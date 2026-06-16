@@ -60,5 +60,18 @@ export {
 } from './boundary/policy.mjs'
 
 export {
+  ATELIER_LOCK_SCHEMA,
+  ATELIER_MIGRATION_SCHEMA,
+  BASE_MIGRATIONS,
+  applyUpgrade,
+  buildAtelierLock,
+  checkAtelierLock,
+  loadAtelierLock,
+  planUpgrade,
+  validateMigrationRecord,
+  writeAtelierLock,
+} from './upgrade/upgrade.mjs'
+
+export {
   analysisDryRun,
 } from './analysis/analysis.mjs'

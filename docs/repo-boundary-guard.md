@@ -48,7 +48,18 @@ Use this as a defensive review before copying preview content into real repos:
 - `rg -n "kg.visibility|visibility:"` over source files finds no local source
   front matter misuse.
 - `repo-access.v1.json` covers every repo listed in `atelier.project.json`.
+- `atelier.lock.json` is written in the copied workspace with
+  `mnstry-atelier lock write`, not copied from the package root.
 - Generated `atelier-output/` files are not treated as source authority.
 
 When in doubt, fail closed: move the source into the private domain repo first,
 then project a reviewed summary into shared Mystery material later.
+
+## Upgrade Review
+
+When upgrading a copied workspace, review package, lockfile, and boundary
+changes together. The `atelier.lock.json` refresh should be limited to the
+copied workspace's Atelier package metadata, contracts, and migration state,
+while private-domain and shared-project source boundaries remain unchanged.
+
+See `docs/upgrade.md` for the upgrade sequence.

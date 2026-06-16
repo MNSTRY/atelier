@@ -1,0 +1,20 @@
+{
+  "schema": "mnstry.atelier-migration@v1",
+  "id": "missing-title@0.1.0-alpha.0",
+  "from": "*",
+  "to": "0.1.0-alpha.0",
+  "class": "config_schema",
+  "description": "This fixture omits the required title field.",
+  "files": [],
+  "requiredPostChecks": [],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "sendPath": false,
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "runtimeApply": false,
+    "analysisExecution": false,
+    "hiddenProvider": false
+  }
+}

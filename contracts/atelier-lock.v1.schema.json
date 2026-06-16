@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/contracts/atelier-lock.v1.schema.json",
+  "title": "mnstry.atelier-lock@v1",
+  "description": "Reviewable lock document recording the installed Atelier package, contract versions, boundary digest, and applied migration state for a workspace.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "package",
+    "template",
+    "runtime",
+    "contracts",
+    "extensionPacks",
+    "boundaryPolicy",
+    "lastSuccessfulUpgrade",
+    "appliedMigrations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-lock@v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "source"],
+      "properties": {
+        "name": {
+          "const": "@mnstry/atelier"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "$ref": "#/$defs/packageSource"
+        }
+      }
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "telemetry", "egress", "mutation", "runtimeImport", "analysisExecution"],
+      "properties": {
+        "node": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["range"],
+          "properties": {
+            "range": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "telemetry": {
+          "const": "none"
+        },
+        "egress": {
+          "const": "local-only"
+        },
+        "mutation": {
+          "const": "not-implemented"
+        },
+        "runtimeImport": {
+          "const": false
+        },
+        "analysisExecution": {
+          "const": false
+        }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectConfig", "knowledgeGraph", "boundaryPolicy", "exportContract"],
+      "properties": {
+        "projectConfig": {
+          "const": "mnstry.atelier-project-config@v1"
+        },
+        "knowledgeGraph": {
+          "const": "mnstry.atelier-knowledge-graph@v1"
+        },
+        "boundaryPolicy": {
+          "const": "mnstry.atelier-boundary-policy@v1"
+        },
+        "exportContract": {
+          "const": "atelier-export@v1"
+        }
+      }
+    },
+    "extensionPacks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/extensionPackRef"
+      },
+      "uniqueItems": true
+    },
+    "boundaryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "snapshot"],
+      "properties": {
+        "path": {
+          "type": ["string", "null"],
+          "not": { "pattern": "^/" }
+        },
+        "digest": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "snapshot": {
+          "type": ["object", "null"]
+        }
+      }
+    },
+    "lastSuccessfulUpgrade": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "appliedMigrations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/appliedMigration"
+      }
+    }
+  },
+  "$defs": {
+    "packageSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["git", "private_github", "npm", "local_path", "tarball"]
+        },
+        "repository": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "gitSha": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "path": {
+          "type": ["string", "null"],
+          "not": { "pattern": "^/" }
+        },
+        "registry": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "git" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["repository", "gitSha"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "local_path" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["path"]
+          }
+        }
+      ]
+    },
+    "extensionPackRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "appliedMigration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "hash", "appliedAt"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "appliedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

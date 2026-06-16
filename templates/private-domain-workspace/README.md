@@ -22,7 +22,18 @@ filters to hide it.
 mnstry atelier graph --project ./atelier.project.json
 mnstry atelier project --project ./atelier.project.json
 mnstry atelier readiness --project ./atelier.project.json
+mnstry atelier lock check --project ./atelier.project.json
+mnstry atelier upgrade --dry-run --project ./atelier.project.json
 ```
 
 Atelier performs no telemetry, cloud sync, runtime mutation, or direct browser
 writes for this preview.
+
+## Atelier Lockfile
+
+`mnstry-atelier init --template private-domain` writes `atelier.lock.json`.
+If this template was copied manually, create the lock before the first commit:
+
+```bash
+mnstry-atelier lock write --project ./atelier.project.json
+```

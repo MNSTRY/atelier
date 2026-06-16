@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/contracts/atelier-migration.v1.schema.json",
+  "title": "mnstry.atelier-migration@v1",
+  "description": "Reviewable migration registry entry for moving an Atelier workspace between package/contract states.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "class",
+    "title",
+    "description",
+    "files",
+    "requiredPostChecks",
+    "authority"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-migration@v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:@-]*$"
+    },
+    "from": {
+      "type": "string",
+      "minLength": 1
+    },
+    "to": {
+      "type": "string",
+      "minLength": 1
+    },
+    "class": {
+      "enum": [
+        "generated_refresh",
+        "config_schema",
+        "hook_update",
+        "template_scaffold",
+        "extension_pack",
+        "semantic_review",
+        "breaking"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "safety": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewMarkerRequired": {
+      "type": "boolean"
+    },
+    "explicitConfirmationRequired": {
+      "type": "boolean"
+    },
+    "apply": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requiredPostChecks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "telemetry",
+        "egress",
+        "sendPath",
+        "runtimeMutation",
+        "runtimeImport",
+        "runtimeApply",
+        "analysisExecution",
+        "hiddenProvider"
+      ],
+      "properties": {
+        "telemetry": { "const": false },
+        "egress": { "const": false },
+        "sendPath": { "const": false },
+        "runtimeMutation": { "const": false },
+        "runtimeImport": { "const": false },
+        "runtimeApply": { "const": false },
+        "analysisExecution": { "const": false },
+        "hiddenProvider": { "const": false }
+      }
+    },
+    "active": {
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "class": { "const": "breaking" } },
+        "required": ["class"]
+      },
+      "then": {
+        "properties": {
+          "explicitConfirmationRequired": { "const": true }
+        },
+        "required": ["explicitConfirmationRequired"]
+      }
+    }
+  ]
+}

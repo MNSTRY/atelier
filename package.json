@@ -19,6 +19,7 @@
     "./support": "./src/support/support-bundle.mjs",
     "./egress": "./src/egress/forbidden-egress.mjs",
     "./boundary": "./src/boundary/policy.mjs",
+    "./upgrade": "./src/upgrade/upgrade.mjs",
     "./analysis/analysis": "./src/analysis/analysis.mjs",
     "./export-contract": "./src/export/atelier-export-contract.mjs",
     "./dry-run": "./src/validate-atelier-export-dry-run.mjs",
@@ -39,6 +40,7 @@
     "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs",
     "harness:test": "node --test test/harness.test.mjs test/harness-context.test.mjs",
     "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-guard.test.mjs",
+    "upgrade:test": "node --test test/upgrade-contract.test.mjs test/upgrade.test.mjs",
     "release:audit": "node scripts/check-release-tarball.mjs",
     "consumer:smoke": "node scripts/consumer-smoke.mjs"
   },

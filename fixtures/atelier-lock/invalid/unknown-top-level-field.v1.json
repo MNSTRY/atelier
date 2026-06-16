@@ -1,0 +1,42 @@
+{
+  "schema": "mnstry.atelier-lock@v1",
+  "generatedAt": "2026-06-17T00:00:00.000Z",
+  "package": {
+    "name": "@mnstry/atelier",
+    "version": "0.1.0-alpha.0",
+    "source": {
+      "type": "git",
+      "repository": "git+https://github.com/mnstry/atelier.git",
+      "gitSha": "1111111111111111111111111111111111111111"
+    }
+  },
+  "template": {
+    "id": "sample-workspace",
+    "version": "0.1.0-alpha.0"
+  },
+  "runtime": {
+    "node": {
+      "range": ">=22.18.0 <23"
+    },
+    "telemetry": "none",
+    "egress": "local-only",
+    "mutation": "not-implemented",
+    "runtimeImport": false,
+    "analysisExecution": false
+  },
+  "contracts": {
+    "projectConfig": "mnstry.atelier-project-config@v1",
+    "knowledgeGraph": "mnstry.atelier-knowledge-graph@v1",
+    "boundaryPolicy": "mnstry.atelier-boundary-policy@v1",
+    "exportContract": "atelier-export@v1"
+  },
+  "extensionPacks": [],
+  "boundaryPolicy": {
+    "path": "boundary-policy.v1.json",
+    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "snapshot": null
+  },
+  "lastSuccessfulUpgrade": null,
+  "appliedMigrations": [],
+  "unexpectedField": true
+}

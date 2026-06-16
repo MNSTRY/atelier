@@ -1,0 +1,32 @@
+{
+  "schema": "mnstry.atelier-migration@v1",
+  "id": "generated-refresh@0.1.0-alpha.0",
+  "from": "*",
+  "to": "0.1.0-alpha.0",
+  "class": "generated_refresh",
+  "title": "Refresh generated read models",
+  "description": "Regenerate graph, projection, and readiness artifacts from source files.",
+  "files": [
+    "atelier-output/knowledge.graph.json",
+    "atelier-output/atelier-readiness.json"
+  ],
+  "safety": "safe-generated",
+  "reviewMarkerRequired": false,
+  "explicitConfirmationRequired": false,
+  "apply": "refreshGenerated",
+  "requiredPostChecks": [
+    "graph --check",
+    "project --check",
+    "readiness --check"
+  ],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "sendPath": false,
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "runtimeApply": false,
+    "analysisExecution": false,
+    "hiddenProvider": false
+  }
+}
