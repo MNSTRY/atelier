@@ -1,0 +1,29 @@
+{
+  "schema": "git-promote-event@v1",
+  "source": {
+    "repo": "atelier-private-fixture",
+    "repoAccess": "private",
+    "kgId": "atelier-private-fixture:offer-draft",
+    "audience": "private",
+    "commit": "1111111111111111111111111111111111111111"
+  },
+  "target": {
+    "repo": "atelier-team-fixture",
+    "repoAccess": "team",
+    "kgId": "atelier-team-fixture:offer-draft",
+    "audience": "team",
+    "commit": "2222222222222222222222222222222222222222"
+  },
+  "event": {
+    "type": "space.provision",
+    "actor": "github:mnstry",
+    "sourceRepo": "atelier-private-fixture",
+    "targetRepo": "atelier-team-fixture",
+    "sourceKgId": "atelier-private-fixture:offer-draft",
+    "targetKgId": "atelier-team-fixture:offer-draft",
+    "sourceCommit": "1111111111111111111111111111111111111111",
+    "targetCommit": "2222222222222222222222222222222222222222",
+    "disclosure_class": "runtime",
+    "revocable": true
+  }
+}

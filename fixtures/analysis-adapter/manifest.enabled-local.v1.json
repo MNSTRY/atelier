@@ -1,0 +1,23 @@
+{
+  "schema": "analysis-adapter-manifest@v1",
+  "provider": "analysis",
+  "enabled": true,
+  "outputRoot": ".mnstry/atelier/analysis/pilot",
+  "claimContract": "atelier-claim@v1",
+  "harness": {
+    "policy": "active-agentic-harness-only",
+    "hiddenModelProvider": false,
+    "network": "none",
+    "analysisExecution": false
+  },
+  "canonicalMutation": false,
+  "authority": {
+    "claimOnly": true,
+    "frontMatterMutation": false,
+    "graphRelationMutation": false,
+    "publicExportFeed": false,
+    "mcpFeed": false,
+    "runtimeImport": false,
+    "directCanonicalWrite": false
+  }
+}

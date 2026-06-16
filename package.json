@@ -1,0 +1,76 @@
+{
+  "name": "@mnstry/atelier",
+  "version": "0.1.0-alpha.0",
+  "private": false,
+  "description": "Local-first MNSTRY Atelier workspace for agentic authoring, graph projection, and dry-run runtime readiness.",
+  "type": "module",
+  "bin": {
+    "mnstry": "./bin/mnstry-atelier.mjs",
+    "mnstry-atelier": "./bin/mnstry-atelier.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./project": "./src/project/config.mjs",
+    "./graph": "./src/graph/graph.mjs",
+    "./projection": "./src/projection/project.mjs",
+    "./readiness": "./src/readiness/readiness.mjs",
+    "./server": "./src/server/local-sidecar.mjs",
+    "./harness": "./src/harness/context.mjs",
+    "./support": "./src/support/support-bundle.mjs",
+    "./egress": "./src/egress/forbidden-egress.mjs",
+    "./analysis/analysis": "./src/analysis/analysis.mjs",
+    "./export-contract": "./src/export/atelier-export-contract.mjs",
+    "./dry-run": "./src/validate-atelier-export-dry-run.mjs",
+    "./contracts/atelier-export.v1.schema.json": "./contracts/atelier-export.v1.schema.json",
+    "./fixtures/atelier-export/sample-studio-offer.v1.json": "./fixtures/atelier-export/sample-studio-offer.v1.json"
+  },
+  "scripts": {
+    "contract": "node src/check-atelier-export-contract.mjs",
+    "dry-run": "node src/validate-atelier-export-dry-run.mjs fixtures/atelier-export/sample-studio-offer.v1.json",
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "find bin src -name '*.mjs' -print0 | xargs -0 -n1 node --check",
+    "graph:test": "node --test test/graph.test.mjs test/graph-knowledge-graph.test.mjs",
+    "project:test": "node --test test/project.test.mjs test/project-config.test.mjs test/projection-policy.test.mjs test/projection-alignment.test.mjs",
+    "server:security:test": "node --test test/server.test.mjs test/server-security.test.mjs test/server-proposals.test.mjs",
+    "browser:smoke": "node --test test/server.test.mjs",
+    "support-bundle:test": "node --test test/support-bundle.test.mjs test/support-egress-analysis.test.mjs",
+    "egress:check": "node bin/mnstry-atelier.mjs egress check",
+    "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs",
+    "harness:test": "node --test test/harness.test.mjs test/harness-context.test.mjs",
+    "release:audit": "node scripts/check-release-tarball.mjs",
+    "consumer:smoke": "node scripts/consumer-smoke.mjs"
+  },
+  "dependencies": {
+    "ajv": "8.18.0",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mnstry/atelier.git"
+  },
+  "homepage": "https://mnstry.org",
+  "bugs": {
+    "url": "https://github.com/mnstry/atelier/issues"
+  },
+  "engines": {
+    "node": ">=22.18.0 <23"
+  },
+  "files": [
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "bin/",
+    "contracts/",
+    "fixtures/",
+    "src/",
+    "templates/",
+    "docs/"
+  ],
+  "publishConfig": {
+    "access": "restricted"
+  }
+}

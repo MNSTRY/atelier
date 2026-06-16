@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/atelier-action-intent.v1.schema.json",
+  "title": "atelier-action-intent@v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "kind",
+    "appliesTo",
+    "reads",
+    "writes",
+    "authority",
+    "deniedWhen"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-action-intent@v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^atelier\\.action\\.[a-z0-9][a-z0-9.-]*$"
+    },
+    "kind": {
+      "enum": [
+        "copy.repoPath",
+        "copy.absolutePath",
+        "copy.agentPrompt",
+        "copy.realmPath",
+        "copy.repoFolder"
+      ]
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "appliesTo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopes"
+      ],
+      "properties": {
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "entry",
+              "realm"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "targetTypes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "reads": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "writes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "const": "clipboard"
+      },
+      "uniqueItems": true
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "runtimeMutation"
+      ],
+      "properties": {
+        "label": {
+          "const": "Copy only; no runtime mutation"
+        },
+        "runtimeMutation": {
+          "const": false
+        }
+      }
+    },
+    "deniedWhen": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

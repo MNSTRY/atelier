@@ -1,0 +1,11 @@
+{
+  "description": "Public objects must not hide internal graph ids behind external-looking sourceRefs.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/objects/offers/0/sourceRefs/0",
+      "value": "notion:sample-architecture:fable-5-review-disposition-mnstry-atelier-graph-contract"
+    }
+  ],
+  "expectedErrors": ["does not resolve to provenance.sourceNodes or an export object"]
+}

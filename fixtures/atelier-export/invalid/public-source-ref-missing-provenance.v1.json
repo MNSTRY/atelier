@@ -1,0 +1,20 @@
+{
+  "description": "Public object graph sourceRefs must appear in provenance.sourceNodes.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/provenance/sourceNodes/1",
+      "value": {
+        "kgId": "sample-app:templates-public-surface",
+        "repo": "sample-app",
+        "path": "templates/public-surface.md",
+        "audience": "public",
+        "sourceRole": "duplicate-public-surface-template"
+      }
+    }
+  ],
+  "expectedErrors": [
+    "sourceRef sample-strategy:evidence-session-format does not resolve",
+    "duplicates provenance source node sample-app:templates-public-surface"
+  ]
+}

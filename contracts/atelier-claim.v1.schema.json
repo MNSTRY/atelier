@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/atelier-claim.v1.schema.json",
+  "title": "atelier-claim@v1",
+  "description": "Proposal-only relationship claim emitted by an agent, human, script, or optional provider. It cannot mutate canonical front matter, graph relations, public exports, MCP feeds, or runtime imports.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "claimId",
+    "subject",
+    "predicate",
+    "object",
+    "provider",
+    "status",
+    "promoted"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-claim@v1"
+    },
+    "claimId": {
+      "type": "string",
+      "pattern": "^claim:[a-z0-9][a-z0-9:-]*$"
+    },
+    "subject": {
+      "description": "Stable kg.id for the source node being described.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9:-]*$"
+    },
+    "predicate": {
+      "description": "Proposed relation type. Promotion into kg.relations is a separate reviewed edit.",
+      "enum": [
+        "related",
+        "supports",
+        "supersedes",
+        "implements",
+        "depends_on",
+        "evidences",
+        "contradicts",
+        "belongs_to"
+      ]
+    },
+    "object": {
+      "description": "Stable kg.id for the target node being described.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9:-]*$"
+    },
+    "provider": {
+      "description": "Claim proposer, not authority.",
+      "enum": [
+        "codex",
+        "manual",
+        "analysis",
+        "claude",
+        "script"
+      ]
+    },
+    "status": {
+      "const": "proposed"
+    },
+    "promoted": {
+      "const": false
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

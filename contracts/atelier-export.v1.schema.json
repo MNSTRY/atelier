@@ -1,0 +1,529 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/atelier-export.v1.schema.json",
+  "title": "atelier-export@v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "exportId",
+    "createdAt",
+    "sourceWorkspace",
+    "sourceCommit",
+    "dirtyTree",
+    "forced",
+    "provenance",
+    "validation",
+    "visibilityGate",
+    "objects",
+    "importPlan",
+    "blockers"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["dirtyTree"],
+        "properties": {
+          "dirtyTree": { "const": true }
+        }
+      },
+      "then": {
+        "required": ["forced", "visibilityGate"],
+        "properties": {
+          "forced": { "const": true },
+          "visibilityGate": {
+            "required": ["taint"],
+            "properties": {
+              "taint": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-export@v1"
+    },
+    "exportId": {
+      "type": "string",
+      "pattern": "^export:[a-z0-9][a-z0-9:-]*$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceWorkspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rootName"],
+      "properties": {
+        "id": { "type": "string" },
+        "rootName": { "type": "string" },
+        "workspacePath": { "type": "string" }
+      }
+    },
+    "sourceCommit": {
+      "description": "The commit SHA of the repository used to define the export contract fixture. Per-repo SHAs remain in sourceCommit.repos.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha", "repos"],
+      "properties": {
+        "sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "repos": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/repoCommit" },
+          "minItems": 1
+        }
+      }
+    },
+    "dirtyTree": {
+      "type": "boolean"
+    },
+    "forced": {
+      "type": "boolean"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generatedBy", "sourceNodes"],
+      "properties": {
+        "generatedBy": { "type": "string" },
+        "sourceNodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sourceNode" },
+          "minItems": 1
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checks"],
+      "properties": {
+        "status": {
+          "enum": ["pass", "warn", "fail"]
+        },
+        "checks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/check" }
+        }
+      }
+    },
+    "visibilityGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "defaultVisibility", "publicSourcePolicy"],
+      "properties": {
+        "status": {
+          "enum": ["pass", "warn", "fail"]
+        },
+        "defaultVisibility": {
+          "enum": ["private"]
+        },
+        "publicSourcePolicy": {
+          "enum": ["public-only"]
+        },
+        "taint": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "objects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offers",
+        "surfaces",
+        "sdui",
+        "commitmentPaths",
+        "spaces",
+        "trackables",
+        "consentBoundaries",
+        "staffPrep",
+        "providerEgress"
+      ],
+      "properties": {
+        "offers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/offer" }
+        },
+        "surfaces": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/surface" }
+        },
+        "sdui": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sduiBlock" }
+        },
+        "commitmentPaths": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/commitmentPath" }
+        },
+        "spaces": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/space" }
+        },
+        "trackables": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/trackable" }
+        },
+        "consentBoundaries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/consentBoundary" }
+        },
+        "staffPrep": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/staffPrep" }
+        },
+        "providerEgress": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/providerEgress" }
+        }
+      }
+    },
+    "importPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "transactional", "tenant", "runtimeOwners", "operations"],
+      "properties": {
+        "mode": {
+          "enum": ["dry-run", "apply"]
+        },
+        "transactional": {
+          "const": true
+        },
+        "tenant": {
+          "type": "string"
+        },
+        "runtimeOwners": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/runtimeOwner" }
+        },
+        "operations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/importOperation" }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/blocker" }
+    }
+  },
+  "$defs": {
+    "visibility": {
+      "description": "Runtime/export visibility. Local source readership belongs in audience, not this field.",
+      "enum": ["private", "shared", "platform", "public"]
+    },
+    "audience": {
+      "enum": ["public", "team", "operator", "staff", "private", "sensitive"]
+    },
+    "approvalStatus": {
+      "enum": ["approved", "draft", "blocked", "needs-review"]
+    },
+    "repoCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "sha"],
+      "properties": {
+        "repo": { "type": "string" },
+        "sha": { "type": "string" },
+        "branch": { "type": "string" },
+        "dirty": { "type": "boolean" }
+      }
+    },
+    "sourceNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kgId", "repo", "path", "audience", "sourceRole"],
+      "properties": {
+        "kgId": { "type": "string" },
+        "repo": { "type": "string" },
+        "path": { "type": "string" },
+        "audience": { "$ref": "#/$defs/audience" },
+        "sourceRole": { "type": "string" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "enum": ["pass", "warn", "fail"] },
+        "detail": { "type": "string" }
+      }
+    },
+    "offer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "visibility",
+        "approvalStatus",
+        "entryModes",
+        "capacity",
+        "pricing",
+        "sourceRefs"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "approvalStatus": { "$ref": "#/$defs/approvalStatus" },
+        "entryModes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "capacity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "preferredMax", "absoluteMax"],
+          "properties": {
+            "min": { "type": "integer", "minimum": 1 },
+            "preferredMax": { "type": "integer", "minimum": 1 },
+            "absoluteMax": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "pricing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["currency", "posture", "approvalStatus"],
+          "properties": {
+            "currency": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            },
+            "posture": { "type": "string" },
+            "approvalStatus": { "$ref": "#/$defs/approvalStatus" },
+            "bands": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["label", "amountMinor"],
+                "properties": {
+                  "label": { "type": "string" },
+                  "amountMinor": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "notes": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "visibility", "title", "slug", "sourceRefs"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "title": { "type": "string" },
+        "slug": { "type": "string" },
+        "summary": { "type": "string" },
+        "sourceRefs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "sduiBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "primitive", "visibility", "props"],
+      "properties": {
+        "id": { "type": "string" },
+        "primitive": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "props": { "type": "object" }
+      }
+    },
+    "commitmentPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "offerId", "mode", "steps", "approvalStatus"],
+      "properties": {
+        "id": { "type": "string" },
+        "offerId": { "type": "string" },
+        "mode": { "type": "string" },
+        "approvalStatus": { "$ref": "#/$defs/approvalStatus" },
+        "steps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "space": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "type", "visibility", "roles"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "trackable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "type", "visibility", "events"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "events": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "consentBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "visibility", "rules"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "decision"],
+            "properties": {
+              "id": { "type": "string" },
+              "decision": { "enum": ["allow", "deny", "review"] },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "staffPrep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "visibility", "allowedFields", "prohibitedFields"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "allowedFields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "prohibitedFields": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "providerEgress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerClass", "defaultDecision", "allowedPayloads", "deniedPayloads"],
+      "properties": {
+        "providerClass": { "type": "string" },
+        "defaultDecision": { "enum": ["allow", "deny", "review"] },
+        "allowedPayloads": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "deniedPayloads": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "runtimeOwner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objectClass", "owner"],
+      "properties": {
+        "objectClass": { "$ref": "#/$defs/objectClass" },
+        "owner": { "$ref": "#/$defs/runtimeOwnerName" }
+      }
+    },
+    "importOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "objectClass", "externalId", "status"],
+      "properties": {
+        "op": { "enum": ["create", "update", "skip"] },
+        "objectClass": { "$ref": "#/$defs/objectClass" },
+        "externalId": { "type": "string" },
+        "status": { "enum": ["ready", "blocked", "warning"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "objectClass": {
+      "enum": [
+        "offer",
+        "public_surface",
+        "surface",
+        "sdui_block",
+        "commitment_path",
+        "space",
+        "trackable",
+        "consent_boundary",
+        "staff_prep",
+        "provider_egress"
+      ]
+    },
+    "runtimeOwnerName": {
+      "enum": [
+        "IdentityGraph",
+        "OfferGraph",
+        "CommitmentGraph",
+        "EventSpine",
+        "ProjectionGraph",
+        "ConsentBoundary",
+        "MessageSpine",
+        "ProviderGraph",
+        "AuditGraph"
+      ]
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "severity", "message", "owner"],
+      "properties": {
+        "id": { "type": "string" },
+        "severity": { "enum": ["p0", "p1", "p2"] },
+        "message": { "type": "string" },
+        "owner": { "type": "string" }
+      }
+    }
+  }
+}

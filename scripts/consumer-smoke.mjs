@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+const packageName = '@mnstry/atelier'
+const expectedTarballName = 'mnstry-atelier-0.1.0-alpha.0.tgz'
+const tempRoot = mkdtempSync(join(tmpdir(), 'mnstry-atelier-consumer-'))
+let tarballPath
+
+function run(command, args, options = {}) {
+  return execFileSync(command, args, {
+    cwd: options.cwd ?? packageRoot,
+    encoding: 'utf8',
+    stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
+  })
+}
+
+try {
+  const pack = JSON.parse(run('npm', ['pack', '--json']))[0]
+  if (pack.name !== packageName) throw new Error(`expected npm pack name ${packageName}, got ${pack.name}`)
+  if (pack.filename !== expectedTarballName) {
+    throw new Error(`expected npm pack filename ${expectedTarballName}, got ${pack.filename}`)
+  }
+  tarballPath = join(packageRoot, pack.filename)
+
+  writeFileSync(join(tempRoot, 'package.json'), `${JSON.stringify({ type: 'module' }, null, 2)}\n`)
+  run('npm', ['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
+    cwd: tempRoot,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  writeFileSync(join(tempRoot, 'smoke.mjs'), `
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { validateAtelierExportDryRun } from '@mnstry/atelier'
+
+const fixturePath = fileURLToPath(import.meta.resolve('@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json'))
+const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
+const report = validateAtelierExportDryRun(fixture)
+assert.equal(report.accepted, true)
+assert.equal(report.importable, false)
+assert.equal(report.errors.length, 0)
+
+const invalid = JSON.parse(JSON.stringify(fixture))
+invalid.provenance.sourceNodes[0].visibility = 'public'
+const invalidReport = validateAtelierExportDryRun(invalid)
+assert.equal(invalidReport.accepted, false)
+assert.match(invalidReport.errors.join('\\n'), /must use audience, not visibility/)
+`)
+
+  run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
+  const cliOutput = run(process.execPath, [
+    'node_modules/.bin/mnstry',
+    'atelier',
+    'dry-run',
+    'node_modules/@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json',
+  ], { cwd: tempRoot })
+  const cliReport = JSON.parse(cliOutput)
+  if (cliReport.accepted !== true) throw new Error('mnstry atelier dry-run did not accept the sample fixture')
+
+  const directCliOutput = run(process.execPath, ['node_modules/.bin/mnstry-atelier', '--version'], { cwd: tempRoot })
+  if (directCliOutput.trim() !== '0.1.0-alpha.0') {
+    throw new Error(`mnstry-atelier --version returned ${directCliOutput.trim()}`)
+  }
+
+  console.log('[consumer:smoke] packed tarball installs and validates in a clean temp project')
+} finally {
+  if (tarballPath) rmSync(tarballPath, { force: true })
+  rmSync(tempRoot, { recursive: true, force: true })
+}

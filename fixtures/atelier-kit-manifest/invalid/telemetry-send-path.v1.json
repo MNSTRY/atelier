@@ -1,0 +1,21 @@
+{
+  "description": "Kit manifests must keep telemetry disabled with no background or send path.",
+  "base": "../valid/mnstry-atelier-kit.valid.v1.json",
+  "mutations": [
+    {
+      "path": "/telemetry/mode",
+      "value": "support_bundle"
+    },
+    {
+      "path": "/telemetry/background",
+      "value": true
+    },
+    {
+      "path": "/telemetry/sendPath",
+      "value": true
+    }
+  ],
+  "expectedErrors": [
+    "telemetry"
+  ]
+}

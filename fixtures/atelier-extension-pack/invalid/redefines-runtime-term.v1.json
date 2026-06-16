@@ -1,0 +1,19 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "id": "sample.invalid",
+  "namespace": "sample",
+  "version": "v1",
+  "terms": [
+    {
+      "id": "mnstry.runtime:visibility",
+      "label": "Do not redefine runtime visibility",
+      "kind": "concept"
+    }
+  ],
+  "migrations": [],
+  "fixtures": [],
+  "lenses": [],
+  "readinessRules": [],
+  "actionRules": [],
+  "exportMappings": []
+}

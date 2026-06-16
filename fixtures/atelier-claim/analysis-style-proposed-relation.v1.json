@@ -1,0 +1,19 @@
+{
+  "schema": "atelier-claim@v1",
+  "claimId": "claim:analysis:2026-06-12:optional-install-supports-local-hybrid",
+  "subject": "sample-architecture:atelier-analysis-optional-install-decision",
+  "predicate": "supports",
+  "object": "sample-architecture:local-git-generated-db-hybrid",
+  "provider": "analysis",
+  "status": "proposed",
+  "promoted": false,
+  "confidence": 0.72,
+  "evidence": [
+    "ATELIER-ANALYSIS-OPTIONAL-INSTALL-DECISION.md#authority-boundary",
+    "LOCAL-GIT-GENERATED-DB-HYBRID.md#optional-discovery-graph-providers"
+  ],
+  "notes": [
+    "Analysis-style fixture only; no Analysis execution path exists in this pass."
+  ],
+  "createdAt": "2026-06-12T00:00:00Z"
+}

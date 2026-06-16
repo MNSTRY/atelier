@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {
+      "id": "sample-architecture:atelier-analysis-optional-install-decision"
+    }
+  ],
+  "edges": [
+    {
+      "source": "sample-architecture:atelier-analysis-optional-install-decision",
+      "target": "sample-architecture:local-git-generated-db-hybrid",
+      "type": "supports"
+    }
+  ]
+}

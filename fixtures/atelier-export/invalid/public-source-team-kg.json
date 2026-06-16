@@ -1,0 +1,12 @@
+{
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/objects/offers/0/sourceRefs/0",
+      "value": "sample-architecture:fable-5-review-disposition-mnstry-atelier-graph-contract"
+    }
+  ],
+  "expectedErrors": [
+    "sourceRef sample-architecture:fable-5-review-disposition-mnstry-atelier-graph-contract does not resolve"
+  ]
+}

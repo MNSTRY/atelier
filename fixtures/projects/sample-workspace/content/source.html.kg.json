@@ -1,0 +1,15 @@
+{
+  "assetFilename": "source.html",
+  "title": "Sample Source",
+  "summary": "Neutral non-Markdown source with durable sidecar identity.",
+  "tags": [
+    "sample"
+  ],
+  "kg": {
+    "id": "sample-workspace:source-html",
+    "type": "source",
+    "status": "active",
+    "audience": "private",
+    "relations": {}
+  }
+}

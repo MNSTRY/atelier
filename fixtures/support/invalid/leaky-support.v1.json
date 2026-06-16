@@ -1,0 +1,13 @@
+{
+  "schema": "mnstry.atelier-support-bundle-preview@v1",
+  "state": "support_bundle",
+  "sendPath": true,
+  "promptText": "copy this prompt",
+  "details": [
+    "<absolute-user-path>/Code/project-app/src/private.md",
+    "project-app:private-node",
+    "person@example.com",
+    "https://mnstry.example/support",
+    "sk-test_secretsecret"
+  ]
+}

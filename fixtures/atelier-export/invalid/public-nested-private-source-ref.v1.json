@@ -1,0 +1,17 @@
+{
+  "description": "Public object nested sourceRef fields must be resolved and public-projectable.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/objects/sdui/0/props",
+      "value": {
+        "eyebrow": "Guided Studio Session",
+        "title": "A fictional guided session example",
+        "summary": "Clear sample copy for validating public export behavior.",
+        "cta": "Request the sample session",
+        "sourceRef": "sample-architecture:internal-review-note"
+      }
+    }
+  ],
+  "expectedErrors": ["sourceRef sample-architecture:internal-review-note does not resolve"]
+}

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.org/contracts/atelier/source-sidecar.v1.schema.json",
+  "title": "Atelier Source Sidecar",
+  "description": "Committed metadata sidecar for non-Markdown Atelier knowledge graph sources.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "asset", "title", "summary", "tags", "kg"],
+  "properties": {
+    "schema": {
+      "const": "mnstry.source-sidecar@v1"
+    },
+    "asset": {
+      "description": "Filename of the adjacent non-Markdown asset this sidecar identifies.",
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "kg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "domain", "lifecycle", "status", "audience", "relations"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9:._/-]*$"
+        },
+        "type": {
+          "enum": ["html", "pdf", "docx", "artifact", "evidence", "source", "prototype", "research", "report", "manifest"]
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lifecycle": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": ["active", "draft", "archived", "template"]
+        },
+        "audience": {
+          "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+        },
+        "relations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "related": { "$ref": "#/$defs/relationTargets" },
+            "supports": { "$ref": "#/$defs/relationTargets" },
+            "supersedes": { "$ref": "#/$defs/relationTargets" },
+            "implements": { "$ref": "#/$defs/relationTargets" },
+            "depends_on": { "$ref": "#/$defs/relationTargets" },
+            "evidences": { "$ref": "#/$defs/relationTargets" },
+            "contradicts": { "$ref": "#/$defs/relationTargets" },
+            "belongs_to": { "$ref": "#/$defs/relationTargets" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "relationTargets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

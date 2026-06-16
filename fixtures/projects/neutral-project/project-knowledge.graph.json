@@ -1,0 +1,69 @@
+{
+  "schema": "mnstry.knowledge-graph@v1",
+  "workspace": "neutral-project",
+  "diagnostics": [],
+  "nodes": [
+    {
+      "id": "project-app:alignment-overview",
+      "title": "Alignment Overview",
+      "summary": "Maps the project alignment surface.",
+      "repo": "project-app",
+      "path": "APP/mnstry-alignment/overview.md",
+      "extension": "md",
+      "type": "markdown",
+      "kgType": "document",
+      "domain": "app",
+      "lifecycle": "app",
+      "status": "active",
+      "audience": "team",
+      "repoAccess": {
+        "readBoundary": "team"
+      },
+      "surfaced": true,
+      "atelier": {
+        "section": "alignment",
+        "status": null,
+        "kind": null
+      },
+      "tags": ["mnstry-alignment"],
+      "relations": {
+        "supports": ["project-app:public-guide"]
+      }
+    },
+    {
+      "id": "project-app:public-guide",
+      "title": "Public Guide",
+      "summary": "A public guide.",
+      "repo": "project-app",
+      "path": "docs/public-guide.md",
+      "extension": "md",
+      "type": "markdown",
+      "kgType": "document",
+      "domain": "docs",
+      "lifecycle": "docs",
+      "status": "active",
+      "audience": "public",
+      "repoAccess": {
+        "readBoundary": "team"
+      },
+      "surfaced": true,
+      "atelier": {
+        "section": "docs",
+        "status": null,
+        "kind": null
+      },
+      "tags": ["guide"],
+      "relations": {}
+    }
+  ],
+  "edges": [
+    {
+      "source": "project-app:alignment-overview",
+      "target": "project-app:public-guide",
+      "type": "supports",
+      "declared": true
+    }
+  ],
+  "nodeCount": 2,
+  "edgeCount": 1
+}

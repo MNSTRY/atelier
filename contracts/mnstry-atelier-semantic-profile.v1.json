@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/contracts/mnstry-atelier-semantic-profile.v1.json",
+  "schema": "mnstry-atelier-semantic-profile@v1",
+  "version": "1.0.0",
+  "status": "draft",
+  "updatedAt": "2026-06-12",
+  "purpose": "Machine-readable semantic profile for the MNSTRY Atelier Kit to keep local Git/source vocabulary distinct from MNSTRY runtime authority vocabulary.",
+  "authorityPrinciples": [
+    {
+      "id": "repo-access-read-boundary",
+      "statement": "Git repository access is the hard read boundary for source files. Local audience labels and projection gates do not make a file secret from anyone who can clone or read the repository.",
+      "appliesTo": [
+        "source",
+        "git",
+        "projection"
+      ]
+    },
+    {
+      "id": "runtime-visibility-reserved",
+      "statement": "The word visibility is reserved for the MNSTRY runtime enum and for export artifacts that intentionally carry runtime visibility values.",
+      "appliesTo": [
+        "runtime",
+        "atelier-export@v1"
+      ]
+    },
+    {
+      "id": "local-audience-not-runtime-visibility",
+      "statement": "Local documentation and corpus classification use audience for intended readership/projection eligibility. Audience is not runtime visibility and is not a security boundary inside a readable Git repository.",
+      "appliesTo": [
+        "source",
+        "frontmatter",
+        "projection"
+      ]
+    },
+    {
+      "id": "runtime-dry-run-consumer",
+      "statement": "The first runtime consumer of this profile is the atelier-export@v1 dry-run importer. Until that importer exists, activation claims remain contract-level and fixture-level only.",
+      "appliesTo": [
+        "atelier-export@v1",
+        "runtime"
+      ]
+    }
+  ],
+  "terms": {
+    "audience": {
+      "tier": "local-source",
+      "owner": "atelier",
+      "replacesLocalUseOf": "visibility",
+      "description": "Intended local readership and projection eligibility for Atelier source documents.",
+      "allowedValues": [
+        "public",
+        "team",
+        "operator",
+        "staff",
+        "private",
+        "sensitive"
+      ],
+      "defaultPolicy": "fail-closed; unclassified content must not project publicly",
+      "securityBoundary": false,
+      "notes": [
+        "A private or sensitive audience value does not hide a file from users with Git repository access.",
+        "Projection gates may consume audience, but repository permissions remain the read boundary."
+      ]
+    },
+    "visibility": {
+      "tier": "runtime-authority",
+      "owner": "mnstry-runtime",
+      "description": "Runtime visibility enum on governed MNSTRY objects.",
+      "allowedValues": [
+        "private",
+        "shared",
+        "platform",
+        "public"
+      ],
+      "defaultPolicy": "runtime default is private",
+      "securityBoundary": true,
+      "runtimeReferences": [
+        {
+          "repo": "mnstry",
+          "path": "database/migrations/20260402020000_rebuild_08_core.sql",
+          "notes": "Core object visibility constraints and default private posture."
+        }
+      ],
+      "notes": [
+        "Use this word locally only when representing a runtime/export value verbatim.",
+        "Do not use runtime visibility values to describe source-document readership unless the document is an export fixture or dry-run object."
+      ]
+    },
+    "repo_access": {
+      "tier": "git-backed-analog",
+      "owner": "git-provider",
+      "description": "Actual read/write access to the Git repository or path substrate.",
+      "securityBoundary": true,
+      "allowedValues": [
+        "none",
+        "read",
+        "triage",
+        "write",
+        "maintain",
+        "admin"
+      ],
+      "notes": [
+        "For source files, repo_access determines who can read the material.",
+        "Projection labels cannot reduce access for users who already have repository read permissions."
+      ]
+    },
+    "git.promote": {
+      "tier": "git-backed-analog",
+      "owner": "atelier",
+      "description": "A durable disclosure event that moves or copies source material into a broader Git-readable or projection-eligible container.",
+      "substrate": "git",
+      "revocable": false,
+      "disclosureClass": "durable",
+      "mustNotBeNamed": [
+        "provision",
+        "provisioning_event"
+      ],
+      "notes": [
+        "A git.promote event may be homologous to runtime resource sharing, but it is not a runtime provision.",
+        "Undoing promotion requires a new Git history event and cannot guarantee unread by previous readers."
+      ]
+    },
+    "provision": {
+      "tier": "runtime-authority",
+      "owner": "mnstry-runtime",
+      "description": "Runtime resource-shared-into-space grant, not a local Git disclosure event.",
+      "substrate": "postgres",
+      "revocable": true,
+      "runtimeReferences": [
+        {
+          "repo": "mnstry",
+          "path": "database/migrations/20260402025000_rebuild_13_space.sql",
+          "notes": "space.provisions resource sharing table and validation trigger."
+        }
+      ],
+      "notes": [
+        "Keep the noun provision runtime-reserved.",
+        "Use git.promote for local durable disclosure."
+      ]
+    },
+    "sensitivity": {
+      "tier": "local-source",
+      "owner": "atelier",
+      "replacesLocalUseOf": "data_boundary",
+      "description": "Local handling risk classification for source documents and generated projections.",
+      "securityBoundary": false,
+      "notes": [
+        "Runtime data_boundary remains reserved for space descriptors using runtime enum values.",
+        "Use sensitivity for local document handling until a runtime import object requires data_boundary."
+      ]
+    },
+    "data_boundary": {
+      "tier": "runtime-authority",
+      "owner": "mnstry-runtime",
+      "description": "Runtime sharing-floor enum on spaces.",
+      "allowedValues": [
+        "public_shareable",
+        "member_shareable",
+        "client_visible",
+        "practitioner_private",
+        "specially_protected"
+      ],
+      "runtimeReferences": [
+        {
+          "repo": "mnstry",
+          "path": "database/migrations/20260402025000_rebuild_13_space.sql",
+          "notes": "space.spaces data_boundary values and cross-ministry membership guard."
+        }
+      ],
+      "notes": [
+        "Do not attach runtime data_boundary values to arbitrary source documents unless the object is a runtime space descriptor or export fixture."
+      ]
+    },
+    "egress_intent": {
+      "tier": "local-source",
+      "owner": "atelier",
+      "replacesLocalUseOf": "provider_egress",
+      "description": "Local declaration of intended provider/model/data egress posture before runtime enforcement exists.",
+      "securityBoundary": false,
+      "notes": [
+        "provider_egress is not a verified runtime canonical today.",
+        "Runtime provider controls must be represented by explicit runtime import fields when they exist."
+      ]
+    },
+    "runtime_object": {
+      "tier": "local-projection-of-runtime-canonical",
+      "owner": "atelier",
+      "replacesLocalUseOf": "semantic_object",
+      "description": "Local pointer to a real runtime table/object family.",
+      "allowedValueExamples": [
+        "content.material",
+        "core.artifact",
+        "core.thread",
+        "core.session",
+        "core.trackable",
+        "space.space"
+      ],
+      "notes": [
+        "semantic_object is not a verified runtime canonical.",
+        "Team architecture documents should not default to core.artifact without an explicit personal-actor-content rationale."
+      ]
+    }
+  },
+  "optionalAdapters": {
+    "analysis": {
+      "status": "optional-experimental",
+      "role": "derived-discovery-graph",
+      "authority": "none",
+      "mayAnalyze": [
+        "allowlisted source repositories",
+        "sanitized contract fixtures",
+        "generated public or team-safe exports",
+        "development-only architecture maps"
+      ],
+      "mustNotAnalyzeOrGovern": [
+        "live runtime authority",
+        "production customer or member data",
+        "consent records",
+        "bookings, payments, refunds, or commerce truth",
+        "permission decisions",
+        "raw tenant-private runtime exports"
+      ],
+      "modelProviderPolicy": "Analysis must run through the active agentic harness and must not introduce a hidden model provider, second API key, or second inference boundary.",
+      "promotionRule": "Analysis suggestions become canonical only after reviewed promotion into source front matter or a governed runtime import path."
+    }
+  },
+  "consumers": {
+    "sourceValidation": {
+      "status": "implemented-in-sample-ops",
+      "description": "build-knowledge-graph.mjs validates mandatory kg.audience, rejects legacy kg.visibility, and checks declared graph relations."
+    },
+    "projectionGate": {
+      "status": "implemented-for-local-projections",
+      "description": "projection-policy.mjs gates public/team/operator/local graph, alignment, API, and export source eligibility."
+    },
+    "atelierExportV1": {
+      "status": "graph-resolved-fixture-level",
+      "description": "contracts:check resolves sourceRefs/sourceNodes against the Atelier knowledge graph and fails public objects with non-public source kgIds."
+    },
+    "runtimeDryRunImporter": {
+      "status": "implemented-non-mutating-dry-run",
+      "description": "MNSTRY runtime worktree provides a non-mutating atelier-export@v1 dry-run validator for enum/classification alignment."
+    }
+  }
+}

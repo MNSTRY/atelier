@@ -1,0 +1,9 @@
+{
+  "schema": "mnstry.atelier-repo-access@v1",
+  "defaultReadBoundary": "private",
+  "repos": {
+    "content": {
+      "readBoundary": "private"
+    }
+  }
+}

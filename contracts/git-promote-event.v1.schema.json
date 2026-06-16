@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.org/contracts/atelier/git-promote-event.v1.schema.json",
+  "title": "Atelier Git Promote Event",
+  "description": "Append-only local Git disclosure event for promoting a source from one repo/read boundary to another.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source", "target", "event"],
+  "properties": {
+    "schema": {
+      "const": "git-promote-event@v1"
+    },
+    "source": {
+      "$ref": "#/$defs/endpoint"
+    },
+    "target": {
+      "$ref": "#/$defs/endpoint"
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "actor",
+        "sourceRepo",
+        "targetRepo",
+        "sourceKgId",
+        "targetKgId",
+        "sourceCommit",
+        "targetCommit",
+        "disclosure_class",
+        "revocable"
+      ],
+      "properties": {
+        "type": {
+          "const": "git.promote"
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRepo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetRepo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKgId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetKgId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "targetCommit": {
+          "$ref": "#/$defs/commit"
+        },
+        "disclosure_class": {
+          "const": "durable"
+        },
+        "revocable": {
+          "const": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "repoAccess", "kgId", "audience", "commit"],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repoAccess": {
+          "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+        },
+        "kgId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audience": {
+          "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+        },
+        "commit": {
+          "$ref": "#/$defs/commit"
+        }
+      }
+    }
+  }
+}

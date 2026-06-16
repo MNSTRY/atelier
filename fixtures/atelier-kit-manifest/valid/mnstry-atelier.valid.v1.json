@@ -1,0 +1,47 @@
+{
+  "schema": "mnstry-atelier-kit-manifest@v1",
+  "kit": {
+    "name": "mnstry-atelier",
+    "boundary": "extractable-kit-readiness",
+    "clientZero": "sample"
+  },
+  "versions": {
+    "kernel": "v1",
+    "sourceDialect": "v1",
+    "exportContract": "atelier-export@v1",
+    "readinessRules": "atelier-readiness@v1",
+    "actionRules": "atelier-action-intent@v1"
+  },
+  "runtimeLock": {
+    "path": "atelier-runtime.lock.json",
+    "schema": "atelier-runtime-lock@v1",
+    "digest": "sha256:115ede36852f0394872a3b5ed6098433eb71110dc198c5e740671cefe603ea6c"
+  },
+  "contracts": {
+    "export": {
+      "path": "sample-architecture/contracts/atelier-export.v1.schema.json",
+      "digest": "sha256:c7ea26385ed0165f1527883f939cb2f40d47bc93679c82728e4e6be3fac74cfd"
+    },
+    "readiness": {
+      "path": "sample-architecture/contracts/atelier-readiness.v1.schema.json",
+      "digest": "sha256:fb9c56a817fbc0e902a3c207a65c6983515da24d3f23d163a5306e01c2161d36"
+    },
+    "actions": {
+      "path": "sample-architecture/contracts/atelier-action-intent.v1.schema.json",
+      "digest": "sha256:ee0051a21198c8736f196b1891c926a2b6e3004e10daf6bc18536e602f0491b8"
+    }
+  },
+  "extensionPacks": [
+    {
+      "id": "sample.extension",
+      "version": "v1",
+      "path": "sample-architecture/fixtures/atelier-extension-pack/sample.extension.v1.json",
+      "enabled": true
+    }
+  ],
+  "telemetry": {
+    "mode": "none",
+    "background": false,
+    "sendPath": false
+  }
+}

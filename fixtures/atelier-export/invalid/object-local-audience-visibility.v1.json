@@ -1,0 +1,11 @@
+{
+  "description": "Runtime/export object visibility must use runtime visibility, not local audience words.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/objects/spaces/0/visibility",
+      "value": "operator"
+    }
+  ],
+  "expectedErrors": ["runtime visibility must be one of private, shared, platform, public"]
+}

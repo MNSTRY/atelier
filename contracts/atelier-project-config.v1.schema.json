@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/atelier-project-config.v1.schema.json",
+  "title": "mnstry.atelier-project-config@v1",
+  "description": "Read-only project adapter config for resolving a workspace, repo-ops root, graph inputs, and project projection paths.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-project-config@v1"
+    },
+    "roots": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace": {
+          "$ref": "#/$defs/pathString"
+        },
+        "workspaceRoot": {
+          "$ref": "#/$defs/pathString"
+        },
+        "repoOps": {
+          "$ref": "#/$defs/pathString"
+        },
+        "repoOpsRoot": {
+          "$ref": "#/$defs/pathString"
+        }
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repoAccessPath": {
+          "$ref": "#/$defs/pathString"
+        },
+        "repoAccessConfig": {
+          "$ref": "#/$defs/pathString"
+        },
+        "workspaceGraphPath": {
+          "$ref": "#/$defs/pathString"
+        },
+        "workspaceGraph": {
+          "$ref": "#/$defs/pathString"
+        }
+      }
+    },
+    "repos": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "type": "string",
+          "minLength": 1
+        },
+        "appRoot": {
+          "$ref": "#/$defs/pathString"
+        }
+      }
+    },
+    "alignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "appRepo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "appRoot": {
+          "$ref": "#/$defs/pathString"
+        },
+        "root": {
+          "$ref": "#/$defs/pathString"
+        },
+        "path": {
+          "$ref": "#/$defs/pathString"
+        }
+      }
+    },
+    "repoOpsRoot": {
+      "$ref": "#/$defs/pathString"
+    },
+    "workspaceRoot": {
+      "$ref": "#/$defs/pathString"
+    },
+    "repoAccessPath": {
+      "$ref": "#/$defs/pathString"
+    },
+    "workspaceGraphPath": {
+      "$ref": "#/$defs/pathString"
+    },
+    "appRepoName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "appRoot": {
+      "$ref": "#/$defs/pathString"
+    },
+    "alignmentRoot": {
+      "$ref": "#/$defs/pathString"
+    }
+  },
+  "$defs": {
+    "pathString": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "\\u0000"
+          },
+          {
+            "pattern": "^[a-z][a-z0-9+.-]*:"
+          }
+        ]
+      }
+    }
+  }
+}

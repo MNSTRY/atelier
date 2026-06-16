@@ -1,0 +1,21 @@
+{
+  "description": "Provenance sourceNodes must use source audience, not legacy visibility.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/provenance/sourceNodes/0",
+      "value": {
+        "kgId": "sample-strategy:guides-offer-structure",
+        "repo": "sample-strategy",
+        "path": "guides/offer-structure.md",
+        "visibility": "public",
+        "sourceRole": "offer-pricing-continuity-authority"
+      }
+    }
+  ],
+  "expectedErrors": [
+    "/provenance/sourceNodes/0 must use audience, not visibility",
+    "/provenance/sourceNodes/0 must include required property audience",
+    "/provenance/sourceNodes/0 must not include additional property visibility"
+  ]
+}

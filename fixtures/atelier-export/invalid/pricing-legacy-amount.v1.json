@@ -1,0 +1,23 @@
+{
+  "description": "Pricing must use ISO-4217 currency and integer amountMinor values.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/objects/offers/0/pricing/currency",
+      "value": "AUDD"
+    },
+    {
+      "path": "/objects/offers/0/pricing/bands/0",
+      "value": {
+        "label": "Legacy float price",
+        "amount": 1250.5,
+        "notes": "Invalid legacy major-unit amount."
+      }
+    }
+  ],
+  "expectedErrors": [
+    "/objects/offers/0/pricing/currency must match pattern",
+    "/objects/offers/0/pricing/bands/0 must include required property amountMinor",
+    "/objects/offers/0/pricing/bands/0 must not include additional property amount"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "analysis-adapter-manifest@v1",
+  "provider": "analysis",
+  "enabled": true,
+  "outputRoot": ".mnstry/atelier/analysis/output",
+  "claimContract": "atelier-claim@v1",
+  "harness": {
+    "policy": "active-agentic-harness-only",
+    "hiddenModelProvider": true,
+    "network": "none",
+    "analysisExecution": false,
+    "modelProvider": "openai"
+  },
+  "canonicalMutation": false,
+  "authority": {
+    "claimOnly": true,
+    "frontMatterMutation": false,
+    "graphRelationMutation": false,
+    "publicExportFeed": false,
+    "mcpFeed": false,
+    "runtimeImport": false,
+    "directCanonicalWrite": false
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "description": "A dirty export must be forced and must carry non-empty taint.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/dirtyTree",
+      "value": true
+    },
+    {
+      "path": "/forced",
+      "value": false
+    },
+    {
+      "path": "/visibilityGate/taint",
+      "value": []
+    }
+  ],
+  "expectedErrors": ["/forced must be true", "/visibilityGate/taint must contain at least 1 item"]
+}

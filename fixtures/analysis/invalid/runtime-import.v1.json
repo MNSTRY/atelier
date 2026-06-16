@@ -1,0 +1,20 @@
+[
+  {
+    "schema": "atelier-claim@v1",
+    "claimId": "claim:analysis:2026-06-17:test",
+    "subject": "project:source-node",
+    "predicate": "supports",
+    "object": "project:claim-target",
+    "provider": "analysis",
+    "status": "proposed",
+    "promoted": false,
+    "confidence": 0.6,
+    "evidence": [
+      "docs/source.md#claim"
+    ],
+    "createdAt": "2026-06-17T00:00:00Z",
+    "runtimeImport": {
+      "mode": "apply"
+    }
+  }
+]

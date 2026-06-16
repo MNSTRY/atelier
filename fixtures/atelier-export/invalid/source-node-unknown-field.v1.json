@@ -1,0 +1,18 @@
+{
+  "description": "Schema validation must reject smuggled source-node fields.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/provenance/sourceNodes/0",
+      "value": {
+        "kgId": "sample-strategy:guides-offer-structure",
+        "repo": "sample-strategy",
+        "path": "guides/offer-structure.md",
+        "audience": "public",
+        "sourceRole": "offer-pricing-continuity-authority",
+        "visibilityRuntime": "private"
+      }
+    }
+  ],
+  "expectedErrors": ["must not include additional property visibilityRuntime"]
+}

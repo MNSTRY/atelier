@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/contracts/atelier-kit-manifest.v1.schema.json",
+  "title": "MNSTRY Atelier Kit Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kit",
+    "versions",
+    "runtimeLock",
+    "contracts",
+    "extensionPacks",
+    "telemetry"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry-atelier-kit-manifest@v1"
+    },
+    "kit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "boundary", "clientZero"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "boundary": {
+          "const": "extractable-kit-readiness"
+        },
+        "clientZero": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel",
+        "sourceDialect",
+        "exportContract",
+        "readinessRules",
+        "actionRules"
+      ],
+      "properties": {
+        "kernel": {
+          "type": "string",
+          "pattern": "^v[0-9]+$"
+        },
+        "sourceDialect": {
+          "type": "string",
+          "pattern": "^v[0-9]+$"
+        },
+        "exportContract": {
+          "const": "atelier-export@v1"
+        },
+        "readinessRules": {
+          "type": "string",
+          "pattern": "^atelier-readiness@v[0-9]+$"
+        },
+        "actionRules": {
+          "type": "string",
+          "pattern": "^atelier-action-intent@v[0-9]+$"
+        }
+      }
+    },
+    "runtimeLock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "schema", "digest"],
+      "properties": {
+        "path": {
+          "const": "atelier-runtime.lock.json"
+        },
+        "schema": {
+          "const": "atelier-runtime-lock@v1"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "digest"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]+$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      },
+      "required": ["export", "readiness", "actions"]
+    },
+    "extensionPacks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "path", "enabled"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^v[0-9]+$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]+\\.json$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "uniqueItems": true
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "background", "sendPath"],
+      "properties": {
+        "mode": {
+          "const": "none"
+        },
+        "background": {
+          "const": false
+        },
+        "sendPath": {
+          "const": false
+        }
+      }
+    }
+  }
+}

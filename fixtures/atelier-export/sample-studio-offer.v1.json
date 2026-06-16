@@ -1,0 +1,397 @@
+{
+  "schema": "atelier-export@v1",
+  "exportId": "export:sample-studio:guided-session:2026-06-11",
+  "createdAt": "2026-06-11T12:00:00Z",
+  "sourceWorkspace": {
+    "id": "workspace:sample-studio",
+    "rootName": "sample-studio"
+  },
+  "sourceCommit": {
+    "sha": "b4934b3df2504e5d9135e0c05264f6fcdf7c155d",
+    "repos": [
+      {
+        "repo": "sample-strategy",
+        "sha": "1111111111111111111111111111111111111111"
+      },
+      {
+        "repo": "sample-app",
+        "sha": "2222222222222222222222222222222222222222"
+      },
+      {
+        "repo": "sample-architecture",
+        "sha": "3333333333333333333333333333333333333333"
+      }
+    ]
+  },
+  "dirtyTree": false,
+  "forced": false,
+  "provenance": {
+    "generatedBy": "manual-contract-fixture",
+    "sourceNodes": [
+      {
+        "kgId": "sample-strategy:guides-offer-structure",
+        "repo": "sample-strategy",
+        "path": "guides/offer-structure.md",
+        "audience": "public",
+        "sourceRole": "offer-structure-authority"
+      },
+      {
+        "kgId": "sample-strategy:evidence-session-format",
+        "repo": "sample-strategy",
+        "path": "evidence/session-format.md",
+        "audience": "public",
+        "sourceRole": "session-format-evidence"
+      },
+      {
+        "kgId": "sample-app:templates-public-surface",
+        "repo": "sample-app",
+        "path": "templates/public-surface.md",
+        "audience": "public",
+        "sourceRole": "surface-authoring-template"
+      },
+      {
+        "kgId": "sample-app:templates-operations-consent",
+        "repo": "sample-app",
+        "path": "templates/operations-consent.md",
+        "audience": "public",
+        "sourceRole": "operations-consent-template"
+      }
+    ],
+    "notes": [
+      "Fixture is a fictional dry-run contract artifact, not a production export.",
+      "Example pricing, copy, and operations data are invented for schema validation.",
+      "No real participant, customer, staff, client, or project data is included.",
+      "Dry-run validation treats fixture sourceNodes as self-attested unless an external knowledge graph supplies matching node proof."
+    ]
+  },
+  "validation": {
+    "status": "warn",
+    "checks": [
+      {
+        "id": "graph",
+        "status": "pass",
+        "detail": "Source kg ids resolve in the source provenance graph."
+      },
+      {
+        "id": "visibility",
+        "status": "pass",
+        "detail": "Public surface uses only authored public-safe copy."
+      },
+      {
+        "id": "pricing-approval",
+        "status": "warn",
+        "detail": "Example pricing is fictional and used only for dry-run contract validation."
+      },
+      {
+        "id": "provider-selection",
+        "status": "warn",
+        "detail": "Payment, scheduling, and messaging providers are not selected."
+      }
+    ]
+  },
+  "visibilityGate": {
+    "status": "pass",
+    "defaultVisibility": "private",
+    "publicSourcePolicy": "public-only",
+    "taint": []
+  },
+  "objects": {
+    "offers": [
+      {
+        "id": "offer:sample-studio:guided-session",
+        "title": "Guided Studio Session",
+        "visibility": "public",
+        "approvalStatus": "draft",
+        "entryModes": ["journey_path", "custom_journey"],
+        "capacity": {
+          "min": 2,
+          "preferredMax": 4,
+          "absoluteMax": 6
+        },
+        "pricing": {
+          "currency": "USD",
+          "posture": "minimum_spend_or_quote",
+          "approvalStatus": "draft",
+          "bands": [
+            {
+              "label": "Guided session weekday sample",
+              "amountMinor": 10000
+            },
+            {
+              "label": "Guided session peak sample",
+              "amountMinor": 12500
+            },
+            {
+              "label": "Small group weekday sample",
+              "amountMinor": 18000
+            },
+            {
+              "label": "Small group peak sample",
+              "amountMinor": 22000
+            }
+          ]
+        },
+        "sourceRefs": [
+          "sample-strategy:guides-offer-structure",
+          "sample-strategy:evidence-session-format"
+        ]
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "surface:sample-studio:guided-session-public",
+        "type": "public_offer_page",
+        "visibility": "public",
+        "title": "Guided Studio Session",
+        "slug": "guided-studio-session",
+        "summary": "A fictional public surface for a guided studio session.",
+        "sourceRefs": ["offer:sample-studio:guided-session"]
+      }
+    ],
+    "sdui": [
+      {
+        "id": "sdui:sample-studio:guided-session:hero",
+        "primitive": "Hero",
+        "visibility": "public",
+        "props": {
+          "eyebrow": "Guided Studio Session",
+          "title": "A fictional guided session example",
+          "summary": "Clear sample copy for validating public export behavior.",
+          "cta": "Request the sample session"
+        }
+      },
+      {
+        "id": "sdui:sample-studio:guided-session:booking-cta",
+        "primitive": "InquiryCTA",
+        "visibility": "public",
+        "props": {
+          "label": "Begin a private inquiry",
+          "mode": "human_review_required"
+        }
+      },
+      {
+        "id": "sdui:sample-studio:guided-session:consent-notice",
+        "primitive": "ConsentNotice",
+        "visibility": "public",
+        "props": {
+          "summary": "Each participant controls their own intake. Organizers see logistics and completion status, not private disclosures."
+        }
+      }
+    ],
+    "commitmentPaths": [
+      {
+        "id": "commitment:sample-studio:guided-session",
+        "offerId": "offer:sample-studio:guided-session",
+        "mode": "inquiry_to_quote_to_deposit",
+        "approvalStatus": "needs-review",
+        "steps": [
+          "public_offer_page",
+          "organizer_inquiry",
+          "human_review",
+          "quote_or_hold",
+          "deposit_or_payment_request",
+          "participant_intake",
+          "staff_prep",
+          "experience",
+          "followup_or_continuity"
+        ]
+      }
+    ],
+    "spaces": [
+      {
+        "id": "space:sample-studio:guided-session",
+        "title": "Guided Studio Session",
+        "type": "offer_space",
+        "visibility": "platform",
+        "roles": ["prospective_client", "organizer", "participant", "operator", "staff", "provider"]
+      }
+    ],
+    "trackables": [
+      {
+        "id": "trackable:sample-studio:guided-session-readiness",
+        "title": "Guided Session Readiness",
+        "type": "offer_readiness",
+        "visibility": "platform",
+        "events": [
+          "inquiry_received",
+          "human_review_completed",
+          "quote_sent",
+          "deposit_received",
+          "participant_intake_completed",
+          "staff_prep_locked",
+          "experience_completed",
+          "followup_sent"
+        ]
+      }
+    ],
+    "consentBoundaries": [
+      {
+        "id": "consent:sample-studio:guided-session-participant-boundary",
+        "title": "Guided Session Participant Boundary",
+        "visibility": "platform",
+        "rules": [
+          {
+            "id": "organizer-sensitive-access",
+            "decision": "deny",
+            "reason": "Organizer may see logistics and form completion status, not participant-sensitive intake."
+          },
+          {
+            "id": "staff-operational-summary",
+            "decision": "allow",
+            "reason": "Staff may see operational summaries required to deliver the experience safely."
+          },
+          {
+            "id": "marketing-use",
+            "decision": "deny",
+            "reason": "Private participant disclosures must not become marketing data."
+          },
+          {
+            "id": "provider-egress",
+            "decision": "review",
+            "reason": "Provider payloads require minimum-necessary review per provider class."
+          }
+        ]
+      }
+    ],
+    "staffPrep": [
+      {
+        "id": "staffprep:sample-studio:guided-session",
+        "title": "Guided Session Staff Prep",
+        "visibility": "platform",
+        "allowedFields": [
+          "session_type",
+          "date_time",
+          "group_size",
+          "organizer_logistics",
+          "approved_package",
+          "participant_completion_status",
+          "aggregate_operational_needs",
+          "staff_assignment",
+          "setup_reset_checklist",
+          "followup_task"
+        ],
+        "prohibitedFields": [
+          "real_participant_names_in_fixture",
+          "raw_health_disclosures",
+          "private_reflections",
+          "individual_sensitive_intake",
+          "unapproved_staff_notes",
+          "provider_secrets"
+        ]
+      }
+    ],
+    "providerEgress": [
+      {
+        "providerClass": "payment",
+        "defaultDecision": "review",
+        "allowedPayloads": [
+          "amountMinor",
+          "currency",
+          "invoice_or_checkout_reference",
+          "payer_contact"
+        ],
+        "deniedPayloads": ["sensitive_intake", "private_reflections", "staff_notes"]
+      },
+      {
+        "providerClass": "scheduling",
+        "defaultDecision": "review",
+        "allowedPayloads": ["time_window", "resource_hold", "group_size"],
+        "deniedPayloads": ["participant_sensitive_intake", "private_reflections", "staff_notes"]
+      },
+      {
+        "providerClass": "messaging",
+        "defaultDecision": "review",
+        "allowedPayloads": ["approved_message_copy", "recipient_contact", "delivery_preference"],
+        "deniedPayloads": ["unapproved_private_context", "sensitive_intake", "staff_only_context"]
+      }
+    ]
+  },
+  "importPlan": {
+    "mode": "dry-run",
+    "transactional": true,
+    "tenant": "sample-studio",
+    "runtimeOwners": [
+      {
+        "objectClass": "public_surface",
+        "owner": "ProjectionGraph"
+      },
+      {
+        "objectClass": "offer",
+        "owner": "OfferGraph"
+      },
+      {
+        "objectClass": "commitment_path",
+        "owner": "CommitmentGraph"
+      },
+      {
+        "objectClass": "consent_boundary",
+        "owner": "ConsentBoundary"
+      },
+      {
+        "objectClass": "staff_prep",
+        "owner": "ProjectionGraph"
+      },
+      {
+        "objectClass": "trackable",
+        "owner": "EventSpine"
+      }
+    ],
+    "operations": [
+      {
+        "op": "create",
+        "objectClass": "public_surface",
+        "externalId": "surface:sample-studio:guided-session-public",
+        "status": "warning",
+        "reason": "Public copy remains a dry-run sample until reviewed by the project owner."
+      },
+      {
+        "op": "create",
+        "objectClass": "offer",
+        "externalId": "offer:sample-studio:guided-session",
+        "status": "warning",
+        "reason": "Pricing and commitment policy remain draft."
+      },
+      {
+        "op": "create",
+        "objectClass": "commitment_path",
+        "externalId": "commitment:sample-studio:guided-session",
+        "status": "blocked",
+        "reason": "Provider mechanics are outside this dry-run fixture."
+      },
+      {
+        "op": "create",
+        "objectClass": "consent_boundary",
+        "externalId": "consent:sample-studio:guided-session-participant-boundary",
+        "status": "ready",
+        "reason": "Boundary is deny-by-default and contains no real participant data."
+      },
+      {
+        "op": "create",
+        "objectClass": "trackable",
+        "externalId": "trackable:sample-studio:guided-session-readiness",
+        "status": "ready",
+        "reason": "Readiness events are structural and do not contain participant data."
+      }
+    ]
+  },
+  "blockers": [
+    {
+      "id": "sample-public-copy-review",
+      "severity": "p2",
+      "message": "Project-owner review required before sample public copy is adapted for a real project.",
+      "owner": "project-owner"
+    },
+    {
+      "id": "sample-commercial-terms",
+      "severity": "p1",
+      "message": "Commercial terms are fictional and must not be imported as live pricing.",
+      "owner": "project-owner"
+    },
+    {
+      "id": "runtime-importer-not-enabled",
+      "severity": "p1",
+      "message": "MNSTRY runtime importer does not yet consume atelier-export@v1.",
+      "owner": "mnstry-runtime"
+    }
+  ]
+}

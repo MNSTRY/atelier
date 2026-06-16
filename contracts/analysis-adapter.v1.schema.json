@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/analysis-adapter.v1.schema.json",
+  "title": "analysis-adapter@v1",
+  "description": "Local-only optional Analysis adapter contract. The adapter may record opt-in posture and claim files, but it cannot install Analysis, execute Analysis, create a model-provider boundary, or mutate canonical Atelier state.",
+  "$defs": {
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "provider",
+        "outputRoot",
+        "claimContract",
+        "harness",
+        "canonicalMutation",
+        "authority"
+      ],
+      "properties": {
+        "schema": {
+          "const": "analysis-adapter-manifest@v1"
+        },
+        "provider": {
+          "const": "analysis"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "outputRoot": {
+          "description": "Repo-relative ignored local directory for Analysis adapter artifacts.",
+          "type": "string",
+          "pattern": "^\\.mnstry/atelier/analysis(/.*)?$"
+        },
+        "claimContract": {
+          "const": "atelier-claim@v1"
+        },
+        "harness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policy",
+            "hiddenModelProvider",
+            "network",
+            "analysisExecution"
+          ],
+          "properties": {
+            "policy": {
+              "const": "active-agentic-harness-only"
+            },
+            "hiddenModelProvider": {
+              "const": false
+            },
+            "network": {
+              "const": "none"
+            },
+            "analysisExecution": {
+              "const": false
+            }
+          }
+        },
+        "canonicalMutation": {
+          "const": false
+        },
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "claimOnly",
+            "frontMatterMutation",
+            "graphRelationMutation",
+            "publicExportFeed",
+            "mcpFeed",
+            "runtimeImport",
+            "directCanonicalWrite"
+          ],
+          "properties": {
+            "claimOnly": {
+              "const": true
+            },
+            "frontMatterMutation": {
+              "const": false
+            },
+            "graphRelationMutation": {
+              "const": false
+            },
+            "publicExportFeed": {
+              "const": false
+            },
+            "mcpFeed": {
+              "const": false
+            },
+            "runtimeImport": {
+              "const": false
+            },
+            "directCanonicalWrite": {
+              "const": false
+            }
+          }
+        }
+      }
+    },
+    "claimOutput": {
+      "description": "Analysis adapter output is only a list of proposed atelier-claim@v1 claims.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "schema",
+          "provider",
+          "status",
+          "promoted"
+        ],
+        "properties": {
+          "schema": {
+            "const": "atelier-claim@v1"
+          },
+          "provider": {
+            "const": "analysis"
+          },
+          "status": {
+            "const": "proposed"
+          },
+          "promoted": {
+            "const": false
+          }
+        },
+        "not": {
+          "anyOf": [
+            { "required": ["kg"] },
+            { "required": ["frontmatter"] },
+            { "required": ["frontMatter"] },
+            { "required": ["canonicalFrontMatter"] },
+            { "required": ["relations"] },
+            { "required": ["graphRelations"] },
+            { "required": ["canonicalRelations"] },
+            { "required": ["edges"] },
+            { "required": ["publicExport"] },
+            { "required": ["atelierExport"] },
+            { "required": ["mcpFeed"] },
+            { "required": ["mcpResources"] },
+            { "required": ["runtimeImport"] },
+            { "required": ["importPlan"] },
+            { "required": ["canonicalWrite"] },
+            { "required": ["canonicalMutation"] },
+            { "required": ["mutation"] },
+            { "required": ["mutations"] },
+            { "required": ["writes"] }
+          ]
+        }
+      }
+    }
+  }
+}

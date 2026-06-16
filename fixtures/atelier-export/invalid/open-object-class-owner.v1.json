@@ -1,0 +1,23 @@
+{
+  "description": "Runtime owner and operation object classes must use the closed v1 vocabulary.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/importPlan/runtimeOwners/0/objectClass",
+      "value": "raw_table"
+    },
+    {
+      "path": "/importPlan/runtimeOwners/0/owner",
+      "value": "RawDatabase"
+    },
+    {
+      "path": "/importPlan/operations/0/objectClass",
+      "value": "raw_table"
+    }
+  ],
+  "expectedErrors": [
+    "invalid runtime owner objectClass",
+    "invalid runtime owner",
+    "invalid operation objectClass"
+  ]
+}

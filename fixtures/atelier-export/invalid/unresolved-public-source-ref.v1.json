@@ -1,0 +1,11 @@
+{
+  "description": "Public object graph-looking sourceRefs must resolve in the Sample Studio knowledge graph.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/objects/offers/0/sourceRefs/0",
+      "value": "sample-strategy:missing-atelier-export-source"
+    }
+  ],
+  "expectedErrors": ["sourceRef sample-strategy:missing-atelier-export-source does not resolve"]
+}

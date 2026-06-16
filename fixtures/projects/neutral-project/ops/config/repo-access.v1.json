@@ -1,0 +1,12 @@
+{
+  "schema": "mnstry.repo-access@v1",
+  "defaultReadBoundary": "team",
+  "repos": {
+    "project-app": {
+      "readBoundary": "team"
+    },
+    "project-notes": {
+      "readBoundary": "private"
+    }
+  }
+}

@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/atelier-analysis-adapter.v1.schema.json",
+  "title": "atelier-analysis-adapter@v1",
+  "description": "Provider-neutral contract for optional analysis adapters. Analysis may emit proposed claims, but cannot mutate canonical Atelier state.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/manifest"
+    },
+    {
+      "$ref": "#/$defs/proposals"
+    }
+  ],
+  "$defs": {
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "adapterId",
+        "provider",
+        "enabled",
+        "outputRoot",
+        "claimContract",
+        "execution",
+        "authority"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-analysis-adapter@v1"
+        },
+        "adapterId": {
+          "type": "string",
+          "pattern": "^atelier\\.analysis\\.[a-z0-9][a-z0-9.-]*$"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*$"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "outputRoot": {
+          "$ref": "#/$defs/localPath"
+        },
+        "claimContract": {
+          "const": "atelier-claim@v1"
+        },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "posture",
+            "hiddenModelProvider",
+            "network",
+            "installCommand",
+            "executeCommand"
+          ],
+          "properties": {
+            "posture": {
+              "enum": [
+                "inert",
+                "dry-run",
+                "reviewed-executor"
+              ]
+            },
+            "hiddenModelProvider": {
+              "const": false
+            },
+            "network": {
+              "enum": [
+                "none",
+                "active-harness-approved"
+              ]
+            },
+            "installCommand": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "executeCommand": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reviewedBy": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "posture": {
+                    "const": "inert"
+                  }
+                },
+                "required": [
+                  "posture"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "network": {
+                    "const": "none"
+                  },
+                  "installCommand": {
+                    "type": "null"
+                  },
+                  "executeCommand": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "posture": {
+                    "const": "reviewed-executor"
+                  }
+                },
+                "required": [
+                  "posture"
+                ]
+              },
+              "then": {
+                "required": [
+                  "reviewedBy",
+                  "reviewedAt"
+                ]
+              }
+            }
+          ]
+        },
+        "authority": {
+          "$ref": "#/$defs/claimOnlyAuthority"
+        }
+      }
+    },
+    "proposals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "provider",
+        "generatedAt",
+        "proposals",
+        "authority"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-proposals@v1"
+        },
+        "adapterId": {
+          "type": "string",
+          "pattern": "^atelier\\.analysis\\.[a-z0-9][a-z0-9.-]*$"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*$"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/proposedClaim"
+          }
+        },
+        "authority": {
+          "$ref": "#/$defs/claimOnlyAuthority"
+        }
+      }
+    },
+    "claimOnlyAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claimOnly",
+        "frontMatterMutation",
+        "graphRelationMutation",
+        "publicExportFeed",
+        "mcpFeed",
+        "runtimeImport",
+        "directCanonicalWrite"
+      ],
+      "properties": {
+        "claimOnly": {
+          "const": true
+        },
+        "frontMatterMutation": {
+          "const": false
+        },
+        "graphRelationMutation": {
+          "const": false
+        },
+        "publicExportFeed": {
+          "const": false
+        },
+        "mcpFeed": {
+          "const": false
+        },
+        "runtimeImport": {
+          "const": false
+        },
+        "directCanonicalWrite": {
+          "const": false
+        }
+      }
+    },
+    "proposedClaim": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "schema",
+        "provider",
+        "status",
+        "promoted"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-claim@v1"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*$"
+        },
+        "status": {
+          "const": "proposed"
+        },
+        "promoted": {
+          "const": false
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "kg"
+            ]
+          },
+          {
+            "required": [
+              "frontmatter"
+            ]
+          },
+          {
+            "required": [
+              "frontMatter"
+            ]
+          },
+          {
+            "required": [
+              "relations"
+            ]
+          },
+          {
+            "required": [
+              "graphRelations"
+            ]
+          },
+          {
+            "required": [
+              "publicExport"
+            ]
+          },
+          {
+            "required": [
+              "atelierExport"
+            ]
+          },
+          {
+            "required": [
+              "mcpFeed"
+            ]
+          },
+          {
+            "required": [
+              "runtimeImport"
+            ]
+          },
+          {
+            "required": [
+              "canonicalWrite"
+            ]
+          },
+          {
+            "required": [
+              "canonicalMutation"
+            ]
+          },
+          {
+            "required": [
+              "mutation"
+            ]
+          },
+          {
+            "required": [
+              "writes"
+            ]
+          }
+        ]
+      }
+    },
+    "localPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._/-]+$",
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^/"
+          },
+          {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          },
+          {
+            "pattern": "^[a-zA-Z][a-zA-Z0-9+.-]*:"
+          }
+        ]
+      }
+    }
+  }
+}

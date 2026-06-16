@@ -1,0 +1,21 @@
+[
+  {
+    "schema": "atelier-claim@v1",
+    "claimId": "claim:analysis:2026-06-12:invalid-frontmatter",
+    "subject": "sample-architecture:atelier-analysis-optional-install-decision",
+    "predicate": "supports",
+    "object": "sample-architecture:local-git-generated-db-hybrid",
+    "provider": "analysis",
+    "status": "proposed",
+    "promoted": false,
+    "frontmatter": {
+      "kg": {
+        "relations": {
+          "supports": [
+            "sample-architecture:local-git-generated-db-hybrid"
+          ]
+        }
+      }
+    }
+  }
+]

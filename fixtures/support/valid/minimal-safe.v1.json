@@ -1,0 +1,20 @@
+{
+  "schema": "mnstry.atelier-support-bundle-preview@v1",
+  "state": "support_bundle",
+  "telemetry": "none",
+  "sendPath": false,
+  "background": false,
+  "generatedAt": "1970-01-01T00:00:00.000Z",
+  "fields": [
+    "nodeVersion",
+    "platform"
+  ],
+  "artifacts": [
+    {
+      "kind": "local-diagnostic",
+      "label": "operator-reviewed-summary",
+      "count": 2
+    }
+  ],
+  "hash": "fixture-hash-not-authoritative"
+}

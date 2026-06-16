@@ -1,0 +1,409 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/atelier-readiness.v1.schema.json",
+  "title": "mnstry.atelier-readiness@v1",
+  "description": "Live readiness report for the Atelier extractable-kit boundary. This is evidence from current checks, not source authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generatedAt",
+    "workspace",
+    "acceptedBoundary",
+    "ready",
+    "blockers",
+    "warnings",
+    "graph",
+    "alignment",
+    "contracts",
+    "kitManifest",
+    "runtimeDryRun",
+    "supportBundle",
+    "analysis",
+    "checks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-readiness@v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "repoOpsHead"
+      ],
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repoOpsHead": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{7,40}$"
+        }
+      }
+    },
+    "acceptedBoundary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "blockers": {
+      "$ref": "#/$defs/stringList"
+    },
+    "warnings": {
+      "$ref": "#/$defs/stringList"
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "path",
+        "schema",
+        "nodes",
+        "edges",
+        "diagnostics",
+        "privateRepoRecommended"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "edges": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "privateRepoRecommended": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "alignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "path",
+        "schema",
+        "generatedAt",
+        "graphNodes",
+        "graphEdges",
+        "alignmentNodes",
+        "alignmentEdges",
+        "gaps",
+        "diagnostics"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generatedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "graphNodes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "graphEdges": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "alignmentNodes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "alignmentEdges": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gaps": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "present"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "present": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "runtimeDryRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "root",
+        "script",
+        "test",
+        "fixture",
+        "dryRunOnly"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "script": {
+          "type": "string",
+          "minLength": 1
+        },
+        "test": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fixture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dryRunOnly": {
+          "const": true
+        }
+      }
+    },
+    "kitManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "path",
+        "schema",
+        "kernel",
+        "sourceDialect",
+        "exportContract",
+        "extensionPacks",
+        "telemetry"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kernel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceDialect": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exportContract": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "extensionPacks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "telemetry": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "supportBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "states",
+        "sendPath",
+        "background",
+        "telemetry",
+        "hashableDryRun"
+      ],
+      "properties": {
+        "states": {
+          "type": "array",
+          "items": {
+            "enum": ["none", "support_bundle"]
+          },
+          "minItems": 2,
+          "uniqueItems": true
+        },
+        "sendPath": {
+          "const": false
+        },
+        "background": {
+          "const": false
+        },
+        "telemetry": {
+          "const": "none"
+        },
+        "hashableDryRun": {
+          "const": true
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "enabled",
+        "defaultEnabled",
+        "manifestPath",
+        "manifestPresent",
+        "authority"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "defaultEnabled": {
+          "const": false
+        },
+        "manifestPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifestPresent": {
+          "type": "boolean"
+        },
+        "authority": {
+          "enum": [
+            "optional-local-claim-only"
+          ]
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "command",
+          "cwd",
+          "ok",
+          "status",
+          "signal"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "signal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

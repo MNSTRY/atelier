@@ -1,0 +1,16 @@
+{
+  "schema": "atelier-claim@v1",
+  "claimId": "claim:manual:2026-06-12:local-hybrid-supports-runtime-strategy",
+  "subject": "sample-architecture:local-git-generated-db-hybrid",
+  "predicate": "supports",
+  "object": "sample-architecture:mnstry-atelier-open-source-to-runtime-product-strategy",
+  "provider": "manual",
+  "status": "proposed",
+  "promoted": false,
+  "confidence": 0.9,
+  "evidence": [
+    "LOCAL-GIT-GENERATED-DB-HYBRID.md#core-shape",
+    "MNSTRY-ATELIER-OPEN-SOURCE-TO-RUNTIME-PRODUCT-STRATEGY.md"
+  ],
+  "createdAt": "2026-06-12T00:00:00Z"
+}

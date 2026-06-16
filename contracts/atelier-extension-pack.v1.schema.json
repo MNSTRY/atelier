@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/contracts/atelier-extension-pack.v1.schema.json",
+  "title": "MNSTRY Atelier Extension Pack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "namespace",
+    "version",
+    "terms",
+    "migrations",
+    "fixtures",
+    "lenses",
+    "readinessRules",
+    "actionRules",
+    "exportMappings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry-atelier-extension-pack@v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
+    },
+    "namespace": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v[0-9]+$"
+    },
+    "terms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "kind"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": ["concept", "workflow", "lens", "readiness", "action", "export_mapping"]
+          }
+        }
+      }
+    },
+    "migrations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "mode", "description"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+          },
+          "mode": {
+            "enum": ["manual_review", "dry_run_only", "generated_projection"]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._/-]+$"
+      }
+    },
+    "lenses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "query"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "query": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "readinessRules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "condition"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+          },
+          "severity": {
+            "enum": ["info", "warning", "blocker"]
+          },
+          "condition": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "actionRules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "actionIntent", "runtimeMutation"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+          },
+          "actionIntent": {
+            "type": "string",
+            "pattern": "^copy\\.[a-zA-Z0-9]+$"
+          },
+          "runtimeMutation": {
+            "const": false
+          }
+        }
+      }
+    },
+    "exportMappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sourceTerm", "target"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+          },
+          "sourceTerm": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+          },
+          "target": {
+            "enum": [
+              "content.material",
+              "core.artifact",
+              "core.trackable",
+              "scheduling.commitment",
+              "space.space",
+              "space.provision"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
