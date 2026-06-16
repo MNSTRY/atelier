@@ -1,0 +1,33 @@
+{
+  "schema": "mnstry.atelier-boundary-policy@v1",
+  "mode": "legacy-warning",
+  "actors": {
+    "project-owner": {
+      "githubLogin": "project-owner",
+      "gitEmails": ["owner@example.invalid"],
+      "privateDomainRepo": "client-private"
+    }
+  },
+  "repos": {
+    "client-private": {
+      "kind": "private_domain",
+      "ownerActor": "project-owner",
+      "readBoundary": "private",
+      "allowedAudiences": ["private", "sensitive", "team", "operator", "staff", "public"],
+      "forbiddenAudiences": [],
+      "autoCommit": "guarded"
+    },
+    "client-shared": {
+      "kind": "shared",
+      "readBoundary": "team",
+      "allowedAudiences": ["team", "operator", "staff", "public"],
+      "forbiddenAudiences": ["private", "sensitive"],
+      "autoCommit": "guarded"
+    }
+  },
+  "promotion": {
+    "requiresGitPromote": true,
+    "recordsPath": "governance/git-promote-events.jsonl"
+  },
+  "forbiddenPaths": [".mnstry-local/**", "support-bundles/**"]
+}

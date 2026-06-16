@@ -17,9 +17,16 @@ function copyDir(source, target) {
 
 const args = parseArgs(process.argv.slice(2))
 const target = path.resolve(args.target || process.cwd())
-if (args.fixture === 'sample-workspace') {
+const template = args.template || args.fixture
+if (template === 'sample-workspace') {
   copyDir(path.join(packageRoot, 'fixtures/projects/sample-workspace'), target)
   console.log(`created sample Atelier workspace at ${target}`)
+} else if (template === 'private-domain') {
+  copyDir(path.join(packageRoot, 'templates/private-domain-workspace'), target)
+  console.log(`created private domain Atelier workspace at ${target}`)
+} else if (template === 'shared-project' || template === 'mystery-shared') {
+  copyDir(path.join(packageRoot, 'templates/shared-project-workspace'), target)
+  console.log(`created shared project Atelier workspace at ${target}`)
 } else {
   fs.mkdirSync(target, { recursive: true })
   fs.mkdirSync(path.join(target, 'content'), { recursive: true })

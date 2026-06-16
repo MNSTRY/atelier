@@ -51,5 +51,14 @@ export {
 } from './egress/forbidden-egress.mjs'
 
 export {
+  BOUNDARY_POLICY_SCHEMA,
+  checkBoundaryPolicy,
+  createPromoteEvent,
+  installBoundaryHooks,
+  loadBoundaryPolicy,
+  validateBoundaryPolicy,
+} from './boundary/policy.mjs'
+
+export {
   analysisDryRun,
 } from './analysis/analysis.mjs'

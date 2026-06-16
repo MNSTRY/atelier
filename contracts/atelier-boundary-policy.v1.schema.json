@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.app/schemas/atelier-boundary-policy.v1.schema.json",
+  "title": "mnstry.atelier-boundary-policy@v1",
+  "description": "Local repo boundary policy for enforcing private-domain and shared-repo placement in MNSTRY Atelier workspaces.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "mode", "actors", "repos"],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-boundary-policy@v1"
+    },
+    "mode": {
+      "enum": ["strict", "legacy-warning"]
+    },
+    "actors": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/actorId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/actorPolicy"
+      },
+      "minProperties": 1
+    },
+    "repos": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/repoName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/repoPolicy"
+      },
+      "minProperties": 1
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiresGitPromote": {
+          "type": "boolean"
+        },
+        "recordsPath": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    },
+    "forbiddenPaths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "governanceLedgerPath": {
+      "$ref": "#/$defs/relativePath"
+    }
+  },
+  "$defs": {
+    "actorId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]*$"
+    },
+    "actorPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["privateDomainRepo"],
+      "properties": {
+        "githubLogin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gitEmails": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 3
+          },
+          "uniqueItems": true
+        },
+        "privateDomainRepo": {
+          "$ref": "#/$defs/repoName"
+        }
+      },
+      "anyOf": [
+        { "required": ["githubLogin"] },
+        { "required": ["gitEmails"] }
+      ]
+    },
+    "repoName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "repoPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "readBoundary", "allowedAudiences", "forbiddenAudiences", "autoCommit"],
+      "properties": {
+        "kind": {
+          "enum": ["private_domain", "shared", "generated", "archive"]
+        },
+        "ownerActor": {
+          "$ref": "#/$defs/actorId"
+        },
+        "readBoundary": {
+          "$ref": "#/$defs/audience"
+        },
+        "allowedAudiences": {
+          "$ref": "#/$defs/audienceList"
+        },
+        "forbiddenAudiences": {
+          "$ref": "#/$defs/audienceList"
+        },
+        "autoCommit": {
+          "enum": ["allowed", "blocked", "guarded"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "private_domain" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["ownerActor"]
+          }
+        }
+      ]
+    },
+    "audience": {
+      "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+    },
+    "audienceList": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/audience"
+      },
+      "uniqueItems": true
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          { "pattern": "\\u0000" },
+          { "pattern": "^/" },
+          { "pattern": "^[a-z][a-z0-9+.-]*:" }
+        ]
+      }
+    }
+  }
+}

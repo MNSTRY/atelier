@@ -31,6 +31,11 @@ const commandMap = new Map([
   ['support:bundle', ['src/commands/support.mjs']],
   ['egress', ['src/commands/egress.mjs']],
   ['egress:check', ['src/commands/egress.mjs']],
+  ['boundary', ['src/commands/boundary.mjs']],
+  ['boundary:check', ['src/commands/boundary.mjs', 'check']],
+  ['boundary:doctor', ['src/commands/boundary.mjs', 'doctor']],
+  ['boundary:install-hooks', ['src/commands/boundary.mjs', 'install-hooks']],
+  ['promote', ['src/commands/promote.mjs']],
   ['analysis', ['src/commands/analysis.mjs']],
   ['analyze', ['src/commands/analysis.mjs']],
   ['config', ['src/commands/config.mjs']],
@@ -57,6 +62,9 @@ Core commands:
   export --dry-run FILE           Validate atelier-export@v1 dry-run artifact.
   support bundle --dry-run        Preview a no-send support bundle.
   egress check                    Check extracted Atelier paths for forbidden egress.
+  boundary check                  Enforce private/shared repo placement rules.
+  boundary install-hooks          Install staged/private-domain Git guards.
+  promote                         Record a git.promote disclosure event.
   config check                    Validate project config.
 
 Every project-aware command accepts --project-config=PATH or
@@ -72,6 +80,9 @@ function normalizeArgs(argv) {
   if (args[0] === 'export' && args[1] === '--dry-run') args.splice(0, 2, 'export:dry-run')
   if (args[0] === 'generated' && args[1] === 'check') args.splice(0, 2, 'generated:check')
   if (args[0] === 'egress' && args[1] === 'check') args.splice(0, 2, 'egress:check')
+  if (args[0] === 'boundary' && args[1] === 'check') args.splice(0, 2, 'boundary:check')
+  if (args[0] === 'boundary' && args[1] === 'doctor') args.splice(0, 2, 'boundary:doctor')
+  if (args[0] === 'boundary' && args[1] === 'install-hooks') args.splice(0, 2, 'boundary:install-hooks')
   if (args[0] === 'config' && args[1] === 'check') args.splice(0, 2, 'config:check')
   if (args[0] === 'support' && args[1] === 'bundle') args.splice(0, 2, 'support:bundle')
   if (args[0] === 'support:bundle' && args[1] === '--dry-run') args.splice(1, 1)

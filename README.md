@@ -40,6 +40,7 @@ client-grade sharing.
 - Rejects unresolved, disguised, or non-public-projectable source references.
 - Produces deterministic dry-run reports with `accepted`, `importable`, and
   `worstOperationStatus`.
+- Enforces Repo Boundary Guard V1 for private domain and shared project repos.
 
 ## What This Package Does Not Do
 
@@ -67,6 +68,7 @@ mnstry atelier init --fixture=sample-workspace --target ./sample
 mnstry atelier graph --project ./sample/atelier.project.json
 mnstry atelier project --project ./sample/atelier.project.json
 mnstry atelier readiness --project ./sample/atelier.project.json
+mnstry atelier boundary check --project ./sample/atelier.project.json
 mnstry atelier dev --project ./sample/atelier.project.json
 ```
 
@@ -75,6 +77,20 @@ The direct package binary supports the same Atelier subcommands:
 ```bash
 mnstry-atelier dry-run ./atelier-export.json
 ```
+
+Boundary guard commands are local and Git-native:
+
+```bash
+mnstry-atelier boundary check --project ./atelier.project.json
+mnstry-atelier boundary check --staged --project ./atelier.project.json
+mnstry-atelier boundary install-hooks --project ./atelier.project.json
+mnstry-atelier promote --source-repo mnstry-private-author --target-repo mystery-example --kg-id mnstry-private-author:seed
+```
+
+Strict policies fail closed when private or sensitive source is placed in a
+shared repo, when protected local/support/session files are staged, or when
+private-domain material appears in shared work without a `git.promote`
+disclosure record.
 
 ## Contract Boundary
 

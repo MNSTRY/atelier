@@ -77,6 +77,21 @@
         }
       }
     },
+    "boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policyPath": {
+          "$ref": "#/$defs/pathString"
+        },
+        "governanceLedgerPath": {
+          "$ref": "#/$defs/pathString"
+        },
+        "strictNewRepos": {
+          "type": "boolean"
+        }
+      }
+    },
     "repoOpsRoot": {
       "$ref": "#/$defs/pathString"
     },
