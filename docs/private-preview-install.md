@@ -18,6 +18,23 @@ from anyone who can read the repository.
 
 ## Install Shape
 
+Install the private preview from the accepted Git tag. Public npm publishing is
+deferred until the public package path is ready:
+
+```bash
+npm install --save-dev git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.0
+```
+
+Invited users who prefer SSH may use:
+
+```bash
+npm install --save-dev git+ssh://git@github.com/mnstry/atelier.git#v0.1.0-alpha.0
+```
+
+The workspace `atelier.lock.json` should record the resolved Git SHA from this
+tag install. Treat the tag as the collaborator-friendly handle and the SHA as
+the review authority.
+
 Use one private domain repository per user:
 
 ```text
@@ -44,7 +61,8 @@ Default example user:
 - Shared Mystery repo: `github.com/<org>/mystery-private-preview`
 
 `AUTHOR_GITHUB_LOGIN_PLACEHOLDER` is not a real account. Replace it before using
-the template.
+the template. `mnstry-private-author` and `mystery-private-preview` are the next
+rollout defaults, not repositories created by this package release.
 
 ## Local Setup
 
@@ -86,6 +104,7 @@ These commands read local files and write generated local outputs only.
 The starter commands create `atelier.lock.json` inside the copied workspace so
 the installed Atelier package source, version, contracts, and migration state
 are reviewable. Refresh it from inside the copied workspace after choosing a
-published package version, private GitHub install, or local tarball.
+private GitHub tag install. Local tarballs remain release-audit and smoke-test
+tools; they are not the default collaborator install path.
 
 See `docs/upgrade.md` for the full upgrade flow and boundary review checklist.
