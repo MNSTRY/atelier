@@ -1,0 +1,20 @@
+{
+  "schema": "mnstry.atelier-boundary-policy@v1",
+  "mode": "legacy-warning",
+  "actors": {
+    "project-owner": {
+      "githubLogin": "project-owner",
+      "privateDomainRepo": "client-private"
+    }
+  },
+  "repos": {
+    "client-private": {
+      "kind": "private_domain",
+      "ownerActor": "project-owner",
+      "readBoundary": "private",
+      "allowedAudiences": ["not-real"],
+      "forbiddenAudiences": [],
+      "autoCommit": "guarded"
+    }
+  }
+}

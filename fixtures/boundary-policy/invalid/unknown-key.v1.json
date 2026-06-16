@@ -1,0 +1,12 @@
+{
+  "schema": "mnstry.atelier-boundary-policy@v1",
+  "mode": "strict",
+  "implicitPromotion": true,
+  "actors": {
+    "author": {
+      "githubLogin": "AUTHOR_GITHUB_LOGIN_PLACEHOLDER",
+      "privateDomainRepo": "mnstry-private-author"
+    }
+  },
+  "repos": {}
+}

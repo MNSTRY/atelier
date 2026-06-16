@@ -136,6 +136,7 @@ export function resolveProjectConfig({
   const projection = asObject(config.projection)
   const alignment = asObject(config.alignment)
   const runtime = asObject(config.runtime)
+  const boundaries = asObject(config.boundaries)
 
   const workspaceRoot =
     resolvePathValue(firstString(roots.workspace, roots.workspaceRoot), configDir) ||
@@ -161,6 +162,14 @@ export function resolveProjectConfig({
     resolvePathValue(firstString(projection.readinessPath, projection.readiness), configDir) ||
     resolvePathValue(firstString(defaults.readinessPath), outputRoot) ||
     path.join(outputRoot, 'atelier-readiness.json')
+  const boundaryPolicyPath =
+    resolvePathValue(firstString(boundaries.policyPath), configDir) ||
+    resolvePathValue(firstString(defaults.boundaryPolicyPath), configDir) ||
+    path.join(configDir, 'boundary-policy.v1.json')
+  const governanceLedgerPath =
+    resolvePathValue(firstString(boundaries.governanceLedgerPath), configDir) ||
+    resolvePathValue(firstString(defaults.governanceLedgerPath), configDir) ||
+    null
   const appRepoName = firstString(alignment.appRepo, config.appRepoName, defaults.appRepoName)
   const appRootValue = firstString(alignment.appRoot, config.appRoot)
   const appRoot = resolvePathValue(appRootValue, workspaceRoot) || (appRepoName ? path.join(workspaceRoot, appRepoName) : null)
@@ -184,6 +193,9 @@ export function resolveProjectConfig({
     workspaceGraphPath: graphPath,
     outputRoot,
     readinessPath,
+    boundaryPolicyPath,
+    governanceLedgerPath,
+    strictNewRepos: boundaries.strictNewRepos === true || defaults.strictNewRepos === true,
     runtimeRoot: resolvePathValue(firstString(runtime.root, runtime.mnstryRuntimeRoot), configDir),
     appRepoName,
     appRoot,
@@ -229,7 +241,7 @@ function stringPathErrors(value, label) {
 export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) {
   const errors = []
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return ['project config must be a JSON object']
-  errors.push(...unknownKeyErrors(doc, '/', new Set(['schema', 'name', 'roots', 'graph', 'projection', 'alignment', 'runtime', 'repos'])))
+  errors.push(...unknownKeyErrors(doc, '/', new Set(['schema', 'name', 'roots', 'graph', 'projection', 'alignment', 'runtime', 'boundaries', 'repos'])))
   if (doc.schema !== PROJECT_CONFIG_SCHEMA) errors.push(`schema must be ${PROJECT_CONFIG_SCHEMA}`)
 
   const roots = asObject(doc.roots)
@@ -237,11 +249,13 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
   const projection = asObject(doc.projection)
   const alignment = asObject(doc.alignment)
   const runtime = asObject(doc.runtime)
+  const boundaries = asObject(doc.boundaries)
   if (doc.roots != null && roots !== doc.roots) errors.push('roots must be an object')
   if (doc.graph != null && graph !== doc.graph) errors.push('graph must be an object')
   if (doc.projection != null && projection !== doc.projection) errors.push('projection must be an object')
   if (doc.alignment != null && alignment !== doc.alignment) errors.push('alignment must be an object')
   if (doc.runtime != null && runtime !== doc.runtime) errors.push('runtime must be an object')
+  if (doc.boundaries != null && boundaries !== doc.boundaries) errors.push('boundaries must be an object')
   const hasRepoArray = Array.isArray(doc.repos) && doc.repos.length > 0
   const hasAlignmentScaffold = Boolean(firstString(alignment.appRepo) && firstString(alignment.root, alignment.path))
   if (!hasRepoArray && !hasAlignmentScaffold) errors.push('repos must be a non-empty array or alignment must define appRepo and root')
@@ -251,6 +265,7 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
   errors.push(...unknownKeyErrors(projection, 'projection', new Set(['outputRoot', 'root', 'readinessPath', 'readiness'])))
   errors.push(...unknownKeyErrors(alignment, 'alignment', new Set(['appRepo', 'appRoot', 'root', 'path'])))
   errors.push(...unknownKeyErrors(runtime, 'runtime', new Set(['root', 'mnstryRuntimeRoot'])))
+  errors.push(...unknownKeyErrors(boundaries, 'boundaries', new Set(['policyPath', 'governanceLedgerPath', 'strictNewRepos'])))
   errors.push(...stringPathErrors(roots.workspace, 'roots.workspace'))
   errors.push(...stringPathErrors(graph.outputPath, 'graph.outputPath'))
   errors.push(...stringPathErrors(graph.repoAccessPath, 'graph.repoAccessPath'))
@@ -260,6 +275,11 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
   errors.push(...stringPathErrors(alignment.root, 'alignment.root'))
   errors.push(...stringPathErrors(alignment.path, 'alignment.path'))
   errors.push(...stringPathErrors(alignment.appRoot, 'alignment.appRoot'))
+  errors.push(...stringPathErrors(boundaries.policyPath, 'boundaries.policyPath'))
+  errors.push(...stringPathErrors(boundaries.governanceLedgerPath, 'boundaries.governanceLedgerPath'))
+  if (boundaries.strictNewRepos != null && typeof boundaries.strictNewRepos !== 'boolean') {
+    errors.push('boundaries.strictNewRepos must be a boolean')
+  }
   if (alignment.appRepo != null && !firstString(alignment.appRepo)) errors.push('alignment.appRepo must be a non-empty string')
 
   for (const [index, repo] of (Array.isArray(doc.repos) ? doc.repos : []).entries()) {

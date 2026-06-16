@@ -1,0 +1,9 @@
+{
+  "schema": "mnstry.repo-access@v1",
+  "defaultReadBoundary": "private",
+  "repos": {
+    "mnstry-private-author": {
+      "readBoundary": "private"
+    }
+  }
+}

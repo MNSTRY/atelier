@@ -1,0 +1,28 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "mnstry-private-author",
+  "roots": {
+    "workspace": ".",
+    "repoOps": "."
+  },
+  "graph": {
+    "repoAccessPath": "repo-access.v1.json",
+    "outputPath": "atelier-output/knowledge.graph.json"
+  },
+  "projection": {
+    "outputRoot": "atelier-output",
+    "readinessPath": "atelier-output/atelier-readiness.json"
+  },
+  "boundaries": {
+    "policyPath": "boundary-policy.v1.json",
+    "governanceLedgerPath": "governance/repo-boundary-ledger.md",
+    "strictNewRepos": true
+  },
+  "repos": [
+    {
+      "name": "mnstry-private-author",
+      "path": "domain",
+      "readBoundary": "private"
+    }
+  ]
+}

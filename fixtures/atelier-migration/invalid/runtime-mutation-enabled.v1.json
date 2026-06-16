@@ -1,0 +1,21 @@
+{
+  "schema": "mnstry.atelier-migration@v1",
+  "id": "runtime-mutation@0.1.0-alpha.0",
+  "from": "*",
+  "to": "0.1.0-alpha.0",
+  "class": "config_schema",
+  "title": "Runtime mutation is refused",
+  "description": "This fixture proves migration authority cannot enable runtime mutation.",
+  "files": [],
+  "requiredPostChecks": [],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "sendPath": false,
+    "runtimeMutation": true,
+    "runtimeImport": false,
+    "runtimeApply": false,
+    "analysisExecution": false,
+    "hiddenProvider": false
+  }
+}

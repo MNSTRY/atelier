@@ -1,0 +1,21 @@
+{
+  "schema": "mnstry.atelier-migration@v1",
+  "id": "live-apply@0.1.0-alpha.0",
+  "from": "*",
+  "to": "0.1.0-alpha.0",
+  "class": "live_apply",
+  "title": "Live apply is not a migration class",
+  "description": "This fixture proves unknown migration classes fail closed.",
+  "files": [],
+  "requiredPostChecks": [],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "sendPath": false,
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "runtimeApply": false,
+    "analysisExecution": false,
+    "hiddenProvider": false
+  }
+}

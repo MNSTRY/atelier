@@ -1,0 +1,38 @@
+{
+  "schema": "mnstry.atelier-boundary-policy@v1",
+  "mode": "strict",
+  "actors": {
+    "author": {
+      "githubLogin": "AUTHOR_GITHUB_LOGIN_PLACEHOLDER",
+      "gitEmails": ["author@example.invalid"],
+      "privateDomainRepo": "mnstry-private-author"
+    }
+  },
+  "repos": {
+    "mnstry-private-author": {
+      "kind": "private_domain",
+      "ownerActor": "author",
+      "readBoundary": "private",
+      "allowedAudiences": ["private", "sensitive", "team", "operator", "staff", "public"],
+      "forbiddenAudiences": [],
+      "autoCommit": "guarded"
+    }
+  },
+  "promotion": {
+    "requiresGitPromote": true,
+    "recordsPath": "governance/git-promote-events.jsonl"
+  },
+  "forbiddenPaths": [
+    ".mnstry-local/**",
+    ".atelier-proposals/**",
+    ".atelier-current",
+    ".atelier-presence.json",
+    ".atelier-nonce",
+    ".atelier-capability-grants.json",
+    ".atelier-audit.jsonl",
+    "support-bundles/**",
+    "prompts/**",
+    "transcripts/**"
+  ],
+  "governanceLedgerPath": "governance/repo-boundary-ledger.md"
+}

@@ -34,12 +34,16 @@ client-grade sharing.
 - Records proposal metadata without browser apply/write endpoints.
 - Previews no-send support bundles.
 - Checks package runtime paths for forbidden non-localhost egress.
+- Writes and checks `atelier.lock.json` for reviewable upstream package state.
+- Plans and applies branch-based upgrades without silently overwriting authored
+  content.
 - Validates `atelier-export@v1` JSON against the published schema.
 - Enforces the local source `audience` and runtime `visibility` boundary.
 - Rejects mutation/apply intent in dry-run validation.
 - Rejects unresolved, disguised, or non-public-projectable source references.
 - Produces deterministic dry-run reports with `accepted`, `importable`, and
   `worstOperationStatus`.
+- Enforces Repo Boundary Guard V1 for private domain and shared project repos.
 
 ## What This Package Does Not Do
 
@@ -67,6 +71,9 @@ mnstry atelier init --fixture=sample-workspace --target ./sample
 mnstry atelier graph --project ./sample/atelier.project.json
 mnstry atelier project --project ./sample/atelier.project.json
 mnstry atelier readiness --project ./sample/atelier.project.json
+mnstry atelier boundary check --project ./sample/atelier.project.json
+mnstry atelier lock write --project ./sample/atelier.project.json
+mnstry atelier upgrade --dry-run --project ./sample/atelier.project.json
 mnstry atelier dev --project ./sample/atelier.project.json
 ```
 
@@ -75,6 +82,34 @@ The direct package binary supports the same Atelier subcommands:
 ```bash
 mnstry-atelier dry-run ./atelier-export.json
 ```
+
+Boundary guard commands are local and Git-native:
+
+```bash
+mnstry-atelier boundary check --project ./atelier.project.json
+mnstry-atelier boundary check --staged --project ./atelier.project.json
+mnstry-atelier boundary install-hooks --project ./atelier.project.json
+mnstry-atelier promote --source-repo mnstry-private-author --target-repo mystery-example --kg-id mnstry-private-author:seed
+```
+
+Strict policies fail closed when private or sensitive source is placed in a
+shared repo, when protected local/support/session files are staged, or when
+private-domain material appears in shared work without a `git.promote`
+disclosure record.
+
+Upgrade commands are also local and review-first:
+
+```bash
+mnstry-atelier lock check --project ./atelier.project.json
+mnstry-atelier upgrade --dry-run --project ./atelier.project.json
+mnstry-atelier upgrade --apply --project ./atelier.project.json --branch codex/atelier-upgrade-YYYYMMDD
+```
+
+`upgrade --apply` creates or switches to the requested branch, refuses dirty
+authored repos, preserves unrelated user hooks through composed hook files, runs
+only registered migrations, refreshes generated projections, and leaves a Git
+commit for review. It will not weaken boundary policy, introduce telemetry,
+enable non-localhost egress, run Analysis, or write/import/apply runtime state.
 
 ## Contract Boundary
 

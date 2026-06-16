@@ -1,0 +1,230 @@
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+import {
+  BOUNDARY_POLICY_SCHEMA,
+  checkBoundaryPolicy,
+  createPromoteEvent,
+  installBoundaryHooks,
+  runBoundaryCheckCommand,
+  validateBoundaryPolicy,
+} from '../src/boundary/policy.mjs'
+import { commandProject, writeJson } from '../src/project/config.mjs'
+
+function git(repo, args) {
+  return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
+}
+
+function makeWorkspace() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-boundary-'))
+  const privateRepo = path.join(root, 'mnstry-private-author')
+  const sharedRepo = path.join(root, 'mystery-example')
+  fs.mkdirSync(privateRepo, { recursive: true })
+  fs.mkdirSync(sharedRepo, { recursive: true })
+  for (const repo of [privateRepo, sharedRepo]) {
+    git(repo, ['init'])
+    git(repo, ['config', 'user.email', 'author@example.invalid'])
+    git(repo, ['config', 'user.name', 'Author'])
+  }
+  writeJson(path.join(root, 'atelier.project.json'), {
+    schema: 'mnstry.atelier-project-config@v1',
+    name: 'boundary-fixture',
+    roots: { workspace: '.', repoOps: '.' },
+    graph: {
+      repoAccessPath: 'repo-access.v1.json',
+      outputPath: 'atelier-output/knowledge.graph.json',
+    },
+    projection: {
+      outputRoot: 'atelier-output',
+      readinessPath: 'atelier-output/atelier-readiness.json',
+    },
+    boundaries: {
+      policyPath: 'boundary-policy.v1.json',
+      governanceLedgerPath: 'governance/repo-boundary-ledger.md',
+      strictNewRepos: true,
+    },
+    repos: [
+      { name: 'mnstry-private-author', path: 'mnstry-private-author', readBoundary: 'private' },
+      { name: 'mystery-example', path: 'mystery-example', readBoundary: 'team' },
+    ],
+  })
+  writeJson(path.join(root, 'repo-access.v1.json'), {
+    schema: 'mnstry.atelier-repo-access@v1',
+    defaultReadBoundary: 'team',
+    repos: {
+      'mnstry-private-author': { readBoundary: 'private' },
+      'mystery-example': { readBoundary: 'team' },
+    },
+  })
+  const policy = boundaryPolicy()
+  writeJson(path.join(root, 'boundary-policy.v1.json'), policy)
+  return { root, privateRepo, sharedRepo, policy, project: project(root) }
+}
+
+function project(root) {
+  return commandProject({ argv: ['--project', path.join(root, 'atelier.project.json')], cwd: root, env: {} })
+}
+
+function boundaryPolicy(overrides = {}) {
+  return {
+    schema: BOUNDARY_POLICY_SCHEMA,
+    mode: 'strict',
+    actors: {
+      author: {
+        githubLogin: 'AUTHOR_GITHUB_LOGIN_PLACEHOLDER',
+        gitEmails: ['author@example.invalid'],
+        privateDomainRepo: 'mnstry-private-author',
+      },
+    },
+    repos: {
+      'mnstry-private-author': {
+        kind: 'private_domain',
+        ownerActor: 'author',
+        readBoundary: 'private',
+        allowedAudiences: ['private', 'sensitive', 'team', 'operator', 'staff', 'public'],
+        forbiddenAudiences: [],
+        autoCommit: 'guarded',
+      },
+      'mystery-example': {
+        kind: 'shared',
+        readBoundary: 'team',
+        allowedAudiences: ['team', 'operator', 'staff', 'public'],
+        forbiddenAudiences: ['private', 'sensitive'],
+        autoCommit: 'guarded',
+      },
+    },
+    promotion: {
+      requiresGitPromote: true,
+      recordsPath: 'governance/git-promote-events.jsonl',
+    },
+    forbiddenPaths: ['.mnstry-local/**', '.atelier-proposals/**', 'support-bundles/**', 'prompts/**', 'transcripts/**'],
+    governanceLedgerPath: 'governance/repo-boundary-ledger.md',
+    ...overrides,
+  }
+}
+
+function writeDoc(repo, rel, id, audience, relations = '') {
+  const abs = path.join(repo, rel)
+  fs.mkdirSync(path.dirname(abs), { recursive: true })
+  fs.writeFileSync(abs, `---
+title: "${id}"
+kg:
+  id: "${id}"
+  type: "document"
+  status: "active"
+  audience: "${audience}"
+${relations}
+---
+
+# ${id}
+`)
+  return abs
+}
+
+test('boundary policy semantic validation catches missing project repo coverage', () => {
+  const { project: cfg } = makeWorkspace()
+  const policy = boundaryPolicy({ repos: { 'mnstry-private-author': boundaryPolicy().repos['mnstry-private-author'] } })
+  assert.match(validateBoundaryPolicy(policy, cfg).join('\n'), /policy repos\.mystery-example must be declared/)
+})
+
+test('strict boundary blocks private and sensitive material in shared repos', () => {
+  const { project: cfg, policy, sharedRepo } = makeWorkspace()
+  writeDoc(sharedRepo, 'private.md', 'mystery-example:private', 'private')
+  writeDoc(sharedRepo, 'sensitive.md', 'mystery-example:sensitive', 'sensitive')
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author' })
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((item) => item.code === 'private-audience-in-shared-repo' && item.path === 'private.md'))
+  assert.ok(report.errors.some((item) => item.code === 'private-audience-in-shared-repo' && item.path === 'sensitive.md'))
+})
+
+test('strict boundary permits private material in the owner private domain repo', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'private.md', 'mnstry-private-author:private', 'private')
+  writeDoc(privateRepo, 'sensitive.md', 'mnstry-private-author:sensitive', 'sensitive')
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author' })
+  assert.equal(report.ok, true, report.errors.map((item) => item.message).join('\n'))
+})
+
+test('legacy-warning mode reports placement problems without failing', () => {
+  const { project: cfg, policy, sharedRepo } = makeWorkspace()
+  policy.mode = 'legacy-warning'
+  writeDoc(sharedRepo, 'private.md', 'mystery-example:private', 'private')
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author' })
+  assert.equal(report.ok, true)
+  assert.ok(report.warnings.some((item) => item.code === 'private-audience-in-shared-repo'))
+})
+
+test('staged guard blocks forbidden paths and semantic field changes without review marker', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', 'doc.md'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  fs.mkdirSync(path.join(privateRepo, '.mnstry-local'), { recursive: true })
+  fs.writeFileSync(path.join(privateRepo, '.mnstry-local/session.json'), '{}\n')
+  let text = fs.readFileSync(path.join(privateRepo, 'doc.md'), 'utf8')
+  text = text.replace('audience: "private"', 'audience: "team"')
+  fs.writeFileSync(path.join(privateRepo, 'doc.md'), text)
+  git(privateRepo, ['add', '.'])
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true })
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((item) => item.code === 'forbidden-path-staged'))
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-change-needs-review'))
+})
+
+test('private domain actor mismatch fails closed in strict mode', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  policy.actors.other = {
+    githubLogin: 'other',
+    gitEmails: ['other@example.invalid'],
+    privateDomainRepo: 'mnstry-private-author',
+  }
+  writeDoc(privateRepo, 'private.md', 'mnstry-private-author:private', 'private')
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'other' })
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((item) => item.code === 'private-domain-actor-mismatch'))
+})
+
+test('private-to-shared supersession requires a git.promote record and passes after one exists', () => {
+  const { root, project: cfg, policy, privateRepo, sharedRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'private.md', 'mnstry-private-author:source', 'private')
+  writeDoc(
+    sharedRepo,
+    'summary.md',
+    'mystery-example:summary',
+    'team',
+    `  relations:
+    supersedes:
+      - "mnstry-private-author:source"`,
+  )
+  let report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author' })
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((item) => item.code === 'git-promote-required'))
+
+  const event = createPromoteEvent({
+    project: cfg,
+    policy,
+    sourceRepo: 'mnstry-private-author',
+    targetRepo: 'mystery-example',
+    kgId: 'mnstry-private-author:source',
+    targetKgId: 'mystery-example:summary',
+    actor: 'author',
+  })
+  fs.mkdirSync(path.join(root, 'governance'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'governance/git-promote-events.jsonl'), `${JSON.stringify(event)}\n`)
+  report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author' })
+  assert.equal(report.ok, true, report.errors.map((item) => item.message).join('\n'))
+})
+
+test('hook installer writes sidecar hook when user hook already exists', () => {
+  const { project: cfg, privateRepo } = makeWorkspace()
+  const hook = path.join(privateRepo, '.git/hooks/pre-commit')
+  fs.writeFileSync(hook, '#!/usr/bin/env bash\necho custom\n')
+  fs.chmodSync(hook, 0o755)
+  const result = installBoundaryHooks({ project: cfg })
+  assert.ok(result.skipped.some((item) => item.repo === 'mnstry-private-author' && item.hook === 'pre-commit'))
+  assert.ok(fs.existsSync(`${hook}.mnstry-atelier-boundary`))
+  assert.ok(result.installed.some((item) => item.repo === 'mystery-example'))
+})
