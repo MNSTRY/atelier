@@ -487,7 +487,7 @@ function runTemplateScaffold(project) {
   const target = path.join(docsDir, 'upgrade.md')
   if (fs.existsSync(target)) return
   fs.mkdirSync(docsDir, { recursive: true })
-  fs.writeFileSync(target, `# Atelier Upgrade\n\nRun \`mnstry-atelier upgrade --dry-run --project ./atelier.project.json\` before applying upstream Atelier changes.\n`)
+  fs.writeFileSync(target, `# Atelier Upgrade\n\nRun \`atelier upgrade --dry-run --project ./atelier.project.json\` before applying upstream Atelier changes.\n`)
 }
 
 function applyMigration(project, migration) {

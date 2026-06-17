@@ -11,6 +11,8 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.j
 const commandMap = new Map([
   ['contract', ['src/check-atelier-export-contract.mjs']],
   ['init', ['src/commands/init.mjs']],
+  ['setup', ['src/commands/setup.mjs', 'setup']],
+  ['adopt', ['src/commands/setup.mjs', 'adopt']],
   ['export', ['src/validate-atelier-export-dry-run.mjs']],
   ['export:dry-run', ['src/validate-atelier-export-dry-run.mjs']],
   ['dry-run', ['src/validate-atelier-export-dry-run.mjs']],
@@ -22,7 +24,7 @@ const commandMap = new Map([
   ['readiness', ['src/commands/readiness.mjs']],
   ['generated', ['src/commands/readiness.mjs', '--check']],
   ['generated:check', ['src/commands/readiness.mjs', '--check']],
-  ['doctor', ['src/commands/config.mjs']],
+  ['doctor', ['src/commands/setup.mjs', 'doctor']],
   ['context', ['src/commands/context.mjs']],
   ['resolve', ['src/commands/context.mjs', 'resolve']],
   ['capabilities', ['src/commands/context.mjs', 'capabilities']],
@@ -52,10 +54,14 @@ function printHelp() {
   console.log(`MNSTRY Atelier
 
 Usage:
-  mnstry atelier <command> [args]
-  mnstry-atelier <command> [args]
+  atelier <command> [args]
+  mnstry-atelier <command> [args]   # legacy alias
+  mnstry atelier <command> [args]   # compatibility
 
 Core commands:
+  init                            Create a blank-slate project from a template.
+  adopt                           Add Atelier to an existing repo/workspace.
+  setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
@@ -75,7 +81,32 @@ Core commands:
   config check                    Validate project config.
 
 Every project-aware command accepts --project-config=PATH or
-MNSTRY_ATELIER_PROJECT_CONFIG=PATH.`)
+MNSTRY_ATELIER_PROJECT_CONFIG=PATH. Machine-local repo paths belong in
+.atelier-local/, atelier.local.json, or atelier.workspace.local.json.`)
+}
+
+function printCommandHelp(command) {
+  const help = {
+    init: `Usage: atelier init [--template private-domain|shared-project|sample-workspace] [--target DIR] [--actor ID]
+
+Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately.`,
+    adopt: `Usage: atelier adopt [--profile single-repo|private-domain|shared-project|multi-repo|monorepo|control-workspace] [--target DIR] [--yes]
+
+Creates or checks a tracked atelier.project.json for an existing workspace and writes machine-local path bindings only to ignored local overlay files.`,
+    setup: `Usage: atelier setup --yes [--project ./atelier.project.json]
+
+Ensures ignored local Atelier state exists, verifies ignore coverage, and records unambiguous local repo path bindings.`,
+    doctor: `Usage: atelier doctor [--project ./atelier.project.json] [--fix] [--dry-run]
+
+Reports project config, local overlay, and repo boundary readiness. --fix only repairs ignored local state.`,
+    boundary: `Usage: atelier boundary check|doctor|install-hooks [--project ./atelier.project.json] [--staged]
+
+Checks repo placement and installs copy-safe Git boundary hooks.`,
+    graph: `Usage: atelier graph [--check] [--project ./atelier.project.json]
+
+Builds or checks the project knowledge graph from tracked sources plus ignored local path bindings.`,
+  }
+  console.log(help[command] || `Usage: atelier ${command} [args]\n\nRun atelier --help for the command list.`)
 }
 
 function normalizeArgs(argv) {
@@ -109,6 +140,10 @@ if (normalized.version) {
 }
 
 const [command, ...rest] = normalized.args
+if (rest[0] === '--help' || rest[0] === '-h') {
+  printCommandHelp(command)
+  process.exit(0)
+}
 const target = commandMap.get(command)
 if (!target) {
   console.error(`Unknown MNSTRY Atelier command: ${command}`)

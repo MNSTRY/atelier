@@ -2,12 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mnstry.app/schemas/atelier-project-config.v1.schema.json",
   "title": "mnstry.atelier-project-config@v1",
-  "description": "Read-only project adapter config for resolving a workspace, repo-ops root, graph inputs, and project projection paths.",
+  "description": "Portable project adapter config for resolving a workspace, graph inputs, boundaries, and generated Atelier projections. Machine-local paths belong in ignored local overlays.",
   "type": "object",
   "additionalProperties": false,
+  "required": ["schema"],
   "properties": {
     "schema": {
       "const": "mnstry.atelier-project-config@v1"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
     },
     "roots": {
       "type": "object",
@@ -37,23 +42,43 @@
         "repoAccessConfig": {
           "$ref": "#/$defs/pathString"
         },
+        "outputPath": {
+          "$ref": "#/$defs/pathString"
+        },
         "workspaceGraphPath": {
           "$ref": "#/$defs/pathString"
         },
         "workspaceGraph": {
           "$ref": "#/$defs/pathString"
+        },
+        "externalRelationPrefixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "externalRelationIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
-    "repos": {
+    "projection": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "app": {
-          "type": "string",
-          "minLength": 1
+        "outputRoot": {
+          "$ref": "#/$defs/pathString"
         },
-        "appRoot": {
+        "root": {
+          "$ref": "#/$defs/pathString"
+        },
+        "readinessPath": {
+          "$ref": "#/$defs/pathString"
+        },
+        "readiness": {
           "$ref": "#/$defs/pathString"
         }
       }
@@ -77,6 +102,18 @@
         }
       }
     },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/pathString"
+        },
+        "mnstryRuntimeRoot": {
+          "$ref": "#/$defs/pathString"
+        }
+      }
+    },
     "boundaries": {
       "type": "object",
       "additionalProperties": false,
@@ -92,27 +129,55 @@
         }
       }
     },
-    "repoOpsRoot": {
-      "$ref": "#/$defs/pathString"
+    "setup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "enum": ["single-repo", "private-domain", "shared-project", "multi-repo", "monorepo", "control-workspace"]
+        },
+        "include": {
+          "$ref": "#/$defs/pathString"
+        },
+        "exclude": {
+          "$ref": "#/$defs/pathString"
+        }
+      }
     },
-    "workspaceRoot": {
-      "$ref": "#/$defs/pathString"
-    },
-    "repoAccessPath": {
-      "$ref": "#/$defs/pathString"
-    },
-    "workspaceGraphPath": {
-      "$ref": "#/$defs/pathString"
-    },
-    "appRepoName": {
-      "type": "string",
-      "minLength": 1
-    },
-    "appRoot": {
-      "$ref": "#/$defs/pathString"
-    },
-    "alignmentRoot": {
-      "$ref": "#/$defs/pathString"
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "$ref": "#/$defs/pathString"
+          },
+          "readBoundary": {
+            "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "remote": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -126,6 +191,9 @@
           },
           {
             "pattern": "^[a-z][a-z0-9+.-]*:"
+          },
+          {
+            "pattern": "^/"
           }
         ]
       }

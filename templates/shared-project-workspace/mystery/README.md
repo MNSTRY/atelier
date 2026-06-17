@@ -1,5 +1,5 @@
 ---
-title: "Shared Mystery Seed"
+title: "Mystery Shared Project Seed"
 kg:
   id: "mystery-private-preview:seed"
   type: "project-note"
@@ -10,10 +10,10 @@ kg:
   relations: []
 ---
 
-# Shared Mystery Seed
+# Mystery Shared Project Seed
 
-Shared Mystery source starts here.
+Shared Mystery project source starts here.
 
-This repo is for team-readable project material. Keep Author-only private source
-in `AUTHOR_GITHUB_LOGIN_PLACEHOLDER-private-domain` and bring only reviewed
-summaries here through Git review.
+This repo is for team-readable Mystery project material. Keep Author-only private
+source in `author-private` and bring only reviewed summaries here through Git
+review.
