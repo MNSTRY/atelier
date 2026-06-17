@@ -2,22 +2,22 @@
   "schema": "mnstry.atelier-boundary-policy@v1",
   "mode": "strict",
   "actors": {
-    "author": {
-      "githubLogin": "AUTHOR_GITHUB_LOGIN_PLACEHOLDER",
-      "gitEmails": ["author@example.invalid"],
-      "privateDomainRepo": "author-private"
+    "owner": {
+      "githubLogin": "USER_GITHUB_LOGIN_PLACEHOLDER",
+      "gitEmails": ["owner@example.invalid"],
+      "privateDomainRepo": "tenant-private-domain"
     }
   },
   "repos": {
-    "author-private": {
+    "tenant-private-domain": {
       "kind": "private_domain",
-      "ownerActor": "author",
+      "ownerActor": "owner",
       "readBoundary": "private",
       "allowedAudiences": ["private", "sensitive", "team", "operator", "staff", "public"],
       "forbiddenAudiences": [],
       "autoCommit": "guarded"
     },
-    "mystery-private-preview": {
+    "project-alpha": {
       "kind": "shared",
       "readBoundary": "team",
       "allowedAudiences": ["team", "operator", "staff", "public"],

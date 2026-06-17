@@ -1,21 +1,21 @@
-# Shared Mystery Project Workspace
+# Shared Project Workspace
 
-Starter for shared Mystery project repositories.
+Starter for shared project repositories.
 
 Default example:
 
-- Project: `mystery-private-preview`
-- Shared repo: `github.com/<org>/mystery-private-preview`
-- Example collaborator: `Author`
-- Example collaborator login placeholder: `AUTHOR_GITHUB_LOGIN_PLACEHOLDER`
+- Project: `project-alpha`
+- Shared repo: `github.com/<org>/project-alpha`
+- Example collaborator: `Owner`
+- Example collaborator login placeholder: `USER_GITHUB_LOGIN_PLACEHOLDER`
 
-`AUTHOR_GITHUB_LOGIN_PLACEHOLDER` is a placeholder, not a real account. Keep
+`USER_GITHUB_LOGIN_PLACEHOLDER` is a placeholder, not a real account. Keep
 committed starter files placeholder-only; set a real login or email only in the
 copied private workspace.
 
 ## Boundary
 
-Shared Mystery project repos are readable by the project group. Do not place
+Shared project repos are readable by the project group. Do not place
 private or sensitive personal domain source here. Use a private domain repo per
 user for that material.
 

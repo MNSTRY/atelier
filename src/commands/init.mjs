@@ -12,7 +12,7 @@ function slug(value) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'author'
+    .replace(/^-+|-+$/g, '') || 'owner'
 }
 
 function gitConfig(name) {
@@ -38,9 +38,9 @@ function personalizeBoundaryPolicy(target, { actor, githubLogin, gitEmail } = {}
   const policyPath = path.join(target, 'boundary-policy.v1.json')
   if (!fs.existsSync(policyPath)) return
   const policy = readJson(policyPath)
-  const actorId = slug(actor || 'author')
+  const actorId = slug(actor || 'owner')
   const privateDomainRepo = Object.entries(policy.repos || {}).find(([, repo]) => repo?.kind === 'private_domain')?.[0] || `mnstry-private-${actorId}`
-  const login = githubLogin || process.env.GITHUB_ACTOR || (actorId === 'author' ? 'AUTHOR_GITHUB_LOGIN_PLACEHOLDER' : actorId)
+  const login = githubLogin || process.env.GITHUB_ACTOR || actorId
   const email = gitEmail || gitConfig('user.email') || `${actorId}@example.invalid`
 
   policy.actors = {
@@ -69,7 +69,7 @@ if (template === 'sample-workspace') {
     gitEmail: args['git-email'],
   })
   console.log(`created private domain Atelier workspace at ${target}`)
-} else if (template === 'shared-project' || template === 'mystery-shared') {
+} else if (template === 'shared-project') {
   copyDir(path.join(packageRoot, 'templates/shared-project-workspace'), target)
   personalizeBoundaryPolicy(target, {
     actor: args.actor,

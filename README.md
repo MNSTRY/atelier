@@ -15,11 +15,11 @@ client-grade sharing.
 
 ## Status
 
-- Version: `0.1.0-alpha.0`
+- Version: `0.1.0-alpha.2`
 - Runtime: Node.js `>=22.18.0 <23`
 - Stability: alpha
 - Distribution: private-preview Git tag
-  `git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.0`
+  `git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.2`
 - Telemetry: none
 - Network egress: none in package runtime paths
 - Runtime mutation: not implemented
@@ -33,6 +33,7 @@ client-grade sharing.
 - Builds a generated local GUI projection.
 - Serves the generated projection over a loopback-only sidecar.
 - Produces agent-harness context and capability envelopes.
+- Ships neutral Codex and Claude skill wrappers for readiness review work.
 - Records proposal metadata without browser apply/write endpoints.
 - Previews no-send support bundles.
 - Checks package runtime paths for forbidden non-localhost egress.
@@ -46,6 +47,8 @@ client-grade sharing.
 - Produces deterministic dry-run reports with `accepted`, `importable`, and
   `worstOperationStatus`.
 - Enforces Repo Boundary Guard V1 for private domain and shared project repos.
+- Ships the bundled `mnstry-readiness-pack@v1` with twelve claim-first
+  readiness protocols for tenant preparation.
 
 ## What This Package Does Not Do
 
@@ -61,7 +64,7 @@ Private-preview installs are Git tag pinned while npm publishing remains
 deferred:
 
 ```bash
-npm install --save-dev git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.0
+npm install --save-dev git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.2
 ```
 
 ```js
@@ -80,6 +83,11 @@ atelier init --fixture=sample-workspace --target ./sample
 atelier graph --project ./sample/atelier.project.json
 atelier project --project ./sample/atelier.project.json
 atelier readiness --project ./sample/atelier.project.json
+atelier readiness protocols
+atelier readiness journey --project ./sample/atelier.project.json
+atelier readiness run mnstry.readiness:identity-map --project ./sample/atelier.project.json
+atelier readiness packet --project ./sample/atelier.project.json
+atelier readiness export --dry-run --project ./sample/atelier.project.json
 atelier boundary check --project ./sample/atelier.project.json
 atelier lock write --project ./sample/atelier.project.json
 atelier upgrade --dry-run --project ./sample/atelier.project.json
@@ -98,7 +106,7 @@ Boundary guard commands are local and Git-native:
 atelier boundary check --project ./atelier.project.json
 atelier boundary check --staged --project ./atelier.project.json
 atelier boundary install-hooks --project ./atelier.project.json
-atelier promote --source-repo mnstry-private-author --target-repo mystery-example --kg-id mnstry-private-author:seed
+atelier promote --source-repo tenant-private-domain --target-repo project-alpha --kg-id tenant-private-domain:seed
 ```
 
 Strict policies fail closed when private or sensitive source is placed in a

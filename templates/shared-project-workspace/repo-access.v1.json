@@ -2,7 +2,7 @@
   "schema": "mnstry.repo-access@v1",
   "defaultReadBoundary": "team",
   "repos": {
-    "mystery-private-preview": {
+    "project-alpha": {
       "readBoundary": "team"
     }
   }

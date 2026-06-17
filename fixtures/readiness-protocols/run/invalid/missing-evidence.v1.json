@@ -1,0 +1,37 @@
+{
+  "schema": "atelier-readiness-run@v1",
+  "runId": "readiness-run-222222222222222222222222",
+  "protocolId": "sample.readiness:contract-gate",
+  "createdAt": "2026-06-17T00:00:00.000Z",
+  "project": "sample-workspace",
+  "answers": {
+    "scope": {
+      "name": "Sample scope",
+      "sourceRef": "source:sample-note"
+    }
+  },
+  "status": "review-needed",
+  "score": 100,
+  "blockers": [],
+  "warnings": [],
+  "claims": [
+    {
+      "schema": "atelier-claim@v1",
+      "claimId": "claim:readiness-run-222222222222222222222222:scope",
+      "subject": "readiness:sample:contract-gate",
+      "predicate": "supports",
+      "object": "readiness:contract-gate:scope",
+      "provider": "atelier-readiness",
+      "status": "proposed",
+      "promoted": false,
+      "evidence": []
+    }
+  ],
+  "safety": {
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "canonicalWrites": false,
+    "claimOnly": true,
+    "storage": "ignored-local"
+  }
+}

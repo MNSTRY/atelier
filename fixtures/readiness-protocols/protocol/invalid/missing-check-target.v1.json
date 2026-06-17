@@ -1,0 +1,103 @@
+{
+  "schema": "atelier-readiness-protocol@v1",
+  "id": "sample.readiness:contract-gate",
+  "slug": "contract-gate",
+  "version": "v1",
+  "stage": "formation",
+  "title": "Sample Contract Gate",
+  "purpose": "Verify neutral protocol inputs before a readiness run is accepted.",
+  "questions": [
+    {
+      "id": "scope",
+      "prompt": "What neutral scope is being prepared?",
+      "required": true
+    }
+  ],
+  "inputFields": [
+    {
+      "id": "scope.name",
+      "type": "string",
+      "required": true,
+      "description": "Neutral scope name."
+    },
+    {
+      "id": "scope.sourceRef",
+      "type": "string",
+      "required": true,
+      "description": "Evidence reference for the scope."
+    }
+  ],
+  "outputHints": [
+    {
+      "id": "contract-gate.summary",
+      "text": "Render scope and evidence before review."
+    }
+  ],
+  "outputs": {
+    "runSchema": "atelier-readiness-run@v1",
+    "artifacts": [
+      {
+        "id": "sample.readiness:contract-gate.summary",
+        "kind": "draft",
+        "schema": "atelier-readiness-run@v1",
+        "description": "Draft readiness summary."
+      }
+    ]
+  },
+  "claimMappings": [
+    {
+      "id": "sample.readiness:contract-gate.scope-supports-review",
+      "claimPredicate": "supports",
+      "sourceFields": [
+        "scope.name"
+      ],
+      "target": "atelier-claim@v1",
+      "evidence": "scope.sourceRef"
+    }
+  ],
+  "readinessRules": [
+    {
+      "id": "sample.readiness:contract-gate.scope-present",
+      "severity": "blocker",
+      "condition": "Scope name and evidence are present.",
+      "remediation": "Add scope.name and scope.sourceRef.",
+      "failClosed": true
+    }
+  ],
+  "graphLenses": [
+    {
+      "id": "sample.readiness:contract-gate.lens",
+      "title": "Sample Contract Gate Lens",
+      "query": {
+        "protocolId": "sample.readiness:contract-gate"
+      }
+    }
+  ],
+  "exportMappings": [
+    {
+      "id": "sample.readiness:contract-gate.export",
+      "sourceField": "scope",
+      "sourceTerm": "sample.readiness:contract-gate.scope",
+      "target": "core.artifact",
+      "runtimeOwner": "AuditGraph",
+      "targetCollection": "staffPrep"
+    }
+  ],
+  "ui": {
+    "section": "readiness-journey",
+    "title": "Sample Contract Gate",
+    "description": "Neutral protocol fixture.",
+    "agentPrompt": "Run atelier readiness run sample.readiness:contract-gate --project ./atelier.project.json."
+  },
+  "safety": {
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "canonicalWrites": false,
+    "claimOnly": true,
+    "telemetry": false,
+    "egress": false,
+    "sendPath": false,
+    "browserApply": false,
+    "dryRunOnly": true
+  }
+}

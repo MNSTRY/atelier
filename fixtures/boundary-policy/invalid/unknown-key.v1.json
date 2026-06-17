@@ -3,9 +3,9 @@
   "mode": "strict",
   "implicitPromotion": true,
   "actors": {
-    "author": {
-      "githubLogin": "AUTHOR_GITHUB_LOGIN_PLACEHOLDER",
-      "privateDomainRepo": "mnstry-private-author"
+    "owner": {
+      "githubLogin": "USER_GITHUB_LOGIN_PLACEHOLDER",
+      "privateDomainRepo": "tenant-private-domain"
     }
   },
   "repos": {}

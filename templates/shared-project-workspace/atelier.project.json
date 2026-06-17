@@ -1,6 +1,6 @@
 {
   "schema": "mnstry.atelier-project-config@v1",
-  "name": "mystery-private-preview",
+  "name": "project-alpha",
   "roots": {
     "workspace": ".",
     "repoOps": "."
@@ -20,8 +20,8 @@
   },
   "repos": [
     {
-      "name": "mystery-private-preview",
-      "path": "mystery",
+      "name": "project-alpha",
+      "path": "project",
       "readBoundary": "team"
     }
   ]

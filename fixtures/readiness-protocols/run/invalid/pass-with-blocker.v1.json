@@ -1,0 +1,22 @@
+{
+  "schema": "atelier-readiness-run@v1",
+  "runId": "readiness-run-333333333333333333333333",
+  "protocolId": "sample.readiness:contract-gate",
+  "createdAt": "2026-06-17T00:00:00.000Z",
+  "project": "sample-workspace",
+  "answers": {},
+  "status": "ready",
+  "score": 100,
+  "blockers": [
+    "missing-answer:scope.name"
+  ],
+  "warnings": [],
+  "claims": [],
+  "safety": {
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "canonicalWrites": false,
+    "claimOnly": true,
+    "storage": "ignored-local"
+  }
+}

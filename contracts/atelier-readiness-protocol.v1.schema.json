@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/contracts/atelier-readiness-protocol.v1.schema.json",
+  "title": "MNSTRY Atelier Readiness Protocol v1",
+  "description": "Claim-first protocol contract for guided MNSTRY tenant readiness. Protocols collect local answers, generate proposed claims and draft packets, and never grant runtime mutation, import, telemetry, egress, send-path, direct browser-write, or canonical front-matter authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "version",
+    "stage",
+    "title",
+    "purpose",
+    "questions",
+    "inputFields",
+    "outputs",
+    "claimMappings",
+    "readinessRules",
+    "graphLenses",
+    "exportMappings",
+    "ui",
+    "safety"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-readiness-protocol@v1"
+    },
+    "id": {
+      "$ref": "#/$defs/protocolId"
+    },
+    "slug": {
+      "$ref": "#/$defs/slug"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v[0-9]+$"
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/question"
+      },
+      "minItems": 1
+    },
+    "inputFields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/inputField"
+      },
+      "minItems": 1
+    },
+    "outputHints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/outputHint"
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runSchema",
+        "artifacts"
+      ],
+      "properties": {
+        "runSchema": {
+          "const": "atelier-readiness-run@v1"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/outputArtifact"
+          }
+        }
+      }
+    },
+    "claimMappings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claimMapping"
+      },
+      "minItems": 1
+    },
+    "readinessRules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/readinessRule"
+      },
+      "minItems": 1
+    },
+    "graphLenses": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/graphLens"
+      },
+      "minItems": 1
+    },
+    "exportMappings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/exportMapping"
+      },
+      "minItems": 1
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "section",
+        "title",
+        "agentPrompt"
+      ],
+      "properties": {
+        "section": {
+          "const": "readiness-journey"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "agentPrompt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "safety": {
+      "$ref": "#/$defs/safety"
+    },
+    "safetyPosture": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "protocolId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+    },
+    "termId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*(\\.[a-z0-9._-]+)?$"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]*$"
+    },
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "prompt",
+        "inputFields",
+        "required"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputFields": {
+          "$ref": "#/$defs/stringList"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "inputField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "required",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "array",
+            "boolean",
+            "enum",
+            "number",
+            "string",
+            "text"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "values": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    },
+    "outputHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "outputArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "schema",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/termId"
+        },
+        "kind": {
+          "enum": [
+            "claim",
+            "draft",
+            "packet",
+            "projection"
+          ]
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "claimMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "claimPredicate",
+        "sourceFields",
+        "target",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/termId"
+        },
+        "claimPredicate": {
+          "enum": [
+            "related",
+            "supports",
+            "supersedes",
+            "implements",
+            "depends_on",
+            "evidences",
+            "contradicts",
+            "belongs_to"
+          ]
+        },
+        "sourceFields": {
+          "$ref": "#/$defs/stringList"
+        },
+        "target": {
+          "const": "atelier-claim@v1"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "readinessRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "severity",
+        "condition",
+        "remediation",
+        "failClosed"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/termId"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "blocker"
+          ]
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failClosed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "graphLens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "query"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/termId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "query": {
+          "type": "object"
+        }
+      }
+    },
+    "exportMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sourceField",
+        "sourceTerm",
+        "target",
+        "runtimeOwner",
+        "targetCollection"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/termId"
+        },
+        "sourceField": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceTerm": {
+          "$ref": "#/$defs/termId"
+        },
+        "target": {
+          "enum": [
+            "content.material",
+            "core.artifact",
+            "core.trackable",
+            "scheduling.commitment",
+            "space.space",
+            "space.provision"
+          ]
+        },
+        "runtimeOwner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetCollection": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeMutation",
+        "runtimeImport",
+        "canonicalWrites",
+        "claimOnly",
+        "telemetry",
+        "egress",
+        "sendPath",
+        "browserApply",
+        "dryRunOnly"
+      ],
+      "properties": {
+        "runtimeMutation": {
+          "const": false
+        },
+        "runtimeImport": {
+          "const": false
+        },
+        "canonicalWrites": {
+          "const": false
+        },
+        "claimOnly": {
+          "const": true
+        },
+        "telemetry": {
+          "const": false
+        },
+        "egress": {
+          "const": false
+        },
+        "sendPath": {
+          "const": false
+        },
+        "browserApply": {
+          "const": false
+        },
+        "dryRunOnly": {
+          "const": true
+        }
+      }
+    }
+  }
+}

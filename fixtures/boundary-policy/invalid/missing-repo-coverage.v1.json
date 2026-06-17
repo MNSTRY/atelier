@@ -2,15 +2,15 @@
   "schema": "mnstry.atelier-boundary-policy@v1",
   "mode": "strict",
   "actors": {
-    "author": {
-      "githubLogin": "AUTHOR_GITHUB_LOGIN_PLACEHOLDER",
-      "privateDomainRepo": "mnstry-private-author"
+    "owner": {
+      "githubLogin": "USER_GITHUB_LOGIN_PLACEHOLDER",
+      "privateDomainRepo": "tenant-private-domain"
     }
   },
   "repos": {
-    "mnstry-private-author": {
+    "tenant-private-domain": {
       "kind": "private_domain",
-      "ownerActor": "author",
+      "ownerActor": "owner",
       "readBoundary": "private",
       "allowedAudiences": ["private"],
       "forbiddenAudiences": []

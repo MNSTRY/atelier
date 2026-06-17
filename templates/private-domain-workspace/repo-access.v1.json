@@ -2,7 +2,7 @@
   "schema": "mnstry.repo-access@v1",
   "defaultReadBoundary": "private",
   "repos": {
-    "author-private": {
+    "tenant-private-domain": {
       "readBoundary": "private"
     }
   }
