@@ -2,7 +2,7 @@
 
 Repo Boundary Guard V1 is a local-first preview pattern for Atelier workspaces.
 It keeps private domain source in user-owned Git repositories and keeps shared
-Mystery work in shared project repositories.
+Mystery project work in shared project repositories.
 
 ## Preview Posture
 
@@ -15,6 +15,9 @@ Mystery work in shared project repositories.
 Git repository access is the hard read boundary for source files. Local
 `kg.audience` labels guide projection and review, but they do not hide files
 from anyone who can read the repository.
+
+Use `atelier` as the primary CLI command in copied workspaces. The older
+`mnstry-atelier` binary is a legacy alias for compatibility.
 
 ## Install Shape
 
@@ -41,7 +44,7 @@ Use one private domain repository per user:
 github.com/<org>/<github-login>-private-domain
 ```
 
-Use shared Mystery repositories for project work that the team can read:
+Use shared Mystery project repositories for project work that the team can read:
 
 ```text
 github.com/<org>/mystery-<project-slug>
@@ -56,26 +59,28 @@ GitHub or your internal Git host before pointing Atelier at them.
 Default example user:
 
 - Name: `Author`
-- GitHub login: `AUTHOR_GITHUB_LOGIN_PLACEHOLDER`
-- Private domain repo: `github.com/<org>/AUTHOR_GITHUB_LOGIN_PLACEHOLDER-private-domain`
-- Shared Mystery repo: `github.com/<org>/mystery-private-preview`
+- GitHub login placeholder: `AUTHOR_GITHUB_LOGIN_PLACEHOLDER`
+- Private domain repo: `github.com/<org>/author-private`
+- Shared Mystery project repo: `github.com/<org>/mystery-private-preview`
 
-`AUTHOR_GITHUB_LOGIN_PLACEHOLDER` is not a real account. Replace it before using
-the template. `mnstry-private-author` and `mystery-private-preview` are the next
-rollout defaults, not repositories created by this package release.
+`AUTHOR_GITHUB_LOGIN_PLACEHOLDER` is not a real account and the templates do not
+include Author's real GitHub login or email. Set real identity values only inside
+the copied private workspace or through initializer flags. `author-private` and
+`mystery-private-preview` are the proof-repo defaults, not repositories created by
+this package release.
 
 ## Local Setup
 
 Copy one of the starter templates:
 
 - `templates/private-domain-workspace/` for one user's private domain repo.
-- `templates/shared-project-workspace/` for shared Mystery repositories.
+- `templates/shared-project-workspace/` for shared Mystery project repositories.
 
 Prefer the CLI initializer when possible:
 
 ```bash
-mnstry-atelier init --template private-domain --target ./mnstry-private-author --actor author
-mnstry-atelier init --template shared-project --target ./mystery-private-preview --actor author
+atelier init --template private-domain --target ./author-private --actor author
+atelier init --template shared-project --target ./mystery-private-preview --actor author
 ```
 
 `--actor` rewrites the copied boundary policy actor entry and binds it to the
@@ -86,15 +91,22 @@ Then update:
 
 - `atelier.project.json` repo paths.
 - `repo-access.v1.json` read boundaries.
-- `atelier.lock.json` with `mnstry-atelier lock write` after choosing the exact Atelier package source.
+- `atelier.lock.json` with `atelier lock write` after choosing the exact Atelier package source.
 - README placeholders for project names and Git remotes.
+
+Keep project configuration tracked and local overlay state ignored. Track
+`atelier.project.json`, `repo-access.v1.json`, `boundary-policy.v1.json`,
+`atelier.lock.json`, and source documents. Do not track `atelier.local.json`,
+`atelier.workspace.local.json`, `.atelier-local/`, proposals/current/presence/
+nonce/grants/audit/session/support state, prompts, transcripts, support
+bundles, or generated projections.
 
 Run local-only checks from the copied workspace:
 
 ```bash
-mnstry atelier graph --project ./atelier.project.json
-mnstry atelier project --project ./atelier.project.json
-mnstry atelier readiness --project ./atelier.project.json
+atelier graph --project ./atelier.project.json
+atelier project --project ./atelier.project.json
+atelier readiness --project ./atelier.project.json
 ```
 
 These commands read local files and write generated local outputs only.

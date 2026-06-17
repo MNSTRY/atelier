@@ -64,14 +64,22 @@ function git(root, args, { allowFail = true } = {}) {
   return result.status === 0 ? result.stdout.trim() : null
 }
 
+function packageGitRoot() {
+  const root = git(packageRoot, ['rev-parse', '--show-toplevel'])
+  return root && path.resolve(root) === path.resolve(packageRoot) ? root : null
+}
+
 function packageGitSha() {
-  return git(packageRoot, ['rev-parse', 'HEAD']) || null
+  return packageGitRoot() ? git(packageRoot, ['rev-parse', 'HEAD']) || null : null
 }
 
 function packageSource() {
   const gitSha = packageGitSha()
-  const repository = git(packageRoot, ['config', '--get', 'remote.origin.url']) || packageJson.repository?.url || null
+  const repository = packageGitRoot()
+    ? git(packageRoot, ['config', '--get', 'remote.origin.url']) || packageJson.repository?.url || null
+    : packageJson.repository?.url || null
   if (repository && gitSha) return { type: 'git', repository, gitSha }
+  if (repository) return { type: 'private_github', repository, gitSha: null }
   return {
     type: 'local_path',
     path: '.',
@@ -487,7 +495,7 @@ function runTemplateScaffold(project) {
   const target = path.join(docsDir, 'upgrade.md')
   if (fs.existsSync(target)) return
   fs.mkdirSync(docsDir, { recursive: true })
-  fs.writeFileSync(target, `# Atelier Upgrade\n\nRun \`mnstry-atelier upgrade --dry-run --project ./atelier.project.json\` before applying upstream Atelier changes.\n`)
+  fs.writeFileSync(target, `# Atelier Upgrade\n\nRun \`atelier upgrade --dry-run --project ./atelier.project.json\` before applying upstream Atelier changes.\n`)
 }
 
 function applyMigration(project, migration) {

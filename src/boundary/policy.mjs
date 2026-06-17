@@ -13,6 +13,10 @@ export const VALID_AUTOCOMMIT = new Set(['allowed', 'blocked', 'guarded'])
 export const PRIVATE_AUDIENCES = new Set(['private', 'sensitive'])
 
 export const DEFAULT_FORBIDDEN_PATHS = [
+  '.atelier-local',
+  '.atelier-local/**',
+  'atelier.local.json',
+  'atelier.workspace.local.json',
   '.mnstry-local',
   '.mnstry-local/**',
   '.atelier-proposals',
@@ -444,12 +448,18 @@ function hookScript(projectConfigPath, hookName) {
   return `#!/usr/bin/env bash
 # MNSTRY_ATELIER_BOUNDARY_GUARD ${hookName}
 set -euo pipefail
-if command -v mnstry-atelier >/dev/null 2>&1; then
+if command -v atelier >/dev/null 2>&1; then
+  atelier boundary check --staged ${config}
+elif [ -x "./node_modules/.bin/atelier" ]; then
+  ./node_modules/.bin/atelier boundary check --staged ${config}
+elif command -v mnstry-atelier >/dev/null 2>&1; then
   mnstry-atelier boundary check --staged ${config}
+elif [ -x "./node_modules/.bin/mnstry-atelier" ]; then
+  ./node_modules/.bin/mnstry-atelier boundary check --staged ${config}
 elif [ -n "\${MNSTRY_ATELIER_PACKAGE_ROOT:-}" ]; then
   node "$MNSTRY_ATELIER_PACKAGE_ROOT/bin/mnstry-atelier.mjs" boundary check --staged ${config}
 else
-  echo "MNSTRY Atelier boundary guard is not installed on PATH" >&2
+  echo "Atelier boundary guard is not installed on PATH" >&2
   exit 1
 fi
 `

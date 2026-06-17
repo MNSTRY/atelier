@@ -5,6 +5,7 @@
   "description": "Local-first MNSTRY Atelier workspace for agentic authoring, graph projection, and dry-run runtime readiness.",
   "type": "module",
   "bin": {
+    "atelier": "bin/atelier.mjs",
     "mnstry": "bin/mnstry-atelier.mjs",
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
@@ -36,7 +37,7 @@
     "server:security:test": "node --test test/server.test.mjs test/server-security.test.mjs test/server-proposals.test.mjs",
     "browser:smoke": "node --test test/server.test.mjs",
     "support-bundle:test": "node --test test/support-bundle.test.mjs test/support-egress-analysis.test.mjs",
-    "egress:check": "node bin/mnstry-atelier.mjs egress check",
+    "egress:check": "node bin/atelier.mjs egress check",
     "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs",
     "harness:test": "node --test test/harness.test.mjs test/harness-context.test.mjs",
     "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-guard.test.mjs",

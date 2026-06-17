@@ -18,12 +18,12 @@ through a browser view.
 
 `atelier.lock.json` records the installed Atelier package version, source,
 contract versions, template lineage, extension packs, and applied migrations.
-New workspaces get this file from `mnstry-atelier init`. Existing workspaces can
+New workspaces get this file from `atelier init`. Existing workspaces can
 backfill it without changing source content:
 
 ```bash
-mnstry-atelier lock write --project ./atelier.project.json
-mnstry-atelier lock check --project ./atelier.project.json
+atelier lock write --project ./atelier.project.json
+atelier lock check --project ./atelier.project.json
 ```
 
 For private-preview installs, pin the install command to the release tag and
@@ -31,19 +31,19 @@ record the resolved Git SHA in the lockfile:
 
 ```bash
 npm install --save-dev git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.0
-mnstry-atelier lock write --project ./atelier.project.json
+atelier lock write --project ./atelier.project.json
 ```
 
 Before accepting upstream changes, run the non-mutating upgrade planner:
 
 ```bash
-mnstry-atelier upgrade --dry-run --project ./atelier.project.json
+atelier upgrade --dry-run --project ./atelier.project.json
 ```
 
 Apply upgrades only after reviewing the plan:
 
 ```bash
-mnstry-atelier upgrade --apply --project ./atelier.project.json
+atelier upgrade --apply --project ./atelier.project.json
 ```
 
 The apply path creates a branch, refuses unsafe dirty state, regenerates
@@ -54,18 +54,21 @@ projections, runs checks, and leaves a reviewable commit.
 Run checks from the copied workspace after refreshing dependencies:
 
 ```bash
-mnstry atelier graph --project ./atelier.project.json
-mnstry atelier project --project ./atelier.project.json
-mnstry atelier readiness --project ./atelier.project.json
-mnstry atelier lock check --project ./atelier.project.json
-mnstry atelier upgrade --dry-run --project ./atelier.project.json
-mnstry atelier boundary check --project ./atelier.project.json
-mnstry atelier boundary check --staged --project ./atelier.project.json
+atelier graph --project ./atelier.project.json
+atelier project --project ./atelier.project.json
+atelier readiness --project ./atelier.project.json
+atelier lock check --project ./atelier.project.json
+atelier upgrade --dry-run --project ./atelier.project.json
+atelier boundary check --project ./atelier.project.json
+atelier boundary check --staged --project ./atelier.project.json
 ```
 
 Generated `atelier-output/` files are projections. Treat source files,
 `atelier.project.json`, `repo-access.v1.json`, `boundary-policy.v1.json`, and
 `atelier.lock.json` as the review authority.
+
+`atelier` is the primary command. `mnstry-atelier` remains a legacy alias for
+older workspaces and should not be used in new docs or package scripts.
 
 ## Boundary Review
 

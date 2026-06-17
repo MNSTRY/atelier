@@ -17,12 +17,16 @@ export const ATELIER_HTML_CSP = [
 export const DENIED_STATIC_STATE_FILES = new Set([
   '.atelier-nonce',
   '.atelier-current',
+  'atelier.local.json',
+  'atelier.workspace.local.json',
   '.atelier-presence.json',
   '.atelier-capability-grants.json',
   '.atelier-events.jsonl',
 ])
 
 export const DENIED_STATIC_STATE_DIRS = new Set([
+  '.atelier-local',
+  '.mnstry-local',
   '.atelier-proposals',
 ])
 

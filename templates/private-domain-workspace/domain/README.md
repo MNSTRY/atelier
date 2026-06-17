@@ -1,7 +1,7 @@
 ---
 title: "Author Private Domain Seed"
 kg:
-  id: "mnstry-private-author:seed"
+  id: "author-private:seed"
   type: "domain-note"
   domain: "private-preview"
   lifecycle: "draft"
@@ -12,8 +12,8 @@ kg:
 
 # Author Private Domain Seed
 
-Private domain source for `AUTHOR_GITHUB_LOGIN_PLACEHOLDER` starts here.
+Private domain source for the Author private repo starts here.
 
 Keep only Author-owned private material in this repository. Promote reviewed
-summaries into shared Mystery repos through ordinary Git review, not through
+summaries into shared Mystery project repos through ordinary Git review, not through
 browser writes or runtime mutation.

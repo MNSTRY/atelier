@@ -7,7 +7,9 @@ npm-debug.log*
 .env.*
 
 .mnstry-local/
-.client-zero-local/
+.atelier-local/
+atelier.local.json
+atelier.workspace.local.json
 .atelier-current
 .atelier-nonce
 .atelier-grants/

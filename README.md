@@ -74,31 +74,31 @@ console.log(report.accepted, report.importable, report.errors)
 The package also exposes local-only CLI validation:
 
 ```bash
-mnstry atelier dry-run ./atelier-export.json
-mnstry atelier contract check
-mnstry atelier init --fixture=sample-workspace --target ./sample
-mnstry atelier graph --project ./sample/atelier.project.json
-mnstry atelier project --project ./sample/atelier.project.json
-mnstry atelier readiness --project ./sample/atelier.project.json
-mnstry atelier boundary check --project ./sample/atelier.project.json
-mnstry atelier lock write --project ./sample/atelier.project.json
-mnstry atelier upgrade --dry-run --project ./sample/atelier.project.json
-mnstry atelier dev --project ./sample/atelier.project.json
+atelier dry-run ./atelier-export.json
+atelier contract check
+atelier init --fixture=sample-workspace --target ./sample
+atelier graph --project ./sample/atelier.project.json
+atelier project --project ./sample/atelier.project.json
+atelier readiness --project ./sample/atelier.project.json
+atelier boundary check --project ./sample/atelier.project.json
+atelier lock write --project ./sample/atelier.project.json
+atelier upgrade --dry-run --project ./sample/atelier.project.json
+atelier dev --project ./sample/atelier.project.json
 ```
 
 The direct package binary supports the same Atelier subcommands:
 
 ```bash
-mnstry-atelier dry-run ./atelier-export.json
+atelier dry-run ./atelier-export.json
 ```
 
 Boundary guard commands are local and Git-native:
 
 ```bash
-mnstry-atelier boundary check --project ./atelier.project.json
-mnstry-atelier boundary check --staged --project ./atelier.project.json
-mnstry-atelier boundary install-hooks --project ./atelier.project.json
-mnstry-atelier promote --source-repo mnstry-private-author --target-repo mystery-example --kg-id mnstry-private-author:seed
+atelier boundary check --project ./atelier.project.json
+atelier boundary check --staged --project ./atelier.project.json
+atelier boundary install-hooks --project ./atelier.project.json
+atelier promote --source-repo mnstry-private-author --target-repo mystery-example --kg-id mnstry-private-author:seed
 ```
 
 Strict policies fail closed when private or sensitive source is placed in a
@@ -109,9 +109,9 @@ disclosure record.
 Upgrade commands are also local and review-first:
 
 ```bash
-mnstry-atelier lock check --project ./atelier.project.json
-mnstry-atelier upgrade --dry-run --project ./atelier.project.json
-mnstry-atelier upgrade --apply --project ./atelier.project.json --branch codex/atelier-upgrade-YYYYMMDD
+atelier lock check --project ./atelier.project.json
+atelier upgrade --dry-run --project ./atelier.project.json
+atelier upgrade --apply --project ./atelier.project.json --branch codex/atelier-upgrade-YYYYMMDD
 ```
 
 `upgrade --apply` creates or switches to the requested branch, refuses dirty

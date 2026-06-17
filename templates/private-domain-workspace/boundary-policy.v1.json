@@ -5,11 +5,11 @@
     "author": {
       "githubLogin": "AUTHOR_GITHUB_LOGIN_PLACEHOLDER",
       "gitEmails": ["author@example.invalid"],
-      "privateDomainRepo": "mnstry-private-author"
+      "privateDomainRepo": "author-private"
     }
   },
   "repos": {
-    "mnstry-private-author": {
+    "author-private": {
       "kind": "private_domain",
       "ownerActor": "author",
       "readBoundary": "private",
@@ -23,16 +23,32 @@
     "recordsPath": "governance/git-promote-events.jsonl"
   },
   "forbiddenPaths": [
+    ".atelier-local/**",
+    "atelier.local.json",
+    "atelier.workspace.local.json",
     ".mnstry-local/**",
     ".atelier-proposals/**",
     ".atelier-current",
+    ".atelier-current.json",
     ".atelier-presence.json",
     ".atelier-nonce",
     ".atelier-capability-grants.json",
+    ".atelier-grants/**",
+    ".atelier-events.jsonl",
     ".atelier-audit.jsonl",
+    ".atelier-audit/**",
+    ".atelier-session.json",
+    ".atelier-session.jsonl",
+    ".atelier-session/**",
+    ".atelier-sessions/**",
+    ".atelier-support/**",
+    ".atelier-support.json",
+    "support-bundle*",
     "support-bundles/**",
     "prompts/**",
-    "transcripts/**"
+    "transcripts/**",
+    "node_modules/**",
+    ".DS_Store"
   ],
   "governanceLedgerPath": "governance/repo-boundary-ledger.md"
 }

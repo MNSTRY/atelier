@@ -6,6 +6,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   PROJECT_CONFIG_ENV,
+  LOCAL_OVERLAY_SCHEMA,
   PROJECT_CONFIG_SCHEMA,
   projectConfigArg,
   resolveProjectConfig,
@@ -146,4 +147,58 @@ test('project config arg helpers are narrow and leave other flags alone', () => 
   const args = ['node', 'script.mjs', '--check', '--project-config=project.json', '--target=team']
   assert.equal(projectConfigArg(args), 'project.json')
   assert.deepEqual(stripProjectConfigArgs(args.slice(2)), ['--check', '--target=team'])
+})
+
+test('ignored local overlay supplies machine-local repo paths without tracked config paths', () => {
+  const root = makeTempRoot()
+  const repo = path.join(root, 'workspace', 'content')
+  fs.mkdirSync(repo, { recursive: true })
+  const configPath = path.join(root, 'atelier.project.json')
+  writeJson(configPath, {
+    schema: PROJECT_CONFIG_SCHEMA,
+    name: 'overlay-fixture',
+    roots: { workspace: 'workspace', repoOps: '.' },
+    graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' },
+    projection: { outputRoot: 'atelier-output' },
+    repos: [{ name: 'content', readBoundary: 'private', role: 'source' }],
+  })
+  writeJson(path.join(root, '.atelier-local', 'workspace.json'), {
+    schema: LOCAL_OVERLAY_SCHEMA,
+    repos: {
+      content: { path: 'workspace/content' },
+    },
+  })
+
+  const cfg = resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: root })
+  assert.equal(cfg.repos[0].path, repo)
+  assert.equal(cfg.repos[0].pathSource, 'local-overlay')
+  assert.deepEqual(cfg.localOverlay.paths, [path.join(root, '.atelier-local', 'workspace.json')])
+})
+
+test('sibling discovery resolves logical repos when local overlay is absent', () => {
+  const root = makeTempRoot()
+  const repo = path.join(root, 'content')
+  fs.mkdirSync(repo, { recursive: true })
+  const configPath = path.join(root, 'atelier.project.json')
+  writeJson(configPath, {
+    schema: PROJECT_CONFIG_SCHEMA,
+    roots: { workspace: '.', repoOps: '.' },
+    graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' },
+    projection: { outputRoot: 'atelier-output' },
+    repos: [{ name: 'content', readBoundary: 'private', role: 'source' }],
+  })
+
+  const cfg = resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: root })
+  assert.equal(cfg.repos[0].path, repo)
+  assert.equal(cfg.repos[0].pathSource, 'sibling-discovery')
+})
+
+test('project config validation rejects tracked absolute repo paths', () => {
+  const errors = validateProjectConfigDoc({
+    schema: PROJECT_CONFIG_SCHEMA,
+    roots: { workspace: '.' },
+    graph: { outputPath: 'atelier-output/knowledge.graph.json' },
+    repos: [{ name: 'content', path: '/Users/someone/content' }],
+  })
+  assert.match(errors.join('\n'), /machine-local absolute paths/)
 })

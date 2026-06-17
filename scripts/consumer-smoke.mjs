@@ -62,11 +62,16 @@ assert.match(invalidReport.errors.join('\\n'), /must use audience, not visibilit
     'node_modules/@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json',
   ], { cwd: tempRoot })
   const cliReport = JSON.parse(cliOutput)
-  if (cliReport.accepted !== true) throw new Error('mnstry atelier dry-run did not accept the sample fixture')
+  if (cliReport.accepted !== true) throw new Error('atelier dry-run did not accept the sample fixture')
 
-  const directCliOutput = run(process.execPath, ['node_modules/.bin/mnstry-atelier', '--version'], { cwd: tempRoot })
+  const directCliOutput = run(process.execPath, ['node_modules/.bin/atelier', '--version'], { cwd: tempRoot })
   if (directCliOutput.trim() !== '0.1.0-alpha.0') {
-    throw new Error(`mnstry-atelier --version returned ${directCliOutput.trim()}`)
+    throw new Error(`atelier --version returned ${directCliOutput.trim()}`)
+  }
+
+  const legacyCliOutput = run(process.execPath, ['node_modules/.bin/mnstry-atelier', '--version'], { cwd: tempRoot })
+  if (legacyCliOutput.trim() !== '0.1.0-alpha.0') {
+    throw new Error(`mnstry-atelier --version returned ${legacyCliOutput.trim()}`)
   }
 
   console.log('[consumer:smoke] packed tarball installs and validates in a clean temp project')

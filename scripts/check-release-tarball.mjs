@@ -14,11 +14,12 @@ const allowedFiles = [
   /^README\.md$/,
   /^CHANGELOG\.md$/,
   /^LICENSE$/,
+  /^bin\/atelier\.mjs$/,
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
   /^fixtures\/(?!atelier-export\/sample-private-offer)(?!atelier-extension-pack\/client-zero\.client-zero)[A-Za-z0-9./_-]+\.(json|md|html)$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
-  /^templates\/[A-Za-z0-9./_-]+\.(json|md)$/,
+  /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.gitignore)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
 ]
 
@@ -55,8 +56,9 @@ if (packageJson.private !== false) fail('package.json must set private false bef
 if (packageJson.version !== '0.1.0-alpha.0') fail('package version must be 0.1.0-alpha.0 for this release slice')
 if (packageJson.license !== 'Apache-2.0') fail('package license must be Apache-2.0')
 if (packageJson.name !== expectedPackageName) fail(`package name must be ${expectedPackageName}`)
+if (!packageJson.bin?.atelier) fail('package must expose the atelier CLI')
 if (!packageJson.bin?.mnstry) fail('package must expose the mnstry CLI')
-if (!packageJson.bin?.['mnstry-atelier']) fail('package must expose the mnstry-atelier CLI')
+if (!packageJson.bin?.['mnstry-atelier']) fail('package must expose the mnstry-atelier legacy CLI')
 if (!Array.isArray(packageJson.files) || packageJson.files.length === 0) fail('package must use a files allowlist')
 
 const pack = packDryRun()
@@ -64,6 +66,11 @@ if (pack.name !== expectedPackageName) fail(`npm pack name must be ${expectedPac
 if (pack.filename !== expectedTarballName) fail(`npm pack filename must be ${expectedTarballName}`)
 const paths = pack.files.map((entry) => entry.path).sort()
 let failures = 0
+
+if (!paths.includes('bin/atelier.mjs')) {
+  console.error('[release:audit] tarball must include bin/atelier.mjs')
+  failures += 1
+}
 
 if (!paths.includes('bin/mnstry-atelier.mjs')) {
   console.error('[release:audit] tarball must include bin/mnstry-atelier.mjs')
