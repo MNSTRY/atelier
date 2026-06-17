@@ -79,6 +79,7 @@ function packageSource() {
     ? git(packageRoot, ['config', '--get', 'remote.origin.url']) || packageJson.repository?.url || null
     : packageJson.repository?.url || null
   if (repository && gitSha) return { type: 'git', repository, gitSha }
+  if (repository) return { type: 'private_github', repository, gitSha: null }
   return {
     type: 'local_path',
     path: '.',
