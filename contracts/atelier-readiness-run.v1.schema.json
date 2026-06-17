@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/contracts/atelier-readiness-run.v1.schema.json",
+  "title": "MNSTRY Atelier Readiness Run v1",
+  "description": "Local, ignored, claim-first result of a readiness protocol run. A run can create proposed claims and draft packets, but it never grants runtime mutation, import, telemetry, egress, send-path, direct browser-write, or canonical graph/front-matter authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "runId",
+    "protocolId",
+    "createdAt",
+    "project",
+    "answers",
+    "status",
+    "score",
+    "blockers",
+    "warnings",
+    "claims",
+    "safety"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ready"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "blockers": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-readiness-run@v1"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^readiness-run-[a-f0-9]{24}$"
+    },
+    "protocolId": {
+      "$ref": "#/$defs/protocolId"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "answers": {
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "missing",
+        "draft",
+        "review-needed",
+        "ready",
+        "blocked"
+      ]
+    },
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "blockers": {
+      "$ref": "#/$defs/stringList"
+    },
+    "warnings": {
+      "$ref": "#/$defs/stringList"
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/claim"
+      }
+    },
+    "safety": {
+      "$ref": "#/$defs/safety"
+    }
+  },
+  "$defs": {
+    "protocolId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+    },
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "claimId",
+        "subject",
+        "predicate",
+        "object",
+        "provider",
+        "status",
+        "promoted"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-claim@v1"
+        },
+        "claimId": {
+          "type": "string",
+          "pattern": "^claim:[a-z0-9][a-z0-9:-]*$"
+        },
+        "subject": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9:-]*$"
+        },
+        "predicate": {
+          "enum": [
+            "related",
+            "supports",
+            "supersedes",
+            "implements",
+            "depends_on",
+            "evidences",
+            "contradicts",
+            "belongs_to"
+          ]
+        },
+        "object": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9:-]*$"
+        },
+        "provider": {
+          "enum": [
+            "atelier-readiness",
+            "codex",
+            "manual",
+            "analysis",
+            "claude",
+            "script"
+          ]
+        },
+        "status": {
+          "const": "proposed"
+        },
+        "promoted": {
+          "const": false
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "notes": {
+          "$ref": "#/$defs/stringList"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeMutation",
+        "runtimeImport",
+        "canonicalWrites",
+        "claimOnly",
+        "storage"
+      ],
+      "properties": {
+        "runtimeMutation": {
+          "const": false
+        },
+        "runtimeImport": {
+          "const": false
+        },
+        "canonicalWrites": {
+          "const": false
+        },
+        "claimOnly": {
+          "const": true
+        },
+        "storage": {
+          "const": "ignored-local"
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { commandProject, readJson, writeJson } from '../project/config.mjs'
+import { bundledReadinessProtocols } from '../readiness-protocols/bundled-pack.mjs'
+import {
+  buildReadinessExportDryRun,
+  buildTenantPacket,
+  runProtocol,
+  summarizeReadinessJourney,
+  writeTenantPacket,
+} from '../readiness-protocols/runtime.mjs'
+import { commandProject, parseArgs, readJson, writeJson } from '../project/config.mjs'
 
 export const ATELIER_READINESS_SCHEMA = 'mnstry.atelier-readiness@v1'
 
@@ -151,6 +159,7 @@ function buildProjectReadiness({ project, graph = null } = {}) {
       enabled: false,
       authority: 'claim-only',
     },
+    tenantReadiness: summarizeReadinessJourney(project),
   }
 }
 
@@ -183,6 +192,78 @@ export function stableReadinessForCheck(value) {
 }
 
 export function runReadinessCommand(argv = process.argv.slice(2)) {
+  const parsed = parseArgs(argv)
+  const subcommand = parsed._[0]
+  if (subcommand === 'protocols') {
+    const detail = parsed.json === true || parsed.format === 'json'
+    if (detail) {
+      console.log(`${JSON.stringify({
+        schema: 'mnstry.readiness-protocol-list@v1',
+        protocols: bundledReadinessProtocols,
+      }, null, 2)}\n`)
+    } else {
+      console.log('MNSTRY readiness protocols')
+      for (const protocol of bundledReadinessProtocols) {
+        console.log(`- ${protocol.id}: ${protocol.title}`)
+      }
+    }
+    return
+  }
+
+  if (subcommand === 'journey') {
+    const project = commandProject({ argv })
+    const journey = summarizeReadinessJourney(project)
+    console.log(`${JSON.stringify(journey, null, 2)}\n`)
+    return
+  }
+
+  if (subcommand === 'run') {
+    const project = commandProject({ argv })
+    const protocolId = parsed._[1]
+    if (!protocolId) throw new Error('readiness run requires a protocol id')
+    const answers = parsed.answers ? readJson(path.resolve(process.cwd(), parsed.answers)) : {}
+    const result = runProtocol(project, protocolId, {
+      answers,
+      write: parsed.write !== false,
+      createProposal: parsed.proposal !== false && parsed['no-proposal'] !== true,
+    })
+    console.log(`${JSON.stringify({
+      ok: result.run.blockers.length === 0,
+      protocolId: result.run.protocolId,
+      runId: result.run.runId,
+      status: result.run.status,
+      score: result.run.score,
+      blockers: result.run.blockers,
+      warnings: result.run.warnings,
+      claims: result.run.claims.map((claim) => claim.claimId),
+      runPath: result.file,
+      proposal: result.proposal?.record?.proposal?.id ?? null,
+    }, null, 2)}\n`)
+    if (result.run.blockers.length) process.exitCode = 1
+    return
+  }
+
+  if (subcommand === 'packet') {
+    const project = commandProject({ argv })
+    const packet = buildTenantPacket(project)
+    const file = writeTenantPacket(project, packet)
+    console.log(`${JSON.stringify({
+      ok: true,
+      path: file,
+      packet,
+    }, null, 2)}\n`)
+    return
+  }
+
+  if (subcommand === 'export') {
+    if (!argv.includes('--dry-run')) throw new Error('readiness export only supports --dry-run')
+    const project = commandProject({ argv })
+    const report = buildReadinessExportDryRun(project)
+    console.log(`${JSON.stringify(report, null, 2)}\n`)
+    if (!report.accepted) process.exitCode = 1
+    return
+  }
+
   const check = argv.includes('--check')
   const project = commandProject({ argv })
   const readiness = buildReadiness({ project })

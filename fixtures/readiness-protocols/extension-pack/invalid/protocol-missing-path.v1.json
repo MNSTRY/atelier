@@ -1,0 +1,20 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "id": "sample.readiness",
+  "namespace": "sample",
+  "version": "v1",
+  "terms": [],
+  "migrations": [],
+  "fixtures": [],
+  "protocols": [
+    {
+      "id": "sample.readiness:contract-gate",
+      "schema": "atelier-readiness-protocol@v1",
+      "gate": "required"
+    }
+  ],
+  "lenses": [],
+  "readinessRules": [],
+  "actionRules": [],
+  "exportMappings": []
+}

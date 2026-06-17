@@ -1,6 +1,6 @@
 {
   "schema": "mnstry.atelier-project-config@v1",
-  "name": "author-private",
+  "name": "tenant-private-domain",
   "roots": {
     "workspace": ".",
     "repoOps": "."
@@ -20,7 +20,7 @@
   },
   "repos": [
     {
-      "name": "author-private",
+      "name": "tenant-private-domain",
       "path": "domain",
       "readBoundary": "private"
     }

@@ -1,0 +1,24 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "id": "sample.readiness",
+  "namespace": "sample",
+  "version": "v1",
+  "terms": [],
+  "migrations": [],
+  "fixtures": [
+    "fixtures/readiness-protocols/protocol/valid/minimal.v1.json"
+  ],
+  "protocols": [
+    {
+      "id": "sample.readiness:contract-gate",
+      "schema": "atelier-readiness-protocol@v1",
+      "path": "fixtures/readiness-protocols/protocol/valid/minimal.v1.json",
+      "gate": "required",
+      "title": "Sample Contract Gate"
+    }
+  ],
+  "lenses": [],
+  "readinessRules": [],
+  "actionRules": [],
+  "exportMappings": []
+}

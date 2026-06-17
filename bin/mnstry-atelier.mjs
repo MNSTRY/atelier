@@ -67,6 +67,11 @@ Core commands:
   build [--check]                 Build or check a realm portal.
   dev                             Run the local Atelier sidecar.
   readiness [--check]             Build or check readiness.
+  readiness protocols             List bundled MNSTRY readiness protocols.
+  readiness journey               Show the MNSTRY tenant-readiness journey.
+  readiness run PROTOCOL_ID       Run a claim-first readiness protocol.
+  readiness packet                Generate an ignored tenant-readiness draft.
+  readiness export --dry-run      Preview readiness export blockers.
   generated check                 Run terminal generated-artifact freshness.
   context flow ...                Resolve session-bound harness context.
   export --dry-run FILE           Validate atelier-export@v1 dry-run artifact.
@@ -105,6 +110,15 @@ Checks repo placement and installs copy-safe Git boundary hooks.`,
     graph: `Usage: atelier graph [--check] [--project ./atelier.project.json]
 
 Builds or checks the project knowledge graph from tracked sources plus ignored local path bindings.`,
+    readiness: `Usage:
+  atelier readiness [--check] [--project ./atelier.project.json]
+  atelier readiness protocols [--json]
+  atelier readiness journey [--project ./atelier.project.json]
+  atelier readiness run mnstry.readiness:offer-map [--answers answers.json] [--project ./atelier.project.json]
+  atelier readiness packet [--project ./atelier.project.json]
+  atelier readiness export --dry-run [--project ./atelier.project.json]
+
+Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet drafts stay in ignored .atelier-local/readiness/ unless explicitly materialized by a reviewed future flow.`,
   }
   console.log(help[command] || `Usage: atelier ${command} [args]\n\nRun atelier --help for the command list.`)
 }

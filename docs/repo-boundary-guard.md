@@ -1,13 +1,13 @@
 # Repo Boundary Guard V1
 
 Repo Boundary Guard V1 is the Atelier workspace convention for separating
-private domain source from shared Mystery project source before anything reaches the
+private domain source from shared project source before anything reaches the
 MNSTRY runtime.
 
 ## Boundary Model
 
 - Private domain material lives in one private Git repository per user.
-- Shared Mystery project material lives in shared project repositories.
+- Shared project material lives in shared project repositories.
 - Git repository access is the source read boundary.
 - `kg.audience` is local projection metadata, not a permission system.
 - Runtime/export `visibility` remains reserved for MNSTRY runtime objects.
@@ -19,7 +19,7 @@ HTML hiding to protect source material inside a shared repo.
 ## Guard Rules
 
 - Private or sensitive source belongs in a repo with `readBoundary: "private"`.
-- Shared Mystery project source may use `team`, `operator`, `staff`, or `public`
+- Shared project source may use `team`, `operator`, `staff`, or `public`
   audiences when the repository readership matches that exposure.
 - Local source metadata must use `kg.audience`.
 - Local source metadata must not use `kg.visibility`.
@@ -44,7 +44,7 @@ Use this as a defensive review before copying preview content into real repos:
 
 - Every private user has exactly one private domain repo entry.
 - Private domain repos use `readBoundary: "private"`.
-- Shared Mystery project repos do not contain private or sensitive source nodes.
+- Shared project repos do not contain private or sensitive source nodes.
 - `rg -n "kg.visibility|visibility:"` over source files finds no local source
   front matter misuse.
 - `repo-access.v1.json` covers every repo listed in `atelier.project.json`.
@@ -53,7 +53,7 @@ Use this as a defensive review before copying preview content into real repos:
 - Generated `atelier-output/` files are not treated as source authority.
 
 When in doubt, fail closed: move the source into the private domain repo first,
-then project a reviewed summary into shared Mystery project material later.
+then project a reviewed summary into shared project material later.
 
 ## Upgrade Review
 

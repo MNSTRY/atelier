@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const expectedPackageName = '@mnstry/atelier'
-const expectedTarballName = 'mnstry-atelier-0.1.0-alpha.0.tgz'
+const expectedTarballName = 'mnstry-atelier-0.1.0-alpha.2.tgz'
 
 const allowedFiles = [
   /^package\.json$/,
@@ -18,6 +18,7 @@ const allowedFiles = [
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
   /^fixtures\/(?!atelier-export\/sample-private-offer)(?!atelier-extension-pack\/client-zero\.client-zero)[A-Za-z0-9./_-]+\.(json|md|html)$/,
+  /^skills\/(codex|claude)\/mnstry-readiness\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.gitignore)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
@@ -53,7 +54,7 @@ function packDryRun() {
 
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
 if (packageJson.private !== false) fail('package.json must set private false before publish')
-if (packageJson.version !== '0.1.0-alpha.0') fail('package version must be 0.1.0-alpha.0 for this release slice')
+if (packageJson.version !== '0.1.0-alpha.2') fail('package version must be 0.1.0-alpha.2 for this release slice')
 if (packageJson.license !== 'Apache-2.0') fail('package license must be Apache-2.0')
 if (packageJson.name !== expectedPackageName) fail(`package name must be ${expectedPackageName}`)
 if (!packageJson.bin?.atelier) fail('package must expose the atelier CLI')

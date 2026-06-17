@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const packageName = '@mnstry/atelier'
-const expectedTarballName = 'mnstry-atelier-0.1.0-alpha.0.tgz'
+const expectedVersion = '0.1.0-alpha.2'
+const expectedTarballName = `mnstry-atelier-${expectedVersion}.tgz`
 const tempRoot = mkdtempSync(join(tmpdir(), 'mnstry-atelier-consumer-'))
 let tarballPath
 
@@ -38,7 +39,7 @@ try {
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { validateAtelierExportDryRun } from '@mnstry/atelier'
+import { validateAtelierExportDryRun, bundledReadinessProtocols } from '@mnstry/atelier'
 
 const fixturePath = fileURLToPath(import.meta.resolve('@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json'))
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
@@ -52,6 +53,8 @@ invalid.provenance.sourceNodes[0].visibility = 'public'
 const invalidReport = validateAtelierExportDryRun(invalid)
 assert.equal(invalidReport.accepted, false)
 assert.match(invalidReport.errors.join('\\n'), /must use audience, not visibility/)
+assert.equal(bundledReadinessProtocols.length, 12)
+assert.equal(bundledReadinessProtocols[0].safety.runtimeMutation, false)
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
@@ -65,12 +68,12 @@ assert.match(invalidReport.errors.join('\\n'), /must use audience, not visibilit
   if (cliReport.accepted !== true) throw new Error('atelier dry-run did not accept the sample fixture')
 
   const directCliOutput = run(process.execPath, ['node_modules/.bin/atelier', '--version'], { cwd: tempRoot })
-  if (directCliOutput.trim() !== '0.1.0-alpha.0') {
+  if (directCliOutput.trim() !== expectedVersion) {
     throw new Error(`atelier --version returned ${directCliOutput.trim()}`)
   }
 
   const legacyCliOutput = run(process.execPath, ['node_modules/.bin/mnstry-atelier', '--version'], { cwd: tempRoot })
-  if (legacyCliOutput.trim() !== '0.1.0-alpha.0') {
+  if (legacyCliOutput.trim() !== expectedVersion) {
     throw new Error(`mnstry-atelier --version returned ${legacyCliOutput.trim()}`)
   }
 

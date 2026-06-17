@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.2",
   "private": false,
   "description": "Local-first MNSTRY Atelier workspace for agentic authoring, graph projection, and dry-run runtime readiness.",
   "type": "module",
@@ -15,6 +15,7 @@
     "./graph": "./src/graph/graph.mjs",
     "./projection": "./src/projection/project.mjs",
     "./readiness": "./src/readiness/readiness.mjs",
+    "./readiness-protocols": "./src/readiness-protocols/bundled-pack.mjs",
     "./server": "./src/server/local-sidecar.mjs",
     "./harness": "./src/harness/context.mjs",
     "./support": "./src/support/support-bundle.mjs",
@@ -38,7 +39,7 @@
     "browser:smoke": "node --test test/server.test.mjs",
     "support-bundle:test": "node --test test/support-bundle.test.mjs test/support-egress-analysis.test.mjs",
     "egress:check": "node bin/atelier.mjs egress check",
-    "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs",
+    "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs test/readiness-protocol-contract.test.mjs test/readiness-protocols.test.mjs test/readiness-protocol-runtime.test.mjs",
     "harness:test": "node --test test/harness.test.mjs test/harness-context.test.mjs",
     "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-guard.test.mjs",
     "upgrade:test": "node --test test/upgrade-contract.test.mjs test/upgrade.test.mjs",
@@ -71,6 +72,7 @@
     "bin/",
     "contracts/",
     "fixtures/",
+    "skills/",
     "src/",
     "templates/",
     "docs/"

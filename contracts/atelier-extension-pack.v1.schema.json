@@ -82,6 +82,35 @@
         "pattern": "^[A-Za-z0-9._/-]+$"
       }
     },
+    "protocols": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "schema", "path", "gate"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*:[a-z][a-z0-9._-]*$"
+          },
+          "schema": {
+            "const": "atelier-readiness-protocol@v1"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]+\\.json$"
+          },
+          "gate": {
+            "enum": ["advisory", "required"]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "uniqueItems": true
+    },
     "lenses": {
       "type": "array",
       "items": {

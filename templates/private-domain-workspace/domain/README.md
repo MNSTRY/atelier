@@ -1,7 +1,7 @@
 ---
-title: "Author Private Domain Seed"
+title: "Private Domain Seed"
 kg:
-  id: "author-private:seed"
+  id: "tenant-private-domain:seed"
   type: "domain-note"
   domain: "private-preview"
   lifecycle: "draft"
@@ -10,10 +10,10 @@ kg:
   relations: []
 ---
 
-# Author Private Domain Seed
+# Private Domain Seed
 
-Private domain source for the Author private repo starts here.
+Private domain source starts here.
 
-Keep only Author-owned private material in this repository. Promote reviewed
-summaries into shared Mystery project repos through ordinary Git review, not through
+Keep only owner-controlled private material in this repository. Promote reviewed
+summaries into shared project repos through ordinary Git review, not through
 browser writes or runtime mutation.

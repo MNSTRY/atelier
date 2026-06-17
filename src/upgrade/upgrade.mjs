@@ -20,6 +20,7 @@ import {
   installBoundaryHooks,
   loadBoundaryPolicy,
 } from '../boundary/policy.mjs'
+import { bundledMnstryReadinessPackV1 } from '../readiness-protocols/bundled-pack.mjs'
 
 export const ATELIER_LOCK_SCHEMA = 'mnstry.atelier-lock@v1'
 export const ATELIER_MIGRATION_SCHEMA = 'mnstry.atelier-migration@v1'
@@ -146,7 +147,11 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
       boundaryPolicy: BOUNDARY_POLICY_SCHEMA,
       exportContract: 'atelier-export@v1',
     },
-    extensionPacks: [],
+    extensionPacks: [{
+      id: bundledMnstryReadinessPackV1.id,
+      version: bundledMnstryReadinessPackV1.version,
+      digest: `sha256:${sha256(bundledMnstryReadinessPackV1)}`,
+    }],
     boundaryPolicy: {
       path: policy.policyPath ? path.relative(project.configDir, policy.policyPath) : null,
       digest: policy.digest,

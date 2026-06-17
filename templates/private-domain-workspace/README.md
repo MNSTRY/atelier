@@ -4,18 +4,18 @@ Starter for one user's private domain repository.
 
 Default example user:
 
-- Name: `Author`
-- GitHub login placeholder: `AUTHOR_GITHUB_LOGIN_PLACEHOLDER`
-- Repo: `github.com/<org>/author-private`
+- Name: `Owner`
+- GitHub login placeholder: `USER_GITHUB_LOGIN_PLACEHOLDER`
+- Repo: `github.com/<org>/tenant-private-domain`
 
-`AUTHOR_GITHUB_LOGIN_PLACEHOLDER` is a placeholder, not a real account. Keep
+`USER_GITHUB_LOGIN_PLACEHOLDER` is a placeholder, not a real account. Keep
 committed starter files placeholder-only; set a real login or email only in the
 copied private workspace.
 
 ## Boundary
 
 This repo is the Git read boundary for the user's private source. Do not place
-private domain source in a shared Mystery project repository and rely on projection
+private domain source in a shared project repository and rely on projection
 filters to hide it.
 
 ## Tracked Config And Local Overlay

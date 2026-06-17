@@ -1,0 +1,44 @@
+{
+  "schema": "atelier-readiness-run@v1",
+  "runId": "readiness-run-111111111111111111111111",
+  "protocolId": "sample.readiness:contract-gate",
+  "createdAt": "2026-06-17T00:00:00.000Z",
+  "project": "sample-workspace",
+  "answers": {
+    "scope": {
+      "name": "Sample scope",
+      "sourceRef": "source:sample-note"
+    }
+  },
+  "status": "review-needed",
+  "score": 100,
+  "blockers": [],
+  "warnings": [],
+  "claims": [
+    {
+      "schema": "atelier-claim@v1",
+      "claimId": "claim:readiness-run-111111111111111111111111:scope",
+      "subject": "readiness:sample:contract-gate",
+      "predicate": "supports",
+      "object": "readiness:contract-gate:scope",
+      "provider": "atelier-readiness",
+      "status": "proposed",
+      "promoted": false,
+      "confidence": 0.7,
+      "evidence": [
+        "readiness-run:readiness-run-111111111111111111111111"
+      ],
+      "notes": [
+        "Neutral contract fixture."
+      ],
+      "createdAt": "2026-06-17T00:00:00.000Z"
+    }
+  ],
+  "safety": {
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "canonicalWrites": false,
+    "claimOnly": true,
+    "storage": "ignored-local"
+  }
+}
