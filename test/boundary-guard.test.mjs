@@ -8,10 +8,13 @@ import {
   BOUNDARY_POLICY_SCHEMA,
   checkBoundaryPolicy,
   createPromoteEvent,
+  diffFileSections,
   installBoundaryHooks,
   runBoundaryCheckCommand,
+  semanticChangesInFile,
   validateBoundaryPolicy,
 } from '../src/boundary/policy.mjs'
+import { generatedFrontmatter } from '../src/graph/knowledge-graph.mjs'
 import { commandProject, writeJson } from '../src/project/config.mjs'
 
 function git(repo, args) {
@@ -234,4 +237,140 @@ test('hook installer writes sidecar hook when user hook already exists', () => {
   const sharedHook = fs.readFileSync(path.join(path.dirname(privateRepo), 'mystery-example', '.git/hooks/pre-commit'), 'utf8')
   assert.match(sharedHook, /command -v atelier/)
   assert.match(sharedHook, /node_modules\/\.bin\/atelier/)
+})
+
+test('applying the kit fail-closed front-matter default does not need a review marker', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  const rel = 'notes/unlabelled.md'
+  const abs = path.join(privateRepo, rel)
+  fs.mkdirSync(path.dirname(abs), { recursive: true })
+  fs.writeFileSync(abs, '# Unlabelled\n\nBody text.\n')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+
+  const frontmatter = generatedFrontmatter({
+    id: 'mnstry-private-author:notes-unlabelled',
+    repoName: 'mnstry-private-author',
+    rel,
+    title: 'Unlabelled',
+    summary: '',
+    domain: 'notes',
+    lifecycle: 'active',
+    status: 'active',
+    audience: '',
+    surfaced: false,
+    tags: ['notes'],
+  })
+  fs.writeFileSync(abs, `---\n${frontmatter}\n---\n\n# Unlabelled\n\nBody text.\n`)
+  git(privateRepo, ['add', '.'])
+
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.deepEqual(
+    report.findings.filter((item) => item.code === 'semantic-field-change-needs-review'),
+    [],
+  )
+  assert.equal(report.ok, true, report.errors.map((item) => item.message).join('\n'))
+})
+
+test('a brand new file initialized to the fail-closed audience needs no marker', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'seed.md', 'mnstry-private-author:seed', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  writeDoc(privateRepo, 'fresh.md', 'mnstry-private-author:fresh', 'private')
+  git(privateRepo, ['add', '.'])
+
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, true, report.errors.map((item) => item.message).join('\n'))
+})
+
+test('a brand new file introduced at a disclosing audience still needs a marker', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'seed.md', 'mnstry-private-author:seed', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  writeDoc(privateRepo, 'fresh.md', 'mnstry-private-author:fresh', 'public')
+  git(privateRepo, ['add', '.'])
+
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, false)
+  const found = report.errors.find((item) => item.code === 'semantic-field-change-needs-review')
+  assert.equal(found.path, 'fresh.md')
+  assert.match(found.message, /audience introduced as "public"/)
+})
+
+test('widening an existing audience without a marker still fails', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  const abs = path.join(privateRepo, 'doc.md')
+  fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').replace('audience: "private"', 'audience: "team"'))
+  git(privateRepo, ['add', '.'])
+
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, false)
+  const found = report.errors.find((item) => item.code === 'semantic-field-change-needs-review')
+  assert.equal(found.path, 'doc.md')
+  assert.match(found.message, /audience changed from "private" to "team"/)
+})
+
+test('removing an existing audience declaration still fails', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+  const abs = path.join(privateRepo, 'doc.md')
+  fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').replace('  audience: "private"\n', ''))
+  git(privateRepo, ['add', '.'])
+
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, false)
+  assert.match(
+    report.errors.find((item) => item.code === 'semantic-field-change-needs-review').message,
+    /audience removed \(was "private"\)/,
+  )
+})
+
+test('a review marker in the same file approves the change, in another file it does not', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
+  writeDoc(privateRepo, 'other.md', 'mnstry-private-author:other', 'private')
+  git(privateRepo, ['add', '.'])
+  git(privateRepo, ['commit', '-m', 'seed'])
+
+  const other = path.join(privateRepo, 'other.md')
+  fs.appendFileSync(other, '\n<!-- Atelier-Boundary-Review: approved — reviewed by author -->\n')
+  const doc = path.join(privateRepo, 'doc.md')
+  fs.writeFileSync(doc, fs.readFileSync(doc, 'utf8').replace('audience: "private"', 'audience: "team"'))
+  git(privateRepo, ['add', '.'])
+
+  let report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, false, 'a marker in a sibling file must not approve doc.md')
+  assert.ok(report.errors.some((item) => item.code === 'semantic-field-change-needs-review' && item.path === 'doc.md'))
+
+  fs.appendFileSync(doc, '\n<!-- Atelier-Boundary-Review: approved — widened for the team handbook -->\n')
+  git(privateRepo, ['add', '.'])
+  report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, true, report.errors.map((item) => item.message).join('\n'))
+})
+
+test('semantic diff parsing reads sidecar JSON and ignores prose mentions', () => {
+  const diff = [
+    'diff --git a/asset.pdf.kg.json b/asset.pdf.kg.json',
+    '--- a/asset.pdf.kg.json',
+    '+++ b/asset.pdf.kg.json',
+    '@@ -6 +6 @@',
+    '-    "audience": "team",',
+    '+    "audience": "public",',
+    'diff --git a/notes.md b/notes.md',
+    '--- a/notes.md',
+    '+++ b/notes.md',
+    '@@ -0,0 +1 @@',
+    '+Our audience loved the launch',
+  ].join('\n')
+  const [sidecar, prose] = diffFileSections(diff)
+  assert.equal(sidecar.path, 'asset.pdf.kg.json')
+  assert.deepEqual(semanticChangesInFile(sidecar), ['audience changed from "team" to "public"'])
+  assert.deepEqual(semanticChangesInFile(prose), [])
 })

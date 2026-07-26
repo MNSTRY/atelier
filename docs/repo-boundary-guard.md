@@ -27,6 +27,33 @@ HTML hiding to protect source material inside a shared repo.
   objects.
 - Generated outputs are projections and should be reproducible from source.
 
+## Staged Boundary Field Review
+
+The staged guard (`atelier boundary check --staged`) inspects every staged
+`*.md` and `*.kg.json` diff for changes to boundary fields — `kg.audience`,
+`audience`, `handling`, `sensitivity`, `data_boundary`.
+
+It distinguishes two cases:
+
+- **Initialization.** A boundary field added with no prior value, set to a
+  value that discloses nothing (`private` or `sensitive` for `audience`), is
+  recorded as a fail-closed default rather than a disclosure decision. It
+  commits without review. This is what tooling writes when it fills in missing
+  front matter, so kit-generated metadata never needs a human to unjam it.
+- **Change.** Anything else — widening, narrowing, removing an existing value,
+  or introducing a field already set to a disclosing value — needs a human.
+
+To approve a change, put a review marker in the diff:
+
+```
+<!-- Atelier-Boundary-Review: approved — why this exposure is correct -->
+```
+
+The marker must travel **in the same file's diff** as the change it approves.
+A marker committed in a sibling file, or already sitting elsewhere in a file
+that this commit does not touch, approves nothing — the guard reads the diff,
+not the working tree.
+
 ## Non-Goals
 
 Repo Boundary Guard V1 does not:

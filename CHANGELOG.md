@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Staged boundary guard now separates boundary-field *initialization* from
+  *change*. A field added with no prior value, set to a non-disclosing default,
+  commits without a review marker; widening, narrowing, and removal still
+  require one. This removes the deadlock where the kit's own front-matter
+  tooling produced changes the kit's own gate refused.
+- `semantic-field-change-needs-review` findings now name the file and the exact
+  field transition instead of failing a whole repo with one opaque message.
+- Review markers are now scoped to the file they appear in. A marker in a
+  sibling file no longer approves an unrelated boundary change.
+
 ## 0.1.0-alpha.2
 
 - Adds bundled `mnstry-readiness-pack@v1` with twelve claim-first readiness

@@ -45,7 +45,17 @@ export const DEFAULT_FORBIDDEN_PATHS = [
 ]
 
 const SEMANTIC_FIELD_RE = /(^|["'\s.-])(kg[.]audience|audience|handling|sensitivity|data_boundary)(["'\s:.-]|$)/i
+const SEMANTIC_ASSIGNMENT_RE = /(?:^|[^\w.])["']?(kg\.audience|audience|handling|sensitivity|data_boundary)["']?\s*:\s*(.*)$/i
 const REVIEW_MARKER_RE = /(Atelier-Boundary-Review|boundary-review)\s*:\s*(approved|reviewed)/i
+
+// Initializing a boundary field to a value that discloses nothing is not a disclosure
+// decision, so the gate lets it through unreviewed. Widening, narrowing, or removing an
+// existing value still needs a human. Keeping this in sync with the fail-closed default
+// written by generatedFrontmatter() is what stops the kit's own apply tooling from
+// producing changes the kit's own gate refuses.
+export const SEMANTIC_INITIALIZATION_DEFAULTS = Object.freeze({
+  audience: Object.freeze([...PRIVATE_AUDIENCES].sort()),
+})
 
 const normalize = (value) => String(value ?? '').replaceAll('\\', '/').replace(/^\.\/+/, '')
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value)
@@ -294,6 +304,78 @@ function forbiddenPathFindings({ policy, stagedPaths }) {
   return findings
 }
 
+function unquoteValue(value) {
+  const text = String(value ?? '')
+    .trim()
+    .replace(/,$/, '')
+    .trim()
+  const quoted = text.match(/^(["'])(.*)\1$/)
+  return quoted ? quoted[2] : text
+}
+
+export function semanticFieldOnLine(line) {
+  if (!SEMANTIC_FIELD_RE.test(line)) return null
+  const assignment = line.match(SEMANTIC_ASSIGNMENT_RE)
+  if (assignment) {
+    return { field: assignment[1].toLowerCase().replace(/^kg\./, ''), value: unquoteValue(assignment[2]), raw: line.trim() }
+  }
+  // A boundary field is always declared as `field: value` in front matter and in sidecar
+  // JSON. A bare mention with no colon is prose, not a declaration.
+  if (!line.includes(':')) return null
+  return { field: null, value: null, raw: line.trim() }
+}
+
+function isInitializationDefault(field, value) {
+  const defaults = SEMANTIC_INITIALIZATION_DEFAULTS[field]
+  return Array.isArray(defaults) && defaults.includes(value)
+}
+
+export function diffFileSections(diff) {
+  const files = []
+  let current = null
+  let hunk = null
+  for (const line of String(diff ?? '').split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      const header = line.match(/^diff --git a\/(.*) b\/(.*)$/)
+      current = { path: header ? normalize(header[2]) : null, hunks: [], lines: [] }
+      files.push(current)
+      hunk = null
+      continue
+    }
+    if (!current) continue
+    current.lines.push(line)
+    if (line.startsWith('@@')) {
+      hunk = { added: [], removed: [] }
+      current.hunks.push(hunk)
+      continue
+    }
+    if (!hunk) continue
+    if (/^\+(?!\+)/.test(line)) hunk.added.push(line.slice(1))
+    else if (/^-(?!-)/.test(line)) hunk.removed.push(line.slice(1))
+  }
+  return files
+}
+
+export function semanticChangesInFile(file) {
+  const changes = []
+  for (const hunk of file.hunks ?? []) {
+    const pending = hunk.removed.map(semanticFieldOnLine).filter(Boolean)
+    for (const entry of hunk.added.map(semanticFieldOnLine).filter(Boolean)) {
+      const index = pending.findIndex((item) => item.field === entry.field)
+      const prior = index === -1 ? null : pending.splice(index, 1)[0]
+      if (prior) {
+        changes.push(entry.field ? `${entry.field} changed from "${prior.value}" to "${entry.value}"` : `boundary line changed to "${entry.raw}"`)
+      } else if (!entry.field || !isInitializationDefault(entry.field, entry.value)) {
+        changes.push(entry.field ? `${entry.field} introduced as "${entry.value}"` : `boundary line introduced: "${entry.raw}"`)
+      }
+    }
+    for (const entry of pending) {
+      changes.push(entry.field ? `${entry.field} removed (was "${entry.value}")` : `boundary line removed: "${entry.raw}"`)
+    }
+  }
+  return changes
+}
+
 function semanticDiffFindings({ policy, project }) {
   const findings = []
   const severity = severityFor(policy)
@@ -301,12 +383,23 @@ function semanticDiffFindings({ policy, project }) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
     if (result.status !== 0 || !result.stdout.trim()) continue
-    const diff = result.stdout
-    const changedSemantic = diff
-      .split('\n')
-      .some((line) => /^[+-](?![+-])/.test(line) && SEMANTIC_FIELD_RE.test(line))
-    if (changedSemantic && !REVIEW_MARKER_RE.test(diff)) {
-      findings.push(finding({ severity, code: 'semantic-field-change-needs-review', repo: repo.name, message: `${repo.name}: staged audience/sensitivity boundary field change needs Atelier-Boundary-Review marker` }))
+    for (const file of diffFileSections(result.stdout)) {
+      const changes = semanticChangesInFile(file)
+      if (!changes.length) continue
+      // The marker has to travel in the same file's diff as the change it approves —
+      // a marker elsewhere in the commit approves nothing.
+      if (REVIEW_MARKER_RE.test(file.lines.join('\n'))) continue
+      const label = `${repo.name}/${file.path ?? '(unknown path)'}`
+      findings.push(
+        finding({
+          severity,
+          code: 'semantic-field-change-needs-review',
+          repo: repo.name,
+          path: file.path,
+          message: `${label}: ${changes.join('; ')} — add an Atelier-Boundary-Review: approved marker to this file's diff`,
+          details: { changes },
+        }),
+      )
     }
   }
   return findings
