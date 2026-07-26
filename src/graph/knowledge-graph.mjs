@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { VALID_AUDIENCES } from '../projection/policy.mjs'
+import { gitIgnoreFilter } from '../project/git-ignore.mjs'
 
 export const KNOWLEDGE_GRAPH_SCHEMA = 'mnstry.knowledge-graph@v1'
 export const REPO_ACCESS_SCHEMA = 'mnstry.repo-access@v1'
@@ -293,13 +294,16 @@ export function listRepos(workspaceRoot) {
     .sort()
 }
 
-export function walkDocuments(dir, root, acc = []) {
+// Git-ignored paths are machine-local. Counting them makes committed graph
+// artifacts differ per machine, which turns every sync tick into a conflict.
+export function walkDocuments(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue
     const abs = path.join(dir, ent.name)
     const rel = relPath(root, abs)
+    if (isIgnored(rel)) continue
     if (ent.isDirectory()) {
-      walkDocuments(abs, root, acc)
+      walkDocuments(abs, root, acc, isIgnored)
     } else if (ent.isFile()) {
       const ext = path.extname(ent.name).toLowerCase()
       if (!DOC_EXTENSIONS.has(ext)) continue
@@ -311,12 +315,13 @@ export function walkDocuments(dir, root, acc = []) {
   return acc
 }
 
-export function walkSidecars(dir, root, acc = []) {
+export function walkSidecars(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue
     const abs = path.join(dir, ent.name)
+    if (isIgnored(relPath(root, abs))) continue
     if (ent.isDirectory()) {
-      walkSidecars(abs, root, acc)
+      walkSidecars(abs, root, acc, isIgnored)
     } else if (ent.isFile() && ent.name.endsWith('.kg.json')) {
       acc.push({ abs, rel: relPath(root, abs) })
     }

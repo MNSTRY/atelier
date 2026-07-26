@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { commandProject, loadRepoAccess, readJson, writeJson } from '../project/config.mjs'
+import { gitIgnoreFilter } from '../project/git-ignore.mjs'
 
 export const VALID_AUDIENCES = new Set(['private', 'team', 'operator', 'staff', 'public', 'sensitive'])
 export const VALID_RELATIONS = new Set(['related', 'supports', 'supersedes', 'implements', 'depends_on', 'evidences', 'contradicts', 'belongs_to'])
@@ -11,11 +12,12 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', 'atelier-output', 'atelier-re
 const slug = (value) => String(value ?? '').toLowerCase().replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 const relPath = (root, file) => path.relative(root, file).split(path.sep).join('/')
 
-function walk(dir, root, acc = []) {
+function walk(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (ent.name.startsWith('.') || SKIP_DIRS.has(ent.name)) continue
     const abs = path.join(dir, ent.name)
-    if (ent.isDirectory()) walk(abs, root, acc)
+    if (isIgnored(relPath(root, abs))) continue
+    if (ent.isDirectory()) walk(abs, root, acc, isIgnored)
     if (ent.isFile() && DOC_EXTS.has(path.extname(ent.name).toLowerCase())) acc.push({ abs, rel: relPath(root, abs), ext: path.extname(ent.name).toLowerCase() })
   }
   return acc
@@ -238,10 +240,12 @@ function isExternalRelationTarget(target, { externalRelationPrefixes, externalRe
 
 function findOrphanSidecars(root) {
   const orphans = []
+  const isIgnored = gitIgnoreFilter(root)
   function visit(dir) {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       if (ent.name.startsWith('.') || SKIP_DIRS.has(ent.name)) continue
       const abs = path.join(dir, ent.name)
+      if (isIgnored(relPath(root, abs))) continue
       if (ent.isDirectory()) visit(abs)
       else if (ent.isFile() && ent.name.endsWith('.kg.json')) {
         const asset = abs.slice(0, -'.kg.json'.length)

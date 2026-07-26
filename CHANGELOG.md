@@ -11,6 +11,13 @@
   field transition instead of failing a whole repo with one opaque message.
 - Review markers are now scoped to the file they appear in. A marker in a
   sibling file no longer approves an unrelated boundary change.
+- Graph and sidecar walks now skip git-ignored paths via one batched
+  `git ls-files --others --ignored --exclude-standard --directory` per repo
+  root, so committed graph artifacts describe the repository rather than one
+  machine's working tree. Multi-machine workspaces no longer churn.
+- Adds `test/graph-determinism.test.mjs`, a mutation-tested regression guard
+  that builds twice with git-ignored junk planted in between and fails on any
+  byte change to a committed artifact.
 
 ## 0.1.0-alpha.2
 
