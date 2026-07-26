@@ -36,6 +36,20 @@ artifact changes a byte. It also asserts the planted paths really are ignored,
 so a dropped `.gitignore` pattern fails loudly rather than passing while the
 churn quietly returns.
 
+### Open decision: one writer
+
+Determinism guards the trigger, not the underlying shape. Committing generated
+artifacts and rebuilding them on every machine on every tick is inherently
+collision-prone: any nondeterminism that slips back in — a new census input, a
+Node version difference, a timestamp — reproduces the churn, and a machine that
+cannot fast-forward keeps publishing its own build, which is self-sustaining.
+
+The durable fixes are one-writer postures: generate in CI only, or stop
+committing projections and build them on demand. This is not yet decided. When
+the kit formalizes projection workflows for multi-machine adopters, one of those
+should become the documented default, with committed artifacts treated as the
+single-machine special case.
+
 ## Projection Rules
 
 The graph feeds local views, readiness reports, and dry-run exports. A local
