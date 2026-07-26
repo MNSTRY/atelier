@@ -49,3 +49,31 @@ Git authorship is the primary local attribution signal. Actor and harness
 annotations are advisory context. Sensitive semantic fields should fail closed
 without an explicit review marker, while ordinary authored files can use normal
 Git merge/review workflows.
+
+## File Classification
+
+Every file the kit ships or generates belongs to one of three classes, declared
+once in the kit manifest's `fileClasses` and resolved through
+`classifyPath(path, { repoRole })`:
+
+| Class | Meaning | Safe automated handling |
+|---|---|---|
+| `source` | canonical, human or agent authored | never discard; conflicts need a human |
+| `generated-projection` | rebuilt deterministically every tick | discard and regenerate freely |
+| `distributed-runtime-copy` | canonical in ONE repo role, copied into consumers by runtime sync | rederivable in consumers, canonical where it is owned |
+
+A `distributed-runtime-copy` **must** declare `canonicalRepoRole`. This is the
+part that cannot be skipped: name-matching alone cannot tell the repo that owns
+a file from the repos that merely receive it. A self-repair loop that treats a
+runtime copy as authored work wedges the consumer in permanent rebase conflict;
+a sync loop that folds it into a plain "generated" list silently destroys
+canonical edits in the repo where it is source. The same path therefore resolves
+to `source` in its canonical role and `distributed-runtime-copy` everywhere else.
+
+Unclassified paths default to `source`, the fail-closed answer — never discarded.
+Later entries win, as in `.gitignore`, so an adopter can narrow a kit default by
+appending a more specific pattern.
+
+Adapters must not maintain shadow lists. `test/file-class.test.mjs` asserts the
+kit itself keeps no second copy: the graph walker's skip list is derived from the
+declaration, and the glob dialect lives in one module.

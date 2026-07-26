@@ -26,6 +26,15 @@
   `external` as the resolution.
 - `atelier graph` prints the remote host of each external repo so a workspace
   surfaces where its unmanaged folders push.
+- **Breaking:** `fileClasses` is now required in the kit manifest. Every file
+  the kit ships or generates is classified `source`, `generated-projection`, or
+  `distributed-runtime-copy`, and a runtime copy must declare the repo role in
+  which it is canonical. Adds `classifyPath(path, { repoRole })` so sync loops,
+  merge policies, upgrade tooling, and CI guards read one declaration instead of
+  each keeping a list that drifts.
+- The graph walker's generated-file skip list and the boundary policy's glob
+  matcher are now derived from shared modules rather than restated inline, with
+  a drift test asserting the kit keeps no second copy of either.
 
 ## 0.1.0-alpha.2
 

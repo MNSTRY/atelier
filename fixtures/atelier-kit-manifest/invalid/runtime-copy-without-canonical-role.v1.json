@@ -41,31 +41,8 @@
   ],
   "fileClasses": [
     {
-      "pattern": "**/atelier.manifest.json",
-      "class": "generated-projection"
-    },
-    {
-      "pattern": "**/atelier-ledger.html",
-      "class": "generated-projection"
-    },
-    {
-      "pattern": "**/knowledge.graph.json",
-      "class": "generated-projection"
-    },
-    {
-      "pattern": "atelier-output/**",
-      "class": "generated-projection"
-    },
-    {
       "pattern": "**/atelier-shell.js",
-      "class": "distributed-runtime-copy",
-      "canonicalRepoRole": "repo-ops",
-      "note": "Canonical in the ops repo; every consumer receives a copy by runtime sync."
-    },
-    {
-      "pattern": "scripts/build-atelier.mjs",
-      "class": "distributed-runtime-copy",
-      "canonicalRepoRole": "repo-ops"
+      "class": "distributed-runtime-copy"
     }
   ],
   "telemetry": {

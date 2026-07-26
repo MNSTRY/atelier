@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { buildGraph } from '../graph/graph.mjs'
 import { commandProject, firstString, parseArgs, readJson, resolvePathValue, writeJson } from '../project/config.mjs'
+import { matchesPathPattern } from '../project/path-match.mjs'
 
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
 export const PROMOTE_EVENT_SCHEMA = 'mnstry.git-promote-event@v1'
@@ -230,26 +231,6 @@ function severityFor(policy) {
   return policy?.mode === 'legacy-warning' ? 'warning' : 'error'
 }
 
-function patternMatches(pattern, rel) {
-  const normalizedPattern = normalize(pattern)
-  const normalizedRel = normalize(rel)
-  if (normalizedPattern === normalizedRel) return true
-  if (normalizedPattern.endsWith('/**')) return normalizedRel === normalizedPattern.slice(0, -3) || normalizedRel.startsWith(normalizedPattern.slice(0, -2))
-  if (normalizedPattern.startsWith('**/')) {
-    const tail = normalizedPattern.slice(3)
-    return normalizedRel === tail || normalizedRel.endsWith(`/${tail}`) || patternMatches(tail, normalizedRel)
-  }
-  if (normalizedPattern.includes('*')) {
-    const re = new RegExp(`^${normalizedPattern.split('*').map(escapeRe).join('.*')}$`)
-    return re.test(normalizedRel)
-  }
-  return false
-}
-
-function escapeRe(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function nodePlacementFindings({ node, policy }) {
   const findings = []
   const repo = repoPolicy(policy, node.repo)
@@ -304,7 +285,7 @@ function forbiddenPathFindings({ policy, stagedPaths }) {
   const findings = []
   const severity = severityFor(policy)
   for (const item of stagedPaths) {
-    const matched = patterns.find((pattern) => patternMatches(pattern, item.path))
+    const matched = patterns.find((pattern) => matchesPathPattern(pattern, item.path))
     if (matched) {
       findings.push(finding({ severity, code: 'forbidden-path-staged', repo: item.repo, path: item.path, message: `${item.repo}/${item.path}: staged path is protected by boundary policy pattern ${matched}` }))
     }
