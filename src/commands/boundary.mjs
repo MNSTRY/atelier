@@ -1,14 +1,24 @@
 #!/usr/bin/env node
 import { parseArgs } from '../project/config.mjs'
-import { runBoundaryCheckCommand, runBoundaryInstallHooksCommand } from '../boundary/policy.mjs'
+import {
+  runBoundaryAuditCommand,
+  runBoundaryCheckCommand,
+  runBoundaryInstallHooksCommand,
+  runBoundaryPushCheckCommand,
+} from '../boundary/policy.mjs'
 
 const args = parseArgs(process.argv.slice(2))
 const subcommand = args._[0] || 'check'
+const rest = (...names) => process.argv.slice(2).filter((arg) => !names.includes(arg))
 
 if (subcommand === 'check' || subcommand === 'doctor') {
-  runBoundaryCheckCommand(process.argv.slice(2).filter((arg) => arg !== 'check' && arg !== 'doctor'))
+  runBoundaryCheckCommand(rest('check', 'doctor'))
+} else if (subcommand === 'push-check') {
+  runBoundaryPushCheckCommand(rest('push-check'))
+} else if (subcommand === 'audit') {
+  runBoundaryAuditCommand(rest('audit'))
 } else if (subcommand === 'install-hooks') {
-  runBoundaryInstallHooksCommand(process.argv.slice(2).filter((arg) => arg !== 'install-hooks'))
+  runBoundaryInstallHooksCommand(rest('install-hooks'))
 } else {
   console.error(`Unknown boundary command: ${subcommand}`)
   process.exit(1)

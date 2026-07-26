@@ -11,6 +11,7 @@
     "runtimeLock",
     "contracts",
     "extensionPacks",
+    "fileClasses",
     "telemetry"
   ],
   "properties": {
@@ -128,6 +129,45 @@
         }
       },
       "uniqueItems": true
+    },
+    "fileClasses": {
+      "description": "How automated handling must treat each file the kit ships or generates. Sync loops, merge policies, upgrade tooling, and CI guards consume this one declaration instead of each keeping its own list of filenames. Later entries win, as in .gitignore.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pattern", "class"],
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "minLength": 1
+          },
+          "class": {
+            "description": "source: canonical, never discarded, conflicts need a human. generated-projection: rebuilt deterministically, discard freely. distributed-runtime-copy: canonical in one repo role, rederivable in consumers.",
+            "enum": ["source", "generated-projection", "distributed-runtime-copy"]
+          },
+          "canonicalRepoRole": {
+            "description": "The repo role in which a distributed-runtime-copy is canonical source. Without it, a sync loop cannot tell the repo that owns the file from the repos that merely receive it, and will discard canonical edits.",
+            "type": "string",
+            "minLength": 1
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "class": { "const": "distributed-runtime-copy" } },
+              "required": ["class"]
+            },
+            "then": { "required": ["canonicalRepoRole"] },
+            "else": { "not": { "required": ["canonicalRepoRole"] } }
+          }
+        ]
+      }
     },
     "telemetry": {
       "type": "object",

@@ -3,6 +3,18 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { buildGraph } from '../graph/graph.mjs'
 import { commandProject, firstString, parseArgs, readJson, resolvePathValue, writeJson } from '../project/config.mjs'
+import { matchesPathPattern } from '../project/path-match.mjs'
+import {
+  diffForPushRange,
+  parseAddedContent,
+  parsePushRefUpdates,
+  resolveContentRules,
+  scanAddedContent,
+  scanTree,
+  stagedDiff,
+  validateContentRuleExceptions,
+  validateContentRules,
+} from './content-rules.mjs'
 
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
 export const PROMOTE_EVENT_SCHEMA = 'mnstry.git-promote-event@v1'
@@ -45,7 +57,19 @@ export const DEFAULT_FORBIDDEN_PATHS = [
 ]
 
 const SEMANTIC_FIELD_RE = /(^|["'\s.-])(kg[.]audience|audience|handling|sensitivity|data_boundary)(["'\s:.-]|$)/i
+const SEMANTIC_ASSIGNMENT_RE = /(?:^|[^\w.])["']?(kg\.audience|audience|handling|sensitivity|data_boundary)["']?\s*:\s*(.*)$/i
 const REVIEW_MARKER_RE = /(Atelier-Boundary-Review|boundary-review)\s*:\s*(approved|reviewed)/i
+
+// Initializing a boundary field to a value that discloses nothing is not a disclosure
+// decision, so the gate lets it through unreviewed. Widening, narrowing, or removing an
+// existing value still needs a human. Keeping this in sync with the fail-closed default
+// written by generatedFrontmatter() is what stops the kit's own apply tooling from
+// producing changes the kit's own gate refuses.
+export const SEMANTIC_INITIALIZATION_DEFAULTS = Object.freeze({
+  audience: Object.freeze([...PRIVATE_AUDIENCES].sort()),
+})
+
+const managedRepos = (project) => (project?.repos ?? []).filter((repo) => !repo.external)
 
 const normalize = (value) => String(value ?? '').replaceAll('\\', '/').replace(/^\.\/+/, '')
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value)
@@ -101,7 +125,7 @@ function validAudienceList(value, label, required = false) {
 export function validateBoundaryPolicy(policy, project = null) {
   const errors = []
   if (!isObject(policy)) return ['boundary policy must be a JSON object']
-  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'governanceLedgerPath'])))
+  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath'])))
   if (policy.schema !== BOUNDARY_POLICY_SCHEMA) errors.push(`schema must be ${BOUNDARY_POLICY_SCHEMA}`)
   if (!VALID_BOUNDARY_MODES.has(policy.mode)) errors.push('mode must be strict or legacy-warning')
 
@@ -113,6 +137,17 @@ export function validateBoundaryPolicy(policy, project = null) {
   if (policy.promotion != null && !isObject(policy.promotion)) errors.push('promotion must be an object')
   errors.push(...unknownKeys(promotion, 'promotion', new Set(['requiresGitPromote', 'recordsPath'])))
   if (policy.forbiddenPaths != null && !Array.isArray(policy.forbiddenPaths)) errors.push('forbiddenPaths must be a list')
+  if (policy.contentRules != null) errors.push(...validateContentRules(policy.contentRules))
+  if (policy.contentRuleExceptions != null) {
+    errors.push(...validateContentRuleExceptions(policy.contentRuleExceptions, resolveContentRules(policy)))
+    const declaredRepos = isObject(repos) ? repos : {}
+    for (const [index, exception] of policy.contentRuleExceptions.entries()) {
+      const name = firstString(exception?.repo)
+      if (name && Object.keys(declaredRepos).length && !declaredRepos[name]) {
+        errors.push(`contentRuleExceptions[${index}].repo ${name} is not declared in repos`)
+      }
+    }
+  }
 
   for (const [actorId, actor] of Object.entries(isObject(actors) ? actors : {})) {
     errors.push(...unknownKeys(actor, `actors.${actorId}`, new Set(['githubLogin', 'gitEmails', 'privateDomainRepo'])))
@@ -156,6 +191,12 @@ export function validateBoundaryPolicy(policy, project = null) {
 
   if (project?.repos?.length && isObject(repos)) {
     for (const repo of project.repos) {
+      if (repo.external) {
+        // Declaring a boundary for a repo nobody manages is the confusion the
+        // external kind exists to remove.
+        if (repos[repo.name]) errors.push(`policy repos.${repo.name} must not be declared; it is an external (unmanaged) repo`)
+        continue
+      }
       if (!repos[repo.name]) errors.push(`policy repos.${repo.name} must be declared`)
     }
   }
@@ -182,7 +223,7 @@ export function resolveCurrentActor({ policy, project, actor = null, env = proce
 }
 
 function gitEmailsForProject(project) {
-  const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...(project?.repos ?? []).map((repo) => repo.path)])
+  const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...managedRepos(project).map((repo) => repo.path)])
   const emails = []
   for (const root of roots) {
     if (!root || !fs.existsSync(root)) continue
@@ -210,26 +251,6 @@ function finding({ severity = 'error', code, message, repo = null, path: itemPat
 
 function severityFor(policy) {
   return policy?.mode === 'legacy-warning' ? 'warning' : 'error'
-}
-
-function patternMatches(pattern, rel) {
-  const normalizedPattern = normalize(pattern)
-  const normalizedRel = normalize(rel)
-  if (normalizedPattern === normalizedRel) return true
-  if (normalizedPattern.endsWith('/**')) return normalizedRel === normalizedPattern.slice(0, -3) || normalizedRel.startsWith(normalizedPattern.slice(0, -2))
-  if (normalizedPattern.startsWith('**/')) {
-    const tail = normalizedPattern.slice(3)
-    return normalizedRel === tail || normalizedRel.endsWith(`/${tail}`) || patternMatches(tail, normalizedRel)
-  }
-  if (normalizedPattern.includes('*')) {
-    const re = new RegExp(`^${normalizedPattern.split('*').map(escapeRe).join('.*')}$`)
-    return re.test(normalizedRel)
-  }
-  return false
-}
-
-function escapeRe(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function nodePlacementFindings({ node, policy }) {
@@ -270,7 +291,7 @@ function actorFindings({ policy, project, actor }) {
 
 export function stagedPathsForProject(project) {
   const paths = []
-  for (const repo of project.repos ?? []) {
+  for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf8' })
     if (result.status !== 0) continue
@@ -286,7 +307,7 @@ function forbiddenPathFindings({ policy, stagedPaths }) {
   const findings = []
   const severity = severityFor(policy)
   for (const item of stagedPaths) {
-    const matched = patterns.find((pattern) => patternMatches(pattern, item.path))
+    const matched = patterns.find((pattern) => matchesPathPattern(pattern, item.path))
     if (matched) {
       findings.push(finding({ severity, code: 'forbidden-path-staged', repo: item.repo, path: item.path, message: `${item.repo}/${item.path}: staged path is protected by boundary policy pattern ${matched}` }))
     }
@@ -294,22 +315,191 @@ function forbiddenPathFindings({ policy, stagedPaths }) {
   return findings
 }
 
+function unquoteValue(value) {
+  const text = String(value ?? '')
+    .trim()
+    .replace(/,$/, '')
+    .trim()
+  const quoted = text.match(/^(["'])(.*)\1$/)
+  return quoted ? quoted[2] : text
+}
+
+export function semanticFieldOnLine(line) {
+  if (!SEMANTIC_FIELD_RE.test(line)) return null
+  const assignment = line.match(SEMANTIC_ASSIGNMENT_RE)
+  if (assignment) {
+    return { field: assignment[1].toLowerCase().replace(/^kg\./, ''), value: unquoteValue(assignment[2]), raw: line.trim() }
+  }
+  // A boundary field is always declared as `field: value` in front matter and in sidecar
+  // JSON. A bare mention with no colon is prose, not a declaration.
+  if (!line.includes(':')) return null
+  return { field: null, value: null, raw: line.trim() }
+}
+
+function isInitializationDefault(field, value) {
+  const defaults = SEMANTIC_INITIALIZATION_DEFAULTS[field]
+  return Array.isArray(defaults) && defaults.includes(value)
+}
+
+export function diffFileSections(diff) {
+  const files = []
+  let current = null
+  let hunk = null
+  for (const line of String(diff ?? '').split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      const header = line.match(/^diff --git a\/(.*) b\/(.*)$/)
+      current = { path: header ? normalize(header[2]) : null, hunks: [], lines: [] }
+      files.push(current)
+      hunk = null
+      continue
+    }
+    if (!current) continue
+    current.lines.push(line)
+    if (line.startsWith('@@')) {
+      hunk = { added: [], removed: [] }
+      current.hunks.push(hunk)
+      continue
+    }
+    if (!hunk) continue
+    if (/^\+(?!\+)/.test(line)) hunk.added.push(line.slice(1))
+    else if (/^-(?!-)/.test(line)) hunk.removed.push(line.slice(1))
+  }
+  return files
+}
+
+export function semanticChangesInFile(file) {
+  const changes = []
+  for (const hunk of file.hunks ?? []) {
+    const pending = hunk.removed.map(semanticFieldOnLine).filter(Boolean)
+    for (const entry of hunk.added.map(semanticFieldOnLine).filter(Boolean)) {
+      const index = pending.findIndex((item) => item.field === entry.field)
+      const prior = index === -1 ? null : pending.splice(index, 1)[0]
+      if (prior) {
+        changes.push(entry.field ? `${entry.field} changed from "${prior.value}" to "${entry.value}"` : `boundary line changed to "${entry.raw}"`)
+      } else if (!entry.field || !isInitializationDefault(entry.field, entry.value)) {
+        changes.push(entry.field ? `${entry.field} introduced as "${entry.value}"` : `boundary line introduced: "${entry.raw}"`)
+      }
+    }
+    for (const entry of pending) {
+      changes.push(entry.field ? `${entry.field} removed (was "${entry.value}")` : `boundary line removed: "${entry.raw}"`)
+    }
+  }
+  return changes
+}
+
 function semanticDiffFindings({ policy, project }) {
   const findings = []
   const severity = severityFor(policy)
-  for (const repo of project.repos ?? []) {
+  for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
     if (result.status !== 0 || !result.stdout.trim()) continue
-    const diff = result.stdout
-    const changedSemantic = diff
-      .split('\n')
-      .some((line) => /^[+-](?![+-])/.test(line) && SEMANTIC_FIELD_RE.test(line))
-    if (changedSemantic && !REVIEW_MARKER_RE.test(diff)) {
-      findings.push(finding({ severity, code: 'semantic-field-change-needs-review', repo: repo.name, message: `${repo.name}: staged audience/sensitivity boundary field change needs Atelier-Boundary-Review marker` }))
+    for (const file of diffFileSections(result.stdout)) {
+      const changes = semanticChangesInFile(file)
+      if (!changes.length) continue
+      // The marker has to travel in the same file's diff as the change it approves —
+      // a marker elsewhere in the commit approves nothing.
+      if (REVIEW_MARKER_RE.test(file.lines.join('\n'))) continue
+      const label = `${repo.name}/${file.path ?? '(unknown path)'}`
+      findings.push(
+        finding({
+          severity,
+          code: 'semantic-field-change-needs-review',
+          repo: repo.name,
+          path: file.path,
+          message: `${label}: ${changes.join('; ')} — add an Atelier-Boundary-Review: approved marker to this file's diff`,
+          details: { changes },
+        }),
+      )
     }
   }
   return findings
+}
+
+function contentRuleFindings({ policy, project, files }) {
+  const rules = resolveContentRules(policy)
+  const exceptions = asArray(policy?.contentRuleExceptions)
+  const findings = []
+  for (const entry of files) {
+    for (const item of scanAddedContent({ files: entry.files, rules, exceptions, repo: entry.repo })) {
+      // The rule id and line stay on the finding: they are what a person needs to
+      // either fix the line or write the exception.
+      findings.push({ ...finding({ ...item, details: { rule: item.rule, line: item.line } }), rule: item.rule, line: item.line })
+    }
+  }
+  return findings
+}
+
+function stagedContentFindings({ policy, project }) {
+  const files = managedRepos(project)
+    .filter((repo) => repo.path && fs.existsSync(path.join(repo.path, '.git')))
+    .map((repo) => ({ repo: repo.name, files: parseAddedContent(stagedDiff(repo.path)) }))
+  return contentRuleFindings({ policy, project, files })
+}
+
+function realPath(value) {
+  try {
+    return fs.realpathSync(path.resolve(value))
+  } catch {
+    return path.resolve(value)
+  }
+}
+
+// Matched through realpath: a workspace reached via a symlink (a macOS temp dir, a
+// linked checkout) otherwise fails to match its own configured path, and the guard
+// silently judges nothing.
+function repoForCwd(project, cwd) {
+  const resolved = realPath(cwd)
+  return (
+    managedRepos(project).find((repo) => {
+      if (!repo.path) return false
+      const repoPath = realPath(repo.path)
+      return resolved === repoPath || resolved.startsWith(`${repoPath}${path.sep}`)
+    }) ?? null
+  )
+}
+
+/**
+ * Judge only what is being pushed. The whole-tree view lives in `boundary audit`,
+ * which reports without blocking, so an accepted usage elsewhere in the repo can
+ * never strand unrelated work on the machine.
+ */
+export function checkPushContent({ project, policy, repo, updates, cwd = process.cwd() } = {}) {
+  const target = repo ?? repoForCwd(project, cwd)
+  if (!target) {
+    // Fail closed. This hook is only installed into managed repos, so failing to
+    // identify one means the guard would judge nothing — a silent no-op is the
+    // failure mode this whole guard exists to avoid.
+    const unresolved = finding({
+      code: 'push-check-repo-unresolved',
+      repo: null,
+      message: `${cwd} is not a repo declared in ${project?.configPath ?? 'the project config'}; the push guard cannot tell what it is judging`,
+    })
+    return { ok: false, repo: null, findings: [unresolved], errors: [unresolved], warnings: [] }
+  }
+  const files = []
+  for (const update of updates) files.push(...parseAddedContent(diffForPushRange(target.path, update)))
+  const findings = contentRuleFindings({ policy, project, files: [{ repo: target.name, files }] })
+  const errors = findings.filter((item) => item.severity === 'error')
+  return { ok: errors.length === 0, repo: target.name, updates, findings, errors, warnings: findings.filter((item) => item.severity !== 'error') }
+}
+
+export function auditContentRules({ project, policy } = {}) {
+  const rules = resolveContentRules(policy)
+  const exceptions = asArray(policy?.contentRuleExceptions)
+  const findings = []
+  for (const repo of managedRepos(project)) {
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
+    findings.push(...scanTree(repo.path, { rules, exceptions, repo: repo.name }))
+  }
+  const accepted = []
+  for (const repo of managedRepos(project)) {
+    for (const exception of exceptions) {
+      if (firstString(exception?.repo) !== repo.name) continue
+      accepted.push({ repo: repo.name, rule: exception.rule, paths: exception.paths, reason: exception.reason })
+    }
+  }
+  return { schema: BOUNDARY_POLICY_SCHEMA, findings, accepted }
 }
 
 function promotionRecords(project, policy) {
@@ -380,6 +570,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
       const stagedPaths = stagedPathsForProject(project)
       findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
       findings.push(...semanticDiffFindings({ policy, project }))
+      findings.push(...stagedContentFindings({ policy, project }))
     }
   }
   const errors = findings.filter((item) => item.severity === 'error')
@@ -420,7 +611,7 @@ export function runBoundaryCheckCommand(argv = process.argv.slice(2)) {
 export function installBoundaryHooks({ project, force = false } = {}) {
   const installed = []
   const skipped = []
-  for (const repo of project.repos ?? []) {
+  for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const hooksDir = path.join(repo.path, '.git', 'hooks')
     fs.mkdirSync(hooksDir, { recursive: true })
@@ -445,24 +636,84 @@ export function installBoundaryHooks({ project, force = false } = {}) {
 
 function hookScript(projectConfigPath, hookName) {
   const config = projectConfigPath ? `--project-config=${projectConfigPath.replaceAll('"', '\\"')}` : ''
+  // pre-push reads the ref updates git writes to stdin and judges only that range;
+  // pre-commit judges the staged diff. Neither scans the whole tree — that view is
+  // `atelier boundary audit`, which reports without blocking.
+  const invocation = hookName === 'pre-push' ? `boundary push-check ${config}` : `boundary check --staged ${config}`
   return `#!/usr/bin/env bash
 # MNSTRY_ATELIER_BOUNDARY_GUARD ${hookName}
 set -euo pipefail
 if command -v atelier >/dev/null 2>&1; then
-  atelier boundary check --staged ${config}
+  exec atelier ${invocation}
 elif [ -x "./node_modules/.bin/atelier" ]; then
-  ./node_modules/.bin/atelier boundary check --staged ${config}
+  exec ./node_modules/.bin/atelier ${invocation}
 elif command -v mnstry-atelier >/dev/null 2>&1; then
-  mnstry-atelier boundary check --staged ${config}
+  exec mnstry-atelier ${invocation}
 elif [ -x "./node_modules/.bin/mnstry-atelier" ]; then
-  ./node_modules/.bin/mnstry-atelier boundary check --staged ${config}
+  exec ./node_modules/.bin/mnstry-atelier ${invocation}
 elif [ -n "\${MNSTRY_ATELIER_PACKAGE_ROOT:-}" ]; then
-  node "$MNSTRY_ATELIER_PACKAGE_ROOT/bin/mnstry-atelier.mjs" boundary check --staged ${config}
+  exec node "$MNSTRY_ATELIER_PACKAGE_ROOT/bin/mnstry-atelier.mjs" ${invocation}
 else
   echo "Atelier boundary guard is not installed on PATH" >&2
   exit 1
 fi
 `
+}
+
+export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdin = readStdin() } = {}) {
+  const args = parseArgs(argv)
+  const project = commandProject({ argv })
+  const loaded = loadBoundaryPolicy(project)
+  if (!loaded.ok) {
+    console.error(loaded.errors.join('\n'))
+    process.exit(1)
+  }
+  const updates = parsePushRefUpdates(stdin)
+  if (!updates.length) {
+    console.log('[boundary:push-check] no ref updates on stdin · nothing to judge')
+    process.exit(0)
+  }
+  const report = checkPushContent({ project, policy: loaded.policy, updates, cwd: process.cwd() })
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 2))
+  } else {
+    console.log(`[boundary:push-check] ${report.ok ? 'passed' : 'blocked'} · ${report.repo ?? 'unknown repo'} · ${report.errors.length} errors · ${report.warnings.length} warnings`)
+    for (const item of report.findings.slice(0, 50)) console.log(`${item.severity} ${item.rule ?? item.code}: ${item.message}`)
+    if (!report.ok && report.repo) {
+      console.log('')
+      console.log('If this usage is intentional, declare it in the boundary policy:')
+      console.log('  contentRuleExceptions: [{ rule, repo, paths: [...], reason: "why this is accepted" }]')
+    }
+  }
+  process.exit(report.ok ? 0 : 1)
+}
+
+export function runBoundaryAuditCommand(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv)
+  const project = commandProject({ argv })
+  const loaded = loadBoundaryPolicy(project)
+  if (!loaded.ok) {
+    console.error(loaded.errors.join('\n'))
+    process.exit(1)
+  }
+  const report = auditContentRules({ project, policy: loaded.policy })
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 2))
+  } else {
+    console.log(`[boundary:audit] ${report.findings.length} content-rule matches across the tree · ${report.accepted.length} declared exceptions`)
+    for (const item of report.findings.slice(0, 100)) console.log(`${item.severity} ${item.rule}: ${item.message}`)
+    for (const item of report.accepted) console.log(`accepted ${item.rule} in ${item.repo} (${item.paths.join(', ')}): ${item.reason}`)
+  }
+  // Reporting only. A pre-existing accepted usage must never block unrelated work.
+  process.exit(0)
+}
+
+function readStdin() {
+  try {
+    return fs.readFileSync(0, 'utf8')
+  } catch {
+    return ''
+  }
 }
 
 export function runBoundaryInstallHooksCommand(argv = process.argv.slice(2)) {

@@ -50,6 +50,7 @@ test('boundary policy schema rejects negative contract fixtures', () => {
     ['legacy-warning-missing-warning.v1.json', /allowedAudiences.*must be equal to one of the allowed values/],
     ['missing-repo-coverage.v1.json', /must have required property 'autoCommit'/],
     ['unknown-key.v1.json', /must NOT have additional properties/],
+    ['content-rule-exception-blanket-path.v1.json', /contentRuleExceptions\/0\/paths\/0.*must NOT be valid/s],
   ])
 
   for (const file of fixtureFiles('invalid')) {

@@ -1,0 +1,67 @@
+{
+  "schema": "mnstry.atelier-boundary-policy@v1",
+  "mode": "strict",
+  "actors": {
+    "owner": {
+      "githubLogin": "USER_GITHUB_LOGIN_PLACEHOLDER",
+      "gitEmails": [
+        "owner@example.invalid"
+      ],
+      "privateDomainRepo": "tenant-private-domain"
+    }
+  },
+  "repos": {
+    "tenant-private-domain": {
+      "kind": "private_domain",
+      "ownerActor": "owner",
+      "readBoundary": "private",
+      "allowedAudiences": [
+        "private",
+        "sensitive",
+        "team",
+        "operator",
+        "staff",
+        "public"
+      ],
+      "forbiddenAudiences": [],
+      "autoCommit": "guarded"
+    },
+    "project-example": {
+      "kind": "shared",
+      "readBoundary": "team",
+      "allowedAudiences": [
+        "team",
+        "operator",
+        "staff",
+        "public"
+      ],
+      "forbiddenAudiences": [
+        "private",
+        "sensitive"
+      ],
+      "autoCommit": "guarded"
+    }
+  },
+  "promotion": {
+    "requiresGitPromote": true,
+    "recordsPath": "governance/git-promote-events.jsonl"
+  },
+  "forbiddenPaths": [
+    ".mnstry-local/**",
+    ".atelier-proposals/**",
+    "support-bundles/**",
+    "prompts/**",
+    "transcripts/**"
+  ],
+  "governanceLedgerPath": "governance/repo-boundary-ledger.md",
+  "contentRuleExceptions": [
+    {
+      "rule": "browser-persistence",
+      "repo": "project-example",
+      "paths": [
+        "**"
+      ],
+      "reason": "we need this everywhere"
+    }
+  ]
+}

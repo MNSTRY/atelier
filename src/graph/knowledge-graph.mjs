@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { VALID_AUDIENCES } from '../projection/policy.mjs'
+import { generatedProjectionBasenames } from '../project/file-class.mjs'
+import { gitIgnoreFilter } from '../project/git-ignore.mjs'
 
 export const KNOWLEDGE_GRAPH_SCHEMA = 'mnstry.knowledge-graph@v1'
 export const REPO_ACCESS_SCHEMA = 'mnstry.repo-access@v1'
@@ -13,7 +15,8 @@ export const VALID_KG_TYPES = new Set(['document', 'artifact', 'evidence', 'sour
 export const VALID_SIDECAR_KG_TYPES = new Set(['html', 'pdf', 'docx', 'artifact', 'evidence', 'source', 'prototype', 'research', 'report', 'manifest'])
 
 const SKIP_DIRS = new Set(['.git', '.agents', '.claude', '.github', 'node_modules', 'output', 'uploads', 'scripts', 'lib'])
-const GENERATED_FILES = new Set(['atelier-ledger.html', 'atelier.manifest.json', 'atelier-shell.js', 'knowledge.graph.json'])
+// Derived from the kit's file-class declaration, never restated here.
+const GENERATED_FILES = generatedProjectionBasenames()
 const PRIVATE_AUDIENCES = new Set(['private', 'sensitive'])
 const AUDIENCE_READ_RANK = {
   public: 0,
@@ -293,13 +296,16 @@ export function listRepos(workspaceRoot) {
     .sort()
 }
 
-export function walkDocuments(dir, root, acc = []) {
+// Git-ignored paths are machine-local. Counting them makes committed graph
+// artifacts differ per machine, which turns every sync tick into a conflict.
+export function walkDocuments(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue
     const abs = path.join(dir, ent.name)
     const rel = relPath(root, abs)
+    if (isIgnored(rel)) continue
     if (ent.isDirectory()) {
-      walkDocuments(abs, root, acc)
+      walkDocuments(abs, root, acc, isIgnored)
     } else if (ent.isFile()) {
       const ext = path.extname(ent.name).toLowerCase()
       if (!DOC_EXTENSIONS.has(ext)) continue
@@ -311,12 +317,13 @@ export function walkDocuments(dir, root, acc = []) {
   return acc
 }
 
-export function walkSidecars(dir, root, acc = []) {
+export function walkSidecars(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue
     const abs = path.join(dir, ent.name)
+    if (isIgnored(relPath(root, abs))) continue
     if (ent.isDirectory()) {
-      walkSidecars(abs, root, acc)
+      walkSidecars(abs, root, acc, isIgnored)
     } else if (ent.isFile() && ent.name.endsWith('.kg.json')) {
       acc.push({ abs, rel: relPath(root, abs) })
     }
@@ -399,8 +406,9 @@ export function validateSourceSidecar(metadata, assetFilename) {
   return errors
 }
 
-export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo-access config' } = {}) {
+export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo-access config', externalRepos = [] } = {}) {
   const errors = []
+  const external = new Set(externalRepos)
   if (config?.schema !== REPO_ACCESS_SCHEMA) {
     errors.push(`${configPath}: schema must be ${REPO_ACCESS_SCHEMA}`)
   }
@@ -413,6 +421,10 @@ export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo
   }
 
   for (const [repoName, entry] of Object.entries(config.repos)) {
+    if (external.has(repoName)) {
+      errors.push(`${configPath}: repos.${repoName} is declared kind "external" and must not declare a read boundary`)
+      continue
+    }
     if (!isPlainObject(entry)) {
       errors.push(`${configPath}: repos.${repoName} must declare readBoundary`)
       continue
@@ -423,8 +435,11 @@ export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo
   }
 
   for (const repoName of repoNames) {
+    if (external.has(repoName)) continue
     if (!Object.hasOwn(config.repos, repoName)) {
-      errors.push(`${configPath}: repos.${repoName} must declare readBoundary`)
+      errors.push(
+        `${configPath}: repos.${repoName} must declare readBoundary, or be declared with kind "external" in the project config if it is not an Atelier-managed repo`,
+      )
     }
   }
 
@@ -734,17 +749,22 @@ export function buildKnowledgeGraph({
   repoAccessConfig,
   repoRoots = null,
   repoAccessConfigPath = 'repo-access config',
+  externalRepos = [],
 } = {}) {
   if (!workspaceRoot) throw new Error('workspaceRoot is required')
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
-  const roots = repoRoots ? repoRoots.map((repoRoot) => path.resolve(repoRoot)).sort() : listRepos(resolvedWorkspaceRoot)
+  const external = new Set(externalRepos)
+  const discovered = repoRoots ? repoRoots.map((repoRoot) => path.resolve(repoRoot)).sort() : listRepos(resolvedWorkspaceRoot)
+  // External repos are acknowledged but never walked: no document census, no
+  // sidecar demands, no projection.
+  const roots = discovered.filter((repoRoot) => !external.has(path.basename(repoRoot)))
   const repoNames = roots.map((repoRoot) => path.basename(repoRoot))
   const accessConfig = repoAccessConfig ?? {
     schema: REPO_ACCESS_SCHEMA,
     defaultReadBoundary: 'team',
     repos: Object.fromEntries(repoNames.map((repoName) => [repoName, { readBoundary: 'team' }])),
   }
-  const repoAccessErrors = validateRepoAccessConfig(accessConfig, repoNames, { configPath: repoAccessConfigPath })
+  const repoAccessErrors = validateRepoAccessConfig(accessConfig, repoNames, { configPath: repoAccessConfigPath, externalRepos })
   if (repoAccessErrors.length) {
     return {
       ok: false,

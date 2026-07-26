@@ -166,6 +166,7 @@
             "minLength": 1
           },
           "kind": {
+            "description": "Reserved value \"external\" marks a git folder the workspace acknowledges but does not manage: no read boundary is implied, and it is excluded from graph walking, sidecar requirements, projection, and boundary enforcement.",
             "type": "string",
             "minLength": 1
           },
@@ -173,10 +174,45 @@
             "type": "string",
             "minLength": 1
           },
+          "identity": {
+            "description": "Provider-stable repository identity. Names change and hosting providers redirect the old URL indefinitely, so a name alone cannot tell \"same repo, renamed\" from \"different repo\". Never substitute the root commit: repos created from one template share it.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "id"],
+            "properties": {
+              "provider": {
+                "enum": ["github"]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "aliases": {
+            "description": "Former names this repo has been known by. Config referencing an old name resolves through these with a deprecation notice.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          },
           "required": {
             "type": "boolean"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "kind": { "const": "external" } },
+              "required": ["kind"]
+            },
+            "then": {
+              "not": { "required": ["readBoundary"] }
+            }
+          }
+        ]
       }
     }
   },

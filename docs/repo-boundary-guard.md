@@ -27,6 +27,59 @@ HTML hiding to protect source material inside a shared repo.
   objects.
 - Generated outputs are projections and should be reproducible from source.
 
+## External Repos
+
+Real workspaces accumulate git folders that are not Atelier repos: vendored
+checkouts, app-builder exports, scratch clones. Declare one in
+`atelier.project.json` with `kind: "external"`:
+
+```json
+{ "name": "external-vendor-site", "path": "external-vendor-site", "kind": "external" }
+```
+
+An external repo is acknowledged, not managed. It implies **no** read boundary,
+so it must not declare `readBoundary`, must not appear in `repo-access.v1.json`,
+and must not appear in the boundary policy — declaring a boundary for a repo
+nobody manages is exactly the confusion this classification removes. Its files
+are excluded from graph walking, sidecar requirements, and projection, and the
+staged guard and hook installer skip it entirely.
+
+An undeclared git folder in the workspace remains an error. Forcing an explicit
+decision is the point: it is how a repo pushing to an unexpected host gets
+noticed. `atelier graph` prints the remote host of each external repo for the
+same reason — a workspace should know where its folders push, especially when a
+host is a lookalike of a familiar one.
+
+At least one repo must remain managed; a workspace of only external repos is
+not an Atelier workspace.
+
+## Staged Boundary Field Review
+
+The staged guard (`atelier boundary check --staged`) inspects every staged
+`*.md` and `*.kg.json` diff for changes to boundary fields — `kg.audience`,
+`audience`, `handling`, `sensitivity`, `data_boundary`.
+
+It distinguishes two cases:
+
+- **Initialization.** A boundary field added with no prior value, set to a
+  value that discloses nothing (`private` or `sensitive` for `audience`), is
+  recorded as a fail-closed default rather than a disclosure decision. It
+  commits without review. This is what tooling writes when it fills in missing
+  front matter, so kit-generated metadata never needs a human to unjam it.
+- **Change.** Anything else — widening, narrowing, removing an existing value,
+  or introducing a field already set to a disclosing value — needs a human.
+
+To approve a change, put a review marker in the diff:
+
+```
+<!-- Atelier-Boundary-Review: approved — why this exposure is correct -->
+```
+
+The marker must travel **in the same file's diff** as the change it approves.
+A marker committed in a sibling file, or already sitting elsewhere in a file
+that this commit does not touch, approves nothing — the guard reads the diff,
+not the working tree.
+
 ## Non-Goals
 
 Repo Boundary Guard V1 does not:
@@ -63,3 +116,84 @@ copied workspace's Atelier package metadata, contracts, and migration state,
 while private-domain and shared-project source boundaries remain unchanged.
 
 See `docs/upgrade.md` for the upgrade sequence.
+
+## Repo Identity
+
+Every Atelier-side reference to a repository used to key on its name. Hosting
+providers let repos be renamed and redirect the old URL indefinitely, so a
+rename leaves stale clones that keep fetching happily under a name that no
+longer exists — the failure is silent, which is why two Client zero repos stopped
+syncing for weeks before anyone noticed.
+
+Record a provider-stable identity in `atelier.project.json`:
+
+```json
+{
+  "name": "studio-journal",
+  "path": "studio-journal",
+  "readBoundary": "team",
+  "identity": { "provider": "github", "id": "900001" },
+  "aliases": ["frequency", "hardware"]
+}
+```
+
+Get the id with `gh api repos/{owner}/{name} --jq .id`. It survives renames;
+the name does not.
+
+`resolveRepoIdentity(cloneDir)` answers from the provider's stable id when the
+provider is reachable, then from the recorded identity, then from declared
+aliases, and reports which of those it used in `source` rather than guessing
+silently. **It never keys on the root commit.** Repos created from one template
+share a root commit, so that heuristic reports false duplicates; it also cannot
+see a rename at all. A rename is a metadata update, not a new identity.
+
+`atelier doctor` reports:
+
+- `repo-renamed-upstream` — the provider's canonical name has moved on
+- `repo-folder-name-stale` — the config name is not the canonical name
+- `repo-name-alias-deprecated` — resolved through a recorded alias
+- `repo-identity-duplicate` — two clones are one repository; park the retired one
+- `repo-identity-undeclared` — no recorded id, so a rename during an outage is unresolvable
+- `repo-identity-unresolved` — no origin remote to identify the clone by
+
+## Content Rules and Exceptions
+
+Content rules judge **what is being pushed**, not the whole tree. A whole-tree
+scan cannot tell "you are about to push a new violation" from "a known, accepted
+usage exists", so one legitimate use anywhere blocks every push of everything in
+that repo, forever — including work that has nothing to do with the finding.
+That is how a public site's owner-authorized mock cart stranded real work on a
+machine for weeks.
+
+- `pre-commit` runs `atelier boundary check --staged` — added lines in the
+  staged diff.
+- `pre-push` runs `atelier boundary push-check` — git writes the ref updates to
+  the hook's stdin, and only that range is judged. A brand-new branch is diffed
+  against the empty tree, so nothing slips through unscanned.
+- `atelier boundary audit` scans the whole tree and **reports without blocking**,
+  listing both matches and declared exceptions with their reasons.
+
+If the guard cannot work out which repo it is running in, it fails closed. A
+guard that silently judges nothing is worse than one that stops you.
+
+### Declaring an exception
+
+Exceptions live in the boundary policy, not in the guard script. A repo-specific
+product decision must not require editing shared infrastructure that every repo
+runs:
+
+```json
+"contentRuleExceptions": [
+  {
+    "rule": "browser-persistence",
+    "repo": "example-site",
+    "paths": ["src/scripts/cart.ts"],
+    "reason": "owner-authorized mock cart on a public demo site; localStorage is its whole design"
+  }
+]
+```
+
+Every field is required, because the exception **is** the approval record. There
+is no blanket repo-wide skip: `paths` must name real paths, and a bare `*` or
+`**` is rejected as disabling the rule rather than excepting it. `reason` must
+say something a reviewer can act on. Removing the exception re-blocks the path.
