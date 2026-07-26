@@ -36,6 +36,8 @@ const commandMap = new Map([
   ['boundary', ['src/commands/boundary.mjs']],
   ['boundary:check', ['src/commands/boundary.mjs', 'check']],
   ['boundary:doctor', ['src/commands/boundary.mjs', 'doctor']],
+  ['boundary:push-check', ['src/commands/boundary.mjs', 'push-check']],
+  ['boundary:audit', ['src/commands/boundary.mjs', 'audit']],
   ['boundary:install-hooks', ['src/commands/boundary.mjs', 'install-hooks']],
   ['promote', ['src/commands/promote.mjs']],
   ['upgrade', ['src/commands/upgrade.mjs']],
@@ -78,6 +80,7 @@ Core commands:
   support bundle --dry-run        Preview a no-send support bundle.
   egress check                    Check extracted Atelier paths for forbidden egress.
   boundary check                  Enforce private/shared repo placement rules.
+  boundary audit                  Report content-rule matches tree-wide without blocking.
   boundary install-hooks          Install staged/private-domain Git guards.
   promote                         Record a git.promote disclosure event.
   upgrade --dry-run               Plan a safe package/template upgrade.
@@ -104,9 +107,9 @@ Ensures ignored local Atelier state exists, verifies ignore coverage, and record
     doctor: `Usage: atelier doctor [--project ./atelier.project.json] [--fix] [--dry-run]
 
 Reports project config, local overlay, and repo boundary readiness. --fix only repairs ignored local state.`,
-    boundary: `Usage: atelier boundary check|doctor|install-hooks [--project ./atelier.project.json] [--staged]
+    boundary: `Usage: atelier boundary check|push-check|audit|install-hooks [--project ./atelier.project.json] [--staged]
 
-Checks repo placement and installs copy-safe Git boundary hooks.`,
+check --staged judges the staged diff. push-check reads pre-push ref updates on stdin and judges only the pushed range. audit scans the whole tree and reports without blocking, so an accepted usage never strands unrelated work.`,
     graph: `Usage: atelier graph [--check] [--project ./atelier.project.json]
 
 Builds or checks the project knowledge graph from tracked sources plus ignored local path bindings.`,
@@ -134,6 +137,8 @@ function normalizeArgs(argv) {
   if (args[0] === 'egress' && args[1] === 'check') args.splice(0, 2, 'egress:check')
   if (args[0] === 'boundary' && args[1] === 'check') args.splice(0, 2, 'boundary:check')
   if (args[0] === 'boundary' && args[1] === 'doctor') args.splice(0, 2, 'boundary:doctor')
+  if (args[0] === 'boundary' && args[1] === 'push-check') args.splice(0, 2, 'boundary:push-check')
+  if (args[0] === 'boundary' && args[1] === 'audit') args.splice(0, 2, 'boundary:audit')
   if (args[0] === 'boundary' && args[1] === 'install-hooks') args.splice(0, 2, 'boundary:install-hooks')
   if (args[0] === 'lock' && args[1] === 'check') args.splice(0, 2, 'lock:check')
   if (args[0] === 'lock' && args[1] === 'write') args.splice(0, 2, 'lock:write')

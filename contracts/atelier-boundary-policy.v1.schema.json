@@ -53,11 +53,68 @@
       },
       "uniqueItems": true
     },
+    "contentRules": {
+      "description": "Rules judged against added lines and added file paths, not the whole tree. Omit to use the kit defaults.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/contentRule" },
+      "uniqueItems": true
+    },
+    "contentRuleExceptions": {
+      "description": "Reviewable, per-repo, per-path carve-outs. An exception IS the approval record, which is why every field is required — a repo-specific decision must not live as a hardcoded pathspec inside shared guard infrastructure.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/contentRuleException" },
+      "uniqueItems": true
+    },
     "governanceLedgerPath": {
       "$ref": "#/$defs/relativePath"
     }
   },
   "$defs": {
+    "contentRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "pattern"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "description": "content matches added lines; path matches added file paths.",
+          "enum": ["content", "path"]
+        },
+        "severity": { "enum": ["error", "warning"] },
+        "pattern": { "type": "string", "minLength": 1 },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "contentRuleException": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "repo", "paths", "reason"],
+      "properties": {
+        "rule": { "type": "string", "minLength": 1 },
+        "repo": { "$ref": "#/$defs/repoName" },
+        "paths": {
+          "description": "Specific paths only. A blanket wildcard is disabling the rule, not excepting it.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "not": { "enum": ["*", "**", ".", "./", "**/*", "*/**"] }
+          },
+          "uniqueItems": true
+        },
+        "reason": {
+          "description": "Why this usage is accepted, in terms a reviewer can act on.",
+          "type": "string",
+          "minLength": 8
+        }
+      }
+    },
     "actorId": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._:-]*$"

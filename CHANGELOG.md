@@ -43,6 +43,18 @@
 - `atelier doctor` now audits repo identity: upstream renames, stale config
   names, deprecated aliases, clones that are secretly the same repository, and
   repos with no recorded id or no origin remote.
+- Adds boundary-policy `contentRules` and `contentRuleExceptions`. Rules judge
+  added lines and added file paths rather than the whole tree, so a pre-existing
+  accepted usage no longer blocks every push of everything in a repo. Exceptions
+  are reviewable policy config — per repo, per path, per rule, each requiring a
+  reason — instead of hardcoded pathspecs inside a fleet-wide guard script.
+  Blanket wildcards are rejected.
+- Adds `atelier boundary push-check`, which reads pre-push ref updates from
+  stdin and judges only the pushed range (new branches diff against the empty
+  tree), and `atelier boundary audit`, the whole-tree view that reports without
+  blocking. The installed `pre-push` hook now uses `push-check`.
+- The push guard fails closed when it cannot identify the repo it is running in,
+  and matches its repo through symlinked paths and subdirectories.
 
 ## 0.1.0-alpha.2
 

@@ -155,3 +155,45 @@ see a rename at all. A rename is a metadata update, not a new identity.
 - `repo-identity-duplicate` — two clones are one repository; park the retired one
 - `repo-identity-undeclared` — no recorded id, so a rename during an outage is unresolvable
 - `repo-identity-unresolved` — no origin remote to identify the clone by
+
+## Content Rules and Exceptions
+
+Content rules judge **what is being pushed**, not the whole tree. A whole-tree
+scan cannot tell "you are about to push a new violation" from "a known, accepted
+usage exists", so one legitimate use anywhere blocks every push of everything in
+that repo, forever — including work that has nothing to do with the finding.
+That is how a public site's owner-authorized mock cart stranded real work on a
+machine for weeks.
+
+- `pre-commit` runs `atelier boundary check --staged` — added lines in the
+  staged diff.
+- `pre-push` runs `atelier boundary push-check` — git writes the ref updates to
+  the hook's stdin, and only that range is judged. A brand-new branch is diffed
+  against the empty tree, so nothing slips through unscanned.
+- `atelier boundary audit` scans the whole tree and **reports without blocking**,
+  listing both matches and declared exceptions with their reasons.
+
+If the guard cannot work out which repo it is running in, it fails closed. A
+guard that silently judges nothing is worse than one that stops you.
+
+### Declaring an exception
+
+Exceptions live in the boundary policy, not in the guard script. A repo-specific
+product decision must not require editing shared infrastructure that every repo
+runs:
+
+```json
+"contentRuleExceptions": [
+  {
+    "rule": "browser-persistence",
+    "repo": "example-site",
+    "paths": ["src/scripts/cart.ts"],
+    "reason": "owner-authorized mock cart on a public demo site; localStorage is its whole design"
+  }
+]
+```
+
+Every field is required, because the exception **is** the approval record. There
+is no blanket repo-wide skip: `paths` must name real paths, and a bare `*` or
+`**` is rejected as disabling the rule rather than excepting it. `reason` must
+say something a reviewer can act on. Removing the exception re-blocks the path.

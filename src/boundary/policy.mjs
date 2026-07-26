@@ -4,6 +4,17 @@ import path from 'node:path'
 import { buildGraph } from '../graph/graph.mjs'
 import { commandProject, firstString, parseArgs, readJson, resolvePathValue, writeJson } from '../project/config.mjs'
 import { matchesPathPattern } from '../project/path-match.mjs'
+import {
+  diffForPushRange,
+  parseAddedContent,
+  parsePushRefUpdates,
+  resolveContentRules,
+  scanAddedContent,
+  scanTree,
+  stagedDiff,
+  validateContentRuleExceptions,
+  validateContentRules,
+} from './content-rules.mjs'
 
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
 export const PROMOTE_EVENT_SCHEMA = 'mnstry.git-promote-event@v1'
@@ -114,7 +125,7 @@ function validAudienceList(value, label, required = false) {
 export function validateBoundaryPolicy(policy, project = null) {
   const errors = []
   if (!isObject(policy)) return ['boundary policy must be a JSON object']
-  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'governanceLedgerPath'])))
+  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath'])))
   if (policy.schema !== BOUNDARY_POLICY_SCHEMA) errors.push(`schema must be ${BOUNDARY_POLICY_SCHEMA}`)
   if (!VALID_BOUNDARY_MODES.has(policy.mode)) errors.push('mode must be strict or legacy-warning')
 
@@ -126,6 +137,17 @@ export function validateBoundaryPolicy(policy, project = null) {
   if (policy.promotion != null && !isObject(policy.promotion)) errors.push('promotion must be an object')
   errors.push(...unknownKeys(promotion, 'promotion', new Set(['requiresGitPromote', 'recordsPath'])))
   if (policy.forbiddenPaths != null && !Array.isArray(policy.forbiddenPaths)) errors.push('forbiddenPaths must be a list')
+  if (policy.contentRules != null) errors.push(...validateContentRules(policy.contentRules))
+  if (policy.contentRuleExceptions != null) {
+    errors.push(...validateContentRuleExceptions(policy.contentRuleExceptions, resolveContentRules(policy)))
+    const declaredRepos = isObject(repos) ? repos : {}
+    for (const [index, exception] of policy.contentRuleExceptions.entries()) {
+      const name = firstString(exception?.repo)
+      if (name && Object.keys(declaredRepos).length && !declaredRepos[name]) {
+        errors.push(`contentRuleExceptions[${index}].repo ${name} is not declared in repos`)
+      }
+    }
+  }
 
   for (const [actorId, actor] of Object.entries(isObject(actors) ? actors : {})) {
     errors.push(...unknownKeys(actor, `actors.${actorId}`, new Set(['githubLogin', 'gitEmails', 'privateDomainRepo'])))
@@ -394,6 +416,92 @@ function semanticDiffFindings({ policy, project }) {
   return findings
 }
 
+function contentRuleFindings({ policy, project, files }) {
+  const rules = resolveContentRules(policy)
+  const exceptions = asArray(policy?.contentRuleExceptions)
+  const findings = []
+  for (const entry of files) {
+    for (const item of scanAddedContent({ files: entry.files, rules, exceptions, repo: entry.repo })) {
+      // The rule id and line stay on the finding: they are what a person needs to
+      // either fix the line or write the exception.
+      findings.push({ ...finding({ ...item, details: { rule: item.rule, line: item.line } }), rule: item.rule, line: item.line })
+    }
+  }
+  return findings
+}
+
+function stagedContentFindings({ policy, project }) {
+  const files = managedRepos(project)
+    .filter((repo) => repo.path && fs.existsSync(path.join(repo.path, '.git')))
+    .map((repo) => ({ repo: repo.name, files: parseAddedContent(stagedDiff(repo.path)) }))
+  return contentRuleFindings({ policy, project, files })
+}
+
+function realPath(value) {
+  try {
+    return fs.realpathSync(path.resolve(value))
+  } catch {
+    return path.resolve(value)
+  }
+}
+
+// Matched through realpath: a workspace reached via a symlink (a macOS temp dir, a
+// linked checkout) otherwise fails to match its own configured path, and the guard
+// silently judges nothing.
+function repoForCwd(project, cwd) {
+  const resolved = realPath(cwd)
+  return (
+    managedRepos(project).find((repo) => {
+      if (!repo.path) return false
+      const repoPath = realPath(repo.path)
+      return resolved === repoPath || resolved.startsWith(`${repoPath}${path.sep}`)
+    }) ?? null
+  )
+}
+
+/**
+ * Judge only what is being pushed. The whole-tree view lives in `boundary audit`,
+ * which reports without blocking, so an accepted usage elsewhere in the repo can
+ * never strand unrelated work on the machine.
+ */
+export function checkPushContent({ project, policy, repo, updates, cwd = process.cwd() } = {}) {
+  const target = repo ?? repoForCwd(project, cwd)
+  if (!target) {
+    // Fail closed. This hook is only installed into managed repos, so failing to
+    // identify one means the guard would judge nothing — a silent no-op is the
+    // failure mode this whole guard exists to avoid.
+    const unresolved = finding({
+      code: 'push-check-repo-unresolved',
+      repo: null,
+      message: `${cwd} is not a repo declared in ${project?.configPath ?? 'the project config'}; the push guard cannot tell what it is judging`,
+    })
+    return { ok: false, repo: null, findings: [unresolved], errors: [unresolved], warnings: [] }
+  }
+  const files = []
+  for (const update of updates) files.push(...parseAddedContent(diffForPushRange(target.path, update)))
+  const findings = contentRuleFindings({ policy, project, files: [{ repo: target.name, files }] })
+  const errors = findings.filter((item) => item.severity === 'error')
+  return { ok: errors.length === 0, repo: target.name, updates, findings, errors, warnings: findings.filter((item) => item.severity !== 'error') }
+}
+
+export function auditContentRules({ project, policy } = {}) {
+  const rules = resolveContentRules(policy)
+  const exceptions = asArray(policy?.contentRuleExceptions)
+  const findings = []
+  for (const repo of managedRepos(project)) {
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
+    findings.push(...scanTree(repo.path, { rules, exceptions, repo: repo.name }))
+  }
+  const accepted = []
+  for (const repo of managedRepos(project)) {
+    for (const exception of exceptions) {
+      if (firstString(exception?.repo) !== repo.name) continue
+      accepted.push({ repo: repo.name, rule: exception.rule, paths: exception.paths, reason: exception.reason })
+    }
+  }
+  return { schema: BOUNDARY_POLICY_SCHEMA, findings, accepted }
+}
+
 function promotionRecords(project, policy) {
   const recordsPath = firstString(policy?.promotion?.recordsPath)
   if (!recordsPath) return []
@@ -462,6 +570,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
       const stagedPaths = stagedPathsForProject(project)
       findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
       findings.push(...semanticDiffFindings({ policy, project }))
+      findings.push(...stagedContentFindings({ policy, project }))
     }
   }
   const errors = findings.filter((item) => item.severity === 'error')
@@ -527,24 +636,84 @@ export function installBoundaryHooks({ project, force = false } = {}) {
 
 function hookScript(projectConfigPath, hookName) {
   const config = projectConfigPath ? `--project-config=${projectConfigPath.replaceAll('"', '\\"')}` : ''
+  // pre-push reads the ref updates git writes to stdin and judges only that range;
+  // pre-commit judges the staged diff. Neither scans the whole tree — that view is
+  // `atelier boundary audit`, which reports without blocking.
+  const invocation = hookName === 'pre-push' ? `boundary push-check ${config}` : `boundary check --staged ${config}`
   return `#!/usr/bin/env bash
 # MNSTRY_ATELIER_BOUNDARY_GUARD ${hookName}
 set -euo pipefail
 if command -v atelier >/dev/null 2>&1; then
-  atelier boundary check --staged ${config}
+  exec atelier ${invocation}
 elif [ -x "./node_modules/.bin/atelier" ]; then
-  ./node_modules/.bin/atelier boundary check --staged ${config}
+  exec ./node_modules/.bin/atelier ${invocation}
 elif command -v mnstry-atelier >/dev/null 2>&1; then
-  mnstry-atelier boundary check --staged ${config}
+  exec mnstry-atelier ${invocation}
 elif [ -x "./node_modules/.bin/mnstry-atelier" ]; then
-  ./node_modules/.bin/mnstry-atelier boundary check --staged ${config}
+  exec ./node_modules/.bin/mnstry-atelier ${invocation}
 elif [ -n "\${MNSTRY_ATELIER_PACKAGE_ROOT:-}" ]; then
-  node "$MNSTRY_ATELIER_PACKAGE_ROOT/bin/mnstry-atelier.mjs" boundary check --staged ${config}
+  exec node "$MNSTRY_ATELIER_PACKAGE_ROOT/bin/mnstry-atelier.mjs" ${invocation}
 else
   echo "Atelier boundary guard is not installed on PATH" >&2
   exit 1
 fi
 `
+}
+
+export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdin = readStdin() } = {}) {
+  const args = parseArgs(argv)
+  const project = commandProject({ argv })
+  const loaded = loadBoundaryPolicy(project)
+  if (!loaded.ok) {
+    console.error(loaded.errors.join('\n'))
+    process.exit(1)
+  }
+  const updates = parsePushRefUpdates(stdin)
+  if (!updates.length) {
+    console.log('[boundary:push-check] no ref updates on stdin · nothing to judge')
+    process.exit(0)
+  }
+  const report = checkPushContent({ project, policy: loaded.policy, updates, cwd: process.cwd() })
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 2))
+  } else {
+    console.log(`[boundary:push-check] ${report.ok ? 'passed' : 'blocked'} · ${report.repo ?? 'unknown repo'} · ${report.errors.length} errors · ${report.warnings.length} warnings`)
+    for (const item of report.findings.slice(0, 50)) console.log(`${item.severity} ${item.rule ?? item.code}: ${item.message}`)
+    if (!report.ok && report.repo) {
+      console.log('')
+      console.log('If this usage is intentional, declare it in the boundary policy:')
+      console.log('  contentRuleExceptions: [{ rule, repo, paths: [...], reason: "why this is accepted" }]')
+    }
+  }
+  process.exit(report.ok ? 0 : 1)
+}
+
+export function runBoundaryAuditCommand(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv)
+  const project = commandProject({ argv })
+  const loaded = loadBoundaryPolicy(project)
+  if (!loaded.ok) {
+    console.error(loaded.errors.join('\n'))
+    process.exit(1)
+  }
+  const report = auditContentRules({ project, policy: loaded.policy })
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 2))
+  } else {
+    console.log(`[boundary:audit] ${report.findings.length} content-rule matches across the tree · ${report.accepted.length} declared exceptions`)
+    for (const item of report.findings.slice(0, 100)) console.log(`${item.severity} ${item.rule}: ${item.message}`)
+    for (const item of report.accepted) console.log(`accepted ${item.rule} in ${item.repo} (${item.paths.join(', ')}): ${item.reason}`)
+  }
+  // Reporting only. A pre-existing accepted usage must never block unrelated work.
+  process.exit(0)
+}
+
+function readStdin() {
+  try {
+    return fs.readFileSync(0, 'utf8')
+  } catch {
+    return ''
+  }
 }
 
 export function runBoundaryInstallHooksCommand(argv = process.argv.slice(2)) {
