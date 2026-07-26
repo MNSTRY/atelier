@@ -27,6 +27,32 @@ HTML hiding to protect source material inside a shared repo.
   objects.
 - Generated outputs are projections and should be reproducible from source.
 
+## External Repos
+
+Real workspaces accumulate git folders that are not Atelier repos: vendored
+checkouts, app-builder exports, scratch clones. Declare one in
+`atelier.project.json` with `kind: "external"`:
+
+```json
+{ "name": "external-vendor-site", "path": "external-vendor-site", "kind": "external" }
+```
+
+An external repo is acknowledged, not managed. It implies **no** read boundary,
+so it must not declare `readBoundary`, must not appear in `repo-access.v1.json`,
+and must not appear in the boundary policy — declaring a boundary for a repo
+nobody manages is exactly the confusion this classification removes. Its files
+are excluded from graph walking, sidecar requirements, and projection, and the
+staged guard and hook installer skip it entirely.
+
+An undeclared git folder in the workspace remains an error. Forcing an explicit
+decision is the point: it is how a repo pushing to an unexpected host gets
+noticed. `atelier graph` prints the remote host of each external repo for the
+same reason — a workspace should know where its folders push, especially when a
+host is a lookalike of a familiar one.
+
+At least one repo must remain managed; a workspace of only external repos is
+not an Atelier workspace.
+
 ## Staged Boundary Field Review
 
 The staged guard (`atelier boundary check --staged`) inspects every staged

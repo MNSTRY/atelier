@@ -166,6 +166,7 @@
             "minLength": 1
           },
           "kind": {
+            "description": "Reserved value \"external\" marks a git folder the workspace acknowledges but does not manage: no read boundary is implied, and it is excluded from graph walking, sidecar requirements, projection, and boundary enforcement.",
             "type": "string",
             "minLength": 1
           },
@@ -176,7 +177,18 @@
           "required": {
             "type": "boolean"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "kind": { "const": "external" } },
+              "required": ["kind"]
+            },
+            "then": {
+              "not": { "required": ["readBoundary"] }
+            }
+          }
+        ]
       }
     }
   },

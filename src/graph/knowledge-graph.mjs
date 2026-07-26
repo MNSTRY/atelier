@@ -404,8 +404,9 @@ export function validateSourceSidecar(metadata, assetFilename) {
   return errors
 }
 
-export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo-access config' } = {}) {
+export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo-access config', externalRepos = [] } = {}) {
   const errors = []
+  const external = new Set(externalRepos)
   if (config?.schema !== REPO_ACCESS_SCHEMA) {
     errors.push(`${configPath}: schema must be ${REPO_ACCESS_SCHEMA}`)
   }
@@ -418,6 +419,10 @@ export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo
   }
 
   for (const [repoName, entry] of Object.entries(config.repos)) {
+    if (external.has(repoName)) {
+      errors.push(`${configPath}: repos.${repoName} is declared kind "external" and must not declare a read boundary`)
+      continue
+    }
     if (!isPlainObject(entry)) {
       errors.push(`${configPath}: repos.${repoName} must declare readBoundary`)
       continue
@@ -428,8 +433,11 @@ export function validateRepoAccessConfig(config, repoNames, { configPath = 'repo
   }
 
   for (const repoName of repoNames) {
+    if (external.has(repoName)) continue
     if (!Object.hasOwn(config.repos, repoName)) {
-      errors.push(`${configPath}: repos.${repoName} must declare readBoundary`)
+      errors.push(
+        `${configPath}: repos.${repoName} must declare readBoundary, or be declared with kind "external" in the project config if it is not an Atelier-managed repo`,
+      )
     }
   }
 
@@ -739,17 +747,22 @@ export function buildKnowledgeGraph({
   repoAccessConfig,
   repoRoots = null,
   repoAccessConfigPath = 'repo-access config',
+  externalRepos = [],
 } = {}) {
   if (!workspaceRoot) throw new Error('workspaceRoot is required')
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
-  const roots = repoRoots ? repoRoots.map((repoRoot) => path.resolve(repoRoot)).sort() : listRepos(resolvedWorkspaceRoot)
+  const external = new Set(externalRepos)
+  const discovered = repoRoots ? repoRoots.map((repoRoot) => path.resolve(repoRoot)).sort() : listRepos(resolvedWorkspaceRoot)
+  // External repos are acknowledged but never walked: no document census, no
+  // sidecar demands, no projection.
+  const roots = discovered.filter((repoRoot) => !external.has(path.basename(repoRoot)))
   const repoNames = roots.map((repoRoot) => path.basename(repoRoot))
   const accessConfig = repoAccessConfig ?? {
     schema: REPO_ACCESS_SCHEMA,
     defaultReadBoundary: 'team',
     repos: Object.fromEntries(repoNames.map((repoName) => [repoName, { readBoundary: 'team' }])),
   }
-  const repoAccessErrors = validateRepoAccessConfig(accessConfig, repoNames, { configPath: repoAccessConfigPath })
+  const repoAccessErrors = validateRepoAccessConfig(accessConfig, repoNames, { configPath: repoAccessConfigPath, externalRepos })
   if (repoAccessErrors.length) {
     return {
       ok: false,

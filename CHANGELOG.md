@@ -18,6 +18,14 @@
 - Adds `test/graph-determinism.test.mjs`, a mutation-tested regression guard
   that builds twice with git-ignored junk planted in between and fails on any
   byte change to a committed artifact.
+- Adds the reserved repo kind `external` for git folders a workspace
+  acknowledges but does not manage. External repos imply no read boundary, are
+  excluded from graph walking, sidecar requirements, projection, the staged
+  guard, and hook installation, and must not appear in repo-access or boundary
+  policy. Undeclared git folders remain an error, and the message now names
+  `external` as the resolution.
+- `atelier graph` prints the remote host of each external repo so a workspace
+  surfaces where its unmanaged folders push.
 
 ## 0.1.0-alpha.2
 

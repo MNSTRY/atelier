@@ -57,6 +57,8 @@ export const SEMANTIC_INITIALIZATION_DEFAULTS = Object.freeze({
   audience: Object.freeze([...PRIVATE_AUDIENCES].sort()),
 })
 
+const managedRepos = (project) => (project?.repos ?? []).filter((repo) => !repo.external)
+
 const normalize = (value) => String(value ?? '').replaceAll('\\', '/').replace(/^\.\/+/, '')
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const asArray = (value) => (Array.isArray(value) ? value : [])
@@ -166,6 +168,12 @@ export function validateBoundaryPolicy(policy, project = null) {
 
   if (project?.repos?.length && isObject(repos)) {
     for (const repo of project.repos) {
+      if (repo.external) {
+        // Declaring a boundary for a repo nobody manages is the confusion the
+        // external kind exists to remove.
+        if (repos[repo.name]) errors.push(`policy repos.${repo.name} must not be declared; it is an external (unmanaged) repo`)
+        continue
+      }
       if (!repos[repo.name]) errors.push(`policy repos.${repo.name} must be declared`)
     }
   }
@@ -192,7 +200,7 @@ export function resolveCurrentActor({ policy, project, actor = null, env = proce
 }
 
 function gitEmailsForProject(project) {
-  const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...(project?.repos ?? []).map((repo) => repo.path)])
+  const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...managedRepos(project).map((repo) => repo.path)])
   const emails = []
   for (const root of roots) {
     if (!root || !fs.existsSync(root)) continue
@@ -280,7 +288,7 @@ function actorFindings({ policy, project, actor }) {
 
 export function stagedPathsForProject(project) {
   const paths = []
-  for (const repo of project.repos ?? []) {
+  for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf8' })
     if (result.status !== 0) continue
@@ -379,7 +387,7 @@ export function semanticChangesInFile(file) {
 function semanticDiffFindings({ policy, project }) {
   const findings = []
   const severity = severityFor(policy)
-  for (const repo of project.repos ?? []) {
+  for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
     if (result.status !== 0 || !result.stdout.trim()) continue
@@ -513,7 +521,7 @@ export function runBoundaryCheckCommand(argv = process.argv.slice(2)) {
 export function installBoundaryHooks({ project, force = false } = {}) {
   const installed = []
   const skipped = []
-  for (const repo of project.repos ?? []) {
+  for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const hooksDir = path.join(repo.path, '.git', 'hooks')
     fs.mkdirSync(hooksDir, { recursive: true })

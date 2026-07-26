@@ -10,6 +10,15 @@ export const LOCAL_OVERLAY_ENV = 'MNSTRY_ATELIER_LOCAL_CONFIG'
 export const LOCAL_STATE_DIR = '.atelier-local'
 export const LOCAL_OVERLAY_FILES = ['atelier.local.json', 'atelier.workspace.local.json']
 
+// A workspace accumulates git folders that are not Atelier repos at all: vendored
+// checkouts, app-builder exports, scratch clones. Declaring one `external`
+// acknowledges its identity without implying a read boundary, so validation stops
+// demanding metadata for content the workspace does not own. It is deliberately not
+// a way to silence checks on a repo you do manage.
+export const EXTERNAL_REPO_KIND = 'external'
+
+export const isExternalRepo = (repo) => firstString(repo?.kind) === EXTERNAL_REPO_KIND
+
 export const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
 
 export function parseArgs(argv = process.argv.slice(2)) {
@@ -190,6 +199,21 @@ function normalizeRemote(value) {
     .toLowerCase()
 }
 
+export function gitRemoteUrl(repoPath) {
+  if (!repoPath || !fs.existsSync(repoPath)) return null
+  const result = spawnSync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], { encoding: 'utf8' })
+  return result.status === 0 ? firstString(result.stdout) : null
+}
+
+export function remoteHost(url) {
+  const text = String(url ?? '').trim()
+  if (!text) return null
+  const scp = text.match(/^[^/@]+@([^:/]+):/)
+  if (scp) return scp[1].toLowerCase()
+  const parsed = text.match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)/i)
+  return parsed ? parsed[1].toLowerCase() : null
+}
+
 function fallbackRoot(env, fallback) {
   const config = typeof fallback === 'string' ? { value: fallback } : asObject(fallback)
   return firstString(config.value, config.env ? env[config.env] : null)
@@ -304,11 +328,13 @@ export function resolveProjectConfig({
     repos: (Array.isArray(config.repos) ? config.repos : []).map((repo) => {
       const repoName = firstString(repo.name) || (repo.path ? path.basename(repo.path) : null)
       const repoPath = resolveRepoPath({ repo, repoName, configDir, workspaceRoot, overlay: localOverlay.overlay, cliRepoPaths })
+      const external = isExternalRepo(repo)
       return {
         ...repo,
         name: repoName || (repoPath ? path.basename(repoPath) : null),
         path: repoPath,
-        readBoundary: firstString(repo.readBoundary) || 'team',
+        external,
+        readBoundary: external ? null : firstString(repo.readBoundary) || 'team',
         pathSource: repoPath ? repoPathSource({ repo, repoName, overlay: localOverlay.overlay, cliRepoPaths, workspaceRoot, configDir }) : null,
       }
     }),
@@ -324,6 +350,9 @@ export function commandProject({ argv = process.argv.slice(2), env = process.env
   }
   if (!project.repos.length) {
     throw new Error('project config must declare at least one repo')
+  }
+  if (!project.repos.some((repo) => !repo.external)) {
+    throw new Error(`project config must declare at least one managed repo; every entry is kind "${EXTERNAL_REPO_KIND}"`)
   }
   return project
 }
@@ -449,6 +478,9 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
     if (repo.path != null && !firstString(repo.path)) errors.push(`repos[${index}].path must be a non-empty string when present`)
     if (repo.readBoundary && !['private', 'team', 'operator', 'staff', 'public', 'sensitive'].includes(repo.readBoundary)) {
       errors.push(`repos[${index}].readBoundary is invalid`)
+    }
+    if (isExternalRepo(repo) && repo.readBoundary != null) {
+      errors.push(`repos[${index}] is kind "${EXTERNAL_REPO_KIND}" and must not declare readBoundary; an external repo is unmanaged and implies no boundary`)
     }
     if (repo.required != null && typeof repo.required !== 'boolean') errors.push(`repos[${index}].required must be a boolean`)
     if (repo.path && path.isAbsolute(repo.path)) errors.push(`repos[${index}].path must be relative; put machine-local absolute paths in ignored local overlay`)

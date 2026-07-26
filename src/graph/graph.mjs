@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { commandProject, loadRepoAccess, readJson, writeJson } from '../project/config.mjs'
+import { commandProject, gitRemoteUrl, loadRepoAccess, readJson, remoteHost, writeJson } from '../project/config.mjs'
 import { gitIgnoreFilter } from '../project/git-ignore.mjs'
 
 export const VALID_AUDIENCES = new Set(['private', 'team', 'operator', 'staff', 'public', 'sensitive'])
@@ -175,8 +175,15 @@ export function buildGraph(project) {
   const diagnostics = []
   const nodes = []
   const edges = []
+  const external = []
 
   for (const repo of project.repos) {
+    if (repo.external) {
+      // Identity acknowledged, nothing walked: the workspace does not own this
+      // content and cannot answer for its metadata.
+      external.push({ name: repo.name, path: repo.path ?? null, remoteHost: remoteHost(gitRemoteUrl(repo.path)) })
+      continue
+    }
     if (!repo.name || !repo.path || !fs.existsSync(repo.path)) {
       errors.push(`configured repo is missing or unreadable: ${repo.name ?? '(unnamed)'}`)
       continue
@@ -228,6 +235,7 @@ export function buildGraph(project) {
     nodes,
     edges,
     diagnostics,
+    external: external.sort((a, b) => String(a.name).localeCompare(String(b.name))),
     errors,
   }
 }
@@ -276,4 +284,7 @@ export function runGraphCommand(argv = process.argv.slice(2)) {
     writeJson(project.graphPath, graph)
   }
   console.log(`knowledge graph: ${graph.counts.nodes} nodes · ${graph.counts.edges} edges · ${graph.counts.diagnostics} diagnostics`)
+  for (const repo of graph.external ?? []) {
+    console.log(`external repo (not walked): ${repo.name} → ${repo.remoteHost ?? 'no origin remote'}`)
+  }
 }
