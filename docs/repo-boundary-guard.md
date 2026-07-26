@@ -116,3 +116,42 @@ copied workspace's Atelier package metadata, contracts, and migration state,
 while private-domain and shared-project source boundaries remain unchanged.
 
 See `docs/upgrade.md` for the upgrade sequence.
+
+## Repo Identity
+
+Every Atelier-side reference to a repository used to key on its name. Hosting
+providers let repos be renamed and redirect the old URL indefinitely, so a
+rename leaves stale clones that keep fetching happily under a name that no
+longer exists — the failure is silent, which is why two Client zero repos stopped
+syncing for weeks before anyone noticed.
+
+Record a provider-stable identity in `atelier.project.json`:
+
+```json
+{
+  "name": "studio-journal",
+  "path": "studio-journal",
+  "readBoundary": "team",
+  "identity": { "provider": "github", "id": "900001" },
+  "aliases": ["frequency", "hardware"]
+}
+```
+
+Get the id with `gh api repos/{owner}/{name} --jq .id`. It survives renames;
+the name does not.
+
+`resolveRepoIdentity(cloneDir)` answers from the provider's stable id when the
+provider is reachable, then from the recorded identity, then from declared
+aliases, and reports which of those it used in `source` rather than guessing
+silently. **It never keys on the root commit.** Repos created from one template
+share a root commit, so that heuristic reports false duplicates; it also cannot
+see a rename at all. A rename is a metadata update, not a new identity.
+
+`atelier doctor` reports:
+
+- `repo-renamed-upstream` — the provider's canonical name has moved on
+- `repo-folder-name-stale` — the config name is not the canonical name
+- `repo-name-alias-deprecated` — resolved through a recorded alias
+- `repo-identity-duplicate` — two clones are one repository; park the retired one
+- `repo-identity-undeclared` — no recorded id, so a rename during an outage is unresolvable
+- `repo-identity-unresolved` — no origin remote to identify the clone by

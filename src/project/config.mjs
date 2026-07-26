@@ -19,6 +19,10 @@ export const EXTERNAL_REPO_KIND = 'external'
 
 export const isExternalRepo = (repo) => firstString(repo?.kind) === EXTERNAL_REPO_KIND
 
+// Kept here rather than imported from repo-identity.mjs so config validation stays
+// free of that module's git/provider dependencies.
+export const SUPPORTED_IDENTITY_PROVIDERS = ['github']
+
 export const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
 
 export function parseArgs(argv = process.argv.slice(2)) {
@@ -473,8 +477,25 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
       errors.push(`repos[${index}] must be an object`)
       continue
     }
-    errors.push(...unknownKeyErrors(repo, `repos[${index}]`, new Set(['name', 'path', 'readBoundary', 'role', 'kind', 'remote', 'required'])))
+    errors.push(...unknownKeyErrors(repo, `repos[${index}]`, new Set(['name', 'path', 'readBoundary', 'role', 'kind', 'remote', 'identity', 'aliases', 'required'])))
     if (!firstString(repo.name)) errors.push(`repos[${index}].name is required`)
+    if (repo.identity != null) {
+      const identity = asObject(repo.identity)
+      errors.push(...unknownKeyErrors(identity, `repos[${index}].identity`, new Set(['provider', 'id'])))
+      if (!SUPPORTED_IDENTITY_PROVIDERS.includes(identity.provider)) {
+        errors.push(`repos[${index}].identity.provider must be one of ${SUPPORTED_IDENTITY_PROVIDERS.join(', ')}`)
+      }
+      if (!firstString(identity.id)) errors.push(`repos[${index}].identity.id is required and must be the provider's stable id, not a name`)
+    }
+    if (repo.aliases != null) {
+      if (!Array.isArray(repo.aliases)) errors.push(`repos[${index}].aliases must be a list of former names`)
+      else if (repo.aliases.some((alias) => !firstString(alias))) errors.push(`repos[${index}].aliases must contain non-empty names`)
+      else if (new Set(repo.aliases.map((alias) => alias.toLowerCase())).size !== repo.aliases.length) {
+        errors.push(`repos[${index}].aliases must not repeat a name`)
+      } else if (repo.aliases.some((alias) => alias.toLowerCase() === String(repo.name ?? '').toLowerCase())) {
+        errors.push(`repos[${index}].aliases must not repeat the current name`)
+      }
+    }
     if (repo.path != null && !firstString(repo.path)) errors.push(`repos[${index}].path must be a non-empty string when present`)
     if (repo.readBoundary && !['private', 'team', 'operator', 'staff', 'public', 'sensitive'].includes(repo.readBoundary)) {
       errors.push(`repos[${index}].readBoundary is invalid`)

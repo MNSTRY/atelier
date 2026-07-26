@@ -11,6 +11,7 @@ import {
   resolveProjectConfig,
   writeJson,
 } from '../project/config.mjs'
+import { auditRepoIdentities } from '../project/repo-identity.mjs'
 
 const PROFILE_SET = new Set(['single-repo', 'private-domain', 'shared-project', 'multi-repo', 'monorepo', 'control-workspace'])
 const IGNORE_LINES = [
@@ -220,14 +221,17 @@ function runDoctor(argv) {
     return
   }
   setup = { localState: stateBefore }
+  const identity = auditRepoIdentities(project)
+  const ok = stateBefore.ignored && identity.ok
   console.log(JSON.stringify({
-    ok: stateBefore.ignored,
+    ok,
     command: 'doctor',
     configPath: project.configPath,
-    repos: project.repos.map((repo) => ({ name: repo.name, path: repo.path, pathSource: repo.pathSource })),
+    repos: project.repos.map((repo) => ({ name: repo.name, path: repo.path, pathSource: repo.pathSource, external: Boolean(repo.external) })),
+    identity,
     setup,
   }, null, 2))
-  process.exit(stateBefore.ignored ? 0 : 1)
+  process.exit(ok ? 0 : 1)
 }
 
 const argv = process.argv.slice(2)

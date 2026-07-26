@@ -35,6 +35,14 @@
 - The graph walker's generated-file skip list and the boundary policy's glob
   matcher are now derived from shared modules rather than restated inline, with
   a drift test asserting the kit keeps no second copy of either.
+- Repo entries accept `identity` (provider + stable id) and `aliases` (former
+  names), so a repository survives a rename. Adds
+  `resolveRepoIdentity(cloneDir)`, which resolves from the provider's stable id,
+  then a recorded identity, then declared aliases — and never from a root commit
+  or a folder name.
+- `atelier doctor` now audits repo identity: upstream renames, stale config
+  names, deprecated aliases, clones that are secretly the same repository, and
+  repos with no recorded id or no origin remote.
 
 ## 0.1.0-alpha.2
 
