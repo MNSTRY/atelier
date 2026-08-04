@@ -78,6 +78,42 @@ never the same shape twice running.
 - No label triple repeats on adjacent reading paths; validators can check
   this once cards carry labels as data.
 
+## Adoptable tools (the second worked system)
+
+Long-form pieces land in an instrument rather than a benediction, and the
+instrument is the part most likely to be adopted somewhere we never see. The
+craft ships a harness kit of annotations and a five-question audit; the
+discernment piece ships a placement walk; the REAL test ships a product
+assessment. Design rules learned building those three, in force for every
+tool the corpus ships:
+
+- **Runnable by a person and by an agent, from the same definition.** One
+  instrument with two surfaces, never a human version and a separate machine
+  version that drift apart. The human surface is an ordered walk; the machine
+  surface is a contract with a typed return.
+- **Observable inputs only.** A tool that requires private data cannot be run
+  by the reader who most needs it. Every question resolves against something
+  shipped: a mechanic, a default, a diff, a pricing page.
+- **Evidence per verdict.** Each verdict cites the specific thing that
+  produced it. A verdict without its evidence is an opinion wearing a
+  finding's clothes, and it becomes indistinguishable from a real finding the
+  moment it is written down.
+- **Abstention is a first-class result.** Every tool ships a not-visible or
+  unknown verdict and instructs the runner to prefer it over inference. An
+  assessment that guesses is worse than one that abstains, because the guess
+  travels with the authority of the finding. This is the corpus's own
+  discernment argument turned back on its own instruments.
+- **Refuse the composite when the composite is the error.** Where a framework
+  exists to say that judgment cannot be delegated, its tool must not emit an
+  overall score, and must refuse it even when asked. Encode the refusal in
+  the contract, not in a footnote.
+- **Verdicts expire.** A tool that reads a build says so, and re-runs on the
+  next release rather than aging into a claim about a company.
+
+An instrument that follows these is adoptable in contexts we do not control,
+which is the point: the corpus earns its keep when its tools run inside other
+people's harnesses.
+
 ## How this system grows
 
 Every founder rejection during composition is recorded in the format's
