@@ -6,8 +6,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
 const expectedPackageName = '@mnstry/atelier'
-const expectedTarballName = 'mnstry-atelier-0.1.0-alpha.2.tgz'
+const expectedVersion = packageJson.version
+const expectedTarballName = `${packageJson.name.replace(/^@/, '').replace('/', '-')}-${expectedVersion}.tgz`
 
 const allowedFiles = [
   /^package\.json$/,
@@ -20,7 +22,7 @@ const allowedFiles = [
   /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html)$/,
   /^skills\/(codex|claude)\/[a-z0-9-]+\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
-  /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.gitignore)$/,
+  /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.?gitignore)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
 ]
 
@@ -34,14 +36,24 @@ const structuralForbiddenContent = [
 
 // Client-zero and person-specific name patterns live in a gitignored local
 // denylist so the committed audit does not disclose what it scrubs for.
+// Load precedence: ATELIER_DENYLIST_JSON env -> release-denylist.local.json -> fail closed.
 const localDenylistPath = join(packageRoot, 'release-denylist.local.json')
+let denylistDoc = null
+if (process.env.ATELIER_DENYLIST_JSON) {
+  denylistDoc = JSON.parse(process.env.ATELIER_DENYLIST_JSON)
+} else if (existsSync(localDenylistPath)) {
+  denylistDoc = JSON.parse(readFileSync(localDenylistPath, 'utf8'))
+}
 let localDenylist = []
-if (existsSync(localDenylistPath)) {
-  localDenylist = JSON.parse(readFileSync(localDenylistPath, 'utf8')).patterns.map(
+if (denylistDoc) {
+  localDenylist = denylistDoc.patterns.map(
     ({ pattern, flags = '', label }) => ({ pattern: new RegExp(pattern, flags), label }),
   )
+} else if (process.env.ATELIER_ALLOW_MISSING_DENYLIST === '1') {
+  console.warn('[release:audit] WARNING: denylist unavailable and ATELIER_ALLOW_MISSING_DENYLIST=1 acknowledged — private-name scrub skipped; structural checks still apply')
 } else {
-  console.warn('[release:audit] release-denylist.local.json not found — private-name scrub skipped; structural checks still apply')
+  console.error('[release:audit] denylist unavailable: provide ATELIER_DENYLIST_JSON, restore release-denylist.local.json, or set ATELIER_ALLOW_MISSING_DENYLIST=1 to acknowledge a structural-only run')
+  process.exit(2)
 }
 
 const forbiddenContent = [...structuralForbiddenContent, ...localDenylist]
@@ -61,15 +73,18 @@ function packDryRun() {
   return result[0]
 }
 
-const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
 if (packageJson.private !== false) fail('package.json must set private false before publish')
-if (packageJson.version !== '0.1.0-alpha.2') fail('package version must be 0.1.0-alpha.2 for this release slice')
 if (packageJson.license !== 'Apache-2.0') fail('package license must be Apache-2.0')
 if (packageJson.name !== expectedPackageName) fail(`package name must be ${expectedPackageName}`)
 if (!packageJson.bin?.atelier) fail('package must expose the atelier CLI')
 if (!packageJson.bin?.mnstry) fail('package must expose the mnstry CLI')
 if (!packageJson.bin?.['mnstry-atelier']) fail('package must expose the mnstry-atelier legacy CLI')
 if (!Array.isArray(packageJson.files) || packageJson.files.length === 0) fail('package must use a files allowlist')
+
+const changelog = readFileSync(join(packageRoot, 'CHANGELOG.md'), 'utf8')
+if (!changelog.includes(`## ${expectedVersion}`)) fail(`CHANGELOG.md must contain a "## ${expectedVersion}" heading`)
+const readme = readFileSync(join(packageRoot, 'README.md'), 'utf8')
+if (!readme.includes(expectedVersion)) fail(`README.md must mention version ${expectedVersion}`)
 
 const pack = packDryRun()
 if (pack.name !== expectedPackageName) fail(`npm pack name must be ${expectedPackageName}`)

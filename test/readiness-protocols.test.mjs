@@ -124,8 +124,14 @@ test('bundled readiness pack stays neutral and package-safe', () => {
   // Private name patterns live in the gitignored local denylist so this guard
   // enforces without the committed test disclosing what it protects.
   const denylistUrl = new URL('../release-denylist.local.json', import.meta.url)
-  if (fs.existsSync(denylistUrl)) {
-    for (const { pattern, flags = '', label } of JSON.parse(fs.readFileSync(denylistUrl, 'utf8')).patterns) {
+  const denylistDoc = process.env.ATELIER_DENYLIST_JSON
+    ? JSON.parse(process.env.ATELIER_DENYLIST_JSON)
+    : (fs.existsSync(denylistUrl) ? JSON.parse(fs.readFileSync(denylistUrl, 'utf8')) : null)
+  if (!denylistDoc) {
+    assert.equal(process.env.ATELIER_ALLOW_MISSING_DENYLIST, '1',
+      'release-denylist unavailable: provide ATELIER_DENYLIST_JSON, restore release-denylist.local.json, or set ATELIER_ALLOW_MISSING_DENYLIST=1 to acknowledge a structural-only run')
+  } else {
+    for (const { pattern, flags = '', label } of denylistDoc.patterns) {
       assert.doesNotMatch(serialized, new RegExp(pattern, flags), `pack must not contain ${label}`)
     }
   }

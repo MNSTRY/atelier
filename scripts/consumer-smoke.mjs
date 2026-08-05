@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const packageName = '@mnstry/atelier'
-const expectedVersion = '0.1.0-alpha.2'
-const expectedTarballName = `mnstry-atelier-${expectedVersion}.tgz`
+const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
+const packageName = packageJson.name
+const expectedVersion = packageJson.version
+const expectedTarballName = `${packageName.replace(/^@/, '').replace('/', '-')}-${expectedVersion}.tgz`
 const tempRoot = mkdtempSync(join(tmpdir(), 'mnstry-atelier-consumer-'))
 let tarballPath
 
