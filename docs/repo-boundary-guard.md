@@ -122,7 +122,7 @@ See `docs/upgrade.md` for the upgrade sequence.
 Every Atelier-side reference to a repository used to key on its name. Hosting
 providers let repos be renamed and redirect the old URL indefinitely, so a
 rename leaves stale clones that keep fetching happily under a name that no
-longer exists — the failure is silent, which is why two Client zero repos stopped
+longer exists — the failure is silent, which is why two client-zero repos stopped
 syncing for weeks before anyone noticed.
 
 Record a provider-stable identity in `atelier.project.json`:
@@ -133,7 +133,7 @@ Record a provider-stable identity in `atelier.project.json`:
   "path": "studio-journal",
   "readBoundary": "team",
   "identity": { "provider": "github", "id": "900001" },
-  "aliases": ["frequency", "hardware"]
+  "aliases": ["journal", "press"]
 }
 ```
 

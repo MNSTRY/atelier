@@ -19,7 +19,7 @@ import { matchesPathPattern } from '../src/project/path-match.mjs'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const readJson = (rel) => JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'))
 
-// The classification that burned Client zero: the builder script is canonical in the ops
+// The classification that burned client zero: the builder script is canonical in the ops
 // repo and a rederivable copy in every consumer. A list keyed on filename alone
 // cannot express that, and folding it into a plain "generated" list makes the sync
 // loop discard canonical source in the repo that owns it.

@@ -19,8 +19,8 @@ import {
 } from '../src/boundary/content-rules.mjs'
 import { PROJECT_CONFIG_SCHEMA, commandProject, writeJson } from '../src/project/config.mjs'
 
-// author-site shipped an owner-authorized mock cart whose whole design is
-// localStorage. The whole-tree guard matched it, so every push of that repo failed
+// A client-zero private-domain site shipped an owner-authorized mock cart whose
+// whole design is localStorage. The whole-tree guard matched it, so every push failed
 // at the hook — real work would have stranded locally — and the only fix available
 // was a hardcoded pathspec inside shared fleet infrastructure.
 const CART = 'src/scripts/cart.ts'
@@ -43,7 +43,7 @@ function makeWorkspace(t, { exceptions = [] } = {}) {
   git(site, ['config', 'user.name', 'Author'])
   git(site, ['remote', 'add', 'origin', upstream])
 
-  // The accepted usage is already in history, exactly as it was at Client zero.
+  // The accepted usage is already in history, exactly as it was at client zero.
   fs.mkdirSync(path.join(site, 'src/scripts'), { recursive: true })
   fs.writeFileSync(path.join(site, CART), CART_SOURCE)
   git(site, ['add', '.'])

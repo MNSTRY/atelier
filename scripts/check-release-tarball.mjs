@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -17,25 +17,34 @@ const allowedFiles = [
   /^bin\/atelier\.mjs$/,
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
-  /^fixtures\/(?!atelier-export\/sample-private-offer)(?!atelier-extension-pack\/client-zero\.client-zero)[A-Za-z0-9./_-]+\.(json|md|html)$/,
+  /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html)$/,
   /^skills\/(codex|claude)\/[a-z0-9-]+\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.gitignore)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
 ]
 
-const forbiddenContent = [
+const structuralForbiddenContent = [
   { pattern: /\/Users\//, label: 'absolute user path' },
   { pattern: /\/var\/folders\//, label: 'machine-local temp path' },
   { pattern: /\.codex/, label: 'agent-local state path' },
-  { pattern: /\.client-zero-local/, label: 'client-zero local state path' },
-  { pattern: /\bClient zero\b|client-zero-|client-zero:/i, label: 'Client zero client-zero content' },
-  { pattern: /\bBrandA\b/i, label: 'client-zero brand content' },
-  { pattern: /\bPersonC\b|\bPersonD\b|\bProjectY\b/, label: 'project/person-specific content' },
-  { pattern: /private[- ]hire/i, label: 'client-zero offer content' },
   { pattern: /BEGIN (RSA|OPENSSH|PRIVATE) KEY/, label: 'private key material' },
   { pattern: /\b(api[_-]?key|secret|password|token)\b\s*[:=]/i, label: 'secret-like assignment' },
 ]
+
+// Client-zero and person-specific name patterns live in a gitignored local
+// denylist so the committed audit does not disclose what it scrubs for.
+const localDenylistPath = join(packageRoot, 'release-denylist.local.json')
+let localDenylist = []
+if (existsSync(localDenylistPath)) {
+  localDenylist = JSON.parse(readFileSync(localDenylistPath, 'utf8')).patterns.map(
+    ({ pattern, flags = '', label }) => ({ pattern: new RegExp(pattern, flags), label }),
+  )
+} else {
+  console.warn('[release:audit] release-denylist.local.json not found — private-name scrub skipped; structural checks still apply')
+}
+
+const forbiddenContent = [...structuralForbiddenContent, ...localDenylist]
 
 function fail(message) {
   console.error(`[release:audit] ${message}`)

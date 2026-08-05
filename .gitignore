@@ -10,6 +10,7 @@ npm-debug.log*
 .atelier-local/
 atelier.local.json
 atelier.workspace.local.json
+release-denylist.local.json
 .atelier-current
 .atelier-nonce
 .atelier-grants/

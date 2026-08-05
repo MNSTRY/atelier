@@ -7,17 +7,17 @@ import test from 'node:test'
 import { PROJECT_CONFIG_SCHEMA, commandProject, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
 import { auditRepoIdentities, identityKey, parseRemoteRef, resolveRepoIdentity } from '../src/project/repo-identity.mjs'
 
-// The 2026-07 Client zero rename chains: hardware -> frequency -> studio-journal, and
-// product-development -> apothecary -> studio-catalog. Stale clones kept
-// fetching through the provider redirect, so nothing looked broken while two repos
-// silently stopped syncing for weeks.
+// The 2026-07 client-zero rename chains (repo names fictionalized here): press ->
+// journal -> studio-journal, and product-development -> catalog -> studio-catalog.
+// Stale clones kept fetching through the provider redirect, so nothing looked
+// broken while two repos silently stopped syncing for weeks.
 const RENAMED_ID = '900001'
 const SIBLING_A_ID = '900002'
 const SIBLING_B_ID = '900003'
 
 const REGISTRY = {
   // Old and new names resolve to one stable id, exactly as the provider redirect does.
-  'acme/frequency': { id: RENAMED_ID, fullName: 'acme/studio-journal' },
+  'acme/journal': { id: RENAMED_ID, fullName: 'acme/studio-journal' },
   'acme/studio-journal': { id: RENAMED_ID, fullName: 'acme/studio-journal' },
   'acme/site-one': { id: SIBLING_A_ID, fullName: 'acme/site-one' },
   'acme/site-two': { id: SIBLING_B_ID, fullName: 'acme/site-two' },
@@ -72,13 +72,13 @@ function makeProject(t, repos, clones) {
 test('a renamed repo keeps its identity and reports the new canonical name', (t) => {
   const { project } = makeProject(
     t,
-    [{ name: 'frequency', path: 'frequency', readBoundary: 'team' }],
-    [{ folder: 'frequency', remote: 'https://github.com/acme/frequency.git' }],
+    [{ name: 'journal', path: 'journal', readBoundary: 'team' }],
+    [{ folder: 'journal', remote: 'https://github.com/acme/journal.git' }],
   )
   const identity = resolveRepoIdentity(project.repos[0].path, { repo: project.repos[0], lookups })
 
   assert.equal(identity.id, RENAMED_ID)
-  assert.equal(identity.remoteName, 'frequency')
+  assert.equal(identity.remoteName, 'journal')
   assert.equal(identity.currentName, 'studio-journal')
   assert.equal(identity.renamed, true)
   assert.equal(identity.source, 'provider')
@@ -93,11 +93,11 @@ test('a stale clone left by a rename is reported once as a duplicate, not as two
     t,
     [
       { name: 'studio-journal', path: 'studio-journal', readBoundary: 'team', identity: { provider: 'github', id: RENAMED_ID } },
-      { name: 'studio-journal-old', path: 'studio-journal-old', readBoundary: 'team', aliases: ['frequency'] },
+      { name: 'studio-journal-old', path: 'studio-journal-old', readBoundary: 'team', aliases: ['journal'] },
     ],
     [
       { folder: 'studio-journal', remote: 'https://github.com/acme/studio-journal.git' },
-      { folder: 'studio-journal-old', remote: 'https://github.com/acme/frequency.git' },
+      { folder: 'studio-journal-old', remote: 'https://github.com/acme/journal.git' },
     ],
   )
   const audit = auditRepoIdentities(project, { lookups })
@@ -139,7 +139,7 @@ test('a recorded identity resolves the repo when the provider is unreachable', (
   const { project } = makeProject(
     t,
     [{ name: 'studio-journal', path: 'studio-journal', readBoundary: 'team', identity: { provider: 'github', id: RENAMED_ID } }],
-    [{ folder: 'studio-journal', remote: 'https://github.com/acme/frequency.git' }],
+    [{ folder: 'studio-journal', remote: 'https://github.com/acme/journal.git' }],
   )
   const identity = resolveRepoIdentity(project.repos[0].path, { repo: project.repos[0], lookups: offline })
 
@@ -152,8 +152,8 @@ test('a recorded identity resolves the repo when the provider is unreachable', (
 test('an old name resolves through a declared alias with a deprecation notice', (t) => {
   const { project } = makeProject(
     t,
-    [{ name: 'studio-journal', path: 'studio-journal', readBoundary: 'team', aliases: ['frequency', 'hardware'] }],
-    [{ folder: 'studio-journal', remote: 'https://github.com/acme/frequency.git' }],
+    [{ name: 'studio-journal', path: 'studio-journal', readBoundary: 'team', aliases: ['journal', 'press'] }],
+    [{ folder: 'studio-journal', remote: 'https://github.com/acme/journal.git' }],
   )
   const identity = resolveRepoIdentity(project.repos[0].path, { repo: project.repos[0], lookups: offline })
   assert.equal(identity.source, 'alias')

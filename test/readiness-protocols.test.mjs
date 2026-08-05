@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 import {
   MNSTRY_READINESS_PACK_SCHEMA,
@@ -119,7 +120,14 @@ test('each bundled readiness protocol has the required review sections', () => {
 
 test('bundled readiness pack stays neutral and package-safe', () => {
   const serialized = JSON.stringify(bundledMnstryReadinessPackV1)
-  assert.doesNotMatch(serialized, /\b(Author|ProjectX|Client zero|BrandA|PersonA|PersonB)\b/i)
+  // Private name patterns live in the gitignored local denylist so this guard
+  // enforces without the committed test disclosing what it protects.
+  const denylistUrl = new URL('../release-denylist.local.json', import.meta.url)
+  if (fs.existsSync(denylistUrl)) {
+    for (const { pattern, flags = '', label } of JSON.parse(fs.readFileSync(denylistUrl, 'utf8')).patterns) {
+      assert.doesNotMatch(serialized, new RegExp(pattern, flags), `pack must not contain ${label}`)
+    }
+  }
   assert.doesNotMatch(serialized, /\/Users\//)
   assert.doesNotMatch(serialized, /\.codex/)
   assert.doesNotMatch(serialized, /BEGIN (RSA|OPENSSH|PRIVATE) KEY/)

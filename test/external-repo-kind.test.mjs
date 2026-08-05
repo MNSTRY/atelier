@@ -9,7 +9,7 @@ import { buildGraph } from '../src/graph/graph.mjs'
 import { buildKnowledgeGraph, validateRepoAccessConfig } from '../src/graph/knowledge-graph.mjs'
 import { PROJECT_CONFIG_SCHEMA, commandProject, remoteHost, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
 
-// An app-builder export that landed in the workspace during the 2026-07 Client zero
+// An app-builder export that landed in the workspace during a 2026-07 client-zero
 // incident. Not an org remote, not managed, and previously impossible to declare
 // honestly: the only unblock was giving it a read boundary it does not have.
 const FOREIGN_REMOTE = 'https://git.example.test/0000/project_deadbeef.git'

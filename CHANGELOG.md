@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Expunges client-zero-identifying names from tests, fixtures, docs, and the
+  release audit. Name-based scrub patterns now load from the gitignored
+  `release-denylist.local.json`; when that file is absent the audit warns and
+  applies structural checks only, and the readiness-pack neutrality test skips
+  the name assertions.
+
 - Staged boundary guard now separates boundary-field *initialization* from
   *change*. A field added with no prior value, set to a non-disclosing default,
   commits without a review marker; widening, narrowing, and removal still
