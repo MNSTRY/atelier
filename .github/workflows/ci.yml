@@ -1,0 +1,81 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Denylist assertions run in the secret-sweep lane; this job acknowledges
+      # a structural-only run explicitly. Never add this to secret-sweep.
+      ATELIER_ALLOW_MISSING_DENYLIST: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run contract
+      - run: npm run egress:check
+      - run: npm run migrations:check
+      - run: npm run contract:compat
+  consumer-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      # npm ci warms the cache so the tarball's ajv deps resolve under --offline
+      - run: npm ci
+      - run: npm run consumer:smoke
+  structural-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: structural + commit-identity sweep (no secrets)
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "${{ github.event.pull_request.base.sha }}"
+          else
+            node scripts/check-repo-disclosure.mjs --structural-only --commits "${{ vars.ATELIER_COMMIT_SCAN || 'none' }}"
+          fi
+  secret-sweep:
+    runs-on: ubuntu-latest
+    env:
+      ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+    steps:
+      # Explicit failure, never a job-level `if:` — GitHub treats a skipped job
+      # as satisfying a required status check; failing is the only safe block.
+      - name: refuse to pass without the denylist (fork PRs land here)
+        run: |
+          if [ -z "$ATELIER_DENYLIST_JSON" ]; then
+            echo "denylist secret unavailable (fork PR or missing secret) — a maintainer must dispatch fork-sweep on this SHA"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node scripts/check-repo-disclosure.mjs --commits "${{ vars.ATELIER_COMMIT_SCAN || 'none' }}"
+      - run: npm run release:audit

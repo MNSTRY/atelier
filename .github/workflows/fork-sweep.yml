@@ -1,0 +1,52 @@
+name: fork-sweep
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number'
+        required: true
+      head_sha:
+        description: 'Full head SHA verified by the maintainer'
+        required: true
+permissions:
+  contents: read
+  checks: write
+jobs:
+  fork-secret-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      # Trusted tools from main
+      - uses: actions/checkout@v4
+        with:
+          path: trusted
+      # Untrusted content, DATA ONLY — never install or execute anything in target/
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr }}/head
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - name: TOCTOU pin
+        run: |
+          actual="$(git -C target rev-parse HEAD)"
+          if [ "$actual" != "${{ inputs.head_sha }}" ]; then
+            echo "PR head moved to $actual — re-review"
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: trusted sweep of untrusted tree
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+        run: node trusted/scripts/check-repo-disclosure.mjs --root target --commits range --base origin/main
+      - name: report check-run "secret-sweep" on the SHA
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=failure
+          [ "${{ job.status }}" = "success" ] && conclusion=success
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name='secret-sweep' -f head_sha='${{ inputs.head_sha }}' \
+            -f status=completed -f conclusion="$conclusion"
