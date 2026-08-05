@@ -223,8 +223,14 @@ export function validateSchemaShape(schema) {
   for (const value of OBJECT_CLASSES) {
     if (!objectClassEnum?.includes(value)) errors.push(`schema objectClass enum missing ${value}`)
   }
+  for (const value of asArray(objectClassEnum)) {
+    if (!OBJECT_CLASS_SET.has(value)) errors.push(`schema objectClass enum must not include unknown member ${value}`)
+  }
   for (const value of RUNTIME_OWNERS) {
     if (!ownerEnum?.includes(value)) errors.push(`schema runtimeOwnerName enum missing ${value}`)
+  }
+  for (const value of asArray(ownerEnum)) {
+    if (!RUNTIME_OWNER_SET.has(value)) errors.push(`schema runtimeOwnerName enum must not include unknown member ${value}`)
   }
   for (const value of RUNTIME_VISIBILITIES) {
     if (!visibilityEnum?.includes(value)) errors.push(`schema runtime visibility enum missing ${value}`)

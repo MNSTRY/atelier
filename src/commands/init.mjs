@@ -24,13 +24,15 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
 }
 
-function copyDir(source, target) {
+function copyDir(source, target, { renameGitignore = true } = {}) {
   fs.mkdirSync(target, { recursive: true })
   for (const ent of fs.readdirSync(source, { withFileTypes: true })) {
     const from = path.join(source, ent.name)
-    // npm pack strips files named .gitignore, so templates ship the file as `gitignore`.
-    const to = path.join(target, ent.name === 'gitignore' ? '.gitignore' : ent.name)
-    if (ent.isDirectory()) copyDir(from, to)
+    // npm pack strips files named .gitignore, so templates ship the file as
+    // `gitignore` at the template root; nested files keep their literal names.
+    const rename = renameGitignore && ent.name === 'gitignore' && ent.isFile()
+    const to = path.join(target, rename ? '.gitignore' : ent.name)
+    if (ent.isDirectory()) copyDir(from, to, { renameGitignore: false })
     else fs.copyFileSync(from, to)
   }
 }

@@ -14,7 +14,22 @@ permissions:
 jobs:
   fork-secret-sweep:
     runs-on: ubuntu-latest
+    env:
+      # Dispatch inputs reach shell only via env vars ("$VAR"), never by
+      # ${{ }} interpolation inside run: blocks (expression injection).
+      HEAD_SHA: ${{ inputs.head_sha }}
+      PR_NUMBER: ${{ inputs.pr }}
     steps:
+      - name: validate dispatch inputs before any use
+        run: |
+          if ! printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo 'head_sha must be a full 40-hex lowercase SHA'
+            exit 1
+          fi
+          if ! printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]+$'; then
+            echo 'pr must be a PR number'
+            exit 1
+          fi
       # Trusted tools from main
       - uses: actions/checkout@v4
         with:
@@ -24,24 +39,27 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           path: target
-          fetch-depth: 0
           persist-credentials: false
       - name: TOCTOU pin
         run: |
           actual="$(git -C target rev-parse HEAD)"
-          if [ "$actual" != "${{ inputs.head_sha }}" ]; then
+          if [ "$actual" != "$HEAD_SHA" ]; then
             echo "PR head moved to $actual — re-review"
             exit 1
           fi
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: ensure base ref exists in the untrusted checkout
-        run: git -C target fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      # Content sweep only, no --commits: outside-author commits would fail the
+      # identity gate forever, so a dispatched fork sweep could never succeed;
+      # merged commits' messages are covered by the push-range sweep on main
+      # after merge. --untrusted suppresses all per-finding detail — on an
+      # attacker-controlled tree the public log's label + file:line output is a
+      # confirmation oracle against a committed guess dictionary.
       - name: trusted sweep of untrusted tree
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
-        run: node trusted/scripts/check-repo-disclosure.mjs --root target --commits range --base origin/main
+        run: node trusted/scripts/check-repo-disclosure.mjs --root target --untrusted
       - name: report check-run "secret-sweep" on the SHA
         if: always()
         env:
@@ -50,5 +68,5 @@ jobs:
           conclusion=failure
           [ "${{ job.status }}" = "success" ] && conclusion=success
           gh api "repos/${{ github.repository }}/check-runs" \
-            -f name='secret-sweep' -f head_sha='${{ inputs.head_sha }}' \
+            -f name='secret-sweep' -f head_sha="$HEAD_SHA" \
             -f status=completed -f conclusion="$conclusion"

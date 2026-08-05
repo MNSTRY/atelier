@@ -178,6 +178,19 @@ const cases = [
     problems: [/unrecognized disposition "shrug"/],
   },
   {
+    name: 'list markers inside fenced code blocks are not bullets',
+    changelog: changelog([
+      '- Adds a harmless feature.',
+      '',
+      '```md',
+      '- **Breaking:** example bullet quoted inside a code fence.',
+      '```',
+    ]),
+    map: { entries: [] },
+    migrations: [],
+    problems: [],
+  },
+  {
     name: 'a map entry with an empty match fails',
     changelog: changelog(['- Adds a harmless feature.']),
     map: { entries: [{ match: '', disposition: 'exempt', reason: 'r', date: 'd' }] },
@@ -208,6 +221,30 @@ test('checkBreakingMigrations reconciles fixture changelogs against fixture maps
       }
     })
   }
+})
+
+test('an armed epoch requires a reviewer on every exempt entry', () => {
+  const fixture = {
+    changelog: changelog(['- **Breaking:** widget renamed to gadget everywhere.']),
+    migrations: [],
+    epochArmed: true,
+  }
+  const unreviewed = checkBreakingMigrations({
+    ...fixture,
+    map: { entries: [{ match: 'widget renamed to gadget', disposition: 'exempt', reason: 'pre-public', date: '2026-08-05' }] },
+  })
+  assert.equal(unreviewed.ok, false)
+  assert.ok(
+    unreviewed.problems.some((problem) => /is exempt but the epoch is armed and no reviewer is recorded/.test(problem)),
+    `expected a missing-reviewer problem in ${JSON.stringify(unreviewed.problems)}`,
+  )
+
+  const reviewed = checkBreakingMigrations({
+    ...fixture,
+    map: { entries: [{ match: 'widget renamed to gadget', disposition: 'exempt', reason: 'pre-public', date: '2026-08-05', reviewer: 'erik' }] },
+  })
+  assert.deepEqual(reviewed.problems, [])
+  assert.equal(reviewed.ok, true)
 })
 
 test('parseBreakingEntries joins wrapped bullets and skips non-list prose', () => {

@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { CONTRACT_CORPUS, CORPUS_ROOT } from '../src/contracts/corpus.mjs'
-import { checkCompat } from '../scripts/check-contract-compat.mjs'
+import { checkCompat, diffSchemaWidenings } from '../scripts/check-contract-compat.mjs'
 
 // The compat gate is inert until the epoch tag exists, so its plumbing is kept
 // honest here in self-consistency mode: the "baseline" schemas are read from the
@@ -69,6 +69,61 @@ test('a tightened baseline rejects the current corpus', async () => {
   })
   assert.notEqual(failures.length, 0, 'the gate must detect a document its baseline validator rejects')
   for (const failure of failures) assert.equal(failure.entry, 'atelier-attestation')
+})
+
+test('the widening differ catches an enum gaining a member', async () => {
+  // Document validation cannot see this: every current document still passes
+  // the widened schema. The differ must flag it as a rejection.
+  const target = 'contracts/atelier-export.v1.schema.json'
+  const widened = readWorkingTreeContract(target)
+  widened.$defs.objectClass.enum = [...widened.$defs.objectClass.enum, 'smuggled_class']
+
+  const direct = diffSchemaWidenings(readWorkingTreeContract(target), widened)
+  assert.ok(
+    direct.some((finding) => finding.pointer === '/$defs/objectClass' && /enum gained member/.test(finding.message)),
+    `expected an enum-gained finding, got ${JSON.stringify(direct)}`,
+  )
+
+  const { failures } = await checkCompat({
+    readOldContract: readWorkingTreeContract,
+    readCurrentContract: (contractFile) => (contractFile === target ? widened : readWorkingTreeContract(contractFile)),
+  })
+  const widenings = failures.filter((failure) => failure.kind === 'widening')
+  assert.notEqual(widenings.length, 0, 'the gate must reject a widened enum')
+  for (const failure of widenings) assert.equal(failure.entry, 'atelier-export')
+  assert.ok(widenings.some((failure) => /enum gained member/.test(failure.message)))
+})
+
+test('the widening differ catches a required member being removed', async () => {
+  const target = 'contracts/atelier-export.v1.schema.json'
+  const original = readWorkingTreeContract(target)
+  assert.ok(Array.isArray(original.required) && original.required.length > 0, 'fixture assumption: export root declares required members')
+  const widened = readWorkingTreeContract(target)
+  const dropped = widened.required.pop()
+
+  const direct = diffSchemaWidenings(original, widened)
+  assert.ok(
+    direct.some((finding) => finding.pointer === '/' && finding.message.includes(`required lost member(s): ${dropped}`)),
+    `expected a required-lost finding, got ${JSON.stringify(direct)}`,
+  )
+
+  const { failures } = await checkCompat({
+    readOldContract: readWorkingTreeContract,
+    readCurrentContract: (contractFile) => (contractFile === target ? widened : readWorkingTreeContract(contractFile)),
+  })
+  assert.ok(
+    failures.some((failure) => failure.kind === 'widening' && failure.entry === 'atelier-export' && /required lost member/.test(failure.message)),
+    'the gate must reject a required-member removal',
+  )
+})
+
+test('a corpus where every contract skips refuses to pass', async () => {
+  const { checked, failures } = await checkCompat({ readOldContract: () => null })
+  assert.equal(checked.length, 0)
+  assert.ok(
+    failures.some((failure) => failure.kind === 'gate' && /checked nothing/.test(failure.message)),
+    'an all-skip run must fail rather than print clean over zero documents',
+  )
 })
 
 test('a baseline schema that fails to compile is a failure, not a crash', async () => {

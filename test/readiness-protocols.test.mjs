@@ -119,8 +119,15 @@ test('each bundled readiness protocol has the required review sections', () => {
   }
 })
 
-test('bundled readiness pack stays neutral and package-safe', () => {
+test('bundled readiness pack stays neutral and package-safe', (t) => {
   const serialized = JSON.stringify(bundledMnstryReadinessPackV1)
+  assert.doesNotMatch(serialized, /\/Users\//)
+  assert.doesNotMatch(serialized, /\.codex/)
+  assert.doesNotMatch(serialized, /BEGIN (RSA|OPENSSH|PRIVATE) KEY/)
+  assert.equal(bundledMnstryReadinessPackV1.packageSafe, true)
+  assert.equal(bundledMnstryReadinessPackV1.safetyPosture.projectSpecificContent, false)
+  assert.equal(bundledMnstryReadinessPackV1.safetyPosture.runtimeMutation, false)
+  assert.equal(bundledMnstryReadinessPackV1.safetyPosture.externalEgress, false)
   // Private name patterns live in the gitignored local denylist so this guard
   // enforces without the committed test disclosing what it protects.
   const denylistUrl = new URL('../release-denylist.local.json', import.meta.url)
@@ -130,16 +137,18 @@ test('bundled readiness pack stays neutral and package-safe', () => {
   if (!denylistDoc) {
     assert.equal(process.env.ATELIER_ALLOW_MISSING_DENYLIST, '1',
       'release-denylist unavailable: provide ATELIER_DENYLIST_JSON, restore release-denylist.local.json, or set ATELIER_ALLOW_MISSING_DENYLIST=1 to acknowledge a structural-only run')
-  } else {
-    for (const { pattern, flags = '', label } of denylistDoc.patterns) {
-      assert.doesNotMatch(serialized, new RegExp(pattern, flags), `pack must not contain ${label}`)
+    // Visible skip, never a silent pass: CI's test job sets the acknowledgment
+    // env var itself, so asserting on it alone reports ok while checking no
+    // names. The denylist lane runs in ci.yml's secret-sweep job.
+    t.skip('denylist unavailable — structural-only acknowledged')
+    return
+  }
+  for (const { pattern, flags = '', label } of denylistDoc.patterns) {
+    // Not assert.doesNotMatch: its failure message echoes the regex source and
+    // the input, which would print the secret pattern into a public CI log.
+    // g/y stripped so .test is stateless.
+    if (new RegExp(pattern, flags.replace(/[gy]/g, '')).test(serialized)) {
+      assert.fail(`pack must not contain ${label}`)
     }
   }
-  assert.doesNotMatch(serialized, /\/Users\//)
-  assert.doesNotMatch(serialized, /\.codex/)
-  assert.doesNotMatch(serialized, /BEGIN (RSA|OPENSSH|PRIVATE) KEY/)
-  assert.equal(bundledMnstryReadinessPackV1.packageSafe, true)
-  assert.equal(bundledMnstryReadinessPackV1.safetyPosture.projectSpecificContent, false)
-  assert.equal(bundledMnstryReadinessPackV1.safetyPosture.runtimeMutation, false)
-  assert.equal(bundledMnstryReadinessPackV1.safetyPosture.externalEgress, false)
 })

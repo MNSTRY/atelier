@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mnstry.ai/schemas/atelier/atelier-attestation.v1.schema.json",
+  "$comment": "contract revision 1.0.0 (contract-stability epoch)",
   "title": "atelier-attestation@v1",
   "description": "Record of an admission decision by an issuer over a canonicalized payload document. An attestation never encodes conformance: conformance is public and offline, decided by the published validators. Unsigned attestations (signature null) are non-authoritative.",
   "type": "object",
@@ -51,7 +52,8 @@
           ]
         },
         "keyId": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         },
         "ext": {
           "type": "object",
@@ -216,8 +218,10 @@
               "minLength": 1
             },
             "value": {
+              "description": "Unpadded base64url signature bytes. Length must be a valid base64url shape (never length % 4 == 1); minLength 43 is the 32-byte signature floor.",
               "type": "string",
-              "pattern": "^[A-Za-z0-9_-]+$"
+              "minLength": 43,
+              "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2,3})?$"
             },
             "ext": {
               "type": "object",

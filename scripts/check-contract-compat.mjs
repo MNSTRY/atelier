@@ -46,13 +46,111 @@ function formatErrors(validate) {
     .join('\n')
 }
 
+// Schema-vs-schema widening differ. Document validation alone cannot see a
+// contract WIDENING (the current documents still satisfy the widened schema),
+// so every baseline/current schema pair is also compared structurally and any
+// loosening is a rejection. These are public schemas, so member names in the
+// findings are fine; document content never appears here.
+const DIFF_DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'required'])
+const DIFF_MAP_KEYWORDS = new Set(['properties', 'patternProperties', '$defs', 'definitions'])
+const DIFF_MIN_KEYWORDS = ['minLength', 'minItems', 'minimum']
+const DIFF_MAX_KEYWORDS = ['maxLength', 'maxItems', 'maximum']
+
+function isPlainObject(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function diffPointer(parts) {
+  return `/${parts.map((part) => String(part).replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`
+}
+
+export function diffSchemaWidenings(oldSchema, newSchema) {
+  const findings = []
+  walkSchemaPair(oldSchema, newSchema, [], findings)
+  return findings
+}
+
+function walkSchemaPair(oldNode, newNode, parts, findings) {
+  if (!isPlainObject(oldNode) || !isPlainObject(newNode)) return
+  const at = parts.length === 0 ? '/' : diffPointer(parts)
+  const flag = (message) => findings.push({ pointer: at, message })
+
+  if (Array.isArray(oldNode.enum) && Array.isArray(newNode.enum)) {
+    const oldMembers = new Set(oldNode.enum.map((member) => JSON.stringify(member)))
+    const gained = newNode.enum.filter((member) => !oldMembers.has(JSON.stringify(member)))
+    if (gained.length > 0) flag(`enum gained member(s): ${gained.map((member) => JSON.stringify(member)).join(', ')}`)
+  }
+  if (Array.isArray(oldNode.required)) {
+    const newRequired = new Set(Array.isArray(newNode.required) ? newNode.required : [])
+    const lost = oldNode.required.filter((name) => !newRequired.has(name))
+    if (lost.length > 0) flag(`required lost member(s): ${lost.join(', ')}`)
+  }
+  if (oldNode.additionalProperties === false && newNode.additionalProperties !== false) {
+    flag(`additionalProperties weakened (false -> ${newNode.additionalProperties === undefined ? 'absent' : JSON.stringify(newNode.additionalProperties)})`)
+  }
+  if (oldNode.type !== undefined && JSON.stringify(oldNode.type) !== JSON.stringify(newNode.type)) {
+    flag(`type changed (${JSON.stringify(oldNode.type)} -> ${newNode.type === undefined ? 'absent' : JSON.stringify(newNode.type)})`)
+  }
+  if (oldNode.const !== undefined && JSON.stringify(oldNode.const) !== JSON.stringify(newNode.const)) {
+    flag(`const changed or removed (${JSON.stringify(oldNode.const)} -> ${newNode.const === undefined ? 'absent' : JSON.stringify(newNode.const)})`)
+  }
+  if (oldNode.pattern !== undefined && oldNode.pattern !== newNode.pattern) {
+    flag(`pattern changed (${JSON.stringify(oldNode.pattern)} -> ${newNode.pattern === undefined ? 'absent' : JSON.stringify(newNode.pattern)})`)
+  }
+  for (const keyword of DIFF_MIN_KEYWORDS) {
+    if (typeof oldNode[keyword] !== 'number') continue
+    if (typeof newNode[keyword] !== 'number' || newNode[keyword] < oldNode[keyword]) {
+      flag(`${keyword} decreased or removed (${oldNode[keyword]} -> ${typeof newNode[keyword] === 'number' ? newNode[keyword] : 'absent'})`)
+    }
+  }
+  for (const keyword of DIFF_MAX_KEYWORDS) {
+    if (typeof oldNode[keyword] !== 'number') continue
+    if (typeof newNode[keyword] !== 'number' || newNode[keyword] > oldNode[keyword]) {
+      flag(`${keyword} increased or removed (${oldNode[keyword]} -> ${typeof newNode[keyword] === 'number' ? newNode[keyword] : 'absent'})`)
+    }
+  }
+  if (oldNode.additionalProperties === false && isPlainObject(oldNode.properties) && isPlainObject(newNode.properties)) {
+    // No exemptions: even the sanctioned epoch additions (ext, contractVersion)
+    // are reported, so the alpha.2 negative control shows the epoch honestly.
+    for (const key of Object.keys(newNode.properties)) {
+      if (!Object.hasOwn(oldNode.properties, key)) {
+        findings.push({ pointer: diffPointer([...parts, 'properties', key]), message: 'new property key added to a closed object' })
+      }
+    }
+  }
+
+  for (const [key, oldChild] of Object.entries(oldNode)) {
+    if (DIFF_DATA_KEYWORDS.has(key)) continue
+    const newChild = newNode[key]
+    if (DIFF_MAP_KEYWORDS.has(key)) {
+      if (!isPlainObject(oldChild) || !isPlainObject(newChild)) continue
+      for (const [mapKey, oldEntry] of Object.entries(oldChild)) {
+        walkSchemaPair(oldEntry, newChild[mapKey], [...parts, key, mapKey], findings)
+      }
+      continue
+    }
+    if (Array.isArray(oldChild) && Array.isArray(newChild)) {
+      const shared = Math.min(oldChild.length, newChild.length)
+      for (let index = 0; index < shared; index += 1) {
+        walkSchemaPair(oldChild[index], newChild[index], [...parts, key, index], findings)
+      }
+      continue
+    }
+    walkSchemaPair(oldChild, newChild, [...parts, key], findings)
+  }
+}
+
 // readOldContract(contractFile) -> schema object, or null when the contract did
 // not exist at the baseline. Injected so test/contract-compat.test.mjs can run
 // the same plumbing in self-consistency mode (baseline = the working tree).
-export async function checkCompat({ readOldContract, corpus = CONTRACT_CORPUS, root = CORPUS_ROOT }) {
+// readCurrentContract is injectable for the same reason: the widening-differ
+// positive controls substitute a deliberately widened current schema.
+export async function checkCompat({ readOldContract, readCurrentContract, corpus = CONTRACT_CORPUS, root = CORPUS_ROOT }) {
   const checked = []
   const skipped = []
   const failures = []
+  const readCurrent =
+    readCurrentContract ?? ((contractFile) => JSON.parse(fs.readFileSync(path.join(root, contractFile), 'utf8')))
 
   for (const entry of corpus) {
     let oldSchema
@@ -65,6 +163,22 @@ export async function checkCompat({ readOldContract, corpus = CONTRACT_CORPUS, r
     if (oldSchema === null) {
       skipped.push(entry.contractFile)
       continue
+    }
+
+    let currentSchema
+    try {
+      currentSchema = await readCurrent(entry.contractFile)
+    } catch (error) {
+      failures.push({ entry: entry.name, subject: entry.contractFile, message: `current contract unreadable: ${error.message}` })
+      continue
+    }
+    for (const widening of diffSchemaWidenings(oldSchema, currentSchema)) {
+      failures.push({
+        entry: entry.name,
+        subject: entry.contractFile,
+        kind: 'widening',
+        message: `  ${widening.pointer} ${widening.message}`,
+      })
     }
 
     let validate
@@ -95,6 +209,12 @@ export async function checkCompat({ readOldContract, corpus = CONTRACT_CORPUS, r
       failures.push({ entry: entry.name, subject: label, message: formatErrors(validate) })
     }
     checked.push({ entry: entry.name, documents: documents.length })
+  }
+
+  if (checked.length === 0 && corpus.length > 0) {
+    // Every entry skipping (for example after a path move the baseline ref
+    // cannot see) would otherwise print clean over zero documents.
+    failures.push({ entry: '(gate)', subject: '(corpus)', kind: 'gate', message: 'compat gate checked nothing — refusing to pass' })
   }
 
   return { checked, skipped, failures }
@@ -161,13 +281,14 @@ async function main() {
   const cache = new Map()
   const readOldContract = (contractFile) => {
     if (!cache.has(contractFile)) {
-      let text = null
-      try {
-        text = git(['show', `${ref}:${contractFile}`])
-      } catch {
-        text = null // absent at the baseline
+      // Only a path verifiably absent at the ref is "new since baseline"; any
+      // other git failure must surface as a gate failure, not a silent skip.
+      const listing = git(['ls-tree', ref, '--', contractFile])
+      if (listing.trim() === '') {
+        cache.set(contractFile, null)
+      } else {
+        cache.set(contractFile, JSON.parse(git(['show', `${ref}:${contractFile}`])))
       }
-      cache.set(contractFile, text === null ? null : JSON.parse(text))
     }
     return cache.get(contractFile)
   }
@@ -176,7 +297,15 @@ async function main() {
 
   for (const file of skipped) console.log(`contract-compat: new since baseline: ${file} (skipped)`)
   for (const failure of failures) {
-    console.error(`contract-compat: ${failure.subject} rejected by ${ref} validator for ${failure.entry}:`)
+    if (failure.kind === 'gate') {
+      console.error(`contract-compat: ${failure.message}`)
+      continue
+    }
+    if (failure.kind === 'widening') {
+      console.error(`contract-compat: ${failure.subject} widened relative to ${ref} for ${failure.entry}:`)
+    } else {
+      console.error(`contract-compat: ${failure.subject} rejected by ${ref} validator for ${failure.entry}:`)
+    }
     console.error(failure.message)
   }
   if (failures.length > 0) {

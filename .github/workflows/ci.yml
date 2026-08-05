@@ -50,13 +50,22 @@ jobs:
         with:
           node-version: '22'
       - name: structural + commit-identity sweep (no secrets)
+        # Repo values reach shell only via env vars ("$VAR"), never by ${{ }}
+        # interpolation inside the run: block (expression injection if a
+        # maintainer pastes a poisoned value into the variable).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          COMMIT_SCAN: ${{ vars.ATELIER_COMMIT_SCAN }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "${{ github.event.before }}"
+          case "$COMMIT_SCAN" in none|range|all) ;; *) COMMIT_SCAN=none ;; esac
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "$PR_BASE_SHA"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "$PUSH_BEFORE"
           else
-            node scripts/check-repo-disclosure.mjs --structural-only --commits "${{ vars.ATELIER_COMMIT_SCAN || 'none' }}"
+            node scripts/check-repo-disclosure.mjs --structural-only --commits "$COMMIT_SCAN"
           fi
   secret-sweep:
     runs-on: ubuntu-latest
@@ -82,14 +91,28 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: repo-wide disclosure sweep
+        # Repo values reach shell only via env vars ("$VAR"), never by ${{ }}
+        # interpolation inside the run: block (expression injection).
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          COMMIT_SCAN: ${{ vars.ATELIER_COMMIT_SCAN }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            node scripts/check-repo-disclosure.mjs --commits range --base "${{ github.event.before }}"
+          case "$COMMIT_SCAN" in none|range|all) ;; *) COMMIT_SCAN=none ;; esac
+          if [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            node scripts/check-repo-disclosure.mjs --commits range --base "$PUSH_BEFORE"
           else
-            node scripts/check-repo-disclosure.mjs --commits "${{ vars.ATELIER_COMMIT_SCAN || 'none' }}"
+            node scripts/check-repo-disclosure.mjs --commits "$COMMIT_SCAN"
           fi
+      # The test job runs pack neutrality structural-only (it acknowledges the
+      # missing denylist and the test visibly skips the denylist assertions);
+      # this lane re-runs the same test with the real denylist so the name
+      # assertions actually execute somewhere in CI.
+      - name: pack neutrality with denylist
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+        run: node --test test/readiness-protocols.test.mjs
       - name: release audit
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}

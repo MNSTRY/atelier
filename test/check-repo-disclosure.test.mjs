@@ -174,11 +174,119 @@ test('--staged catches a plant that is staged but not committed', (t) => {
   assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
 })
 
+test('--staged bypass demo closed: an added "++ /dev/null" content line cannot null the scan', (t) => {
+  // Reviewer demo: with the old diff-text parser this line rendered as
+  // '+++ /dev/null', nulled relPath, and hid every later added line.
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  fs.writeFileSync(path.join(dir, 'attack.txt'), `++ /dev/null\n${SENTINEL} hidden after fake header\n`)
+  git(dir, ['add', 'attack.txt'])
+  const { status, output } = runChecker(dir, ['--staged'])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel/)
+  assert.match(output, /attack\.txt:2/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
+})
+
+test('--staged bypass demo closed: an added "++ b/<self-excluded>" line cannot retarget the scan', (t) => {
+  // Reviewer demo: the old parser retargeted relPath into the structural
+  // self-exclusion list, exempting every later added line from structural scan.
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  fs.writeFileSync(
+    path.join(dir, 'attack.txt'),
+    '++ b/scripts/check-repo-disclosure.mjs\nsee /Users/nobody/scratch for the trace\n',
+  )
+  git(dir, ['add', 'attack.txt'])
+  const { status, output } = runChecker(dir, ['--staged', '--structural-only'])
+  assert.equal(status, 1, output)
+  assert.match(output, /absolute user path/)
+  assert.match(output, /attack\.txt:2/)
+})
+
+test('--staged scans the index blob, not the worktree copy', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  fs.writeFileSync(path.join(dir, 'staged.txt'), `${SENTINEL} staged\n`)
+  git(dir, ['add', 'staged.txt'])
+  fs.writeFileSync(path.join(dir, 'staged.txt'), 'scrubbed after staging\n')
+  const { status, output } = runChecker(dir, ['--staged'])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel/)
+  assert.match(output, /staged\.txt:1/)
+})
+
 test('--staged passes on a clean index', (t) => {
   const dir = makeRepo(t)
   writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
   const { status, output } = runChecker(dir, ['--staged'])
   assert.equal(status, 0, output)
+})
+
+test('a tracked symlink pointing outside --root is skipped, never followed', (t) => {
+  // Reviewer demo: readFileSync followed the link, so a tracked symlink let
+  // an untrusted tree pull runner-local files into the scan (oracle input).
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-outside-'))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(outside, 'secret.txt'), `${SENTINEL} lives outside the root\n`)
+  fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(dir, 'escape'))
+  git(dir, ['add', 'escape'])
+  git(dir, ['commit', '--quiet', '-m', 'add symlink'])
+  const { status, output } = runChecker(dir)
+  assert.equal(status, 0, output)
+  assert.match(output, /\[repo:check\] clean/)
+  assert.ok(!output.includes(SENTINEL), 'the symlink target must never be read')
+})
+
+test('--untrusted suppresses every per-finding detail and prints only the count', (t) => {
+  // Reviewer demo: per-finding label + file:line on an attacker-controlled
+  // tree confirms which guessed line matched which category (oracle).
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'guess/dictionary.txt', `guess one\n${SENTINEL} guess two\n`)
+  writeAndCommit(dir, 'docs/path.md', 'see /Users/nobody/scratch for the trace\n', 'structural plant')
+  const { status, output } = runChecker(dir, ['--untrusted'])
+  assert.equal(status, 1, output)
+  assert.match(output, /\[repo:check\] 2 finding\(s\) \(details suppressed: untrusted tree\)/)
+  assert.ok(!output.includes('test-sentinel'), 'denylist label suppressed')
+  assert.ok(!output.includes('absolute user path'), 'structural label suppressed')
+  assert.ok(!output.includes('dictionary.txt'), 'file locations suppressed')
+  assert.ok(!output.includes('path.md'), 'file locations suppressed')
+  assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
+})
+
+test('--untrusted still reports clean on a clean tree', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const { status, output } = runChecker(dir, ['--untrusted'])
+  assert.equal(status, 0, output)
+  assert.match(output, /\[repo:check\] clean/)
+})
+
+test('merge commits skip identity checks (synthetic PR merge refs) but keep message scanning', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  git(dir, ['checkout', '--quiet', '-b', 'feature'])
+  writeAndCommit(dir, 'docs/feature.md', 'feature work\n', 'feature commit')
+  git(dir, ['checkout', '--quiet', '-'])
+  writeAndCommit(dir, 'docs/main.md', 'main work\n', 'main commit')
+  const githubIdentity = {
+    GIT_AUTHOR_NAME: 'GitHub',
+    GIT_AUTHOR_EMAIL: 'noreply@github.com',
+    GIT_COMMITTER_NAME: 'GitHub',
+    GIT_COMMITTER_EMAIL: 'noreply@github.com',
+  }
+  git(dir, ['merge', '--quiet', '--no-ff', '-m', 'merge feature', 'feature'], githubIdentity)
+  assert.equal(runChecker(dir, ['--commits', 'all']).status, 0, 'GitHub-authored merge commit passes')
+  git(dir, ['checkout', '--quiet', '-b', 'feature-two'])
+  writeAndCommit(dir, 'docs/two.md', 'more work\n', 'second feature commit')
+  git(dir, ['checkout', '--quiet', '-'])
+  git(dir, ['merge', '--quiet', '--no-ff', '-m', `merge mentioning ${SENTINEL}`, 'feature-two'], githubIdentity)
+  const { status, output } = runChecker(dir, ['--commits', 'all'])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} message/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
 })
 
 test('--commits range without --base is a usage error', (t) => {

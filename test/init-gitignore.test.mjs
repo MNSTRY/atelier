@@ -37,6 +37,33 @@ test('init writes a workspace .gitignore from the shipped gitignore template', (
   }
 })
 
+test('init renames gitignore only at the template root, not nested files', () => {
+  // A file that happens to be named `gitignore` deeper in a template is
+  // content, not the npm-pack workaround, and must keep its literal name.
+  const install = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-install-nested-'))
+  const workspaces = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-init-nested-gitignore-'))
+  try {
+    for (const entry of ['bin', 'src', 'templates', 'contracts', 'package.json']) {
+      fs.cpSync(path.join(ROOT, entry), path.join(install, entry), { recursive: true })
+    }
+    fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(install, 'node_modules'), 'dir')
+    const nestedDir = path.join(install, 'templates', 'private-domain-workspace', 'nested-fixture')
+    fs.mkdirSync(nestedDir, { recursive: true })
+    fs.writeFileSync(path.join(nestedDir, 'gitignore'), 'nested-content\n')
+    const target = path.join(workspaces, 'private-domain')
+    execFileSync(process.execPath, [path.join(install, 'bin', 'atelier.mjs'), 'init', '--template', 'private-domain', '--target', target], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    assert.ok(fs.existsSync(path.join(target, '.gitignore')), 'root gitignore must still be renamed to .gitignore')
+    assert.ok(fs.existsSync(path.join(target, 'nested-fixture', 'gitignore')), 'nested gitignore must keep its literal name')
+    assert.equal(fs.existsSync(path.join(target, 'nested-fixture', '.gitignore')), false, 'nested gitignore must not be renamed')
+  } finally {
+    fs.rmSync(install, { recursive: true, force: true })
+    fs.rmSync(workspaces, { recursive: true, force: true })
+  }
+})
+
 test('npm pack ships the template gitignore files', () => {
   const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
     cwd: ROOT,

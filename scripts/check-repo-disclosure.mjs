@@ -6,7 +6,7 @@
 //
 // Usage:
 //   node scripts/check-repo-disclosure.mjs [--root <dir>] [--staged]
-//     [--structural-only] [--commits none|range|all] [--base <ref>]
+//     [--structural-only] [--commits none|range|all] [--base <ref>] [--untrusted]
 //
 // Denylist source precedence: ATELIER_DENYLIST_JSON env -> the scanned root's
 // release-denylist.local.json -> fail closed (exit 2) unless --structural-only
@@ -14,12 +14,15 @@
 //
 // Log-safety contract: findings print label + file:line (or commit SHA) only —
 // never the pattern source and never the matched text; a pattern that fails to
-// compile is reported by label alone.
+// compile is reported by label alone. With --untrusted (attacker-controlled
+// tree, e.g. a fork PR) even label + location is a confirmation oracle — an
+// attacker commits a guess dictionary and reads back which line matched which
+// category — so all per-finding detail is suppressed and only a count prints.
 //
 // Exit codes: 0 clean, 1 findings, 2 config or usage error.
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
@@ -56,6 +59,7 @@ const args = process.argv.slice(2)
 let root = packageRoot
 let staged = false
 let structuralOnly = false
+let untrusted = false
 let commitsMode = 'none'
 let base = null
 for (let i = 0; i < args.length; i += 1) {
@@ -68,6 +72,8 @@ for (let i = 0; i < args.length; i += 1) {
     staged = true
   } else if (arg === '--structural-only') {
     structuralOnly = true
+  } else if (arg === '--untrusted') {
+    untrusted = true
   } else if (arg === '--commits') {
     i += 1
     if (!['none', 'range', 'all'].includes(args[i])) usageError('--commits must be none, range, or all')
@@ -134,7 +140,10 @@ if (!structuralOnly) {
 
 let findings = 0
 function report(label, location) {
-  console.error(`[repo:check] ${label}: ${location}`)
+  // Log-safety: with --untrusted, per-finding label + location output is a
+  // decryption oracle against an attacker-committed guess dictionary (the log
+  // would confirm which guessed line matched which category). Count only.
+  if (!untrusted) console.error(`[repo:check] ${label}: ${location}`)
   findings += 1
 }
 
@@ -151,47 +160,48 @@ function scanLine(line, relPath, lineNumber) {
 
 let scannedFiles = 0
 
+function scanBuffer(buffer, relPath) {
+  if (buffer.subarray(0, 8192).includes(0)) return // binary
+  scannedFiles += 1
+  const lines = buffer.toString('utf8').split('\n')
+  for (let i = 0; i < lines.length; i += 1) scanLine(lines[i], relPath, i + 1)
+}
+
 function scanTrackedFiles() {
   const tracked = git(['ls-files', '-z']).split('\0').filter(Boolean)
   for (const relPath of tracked) {
-    let buffer
+    let stat
     try {
-      buffer = readFileSync(join(root, relPath))
+      stat = lstatSync(join(root, relPath))
     } catch {
       continue // tracked but absent from the working tree (or a submodule)
     }
-    if (buffer.subarray(0, 8192).includes(0)) continue // binary
-    scannedFiles += 1
-    const lines = buffer.toString('utf8').split('\n')
-    for (let i = 0; i < lines.length; i += 1) scanLine(lines[i], relPath, i + 1)
+    // Only regular files: readFileSync would follow a tracked symlink and
+    // scan content outside --root (an oracle against the runner's own files).
+    if (!stat.isFile()) continue
+    scanBuffer(readFileSync(join(root, relPath)), relPath)
   }
 }
 
 function scanStagedChanges() {
-  const diff = git(['diff', '--cached', '-U0'])
-  const seen = new Set()
-  let relPath = null
-  let lineNumber = 0
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++ ')) {
-      const target = line.slice(4)
-      relPath = target.startsWith('b/') ? target.slice(2) : null // '+++ /dev/null' on deletion
-      if (relPath) seen.add(relPath)
-    } else if (line.startsWith('@@')) {
-      const hunk = line.match(/\+(\d+)/)
-      lineNumber = hunk ? Number(hunk[1]) : 0
-    } else if (relPath && line.startsWith('+')) {
-      scanLine(line.slice(1), relPath, lineNumber)
-      lineNumber += 1
-    } else if (relPath && line.startsWith(' ')) {
-      lineNumber += 1
-    }
+  // Never parse diff text: an added content line like '++ b/<path>' renders
+  // as '+++ b/<path>' and can retarget or null the file header a text parser
+  // keys on. Enumerate staged paths, then scan each staged blob in full —
+  // the blob is read from the index (git show :<path>), not the worktree.
+  const stagedPaths = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'])
+    .split('\0')
+    .filter(Boolean)
+  for (const relPath of stagedPaths) {
+    const blob = execFileSync('git', ['-C', root, 'show', `:${relPath}`], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    scanBuffer(blob, relPath)
   }
-  scannedFiles = seen.size
 }
 
 function scanCommits() {
-  const format = '%H%x01%an%x01%ae%x01%cn%x01%ce%x01%B%x02'
+  const format = '%H%x01%P%x01%an%x01%ae%x01%cn%x01%ce%x01%B%x02'
   const selector = commitsMode === 'all' ? ['--all'] : [`${base}..HEAD`]
   let out
   try {
@@ -206,14 +216,21 @@ function scanCommits() {
     .map((record) => record.replace(/^\n/, ''))
     .filter((record) => record.length > 0)
   for (const record of records) {
-    const [sha, authorName, authorEmail, committerName, committerEmail, message = ''] = record.split('\x01')
+    const [sha, parents = '', authorName, authorEmail, committerName, committerEmail, message = ''] = record.split('\x01')
     if (!sha) continue
-    if (authorName !== ALLOWED_AUTHOR.name || authorEmail !== ALLOWED_AUTHOR.email) {
-      // Log-safety: the offending identity is not echoed, only the SHA.
-      report('commit-identity (author)', sha)
-    }
-    if (!ALLOWED_COMMITTERS.some((id) => id.name === committerName && id.email === committerEmail)) {
-      report('commit-identity (committer)', sha)
+    // Merge commits (>1 parent) skip identity checks: on pull_request events
+    // GitHub's synthetic merge ref commit is authored by
+    // 'GitHub <noreply@github.com>', which would fail the author gate on
+    // every PR. Their messages are still scanned below.
+    const isMergeCommit = parents.trim().split(/\s+/).filter(Boolean).length > 1
+    if (!isMergeCommit) {
+      if (authorName !== ALLOWED_AUTHOR.name || authorEmail !== ALLOWED_AUTHOR.email) {
+        // Log-safety: the offending identity is not echoed, only the SHA.
+        report('commit-identity (author)', sha)
+      }
+      if (!ALLOWED_COMMITTERS.some((id) => id.name === committerName && id.email === committerEmail)) {
+        report('commit-identity (committer)', sha)
+      }
     }
     for (const { pattern, label } of structuralForbiddenContent) {
       if (pattern.test(message)) report(label, `commit ${sha} message`)
@@ -232,7 +249,8 @@ let scannedCommits = 0
 if (commitsMode !== 'none') scannedCommits = scanCommits()
 
 if (findings > 0) {
-  console.error(`[repo:check] ${findings} finding(s)`)
+  if (untrusted) console.error(`[repo:check] ${findings} finding(s) (details suppressed: untrusted tree)`)
+  else console.error(`[repo:check] ${findings} finding(s)`)
   process.exit(1)
 }
 

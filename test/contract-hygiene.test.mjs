@@ -21,13 +21,19 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CONTRACTS_DIR = path.join(ROOT, 'contracts')
 const ID_BASE = 'https://mnstry.ai/schemas/atelier/'
 const DRAFT_2020_12 = 'https://json-schema.org/draft/2020-12/schema'
-const CONTRACT_VERSION_PATTERN = '^1\\.[0-9]+\\.[0-9]+$'
 const ROOT_META_KEYS = new Set(['$schema', '$id', '$comment', 'title', 'description', '$defs'])
 const DATA_KEYS = new Set(['enum', 'const', 'default', 'examples'])
 
 const contractFiles = fs.readdirSync(CONTRACTS_DIR)
   .filter((name) => /\.v[0-9]+(\.schema)?\.json$/.test(name))
   .sort()
+
+// The expected contractVersion major is the filename's .vN, so a future @v2
+// contract satisfies both its filename and its version pattern.
+function contractVersionPattern(basename) {
+  const major = basename.match(/\.v([0-9]+)(\.schema)?\.json$/)[1]
+  return `^${major}\\.[0-9]+\\.[0-9]+$`
+}
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -103,8 +109,9 @@ for (const basename of contractFiles) {
       if (node.type !== 'object') continue
       assert.equal(node.additionalProperties, false, `${label} must set additionalProperties false`)
       const contractVersion = node.properties?.contractVersion
+      const versionPattern = contractVersionPattern(basename)
       assert.equal(contractVersion?.type, 'string', `${label} must declare contractVersion of type string`)
-      assert.equal(contractVersion?.pattern, CONTRACT_VERSION_PATTERN, `${label} contractVersion must use pattern ${CONTRACT_VERSION_PATTERN}`)
+      assert.equal(contractVersion?.pattern, versionPattern, `${label} contractVersion must use pattern ${versionPattern}`)
     }
 
     const violations = []

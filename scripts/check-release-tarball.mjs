@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
+import { compileScanPatterns, STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -41,9 +41,7 @@ if (process.env.ATELIER_DENYLIST_JSON) {
 }
 let localDenylist = []
 if (denylistDoc) {
-  localDenylist = denylistDoc.patterns.map(
-    ({ pattern, flags = '', label }) => ({ pattern: new RegExp(pattern, flags), label }),
-  )
+  localDenylist = compileScanPatterns(denylistDoc.patterns)
 } else if (process.env.ATELIER_ALLOW_MISSING_DENYLIST === '1') {
   console.warn('[release:audit] WARNING: denylist unavailable and ATELIER_ALLOW_MISSING_DENYLIST=1 acknowledged — private-name scrub skipped; structural checks still apply')
 } else {

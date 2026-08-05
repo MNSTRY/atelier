@@ -14,7 +14,14 @@ const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 export function parseChangelogListItems(changelog) {
   const items = []
   let current = null
+  let inFence = false
   for (const line of changelog.split('\n')) {
+    // Lines inside ``` fences are code, not bullets or continuations.
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
     if (/^\s*[-*]\s+/.test(line)) {
       if (current !== null) items.push(current)
       current = line.replace(/^\s*[-*]\s+/, '').trimEnd()

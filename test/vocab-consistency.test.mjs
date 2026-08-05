@@ -3,7 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { ALLOWED_RUNTIME_TARGETS, LOCAL_AUDIENCES, RUNTIME_VISIBILITIES } from '../src/export/atelier-export-contract.mjs'
+import {
+  ALLOWED_RUNTIME_TARGETS,
+  LOCAL_AUDIENCES,
+  OBJECT_CLASSES,
+  RUNTIME_OWNERS,
+  RUNTIME_VISIBILITIES,
+} from '../src/export/atelier-export-contract.mjs'
 import { VALID_AUDIENCES } from '../src/boundary/policy.mjs'
 import { ATELIER_CONTEXT_SCHEMA } from '../src/server/local-sidecar.mjs'
 import { ATELIER_CONTEXT_SCHEMA as CLIENT_CONTEXT_SCHEMA } from '../src/harness/context-client.mjs'
@@ -38,6 +44,13 @@ test('runtime target enums match ALLOWED_RUNTIME_TARGETS in every schema', () =>
 test('export schema audience and visibility enums match the code constants', () => {
   assert.deepEqual(exportSchema.$defs.audience.enum, LOCAL_AUDIENCES)
   assert.deepEqual(exportSchema.$defs.visibility.enum, RUNTIME_VISIBILITIES)
+})
+
+test('export schema owner and object-class enums exactly equal the code constants', () => {
+  // Exact equality, not subset: an appended enum member is a widening the
+  // epoch forbids, and must fail here even though every document still passes.
+  assert.deepEqual(exportSchema.$defs.runtimeOwnerName.enum, RUNTIME_OWNERS)
+  assert.deepEqual(exportSchema.$defs.objectClass.enum, OBJECT_CLASSES)
 })
 
 test('boundary VALID_AUDIENCES set-equals LOCAL_AUDIENCES', () => {
