@@ -5,6 +5,27 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.0
+
+This release breaks the export vocabulary. The runtime owner names are now
+vendor-neutral (`IdentityGraph` → `identity`, `OfferGraph` → `catalog`,
+`CommitmentGraph` → `commitments`, `EventSpine` → `events`,
+`ProjectionGraph` → `projection`, `ConsentBoundary` → `consent`,
+`MessageSpine` → `messaging`, `ProviderGraph` → `providers`,
+`AuditGraph` → `audit`), and documents written against `v0.1.0-alpha.2` do not
+validate here. Regenerate exports and projections rather than hand-editing
+them, and update any consumer that pins an owner name. `CHANGELOG.md` lists
+every breaking change in this release, including the contract-stability epoch
+(`contractVersion`, `ext`) and the schema const alignments.
+
+Contract compatibility is now gated. `npm run contract:compat` validates the
+current corpus against the validators of the baseline recorded in
+`contracts/compat-baseline.json`. The baseline is set at release time: cutting
+a tag sets `baselineTag` to that tag in the release commit, so the following
+development cycle is checked against the released validators. Until the first
+post-epoch tag is cut the baseline is null and the gate is inert by design.
+See `docs/contract-stability.md`.
+
 ## Before You Upgrade
 
 - Start from a clean Git status in the copied workspace.
@@ -30,7 +51,7 @@ For private-preview installs, pin the install command to the release tag and
 record the resolved Git SHA in the lockfile:
 
 ```bash
-npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.1.0-alpha.2
+npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
 atelier lock write --project ./atelier.project.json
 ```
 

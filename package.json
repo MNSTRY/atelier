@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.1.0-alpha.2",
+  "version": "0.2.0-alpha.0",
   "private": false,
   "description": "Local-first MNSTRY Atelier workspace for agentic authoring, graph projection, and dry-run runtime readiness.",
   "type": "module",
@@ -44,7 +44,11 @@
     "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-guard.test.mjs",
     "upgrade:test": "node --test test/upgrade-contract.test.mjs test/upgrade.test.mjs",
     "release:audit": "node scripts/check-release-tarball.mjs",
-    "consumer:smoke": "node scripts/consumer-smoke.mjs"
+    "repo:check": "node scripts/check-repo-disclosure.mjs",
+    "migrations:check": "node scripts/check-breaking-migrations.mjs",
+    "contract:compat": "node scripts/check-contract-compat.mjs",
+    "consumer:smoke": "node scripts/consumer-smoke.mjs",
+    "prepublishOnly": "npm run release:audit && npm run repo:check && npm run migrations:check && npm run contract:compat && npm run typecheck && npm test && npm run consumer:smoke"
   },
   "dependencies": {
     "ajv": "8.18.0",
@@ -56,11 +60,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mnstry/atelier.git"
+    "url": "git+https://github.com/MNSTRY/atelier.git"
   },
   "homepage": "https://mnstry.org",
   "bugs": {
-    "url": "https://github.com/mnstry/atelier/issues"
+    "url": "https://github.com/MNSTRY/atelier/issues"
   },
   "engines": {
     "node": ">=22.18.0 <23"

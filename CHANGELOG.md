@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.0
 
 - **Breaking:** the `atelier-export@v1` runtime owner vocabulary is now
   vendor-neutral. The closed `runtimeOwnerName` enum, the `RUNTIME_OWNERS`

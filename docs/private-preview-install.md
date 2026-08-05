@@ -25,13 +25,13 @@ Install the private preview from the accepted Git tag. Public npm publishing is
 deferred until the public package path is ready:
 
 ```bash
-npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.1.0-alpha.2
+npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
 ```
 
 Invited users who prefer SSH may use:
 
 ```bash
-npm install --save-dev git+ssh://git@github.com/MNSTRY/atelier.git#v0.1.0-alpha.2
+npm install --save-dev git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
 ```
 
 The workspace `atelier.lock.json` should record the resolved Git SHA from this
