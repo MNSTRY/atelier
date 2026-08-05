@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.ai/contracts/atelier-readiness-run.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-readiness-run.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "MNSTRY Atelier Readiness Run v1",
   "description": "Local, ignored, claim-first result of a readiness protocol run. A run can create proposed claims and draft packets, but it never grants runtime mutation, import, telemetry, egress, send-path, direct browser-write, or canonical graph/front-matter authority.",
   "type": "object",
@@ -40,6 +41,10 @@
   "properties": {
     "schema": {
       "const": "atelier-readiness-run@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
     },
     "runId": {
       "type": "string",
@@ -87,6 +92,10 @@
     },
     "safety": {
       "$ref": "#/$defs/safety"
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   },
   "$defs": {
@@ -177,6 +186,10 @@
         "createdAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -205,6 +218,10 @@
         },
         "storage": {
           "const": "ignored-local"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     }

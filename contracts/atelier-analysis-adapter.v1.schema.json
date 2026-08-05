@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.app/schemas/atelier-analysis-adapter.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-analysis-adapter.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "atelier-analysis-adapter@v1",
   "description": "Provider-neutral contract for optional analysis adapters. Analysis may emit proposed claims, but cannot mutate canonical Atelier state.",
   "oneOf": [
@@ -28,6 +29,10 @@
       "properties": {
         "schema": {
           "const": "atelier-analysis-adapter@v1"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
         },
         "adapterId": {
           "type": "string",
@@ -93,6 +98,10 @@
             "reviewedAt": {
               "type": "string",
               "format": "date-time"
+            },
+            "ext": {
+              "type": "object",
+              "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
             }
           },
           "allOf": [
@@ -143,6 +152,10 @@
         },
         "authority": {
           "$ref": "#/$defs/claimOnlyAuthority"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -159,6 +172,10 @@
       "properties": {
         "schema": {
           "const": "atelier-proposals@v1"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
         },
         "adapterId": {
           "type": "string",
@@ -180,6 +197,10 @@
         },
         "authority": {
           "$ref": "#/$defs/claimOnlyAuthority"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -216,6 +237,10 @@
         },
         "directCanonicalWrite": {
           "const": false
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },

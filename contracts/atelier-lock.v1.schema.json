@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.ai/contracts/atelier-lock.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-lock.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "mnstry.atelier-lock@v1",
   "description": "Reviewable lock document recording the installed Atelier package, contract versions, boundary digest, and applied migration state for a workspace.",
   "type": "object",
@@ -21,6 +22,10 @@
     "schema": {
       "const": "mnstry.atelier-lock@v1"
     },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
     "generatedAt": {
       "type": "string",
       "format": "date-time"
@@ -28,7 +33,11 @@
     "package": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version", "source"],
+      "required": [
+        "name",
+        "version",
+        "source"
+      ],
       "properties": {
         "name": {
           "const": "@mnstry/atelier"
@@ -39,13 +48,20 @@
         },
         "source": {
           "$ref": "#/$defs/packageSource"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "template": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "version"],
+      "required": [
+        "id",
+        "version"
+      ],
       "properties": {
         "id": {
           "type": "string",
@@ -54,22 +70,39 @@
         "version": {
           "type": "string",
           "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["node", "telemetry", "egress", "mutation", "runtimeImport", "analysisExecution"],
+      "required": [
+        "node",
+        "telemetry",
+        "egress",
+        "mutation",
+        "runtimeImport",
+        "analysisExecution"
+      ],
       "properties": {
         "node": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["range"],
+          "required": [
+            "range"
+          ],
           "properties": {
             "range": {
               "type": "string",
               "minLength": 1
+            },
+            "ext": {
+              "type": "object",
+              "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
             }
           }
         },
@@ -87,13 +120,22 @@
         },
         "analysisExecution": {
           "const": false
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "contracts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["projectConfig", "knowledgeGraph", "boundaryPolicy", "exportContract"],
+      "required": [
+        "projectConfig",
+        "knowledgeGraph",
+        "boundaryPolicy",
+        "exportContract"
+      ],
       "properties": {
         "projectConfig": {
           "const": "mnstry.atelier-project-config@v1"
@@ -106,6 +148,10 @@
         },
         "exportContract": {
           "const": "atelier-export@v1"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -119,23 +165,45 @@
     "boundaryPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "digest", "snapshot"],
+      "required": [
+        "path",
+        "digest",
+        "snapshot"
+      ],
       "properties": {
         "path": {
-          "type": ["string", "null"],
-          "not": { "pattern": "^/" }
+          "type": [
+            "string",
+            "null"
+          ],
+          "not": {
+            "pattern": "^/"
+          }
         },
         "digest": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^sha256:[0-9a-f]{64}$"
         },
         "snapshot": {
-          "type": ["object", "null"]
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "lastSuccessfulUpgrade": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "appliedMigrations": {
@@ -143,51 +211,98 @@
       "items": {
         "$ref": "#/$defs/appliedMigration"
       }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   },
   "$defs": {
     "packageSource": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "type": {
-          "enum": ["git", "private_github", "npm", "local_path", "tarball"]
+          "enum": [
+            "git",
+            "private_github",
+            "npm",
+            "local_path",
+            "tarball"
+          ]
         },
         "repository": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1
         },
         "gitSha": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "pattern": "^[0-9a-f]{40}$"
         },
         "path": {
-          "type": ["string", "null"],
-          "not": { "pattern": "^/" }
+          "type": [
+            "string",
+            "null"
+          ],
+          "not": {
+            "pattern": "^/"
+          }
         },
         "registry": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       },
       "allOf": [
         {
           "if": {
-            "properties": { "type": { "const": "git" } },
-            "required": ["type"]
+            "properties": {
+              "type": {
+                "const": "git"
+              }
+            },
+            "required": [
+              "type"
+            ]
           },
           "then": {
-            "required": ["repository", "gitSha"]
+            "required": [
+              "repository",
+              "gitSha"
+            ]
           }
         },
         {
           "if": {
-            "properties": { "type": { "const": "local_path" } },
-            "required": ["type"]
+            "properties": {
+              "type": {
+                "const": "local_path"
+              }
+            },
+            "required": [
+              "type"
+            ]
           },
           "then": {
-            "required": ["path"]
+            "required": [
+              "path"
+            ]
           }
         }
       ]
@@ -195,7 +310,10 @@
     "extensionPackRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "version"],
+      "required": [
+        "id",
+        "version"
+      ],
       "properties": {
         "id": {
           "type": "string",
@@ -208,13 +326,21 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "appliedMigration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "hash", "appliedAt"],
+      "required": [
+        "id",
+        "hash",
+        "appliedAt"
+      ],
       "properties": {
         "id": {
           "type": "string",
@@ -227,6 +353,10 @@
         "appliedAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     }

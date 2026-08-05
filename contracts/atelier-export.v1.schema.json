@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.app/schemas/atelier-export.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-export.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "atelier-export@v1",
   "type": "object",
   "additionalProperties": false,
@@ -22,17 +23,28 @@
   "allOf": [
     {
       "if": {
-        "required": ["dirtyTree"],
+        "required": [
+          "dirtyTree"
+        ],
         "properties": {
-          "dirtyTree": { "const": true }
+          "dirtyTree": {
+            "const": true
+          }
         }
       },
       "then": {
-        "required": ["forced", "visibilityGate"],
+        "required": [
+          "forced",
+          "visibilityGate"
+        ],
         "properties": {
-          "forced": { "const": true },
+          "forced": {
+            "const": true
+          },
           "visibilityGate": {
-            "required": ["taint"],
+            "required": [
+              "taint"
+            ],
             "properties": {
               "taint": {
                 "type": "array",
@@ -48,6 +60,10 @@
     "schema": {
       "const": "atelier-export@v1"
     },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
     "exportId": {
       "type": "string",
       "pattern": "^export:[a-z0-9][a-z0-9:-]*$"
@@ -59,18 +75,34 @@
     "sourceWorkspace": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "rootName"],
+      "required": [
+        "id",
+        "rootName"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "rootName": { "type": "string" },
-        "workspacePath": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "rootName": {
+          "type": "string"
+        },
+        "workspacePath": {
+          "type": "string"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "sourceCommit": {
       "description": "The commit SHA of the repository used to define the export contract fixture. Per-repo SHAs remain in sourceCommit.repos.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["sha", "repos"],
+      "required": [
+        "sha",
+        "repos"
+      ],
       "properties": {
         "sha": {
           "type": "string",
@@ -78,8 +110,14 @@
         },
         "repos": {
           "type": "array",
-          "items": { "$ref": "#/$defs/repoCommit" },
+          "items": {
+            "$ref": "#/$defs/repoCommit"
+          },
           "minItems": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -92,51 +130,95 @@
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["generatedBy", "sourceNodes"],
+      "required": [
+        "generatedBy",
+        "sourceNodes"
+      ],
       "properties": {
-        "generatedBy": { "type": "string" },
+        "generatedBy": {
+          "type": "string"
+        },
         "sourceNodes": {
           "type": "array",
-          "items": { "$ref": "#/$defs/sourceNode" },
+          "items": {
+            "$ref": "#/$defs/sourceNode"
+          },
           "minItems": 1
         },
         "notes": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "validation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "checks"],
+      "required": [
+        "status",
+        "checks"
+      ],
       "properties": {
         "status": {
-          "enum": ["pass", "warn", "fail"]
+          "enum": [
+            "pass",
+            "warn",
+            "fail"
+          ]
         },
         "checks": {
           "type": "array",
-          "items": { "$ref": "#/$defs/check" }
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "visibilityGate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "defaultVisibility", "publicSourcePolicy"],
+      "required": [
+        "status",
+        "defaultVisibility",
+        "publicSourcePolicy"
+      ],
       "properties": {
         "status": {
-          "enum": ["pass", "warn", "fail"]
+          "enum": [
+            "pass",
+            "warn",
+            "fail"
+          ]
         },
         "defaultVisibility": {
-          "enum": ["private"]
+          "enum": [
+            "private"
+          ]
         },
         "publicSourcePolicy": {
-          "enum": ["public-only"]
+          "enum": [
+            "public-only"
+          ]
         },
         "taint": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -157,49 +239,80 @@
       "properties": {
         "offers": {
           "type": "array",
-          "items": { "$ref": "#/$defs/offer" }
+          "items": {
+            "$ref": "#/$defs/offer"
+          }
         },
         "surfaces": {
           "type": "array",
-          "items": { "$ref": "#/$defs/surface" }
+          "items": {
+            "$ref": "#/$defs/surface"
+          }
         },
         "sdui": {
           "type": "array",
-          "items": { "$ref": "#/$defs/sduiBlock" }
+          "items": {
+            "$ref": "#/$defs/sduiBlock"
+          }
         },
         "commitmentPaths": {
           "type": "array",
-          "items": { "$ref": "#/$defs/commitmentPath" }
+          "items": {
+            "$ref": "#/$defs/commitmentPath"
+          }
         },
         "spaces": {
           "type": "array",
-          "items": { "$ref": "#/$defs/space" }
+          "items": {
+            "$ref": "#/$defs/space"
+          }
         },
         "trackables": {
           "type": "array",
-          "items": { "$ref": "#/$defs/trackable" }
+          "items": {
+            "$ref": "#/$defs/trackable"
+          }
         },
         "consentBoundaries": {
           "type": "array",
-          "items": { "$ref": "#/$defs/consentBoundary" }
+          "items": {
+            "$ref": "#/$defs/consentBoundary"
+          }
         },
         "staffPrep": {
           "type": "array",
-          "items": { "$ref": "#/$defs/staffPrep" }
+          "items": {
+            "$ref": "#/$defs/staffPrep"
+          }
         },
         "providerEgress": {
           "type": "array",
-          "items": { "$ref": "#/$defs/providerEgress" }
+          "items": {
+            "$ref": "#/$defs/providerEgress"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "importPlan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "transactional", "tenant", "runtimeOwners", "operations"],
+      "required": [
+        "mode",
+        "transactional",
+        "tenant",
+        "runtimeOwners",
+        "operations"
+      ],
       "properties": {
         "mode": {
-          "enum": ["dry-run", "apply"]
+          "enum": [
+            "dry-run",
+            "apply"
+          ]
         },
         "transactional": {
           "const": true
@@ -209,61 +322,144 @@
         },
         "runtimeOwners": {
           "type": "array",
-          "items": { "$ref": "#/$defs/runtimeOwner" }
+          "items": {
+            "$ref": "#/$defs/runtimeOwner"
+          }
         },
         "operations": {
           "type": "array",
-          "items": { "$ref": "#/$defs/importOperation" }
+          "items": {
+            "$ref": "#/$defs/importOperation"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "blockers": {
       "type": "array",
-      "items": { "$ref": "#/$defs/blocker" }
+      "items": {
+        "$ref": "#/$defs/blocker"
+      }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   },
   "$defs": {
     "visibility": {
       "description": "Runtime/export visibility. Local source readership belongs in audience, not this field.",
-      "enum": ["private", "shared", "platform", "public"]
+      "enum": [
+        "private",
+        "shared",
+        "platform",
+        "public"
+      ]
     },
     "audience": {
-      "enum": ["public", "team", "operator", "staff", "private", "sensitive"]
+      "enum": [
+        "public",
+        "team",
+        "operator",
+        "staff",
+        "private",
+        "sensitive"
+      ]
     },
     "approvalStatus": {
-      "enum": ["approved", "draft", "blocked", "needs-review"]
+      "enum": [
+        "approved",
+        "draft",
+        "blocked",
+        "needs-review"
+      ]
     },
     "repoCommit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repo", "sha"],
+      "required": [
+        "repo",
+        "sha"
+      ],
       "properties": {
-        "repo": { "type": "string" },
-        "sha": { "type": "string" },
-        "branch": { "type": "string" },
-        "dirty": { "type": "boolean" }
+        "repo": {
+          "type": "string"
+        },
+        "sha": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "sourceNode": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kgId", "repo", "path", "audience", "sourceRole"],
+      "required": [
+        "kgId",
+        "repo",
+        "path",
+        "audience",
+        "sourceRole"
+      ],
       "properties": {
-        "kgId": { "type": "string" },
-        "repo": { "type": "string" },
-        "path": { "type": "string" },
-        "audience": { "$ref": "#/$defs/audience" },
-        "sourceRole": { "type": "string" }
+        "kgId": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "audience": {
+          "$ref": "#/$defs/audience"
+        },
+        "sourceRole": {
+          "type": "string"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "check": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "status"],
+      "required": [
+        "id",
+        "status"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "status": { "enum": ["pass", "warn", "fail"] },
-        "detail": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "warn",
+            "fail"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "offer": {
@@ -280,211 +476,480 @@
         "sourceRefs"
       ],
       "properties": {
-        "id": { "type": "string" },
-        "title": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
-        "approvalStatus": { "$ref": "#/$defs/approvalStatus" },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "approvalStatus": {
+          "$ref": "#/$defs/approvalStatus"
+        },
         "entryModes": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "minItems": 1
         },
         "capacity": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["min", "preferredMax", "absoluteMax"],
+          "required": [
+            "min",
+            "preferredMax",
+            "absoluteMax"
+          ],
           "properties": {
-            "min": { "type": "integer", "minimum": 1 },
-            "preferredMax": { "type": "integer", "minimum": 1 },
-            "absoluteMax": { "type": "integer", "minimum": 1 }
+            "min": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "preferredMax": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "absoluteMax": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ext": {
+              "type": "object",
+              "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+            }
           }
         },
         "pricing": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["currency", "posture", "approvalStatus"],
+          "required": [
+            "currency",
+            "posture",
+            "approvalStatus"
+          ],
           "properties": {
             "currency": {
               "type": "string",
               "pattern": "^[A-Z]{3}$"
             },
-            "posture": { "type": "string" },
-            "approvalStatus": { "$ref": "#/$defs/approvalStatus" },
+            "posture": {
+              "type": "string"
+            },
+            "approvalStatus": {
+              "$ref": "#/$defs/approvalStatus"
+            },
             "bands": {
               "type": "array",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["label", "amountMinor"],
+                "required": [
+                  "label",
+                  "amountMinor"
+                ],
                 "properties": {
-                  "label": { "type": "string" },
+                  "label": {
+                    "type": "string"
+                  },
                   "amountMinor": {
                     "type": "integer",
                     "minimum": 0
                   },
-                  "notes": { "type": "string" }
+                  "notes": {
+                    "type": "string"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+                  }
                 }
               }
+            },
+            "ext": {
+              "type": "object",
+              "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
             }
           }
         },
         "sourceRefs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "surface": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "type", "visibility", "title", "slug", "sourceRefs"],
+      "required": [
+        "id",
+        "type",
+        "visibility",
+        "title",
+        "slug",
+        "sourceRefs"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "type": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
-        "title": { "type": "string" },
-        "slug": { "type": "string" },
-        "summary": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "title": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
         "sourceRefs": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "sduiBlock": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "primitive", "visibility", "props"],
+      "required": [
+        "id",
+        "primitive",
+        "visibility",
+        "props"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "primitive": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
-        "props": { "type": "object" }
+        "id": {
+          "type": "string"
+        },
+        "primitive": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
+        "props": {
+          "type": "object"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "commitmentPath": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "offerId", "mode", "steps", "approvalStatus"],
+      "required": [
+        "id",
+        "offerId",
+        "mode",
+        "steps",
+        "approvalStatus"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "offerId": { "type": "string" },
-        "mode": { "type": "string" },
-        "approvalStatus": { "$ref": "#/$defs/approvalStatus" },
+        "id": {
+          "type": "string"
+        },
+        "offerId": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "approvalStatus": {
+          "$ref": "#/$defs/approvalStatus"
+        },
         "steps": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "minItems": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "space": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "type", "visibility", "roles"],
+      "required": [
+        "id",
+        "title",
+        "type",
+        "visibility",
+        "roles"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "title": { "type": "string" },
-        "type": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
         "roles": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "trackable": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "type", "visibility", "events"],
+      "required": [
+        "id",
+        "title",
+        "type",
+        "visibility",
+        "events"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "title": { "type": "string" },
-        "type": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
         "events": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "consentBoundary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "visibility", "rules"],
+      "required": [
+        "id",
+        "title",
+        "visibility",
+        "rules"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "title": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
         "rules": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "decision"],
+            "required": [
+              "id",
+              "decision"
+            ],
             "properties": {
-              "id": { "type": "string" },
-              "decision": { "enum": ["allow", "deny", "review"] },
-              "reason": { "type": "string" }
+              "id": {
+                "type": "string"
+              },
+              "decision": {
+                "enum": [
+                  "allow",
+                  "deny",
+                  "review"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "ext": {
+                "type": "object",
+                "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+              }
             }
           }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "staffPrep": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "visibility", "allowedFields", "prohibitedFields"],
+      "required": [
+        "id",
+        "title",
+        "visibility",
+        "allowedFields",
+        "prohibitedFields"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "title": { "type": "string" },
-        "visibility": { "$ref": "#/$defs/visibility" },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        },
         "allowedFields": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "prohibitedFields": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "providerEgress": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["providerClass", "defaultDecision", "allowedPayloads", "deniedPayloads"],
+      "required": [
+        "providerClass",
+        "defaultDecision",
+        "allowedPayloads",
+        "deniedPayloads"
+      ],
       "properties": {
-        "providerClass": { "type": "string" },
-        "defaultDecision": { "enum": ["allow", "deny", "review"] },
+        "providerClass": {
+          "type": "string"
+        },
+        "defaultDecision": {
+          "enum": [
+            "allow",
+            "deny",
+            "review"
+          ]
+        },
         "allowedPayloads": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "deniedPayloads": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "runtimeOwner": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["objectClass", "owner"],
+      "required": [
+        "objectClass",
+        "owner"
+      ],
       "properties": {
-        "objectClass": { "$ref": "#/$defs/objectClass" },
-        "owner": { "$ref": "#/$defs/runtimeOwnerName" }
+        "objectClass": {
+          "$ref": "#/$defs/objectClass"
+        },
+        "owner": {
+          "$ref": "#/$defs/runtimeOwnerName"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "importOperation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["op", "objectClass", "externalId", "status"],
+      "required": [
+        "op",
+        "objectClass",
+        "externalId",
+        "status"
+      ],
       "properties": {
-        "op": { "enum": ["create", "update", "skip"] },
-        "objectClass": { "$ref": "#/$defs/objectClass" },
-        "externalId": { "type": "string" },
-        "status": { "enum": ["ready", "blocked", "warning"] },
-        "reason": { "type": "string" }
+        "op": {
+          "enum": [
+            "create",
+            "update",
+            "skip"
+          ]
+        },
+        "objectClass": {
+          "$ref": "#/$defs/objectClass"
+        },
+        "externalId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "blocked",
+            "warning"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "objectClass": {
@@ -517,12 +982,33 @@
     "blocker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "severity", "message", "owner"],
+      "required": [
+        "id",
+        "severity",
+        "message",
+        "owner"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "severity": { "enum": ["p0", "p1", "p2"] },
-        "message": { "type": "string" },
-        "owner": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "p0",
+            "p1",
+            "p2"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     }
   }

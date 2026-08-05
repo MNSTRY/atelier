@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.ai/contracts/atelier-readiness-protocol.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-readiness-protocol.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "MNSTRY Atelier Readiness Protocol v1",
   "description": "Claim-first protocol contract for guided MNSTRY tenant readiness. Protocols collect local answers, generate proposed claims and draft packets, and never grant runtime mutation, import, telemetry, egress, send-path, direct browser-write, or canonical front-matter authority.",
   "type": "object",
@@ -25,6 +26,10 @@
   "properties": {
     "schema": {
       "const": "atelier-readiness-protocol@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
     },
     "id": {
       "$ref": "#/$defs/protocolId"
@@ -84,6 +89,10 @@
           "items": {
             "$ref": "#/$defs/outputArtifact"
           }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -137,6 +146,10 @@
         "agentPrompt": {
           "type": "string",
           "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -145,6 +158,10 @@
     },
     "safetyPosture": {
       "type": "object"
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   },
   "$defs": {
@@ -190,6 +207,10 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -226,6 +247,10 @@
         },
         "values": {
           "$ref": "#/$defs/stringList"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -247,6 +272,10 @@
         },
         "schema": {
           "type": "string"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -278,6 +307,10 @@
         "description": {
           "type": "string",
           "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -316,6 +349,10 @@
         "evidence": {
           "type": "string",
           "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -350,6 +387,10 @@
         },
         "failClosed": {
           "type": "boolean"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -371,6 +412,10 @@
         },
         "query": {
           "type": "object"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -413,6 +458,10 @@
         "targetCollection": {
           "type": "string",
           "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -457,6 +506,10 @@
         },
         "dryRunOnly": {
           "const": true
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     }

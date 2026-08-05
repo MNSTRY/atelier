@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.app/schemas/atelier-action-intent.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-action-intent.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "atelier-action-intent@v1",
   "type": "object",
   "additionalProperties": false,
@@ -17,6 +18,10 @@
   "properties": {
     "schema": {
       "const": "atelier-action-intent@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
     },
     "id": {
       "type": "string",
@@ -61,6 +66,10 @@
             "minLength": 1
           },
           "uniqueItems": true
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -94,6 +103,10 @@
         },
         "runtimeMutation": {
           "const": false
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -114,9 +127,17 @@
           "message": {
             "type": "string",
             "minLength": 1
+          },
+          "ext": {
+            "type": "object",
+            "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
           }
         }
       }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   }
 }

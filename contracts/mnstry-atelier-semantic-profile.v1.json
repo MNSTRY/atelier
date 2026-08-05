@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.app/contracts/mnstry-atelier-semantic-profile.v1.json",
+  "$id": "https://mnstry.ai/schemas/atelier/mnstry-atelier-semantic-profile.v1.json",
   "schema": "mnstry-atelier-semantic-profile@v1",
   "version": "1.0.0",
   "status": "draft",
@@ -195,6 +195,14 @@
         "core.session",
         "core.trackable",
         "space.space"
+      ],
+      "allowedExportTargets": [
+        "content.material",
+        "core.artifact",
+        "core.trackable",
+        "scheduling.commitment",
+        "space.space",
+        "space.provision"
       ],
       "notes": [
         "semantic_object is not a verified runtime canonical.",

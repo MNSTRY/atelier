@@ -1,14 +1,24 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.org/contracts/atelier/git-promote-event.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/git-promote-event.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "Atelier Git Promote Event",
   "description": "Append-only local Git disclosure event for promoting a source from one repo/read boundary to another.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "source", "target", "event"],
+  "required": [
+    "schema",
+    "source",
+    "target",
+    "event"
+  ],
   "properties": {
     "schema": {
       "const": "git-promote-event@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
     },
     "source": {
       "$ref": "#/$defs/endpoint"
@@ -66,8 +76,16 @@
         },
         "revocable": {
           "const": false
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   },
   "$defs": {
@@ -78,24 +96,48 @@
     "endpoint": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repo", "repoAccess", "kgId", "audience", "commit"],
+      "required": [
+        "repo",
+        "repoAccess",
+        "kgId",
+        "audience",
+        "commit"
+      ],
       "properties": {
         "repo": {
           "type": "string",
           "minLength": 1
         },
         "repoAccess": {
-          "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+          "enum": [
+            "private",
+            "team",
+            "operator",
+            "staff",
+            "public",
+            "sensitive"
+          ]
         },
         "kgId": {
           "type": "string",
           "minLength": 1
         },
         "audience": {
-          "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+          "enum": [
+            "private",
+            "team",
+            "operator",
+            "staff",
+            "public",
+            "sensitive"
+          ]
         },
         "commit": {
           "$ref": "#/$defs/commit"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     }

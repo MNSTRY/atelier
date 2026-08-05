@@ -104,6 +104,7 @@ function protocol({
 
   return {
     schema: READINESS_PROTOCOL_SCHEMA,
+    contractVersion: '1.0.0',
     id: protocolId,
     slug,
     version: 'v1',

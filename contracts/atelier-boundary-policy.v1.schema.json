@@ -1,17 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.app/schemas/atelier-boundary-policy.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-boundary-policy.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "mnstry.atelier-boundary-policy@v1",
   "description": "Local repo boundary policy for enforcing private-domain and shared-repo placement in MNSTRY Atelier workspaces.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "mode", "actors", "repos"],
+  "required": [
+    "schema",
+    "mode",
+    "actors",
+    "repos"
+  ],
   "properties": {
     "schema": {
       "const": "mnstry.atelier-boundary-policy@v1"
     },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
     "mode": {
-      "enum": ["strict", "legacy-warning"]
+      "enum": [
+        "strict",
+        "legacy-warning"
+      ]
     },
     "actors": {
       "type": "object",
@@ -42,6 +55,10 @@
         },
         "recordsPath": {
           "$ref": "#/$defs/relativePath"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -56,47 +73,92 @@
     "contentRules": {
       "description": "Rules judged against added lines and added file paths, not the whole tree. Omit to use the kit defaults.",
       "type": "array",
-      "items": { "$ref": "#/$defs/contentRule" },
+      "items": {
+        "$ref": "#/$defs/contentRule"
+      },
       "uniqueItems": true
     },
     "contentRuleExceptions": {
       "description": "Reviewable, per-repo, per-path carve-outs. An exception IS the approval record, which is why every field is required — a repo-specific decision must not live as a hardcoded pathspec inside shared guard infrastructure.",
       "type": "array",
-      "items": { "$ref": "#/$defs/contentRuleException" },
+      "items": {
+        "$ref": "#/$defs/contentRuleException"
+      },
       "uniqueItems": true
     },
     "governanceLedgerPath": {
       "$ref": "#/$defs/relativePath"
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   },
   "$defs": {
     "contentRule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "pattern"],
+      "required": [
+        "id",
+        "pattern"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
         "kind": {
           "description": "content matches added lines; path matches added file paths.",
-          "enum": ["content", "path"]
+          "enum": [
+            "content",
+            "path"
+          ]
         },
-        "severity": { "enum": ["error", "warning"] },
-        "pattern": { "type": "string", "minLength": 1 },
+        "severity": {
+          "enum": [
+            "error",
+            "warning"
+          ]
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1
+        },
         "paths": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "uniqueItems": true
         },
-        "description": { "type": "string", "minLength": 1 }
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
       }
     },
     "contentRuleException": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["rule", "repo", "paths", "reason"],
+      "required": [
+        "rule",
+        "repo",
+        "paths",
+        "reason"
+      ],
       "properties": {
-        "rule": { "type": "string", "minLength": 1 },
-        "repo": { "$ref": "#/$defs/repoName" },
+        "rule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo": {
+          "$ref": "#/$defs/repoName"
+        },
         "paths": {
           "description": "Specific paths only. A blanket wildcard is disabling the rule, not excepting it.",
           "type": "array",
@@ -104,7 +166,16 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "not": { "enum": ["*", "**", ".", "./", "**/*", "*/**"] }
+            "not": {
+              "enum": [
+                "*",
+                "**",
+                ".",
+                "./",
+                "**/*",
+                "*/**"
+              ]
+            }
           },
           "uniqueItems": true
         },
@@ -112,6 +183,10 @@
           "description": "Why this usage is accepted, in terms a reviewer can act on.",
           "type": "string",
           "minLength": 8
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -122,7 +197,9 @@
     "actorPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["privateDomainRepo"],
+      "required": [
+        "privateDomainRepo"
+      ],
       "properties": {
         "githubLogin": {
           "type": "string",
@@ -138,11 +215,23 @@
         },
         "privateDomainRepo": {
           "$ref": "#/$defs/repoName"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       },
       "anyOf": [
-        { "required": ["githubLogin"] },
-        { "required": ["gitEmails"] }
+        {
+          "required": [
+            "githubLogin"
+          ]
+        },
+        {
+          "required": [
+            "gitEmails"
+          ]
+        }
       ]
     },
     "repoName": {
@@ -152,10 +241,21 @@
     "repoPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "readBoundary", "allowedAudiences", "forbiddenAudiences", "autoCommit"],
+      "required": [
+        "kind",
+        "readBoundary",
+        "allowedAudiences",
+        "forbiddenAudiences",
+        "autoCommit"
+      ],
       "properties": {
         "kind": {
-          "enum": ["private_domain", "shared", "generated", "archive"]
+          "enum": [
+            "private_domain",
+            "shared",
+            "generated",
+            "archive"
+          ]
         },
         "ownerActor": {
           "$ref": "#/$defs/actorId"
@@ -170,23 +270,46 @@
           "$ref": "#/$defs/audienceList"
         },
         "autoCommit": {
-          "enum": ["allowed", "blocked", "guarded"]
+          "enum": [
+            "allowed",
+            "blocked",
+            "guarded"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       },
       "allOf": [
         {
           "if": {
-            "properties": { "kind": { "const": "private_domain" } },
-            "required": ["kind"]
+            "properties": {
+              "kind": {
+                "const": "private_domain"
+              }
+            },
+            "required": [
+              "kind"
+            ]
           },
           "then": {
-            "required": ["ownerActor"]
+            "required": [
+              "ownerActor"
+            ]
           }
         }
       ]
     },
     "audience": {
-      "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+      "enum": [
+        "private",
+        "team",
+        "operator",
+        "staff",
+        "public",
+        "sensitive"
+      ]
     },
     "audienceList": {
       "type": "array",
@@ -200,9 +323,15 @@
       "minLength": 1,
       "not": {
         "anyOf": [
-          { "pattern": "\\u0000" },
-          { "pattern": "^/" },
-          { "pattern": "^[a-z][a-z0-9+.-]*:" }
+          {
+            "pattern": "\\u0000"
+          },
+          {
+            "pattern": "^/"
+          },
+          {
+            "pattern": "^[a-z][a-z0-9+.-]*:"
+          }
         ]
       }
     }

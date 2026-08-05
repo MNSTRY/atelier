@@ -203,7 +203,7 @@ export function validateSchemaShape(schema) {
   const objectClassEnum = schema?.$defs?.objectClass?.enum
   const ownerEnum = schema?.$defs?.runtimeOwnerName?.enum
   const visibilityEnum = schema?.$defs?.visibility?.enum
-  const dirtyRule = JSON.stringify(schema?.allOf ?? [])
+  const dirtyRule = asArray(schema?.allOf).find((rule) => rule?.if?.properties?.dirtyTree?.const === true)
 
   if (sourceSha?.pattern !== '^[0-9a-f]{40}$') {
     errors.push('schema sourceCommit.sha must require a 40-character architecture repo SHA')
@@ -232,10 +232,10 @@ export function validateSchemaShape(schema) {
   for (const value of LOCAL_AUDIENCES.filter((audience) => !RUNTIME_VISIBILITY_SET.has(audience))) {
     if (visibilityEnum?.includes(value)) errors.push(`schema runtime visibility enum must not include local audience ${value}`)
   }
-  if (!dirtyRule.includes('"dirtyTree":{"const":true}') || !dirtyRule.includes('"forced":{"const":true}')) {
+  if (dirtyRule?.then?.properties?.forced?.const !== true || !asArray(dirtyRule?.then?.required).includes('forced')) {
     errors.push('schema must force dirtyTree exports to set forced true')
   }
-  if (!dirtyRule.includes('"minItems":1')) {
+  if (dirtyRule?.then?.properties?.visibilityGate?.properties?.taint?.minItems !== 1) {
     errors.push('schema must force dirtyTree exports to carry non-empty taint')
   }
   const sourceNode = schema?.$defs?.sourceNode

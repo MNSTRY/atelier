@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.ai/contracts/atelier-kit-manifest.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-kit-manifest.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "MNSTRY Atelier Kit Manifest v1",
   "type": "object",
   "additionalProperties": false,
@@ -18,10 +19,18 @@
     "schema": {
       "const": "mnstry-atelier-kit-manifest@v1"
     },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
     "kit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "boundary", "clientZero"],
+      "required": [
+        "name",
+        "boundary",
+        "clientZero"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -33,6 +42,10 @@
         "clientZero": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -65,13 +78,21 @@
         "actionRules": {
           "type": "string",
           "pattern": "^atelier-action-intent@v[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
     "runtimeLock": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "schema", "digest"],
+      "required": [
+        "path",
+        "schema",
+        "digest"
+      ],
       "properties": {
         "path": {
           "const": "atelier-runtime.lock.json"
@@ -82,6 +103,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -90,7 +115,10 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "digest"],
+        "required": [
+          "path",
+          "digest"
+        ],
         "properties": {
           "path": {
             "type": "string",
@@ -99,17 +127,30 @@
           "digest": {
             "type": "string",
             "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "ext": {
+            "type": "object",
+            "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
           }
         }
       },
-      "required": ["export", "readiness", "actions"]
+      "required": [
+        "export",
+        "readiness",
+        "actions"
+      ]
     },
     "extensionPacks": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "version", "path", "enabled"],
+        "required": [
+          "id",
+          "version",
+          "path",
+          "enabled"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -125,6 +166,10 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "ext": {
+            "type": "object",
+            "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
           }
         }
       },
@@ -138,7 +183,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["pattern", "class"],
+        "required": [
+          "pattern",
+          "class"
+        ],
         "properties": {
           "pattern": {
             "type": "string",
@@ -146,7 +194,11 @@
           },
           "class": {
             "description": "source: canonical, never discarded, conflicts need a human. generated-projection: rebuilt deterministically, discard freely. distributed-runtime-copy: canonical in one repo role, rederivable in consumers.",
-            "enum": ["source", "generated-projection", "distributed-runtime-copy"]
+            "enum": [
+              "source",
+              "generated-projection",
+              "distributed-runtime-copy"
+            ]
           },
           "canonicalRepoRole": {
             "description": "The repo role in which a distributed-runtime-copy is canonical source. Without it, a sync loop cannot tell the repo that owns the file from the repos that merely receive it, and will discard canonical edits.",
@@ -155,16 +207,36 @@
           },
           "note": {
             "type": "string"
+          },
+          "ext": {
+            "type": "object",
+            "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
           }
         },
         "allOf": [
           {
             "if": {
-              "properties": { "class": { "const": "distributed-runtime-copy" } },
-              "required": ["class"]
+              "properties": {
+                "class": {
+                  "const": "distributed-runtime-copy"
+                }
+              },
+              "required": [
+                "class"
+              ]
             },
-            "then": { "required": ["canonicalRepoRole"] },
-            "else": { "not": { "required": ["canonicalRepoRole"] } }
+            "then": {
+              "required": [
+                "canonicalRepoRole"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "canonicalRepoRole"
+                ]
+              }
+            }
           }
         ]
       }
@@ -172,7 +244,11 @@
     "telemetry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "background", "sendPath"],
+      "required": [
+        "mode",
+        "background",
+        "sendPath"
+      ],
       "properties": {
         "mode": {
           "const": "none"
@@ -182,8 +258,16 @@
         },
         "sendPath": {
           "const": false
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   }
 }
