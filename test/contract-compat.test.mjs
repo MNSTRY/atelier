@@ -139,3 +139,53 @@ test('a baseline schema that fails to compile is a failure, not a crash', async 
   assert.equal(failures[0].entry, 'atelier-claim')
   assert.match(failures[0].message, /failed to compile/)
 })
+
+test('the widening differ catches deleted constraints, not just loosened ones', () => {
+  const target = 'contracts/atelier-export.v1.schema.json'
+  const base = readWorkingTreeContract(target)
+
+  // Deleting the enum outright is the widest relaxation of a closed vocabulary.
+  const enumDeleted = readWorkingTreeContract(target)
+  delete enumDeleted.$defs.runtimeOwnerName.enum
+  assert.ok(
+    diffSchemaWidenings(base, enumDeleted).some(
+      (finding) => finding.pointer === '/$defs/runtimeOwnerName' && /enum constraint removed/.test(finding.message),
+    ),
+    'deleting an enum must be flagged',
+  )
+
+  // Wrapping the old node in anyOf removes the enum at the original pointer.
+  const anyOfWrapped = readWorkingTreeContract(target)
+  anyOfWrapped.$defs.runtimeOwnerName = { anyOf: [base.$defs.runtimeOwnerName, { type: 'string' }] }
+  assert.ok(
+    diffSchemaWidenings(base, anyOfWrapped).some(
+      (finding) => finding.pointer === '/$defs/runtimeOwnerName' && /enum constraint removed/.test(finding.message),
+    ),
+    'an anyOf escape hatch must be flagged',
+  )
+
+  // Deleting a combinator rule (the dirtyTree allOf) must be flagged.
+  const allOfDeleted = readWorkingTreeContract(target)
+  delete allOfDeleted.allOf
+  assert.ok(
+    diffSchemaWidenings(base, allOfDeleted).some((finding) => /allOf constraint removed/.test(finding.message)),
+    'deleting allOf must be flagged',
+  )
+
+  // Changing the combinator rule count (insert or drop) must be flagged.
+  const allOfPrepended = readWorkingTreeContract(target)
+  allOfPrepended.allOf = [{ if: { properties: { forced: { const: true } } }, then: {} }, ...base.allOf]
+  assert.ok(
+    diffSchemaWidenings(base, allOfPrepended).some((finding) => /allOf rule count changed/.test(finding.message)),
+    'a combinator rule-count change must be flagged',
+  )
+
+  // Replacing a subschema wholesale with {} must produce findings.
+  const gutted = readWorkingTreeContract(target)
+  gutted.$defs.runtimeOwner = {}
+  assert.notEqual(
+    diffSchemaWidenings(base, gutted).length,
+    0,
+    'gutting a subschema must be flagged',
+  )
+})

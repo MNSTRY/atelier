@@ -100,6 +100,11 @@ for (const basename of contractFiles) {
 
     assert.equal(schema.$schema, DRAFT_2020_12, '$schema must be the 2020-12 draft URI')
     assert.ok(typeof schema.title === 'string' && schema.title.length > 0, 'title must be present')
+    assert.match(
+      schema.$comment ?? '',
+      /^contract revision \d+\.\d+\.\d+/,
+      '$comment must carry the machine-visible contract revision marker',
+    )
 
     const roots = effectiveRoots(schema)
     assert.notEqual(roots.length, 0, 'schema must expose at least one effective document root')

@@ -59,7 +59,7 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
           COMMIT_SCAN: ${{ vars.ATELIER_COMMIT_SCAN }}
         run: |
-          case "$COMMIT_SCAN" in none|range|all) ;; *) COMMIT_SCAN=none ;; esac
+          case "$COMMIT_SCAN" in none|all) ;; *) COMMIT_SCAN=none ;; esac
           if [ "$EVENT_NAME" = "pull_request" ]; then
             node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "$PR_BASE_SHA"
           elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
@@ -99,7 +99,7 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
           COMMIT_SCAN: ${{ vars.ATELIER_COMMIT_SCAN }}
         run: |
-          case "$COMMIT_SCAN" in none|range|all) ;; *) COMMIT_SCAN=none ;; esac
+          case "$COMMIT_SCAN" in none|all) ;; *) COMMIT_SCAN=none ;; esac
           if [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
             node scripts/check-repo-disclosure.mjs --commits range --base "$PUSH_BEFORE"
           else

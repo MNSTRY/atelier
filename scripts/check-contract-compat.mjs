@@ -55,6 +55,12 @@ const DIFF_DATA_KEYWORDS = new Set(['enum', 'const', 'default', 'examples', 'req
 const DIFF_MAP_KEYWORDS = new Set(['properties', 'patternProperties', '$defs', 'definitions'])
 const DIFF_MIN_KEYWORDS = ['minLength', 'minItems', 'minimum']
 const DIFF_MAX_KEYWORDS = ['maxLength', 'maxItems', 'maximum']
+const DIFF_ABSENCE_KEYWORDS = [
+  'enum', 'not', 'allOf', 'anyOf', 'oneOf', 'if', 'then', 'else', 'items',
+  'prefixItems', 'propertyNames', 'uniqueItems', 'multipleOf', 'format',
+  'contains', 'dependentRequired',
+]
+const DIFF_COMBINATOR_KEYWORDS = ['allOf', 'anyOf', 'oneOf']
 
 function isPlainObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value)
@@ -79,6 +85,22 @@ function walkSchemaPair(oldNode, newNode, parts, findings) {
     const oldMembers = new Set(oldNode.enum.map((member) => JSON.stringify(member)))
     const gained = newNode.enum.filter((member) => !oldMembers.has(JSON.stringify(member)))
     if (gained.length > 0) flag(`enum gained member(s): ${gained.map((member) => JSON.stringify(member)).join(', ')}`)
+  }
+  // Deleting a constraint outright is the widest widening of all. Keywords with
+  // their own specific absence handling above/below (const, pattern, min*/max*,
+  // additionalProperties, required) are excluded here.
+  for (const keyword of DIFF_ABSENCE_KEYWORDS) {
+    if (oldNode[keyword] !== undefined && newNode[keyword] === undefined) {
+      flag(`${keyword} constraint removed`)
+    }
+  }
+  // Combinator arrays: pairwise comparison is only meaningful when the rule
+  // count is unchanged; any count change (dropped OR inserted rules) shifts
+  // indices and must be reviewed rather than silently mis-paired.
+  for (const keyword of DIFF_COMBINATOR_KEYWORDS) {
+    if (Array.isArray(oldNode[keyword]) && Array.isArray(newNode[keyword]) && oldNode[keyword].length !== newNode[keyword].length) {
+      flag(`${keyword} rule count changed (${oldNode[keyword].length} -> ${newNode[keyword].length}) — combinator changes require review`)
+    }
   }
   if (Array.isArray(oldNode.required)) {
     const newRequired = new Set(Array.isArray(newNode.required) ? newNode.required : [])

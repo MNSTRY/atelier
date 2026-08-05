@@ -249,7 +249,9 @@ let scannedCommits = 0
 if (commitsMode !== 'none') scannedCommits = scanCommits()
 
 if (findings > 0) {
-  if (untrusted) console.error(`[repo:check] ${findings} finding(s) (details suppressed: untrusted tree)`)
+  // Even the count is a 1-bit-per-dispatch oracle on an attacker-controlled
+  // tree; the exit code carries the only signal.
+  if (untrusted) console.error('[repo:check] findings present (details suppressed: untrusted tree)')
   else console.error(`[repo:check] ${findings} finding(s)`)
   process.exit(1)
 }
