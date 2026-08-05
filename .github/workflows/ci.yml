@@ -53,17 +53,21 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "${{ github.event.before }}"
           else
             node scripts/check-repo-disclosure.mjs --structural-only --commits "${{ vars.ATELIER_COMMIT_SCAN || 'none' }}"
           fi
   secret-sweep:
     runs-on: ubuntu-latest
-    env:
-      ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
     steps:
       # Explicit failure, never a job-level `if:` — GitHub treats a skipped job
       # as satisfying a required status check; failing is the only safe block.
+      # The secret is scoped to individual steps so npm ci (and any dependency
+      # lifecycle script) never sees it; install additionally ignores scripts.
       - name: refuse to pass without the denylist (fork PRs land here)
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
         run: |
           if [ -z "$ATELIER_DENYLIST_JSON" ]; then
             echo "denylist secret unavailable (fork PR or missing secret) — a maintainer must dispatch fork-sweep on this SHA"
@@ -76,6 +80,17 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci
-      - run: node scripts/check-repo-disclosure.mjs --commits "${{ vars.ATELIER_COMMIT_SCAN || 'none' }}"
-      - run: npm run release:audit
+      - run: npm ci --ignore-scripts
+      - name: repo-wide disclosure sweep
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            node scripts/check-repo-disclosure.mjs --commits range --base "${{ github.event.before }}"
+          else
+            node scripts/check-repo-disclosure.mjs --commits "${{ vars.ATELIER_COMMIT_SCAN || 'none' }}"
+          fi
+      - name: release audit
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+        run: npm run release:audit

@@ -128,18 +128,30 @@ async function main() {
     usageError(`unexpected baseline document schema: ${baselineDoc.schema}`)
   }
 
-  const ref = baselineOverride ?? baselineDoc.baselineTag
-  if (ref === null || ref === undefined) {
-    console.log('contract-compat: epoch not yet tagged; gate inert')
-    return
-  }
-
   const git = (gitArgs) =>
     execFileSync('git', ['-C', CORPUS_ROOT, ...gitArgs], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 32 * 1024 * 1024,
     })
+
+  const ref = baselineOverride ?? baselineDoc.baselineTag
+  if (ref === null || ref === undefined) {
+    // Inert is only legitimate while no post-epoch tag exists. The moment a
+    // tag outside the recorded pre-epoch set appears without baselineTag being
+    // armed, a green run would assert nothing — fail instead.
+    const preEpoch = new Set(baselineDoc.preEpochTags ?? [])
+    const tags = git(['tag', '--list']).split('\n').filter(Boolean)
+    const unarmed = tags.filter((tag) => !preEpoch.has(tag))
+    if (unarmed.length > 0) {
+      console.error(
+        `contract-compat: tag(s) exist beyond the pre-epoch set (${unarmed.join(', ')}) but baselineTag is null — arm the gate by recording the epoch baseline in contracts/compat-baseline.json`,
+      )
+      process.exit(1)
+    }
+    console.log('contract-compat: epoch not yet tagged; gate inert')
+    return
+  }
   try {
     git(['rev-parse', '--verify', `${ref}^{commit}`])
   } catch {

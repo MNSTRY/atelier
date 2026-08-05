@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -26,13 +27,7 @@ const allowedFiles = [
   /^docs\/[a-z0-9./_-]+\.md$/,
 ]
 
-const structuralForbiddenContent = [
-  { pattern: /\/Users\//, label: 'absolute user path' },
-  { pattern: /\/var\/folders\//, label: 'machine-local temp path' },
-  { pattern: /\.codex/, label: 'agent-local state path' },
-  { pattern: /BEGIN (RSA|OPENSSH|PRIVATE) KEY/, label: 'private key material' },
-  { pattern: /\b(api[_-]?key|secret|password|token)\b\s*[:=]/i, label: 'secret-like assignment' },
-]
+const structuralForbiddenContent = STRUCTURAL_FORBIDDEN_CONTENT
 
 // Client-zero and person-specific name patterns live in a gitignored local
 // denylist so the committed audit does not disclose what it scrubs for.

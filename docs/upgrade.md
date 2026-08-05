@@ -8,12 +8,10 @@ through a browser view.
 ## Upgrading to 0.2.0-alpha.0
 
 This release breaks the export vocabulary. The runtime owner names are now
-vendor-neutral (`IdentityGraph` → `identity`, `OfferGraph` → `catalog`,
-`CommitmentGraph` → `commitments`, `EventSpine` → `events`,
-`ProjectionGraph` → `projection`, `ConsentBoundary` → `consent`,
-`MessageSpine` → `messaging`, `ProviderGraph` → `providers`,
-`AuditGraph` → `audit`), and documents written against `v0.1.0-alpha.2` do not
-validate here. Regenerate exports and projections rather than hand-editing
+the vendor-neutral domain terms `identity`, `catalog`, `commitments`,
+`events`, `projection`, `consent`, `messaging`, `providers`, and `audit`
+(defined in `docs/ontology.md`), and documents written against
+`v0.1.0-alpha.2` do not validate here. Regenerate exports and projections rather than hand-editing
 them, and update any consumer that pins an owner name. `CHANGELOG.md` lists
 every breaking change in this release, including the contract-stability epoch
 (`contractVersion`, `ext`) and the schema const alignments.

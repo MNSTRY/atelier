@@ -37,7 +37,7 @@ function excerpt(text, limit = 72) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text
 }
 
-export function checkBreakingMigrations({ changelog, map, migrations = BASE_MIGRATIONS } = {}) {
+export function checkBreakingMigrations({ changelog, map, migrations = BASE_MIGRATIONS, epochArmed = false } = {}) {
   const problems = []
   const entries = Array.isArray(map?.entries) ? map.entries : []
   const breaking = parseBreakingEntries(changelog ?? '')
@@ -60,6 +60,12 @@ export function checkBreakingMigrations({ changelog, map, migrations = BASE_MIGR
     if (entry?.disposition === 'exempt') {
       if (typeof entry.reason !== 'string' || !entry.reason.trim()) problems.push(`${label} is exempt but has no reason`)
       if (typeof entry.date !== 'string' || !entry.date.trim()) problems.push(`${label} is exempt but has no date`)
+      // Once the compat epoch is armed, external consumers exist by
+      // assumption: exemption stops being the default reflex and needs a
+      // named reviewer on the record.
+      if (epochArmed && (typeof entry.reviewer !== 'string' || !entry.reviewer.trim())) {
+        problems.push(`${label} is exempt but the epoch is armed and no reviewer is recorded`)
+      }
     } else if (entry?.disposition === 'migration') {
       const named = migrations.find((migration) => migration.id === entry.migration)
       if (!named) {
@@ -135,7 +141,14 @@ function runCli() {
     console.error('[migrations:check] scripts/breaking-changes.map.json must contain an entries array')
     process.exit(2)
   }
-  const { ok, problems } = checkBreakingMigrations({ changelog, map, migrations: BASE_MIGRATIONS })
+  let epochArmed = false
+  try {
+    const baseline = JSON.parse(readFileSync(join(packageRoot, 'contracts', 'compat-baseline.json'), 'utf8'))
+    epochArmed = baseline.baselineTag != null
+  } catch {
+    // No baseline document — treat as unarmed rather than failing this gate.
+  }
+  const { ok, problems } = checkBreakingMigrations({ changelog, map, migrations: BASE_MIGRATIONS, epochArmed })
   if (!ok) {
     for (const problem of problems) console.error(`[migrations:check] ${problem}`)
     process.exit(1)

@@ -4,13 +4,11 @@
 
 - **Breaking:** the `atelier-export@v1` runtime owner vocabulary is now
   vendor-neutral. The closed `runtimeOwnerName` enum, the `RUNTIME_OWNERS`
-  constant, the bundled readiness protocols, and the fixtures all rename:
-  `IdentityGraph` → `identity`, `OfferGraph` → `catalog`,
-  `CommitmentGraph` → `commitments`, `EventSpine` → `events`,
-  `ProjectionGraph` → `projection`, `ConsentBoundary` → `consent`,
-  `MessageSpine` → `messaging`, `ProviderGraph` → `providers`,
-  `AuditGraph` → `audit`. Documents and validators from earlier tags do not
-  interoperate across this rename.
+  constant, the bundled readiness protocols, and the fixtures all move to the
+  domain terms `identity`, `catalog`, `commitments`, `events`, `projection`,
+  `consent`, `messaging`, `providers`, `audit` (see `docs/ontology.md`).
+  Documents and validators from earlier tags do not interoperate across this
+  change; regenerate exports rather than hand-editing owner values.
 - **Breaking:** `protocol.outputs` on bundled readiness protocols is now the
   contract's object shape (`{ runSchema, artifacts }`) instead of an informal
   array of artifact slugs, and the undeclared `outputArtifacts` key is gone.

@@ -22,19 +22,14 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 
 // Duplicated from scripts/check-release-tarball.mjs (that audit scans only the
 // published tarball; this script scans the whole tracked tree). Drift risk:
 // keep the two lists identical when either changes.
-const structuralForbiddenContent = [
-  { pattern: /\/Users\//, label: 'absolute user path' },
-  { pattern: /\/var\/folders\//, label: 'machine-local temp path' },
-  { pattern: /\.codex/, label: 'agent-local state path' },
-  { pattern: /BEGIN (RSA|OPENSSH|PRIVATE) KEY/, label: 'private key material' },
-  { pattern: /\b(api[_-]?key|secret|password|token)\b\s*[:=]/i, label: 'secret-like assignment' },
-]
+const structuralForbiddenContent = STRUCTURAL_FORBIDDEN_CONTENT
 
 // These files carry structural pattern literals (or exercise this gate) and
 // would self-match. Structural patterns only — denylist patterns get no
@@ -42,6 +37,7 @@ const structuralForbiddenContent = [
 const STRUCTURAL_SELF_EXCLUDED = [
   'scripts/check-repo-disclosure.mjs',
   'scripts/check-release-tarball.mjs',
+  'scripts/structural-patterns.mjs',
   'test/readiness-protocols.test.mjs',
   'test/check-repo-disclosure.test.mjs',
 ]
