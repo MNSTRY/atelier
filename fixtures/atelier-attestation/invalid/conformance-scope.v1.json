@@ -1,0 +1,23 @@
+{
+  "schema": "atelier-attestation@v1",
+  "attestationId": "attestation:mnstry:export:sample-studio-offer:bad-scope",
+  "issuedAt": "2026-08-05T14:30:00Z",
+  "issuer": {
+    "id": "mnstry-admission",
+    "role": "admission-authority"
+  },
+  "subject": {
+    "schema": "atelier-export@v1",
+    "ref": "export:sample-studio-offer:0001",
+    "payloadHash": {
+      "algorithm": "sha-256",
+      "canonicalization": "RFC8785-JCS",
+      "digest": "62c1948f3b3e84110dbe09ab86d2cfc7e3a444f308f3c6aba147508da651ef17"
+    }
+  },
+  "verdict": {
+    "scope": "conformance",
+    "decision": "admitted"
+  },
+  "signature": null
+}

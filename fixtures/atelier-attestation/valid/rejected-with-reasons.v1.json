@@ -1,0 +1,49 @@
+{
+  "schema": "atelier-attestation@v1",
+  "contractVersion": "1.0.0",
+  "attestationId": "attestation:mnstry:claim:demo-thread-relation:0003",
+  "issuedAt": "2026-08-05T16:45:12Z",
+  "issuer": {
+    "id": "mnstry-admission",
+    "role": "admission-authority",
+    "keyId": "mnstry-admission-2026"
+  },
+  "subject": {
+    "schema": "atelier-claim@v1",
+    "ref": "claim:demo:thread-relation:0003",
+    "payloadHash": {
+      "algorithm": "sha-256",
+      "canonicalization": "RFC8785-JCS",
+      "digest": "fe41682e639687b00e6950498629b47cb001d4b99a717c1c078b4b4d175c3c6a"
+    },
+    "references": [
+      {
+        "type": "claim",
+        "id": "claim:demo:thread-relation:0003"
+      },
+      {
+        "type": "protocol",
+        "id": "protocol:tenant-readiness"
+      }
+    ]
+  },
+  "verdict": {
+    "scope": "admission",
+    "decision": "rejected",
+    "reasons": [
+      {
+        "code": "provenance.unverified",
+        "message": "Payload provenance chain could not be verified against the submitted repo commit."
+      },
+      {
+        "code": "policy.visibility-gate",
+        "message": "Declared visibility gate does not satisfy the admission policy for this collection."
+      }
+    ]
+  },
+  "signature": {
+    "algorithm": "es256",
+    "keyId": "mnstry-admission-2026",
+    "value": "eHWZOUiIroSEOwMwupyrs42SPR5wUcRVkRNL8Wu403nAyAggeNniEM4TL_Mka3eSrE5C-ByKrUnmD3qsumGbEg"
+  }
+}

@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-attestation.v1.schema.json",
+  "title": "atelier-attestation@v1",
+  "description": "Record of an admission decision by an issuer over a canonicalized payload document. An attestation never encodes conformance: conformance is public and offline, decided by the published validators. Unsigned attestations (signature null) are non-authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "attestationId",
+    "issuedAt",
+    "issuer",
+    "subject",
+    "verdict",
+    "signature"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-attestation@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "attestationId": {
+      "type": "string",
+      "pattern": "^attestation:[a-z0-9][a-z0-9:-]*$"
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "issuer": {
+      "description": "Who made the admission decision. Issuer identity is asserted here; authority comes only from a recognized signature.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "role"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": [
+            "admission-authority",
+            "tool",
+            "self"
+          ]
+        },
+        "keyId": {
+          "type": "string"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      }
+    },
+    "subject": {
+      "description": "The attested payload: its contract, its stable reference, and a canonical hash binding the attestation to exact payload bytes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "ref",
+        "payloadHash"
+      ],
+      "properties": {
+        "schema": {
+          "description": "Contract of the attested payload document.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]*@v[0-9]+$"
+        },
+        "ref": {
+          "description": "Stable identifier of the payload (exportId, runId, or claimId).",
+          "type": "string",
+          "minLength": 1
+        },
+        "payloadHash": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "canonicalization",
+            "digest"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "sha-256"
+            },
+            "canonicalization": {
+              "const": "RFC8785-JCS"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "ext": {
+              "type": "object",
+              "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+            }
+          }
+        },
+        "references": {
+          "description": "Optional cross-references to related governed documents.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "id"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "claim",
+                  "run",
+                  "export",
+                  "protocol"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ext": {
+                "type": "object",
+                "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+              }
+            }
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      }
+    },
+    "verdict": {
+      "description": "The admission decision. scope is structurally pinned to admission: a document claiming a conformance verdict cannot validate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "decision"
+      ],
+      "properties": {
+        "scope": {
+          "const": "admission"
+        },
+        "decision": {
+          "enum": [
+            "admitted",
+            "rejected",
+            "needs-review"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]*$"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ext": {
+                "type": "object",
+                "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+              }
+            }
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      }
+    },
+    "signature": {
+      "description": "Required in shape, nullable in value. null means the attestation is unsigned and non-authoritative; silently absent is not expressible.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "keyId",
+            "value"
+          ],
+          "properties": {
+            "algorithm": {
+              "enum": [
+                "ed25519",
+                "es256"
+              ]
+            },
+            "keyId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "ext": {
+              "type": "object",
+              "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+            }
+          }
+        }
+      ]
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+    }
+  }
+}

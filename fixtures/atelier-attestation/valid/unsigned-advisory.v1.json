@@ -1,0 +1,23 @@
+{
+  "schema": "atelier-attestation@v1",
+  "attestationId": "attestation:local:run:tenant-readiness:0002",
+  "issuedAt": "2026-08-05T09:15:30Z",
+  "issuer": {
+    "id": "atelier-cli",
+    "role": "tool"
+  },
+  "subject": {
+    "schema": "atelier-readiness-run@v1",
+    "ref": "run:tenant-readiness:2026-08-05:0002",
+    "payloadHash": {
+      "algorithm": "sha-256",
+      "canonicalization": "RFC8785-JCS",
+      "digest": "938247ce73bf64fc7a0f0b06aaea900dc2c9b75ab22c0f92811ba917d5bd9cee"
+    }
+  },
+  "verdict": {
+    "scope": "admission",
+    "decision": "needs-review"
+  },
+  "signature": null
+}
