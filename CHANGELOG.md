@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+- **Breaking:** the `atelier-export@v1` runtime owner vocabulary is now
+  vendor-neutral. The closed `runtimeOwnerName` enum, the `RUNTIME_OWNERS`
+  constant, the bundled readiness protocols, and the fixtures all rename:
+  `IdentityGraph` → `identity`, `OfferGraph` → `catalog`,
+  `CommitmentGraph` → `commitments`, `EventSpine` → `events`,
+  `ProjectionGraph` → `projection`, `ConsentBoundary` → `consent`,
+  `MessageSpine` → `messaging`, `ProviderGraph` → `providers`,
+  `AuditGraph` → `audit`. Documents and validators from earlier tags do not
+  interoperate across this rename.
+- **Breaking:** `protocol.outputs` on bundled readiness protocols is now the
+  contract's object shape (`{ runSchema, artifacts }`) instead of an informal
+  array of artifact slugs, and the undeclared `outputArtifacts` key is gone.
+  All twelve bundled protocols now validate against
+  `atelier-readiness-protocol@v1`.
+- **Breaking:** every document contract enters the contract-stability epoch:
+  each schema declares an optional root `contractVersion` and a reserved
+  optional `ext` extension container on every closed object, and bundled
+  readiness protocols emit `contractVersion: "1.0.0"`. Validators pinned to
+  earlier tags reject documents that carry the new fields. See
+  `docs/contract-stability.md`.
+- **Breaking:** the `atelier-claim@v1` provider enum gains
+  `atelier-readiness`, so claims emitted by readiness runs validate against
+  the standalone claim contract. Claim validators pinned to earlier tags
+  reject the new provider.
+- **Breaking:** the analysis adapter manifest schema const is now
+  `analysis-adapter-manifest@v1` (was
+  `mnstry.atelier-analysis-adapter-manifest@v1`), matching the published
+  contract and fixtures. Local manifests emitted before this change must
+  update their `schema` field.
+- **Breaking:** boundary promote events are now recorded with schema
+  `git-promote-event@v1` (was `mnstry.git-promote-event@v1`), matching the
+  published contract. Previously recorded ledger lines carrying the old
+  const are not rewritten.
+- **Breaking:** the agent-harness context envelope schema const is now
+  `atelier-context@v1` (was `mnstry.atelier-context@v1`), matching the local
+  sidecar contract.
+- **Breaking:** the alignment projection ships no default root-graph name
+  list; the default is empty and workspaces supply their own via
+  `sduiMap.rootGraphs` in project configuration. Nodes previously classified
+  by the built-in name list no longer match without configuration.
+- Adds `atelier-attestation@v1`, a contract for recording admission
+  decisions: issuer, attested payload with an RFC 8785 (JCS) + SHA-256
+  payload hash, an admission-scoped verdict (a conformance-scoped verdict is
+  structurally unexpressible), and a required-but-nullable signature where
+  null means advisory and non-authoritative. See `docs/attestation.md`.
+- Adds the contract compatibility gate: `scripts/check-contract-compat.mjs`
+  (`npm run contract:compat`) validates the current fixture and
+  generated-document corpus against validators from the baseline tag recorded
+  in `contracts/compat-baseline.json`. The gate is inert until the first
+  post-epoch tag is recorded as the baseline.
+- Adds `docs/ontology.md` — the public export vocabulary: the nine runtime
+  owners, the object classes and collections they govern, the six runtime
+  targets, and the audience/visibility boundary — and
+  `docs/contract-stability.md` — the stability epoch, `contractVersion`,
+  `ext` and must-ignore rules, the widening ban, the deprecation policy, and
+  the compatibility gate.
 - Expunges client-zero-identifying names from tests, fixtures, docs, and the
   release audit. Name-based scrub patterns now load from the gitignored
   `release-denylist.local.json`; when that file is absent the audit warns and
