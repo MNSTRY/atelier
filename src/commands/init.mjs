@@ -96,6 +96,16 @@ if (template === 'sample-workspace') {
   console.log(`created Atelier project scaffold at ${target}`)
 }
 
+// Every workspace gets a preview launch config, whichever template made it.
+// autoPort matters: a workspace usually keeps a long-lived instance on the
+// canonical port, and a preview that cannot take a free port evicts it.
+const launchTemplate = path.join(packageRoot, 'templates/launch.json')
+const launchTarget = path.join(target, '.claude/launch.json')
+if (fs.existsSync(launchTemplate) && !fs.existsSync(launchTarget)) {
+  fs.mkdirSync(path.dirname(launchTarget), { recursive: true })
+  fs.copyFileSync(launchTemplate, launchTarget)
+}
+
 const projectPath = path.join(target, 'atelier.project.json')
 if (fs.existsSync(projectPath)) {
   const project = resolveProjectConfig({ cwd: target, argv: ['--project', projectPath] })

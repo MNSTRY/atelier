@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "atelier",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["atelier", "server"],
+      "port": 8137,
+      "autoPort": true
+    }
+  ]
+}

@@ -17,7 +17,10 @@ export async function runServerCommand(argv = process.argv.slice(2)) {
   const sidecar = createAtelierSidecarServer({
     workspaceRoot: project.outputRoot,
     stateDir: project.outputRoot,
-    port: args.smoke ? 0 : Number(args.port || 8137),
+    // argv > PORT env > default. Supervisors that assign a free port (preview
+    // panes, dev harnesses) pass it via PORT, and an Atelier that ignores that
+    // fights whatever already holds the canonical port instead of coexisting.
+    port: args.smoke ? 0 : Number(args.port || process.env.PORT || 8137),
   })
 
   if (args.smoke) {

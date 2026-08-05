@@ -18,7 +18,7 @@ const allowedFiles = [
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
   /^fixtures\/(?!atelier-export\/sample-private-offer)(?!atelier-extension-pack\/client-zero\.client-zero)[A-Za-z0-9./_-]+\.(json|md|html)$/,
-  /^skills\/(codex|claude)\/mnstry-readiness\/SKILL\.md$/,
+  /^skills\/(codex|claude)\/[a-z0-9-]+\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.gitignore)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
