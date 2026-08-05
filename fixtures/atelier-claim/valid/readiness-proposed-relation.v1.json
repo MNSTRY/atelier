@@ -1,0 +1,18 @@
+{
+  "schema": "atelier-claim@v1",
+  "claimId": "claim:atelier-readiness:2026-08-05:offer-draft-supports-runtime-readiness",
+  "subject": "sample-workspace:offer-draft",
+  "predicate": "supports",
+  "object": "sample-workspace:runtime-readiness-summary",
+  "provider": "atelier-readiness",
+  "status": "proposed",
+  "promoted": false,
+  "confidence": 0.8,
+  "evidence": [
+    "atelier-output/atelier-readiness.json#claims"
+  ],
+  "notes": [
+    "Emitted by a readiness protocol run; promotion into kg.relations remains a reviewed edit."
+  ],
+  "createdAt": "2026-08-05T00:00:00Z"
+}

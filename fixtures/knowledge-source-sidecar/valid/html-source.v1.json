@@ -1,0 +1,18 @@
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "source.html",
+  "title": "Sample source",
+  "summary": "Neutral non-Markdown source with a durable sidecar identity.",
+  "tags": ["sample", "architecture"],
+  "kg": {
+    "id": "sample-workspace:source-html",
+    "type": "html",
+    "domain": "architecture",
+    "lifecycle": "current",
+    "status": "active",
+    "audience": "team",
+    "relations": {
+      "related": ["sample-workspace:readme"]
+    }
+  }
+}

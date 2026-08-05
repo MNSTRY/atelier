@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(__dirname, '../..')
 
-export const manifestSchema = 'mnstry.atelier-analysis-adapter-manifest@v1'
+export const manifestSchema = 'analysis-adapter-manifest@v1'
 export const claimSchema = 'atelier-claim@v1'
 export const provider = 'analysis'
 export const harnessPolicy = 'claim-only-local-disabled'

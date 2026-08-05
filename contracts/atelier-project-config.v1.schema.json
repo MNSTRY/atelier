@@ -1,14 +1,57 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mnstry.app/schemas/atelier-project-config.v1.schema.json",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-project-config.v1.schema.json",
+  "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "mnstry.atelier-project-config@v1",
   "description": "Portable project adapter config for resolving a workspace, graph inputs, boundaries, and generated Atelier projections. Machine-local paths belong in ignored local overlays.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema"],
+  "required": [
+    "schema"
+  ],
+  "anyOf": [
+    {
+      "required": [
+        "repos"
+      ],
+      "properties": {
+        "repos": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "required": [
+        "alignment"
+      ],
+      "properties": {
+        "alignment": {
+          "required": [
+            "appRepo"
+          ],
+          "anyOf": [
+            {
+              "required": [
+                "root"
+              ]
+            },
+            {
+              "required": [
+                "path"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
   "properties": {
     "schema": {
       "const": "mnstry.atelier-project-config@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
     },
     "name": {
       "type": "string",
@@ -29,6 +72,10 @@
         },
         "repoOpsRoot": {
           "$ref": "#/$defs/pathString"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -62,6 +109,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -80,6 +131,10 @@
         },
         "readiness": {
           "$ref": "#/$defs/pathString"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -99,6 +154,10 @@
         },
         "path": {
           "$ref": "#/$defs/pathString"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -111,6 +170,10 @@
         },
         "mnstryRuntimeRoot": {
           "$ref": "#/$defs/pathString"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -126,6 +189,10 @@
         },
         "strictNewRepos": {
           "type": "boolean"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -134,13 +201,24 @@
       "additionalProperties": false,
       "properties": {
         "profile": {
-          "enum": ["single-repo", "private-domain", "shared-project", "multi-repo", "monorepo", "control-workspace"]
+          "enum": [
+            "single-repo",
+            "private-domain",
+            "shared-project",
+            "multi-repo",
+            "monorepo",
+            "control-workspace"
+          ]
         },
         "include": {
           "$ref": "#/$defs/pathString"
         },
         "exclude": {
           "$ref": "#/$defs/pathString"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
         }
       }
     },
@@ -149,7 +227,9 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
           "name": {
             "type": "string",
@@ -159,7 +239,14 @@
             "$ref": "#/$defs/pathString"
           },
           "readBoundary": {
-            "enum": ["private", "team", "operator", "staff", "public", "sensitive"]
+            "enum": [
+              "private",
+              "team",
+              "operator",
+              "staff",
+              "public",
+              "sensitive"
+            ]
           },
           "role": {
             "type": "string",
@@ -178,14 +265,23 @@
             "description": "Provider-stable repository identity. Names change and hosting providers redirect the old URL indefinitely, so a name alone cannot tell \"same repo, renamed\" from \"different repo\". Never substitute the root commit: repos created from one template share it.",
             "type": "object",
             "additionalProperties": false,
-            "required": ["provider", "id"],
+            "required": [
+              "provider",
+              "id"
+            ],
             "properties": {
               "provider": {
-                "enum": ["github"]
+                "enum": [
+                  "github"
+                ]
               },
               "id": {
                 "type": "string",
                 "minLength": 1
+              },
+              "ext": {
+                "type": "object",
+                "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
               }
             }
           },
@@ -200,20 +296,38 @@
           },
           "required": {
             "type": "boolean"
+          },
+          "ext": {
+            "type": "object",
+            "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
           }
         },
         "allOf": [
           {
             "if": {
-              "properties": { "kind": { "const": "external" } },
-              "required": ["kind"]
+              "properties": {
+                "kind": {
+                  "const": "external"
+                }
+              },
+              "required": [
+                "kind"
+              ]
             },
             "then": {
-              "not": { "required": ["readBoundary"] }
+              "not": {
+                "required": [
+                  "readBoundary"
+                ]
+              }
             }
           }
         ]
       }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
     }
   },
   "$defs": {

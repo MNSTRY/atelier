@@ -1,0 +1,12 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "sample-workspace",
+  "repos": [
+    {
+      "name": "vendored-site",
+      "path": "vendored-site",
+      "kind": "external",
+      "readBoundary": "team"
+    }
+  ]
+}

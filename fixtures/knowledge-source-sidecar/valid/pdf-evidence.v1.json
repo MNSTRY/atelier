@@ -1,0 +1,18 @@
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "capacity-report.pdf",
+  "title": "Capacity report",
+  "summary": "Evidence artifact backing the readiness summary.",
+  "tags": ["evidence"],
+  "kg": {
+    "id": "sample-workspace:capacity-report",
+    "type": "pdf",
+    "domain": "operations",
+    "lifecycle": "current",
+    "status": "active",
+    "audience": "private",
+    "relations": {
+      "evidences": ["sample-workspace:runtime-readiness-summary"]
+    }
+  }
+}

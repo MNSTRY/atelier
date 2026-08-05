@@ -1,0 +1,17 @@
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "source.html",
+  "title": "Sample source",
+  "summary": "Sidecar illegally carrying the runtime-reserved visibility word.",
+  "tags": ["sample"],
+  "kg": {
+    "id": "sample-workspace:source-html",
+    "type": "html",
+    "domain": "architecture",
+    "lifecycle": "current",
+    "status": "active",
+    "audience": "team",
+    "visibility": "public",
+    "relations": {}
+  }
+}

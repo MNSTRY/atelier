@@ -1,0 +1,16 @@
+{
+  "schema": "atelier-action-intent@v1",
+  "id": "atelier.action.copy-agent-prompt",
+  "kind": "copy.agentPrompt",
+  "label": "Copy agent prompt",
+  "appliesTo": {
+    "scopes": ["entry", "realm"]
+  },
+  "reads": ["kg.id", "title", "repoPath"],
+  "writes": ["clipboard"],
+  "authority": {
+    "label": "Copy only; no runtime mutation",
+    "runtimeMutation": false
+  },
+  "deniedWhen": []
+}

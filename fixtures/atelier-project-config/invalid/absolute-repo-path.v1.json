@@ -1,0 +1,11 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "sample-workspace",
+  "repos": [
+    {
+      "name": "content",
+      "path": "/tmp/content",
+      "readBoundary": "private"
+    }
+  ]
+}

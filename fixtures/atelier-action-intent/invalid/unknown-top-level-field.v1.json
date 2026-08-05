@@ -1,0 +1,17 @@
+{
+  "schema": "atelier-action-intent@v1",
+  "id": "atelier.action.copy-repo-path",
+  "kind": "copy.repoPath",
+  "label": "Copy repo path",
+  "appliesTo": {
+    "scopes": ["entry"]
+  },
+  "reads": ["kg.id", "repoPath"],
+  "writes": ["clipboard"],
+  "authority": {
+    "label": "Copy only; no runtime mutation",
+    "runtimeMutation": false
+  },
+  "deniedWhen": [],
+  "applyEndpoint": "/api/apply"
+}

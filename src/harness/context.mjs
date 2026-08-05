@@ -3,7 +3,7 @@ import { commandProject, parseArgs } from '../project/config.mjs'
 export function contextEnvelope(project, args) {
   const path = args.path || 'index.html'
   return {
-    schema: 'mnstry.atelier-context@v1',
+    schema: 'atelier-context@v1',
     workspaceId: `atelier:${project.config.name ?? 'workspace'}`,
     workspaceVerified: Boolean(args.expectedWorkspaceId ? args.expectedWorkspaceId === `atelier:${project.config.name ?? 'workspace'}` : false),
     view: { path, source: 'cli' },

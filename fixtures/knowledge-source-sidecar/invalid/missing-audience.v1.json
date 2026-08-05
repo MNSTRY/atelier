@@ -1,0 +1,15 @@
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "source.html",
+  "title": "Sample source",
+  "summary": "Sidecar missing the mandatory audience classification.",
+  "tags": ["sample"],
+  "kg": {
+    "id": "sample-workspace:source-html",
+    "type": "html",
+    "domain": "architecture",
+    "lifecycle": "current",
+    "status": "active",
+    "relations": {}
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "atelier-analysis-adapter@v1",
+  "adapterId": "atelier.analysis.sample",
+  "provider": "sample",
+  "enabled": false,
+  "outputRoot": ".mnstry/atelier/analysis/sample",
+  "claimContract": "atelier-claim@v1",
+  "execution": {
+    "posture": "inert",
+    "hiddenModelProvider": false,
+    "network": "none",
+    "installCommand": null,
+    "executeCommand": null
+  },
+  "authority": {
+    "claimOnly": true,
+    "frontMatterMutation": false,
+    "graphRelationMutation": false,
+    "publicExportFeed": false,
+    "mcpFeed": false,
+    "runtimeImport": false,
+    "directCanonicalWrite": false
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "schema": "mnstry.atelier-readiness@v1",
+  "generatedAt": "2026-08-05T00:00:00Z",
+  "workspace": {
+    "root": ".",
+    "repoOpsHead": "1111111111111111111111111111111111111111"
+  },
+  "acceptedBoundary": "team",
+  "ready": true,
+  "blockers": [],
+  "warnings": [
+    "analysis-disabled-by-default"
+  ],
+  "graph": {
+    "ok": true,
+    "path": "atelier-output/knowledge.graph.json",
+    "schema": "mnstry.atelier-knowledge-graph@v1",
+    "nodes": 2,
+    "edges": 1,
+    "diagnostics": 0,
+    "privateRepoRecommended": 0
+  },
+  "alignment": {
+    "ok": true,
+    "path": "atelier-output/alignment.json",
+    "schema": null,
+    "generatedAt": null,
+    "graphNodes": 2,
+    "graphEdges": 1,
+    "alignmentNodes": 2,
+    "alignmentEdges": 1,
+    "gaps": 0,
+    "diagnostics": 0
+  },
+  "contracts": [
+    {
+      "path": "contracts/atelier-export.v1.schema.json",
+      "present": true
+    }
+  ],
+  "kitManifest": {
+    "ok": true,
+    "path": "atelier.kit.json",
+    "schema": "mnstry.atelier-kit@v1",
+    "kernel": "atelier-kernel@v1",
+    "sourceDialect": "markdown-kg-front-matter@v1",
+    "exportContract": "atelier-export@v1",
+    "extensionPacks": 0,
+    "telemetry": null
+  },
+  "runtimeDryRun": {
+    "ok": true,
+    "root": ".",
+    "script": "npm run dry-run",
+    "test": "npm run contract",
+    "fixture": "fixtures/atelier-export/sample-studio-offer.v1.json",
+    "dryRunOnly": true
+  },
+  "supportBundle": {
+    "states": ["none", "support_bundle"],
+    "sendPath": false,
+    "background": false,
+    "telemetry": "none",
+    "hashableDryRun": true
+  },
+  "analysis": {
+    "ok": true,
+    "enabled": false,
+    "defaultEnabled": false,
+    "manifestPath": ".mnstry/atelier/analysis/manifest.json",
+    "manifestPresent": false,
+    "authority": "optional-local-claim-only"
+  },
+  "checks": [
+    {
+      "label": "npm test",
+      "command": "npm test",
+      "cwd": ".",
+      "ok": true,
+      "status": 0,
+      "signal": null
+    }
+  ]
+}

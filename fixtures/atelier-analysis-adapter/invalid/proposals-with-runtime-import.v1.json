@@ -1,0 +1,30 @@
+{
+  "schema": "atelier-proposals@v1",
+  "adapterId": "atelier.analysis.sample",
+  "provider": "sample",
+  "generatedAt": "2026-08-05T00:00:00Z",
+  "proposals": [
+    {
+      "schema": "atelier-claim@v1",
+      "claimId": "claim:sample:2026-08-05:runtime-import-attempt",
+      "subject": "sample-workspace:offer-draft",
+      "predicate": "supports",
+      "object": "sample-workspace:runtime-readiness-summary",
+      "provider": "sample",
+      "status": "proposed",
+      "promoted": false,
+      "runtimeImport": {
+        "mode": "apply"
+      }
+    }
+  ],
+  "authority": {
+    "claimOnly": true,
+    "frontMatterMutation": false,
+    "graphRelationMutation": false,
+    "publicExportFeed": false,
+    "mcpFeed": false,
+    "runtimeImport": false,
+    "directCanonicalWrite": false
+  }
+}

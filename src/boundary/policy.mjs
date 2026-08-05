@@ -17,7 +17,10 @@ import {
 } from './content-rules.mjs'
 
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
-export const PROMOTE_EVENT_SCHEMA = 'mnstry.git-promote-event@v1'
+export const PROMOTE_EVENT_SCHEMA = 'git-promote-event@v1'
+// Promote events append to a durable governance ledger; lines written before the
+// contract-stability epoch carry the legacy schema id and must stay readable.
+export const LEGACY_PROMOTE_EVENT_SCHEMAS = new Set(['mnstry.git-promote-event@v1'])
 export const VALID_BOUNDARY_MODES = new Set(['strict', 'legacy-warning'])
 export const VALID_REPO_KINDS = new Set(['private_domain', 'shared', 'generated', 'archive'])
 export const VALID_AUDIENCES = new Set(['private', 'team', 'operator', 'staff', 'public', 'sensitive'])
@@ -545,7 +548,7 @@ function promotionFindings({ policy, project, graph }) {
   for (const [index, record] of records.entries()) {
     if (record.invalid) {
       findings.push(finding({ severity, code: 'git-promote-record-invalid-json', message: `git.promote record ${index + 1} is invalid JSON` }))
-    } else if (record.schema && record.schema !== PROMOTE_EVENT_SCHEMA) {
+    } else if (record.schema && record.schema !== PROMOTE_EVENT_SCHEMA && !LEGACY_PROMOTE_EVENT_SCHEMAS.has(record.schema)) {
       findings.push(finding({ severity, code: 'git-promote-record-invalid-schema', message: `git.promote record ${index + 1} has invalid schema ${record.schema}` }))
     } else if (record.event?.type !== 'git.promote' || record.event?.revocable !== false) {
       findings.push(finding({ severity, code: 'git-promote-record-invalid', message: `git.promote record ${index + 1} must be durable and non-revocable` }))

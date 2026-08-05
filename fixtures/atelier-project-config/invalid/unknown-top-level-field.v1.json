@@ -1,0 +1,14 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "sample-workspace",
+  "telemetry": {
+    "endpoint": "https://example.test/collect"
+  },
+  "repos": [
+    {
+      "name": "content",
+      "path": "content",
+      "readBoundary": "private"
+    }
+  ]
+}

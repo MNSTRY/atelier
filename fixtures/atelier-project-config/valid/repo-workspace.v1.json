@@ -1,0 +1,23 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "sample-workspace",
+  "roots": {
+    "workspace": ".",
+    "repoOps": "."
+  },
+  "graph": {
+    "repoAccessPath": "repo-access.v1.json",
+    "outputPath": "atelier-output/knowledge.graph.json"
+  },
+  "projection": {
+    "outputRoot": "atelier-output",
+    "readinessPath": "atelier-output/atelier-readiness.json"
+  },
+  "repos": [
+    {
+      "name": "content",
+      "path": "content",
+      "readBoundary": "private"
+    }
+  ]
+}

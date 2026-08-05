@@ -1,0 +1,22 @@
+{
+  "schema": "atelier-action-intent@v1",
+  "id": "atelier.action.copy-repo-path",
+  "kind": "copy.repoPath",
+  "label": "Copy repo path",
+  "appliesTo": {
+    "scopes": ["entry"],
+    "targetTypes": ["source"]
+  },
+  "reads": ["kg.id", "repoPath"],
+  "writes": ["clipboard"],
+  "authority": {
+    "label": "Copy only; no runtime mutation",
+    "runtimeMutation": false
+  },
+  "deniedWhen": [
+    {
+      "reason": "no-repo-path",
+      "message": "Entry has no repo path to copy."
+    }
+  ]
+}

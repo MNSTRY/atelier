@@ -1,0 +1,15 @@
+{
+  "schema": "atelier-claim@v2",
+  "claimId": "claim:manual:2026-08-05:wrong-schema-const",
+  "subject": "sample-workspace:offer-draft",
+  "predicate": "supports",
+  "object": "sample-workspace:runtime-readiness-summary",
+  "provider": "manual",
+  "status": "proposed",
+  "promoted": false,
+  "confidence": 0.5,
+  "evidence": [
+    "docs/source.md#claim"
+  ],
+  "createdAt": "2026-08-05T00:00:00Z"
+}

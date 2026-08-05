@@ -1,0 +1,7 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "empty-project",
+  "roots": {
+    "workspace": "."
+  }
+}

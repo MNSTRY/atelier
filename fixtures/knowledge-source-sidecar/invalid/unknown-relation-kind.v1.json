@@ -1,0 +1,18 @@
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "source.html",
+  "title": "Sample source",
+  "summary": "Sidecar declaring a relation kind outside the shared vocabulary.",
+  "tags": ["sample"],
+  "kg": {
+    "id": "sample-workspace:source-html",
+    "type": "html",
+    "domain": "architecture",
+    "lifecycle": "current",
+    "status": "active",
+    "audience": "team",
+    "relations": {
+      "blocks": ["sample-workspace:readme"]
+    }
+  }
+}

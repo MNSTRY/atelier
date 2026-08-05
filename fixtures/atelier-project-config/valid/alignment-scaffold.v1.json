@@ -1,0 +1,15 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "roots": {
+    "workspace": ".",
+    "repoOps": "ops"
+  },
+  "graph": {
+    "repoAccessPath": "config/repo-access.v1.json",
+    "workspaceGraphPath": "../project-knowledge.graph.json"
+  },
+  "alignment": {
+    "appRepo": "project-app",
+    "root": "APP/mnstry-alignment"
+  }
+}
