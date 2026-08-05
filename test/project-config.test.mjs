@@ -198,7 +198,7 @@ test('project config validation rejects tracked absolute repo paths', () => {
     schema: PROJECT_CONFIG_SCHEMA,
     roots: { workspace: '.' },
     graph: { outputPath: 'atelier-output/knowledge.graph.json' },
-    repos: [{ name: 'content', path: '/Users/someone/content' }],
+    repos: [{ name: 'content', path: '/home/someone/content' }],
   })
   assert.match(errors.join('\n'), /machine-local absolute paths/)
 })

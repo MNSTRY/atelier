@@ -28,7 +28,7 @@ export const BANNED_KEY_PATTERNS = [
 ]
 
 export const BANNED_VALUE_PATTERNS = [
-  { type: 'absolute-path', re: /(?:^|[\s"'])\/Users\/[^/\s"']+\/[^\s"']+/ },
+  { type: 'absolute-path', re: /(?:^|[\s"'])\/(?:Users|home)\/[^/\s"']+\/[^\s"']+/ },
   { type: 'repo-file-path', re: /(?:^|[\s"'])(?:[a-z0-9._-]+)\/(?:APP|app|src|docs|private|secrets?)\/[^\s"']+/i },
   { type: 'kg-node-id', re: /(?:^|[\s"'])[a-z][a-z0-9._-]*:[a-z0-9._:-]*[a-z][a-z0-9._:-]*/i },
   { type: 'git-remote', re: /\b(?:git@|https:\/\/github\.com\/)[^\s"']+/i },

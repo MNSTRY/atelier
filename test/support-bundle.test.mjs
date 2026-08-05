@@ -33,7 +33,7 @@ test('support bundle rejects banned data classes and fixtures cover both sides',
     sendPath: false,
     promptText: 'copy this prompt',
     leaked: [
-      '/Users/operator/Code/project-app/src/private.md',
+      '/home/operator/code/project-app/src/private.md',
       'project-app/private/item.md',
       'project-app:private-node',
       'git@github.com:owner/project.git',
