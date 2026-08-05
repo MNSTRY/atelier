@@ -4,15 +4,10 @@ import { canProjectNode, projectGraph } from './policy.mjs'
 export const ALIGNMENT_PROJECTION_SCHEMA = 'mnstry.alignment-projection@v1'
 export const PROJECTION_POLICY_VERSION = 'projection-policy@v1'
 
-export const DEFAULT_ROOT_GRAPHS = [
-  'IdentityGraph',
-  'OfferGraph',
-  'CommitmentGraph',
-  'EventSpine',
-  'ProjectionGraph',
-  'ConsentBoundary',
-  'MessageSpine',
-]
+// Root graph names are workspace-configured via sduiMap.rootGraphs. The kit
+// ships no defaults, so name-based alignment classification stays inactive
+// until a workspace supplies its own graph names.
+export const DEFAULT_ROOT_GRAPHS = []
 
 export const DEFAULT_PROOF_GATES = [
   'tenant-purity',
