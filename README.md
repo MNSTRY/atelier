@@ -17,9 +17,10 @@ client-grade sharing.
 
 - Version: `0.1.0-alpha.2`
 - Runtime: Node.js `>=22.18.0 <23`
+- Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at runtime
 - Stability: alpha
 - Distribution: private-preview Git tag
-  `git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.2`
+  `git+https://github.com/MNSTRY/atelier.git#v0.1.0-alpha.2`
 - Telemetry: none
 - Network egress: none in package runtime paths
 - Runtime mutation: not implemented
@@ -64,7 +65,7 @@ Private-preview installs are Git tag pinned while npm publishing remains
 deferred:
 
 ```bash
-npm install --save-dev git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.2
+npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.1.0-alpha.2
 ```
 
 ```js

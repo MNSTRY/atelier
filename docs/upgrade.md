@@ -30,7 +30,7 @@ For private-preview installs, pin the install command to the release tag and
 record the resolved Git SHA in the lockfile:
 
 ```bash
-npm install --save-dev git+https://github.com/mnstry/atelier.git#v0.1.0-alpha.2
+npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.1.0-alpha.2
 atelier lock write --project ./atelier.project.json
 ```
 
