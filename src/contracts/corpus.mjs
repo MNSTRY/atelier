@@ -77,6 +77,12 @@ export const CONTRACT_CORPUS = [
     registry: false,
   },
   {
+    name: 'atelier-attestation',
+    contractFile: 'contracts/atelier-attestation.v1.schema.json',
+    fixtureRoot: 'fixtures/atelier-attestation',
+    registry: false,
+  },
+  {
     name: 'atelier-claim',
     contractFile: 'contracts/atelier-claim.v1.schema.json',
     fixtureRoot: 'fixtures/atelier-claim',

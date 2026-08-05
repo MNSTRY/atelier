@@ -1,0 +1,5 @@
+{
+  "schema": "atelier-compat-baseline@v1",
+  "baselineTag": null,
+  "note": "Set to the first tag cut after the contract-stability epoch. Null = gate inert."
+}
