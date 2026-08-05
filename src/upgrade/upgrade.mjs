@@ -503,7 +503,7 @@ function runTemplateScaffold(project) {
   fs.writeFileSync(target, `# Atelier Upgrade\n\nRun \`atelier upgrade --dry-run --project ./atelier.project.json\` before applying upstream Atelier changes.\n`)
 }
 
-function applyMigration(project, migration) {
+export function applyMigration(project, migration) {
   if (migration.apply === 'writeLock') {
     writeAtelierLock({ project })
   } else if (migration.apply === 'refreshGenerated') {
@@ -518,6 +518,10 @@ function applyMigration(project, migration) {
   } else if (migration.apply === 'semanticReviewCheck') {
     const findings = stagedSemanticFindings(project)
     if (findings.length) throw new Error(findings.join('\n'))
+  } else if (migration.apply === 'none') {
+    // explicit no-op reserved for inactive placeholder migrations
+  } else {
+    throw new Error(`migration ${migration.id} has unrecognized apply action "${migration.apply}"`)
   }
 }
 

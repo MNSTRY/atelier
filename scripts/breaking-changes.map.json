@@ -1,0 +1,58 @@
+{
+  "entries": [
+    {
+      "match": "`fileClasses` is now required",
+      "disposition": "exempt",
+      "reason": "Unreleased pre-public change. No released tag ever required fileClasses and the kit manifest is package-owned (fixtures only) — no consumer-authored file exists to migrate; generated artifacts are covered by generated_refresh.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "runtime owner vocabulary is now",
+      "disposition": "exempt",
+      "reason": "Contract-stability epoch change, pre-public. The vendor-neutral rename lands before any external consumer pins; the epoch tag is the compatibility baseline and no consumer-authored document carries the old owner names.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "`protocol.outputs` on bundled readiness protocols",
+      "disposition": "exempt",
+      "reason": "Contract-stability epoch change, pre-public. The slug-array shape never validated against the protocol contract and had no production consumer; bundled protocols are package-owned.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "every document contract enters the contract-stability epoch",
+      "disposition": "exempt",
+      "reason": "The epoch flag-day itself: contractVersion and ext are additive-optional going forward; validators pinned to pre-epoch tags predate any external consumer.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "provider enum gains",
+      "disposition": "exempt",
+      "reason": "Contract-stability epoch change, pre-public. Widening the claim provider enum is sanctioned only inside the epoch; readiness-emitted claims previously failed the standalone contract, so no valid consumer document regresses.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "analysis adapter manifest schema const",
+      "disposition": "exempt",
+      "reason": "Contract-stability epoch change, pre-public. Local adapter manifests are dev-local alpha state; the contract and published fixtures already carried the new const.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "boundary promote events are now recorded with schema",
+      "disposition": "exempt",
+      "reason": "Contract-stability epoch change, pre-public. New ledger lines use the published const; previously recorded lines are tolerated read-side via LEGACY_PROMOTE_EVENT_SCHEMAS rather than rewritten.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "context envelope schema const",
+      "disposition": "exempt",
+      "reason": "Contract-stability epoch change, pre-public. The envelope is ephemeral harness state regenerated per session; nothing durable carries the old const.",
+      "date": "2026-08-05"
+    },
+    {
+      "match": "ships no default root-graph name",
+      "disposition": "exempt",
+      "reason": "Pre-public neutralization. The built-in list named internal systems and shipped in the public kit; workspaces that relied on it supply their own names via sduiMap.rootGraphs configuration.",
+      "date": "2026-08-05"
+    }
+  ]
+}
