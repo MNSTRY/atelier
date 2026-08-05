@@ -28,7 +28,8 @@ function copyDir(source, target) {
   fs.mkdirSync(target, { recursive: true })
   for (const ent of fs.readdirSync(source, { withFileTypes: true })) {
     const from = path.join(source, ent.name)
-    const to = path.join(target, ent.name)
+    // npm pack strips files named .gitignore, so templates ship the file as `gitignore`.
+    const to = path.join(target, ent.name === 'gitignore' ? '.gitignore' : ent.name)
     if (ent.isDirectory()) copyDir(from, to)
     else fs.copyFileSync(from, to)
   }
