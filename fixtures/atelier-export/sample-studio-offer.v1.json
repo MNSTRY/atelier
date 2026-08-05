@@ -313,27 +313,27 @@
     "runtimeOwners": [
       {
         "objectClass": "public_surface",
-        "owner": "ProjectionGraph"
+        "owner": "projection"
       },
       {
         "objectClass": "offer",
-        "owner": "OfferGraph"
+        "owner": "catalog"
       },
       {
         "objectClass": "commitment_path",
-        "owner": "CommitmentGraph"
+        "owner": "commitments"
       },
       {
         "objectClass": "consent_boundary",
-        "owner": "ConsentBoundary"
+        "owner": "consent"
       },
       {
         "objectClass": "staff_prep",
-        "owner": "ProjectionGraph"
+        "owner": "projection"
       },
       {
         "objectClass": "trackable",
-        "owner": "EventSpine"
+        "owner": "events"
       }
     ],
     "operations": [

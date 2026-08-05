@@ -5,6 +5,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
+import { bundledReadinessProtocols } from '@mnstry/atelier/readiness-protocols'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const FIXTURE_ROOT = path.join(ROOT, 'fixtures', 'readiness-protocols')
@@ -98,6 +99,19 @@ for (const contract of CONTRACTS) {
     }
   })
 }
+
+test('bundled protocols validate against the readiness protocol contract', () => {
+  const validate = compileSchema(path.join(ROOT, 'contracts', 'atelier-readiness-protocol.v1.schema.json'))
+
+  assert.notEqual(bundledReadinessProtocols.length, 0, 'bundled pack must expose protocols')
+
+  const failures = []
+  for (const protocol of bundledReadinessProtocols) {
+    if (!validate(protocol)) failures.push(`${protocol.id}:\n${formatErrors(validate)}`)
+  }
+
+  assert.deepEqual(failures, [], `bundled protocols failed the contract:\n${failures.join('\n\n')}`)
+})
 
 test('extension pack schema allows optional readiness protocol references', () => {
   const validate = compileSchema(path.join(ROOT, 'contracts', 'atelier-extension-pack.v1.schema.json'))

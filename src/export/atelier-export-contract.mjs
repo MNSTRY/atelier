@@ -18,15 +18,15 @@ export const OBJECT_CLASSES = [
 ]
 
 export const RUNTIME_OWNERS = [
-  'IdentityGraph',
-  'OfferGraph',
-  'CommitmentGraph',
-  'EventSpine',
-  'ProjectionGraph',
-  'ConsentBoundary',
-  'MessageSpine',
-  'ProviderGraph',
-  'AuditGraph',
+  'identity',
+  'catalog',
+  'commitments',
+  'events',
+  'projection',
+  'consent',
+  'messaging',
+  'providers',
+  'audit',
 ]
 
 export const ALLOWED_RUNTIME_TARGETS = [

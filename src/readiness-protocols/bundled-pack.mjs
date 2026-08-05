@@ -61,6 +61,8 @@ function sourceTerm(protocolId, mapping) {
   if (mapping.sourceTerm) return mapping.sourceTerm
   const clean = String(mapping.sourceField || 'source')
     .replace(/\[\]/g, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase()
     .replace(/[^a-z0-9._-]+/gi, '-')
     .replace(/^-+|-+$/g, '')
   return `${protocolId}.${clean || 'source'}`
@@ -111,8 +113,7 @@ function protocol({
     questions: normalizedQuestions,
     inputFields,
     outputHints,
-    outputs: outputHints.map((hint) => outputSlug(slug, hint.id)),
-    outputArtifacts: {
+    outputs: {
       runSchema: READINESS_RUN_SCHEMA,
       artifacts: outputHints.map((hint) => ({
         id: `${protocolId}.${outputSlug(slug, hint.id)}`,
@@ -178,7 +179,7 @@ export const bundledReadinessProtocols = [
     inputFields: [
       { id: 'actors[].localId', type: 'string', required: true, description: 'Packet-local stable id for the role or actor.' },
       { id: 'actors[].role', type: 'enum', required: true, values: ['participant', 'facilitator', 'operator', 'organization', 'system'], description: 'Neutral role category.' },
-      { id: 'actors[].runtimeOwner', type: 'enum', required: true, values: ['IdentityGraph', 'ProviderGraph', 'AuditGraph'], description: 'Runtime owner proposed for later review.' },
+      { id: 'actors[].runtimeOwner', type: 'enum', required: true, values: ['identity', 'providers', 'audit'], description: 'Runtime owner proposed for later review.' },
       { id: 'identityQuestions[]', type: 'array', required: false, description: 'Open identity questions that block confident promotion.' },
     ],
     outputHints: [
@@ -194,8 +195,8 @@ export const bundledReadinessProtocols = [
       { id: 'identity-map.alias-supports-actor', claimPredicate: 'supports', sourceFields: ['identityQuestions[].subject'], target: 'atelier-claim@v1', evidence: 'identityQuestions[].reason' },
     ],
     exportMappings: [
-      { id: 'identity-map.actor-artifact', sourceField: 'actors[]', target: 'core.artifact', runtimeOwner: 'IdentityGraph', targetCollection: 'staffPrep' },
-      { id: 'identity-map.review-trackable', sourceField: 'identityQuestions[]', target: 'core.trackable', runtimeOwner: 'AuditGraph', targetCollection: 'trackables' },
+      { id: 'identity-map.actor-artifact', sourceField: 'actors[]', target: 'core.artifact', runtimeOwner: 'identity', targetCollection: 'staffPrep' },
+      { id: 'identity-map.review-trackable', sourceField: 'identityQuestions[]', target: 'core.trackable', runtimeOwner: 'audit', targetCollection: 'trackables' },
     ],
     safety: {
       reviewFocus: 'Verify that identity records remain role-based and evidence-backed until a runtime owner reviews them.',
@@ -241,8 +242,8 @@ export const bundledReadinessProtocols = [
       { id: 'transformation-map.limit-contradicts-overclaim', claimPredicate: 'contradicts', sourceFields: ['limits[].statement'], target: 'atelier-claim@v1', evidence: 'limits[].reason' },
     ],
     exportMappings: [
-      { id: 'transformation-map.material', sourceField: 'states', target: 'content.material', runtimeOwner: 'ProjectionGraph', targetCollection: 'surfaces' },
-      { id: 'transformation-map.outcome-trackable', sourceField: 'mechanisms[]', target: 'core.trackable', runtimeOwner: 'EventSpine', targetCollection: 'trackables' },
+      { id: 'transformation-map.material', sourceField: 'states', target: 'content.material', runtimeOwner: 'projection', targetCollection: 'surfaces' },
+      { id: 'transformation-map.outcome-trackable', sourceField: 'mechanisms[]', target: 'core.trackable', runtimeOwner: 'events', targetCollection: 'trackables' },
     ],
     safety: {
       refuses: ['unsupported therapeutic or financial outcome claims'],
@@ -289,8 +290,8 @@ export const bundledReadinessProtocols = [
       { id: 'offer-map-step-depends-on-previous', claimPredicate: 'depends_on', sourceFields: ['commitmentPath.steps[]'], target: 'atelier-claim@v1', evidence: 'commitmentPath.sourceRef' },
     ],
     exportMappings: [
-      { id: 'offer-map.offer', sourceField: 'offer', target: 'content.material', runtimeOwner: 'OfferGraph', targetCollection: 'offers' },
-      { id: 'offer-map.commitment-path', sourceField: 'commitmentPath', target: 'scheduling.commitment', runtimeOwner: 'CommitmentGraph', targetCollection: 'commitmentPaths' },
+      { id: 'offer-map.offer', sourceField: 'offer', target: 'content.material', runtimeOwner: 'catalog', targetCollection: 'offers' },
+      { id: 'offer-map.commitment-path', sourceField: 'commitmentPath', target: 'scheduling.commitment', runtimeOwner: 'commitments', targetCollection: 'commitmentPaths' },
     ],
     safety: {
       refuses: ['active booking flow', 'active payment flow'],
@@ -337,8 +338,8 @@ export const bundledReadinessProtocols = [
       { id: 'space-design-provision-depends-on-constraint', claimPredicate: 'depends_on', sourceFields: ['provisioning.needs[]', 'space.constraints[]'], target: 'atelier-claim@v1', evidence: 'provisioning.sourceRef' },
     ],
     exportMappings: [
-      { id: 'space-design.space', sourceField: 'space', target: 'space.space', runtimeOwner: 'ProjectionGraph', targetCollection: 'spaces' },
-      { id: 'space-design.provision', sourceField: 'provisioning', target: 'space.provision', runtimeOwner: 'ProviderGraph', targetCollection: 'providerEgress' },
+      { id: 'space-design.space', sourceField: 'space', target: 'space.space', runtimeOwner: 'projection', targetCollection: 'spaces' },
+      { id: 'space-design.provision', sourceField: 'provisioning', target: 'space.provision', runtimeOwner: 'providers', targetCollection: 'providerEgress' },
     ],
     safety: {
       refuses: ['automatic provisioning', 'capacity expansion without review'],
@@ -385,8 +386,8 @@ export const bundledReadinessProtocols = [
       { id: 'trackables-signal-supports-journey', claimPredicate: 'supports', sourceFields: ['trackables[].relatedStage'], target: 'atelier-claim@v1', evidence: 'trackables[].sourceRef' },
     ],
     exportMappings: [
-      { id: 'trackables.trackable', sourceField: 'trackables[]', target: 'core.trackable', runtimeOwner: 'EventSpine', targetCollection: 'trackables' },
-      { id: 'trackables.audit-artifact', sourceField: 'trackables[].decisionUse', target: 'core.artifact', runtimeOwner: 'AuditGraph', targetCollection: 'staffPrep' },
+      { id: 'trackables.trackable', sourceField: 'trackables[]', target: 'core.trackable', runtimeOwner: 'events', targetCollection: 'trackables' },
+      { id: 'trackables.audit-artifact', sourceField: 'trackables[].decisionUse', target: 'core.artifact', runtimeOwner: 'audit', targetCollection: 'staffPrep' },
     ],
     safety: {
       refuses: ['background collection', 'implicit participant monitoring'],
@@ -433,8 +434,8 @@ export const bundledReadinessProtocols = [
       { id: 'consent-boundaries-refusal-supports-boundary', claimPredicate: 'supports', sourceFields: ['boundaries[].refusalPath'], target: 'atelier-claim@v1', evidence: 'boundaries[].sourceRef' },
     ],
     exportMappings: [
-      { id: 'consent-boundaries.artifact', sourceField: 'boundaries[]', target: 'core.artifact', runtimeOwner: 'ConsentBoundary', targetCollection: 'consentBoundaries' },
-      { id: 'consent-boundaries.audit-trackable', sourceField: 'boundaries[].exceptions[]', target: 'core.trackable', runtimeOwner: 'AuditGraph', targetCollection: 'trackables' },
+      { id: 'consent-boundaries.artifact', sourceField: 'boundaries[]', target: 'core.artifact', runtimeOwner: 'consent', targetCollection: 'consentBoundaries' },
+      { id: 'consent-boundaries.audit-trackable', sourceField: 'boundaries[].exceptions[]', target: 'core.trackable', runtimeOwner: 'audit', targetCollection: 'trackables' },
     ],
     safety: {
       refuses: ['assumed consent', 'silent visibility expansion'],
@@ -481,8 +482,8 @@ export const bundledReadinessProtocols = [
       { id: 'content-inventory-material-supersedes', claimPredicate: 'supersedes', sourceFields: ['materials[].supersedes'], target: 'atelier-claim@v1', evidence: 'materials[].sourceRef' },
     ],
     exportMappings: [
-      { id: 'content-inventory.material', sourceField: 'materials[]', target: 'content.material', runtimeOwner: 'ProjectionGraph', targetCollection: 'surfaces' },
-      { id: 'content-inventory.staff-prep', sourceField: 'materials[contentRole=staff-prep]', target: 'core.artifact', runtimeOwner: 'ProviderGraph', targetCollection: 'staffPrep' },
+      { id: 'content-inventory.material', sourceField: 'materials[]', target: 'content.material', runtimeOwner: 'projection', targetCollection: 'surfaces' },
+      { id: 'content-inventory.staff-prep', sourceField: 'materials[contentRole=staff-prep]', target: 'core.artifact', runtimeOwner: 'providers', targetCollection: 'staffPrep' },
     ],
     safety: {
       refuses: ['public projection from private source material', 'unreviewed content promotion'],
@@ -529,8 +530,8 @@ export const bundledReadinessProtocols = [
       { id: 'discovery-engine-question-supports-signal', claimPredicate: 'supports', sourceFields: ['discoveryQuestions[].prompt', 'signals[].name'], target: 'atelier-claim@v1', evidence: 'signals[].sourceRef' },
     ],
     exportMappings: [
-      { id: 'discovery-engine.surface', sourceField: 'discoveryQuestions[]', target: 'content.material', runtimeOwner: 'ProjectionGraph', targetCollection: 'sdui' },
-      { id: 'discovery-engine.signal-trackable', sourceField: 'signals[]', target: 'core.trackable', runtimeOwner: 'EventSpine', targetCollection: 'trackables' },
+      { id: 'discovery-engine.surface', sourceField: 'discoveryQuestions[]', target: 'content.material', runtimeOwner: 'projection', targetCollection: 'sdui' },
+      { id: 'discovery-engine.signal-trackable', sourceField: 'signals[]', target: 'core.trackable', runtimeOwner: 'events', targetCollection: 'trackables' },
     ],
     safety: {
       refuses: ['external analysis execution', 'automatic recommendation promotion'],
@@ -561,7 +562,7 @@ export const bundledReadinessProtocols = [
     inputFields: [
       { id: 'stages[].name', type: 'string', required: true, description: 'Neutral journey stage name.' },
       { id: 'stages[].entryCriteria', type: 'text', required: true, description: 'Reviewed entry condition.' },
-      { id: 'handoffs[].toOwner', type: 'enum', required: true, values: ['IdentityGraph', 'OfferGraph', 'CommitmentGraph', 'ProviderGraph', 'MessageSpine', 'AuditGraph'], description: 'Owner proposed for review.' },
+      { id: 'handoffs[].toOwner', type: 'enum', required: true, values: ['identity', 'catalog', 'commitments', 'providers', 'messaging', 'audit'], description: 'Owner proposed for review.' },
       { id: 'exits[].path', type: 'text', required: true, description: 'Pause, decline, complete, or leave path.' },
     ],
     outputHints: [
@@ -577,8 +578,8 @@ export const bundledReadinessProtocols = [
       { id: 'journey-map-exit-supports-consent', claimPredicate: 'supports', sourceFields: ['exits[].path', 'handoffs[].consentBoundaryRef'], target: 'atelier-claim@v1', evidence: 'exits[].sourceRef' },
     ],
     exportMappings: [
-      { id: 'journey-map.commitment-path', sourceField: 'stages[]', target: 'scheduling.commitment', runtimeOwner: 'CommitmentGraph', targetCollection: 'commitmentPaths' },
-      { id: 'journey-map.surface', sourceField: 'stages[].participantCopy', target: 'content.material', runtimeOwner: 'ProjectionGraph', targetCollection: 'surfaces' },
+      { id: 'journey-map.commitment-path', sourceField: 'stages[]', target: 'scheduling.commitment', runtimeOwner: 'commitments', targetCollection: 'commitmentPaths' },
+      { id: 'journey-map.surface', sourceField: 'stages[].participantCopy', target: 'content.material', runtimeOwner: 'projection', targetCollection: 'surfaces' },
     ],
     safety: {
       refuses: ['automatic routing', 'exit path omission'],
@@ -625,8 +626,8 @@ export const bundledReadinessProtocols = [
       { id: 'operations-readiness-escalation-depends-on-owner', claimPredicate: 'depends_on', sourceFields: ['escalations[].condition', 'escalations[].ownerRole'], target: 'atelier-claim@v1', evidence: 'escalations[].sourceRef' },
     ],
     exportMappings: [
-      { id: 'operations-readiness.staff-prep', sourceField: 'runbooks[]', target: 'core.artifact', runtimeOwner: 'ProviderGraph', targetCollection: 'staffPrep' },
-      { id: 'operations-readiness.escalation-trackable', sourceField: 'escalations[]', target: 'core.trackable', runtimeOwner: 'AuditGraph', targetCollection: 'trackables' },
+      { id: 'operations-readiness.staff-prep', sourceField: 'runbooks[]', target: 'core.artifact', runtimeOwner: 'providers', targetCollection: 'staffPrep' },
+      { id: 'operations-readiness.escalation-trackable', sourceField: 'escalations[]', target: 'core.trackable', runtimeOwner: 'audit', targetCollection: 'trackables' },
     ],
     safety: {
       refuses: ['unowned operational responsibility', 'silent launch with blocked runbooks'],
@@ -655,7 +656,7 @@ export const bundledReadinessProtocols = [
       },
     ],
     inputFields: [
-      { id: 'runtimeOwners[].name', type: 'enum', required: true, values: ['IdentityGraph', 'OfferGraph', 'CommitmentGraph', 'EventSpine', 'ProjectionGraph', 'ConsentBoundary', 'MessageSpine', 'ProviderGraph', 'AuditGraph'], description: 'Runtime owner proposed by the packet.' },
+      { id: 'runtimeOwners[].name', type: 'enum', required: true, values: ['identity', 'catalog', 'commitments', 'events', 'projection', 'consent', 'messaging', 'providers', 'audit'], description: 'Runtime owner proposed by the packet.' },
       { id: 'importPlan.mode', type: 'enum', required: true, values: ['dry-run'], description: 'Bundled pack only supports dry-run import planning.' },
       { id: 'importPlan.operations[]', type: 'array', required: true, description: 'Reviewable operations, not executable writes.' },
       { id: 'controls[].expectedRefusal', type: 'text', required: true, description: 'Boundary validation expectation for fail-closed behavior.' },
@@ -673,8 +674,8 @@ export const bundledReadinessProtocols = [
       { id: 'runtime-readiness-operation-depends-on-owner', claimPredicate: 'depends_on', sourceFields: ['importPlan.operations[]', 'runtimeOwners[].name'], target: 'atelier-claim@v1', evidence: 'runtimeOwners[].sourceRef' },
     ],
     exportMappings: [
-      { id: 'runtime-readiness.report', sourceField: 'controls[]', target: 'core.artifact', runtimeOwner: 'AuditGraph', targetCollection: 'staffPrep' },
-      { id: 'runtime-readiness.import-trackable', sourceField: 'importPlan.blockers[]', target: 'core.trackable', runtimeOwner: 'AuditGraph', targetCollection: 'trackables' },
+      { id: 'runtime-readiness.report', sourceField: 'controls[]', target: 'core.artifact', runtimeOwner: 'audit', targetCollection: 'staffPrep' },
+      { id: 'runtime-readiness.import-trackable', sourceField: 'importPlan.blockers[]', target: 'core.trackable', runtimeOwner: 'audit', targetCollection: 'trackables' },
     ],
     safety: {
       refuses: ['apply mode', 'runtime mutation', 'unverified control pass'],
@@ -721,8 +722,8 @@ export const bundledReadinessProtocols = [
       { id: 'tenant-packet-acceptance-evidences-readiness', claimPredicate: 'evidences', sourceFields: ['acceptance.ownerRole', 'acceptance.conditions[]'], target: 'atelier-claim@v1', evidence: 'acceptance.evidenceRefs[]' },
     ],
     exportMappings: [
-      { id: 'tenant-packet.cover-artifact', sourceField: 'tenant', target: 'core.artifact', runtimeOwner: 'AuditGraph', targetCollection: 'staffPrep' },
-      { id: 'tenant-packet.provision-review', sourceField: 'protocolStates[]', target: 'space.provision', runtimeOwner: 'ProviderGraph', targetCollection: 'providerEgress' },
+      { id: 'tenant-packet.cover-artifact', sourceField: 'tenant', target: 'core.artifact', runtimeOwner: 'audit', targetCollection: 'staffPrep' },
+      { id: 'tenant-packet.provision-review', sourceField: 'protocolStates[]', target: 'space.provision', runtimeOwner: 'providers', targetCollection: 'providerEgress' },
     ],
     safety: {
       refuses: ['unaccounted protocol state', 'acceptance without evidence'],

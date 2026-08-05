@@ -83,7 +83,7 @@
       "sourceField": "scope",
       "sourceTerm": "sample.readiness:contract-gate.scope",
       "target": "core.artifact",
-      "runtimeOwner": "AuditGraph",
+      "runtimeOwner": "audit",
       "targetCollection": "staffPrep"
     }
   ],

@@ -503,15 +503,15 @@
     },
     "runtimeOwnerName": {
       "enum": [
-        "IdentityGraph",
-        "OfferGraph",
-        "CommitmentGraph",
-        "EventSpine",
-        "ProjectionGraph",
-        "ConsentBoundary",
-        "MessageSpine",
-        "ProviderGraph",
-        "AuditGraph"
+        "identity",
+        "catalog",
+        "commitments",
+        "events",
+        "projection",
+        "consent",
+        "messaging",
+        "providers",
+        "audit"
       ]
     },
     "blocker": {

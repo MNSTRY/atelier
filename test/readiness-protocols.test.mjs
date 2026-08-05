@@ -65,8 +65,9 @@ test('each bundled readiness protocol has the required review sections', () => {
     assert.ok(READINESS_PROTOCOL_SLUGS.includes(protocol.slug))
     assert.equal(typeof protocol.title, 'string')
     assert.equal(typeof protocol.purpose, 'string')
-    assert.ok(Array.isArray(protocol.outputs))
-    assert.ok(protocol.outputs.length > 0)
+    assert.equal(protocol.outputs.runSchema, 'atelier-readiness-run@v1')
+    assert.ok(Array.isArray(protocol.outputs.artifacts))
+    assert.ok(protocol.outputs.artifacts.length > 0)
     assert.equal(typeof protocol.ui.agentPrompt, 'string')
 
     for (const section of requiredSections) {
