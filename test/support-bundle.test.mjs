@@ -118,3 +118,15 @@ test('a large address-shaped value is rejected promptly, not by backtracking', (
   assert.doesNotMatch(bannedValueErrors('ab.c-d_'.repeat(37449)), /banned value email/)
   assert.ok(Date.now() - started < 5000, `scanning a capped value took ${Date.now() - started}ms`)
 })
+
+test('the private-key pattern is bounded against header-shaped input', () => {
+  // The widened pattern repeats a repeated group. Unbounded, that is
+  // quadratic: 256 KiB of header-shaped text took about ten seconds to
+  // reject, which the size cap alone would not have prevented — it is the
+  // cap that made the worst case reachable. Bounded at four algorithm words
+  // (real headers carry at most two) it is a couple of milliseconds.
+  const headerShaped = 'BEGIN AAAA '.repeat(24000)
+  const started = Date.now()
+  assert.doesNotMatch(bannedValueErrors(headerShaped), /banned value private-key/)
+  assert.ok(Date.now() - started < 5000, `scanning header-shaped input took ${Date.now() - started}ms`)
+})

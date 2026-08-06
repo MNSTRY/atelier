@@ -98,6 +98,18 @@ function jwkMatchesAlgorithm(jwk, algorithm) {
 // validation (the attestation flow validates against its contract; the
 // announcements flow validates structurally in code). Signs the signingInput
 // bytes defined above. Never mutates the input document.
+// Attacker-controlled strings reach terminals through reason messages and
+// listing headers. A keyId carrying ANSI or newlines can erase the warning
+// line above it and print a convincing forgery in its place, so every such
+// value is capped and stripped of anything outside printable ASCII before it
+// is interpolated. Callers never see the raw value.
+export function safeLabel(value, max = 64) {
+  if (typeof value !== 'string') return '(none)'
+  const printable = Array.from(value, (ch) => (ch >= ' ' && ch <= '~' ? ch : '?')).join('')
+  if (printable.length === 0) return '(none)'
+  return printable.length > max ? `${printable.slice(0, max)}…` : printable
+}
+
 export function signDocument(doc, { privateKey, keyId, algorithm } = {}) {
   if (!doc || typeof doc !== 'object') throw new TypeError('signDocument requires a document object')
   if (!privateKey || typeof privateKey !== 'object') throw new TypeError('signDocument requires a private key JWK')
@@ -136,13 +148,13 @@ export function verifyDocument(doc, { publicKey } = {}) {
   if (signature.algorithm !== publicKey.algorithm || !jwkMatchesAlgorithm(publicKey.publicKeyJwk, signature.algorithm)) {
     reasons.push({
       code: 'signature.algorithm-mismatch',
-      message: `signature algorithm ${signature.algorithm} does not match public key algorithm ${publicKey.algorithm}`,
+      message: `signature algorithm ${safeLabel(signature.algorithm, 32)} does not match public key algorithm ${safeLabel(publicKey.algorithm, 32)}`,
     })
   }
   if (signature.keyId !== publicKey.keyId) {
     reasons.push({
       code: 'signature.key-id-mismatch',
-      message: `signature keyId ${signature.keyId} does not match public key keyId ${publicKey.keyId}`,
+      message: `signature keyId ${safeLabel(signature.keyId)} does not match public key keyId ${safeLabel(publicKey.keyId)}`,
     })
   }
   let cryptoValid = false

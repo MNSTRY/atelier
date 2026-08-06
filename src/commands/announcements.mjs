@@ -33,7 +33,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyDocument } from '../attestation/sign.mjs'
+import { safeLabel, verifyDocument } from '../attestation/sign.mjs'
 
 const PACKAGE_ROOT = process.env.MNSTRY_ATELIER_PACKAGE_ROOT
   ?? fileURLToPath(new URL('../..', import.meta.url))
@@ -136,7 +136,7 @@ function describeKeyPath(keyPath) {
 // makes a swapped trust anchor visible rather than silent, so it prints on
 // every run — and says so out loud when the key is not the committed default.
 function keyIdentityHeader(keyPath, keyDoc, { explicit }) {
-  const keyId = typeof keyDoc.keyId === 'string' && keyDoc.keyId.length > 0 ? keyDoc.keyId : '(none)'
+  const keyId = safeLabel(keyDoc.keyId)
   const provenance = explicit
     ? 'explicit --public-key, not the committed default key'
     : 'committed default key'
@@ -189,14 +189,24 @@ function runVerify(argv) {
   const options = parseOptions(argv, { 'public-key': 'value', json: 'flag' })
   const [file] = options._
   if (!file || options._.length !== 1) fail(`announcements verify requires exactly one announcement file\n\n${USAGE}`)
-  const publicKey = loadPublicKey(options['public-key'] ?? DEFAULT_PUBLIC_KEY)
+  const explicitKey = options['public-key'] !== undefined
+  const keyPath = explicitKey ? options['public-key'] : DEFAULT_PUBLIC_KEY
+  const publicKey = loadPublicKey(keyPath)
   const doc = readJsonFile(file, 'announcement')
   const { valid, reasons } = verifyAnnouncement(doc, publicKey)
   if (options.json) {
-    console.log(JSON.stringify({ valid, reasons }, null, 2))
+    console.log(JSON.stringify({
+      valid,
+      reasons,
+      key: describeKeyPath(keyPath),
+      keyId: safeLabel(publicKey.keyId),
+      explicitKey,
+    }, null, 2))
   } else if (valid) {
-    console.log(`announcement signature is valid (keyId ${doc.signature.keyId})`)
+    console.log(keyIdentityHeader(keyPath, publicKey, { explicit: explicitKey }))
+    console.log(`announcement signature is valid (keyId ${safeLabel(doc.signature.keyId)})`)
   } else {
+    console.error(keyIdentityHeader(keyPath, publicKey, { explicit: explicitKey }))
     for (const reason of reasons) console.error(`[${reason.code}] ${reason.message}`)
   }
   process.exit(valid ? 0 : 1)
@@ -206,16 +216,22 @@ function runShow(argv) {
   const options = parseOptions(argv, { 'public-key': 'value' })
   const [file] = options._
   if (!file || options._.length !== 1) fail(`announcements show requires exactly one announcement file\n\n${USAGE}`)
-  const publicKey = loadPublicKey(options['public-key'] ?? DEFAULT_PUBLIC_KEY)
+  const explicitKey = options['public-key'] !== undefined
+  const keyPath = explicitKey ? options['public-key'] : DEFAULT_PUBLIC_KEY
+  const publicKey = loadPublicKey(keyPath)
   const doc = readJsonFile(file, 'announcement')
   const { valid, reasons } = verifyAnnouncement(doc, publicKey)
   if (!valid) {
+    console.error(keyIdentityHeader(keyPath, publicKey, { explicit: explicitKey }))
     console.error(`refusing to show ${file}: the announcement does not verify, so its content is untrusted`)
     for (const reason of reasons) console.error(`[${reason.code}] ${reason.message}`)
     process.exit(1)
   }
+  // The anchor prints before any attacker-authored content, so a reader sees
+  // which key vouched for what they are about to read.
+  console.log(keyIdentityHeader(keyPath, publicKey, { explicit: explicitKey }))
   console.log(`${doc.title}`)
-  console.log(`${doc.announcementId} — ${doc.publishedAt} (signature valid, keyId ${doc.signature.keyId})`)
+  console.log(`${doc.announcementId} — ${doc.publishedAt} (signature valid, keyId ${safeLabel(doc.signature.keyId)})`)
   console.log('')
   console.log(doc.body)
   process.exit(0)
@@ -265,7 +281,7 @@ function runList(argv) {
     }
     if (reasons) {
       failures += 1
-      console.error(`!! UNVERIFIED ${name} — do not trust this file's content`)
+      console.error(`!! UNVERIFIED ${safeLabel(name, 96)} — do not trust this file's content`)
       for (const reason of reasons) console.error(`   [${reason.code}] ${reason.message}`)
     } else {
       console.log(`${doc.announcementId}  ${doc.publishedAt}  ${doc.title}`)

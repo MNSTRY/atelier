@@ -2,6 +2,30 @@
 
 ## 0.2.0-alpha.0
 
+- **Security:** the widened private-key pattern repeated a repeated group,
+  which is quadratic — 256 KiB of header-shaped text took about ten seconds
+  to reject, reachable through `--message`, a capped `--context`, and the
+  release audit. The repetition is bounded at four algorithm words, which
+  still matches every real header, and a timing guard pins it.
+- **Security:** JWK private key material had no coverage anywhere, though it
+  is the only key format the kit writes. The private scalar and the
+  `privateKeyJwk` wrapper are now banned values, the repo sweep looks for the
+  scalar, and the release audit rejects any packed JSON that carries one —
+  not only announcements documents.
+- Attacker-controlled labels are sanitized before they reach a terminal. A
+  keyId carrying an escape sequence could erase the `!! UNVERIFIED` warning
+  above it and print a forged listing in its place; keyIds, algorithms, and
+  announcement filenames are now capped and stripped of control characters.
+- `announcements verify` and `show` name the key that vouched for a document,
+  as `list` already did — `show` prints it before any attacker-authored
+  content, and `verify --json` carries the key path, keyId, and whether the
+  anchor was explicit.
+- `atelier feedback` refuses a `--context` that is not a regular file (a FIFO
+  or character device never returned from the read, so the size cap could not
+  fire) and bounds `--message` the way file inputs were already bounded.
+- The release audit decodes packed files strictly: a NUL-free binary used to
+  scan as harmless text through a lossy decode while still carrying
+  recoverable content.
 - **Security:** the private-key disclosure pattern matched only the bare
   PKCS#8 header, so an ssh-keygen OPENSSH private key — and the RSA, EC, DSA,
   ENCRYPTED, and PGP block headers — passed the support-bundle scan, the

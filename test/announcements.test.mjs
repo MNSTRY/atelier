@@ -91,7 +91,15 @@ test('committed seed announcement verifies with the default committed key', () =
 
   const json = run(['verify', SEED, '--public-key', PUBLIC_KEY, '--json'])
   assert.equal(json.status, 0)
-  assert.deepEqual(JSON.parse(json.stdout), { valid: true, reasons: [] })
+  // The verdict carries its anchor: which key vouched, and whether that key
+  // was the committed default or one the caller passed in.
+  assert.deepEqual(JSON.parse(json.stdout), {
+    valid: true,
+    reasons: [],
+    key: 'announcements/keys/mnstry-announcements.public.v1.json',
+    keyId: 'mnstry-announcements-2026',
+    explicitKey: true,
+  })
 
   // The library layer agrees with the CLI.
   assert.deepEqual(verifyDocument(seedDoc, { publicKey: seedPublicKey }), { valid: true, reasons: [] })

@@ -200,6 +200,24 @@ export function writeFeedbackReport(payload, { baseDir = process.cwd() } = {}) {
 // the decode) into the payload while the scan patterns, all text-shaped, walk
 // straight past the bytes that matter.
 function readTextFile(label, file) {
+  // Character devices and FIFOs never return from readFileSync, so the
+  // post-read cap below can never fire for them: refuse anything that is not
+  // a regular file, and refuse an oversized one before reading it. The
+  // post-read check stays — it is what makes the size bound race-free.
+  let stat
+  try {
+    stat = fs.statSync(file)
+  } catch {
+    throw new UsageError(`could not read ${label}: ${file}`)
+  }
+  if (!stat.isFile()) {
+    throw new UsageError(`${label} is not a regular file, so nothing was embedded: ${file}`)
+  }
+  if (stat.size > MAX_INPUT_FILE_BYTES) {
+    throw new UsageError(
+      `${label} is ${stat.size} bytes and the limit is ${MAX_INPUT_FILE_BYTES} bytes (${MAX_INPUT_FILE_BYTES / 1024} KiB); nothing was embedded. Attach a trimmed excerpt instead: ${file}`,
+    )
+  }
   let buffer
   try {
     buffer = fs.readFileSync(file)
@@ -279,6 +297,13 @@ function runCreate(argv) {
   }
   const message = options.message ?? readTextFile('--message-file', options.messageFile)
   if (!message.trim()) throw new UsageError('the feedback message must not be empty')
+  // --message arrives through argv rather than a file, so the file reader's
+  // bound never saw it; the same payload reaches the same scan either way.
+  if (Buffer.byteLength(message, 'utf8') > MAX_INPUT_FILE_BYTES) {
+    throw new UsageError(
+      `--message is longer than the ${MAX_INPUT_FILE_BYTES} byte limit (${MAX_INPUT_FILE_BYTES / 1024} KiB); nothing was written. Use --message-file with a trimmed excerpt instead.`,
+    )
+  }
   const context = options.context === null
     ? null
     : { name: path.basename(options.context), text: readTextFile('--context', options.context) }

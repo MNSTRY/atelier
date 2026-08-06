@@ -48,7 +48,13 @@ export const BANNED_VALUE_PATTERNS = [
   // to the structural pattern in scripts/structural-patterns.mjs.
   // The literal must not match itself: this file ships in the tarball and
   // release:audit scans it with that structural pattern.
-  { type: 'private-key', re: /BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?|BEGIN (?:RSA|OPENSSH) KEY/ },
+  // Keys in this kit are JWK, not PEM: the PEM patterns above never saw the
+  // one key format atelier itself writes. The private scalar and the wrapper
+  // member are both refused. The literals do not self-match — the value here
+  // is a pattern, not a base64url run.
+  { type: 'jwk-private-key', re: /"d"\s*:\s*"[A-Za-z0-9_-]{20,}"/ },
+  { type: 'jwk-private-key-document', re: /privateKeyJwk/ },
+  { type: 'private-key', re: /BEGIN (?:[A-Z0-9]+ ){0,4}PRIVATE KEY(?: BLOCK)?|BEGIN (?:RSA|OPENSSH) KEY/ },
 ]
 
 function stable(value) {

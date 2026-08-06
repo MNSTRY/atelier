@@ -140,7 +140,17 @@ for (const filePath of paths) {
     continue
   }
 
-  const text = bytes.toString('utf8')
+  // A lossy utf8 read turns undecodable bytes into replacement characters, so
+  // a NUL-free binary would scan as harmless text while still carrying
+  // recoverable content. Decoding strictly refuses it instead.
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    console.error(`[release:audit] file is not valid UTF-8 text and cannot be content-scanned: ${filePath}`)
+    failures += 1
+    continue
+  }
   for (const { pattern, label } of forbiddenContent) {
     if (pattern.test(text)) {
       console.error(`[release:audit] ${filePath} contains ${label}`)
@@ -148,18 +158,20 @@ for (const filePath of paths) {
     }
   }
 
-  // The announcements channel dies the moment a private half is published.
-  if (filePath.startsWith('announcements/')) {
+  // No packed JSON may carry a JWK private scalar: the announcements channel
+  // dies the moment a private half is published, and the same mistake in any
+  // fixture would ship a signing key.
+  if (filePath.endsWith('.json')) {
     let doc
     try {
       doc = JSON.parse(text)
     } catch {
-      console.error(`[release:audit] announcements document is not valid JSON: ${filePath}`)
+      console.error(`[release:audit] packed JSON document does not parse: ${filePath}`)
       failures += 1
       continue
     }
     if (JSON.stringify(doc).includes('"d":')) {
-      console.error(`[release:audit] announcements document carries a private key member: ${filePath}`)
+      console.error(`[release:audit] packed JSON document carries a private key member: ${filePath}`)
       failures += 1
     }
   }
