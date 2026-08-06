@@ -14,7 +14,7 @@ import {
   provider,
   runAnalysisClaimContractCheck,
   validateContractShape,
-  validateAnalysisOutput,
+  validateAdapterOutput,
   validateManifest,
 } from '../src/analysis/analysis-claim-contract.mjs'
 
@@ -56,7 +56,7 @@ const baseClaim = {
   createdAt: '2026-06-17T00:00:00Z',
 }
 
-test('contract and fixture set preserve claim-only Analysis posture', () => {
+test('contract and fixture set preserve claim-only model-assisted analysis posture', () => {
   assert.deepEqual(validateContractShape(defaultAnalysisClaimContract), [])
   const result = checkFixtureSet()
   assert.deepEqual(result.errors, [])
@@ -87,10 +87,10 @@ test('manifest defaults disabled and rejects authority creep', () => {
   }
 })
 
-test('Analysis output is valid only as proposed atelier claims', () => {
+test('model-assisted analysis output is valid only as proposed atelier claims', () => {
   const valid = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'valid', 'output.claims.v1.json'), 'utf8'))
-  assert.deepEqual(validateAnalysisOutput(valid).errors, [])
-  assert.equal(validateAnalysisOutput(valid).claimCount, 1)
+  assert.deepEqual(validateAdapterOutput(valid).errors, [])
+  assert.equal(validateAdapterOutput(valid).claimCount, 1)
 
   const cases = [
     [{ nodes: [], edges: [] }, /single atelier-claim@v1|graph relation mutation/],
@@ -103,7 +103,7 @@ test('Analysis output is valid only as proposed atelier claims', () => {
     [[{ ...baseClaim, promoted: true }], /promoted must remain false/],
   ]
   for (const [output, pattern] of cases) {
-    assert.match(validateAnalysisOutput(output).errors.join('\n'), pattern)
+    assert.match(validateAdapterOutput(output).errors.join('\n'), pattern)
   }
 })
 
@@ -115,6 +115,6 @@ test('dry-run report never grants execution', () => {
   assert.equal(report.networkCalls, false)
   assert.equal(report.canonicalMutation, false)
   assert.deepEqual(collectContractAttempts({ executeCommand: 'analysis run' }), [
-    'executeCommand attempts Analysis execution command',
+    'executeCommand attempts model-assisted analysis execution command',
   ])
 })

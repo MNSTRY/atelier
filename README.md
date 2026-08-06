@@ -124,7 +124,7 @@ Real projects start from the `private-domain`, `shared-project`, or
 - It does not write to a MNSTRY runtime database.
 - It does not import, provision, publish, or send anything.
 - It does not contact external services.
-- It does not execute Analysis or any model provider.
+- It does not execute model-assisted analysis or any model provider.
 - It does not include client project content.
 
 These limits are the design. An authoring tool for private material earns
@@ -219,7 +219,7 @@ atelier dev --project ./atelier.project.json
 authored repos, preserves unrelated user hooks through composed hook files,
 runs only registered migrations, refreshes generated projections, and leaves
 a Git commit for review. It will not weaken boundary policy, introduce
-telemetry, enable non-localhost egress, run Analysis, or write/import/apply
+telemetry, enable non-localhost egress, run model-assisted analysis, or write/import/apply
 runtime state.
 
 ## Sample fixtures

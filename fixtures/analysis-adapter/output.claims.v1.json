@@ -14,7 +14,7 @@
       "LOCAL-GIT-GENERATED-DB-HYBRID.md#optional-discovery-graph-providers"
     ],
     "notes": [
-      "Adapter fixture only. This is not Analysis execution output."
+      "Adapter fixture only. This is not model-assisted analysis execution output."
     ],
     "createdAt": "2026-06-12T00:00:00Z"
   }

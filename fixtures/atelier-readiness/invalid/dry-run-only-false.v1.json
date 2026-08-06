@@ -9,7 +9,7 @@
   "ready": true,
   "blockers": [],
   "warnings": [
-    "analysis-disabled-by-default"
+    "analysis-adapter-disabled-by-default"
   ],
   "graph": {
     "ok": true,

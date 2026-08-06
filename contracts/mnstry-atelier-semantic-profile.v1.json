@@ -229,8 +229,8 @@
         "permission decisions",
         "raw tenant-private runtime exports"
       ],
-      "modelProviderPolicy": "Analysis must run through the active agentic harness and must not introduce a hidden model provider, second API key, or second inference boundary.",
-      "promotionRule": "Analysis suggestions become canonical only after reviewed promotion into source front matter or a governed runtime import path."
+      "modelProviderPolicy": "model-assisted analysis must run through the active agentic harness and must not introduce a hidden model provider, second API key, or second inference boundary.",
+      "promotionRule": "Adapter suggestions become canonical only after reviewed promotion into source front matter or a governed runtime import path."
     }
   },
   "consumers": {

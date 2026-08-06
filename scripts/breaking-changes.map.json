@@ -1,9 +1,16 @@
 {
   "entries": [
     {
+      "match": "internal analysis-engine codename is fully removed",
+      "disposition": "exempt",
+      "reason": "Pre-public vocabulary scrub on founder instruction. The epoch tag carrying the old names was cut hours earlier the same day, was never published to npm, and had no external consumer; the tag is re-cut at the rename commit so the compatibility baseline itself carries the neutral vocabulary.",
+      "date": "2026-08-07",
+      "reviewer": "erik@mnstry.ai (audit remediation session, 2026-08-07)"
+    },
+    {
       "match": "`fileClasses` is now required",
       "disposition": "exempt",
-      "reason": "Unreleased pre-public change. No released tag ever required fileClasses and the kit manifest is package-owned (fixtures only) — no consumer-authored file exists to migrate; generated artifacts are covered by generated_refresh.",
+      "reason": "Unreleased pre-public change. No released tag ever required fileClasses and the kit manifest is package-owned (fixtures only) \u2014 no consumer-authored file exists to migrate; generated artifacts are covered by generated_refresh.",
       "date": "2026-08-05",
       "reviewer": "erik@mnstry.ai (flip-ready program, adversarial re-review 2026-08-05)"
     },

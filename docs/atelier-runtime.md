@@ -29,6 +29,6 @@ runtime authority.
 ## Safety Posture
 
 The default package posture is no telemetry, no external network egress, no
-runtime mutation, no browser apply endpoint, and no Analysis execution.
+runtime mutation, no browser apply endpoint, and no model-assisted analysis execution.
 Provider analysis output may only enter as proposed `atelier-claim@v1` records
 until explicitly reviewed by the project owner.

@@ -33,7 +33,7 @@ test('readiness summarizes graph, projection, contracts, and live checks', () =>
   assert.equal(readiness.schema, 'mnstry.atelier-readiness@v1')
   assert.equal(readiness.ready, true)
   assert.deepEqual(readiness.blockers, [])
-  assert.deepEqual(readiness.warnings, ['private-or-sensitive-nodes-in-team-readable-repos', 'analysis-disabled-by-default'])
+  assert.deepEqual(readiness.warnings, ['private-or-sensitive-nodes-in-team-readable-repos', 'analysis-adapter-disabled-by-default'])
   assert.equal(readiness.graph.nodes, 2)
   assert.equal(readiness.alignment.alignmentNodes, 1)
 })

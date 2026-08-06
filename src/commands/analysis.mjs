@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { runAnalysisCommand } from '../analysis/analysis.mjs'
+import { runAnalysisAdapterCommand } from '../analysis/adapter.mjs'
 try {
-  runAnalysisCommand()
+  runAnalysisAdapterCommand()
 } catch (error) {
   console.error(error.message)
   process.exit(1)

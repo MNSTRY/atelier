@@ -13,7 +13,7 @@
     "LOCAL-GIT-GENERATED-DB-HYBRID.md#optional-discovery-graph-providers"
   ],
   "notes": [
-    "Analysis-style fixture only; no Analysis execution path exists in this pass."
+    "model-assisted analysis-style fixture only; no model-assisted analysis execution path exists in this pass."
   ],
   "createdAt": "2026-06-12T00:00:00Z"
 }

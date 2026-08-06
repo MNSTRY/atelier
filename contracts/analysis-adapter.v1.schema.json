@@ -3,7 +3,7 @@
   "$id": "https://mnstry.ai/schemas/atelier/analysis-adapter.v1.schema.json",
   "$comment": "contract revision 1.1.0 (contract-stability epoch)",
   "title": "analysis-adapter@v1",
-  "description": "Local-only optional Analysis adapter contract. The adapter may record opt-in posture and claim files, but it cannot install Analysis, execute Analysis, create a model-provider boundary, or mutate canonical Atelier state.",
+  "description": "Local-only optional model-assisted analysis adapter contract. The adapter may record opt-in posture and claim files, but it cannot install model-assisted analysis, execute model-assisted analysis, create a model-provider boundary, or mutate canonical Atelier state.",
   "$defs": {
     "manifest": {
       "type": "object",
@@ -33,7 +33,7 @@
           "default": false
         },
         "outputRoot": {
-          "description": "Repo-relative ignored local directory for Analysis adapter artifacts.",
+          "description": "Repo-relative ignored local directory for model-assisted analysis adapter artifacts.",
           "type": "string",
           "pattern": "^\\.mnstry/atelier/analysis(/.*)?$"
         },
@@ -118,7 +118,7 @@
       }
     },
     "claimOutput": {
-      "description": "Analysis adapter output is only a list of proposed atelier-claim@v1 claims.",
+      "description": "model-assisted analysis adapter output is only a list of proposed atelier-claim@v1 claims.",
       "type": "array",
       "items": {
         "type": "object",

@@ -2,6 +2,15 @@
 
 ## 0.2.0-alpha.0
 
+- **Breaking:** the internal analysis-engine codename is fully removed from
+  the contract surface. The adapter contract is `analysis-adapter@v1`
+  (schema const `analysis-adapter-manifest@v1`, provider const `analysis`,
+  output root `.mnstry/atelier/analysis`); the lock and migration schemas
+  say `analysisExecution`; the readiness contract's section and the claim
+  proposer enum value are `analysis`; the package export is
+  `./analysis/adapter`; the CLI command is `analysis` (alias `analyze`).
+  The `v0.2.0-alpha.0` baseline tag is re-cut at this commit — it was hours
+  old, unpublished, and had no external consumer.
 - **Security:** an independent external audit deleted both enforcement sites
   of the public-projectability boundary with every gate green — the invalid
   fixtures named for the property fail earlier, at resolution, so the branch

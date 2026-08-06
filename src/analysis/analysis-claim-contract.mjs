@@ -67,11 +67,11 @@ const hiddenProviderKeys = new Map([
 ])
 
 const executionKeys = new Map([
-  ['execute', 'Analysis execution'],
-  ['executeCommand', 'Analysis execution command'],
-  ['runCommand', 'Analysis execution command'],
-  ['shellCommand', 'Analysis execution command'],
-  ['installCommand', 'Analysis install command'],
+  ['execute', 'model-assisted analysis execution'],
+  ['executeCommand', 'model-assisted analysis execution command'],
+  ['runCommand', 'model-assisted analysis execution command'],
+  ['shellCommand', 'model-assisted analysis execution command'],
+  ['installCommand', 'model-assisted analysis install command'],
   ['network', 'network access'],
 ])
 
@@ -211,15 +211,15 @@ function normalizeOutputClaims(output) {
   return null
 }
 
-export function validateAnalysisOutput(output, { nodes = null, contract = defaultAnalysisClaimContract } = {}) {
+export function validateAdapterOutput(output, { nodes = null, contract = defaultAnalysisClaimContract } = {}) {
   const errors = validateContractShape(contract)
   if (isPlainObject(output) && (Array.isArray(output.nodes) || Array.isArray(output.edges))) {
-    errors.push('Analysis output must be a single atelier-claim@v1 claim list, not native graph nodes/edges')
+    errors.push('model-assisted analysis output must be a single atelier-claim@v1 claim list, not native graph nodes/edges')
     errors.push('native graph output attempts graph relation mutation')
   }
   const claims = normalizeOutputClaims(output)
   if (!claims) {
-    errors.push('Analysis output must be a single atelier-claim@v1 claim list')
+    errors.push('model-assisted analysis output must be a single atelier-claim@v1 claim list')
     return { errors, claimCount: 0 }
   }
 
@@ -271,14 +271,14 @@ export function checkFixtureSet({ root = fixtureRoot, nodes = null } = {}) {
   if (fs.existsSync(validDir)) {
     for (const name of fs.readdirSync(validDir).filter(isJsonFile).sort()) {
       fixtureCount += 1
-      const result = validateAnalysisOutput(readJson(path.join(validDir, name)), { nodes })
+      const result = validateAdapterOutput(readJson(path.join(validDir, name)), { nodes })
       errors.push(...result.errors.map((error) => `${name}: ${error}`))
     }
   }
   if (fs.existsSync(invalidDir)) {
     for (const name of fs.readdirSync(invalidDir).filter(isJsonFile).sort()) {
       invalidFixtureCount += 1
-      const result = validateAnalysisOutput(readJson(path.join(invalidDir, name)), { nodes })
+      const result = validateAdapterOutput(readJson(path.join(invalidDir, name)), { nodes })
       if (result.errors.length === 0) errors.push(`${name}: invalid fixture unexpectedly passed`)
     }
   }
@@ -307,7 +307,7 @@ export function runAnalysisClaimContractCheck({
     report.warnings.push(...manifestResult.warnings)
     report.enabled = manifestResult.manifest?.enabled === true
   } else if (manifestPath) {
-    report.warnings.push('manifest missing; Analysis remains disabled')
+    report.warnings.push('manifest missing; model-assisted analysis remains disabled')
   }
   const fixtureResult = checkFixtureSet({ root: fixtures })
   report.errors.push(...fixtureResult.errors)

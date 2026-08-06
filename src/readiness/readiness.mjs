@@ -99,7 +99,7 @@ function buildPackageReadiness({
     if (!check.ok) blockers.push(`live-check-failed:${check.label}`)
   }
   if (graphSummary.privateRepoRecommended > 0) warnings.push('private-or-sensitive-nodes-in-team-readable-repos')
-  if (!analysis?.enabled) warnings.push('analysis-disabled-by-default')
+  if (!analysis?.enabled) warnings.push('analysis-adapter-disabled-by-default')
 
   return {
     schema: ATELIER_READINESS_SCHEMA,

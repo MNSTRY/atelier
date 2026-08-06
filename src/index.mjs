@@ -84,5 +84,5 @@ export {
 } from './upgrade/upgrade.mjs'
 
 export {
-  analysisDryRun,
-} from './analysis/analysis.mjs'
+  analysisAdapterDryRun,
+} from './analysis/adapter.mjs'

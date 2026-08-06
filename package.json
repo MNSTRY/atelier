@@ -25,7 +25,7 @@
     "./upgrade": "./src/upgrade/upgrade.mjs",
     "./attestation": "./src/attestation/sign.mjs",
     "./extension-packs": "./src/extension-packs/loader.mjs",
-    "./analysis/analysis": "./src/analysis/analysis.mjs",
+    "./analysis/adapter": "./src/analysis/adapter.mjs",
     "./export-contract": "./src/export/atelier-export-contract.mjs",
     "./dry-run": "./src/validate-atelier-export-dry-run.mjs",
     "./contracts/atelier-export.v1.schema.json": "./contracts/atelier-export.v1.schema.json",
