@@ -22,11 +22,14 @@ const allowedFiles = [
   /^bin\/atelier\.mjs$/,
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
-  /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html|yaml|yml|csv|png)$/,
+  // Text formats only: every packed file is content-scanned as utf8, so a
+  // binary (whose text can hide in compressed chunks) would ship unscanned.
+  /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html|yaml|yml|csv)$/,
   /^skills\/(codex|claude)\/[a-z0-9-]+\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.?gitignore)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
+  /^announcements\/(keys\/)?[A-Za-z0-9.-]+\.json$/,
 ]
 
 const structuralForbiddenContent = STRUCTURAL_FORBIDDEN_CONTENT
@@ -112,6 +115,14 @@ if (!paths.includes('NOTICE')) {
   failures += 1
 }
 
+// The announcements channel is verify-only for consumers: shipping the
+// documents without the public key would leave every subcommand dead.
+const announcementsKey = 'announcements/keys/mnstry-announcements.public.v1.json'
+if (!paths.includes(announcementsKey)) {
+  console.error(`[release:audit] tarball must include ${announcementsKey}`)
+  failures += 1
+}
+
 for (const filePath of paths) {
   if (!allowedFiles.some((pattern) => pattern.test(filePath))) {
     console.error(`[release:audit] unexpected tarball file: ${filePath}`)
@@ -119,10 +130,36 @@ for (const filePath of paths) {
     continue
   }
 
-  const text = readFileSync(join(packageRoot, filePath), 'utf8')
+  // Content scanning is a utf8 regex pass, so a binary file would ship
+  // effectively unscanned (text can hide in compressed chunks). Nothing
+  // binary is allowed to pack rather than allowing it past the scrub.
+  const bytes = readFileSync(join(packageRoot, filePath))
+  if (bytes.includes(0)) {
+    console.error(`[release:audit] binary file cannot be content-scanned: ${filePath}`)
+    failures += 1
+    continue
+  }
+
+  const text = bytes.toString('utf8')
   for (const { pattern, label } of forbiddenContent) {
     if (pattern.test(text)) {
       console.error(`[release:audit] ${filePath} contains ${label}`)
+      failures += 1
+    }
+  }
+
+  // The announcements channel dies the moment a private half is published.
+  if (filePath.startsWith('announcements/')) {
+    let doc
+    try {
+      doc = JSON.parse(text)
+    } catch {
+      console.error(`[release:audit] announcements document is not valid JSON: ${filePath}`)
+      failures += 1
+      continue
+    }
+    if (JSON.stringify(doc).includes('"d":')) {
+      console.error(`[release:audit] announcements document carries a private key member: ${filePath}`)
       failures += 1
     }
   }

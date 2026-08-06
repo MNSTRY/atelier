@@ -2,6 +2,29 @@
 
 ## 0.2.0-alpha.0
 
+- **Security:** the private-key disclosure pattern matched only the bare
+  PKCS#8 header, so an ssh-keygen OPENSSH private key — and the RSA, EC, DSA,
+  ENCRYPTED, and PGP block headers — passed the support-bundle scan, the
+  repo-wide sweep, and the tarball audit untouched. It now matches any PEM
+  private-key header. The banned-value email pattern also backtracked for
+  about a minute on large non-email input and is bounded to the RFC 5321
+  local-part and domain limits.
+- `atelier feedback create` refuses `--context` and `--message-file` input
+  over 262144 bytes or that is not valid UTF-8 rather than embedding it, and
+  warns when the report lands where `.atelier-local/` is not git-ignored. The
+  success message states that the scan is a backstop, not clearance to share.
+- `atelier announcements list` takes its trust anchor from the committed
+  MNSTRY key, never from the directory being listed: `--dir` relocates only
+  where documents are read. Every run names the key and keyId it verified
+  against. A tree carrying its own key can no longer present forged
+  announcements as verified.
+- A git-ignored `.kg.json` sidecar can no longer enroll a file in the census
+  or describe one. Membership is a function of tracked state alone, so a
+  clean checkout and a working tree build the same graph.
+- The announcements documents and public key now ship in the package, so
+  `announcements verify` works for consumers; the release audit asserts the
+  key is present, rejects any announcements document carrying a private key
+  member, and refuses to pack a binary file it cannot content-scan.
 - The knowledge-graph census is now sidecar-first: a `.kg.json` sidecar
   attaches any sibling file — JSON, YAML, CSV, binaries — as a first-class
   node with its own audience, without atelier ever parsing the foreign

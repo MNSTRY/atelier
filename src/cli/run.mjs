@@ -186,10 +186,10 @@ Records and checks admission decisions. hash prints the canonical payload hash (
   ${c} feedback create --message TEXT | --message-file PATH [--context FILE] [--include-gates]
   ${c} feedback check FILE
 
-Assembles a local feedback report under ignored .atelier-local/feedback/ (mode 0600), scanned with the support-bundle banned key and value patterns before writing; any match refuses the write naming pattern label and location only. The kit has no send path — sharing the file is always the user's own explicit act.`,
+Assembles a local feedback report under ignored .atelier-local/feedback/ (mode 0600), scanned with the support-bundle banned key and value patterns before writing; any match refuses the write naming pattern label and location only. Files given to --message-file and --context must be valid UTF-8 text of at most 262144 bytes. The scan is a backstop, not clearance: read the whole report before sharing it. The kit has no send path — sharing the file is always the user's own explicit act.`,
     announcements: `Usage: ${c} announcements list [--dir DIR] [--public-key FILE] | verify <file> [--public-key FILE] [--json] | show <file> [--public-key FILE]
 
-MNSTRY announcements are a pull-only channel: signed JSON documents under announcements/ in the repository, verified against announcements/keys/mnstry-announcements.public.v1.json. The kit never fetches them — receiving announcements is the git pull you chose to run. show refuses to print a body whose signature does not verify.`,
+MNSTRY announcements are a pull-only channel: signed JSON documents under announcements/ in the repository. The trust anchor is always the committed MNSTRY key, or one you pass explicitly with --public-key; --dir changes only where documents are read from and never which key verifies them. Every run names the key and keyId it used. The kit never fetches anything — receiving announcements is the git pull you chose to run, and show refuses to print a body whose signature does not verify.`,
   }
   return help[command] || `Usage: ${c} ${command} [args]\n\nRun ${c} --help for the command list.`
 }
