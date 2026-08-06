@@ -62,6 +62,13 @@
       "reason": "Pre-public neutralization. The built-in list named internal systems and shipped in the public kit; workspaces that relied on it supply their own names via sduiMap.rootGraphs configuration.",
       "date": "2026-08-05",
       "reviewer": "erik@mnstry.ai (flip-ready program, adversarial re-review 2026-08-05)"
+    },
+    {
+      "match": "validates loaded config files fail-closed",
+      "disposition": "exempt",
+      "reason": "Contract-stability epoch change, pre-public. The project-config contract already declared these objects closed with a reserved ext container; the CLI simply was not enforcing it. Every config that validates against the published contract keeps loading, so the only documents that regress are ones that were relying on an enforcement gap rather than on a documented affordance, and the extension-pack surface this enables needs ext read as authoritative structure.",
+      "date": "2026-08-06",
+      "reviewer": "erik@mnstry.ai (white-label program)"
     }
   ]
 }

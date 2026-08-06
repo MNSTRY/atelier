@@ -63,10 +63,11 @@ error.
 
 ## Building a distribution: the Loomworks walkthrough
 
-The reference distribution, Loomworks Studio, lands at
-`examples/loomworks-studio/` later in this program; the steps below are the
-complete recipe it follows. Paths are relative to the wrapper package root,
-for example `~/workspace/loomworks-studio`.
+The reference distribution, Loomworks Studio, lives at
+`examples/loomworks-studio/` in this repository; the steps below are the
+complete recipe it follows, and `npm run distribution:smoke` runs that recipe
+against a packed tarball on every publish. Paths are relative to the wrapper
+package root, for example `~/workspace/loomworks-studio`.
 
 ### 1. Create the wrapper package
 
@@ -146,6 +147,12 @@ The manifest carries the advisory attribution key:
 
 Extension protocols load alongside the bundled twelve; they never replace
 them.
+
+Declared pack paths resolve from the directory holding `atelier.project.json`
+and may not contain `..` segments, so the pack directory has to sit inside the
+config directory. Put the workspace config wherever the packs are, not one
+level above them — `examples/loomworks-studio/` keeps both at the wrapper
+root for exactly this reason.
 
 ### 6. Ship skills
 

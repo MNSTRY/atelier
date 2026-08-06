@@ -40,6 +40,14 @@
   list; the default is empty and workspaces supply their own via
   `sduiMap.rootGraphs` in project configuration. Nodes previously classified
   by the built-in name list no longer match without configuration.
+- **Breaking:** every command that resolves a project now
+  validates loaded config files fail-closed. Unknown keys that earlier
+  releases silently ignored are rejected, `ext` must be an object whose
+  members are namespaced objects, and the closed sub-objects (`roots`,
+  `graph`, `projection`, `alignment`, `runtime`, `boundaries`, `setup`)
+  reject additional properties. A config with a misspelled or stray key now
+  fails at CLI entry with the offending key named, instead of running with
+  that key quietly dropped.
 - Adds `atelier-attestation@v1`, a contract for recording admission
   decisions: issuer, attested payload with an RFC 8785 (JCS) + SHA-256
   payload hash, an admission-scoped verdict (a conformance-scoped verdict is
@@ -115,6 +123,74 @@
   blocking. The installed `pre-push` hook now uses `push-check`.
 - The push guard fails closed when it cannot identify the repo it is running in,
   and matches its repo through symlinked paths and subdirectories.
+- Adds extension packs. A project declares namespaced protocol packs under
+  `ext["mnstry.atelier"].extensionPacks`, and the loader admits each one
+  through a fixed fail-closed pipeline: entry shape, enablement, schema
+  validation, identity, reserved-namespace rules, fixture and protocol path
+  guards confined to the pack directory, the nine-point protocol safety
+  posture, collision rules against the bundled pack, and lock pin-and-verify.
+  Enablement is disable-only: the machine-local overlay can switch a declared
+  pack off but can never switch an undeclared one on. Protocol resolution runs
+  through an explicit registry — bundled protocols keep resolving by id, slug,
+  or namespaced id, while pack protocols resolve by full namespaced id only,
+  so a pack can never shadow or squat a bundled slug.
+- Adds `atelier extension-pack validate` and `atelier extension-pack list`,
+  which report per pack with version, resolved path, digest, protocol count,
+  and lock status. Exit 0 means every enabled pack loaded clean, 1 that one
+  failed, 2 a usage or project resolution error.
+- Readiness composes pack protocols alongside the bundled twelve.
+  `readiness protocols --project`, `readiness journey`, and `readiness run`
+  resolve pack protocols through the project registry, and the tenant packet
+  carries a generic per-pack contribution under `ext` built from run fields
+  alone, where only `required`-gate pack protocols can block export and
+  `advisory` ones report without blocking.
+- `atelier lock write` and `lock check` now cover extension packs. The lock
+  records each pack's version and content digest, `lock check` reports drift
+  in both directions (declared but unlocked, locked but changed), and the new
+  `sync-extension-packs` upgrade migration re-verifies and re-pins declared
+  packs. Locking loads packs in throwing mode, so a broken pack cannot be
+  recorded.
+- Adds attestation signing: `atelier attestation hash|sign|verify|keygen`,
+  with RFC 8785 (JCS) canonicalization, sha-256 payload hashes, and ed25519 or
+  es256 keys. `keygen` writes the signing key file at mode 0600, refuses to
+  overwrite an existing one, and prints only the public key document; the
+  default signing key file is gitignored. Adds `TRADEMARKS.md`, the normative
+  home of the required attribution string, the naming rules for distributions,
+  the sanctioned compatibility claim, and the reservation of "certified" and
+  "admitted" to holders of a verifying signed attestation. `TRADEMARKS.md`
+  ships in the published tarball and the release audit fails without it.
+- The workspace projection reads `ext["mnstry.atelier"].distribution` for
+  branding: `name` and `eyebrow` feed the title and eyebrow line, and `theme`
+  overrides five CSS custom properties. Theme values must be hex colors —
+  they are interpolated into a style block, so a non-hex value fails the build
+  rather than reaching the page. Default output is unchanged, and the
+  "MNSTRY Tenant Readiness" heading stays as it is because it names the
+  bundled pack.
+- Adds the `distribution` workspace template
+  (`atelier init --template distribution`), which scaffolds a workspace
+  carrying the branding block and the attribution line. Fixes a bug where an
+  unrecognized `--template` silently produced a blank scaffold: init now exits
+  1, names the valid templates, and writes nothing. The blank scaffold is
+  reached by omitting `--template`.
+- Adds `atelier distribution check`, which verifies a distribution package's
+  attribution markers mechanically: the root `README.md` must contain the
+  exact byte string `powered by MNSTRY Atelier` (blocking), and each
+  extension-pack manifest is reported for the advisory
+  `ext["mnstry.atelier/attribution"]` key. Its messages point at
+  `TRADEMARKS.md` and `docs/attestation.md` rather than restating policy.
+- Adds the exported CLI entry `@mnstry/atelier/cli`. `runCli({ argv, brand })`
+  returns an exit code instead of calling `process.exit`, so a distribution
+  wrapper is a brand object and one line of dispatch. Attribution is derived,
+  not configurable: `runCli` renders `powered by MNSTRY Atelier <version>` in
+  `--version` and help output whenever the brand is not the default, and the
+  brand object has no field that could omit or reword it. Default-brand output
+  is byte-identical apart from the new commands listed in help.
+- Adds `docs/distributions.md` — the three-tier model, the invariant that a
+  distribution adds and rebrands but never alters root semantics, the three
+  attribution surfaces, a build walkthrough, and the
+  `ext["mnstry.atelier"].distribution` field reference — plus
+  `examples/loomworks-studio/`, a complete reference distribution exercised by
+  the new `distribution:smoke` publish gate.
 
 ## 0.1.0-alpha.2
 
