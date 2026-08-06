@@ -1,74 +1,84 @@
 # MNSTRY Atelier
 
-Local-first authoring, knowledge-graph, projection, and dry-run runtime
-readiness for MNSTRY Atelier projects.
+A methodology that creates real transformation cannot scale through static
+content, generic AI, or manual labor. The Atelier is a local-first toolkit for
+authoring that body of work as structured documents machines can validate —
+in plain files, on your machine, under your control.
 
-This alpha package contains the reusable Atelier surface: project adapters,
-front-matter and sidecar knowledge graph indexing, generated local GUI
-projections, loopback-only sidecar serving, agent-harness context flow,
-proposal-only collaboration metadata, support-bundle dry runs, no-egress
-checks, optional claim-only analysis gates, and `atelier-export@v1` dry-run
-validation. It is designed for project adapters that prepare semantic source
-material locally while the MNSTRY runtime remains the authority for identity,
-consent, visibility, provisioning, bookings, commerce, sessions, audit, and
-client-grade sharing.
+It is built for methodology holders and the studios that serve them: you
+author primitives, sources, and offers in your own repositories; the Atelier
+builds a knowledge graph over them, projects a local review surface, checks
+readiness against published protocols, and validates exports against public
+contracts. The MNSTRY runtime remains the authority for identity, consent,
+visibility, provisioning, bookings, commerce, sessions, audit, and
+client-grade sharing — using it is optional, and everything here works
+without it.
 
 ## Status
 
 - Version: `0.2.0-alpha.0`
+- Stability: alpha — contracts are under a compatibility gate from this tag
+  onward; everything else may still move
 - Runtime: Node.js `>=22.18.0 <23`
-- Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at runtime
-- Stability: alpha
+- Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at
+  runtime
 - Distribution: private-preview Git tag
   `git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0`
-- Telemetry: none
-- Network egress: none in package runtime paths
-- Runtime mutation: not implemented
-- Runtime import/apply: not implemented
-- Analysis execution: not implemented
+- Telemetry: none. Network egress: none.
 
-## What This Package Does
+## Claims you can check
 
-- Initializes neutral local Atelier projects.
-- Builds a front-matter and sidecar-led knowledge graph.
-- Builds a generated local GUI projection.
-- Serves the generated projection over a loopback-only sidecar.
-- Produces agent-harness context and capability envelopes.
-- Ships neutral Codex and Claude skill wrappers for readiness review work.
-- Records proposal metadata without browser apply/write endpoints.
-- Previews no-send support bundles.
-- Checks first-party source, templates, and examples for forbidden
-  non-localhost egress — a fail-closed discipline gate over this repo's own
-  code, not a runtime sandbox.
-- Writes and checks `atelier.lock.json` for reviewable upstream package state.
-- Plans and applies branch-based upgrades without silently overwriting authored
-  content.
-- Validates `atelier-export@v1` JSON against the published schema.
-- Enforces the local source `audience` and runtime `visibility` boundary.
-- Rejects mutation/apply intent in dry-run validation.
-- Rejects unresolved, disguised, or non-public-projectable source references.
-- Produces deterministic dry-run reports with `accepted`, `importable`, and
-  `worstOperationStatus`.
-- Enforces Repo Boundary Guard V1 for private domain and shared project repos.
-- Ships the bundled `mnstry-readiness-pack@v1` with twelve claim-first
-  readiness protocols for tenant preparation.
+This package makes three promises. None of them asks for your trust — each
+one names the command that proves it.
 
-## What This Package Does Not Do
+**Nothing leaves your machine.** There is no telemetry, no update check, no
+crash reporting, and no send path anywhere in the package. The only network
+client refuses non-loopback URLs, the served pages carry a policy that
+authorizes no external origin, and a fail-closed gate scans first-party
+source, templates, and examples for egress primitives:
 
-- It does not write to a MNSTRY runtime database.
-- It does not import, provision, publish, or send anything.
-- It does not contact external services.
-- It does not execute Analysis or any model provider.
-- It does not include client-zero project content.
+```bash
+npm run egress:check
+```
 
-## Usage
+**Compatibility is enforced by machinery, not memory.** Documents valid
+against the `v0.2.0-alpha.0` contracts stay valid: every change is checked
+against the baseline tag's validators, and schema widening outside `ext`
+containers is refused by a schema-vs-schema differ. Breaking changes require
+a new contract version and a recorded migration:
 
-Private-preview installs are Git tag pinned while npm publishing remains
-deferred:
+```bash
+npm run contract:compat
+```
+
+**Conformance works offline, forever.** Validating a document against the
+published contracts needs this package and nothing else — no account, no
+service, no network:
+
+```bash
+atelier dry-run ./atelier-export.json
+```
+
+`docs/continuity.md` records the distribution commitments behind these
+claims, including the perpetual Apache-2.0 grant on every tagged release you
+receive.
+
+## Quickstart
 
 ```bash
 npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
+
+atelier init --fixture=sample-workspace --target ./sample
+atelier graph --project ./sample/atelier.project.json
+atelier project --project ./sample/atelier.project.json
+atelier readiness --project ./sample/atelier.project.json
+MNSTRY_ATELIER_ACTOR=owner atelier boundary check --project ./sample/atelier.project.json
+atelier dev --project ./sample/atelier.project.json
 ```
+
+`init` scaffolds a fictional sample workspace, `graph` builds the knowledge
+graph from front matter and sidecars, `project` generates the local review
+surface, `dev` serves it on loopback only. From there:
 
 ```js
 import { validateAtelierExportDryRun } from '@mnstry/atelier'
@@ -77,91 +87,149 @@ const report = validateAtelierExportDryRun(exportDocument)
 console.log(report.accepted, report.importable, report.errors)
 ```
 
-The package also exposes local-only CLI validation:
+Real projects start from the `private-domain`, `shared-project`, or
+`distribution` templates instead of the sample fixture.
 
-```bash
-atelier dry-run ./atelier-export.json
-atelier contract check
-atelier init --fixture=sample-workspace --target ./sample
-atelier graph --project ./sample/atelier.project.json
-atelier project --project ./sample/atelier.project.json
-atelier readiness --project ./sample/atelier.project.json
-atelier readiness protocols
-atelier readiness journey --project ./sample/atelier.project.json
-atelier readiness run mnstry.readiness:identity-map --project ./sample/atelier.project.json
-atelier readiness packet --project ./sample/atelier.project.json
-atelier readiness export --dry-run --project ./sample/atelier.project.json
-MNSTRY_ATELIER_ACTOR=owner atelier boundary check --project ./sample/atelier.project.json
-atelier lock write --project ./sample/atelier.project.json
-atelier upgrade --dry-run --project ./sample/atelier.project.json
-atelier dev --project ./sample/atelier.project.json
-```
+## What this package does
 
-The direct package binary supports the same Atelier subcommands:
+- Initializes neutral local Atelier projects.
+- Builds a front-matter and sidecar-led knowledge graph; a `.kg.json` sidecar
+  enrolls any file — Markdown, JSON, YAML, CSV, media — without the kit ever
+  parsing the foreign format.
+- Generates and serves a local GUI projection over a loopback-only sidecar.
+- Produces agent-harness context and capability envelopes, and ships neutral
+  Codex and Claude skill wrappers for readiness review work.
+- Records proposal metadata without browser apply/write endpoints.
+- Enforces the local source `audience` and runtime `visibility` boundary, and
+  rejects unresolved, disguised, or non-public-projectable source references.
+- Enforces Repo Boundary Guard V1 for private domain and shared project
+  repos: strict policies fail closed when private or sensitive source is
+  placed in a shared repo, when protected local files are staged, or when
+  private-domain material appears in shared work without a `git.promote`
+  disclosure record.
+- Validates `atelier-export@v1` JSON against the published schema and
+  produces deterministic dry-run reports with `accepted`, `importable`, and
+  `worstOperationStatus`.
+- Ships the bundled `mnstry-readiness-pack@v1` with twelve claim-first
+  readiness protocols, extensible through validated extension packs.
+- Writes and checks `atelier.lock.json`, and applies branch-based,
+  review-first upgrades that refuse dirty repos and never silently overwrite
+  authored content.
+- Checks first-party source, templates, and examples for forbidden
+  non-localhost egress — a fail-closed discipline gate over this repo's own
+  code, not a runtime sandbox.
 
-```bash
-atelier dry-run ./atelier-export.json
-```
+## What this package does not do
 
-Boundary guard commands are local and Git-native:
+- It does not write to a MNSTRY runtime database.
+- It does not import, provision, publish, or send anything.
+- It does not contact external services.
+- It does not execute Analysis or any model provider.
+- It does not include client project content.
 
-```bash
-atelier boundary check --project ./atelier.project.json
-atelier boundary check --staged --project ./atelier.project.json
-atelier boundary install-hooks --project ./atelier.project.json
-atelier promote --source-repo tenant-private-domain --target-repo project-alpha --kg-id tenant-private-domain:seed
-```
+These limits are the design. An authoring tool for private material earns
+trust by what it refuses to be able to do.
 
-Strict policies fail closed when private or sensitive source is placed in a
-shared repo, when protected local/support/session files are staged, or when
-private-domain material appears in shared work without a `git.promote`
-disclosure record.
+## Your documents and the boundary
 
-Upgrade commands are also local and review-first:
+What you author is yours. Documents live in your repositories, in formats you
+chose, readable without this tool. The one vocabulary the contracts enforce:
+`audience` describes local source readership (`public`, `team`, `operator`,
+`staff`, `private`, `sensitive`); runtime/export `visibility` describes
+runtime exposure and accepts only `private`, `shared`, `platform`, or
+`public`. A public export referencing a source whose audience is not public
+is refused — that check is fixture-pinned and mutation-tested.
 
-```bash
-atelier lock check --project ./atelier.project.json
-atelier upgrade --dry-run --project ./atelier.project.json
-atelier upgrade --apply --project ./atelier.project.json --branch codex/atelier-upgrade-YYYYMMDD
-```
+## Build a branded distribution
 
-`upgrade --apply` creates or switches to the requested branch, refuses dirty
-authored repos, preserves unrelated user hooks through composed hook files, runs
-only registered migrations, refreshes generated projections, and leaves a Git
-commit for review. It will not weaken boundary policy, introduce telemetry,
-enable non-localhost egress, run Analysis, or write/import/apply runtime state.
+The Atelier is designed to be white-labeled. A distribution wraps the CLI
+under its own name, contributes a validated extension pack (branded
+protocols, terms, templates), and themes the projection — while the root
+contracts, guards, and conformance stay canonical underneath. Start by
+copying the worked example:
 
-## Contract Boundary
+- `examples/loomworks-studio` — a complete fictional distribution: branded
+  bin, extension pack, themed workspace template.
+- `docs/distributions.md` — the contract a distribution must honor.
+- `TRADEMARKS.md` — naming rules; Apache-2.0 grants code rights, not brand
+  rights. Every distribution carries "powered by MNSTRY Atelier" attribution,
+  checked by `atelier distribution check`.
 
-`audience` describes local source readership. Runtime/export `visibility`
-describes runtime exposure and accepts only:
+## The MNSTRY relationship
 
-- `private`
-- `shared`
-- `platform`
-- `public`
+The Atelier is the front porch, not the house. Conformance — is this document
+valid against the published contracts? — is public, offline, and free,
+forever. Admission — will MNSTRY's governed runtime accept it for delivery to
+clients? — is a separate, opt-in step: a signed attestation issued by MNSTRY
+against criteria this package publishes (`docs/attestation.md`). You can
+build on the Atelier without ever talking to MNSTRY. If you want your work to
+run on MNSTRY runtimes, the path is admission, and the rejection message is
+part of the contract.
 
-Local words such as `team`, `operator`, `staff`, and `sensitive` are not valid
-runtime visibility values.
+## Feedback and announcements
 
-## Sample Fixtures
-
-Fixtures in this package are fictional and generic. Project-specific adapter
-fixtures belong in their project repositories, not in the published Atelier
-package.
+Both channels respect consent by construction. `atelier feedback` writes a
+scanned, redaction-checked report to a local file — there is no send path;
+you choose whether and where to share it. `announcements list` verifies
+project-shipped announcements against a committed public key — pull-only,
+nothing phones home to ask.
 
 ## Running the test suite from a fresh clone
 
-`npm test` includes one fail-closed check that expects a private denylist file
-(`release-denylist.local.json`, gitignored) used by MNSTRY's release lane. On
-a fresh clone that file is absent, so the check reports a visible skip and the
-suite records one failure by design — it never passes silently on missing
-protection. To run the suite without the private denylist:
+`npm test` includes one fail-closed check that expects a private denylist
+file (`release-denylist.local.json`, gitignored) used by MNSTRY's release
+lane. On a fresh clone that file is absent, so the check reports a visible
+skip and records a failure by design — it never passes silently on missing
+protection. To run the suite without it:
 
 ```bash
 ATELIER_ALLOW_MISSING_DENYLIST=1 npm test
 ```
 
-Everything else in the suite is self-contained. The denylist itself contains
-MNSTRY-private names and is intentionally not distributed; the release gates
-that depend on it run in MNSTRY's CI, not yours.
+## Command reference
+
+```bash
+atelier dry-run ./atelier-export.json
+atelier contract check
+atelier graph --project ./atelier.project.json
+atelier project --project ./atelier.project.json
+atelier readiness --project ./atelier.project.json
+atelier readiness protocols
+atelier readiness journey --project ./atelier.project.json
+atelier readiness run mnstry.readiness:identity-map --project ./atelier.project.json
+atelier readiness packet --project ./atelier.project.json
+atelier readiness export --dry-run --project ./atelier.project.json
+atelier boundary check --project ./atelier.project.json
+atelier boundary check --staged --project ./atelier.project.json
+atelier boundary install-hooks --project ./atelier.project.json
+atelier promote --source-repo tenant-private-domain --target-repo project-alpha --kg-id tenant-private-domain:seed
+atelier lock write --project ./atelier.project.json
+atelier lock check --project ./atelier.project.json
+atelier upgrade --dry-run --project ./atelier.project.json
+atelier upgrade --apply --project ./atelier.project.json --branch codex/atelier-upgrade-YYYYMMDD
+atelier extension-pack validate --project ./atelier.project.json
+atelier attestation verify ./attestation.json
+atelier feedback create --message "what happened"
+atelier announcements list
+atelier distribution check --target ./my-distribution
+atelier dev --project ./atelier.project.json
+```
+
+`upgrade --apply` creates or switches to the requested branch, refuses dirty
+authored repos, preserves unrelated user hooks through composed hook files,
+runs only registered migrations, refreshes generated projections, and leaves
+a Git commit for review. It will not weaken boundary policy, introduce
+telemetry, enable non-localhost egress, run Analysis, or write/import/apply
+runtime state.
+
+## Sample fixtures
+
+Fixtures in this package are fictional and generic. Project-specific adapter
+fixtures belong in their project repositories, not in the published Atelier
+package.
+
+## License
+
+Apache-2.0. See `LICENSE`, `NOTICE` (attribution obligations that survive
+forks), `TRADEMARKS.md` (naming), and `docs/continuity.md` (distribution
+continuity commitments).
