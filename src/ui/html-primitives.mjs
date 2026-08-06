@@ -17,10 +17,7 @@ export function htmlAttrs(attrs = {}) {
   return Object.entries(attrs).map(([name, value]) => htmlAttr(name, value)).join('')
 }
 
-export function renderPageShell({ title = 'MNSTRY Atelier', body = '', initialData = null } = {}) {
-  const dataScript = initialData == null
-    ? ''
-    : `<script type="application/json" id="atelier-data">${htmlEscape(JSON.stringify(initialData))}</script>`
+export function renderPageShell({ title = 'MNSTRY Atelier', body = '' } = {}) {
   return [
     '<!doctype html>',
     '<html lang="en">',
@@ -43,7 +40,6 @@ export function renderPageShell({ title = 'MNSTRY Atelier', body = '', initialDa
     '<body>',
     '<main>',
     body,
-    dataScript,
     '</main>',
     '</body>',
     '</html>',
@@ -94,7 +90,6 @@ export function renderProposalDetailPageHtml(record) {
 
   return renderPageShell({
     title: `Review ${proposal.id || 'Proposal'}`,
-    initialData: record,
     body: [
       `<h1>Review ${htmlEscape(proposal.id || 'Proposal')}</h1>`,
       `<p class="meta">${htmlEscape(proposal.status || 'unknown')} · ${htmlEscape(proposal.path || '')}</p>`,

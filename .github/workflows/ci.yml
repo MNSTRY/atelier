@@ -23,7 +23,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
+      - run: npm run syntax:check
       - run: npm test
       - run: npm run contract
       - run: npm run egress:check

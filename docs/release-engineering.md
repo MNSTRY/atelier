@@ -105,7 +105,7 @@ maintainer-reviewed before entering the list.
 Four jobs run on pushes to `main` and on pull requests, and all four are
 required status checks:
 
-- `test`: typecheck, the full test suite, contract checks, `egress:check`, and
+- `test`: syntax check (`node --check`, not a type system), the full test suite, contract checks, `egress:check`, and
   `migrations:check`. This job sets `ATELIER_ALLOW_MISSING_DENYLIST=1` scoped
   to the job only — denylist assertions belong to the secret lane.
 - `consumer-smoke`: warms the npm cache with `npm ci` (the offline tarball

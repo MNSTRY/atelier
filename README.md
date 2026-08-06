@@ -91,7 +91,7 @@ atelier readiness journey --project ./sample/atelier.project.json
 atelier readiness run mnstry.readiness:identity-map --project ./sample/atelier.project.json
 atelier readiness packet --project ./sample/atelier.project.json
 atelier readiness export --dry-run --project ./sample/atelier.project.json
-atelier boundary check --project ./sample/atelier.project.json
+MNSTRY_ATELIER_ACTOR=owner atelier boundary check --project ./sample/atelier.project.json
 atelier lock write --project ./sample/atelier.project.json
 atelier upgrade --dry-run --project ./sample/atelier.project.json
 atelier dev --project ./sample/atelier.project.json
@@ -149,3 +149,19 @@ runtime visibility values.
 Fixtures in this package are fictional and generic. Project-specific adapter
 fixtures belong in their project repositories, not in the published Atelier
 package.
+
+## Running the test suite from a fresh clone
+
+`npm test` includes one fail-closed check that expects a private denylist file
+(`release-denylist.local.json`, gitignored) used by MNSTRY's release lane. On
+a fresh clone that file is absent, so the check reports a visible skip and the
+suite records one failure by design — it never passes silently on missing
+protection. To run the suite without the private denylist:
+
+```bash
+ATELIER_ALLOW_MISSING_DENYLIST=1 npm test
+```
+
+Everything else in the suite is self-contained. The denylist itself contains
+MNSTRY-private names and is intentionally not distributed; the release gates
+that depend on it run in MNSTRY's CI, not yours.

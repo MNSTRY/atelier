@@ -1,0 +1,59 @@
+{
+  "schema": "mnstry.atelier-boundary-policy@v1",
+  "mode": "strict",
+  "actors": {
+    "owner": {
+      "githubLogin": "sample-owner",
+      "gitEmails": ["owner@example.invalid"],
+      "privateDomainRepo": "content"
+    }
+  },
+  "repos": {
+    "content": {
+      "kind": "private_domain",
+      "ownerActor": "owner",
+      "readBoundary": "private",
+      "allowedAudiences": [
+        "private",
+        "sensitive",
+        "team",
+        "operator",
+        "staff",
+        "public"
+      ],
+      "forbiddenAudiences": [],
+      "autoCommit": "guarded"
+    }
+  },
+  "promotion": {
+    "requiresGitPromote": true,
+    "recordsPath": "governance/git-promote-events.jsonl"
+  },
+  "forbiddenPaths": [
+    ".atelier-local/**",
+    "atelier.local.json",
+    "atelier.workspace.local.json",
+    ".mnstry-local/**",
+    ".atelier-proposals/**",
+    ".atelier-current",
+    ".atelier-current.json",
+    ".atelier-presence.json",
+    ".atelier-nonce",
+    ".atelier-capability-grants.json",
+    ".atelier-grants/**",
+    ".atelier-events.jsonl",
+    ".atelier-audit.jsonl",
+    ".atelier-audit/**",
+    ".atelier-session.json",
+    ".atelier-session.jsonl",
+    ".atelier-session/**",
+    ".atelier-sessions/**",
+    ".atelier-support/**",
+    ".atelier-support.json",
+    "support-bundle*",
+    "support-bundles/**",
+    "node_modules/**",
+    ".DS_Store"
+  ],
+  "governanceLedgerPath": "governance/repo-boundary-ledger.md"
+}

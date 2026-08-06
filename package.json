@@ -35,7 +35,7 @@
     "contract": "node src/check-atelier-export-contract.mjs",
     "dry-run": "node src/validate-atelier-export-dry-run.mjs fixtures/atelier-export/sample-studio-offer.v1.json",
     "test": "node --test test/*.test.mjs",
-    "typecheck": "find bin src -name '*.mjs' -print0 | xargs -0 -n1 node --check",
+    "syntax:check": "find bin src -name '*.mjs' -print0 | xargs -0 -n1 node --check",
     "graph:test": "node --test test/graph.test.mjs test/graph-knowledge-graph.test.mjs test/graph-determinism.test.mjs test/graph-source-formats.test.mjs",
     "project:test": "node --test test/project.test.mjs test/project-config.test.mjs test/projection-policy.test.mjs test/projection-alignment.test.mjs",
     "server:security:test": "node --test test/server.test.mjs test/server-security.test.mjs test/server-proposals.test.mjs",
@@ -52,7 +52,7 @@
     "contract:compat": "node scripts/check-contract-compat.mjs",
     "consumer:smoke": "node scripts/consumer-smoke.mjs",
     "distribution:smoke": "node scripts/distribution-smoke.mjs",
-    "prepublishOnly": "npm run release:audit && npm run repo:check && npm run migrations:check && npm run contract:compat && npm run typecheck && npm test && npm run consumer:smoke && npm run distribution:smoke"
+    "prepublishOnly": "npm run release:audit && npm run repo:check && npm run migrations:check && npm run contract:compat && npm run syntax:check && npm test && npm run consumer:smoke && npm run distribution:smoke"
   },
   "dependencies": {
     "ajv": "8.18.0",
