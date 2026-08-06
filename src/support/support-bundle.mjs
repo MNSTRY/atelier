@@ -49,11 +49,14 @@ export const BANNED_VALUE_PATTERNS = [
   // The literal must not match itself: this file ships in the tarball and
   // release:audit scans it with that structural pattern.
   // Keys in this kit are JWK, not PEM: the PEM patterns above never saw the
-  // one key format atelier itself writes. The private scalar and the wrapper
-  // member are both refused. The literals do not self-match — the value here
-  // is a pattern, not a base64url run.
-  { type: 'jwk-private-key', re: /"d"\s*:\s*"[A-Za-z0-9_-]{20,}"/ },
-  { type: 'jwk-private-key-document', re: /privateKeyJwk/ },
+  // one key format atelier itself writes. Both patterns match key material
+  // rather than prose about it — a document may discuss privateKeyJwk, and
+  // 40 is the floor for a real scalar (Ed25519 and P-256 are both 43
+  // base64url characters), so shorter identifiers under a member named d
+  // do not fire, and a redacted example in documentation stays attachable. Escaped JSON evades text patterns, which is why a context
+  // file that parses as JSON is walked structurally as well.
+  { type: 'jwk-private-key', re: /"d"\s*:\s*"[A-Za-z0-9_-]{40,}"/ },
+  { type: 'jwk-private-key-document', re: /"privateKeyJwk"\s*:\s*\{[^{}]*"d"\s*:\s*"[A-Za-z0-9_-]{40,}"/ },
   { type: 'private-key', re: /BEGIN (?:[A-Z0-9]+ ){0,4}PRIVATE KEY(?: BLOCK)?|BEGIN (?:RSA|OPENSSH) KEY/ },
 ]
 

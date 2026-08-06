@@ -2,6 +2,16 @@
 
 ## 0.2.0-alpha.0
 
+- Every attacker-reachable label is sanitized, including the key path: a key
+  file whose *name* carried an escape sequence could erase the key-identity
+  line and rewrite it, and an over-long basename wrapped the header so the
+  true provenance landed on a later visual line.
+- The key-material patterns match material rather than prose. A document may
+  discuss `privateKeyJwk` or show a redacted example and still be attachable
+  to a feedback report; the scalar floor is the length of a real key, so a
+  short identifier under a member named `d` no longer fires. A JSON
+  attachment is scanned as the structure it decodes to as well as the text it
+  is, so escaped member names cannot smuggle a key past the scan.
 - **Security:** the widened private-key pattern repeated a repeated group,
   which is quadratic — 256 KiB of header-shaped text took about ten seconds
   to reject, reachable through `--message`, a capped `--context`, and the

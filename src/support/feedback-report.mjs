@@ -109,6 +109,21 @@ export function feedbackReportHash(payload) {
 // and dotted location only — never the matched text.
 export function scanFeedbackReport(payload) {
   const findings = []
+  // A JSON document can hide a key from every text pattern with \u escapes
+  // while JSON.parse still yields it intact. Any attachment that parses as
+  // JSON is therefore scanned twice: as the text it is, and as the structure
+  // it decodes to. The release audit already works this way.
+  const decoded = []
+  const decodeIfJson = (value, parts) => {
+    if (typeof value !== 'string' || value.length > MAX_INPUT_FILE_BYTES) return
+    const trimmed = value.trim()
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return
+    try {
+      decoded.push([JSON.parse(trimmed), [...parts, '<decoded>']])
+    } catch {
+      // Not JSON after all; the text scan is the whole check.
+    }
+  }
   const visit = (value, parts) => {
     const key = parts.at(-1) || ''
     const location = parts.join('.') || '<root>'
@@ -119,6 +134,16 @@ export function scanFeedbackReport(payload) {
       for (const { type, re } of BANNED_VALUE_PATTERNS) {
         if (re.test(value)) findings.push(`banned value (${type}) at ${location}`)
       }
+      // The value patterns match JSON syntax, which a decoded structure no
+      // longer carries: a member named d holding a scalar-length base64url
+      // run is key material whatever escaping produced it.
+      if (key === 'd' && /^[A-Za-z0-9_-]{40,}$/.test(value)) {
+        findings.push(`banned value (jwk-private-key) at ${location}`)
+      }
+      decodeIfJson(value, parts)
+    }
+    if (key === 'privateKeyJwk' && value && typeof value === 'object') {
+      findings.push(`banned value (jwk-private-key-document) at ${location}`)
     }
     if (Array.isArray(value)) {
       value.forEach((item, index) => visit(item, [...parts, String(index)]))
@@ -127,6 +152,12 @@ export function scanFeedbackReport(payload) {
     }
   }
   visit(payload, [])
+  // Decoded structures are appended as they are discovered, so a JSON
+  // attachment nested inside another one is still reached.
+  for (let i = 0; i < decoded.length; i += 1) {
+    const [value, parts] = decoded[i]
+    visit(value, parts)
+  }
   return findings
 }
 

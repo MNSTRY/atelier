@@ -170,7 +170,17 @@ for (const filePath of paths) {
       failures += 1
       continue
     }
-    if (JSON.stringify(doc).includes('"d":')) {
+    // Precise rather than broad: a member named d holding a base64url run
+    // long enough to be a real scalar (Ed25519 and P-256 are both 43
+    // characters). Matching every member named d at any depth would make a
+    // future fixture with an unrelated d field fail for no reason.
+    const carriesPrivateScalar = (value) => {
+      if (Array.isArray(value)) return value.some(carriesPrivateScalar)
+      if (!value || typeof value !== 'object') return false
+      if (typeof value.d === 'string' && /^[A-Za-z0-9_-]{40,}$/.test(value.d)) return true
+      return Object.values(value).some(carriesPrivateScalar)
+    }
+    if (carriesPrivateScalar(doc)) {
       console.error(`[release:audit] packed JSON document carries a private key member: ${filePath}`)
       failures += 1
     }

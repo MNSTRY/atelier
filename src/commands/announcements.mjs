@@ -101,7 +101,7 @@ function readJsonFile(file, label) {
   try {
     raw = fs.readFileSync(file, 'utf8')
   } catch {
-    fail(`cannot read ${label} file: ${file}`)
+    fail(`cannot read ${label} file: ${safeLabel(file, 120)}`)
   }
   try {
     return JSON.parse(raw)
@@ -140,7 +140,10 @@ function keyIdentityHeader(keyPath, keyDoc, { explicit }) {
   const provenance = explicit
     ? 'explicit --public-key, not the committed default key'
     : 'committed default key'
-  return `key: ${describeKeyPath(keyPath)} (keyId ${keyId}, ${provenance})`
+  // The path comes from operator argv, but a filename is an injection sink
+  // like any other: escapes can erase this very line, and an over-long
+  // basename wraps the header so the true provenance lands off-screen.
+  return `key: ${safeLabel(describeKeyPath(keyPath), 120)} (keyId ${keyId}, ${provenance})`
 }
 
 // Structural validation of the runtime-defined announcement shape. Returns
@@ -198,7 +201,7 @@ function runVerify(argv) {
     console.log(JSON.stringify({
       valid,
       reasons,
-      key: describeKeyPath(keyPath),
+      key: safeLabel(describeKeyPath(keyPath), 120),
       keyId: safeLabel(publicKey.keyId),
       explicitKey,
     }, null, 2))
@@ -223,7 +226,7 @@ function runShow(argv) {
   const { valid, reasons } = verifyAnnouncement(doc, publicKey)
   if (!valid) {
     console.error(keyIdentityHeader(keyPath, publicKey, { explicit: explicitKey }))
-    console.error(`refusing to show ${file}: the announcement does not verify, so its content is untrusted`)
+    console.error(`refusing to show ${safeLabel(file, 120)}: the announcement does not verify, so its content is untrusted`)
     for (const reason of reasons) console.error(`[${reason.code}] ${reason.message}`)
     process.exit(1)
   }
@@ -255,7 +258,7 @@ function runList(argv) {
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true })
   } catch {
-    fail(`cannot read announcements directory: ${dir}`)
+    fail(`cannot read announcements directory: ${safeLabel(dir, 120)}`)
   }
   const files = entries
     .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
