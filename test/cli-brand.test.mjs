@@ -128,6 +128,35 @@ test('invalid brands are rejected before any dispatch', async () => {
   await assert.rejects(() => runCli({ argv: ['--help'], brand: { command: 'ok', displayName: '' } }))
 })
 
+// N9: control characters in displayName enable ANSI/terminal injection
+// (forged banners, cursor games), so validateBrand rejects C0, DEL, and ESC
+// outright — and the error message never echoes the offending value.
+test('brands with control characters in displayName are rejected', async () => {
+  const hostile = [
+    'Evil\u001b[2J\u001b[HStudio', // ESC: clears the screen, forges a banner
+    'Line\nBreak',
+    'Null\u0000Byte',
+    'Del\u007fete',
+    'Bell\u0007',
+  ]
+  for (const displayName of hostile) {
+    await assert.rejects(
+      () => runCli({ argv: ['--help'], brand: { command: 'ok', displayName } }),
+      (error) => /control characters/.test(error.message) && !error.message.includes(displayName),
+      `displayName ${JSON.stringify(displayName)} must be rejected without being echoed`,
+    )
+  }
+  // Ordinary punctuation and non-ASCII display names stay accepted.
+  const out = []
+  const code = await runCli({
+    argv: ['--version'],
+    brand: { command: 'ok', displayName: 'Ateliér — Straße & Co.', version: '1.0.0' },
+    stdout: (line) => out.push(line),
+  })
+  assert.equal(code, 0)
+  assert.match(out[0], /^Ateliér — Straße & Co\. 1\.0\.0/)
+})
+
 test('runCli renders branded help through injected writers without spawning', async () => {
   const out = []
   const err = []

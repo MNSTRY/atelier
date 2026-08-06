@@ -66,6 +66,12 @@ function validateBrand(brand) {
   if (typeof brand.displayName !== 'string' || brand.displayName.length === 0) {
     throw new Error('brand.displayName must be a non-empty string')
   }
+  // Control characters (C0 including ESC, and DEL) in a display name can
+  // forge or corrupt terminal output (ANSI injection), so they are rejected.
+  // The message deliberately never echoes the offending value.
+  if (/[\u0000-\u001f\u007f]/.test(brand.displayName)) {
+    throw new Error('brand.displayName must not contain control characters')
+  }
 }
 
 export function buildHelpText(brand = DEFAULT_BRAND, atelierVersion = null) {

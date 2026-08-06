@@ -23,6 +23,8 @@
     "./egress": "./src/egress/forbidden-egress.mjs",
     "./boundary": "./src/boundary/policy.mjs",
     "./upgrade": "./src/upgrade/upgrade.mjs",
+    "./attestation": "./src/attestation/sign.mjs",
+    "./extension-packs": "./src/extension-packs/loader.mjs",
     "./analysis/analysis": "./src/analysis/analysis.mjs",
     "./export-contract": "./src/export/atelier-export-contract.mjs",
     "./dry-run": "./src/validate-atelier-export-dry-run.mjs",

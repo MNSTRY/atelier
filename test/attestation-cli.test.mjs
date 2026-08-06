@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const COMMAND = path.join(ROOT, 'src', 'commands', 'attestation.mjs')
@@ -108,6 +109,62 @@ test('keygen, sign, verify roundtrip in a scratch directory', () => {
   for (const output of outputs) {
     assert.equal(output.includes(privateDoc.privateKeyJwk.d), false, 'CLI output leaked the private JWK d value')
   }
+})
+
+// Replay of the demonstrated M5 attack: a planted dangling symlink at the key
+// path used to pass the existsSync pre-check, so writeFileSync followed the
+// link and exfiltrated the fresh private key to an attacker-chosen path. The
+// 'wx' create-exclusive open must now fail on the symlink itself, atomically,
+// and the link target must never receive a single byte.
+test('keygen refuses a dangling symlink at the out path and never writes through it', () => {
+  const dir = tmpdir('atelier-attestation-symlink-')
+  const exfilDir = tmpdir('atelier-attestation-exfil-')
+  const exfilTarget = path.join(exfilDir, 'stolen-key.json')
+
+  // Default out path (cwd local key file) is a dangling symlink.
+  fs.symlinkSync(exfilTarget, path.join(dir, LOCAL_KEY_FILE))
+  const byDefault = run(['keygen', '--key-id', 'symlink-victim'], { cwd: dir })
+  assert.equal(byDefault.status, 2)
+  assert.match(byDefault.stderr, /refusing to overwrite existing signing key file/)
+  assert.equal(fs.existsSync(exfilTarget), false, 'dangling symlink target must never receive key bytes')
+
+  // Explicit --out pointing at a dangling symlink fails identically.
+  const outLink = path.join(dir, 'explicit-out.json')
+  fs.symlinkSync(exfilTarget, outLink)
+  const byOut = run(['keygen', '--key-id', 'symlink-victim', '--out', outLink], { cwd: dir })
+  assert.equal(byOut.status, 2)
+  assert.match(byOut.stderr, /refusing to overwrite existing signing key file/)
+  assert.equal(fs.existsSync(exfilTarget), false)
+
+  // Error output stays path-only: no JWK members, no key bytes.
+  for (const output of [byDefault.stdout, byDefault.stderr, byOut.stdout, byOut.stderr]) {
+    assert.doesNotMatch(output, /privateKeyJwk|"d"\s*:/)
+  }
+})
+
+// Module reachability (N6): a consumer resolving the package's export map
+// must reach the attestation and extension-pack entry points, and the
+// "./attestation" entry must expose canonicalize alongside payloadHashOf so
+// one entry suffices.
+test('package exports resolve ./attestation and ./extension-packs for a consumer', async () => {
+  const consumerDir = tmpdir('atelier-exports-consumer-')
+  fs.mkdirSync(path.join(consumerDir, 'node_modules', '@mnstry'), { recursive: true })
+  fs.symlinkSync(ROOT, path.join(consumerDir, 'node_modules', '@mnstry', 'atelier'), 'dir')
+  const consumerRequire = createRequire(path.join(consumerDir, 'consumer.mjs'))
+
+  const attestationEntry = consumerRequire.resolve('@mnstry/atelier/attestation')
+  assert.equal(fs.realpathSync(attestationEntry), fs.realpathSync(path.join(ROOT, 'src', 'attestation', 'sign.mjs')))
+  const packsEntry = consumerRequire.resolve('@mnstry/atelier/extension-packs')
+  assert.equal(fs.realpathSync(packsEntry), fs.realpathSync(path.join(ROOT, 'src', 'extension-packs', 'loader.mjs')))
+
+  const attestation = await import(pathToFileURL(fs.realpathSync(attestationEntry)).href)
+  assert.equal(typeof attestation.canonicalize, 'function')
+  assert.equal(typeof attestation.payloadHashOf, 'function')
+  assert.equal(typeof attestation.signAttestation, 'function')
+  assert.equal(typeof attestation.verifyAttestation, 'function')
+  const loader = await import(pathToFileURL(fs.realpathSync(packsEntry)).href)
+  assert.equal(typeof loader.loadExtensionPacks, 'function')
+  assert.equal(typeof loader.createProtocolRegistry, 'function')
 })
 
 test('sign with no key available fails closed with the precedence message', () => {

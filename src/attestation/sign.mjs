@@ -21,6 +21,10 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 import { canonicalize } from './jcs.mjs'
 
+// Re-exported so the package's "./attestation" export exposes the full
+// canonicalize -> payloadHashOf -> sign/verify surface from one entry point.
+export { canonicalize }
+
 const SCHEMA_PATH = fileURLToPath(new URL('../../contracts/atelier-attestation.v1.schema.json', import.meta.url))
 const SUPPORTED_ALGORITHMS = new Set(['ed25519', 'es256'])
 export const LOCAL_KEY_FILE = 'atelier-attestation-key.local.json'

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SCRIPT = path.join(ROOT, 'src', 'commands', 'distribution.mjs')
@@ -148,6 +148,95 @@ test('an unreadable pack manifest is an advisory note, not a failure', () => {
     const result = runDistribution(['check', '--target', dir])
     assert.equal(result.status, 0)
     assert.match(result.stdout, /advisory: .*not readable JSON/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Writes a distribution bin that wraps the real runCli. With swallow: true it
+// injects no-op stdout/stderr writers — the demonstrated M6 attack, where the
+// wrapper suppresses the attribution that --version output carries.
+function writeWrapperBin(dir, { swallow }) {
+  const pkg = { name: 'wrapper-dist', version: '1.0.0', type: 'module', bin: { shadowtool: 'bin/shadowtool.mjs' } }
+  fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`)
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true })
+  const runCliUrl = pathToFileURL(path.join(ROOT, 'src', 'cli', 'run.mjs')).href
+  const streamOverrides = swallow ? '\n  stdout: () => {},\n  stderr: () => {},' : ''
+  fs.writeFileSync(path.join(dir, 'bin', 'shadowtool.mjs'), `import { runCli } from ${JSON.stringify(runCliUrl)}
+const code = await runCli({
+  argv: process.argv.slice(2),
+  brand: { command: 'shadowtool', displayName: 'Shadow Tool', version: '9.9.9' },${streamOverrides}
+})
+process.exit(code)
+`)
+}
+
+// Replay of the demonstrated M6 attack: runCli's injected writers let a
+// wrapper swallow every attribution line. The blocking bin probe spawns the
+// declared bin with --version over real pipes, so the suppression is caught.
+test('a wrapper bin that swallows runCli output fails the blocking bin probe', () => {
+  const dir = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  try {
+    writeWrapperBin(dir, { swallow: true })
+    const result = runDistribution(['check', '--target', dir])
+    assert.equal(result.status, 1, 'stream-swallowing wrapper must block')
+    assert.match(result.stderr, /--version stdout does not contain the exact byte string/)
+    assert.match(result.stderr, /TRADEMARKS\.md/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('an honest wrapper bin passes the blocking bin probe', () => {
+  const dir = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  try {
+    writeWrapperBin(dir, { swallow: false })
+    const result = runDistribution(['check', '--target', dir])
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, /declared bin --version output carries the required attribution/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a declared bin that cannot be resolved is a blocking failure', () => {
+  const dir = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify({ name: 'ghost-dist', bin: { ghost: 'bin/missing.mjs' } })}\n`)
+    const result = runDistribution(['check', '--target', dir])
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /declared bin "ghost" cannot be resolved/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a package without any declared bin is only an advisory note', () => {
+  const dir = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify({ name: 'library-dist', version: '1.0.0' })}\n`)
+    const result = runDistribution(['check', '--target', dir])
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, /advisory: no package\.json bin declared; CLI attribution probe skipped/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// Replay of the demonstrated N7 defect: `check --target` with no value used
+// to fall through to a silent cwd check. Both value-taking flags must be a
+// usage error (exit 2) when left valueless.
+test('--target and --pack without a value are usage errors, never a silent cwd check', () => {
+  const dir = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  try {
+    // cwd carries a passing README, so exit 2 proves no silent cwd fallback.
+    const target = runDistribution(['check', '--target'], dir)
+    assert.equal(target.status, 2)
+    assert.match(target.stderr, /--target requires a value/)
+    assert.match(target.stderr, /Usage: distribution check/)
+    const pack = runDistribution(['check', '--pack'], dir)
+    assert.equal(pack.status, 2)
+    assert.match(pack.stderr, /--pack requires a value/)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

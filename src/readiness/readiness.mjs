@@ -9,7 +9,7 @@ import {
   summarizeReadinessJourney,
   writeTenantPacket,
 } from '../readiness-protocols/runtime.mjs'
-import { commandProject, parseArgs, readJson, writeJson } from '../project/config.mjs'
+import { PROJECT_CONFIG_ENV, commandProject, parseArgs, projectConfigArg, readJson, writeJson } from '../project/config.mjs'
 
 export const ATELIER_READINESS_SCHEMA = 'mnstry.atelier-readiness@v1'
 
@@ -205,10 +205,15 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
   const subcommand = parsed._[0]
   if (subcommand === 'protocols') {
     const detail = parsed.json === true || parsed.format === 'json'
-    // Bundled-only by default; an explicit --project loads that project's
-    // extension packs and lists their protocols with a source marker.
+    // Bundled-only by default; an explicit --project PATH / --project-config=PATH
+    // argument OR the MNSTRY_ATELIER_PROJECT_CONFIG env var loads that
+    // project's extension packs and lists their protocols with a source
+    // marker. A bare invocation with neither never auto-detects the cwd.
+    const envConfig = process.env[PROJECT_CONFIG_ENV]
+    const projectAware = projectConfigArg(argv) !== null
+      || (typeof envConfig === 'string' && envConfig.trim() !== '')
     const entries = bundledReadinessProtocols.map((protocol) => ({ protocol, source: null }))
-    if (parsed.project) {
+    if (projectAware) {
       const project = commandProject({ argv })
       const registry = projectRegistry(project)
       for (const pack of registry.packs) {

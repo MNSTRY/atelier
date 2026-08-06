@@ -36,7 +36,14 @@ function serialize(value, path) {
   if (kind === 'function') reject(path, 'function is not representable in JSON')
   if (kind === 'symbol') reject(path, 'symbol is not representable in JSON')
   if (Array.isArray(value)) {
-    const items = value.map((item, index) => serialize(item, `${path}[${index}]`))
+    // Holes must fail loudly: Array.prototype.map skips them, which would emit
+    // invalid JSON like "[,]" instead of a faithful canonicalization.
+    const items = []
+    for (let index = 0; index < value.length; index += 1) {
+      const itemPath = `${path}[${index}]`
+      if (!(index in value)) reject(itemPath, 'sparse array hole is not representable in JSON')
+      items.push(serialize(value[index], itemPath))
+    }
     return `[${items.join(',')}]`
   }
   if (!isPlainObject(value)) {

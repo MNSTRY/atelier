@@ -162,11 +162,25 @@ function runKeygen(argv) {
     fail(`--algorithm must be ed25519 or es256, got ${algorithm}`)
   }
   const outPath = path.resolve(options.out ?? LOCAL_KEY_FILE)
-  if (fs.existsSync(outPath)) {
-    fail(`refusing to overwrite existing signing key file: ${outPath}`)
-  }
   const { privateKeyDoc, publicKeyDoc } = generateKeyPair({ algorithm, keyId })
-  fs.writeFileSync(outPath, `${JSON.stringify(privateKeyDoc, null, 2)}\n`, { mode: 0o600 })
+  // Atomic create-exclusive ('wx' = O_CREAT|O_EXCL, mode 0600): fails on any
+  // existing path AND on symlinks — including dangling ones — so a planted
+  // link can never redirect the private key to an attacker-chosen path, and
+  // there is no check-then-write race window. Error output stays path-only.
+  let fd = null
+  try {
+    fd = fs.openSync(outPath, 'wx', 0o600)
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      fail(`refusing to overwrite existing signing key file: ${outPath}`)
+    }
+    fail(`cannot create signing key file: ${outPath}`)
+  }
+  try {
+    fs.writeSync(fd, `${JSON.stringify(privateKeyDoc, null, 2)}\n`)
+  } finally {
+    fs.closeSync(fd)
+  }
   console.error(`signing key file written to ${outPath} (mode 0600). Keep it out of version control; ${LOCAL_KEY_FILE} is gitignored by default.`)
   console.log(JSON.stringify(publicKeyDoc, null, 2))
 }

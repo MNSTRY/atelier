@@ -6,6 +6,7 @@
 //
 // Exit codes: 0 = checks passed, 1 = blocking attribution check failed,
 // 2 = usage error (unknown subcommand or unusable target).
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from '../project/config.mjs'
@@ -97,7 +98,70 @@ function reportPackAttribution(target, packOverride) {
   }
 }
 
+// Blocking CLI probe. runCli accepts injected stdout/stderr writers, so a
+// wrapper can swallow the attribution that help/version output carries. The
+// probe therefore spawns the distribution's own declared bin with --version
+// through real pipes (not the wrapper's writers) and requires the exact
+// attribution byte string in the child's stdout.
+//
+// A package that declares no bin at all is only an advisory note (packages
+// without a CLI exist). A declared bin that cannot be resolved, or whose
+// --version stdout lacks the attribution bytes, is a blocking failure.
+function declaredBinEntries(target) {
+  let pkg
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8'))
+  } catch {
+    return null
+  }
+  const bin = pkg?.bin
+  if (typeof bin === 'string' && bin.trim()) {
+    return [{ name: typeof pkg.name === 'string' ? pkg.name : 'bin', file: bin.trim() }]
+  }
+  if (bin && typeof bin === 'object' && !Array.isArray(bin)) {
+    const entries = Object.entries(bin)
+      .filter(([, file]) => typeof file === 'string' && file.trim())
+      .map(([name, file]) => ({ name, file: file.trim() }))
+    if (entries.length) return entries
+  }
+  return null
+}
+
+function checkBinAttribution(target) {
+  const entries = declaredBinEntries(target)
+  if (entries === null) {
+    return { ok: true, note: 'no package.json bin declared; CLI attribution probe skipped' }
+  }
+  for (const { name, file } of entries) {
+    const resolved = path.resolve(target, file)
+    if (!fs.existsSync(resolved)) {
+      return { ok: false, reason: `declared bin "${name}" cannot be resolved: ${displayPath(target, resolved)}` }
+    }
+    const result = spawnSync(process.execPath, [resolved, '--version'], {
+      cwd: target,
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
+    const stdout = typeof result.stdout === 'string' ? result.stdout : ''
+    if (result.error || !stdout.includes(ATTRIBUTION_BYTES)) {
+      return {
+        ok: false,
+        reason: `declared bin "${name}" --version stdout does not contain the exact byte string "${ATTRIBUTION_BYTES}"`,
+      }
+    }
+  }
+  return { ok: true, note: null }
+}
+
+function usageExit(message) {
+  logError(message)
+  logError('Usage: distribution check [--target DIR] [--pack DIR]')
+  process.exit(2)
+}
+
 function runCheck(args) {
+  if (args.target === true) usageExit('--target requires a value')
+  if (args.pack === true) usageExit('--pack requires a value')
   const target = path.resolve(typeof args.target === 'string' ? args.target : '.')
   let stat = null
   try {
@@ -111,13 +175,20 @@ function runCheck(args) {
   }
 
   const readme = checkReadmeAttribution(target)
+  const binProbe = checkBinAttribution(target)
   reportPackAttribution(target, args.pack)
+  if (binProbe.note) log(`advisory: ${binProbe.note}`)
 
   if (!readme.ok) {
     logError(`${readme.reason}; distributions must carry the MNSTRY attribution — ${POLICY_POINTER}`)
     process.exit(1)
   }
+  if (!binProbe.ok) {
+    logError(`${binProbe.reason}; distributions must carry the MNSTRY attribution — ${POLICY_POINTER}`)
+    process.exit(1)
+  }
   log('required README.md attribution present')
+  if (!binProbe.note) log('declared bin --version output carries the required attribution')
   log('distribution check passed')
   process.exit(0)
 }
