@@ -1,0 +1,29 @@
+{
+  "schema": "atelier-attestation@v1",
+  "contractVersion": "1.0.0",
+  "attestationId": "attestation:roundtrip:export:sample-studio-offer:0001",
+  "issuedAt": "2026-08-06T00:00:00Z",
+  "issuer": {
+    "id": "atelier-roundtrip-fixture",
+    "role": "admission-authority",
+    "keyId": "roundtrip-issuer-2026"
+  },
+  "subject": {
+    "schema": "atelier-export@v1",
+    "ref": "export:sample-studio:guided-session:2026-06-11",
+    "payloadHash": {
+      "algorithm": "sha-256",
+      "canonicalization": "RFC8785-JCS",
+      "digest": "473d6df71add347f8429e4b2b8597fe96da10f132441fea1570b03d3b5fc8d1e"
+    }
+  },
+  "verdict": {
+    "scope": "admission",
+    "decision": "admitted"
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "roundtrip-issuer-2026",
+    "value": "hxMTmwVBbQiSM3IV6vm__i9hP5b6jl4KQ9p4fBxTGQjC6_RnbylU-Rh2JBN_55G-rrUinH2b6EWxIjnfeg55Dg"
+  }
+}

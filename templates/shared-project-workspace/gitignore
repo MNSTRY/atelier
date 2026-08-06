@@ -1,6 +1,7 @@
 .atelier-local/
 atelier.local.json
 atelier.workspace.local.json
+atelier-attestation-key.local.json
 .mnstry-local/
 .atelier-proposals/
 .atelier-current

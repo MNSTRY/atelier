@@ -47,8 +47,11 @@ The fields are pinned accordingly: `algorithm` is the constant `"sha-256"`,
 `^[0-9a-f]{64}$`. A relying party that re-canonicalizes the payload and gets a
 different digest must treat the attestation as not applying to that payload.
 
-Validator implementation for this procedure is explicitly out of scope for
-this package; the contract only fixes the procedure and the encoding.
+This package ships the reference implementation of this procedure —
+`src/attestation/jcs.mjs` (RFC 8785 canonicalization), `src/attestation/sign.mjs`
+(hashing, signing, verification), and the `atelier attestation hash|sign|verify`
+command line. The contract fixes the procedure and the encoding; the
+implementation is replaceable by anything that produces the same bytes.
 
 `subject.schema` names the contract of the attested payload (for example
 `atelier-export@v1`), `subject.ref` carries its stable identifier (exportId,
@@ -73,8 +76,111 @@ signature is what makes that assertion checkable. `issuer.role` distinguishes
 an admission authority from a tool or a self-attestation, but the role field
 alone confers no authority.
 
-Key distribution, trust establishment, and verifier implementation are out of
-scope for this package. Relying parties decide which keys they recognize.
+Verifier implementation is in scope (see the verification procedure below).
+Key distribution and trust establishment remain policy-level: relying parties
+decide which keys they recognize, and MNSTRY publishes its admission public
+keys out of band.
+
+## Signing procedure
+
+The signing input is the UTF-8 encoding of the RFC 8785 (JCS) canonicalization
+of the attestation document with its `signature` member set to `null`. That
+sentence is normative; everything else here is mechanics.
+
+- To sign: take a schema-valid attestation whose `signature` is `null`,
+  canonicalize it, sign the canonical bytes, and embed the result as
+  `{ "algorithm": ..., "keyId": ..., "value": ... }` where `value` is the
+  unpadded base64url encoding of the raw signature bytes.
+- To verify: take the signed document, replace `signature` with `null`,
+  canonicalize, and verify `signature.value` over those bytes.
+- `ed25519` signatures are raw 64-byte RFC 8032 signatures.
+- `es256` signatures are the 64-byte IEEE P1363 concatenation of r and s,
+  not DER. A DER-encoded signature also fits the schema's base64url pattern,
+  so a verifier must not accept one by accident and a signer must never emit
+  one — both signature shapes are 64 bytes (86 base64url characters).
+
+A signer must refuse to sign a document that is not schema-valid, already
+carries a signature, or names an `issuer.keyId` different from the signing
+key's `keyId`.
+
+## Verification procedure
+
+`verifyAttestation` returns `{ valid, reasons }` and collects every applicable
+reason instead of stopping at the first, in this order:
+
+1. `schema.invalid` — the document fails the attestation schema.
+2. `signature.missing` — `signature` is `null`. An unsigned attestation is
+   non-authoritative, so verification fails by definition.
+3. `signature.algorithm-mismatch` — `signature.algorithm` does not match the
+   public key document's `algorithm` (or its JWK is for another curve).
+4. `signature.key-id-mismatch` — `signature.keyId` does not match the public
+   key document's `keyId`.
+5. `issuer.key-id-mismatch` — `issuer.keyId` is present and differs from
+   `signature.keyId`.
+6. `signature.invalid` — cryptographic verification fails over the signing
+   input defined above.
+
+Payload binding is checked separately by `verifyPayloadBinding`, with reasons
+`payload.digest-mismatch` (recomputed canonical digest differs from
+`subject.payloadHash.digest`) and `payload.schema-field-mismatch` (the
+payload's `schema` field differs from `subject.schema`). Signature validity
+and payload binding are independent answers: a signature can be genuine while
+the attestation is being presented against the wrong payload, and vice versa.
+
+## Key format and the local key file
+
+Key material is handled as JWK only — never PEM. The private key file lives in
+the signing project's working directory, is gitignored by default, and must
+never be committed:
+
+```json
+{
+  "keyId": "example-issuer-2026",
+  "algorithm": "ed25519",
+  "privateKeyJwk": { "kty": "OKP", "crv": "Ed25519", "x": "wafd…", "d": "9dfu…" }
+}
+```
+
+The signing key loads with fail-closed precedence: the
+`ATELIER_ATTESTATION_KEY_JSON` environment variable (key file JSON), then
+`--key <file>`, then `./atelier-attestation-key.local.json` in the current
+directory. If none is present, signing exits with code 2 — there is no
+"sign without a key" mode.
+
+The public key document is freely shareable and is what verifiers consume:
+
+```json
+{
+  "keyId": "example-issuer-2026",
+  "algorithm": "ed25519",
+  "publicKeyJwk": { "kty": "OKP", "crv": "Ed25519", "x": "wafd…" }
+}
+```
+
+Errors and logs may name `keyId` and `algorithm`, and never any JWK member
+value.
+
+## Command line
+
+```
+atelier attestation hash <payload.json>
+atelier attestation sign <attestation.json> [--key FILE] [--out FILE]
+atelier attestation verify <attestation.json> --public-key FILE [--payload FILE] [--json]
+atelier attestation keygen --key-id ID [--algorithm ed25519|es256] [--out FILE]
+```
+
+- `hash` prints the canonical `payloadHash` object for a payload document.
+- `sign` signs an unsigned attestation with the local signing key and writes
+  the signed document to stdout or `--out`.
+- `verify` checks the signature against a public key file, plus payload
+  binding when `--payload` is given; `--json` prints `{ valid, reasons }`.
+  When no `--payload` is given, the output says so explicitly.
+- `keygen` generates a key pair, writes the private key file (mode 0600,
+  refusing to overwrite an existing file), and prints only the public key
+  document.
+
+Exit codes: 0 success (for `verify`: valid), 1 `verify` judged the attestation
+invalid, 2 usage or input error.
 
 ## Fixtures and tests
 
@@ -82,3 +188,14 @@ Reference documents live in `fixtures/atelier-attestation/` (`valid/` and
 `invalid/`), and `test/attestation-contract.test.mjs` validates all of them
 against the schema, asserting that each invalid fixture fails for its intended
 reason.
+
+`valid/` fixtures are schema-valid shapes; only `signed-roundtrip.v1.json` is
+also cryptographically real. Its signature was produced once at authoring time
+with a throwaway key whose private half was never persisted; the public half
+is committed as `keys/roundtrip-issuer.public.v1.json`, and its digest is the
+real canonical hash of `fixtures/atelier-export/sample-studio-offer.v1.json`.
+`test/attestation-signing.test.mjs` verifies the committed signature and the
+payload binding on every run (and never re-signs), alongside a tamper matrix
+asserting the exact failure reason for each mutation.
+`test/attestation-jcs.test.mjs` pins the canonicalizer to the RFC 8785 vectors,
+and `test/attestation-cli.test.mjs` exercises the command line end to end.

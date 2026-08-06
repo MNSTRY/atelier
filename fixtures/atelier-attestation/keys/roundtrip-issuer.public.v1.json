@@ -1,0 +1,9 @@
+{
+  "keyId": "roundtrip-issuer-2026",
+  "algorithm": "ed25519",
+  "publicKeyJwk": {
+    "crv": "Ed25519",
+    "x": "eDaxEA9U34Vi2tO6zosmmK2O6bSdHTdsghF5HGdV1h0",
+    "kty": "OKP"
+  }
+}
