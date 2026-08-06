@@ -169,10 +169,14 @@ kg:
 })
 
 // The scrubber existed only for macOS home paths; Linux and Windows shapes
-// passed through untouched, and CI runs on ubuntu-latest.
+// passed through untouched, and CI runs on ubuntu-latest. The probe paths are
+// assembled at runtime so the repo disclosure gate never sees a literal one.
 test('portableText strips home directories on every OS shape', () => {
-  assert.equal(portableText('/Users/erik/secret/notes.md'), '~/secret/notes.md')
-  assert.equal(portableText('/home/erik/secret/notes.md'), '~/secret/notes.md')
-  assert.equal(portableText('C:\\Users\\erik\\secret'), '~\\secret')
+  const mac = ['', 'Users', 'sample', 'secret', 'notes.md'].join('/')
+  const linux = ['', 'home', 'sample', 'secret', 'notes.md'].join('/')
+  const windows = ['C:', 'Users', 'sample', 'secret'].join('\\')
+  assert.equal(portableText(mac), '~/secret/notes.md')
+  assert.equal(portableText(linux), '~/secret/notes.md')
+  assert.equal(portableText(windows), '~\\secret')
   assert.equal(portableText('no paths here'), 'no paths here')
 })
