@@ -52,6 +52,10 @@ export const commandMap = new Map([
   ['distribution', ['src/commands/distribution.mjs']],
   ['distribution:check', ['src/commands/distribution.mjs', 'check']],
   ['attestation', ['src/commands/attestation.mjs']],
+  ['feedback', ['src/commands/feedback.mjs']],
+  ['feedback:check', ['src/commands/feedback.mjs', 'check']],
+  ['announcements', ['src/commands/announcements.mjs']],
+  ['announcements:list', ['src/commands/announcements.mjs', 'list']],
 ])
 
 function isDefaultBrand(brand) {
@@ -107,6 +111,8 @@ Core commands:
   context flow ...                Resolve session-bound harness context.
   export --dry-run FILE           Validate atelier-export@v1 dry-run artifact.
   support bundle --dry-run        Preview a no-send support bundle.
+  feedback --message TEXT         Write a local, never-sent feedback report.
+  announcements list              List and verify MNSTRY announcements.
   egress check                    Check extracted Atelier paths for forbidden egress.
   boundary check                  Enforce private/shared repo placement rules.
   boundary audit                  Report content-rule matches tree-wide without blocking.
@@ -176,6 +182,14 @@ Checks a distribution package for the required MNSTRY attribution markers. Block
   ${c} attestation keygen --key-id ID [--algorithm ed25519|es256] [--out FILE]
 
 Records and checks admission decisions. hash prints the canonical payload hash (RFC 8785 JCS, SHA-256). sign reads the local signing key file. verify reads a public key file and exits 1 when it judges the attestation invalid. keygen writes the signing key file mode 0600, refuses to overwrite, and prints only the public key document.`,
+    feedback: `Usage:
+  ${c} feedback create --message TEXT | --message-file PATH [--context FILE] [--include-gates]
+  ${c} feedback check FILE
+
+Assembles a local feedback report under ignored .atelier-local/feedback/ (mode 0600), scanned with the support-bundle banned key and value patterns before writing; any match refuses the write naming pattern label and location only. The kit has no send path — sharing the file is always the user's own explicit act.`,
+    announcements: `Usage: ${c} announcements list [--dir DIR] [--public-key FILE] | verify <file> [--public-key FILE] [--json] | show <file> [--public-key FILE]
+
+MNSTRY announcements are a pull-only channel: signed JSON documents under announcements/ in the repository, verified against announcements/keys/mnstry-announcements.public.v1.json. The kit never fetches them — receiving announcements is the git pull you chose to run. show refuses to print a body whose signature does not verify.`,
   }
   return help[command] || `Usage: ${c} ${command} [args]\n\nRun ${c} --help for the command list.`
 }

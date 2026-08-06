@@ -17,11 +17,12 @@ const allowedFiles = [
   /^README\.md$/,
   /^CHANGELOG\.md$/,
   /^LICENSE$/,
+  /^NOTICE$/,
   /^TRADEMARKS\.md$/,
   /^bin\/atelier\.mjs$/,
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
-  /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html)$/,
+  /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html|yaml|yml|csv|png)$/,
   /^skills\/(codex|claude)\/[a-z0-9-]+\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.?gitignore)$/,
@@ -101,6 +102,13 @@ if (!paths.includes('bin/mnstry-atelier.mjs')) {
 // CLI, docs, and distribution check dangling for an installed consumer.
 if (!paths.includes('TRADEMARKS.md')) {
   console.error('[release:audit] tarball must include TRADEMARKS.md')
+  failures += 1
+}
+
+// Apache-2.0 section 4(d): every derivative redistribution must reproduce
+// the NOTICE file, so the published tarball has to carry it.
+if (!paths.includes('NOTICE')) {
+  console.error('[release:audit] tarball must include NOTICE')
   failures += 1
 }
 

@@ -43,6 +43,8 @@ Core commands:
   context flow ...                Resolve session-bound harness context.
   export --dry-run FILE           Validate atelier-export@v1 dry-run artifact.
   support bundle --dry-run        Preview a no-send support bundle.
+  feedback --message TEXT         Write a local, never-sent feedback report.
+  announcements list              List and verify MNSTRY announcements.
   egress check                    Check extracted Atelier paths for forbidden egress.
   boundary check                  Enforce private/shared repo placement rules.
   boundary audit                  Report content-rule matches tree-wide without blocking.
@@ -79,7 +81,7 @@ test('default-brand version text is the bare package version', () => {
 test('command map exposes the dispatch table for introspection', () => {
   assert.equal(commandMap instanceof Map, true)
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
-  assert.equal(commandMap.size, 46)
+  assert.equal(commandMap.size, 50)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {

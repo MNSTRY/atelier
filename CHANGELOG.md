@@ -2,6 +2,25 @@
 
 ## 0.2.0-alpha.0
 
+- The knowledge-graph census is now sidecar-first: a `.kg.json` sidecar
+  attaches any sibling file — JSON, YAML, CSV, binaries — as a first-class
+  node with its own audience, without atelier ever parsing the foreign
+  format. Document extensions keep their existing semantics, and non-Markdown
+  documents still fail closed without a sidecar.
+- Adds `atelier feedback` — a local, never-sent feedback report on the
+  support-bundle chassis: assembled under ignored `.atelier-local/feedback/`,
+  scanned against the banned key and value patterns before writing, refused
+  on any match. The kit has no send path; sharing is always the user's act.
+- Adds the signed announcements channel: pull-only JSON documents under
+  `announcements/`, signed with the published MNSTRY announcements key and
+  verified by `atelier announcements list|verify|show`. The kit never
+  fetches them; receiving an announcement is the `git pull` you chose to
+  run. Generic detached document signing joins `@mnstry/atelier/attestation`.
+- `TRADEMARKS.md` gains the quiet-software clause (no commercially motivated
+  interruptions for anything carrying the MNSTRY marks, MNSTRY bound to the same
+  standard) and the applications attribution rule for apps without a CLI.
+  A `NOTICE` file ships in the tarball; Apache-2.0 section 4(d) makes its
+  reproduction a license obligation in every derivative redistribution.
 - **Breaking:** the `atelier-export@v1` runtime owner vocabulary is now
   vendor-neutral. The closed `runtimeOwnerName` enum, the `RUNTIME_OWNERS`
   constant, the bundled readiness protocols, and the fixtures all move to the
