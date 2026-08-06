@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -93,8 +94,16 @@ test('a valid pack loads with raw-byte digest, protocol records, and stored lens
 
   const pack = result.packs[0]
   const rawBytes = fs.readFileSync(path.join(sample.dir, 'packs/sample.readiness.v1.json'))
-  assert.equal(pack.digest, `sha256:${crypto.createHash('sha256').update(rawBytes).digest('hex')}`)
-  assert.equal(pack.digest, computePackDigest(rawBytes))
+  const protocolBytes = fs.readFileSync(path.join(sample.dir, 'packs/protocols/contract-gate.v1.json'))
+  // The digest is sha256 over a length-prefixed concatenation of the manifest
+  // bytes and each referenced protocol file's bytes, in declaration order.
+  const expectedHash = crypto.createHash('sha256')
+  for (const part of [rawBytes, protocolBytes]) {
+    expectedHash.update(`${part.length}\n`)
+    expectedHash.update(part)
+  }
+  assert.equal(pack.digest, `sha256:${expectedHash.digest('hex')}`)
+  assert.equal(pack.digest, computePackDigest(rawBytes, [protocolBytes]))
   assert.equal(pack.id, 'sample.readiness')
   assert.equal(pack.version, 'v1')
   assert.equal(pack.lock, 'unlocked')
@@ -257,7 +266,7 @@ test('lock version mismatch fails closed', (t) => {
 })
 
 test('a matching lock entry pins the pack', (t) => {
-  const digest = computePackDigest(fs.readFileSync(VALID_PACK))
+  const digest = computePackDigest(fs.readFileSync(VALID_PACK), [fs.readFileSync(VALID_PROTOCOL)])
   const { project } = packProject(t, {
     entries: [entryFor('sample.readiness')],
     files: validPackFiles(),
@@ -414,6 +423,146 @@ test('each of the nine posture points is individually enforced', (t) => {
     assert.equal(report.packs.length, 0, `${tamper.point} tamper must fail the pack`)
     assert.match(errorText(report), tamper.expected, `${tamper.point} tamper failed for the wrong reason:\n${errorText(report)}`)
   }
+})
+
+// M1 replay: the reviewer edited a protocol's ui.agentPrompt behind a locked
+// lock and the loader kept serving the tampered prompt as 'locked'. The pack
+// digest now folds every referenced protocol file's bytes in, so the same
+// attack fails closed on the digest mismatch.
+test('a locked lock pins protocol file bytes, so a tampered protocol prompt fails closed', (t) => {
+  const digest = computePackDigest(fs.readFileSync(VALID_PACK), [fs.readFileSync(VALID_PROTOCOL)])
+  const { sample, project } = packProject(t, {
+    entries: [entryFor('sample.readiness')],
+    files: validPackFiles(),
+    lock: { extensionPacks: [{ id: 'sample.readiness', version: 'v1', digest }] },
+  })
+  // The untampered tree verifies as locked.
+  assert.equal(loadExtensionPacks(project).packs[0].lock, 'locked')
+
+  // Reviewer demonstration: edit only the protocol file, not the manifest.
+  const protocolFile = path.join(sample.dir, 'packs/protocols/contract-gate.v1.json')
+  const doc = readJson(protocolFile)
+  doc.ui.agentPrompt = 'Tampered agent prompt the lock must catch.'
+  writeJson(protocolFile, doc)
+
+  assert.throws(
+    () => loadExtensionPacks(project),
+    /lock digest mismatch for extension pack sample\.readiness; review the pack and run atelier lock write/,
+  )
+})
+
+// M3 replay: a lock entry whose digest was missing or null verified as
+// 'locked' while pinning nothing.
+test('a lock entry with a missing or null digest is a load error, not locked', (t) => {
+  for (const entry of [
+    { id: 'sample.readiness', version: 'v1' },
+    { id: 'sample.readiness', version: 'v1', digest: null },
+  ]) {
+    const { project } = packProject(t, {
+      entries: [entryFor('sample.readiness')],
+      files: validPackFiles(),
+      lock: { extensionPacks: [entry] },
+    })
+    assert.throws(
+      () => loadExtensionPacks(project),
+      /lock entry for extension pack sample\.readiness is missing a string digest; review the pack and run atelier lock write/,
+    )
+  }
+})
+
+// M2 replay, part one: the reviewer symlinked the whole pack tree outside the
+// config root and the lexical guard let it load. This rejection is also the
+// mutation guard for isUnder: neutering the containment comparison makes this
+// test (and the protocols variant below) go red.
+test('a pack tree symlinked outside the config root is rejected', (t) => {
+  const sample = makeSampleProject(t)
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-outside-pack-'))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(outside, 'protocols'), { recursive: true })
+  fs.copyFileSync(VALID_PACK, path.join(outside, 'sample.readiness.v1.json'))
+  fs.copyFileSync(VALID_PROTOCOL, path.join(outside, 'protocols', 'contract-gate.v1.json'))
+  fs.symlinkSync(outside, path.join(sample.dir, 'packs'), 'dir')
+
+  const config = readJson(sample.config)
+  config.ext = { [ATELIER_EXT_NAMESPACE]: { extensionPacks: [entryFor('sample.readiness')] } }
+  writeJson(sample.config, config)
+  const project = resolveProjectConfig({ argv: [`--project=${sample.config}`], cwd: sample.dir })
+
+  const report = loadExtensionPacks(project, { report: true })
+  assert.equal(report.packs.length, 0)
+  assert.match(errorText(report), /pack path escapes the project config directory/)
+  assert.throws(() => loadExtensionPacks(project), /pack path escapes the project config directory/)
+})
+
+// M2 replay, part two: only the protocols directory is a symlink pointing
+// outside; the pack manifest itself is a real in-tree file.
+test('a protocols directory symlinked outside the config root is rejected', (t) => {
+  const { sample, project } = packProject(t, {
+    entries: [entryFor('sample.readiness')],
+    files: [{ from: VALID_PACK, to: 'packs/sample.readiness.v1.json' }],
+  })
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-outside-protocols-'))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.copyFileSync(VALID_PROTOCOL, path.join(outside, 'contract-gate.v1.json'))
+  fs.symlinkSync(outside, path.join(sample.dir, 'packs', 'protocols'), 'dir')
+
+  const report = loadExtensionPacks(project, { report: true })
+  assert.equal(report.packs.length, 0)
+  assert.match(errorText(report), /protocols\[0\]\.path escapes the pack directory/)
+  assert.throws(() => loadExtensionPacks(project), /protocols\[0\]\.path escapes the pack directory/)
+})
+
+// N5: reserved-namespace lookalikes and the memberless case the reviewer
+// proved uncovered. With no member ids the per-member reserved checks never
+// fire, so this test is the mutation guard for the namespace-level rule.
+test('reserved and lookalike namespaces are rejected even for memberless packs', (t) => {
+  const memberFields = ['terms', 'protocols', 'lenses', 'readinessRules', 'actionRules', 'exportMappings']
+  for (const reserved of [
+    { id: 'mnstry.evil', namespace: 'mnstry' },
+    { id: 'mnstry-core.evil', namespace: 'mnstry-core' },
+  ]) {
+    const doc = readJson(VALID_PACK)
+    doc.id = reserved.id
+    doc.namespace = reserved.namespace
+    for (const field of memberFields) doc[field] = []
+    const { project } = packProject(t, {
+      entries: [entryFor(reserved.id)],
+      files: [{ to: `packs/${reserved.id}.v1.json`, doc }],
+    })
+    const report = loadExtensionPacks(project, { report: true })
+    assert.equal(report.packs.length, 0, `namespace ${reserved.namespace} must not load`)
+    assert.equal(report.errors.length, 1, `namespace ${reserved.namespace} must fail for exactly the reserved reason`)
+    assert.match(report.errors[0].message, /is reserved for the bundled runtime vocabulary/)
+  }
+
+  // Control: a namespace that merely starts with the letters is not reserved.
+  const control = readJson(VALID_PACK)
+  control.id = 'mnstryish.pack'
+  control.namespace = 'mnstryish'
+  for (const field of memberFields) control[field] = []
+  const { project } = packProject(t, {
+    entries: [entryFor('mnstryish.pack')],
+    files: [{ to: 'packs/mnstryish.pack.v1.json', doc: control }],
+  })
+  const report = loadExtensionPacks(project, { report: true })
+  assert.deepEqual(report.errors, [])
+  assert.equal(report.packs.length, 1)
+})
+
+// N1 support: writeAtelierLock re-pins with verification disabled, so a
+// drifted lock can never block the very command that repairs it.
+test('verifyLock false ignores the existing lock so re-pinning cannot self-block', (t) => {
+  const { project } = packProject(t, {
+    entries: [entryFor('sample.readiness')],
+    files: validPackFiles(),
+    lock: { extensionPacks: [{ id: 'sample.readiness', version: 'v1', digest: `sha256:${'0'.repeat(64)}` }] },
+  })
+  assert.throws(() => loadExtensionPacks(project), /lock digest mismatch/)
+  const result = loadExtensionPacks(project, { verifyLock: false })
+  assert.deepEqual(result.errors, [])
+  assert.deepEqual(result.warnings, [])
+  assert.equal(result.packs.length, 1)
+  assert.equal(result.packs[0].lock, 'unlocked')
 })
 
 test('a protocol without any safety posture fails every code-enforced point', (t) => {

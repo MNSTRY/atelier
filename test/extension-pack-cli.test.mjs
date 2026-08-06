@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { computePackDigest } from '../src/extension-packs/loader.mjs'
 import { makeSampleProject } from './helpers/sample-project.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -85,9 +85,13 @@ test('validate --json emits the report schema with digest and protocol count', (
   assert.equal(pack.version, 'v1')
   assert.equal(pack.protocolCount, 1)
   assert.equal(pack.lock, 'unlocked')
-  assert.ok(path.isAbsolute(pack.path))
+  // Log-safety: emitted paths are config-relative, never machine-local
+  // absolute paths (same rationale as distribution.mjs output).
+  assert.equal(path.isAbsolute(pack.path), false)
+  assert.equal(pack.path, path.join('packs', 'sample.readiness.v1.json'))
   const rawBytes = fs.readFileSync(path.join(sample.dir, 'packs/sample.readiness.v1.json'))
-  assert.equal(pack.digest, `sha256:${crypto.createHash('sha256').update(rawBytes).digest('hex')}`)
+  const protocolBytes = fs.readFileSync(path.join(sample.dir, 'packs/protocols/contract-gate.v1.json'))
+  assert.equal(pack.digest, computePackDigest(rawBytes, [protocolBytes]))
   assert.deepEqual(pack.errors, [])
   assert.deepEqual(pack.warnings, [])
 })
@@ -99,6 +103,8 @@ test('list is the default subcommand and prints one block per pack', (t) => {
   assert.match(result.stdout, /^sample\.readiness$/m)
   assert.match(result.stdout, /^ {2}version: v1$/m)
   assert.match(result.stdout, /^ {2}enabled: yes$/m)
+  // Config-relative path in text output too; absolute paths never appear.
+  assert.match(result.stdout, /^ {2}path: packs\/sample\.readiness\.v1\.json$/m)
   assert.match(result.stdout, /^ {2}digest: sha256:[0-9a-f]{64}$/m)
   assert.match(result.stdout, /^ {2}protocols: 1$/m)
   assert.match(result.stdout, /^ {2}lock: unlocked$/m)
@@ -170,7 +176,8 @@ test('a lock digest mismatch fails validate and lists lock status mismatch', (t)
 test('a matching lock entry reports locked status', (t) => {
   const sample = packProject(t, { entries: [entryFor('sample.readiness')], files: validPackFiles() })
   const rawBytes = fs.readFileSync(path.join(sample.dir, 'packs/sample.readiness.v1.json'))
-  const digest = `sha256:${crypto.createHash('sha256').update(rawBytes).digest('hex')}`
+  const protocolBytes = fs.readFileSync(path.join(sample.dir, 'packs/protocols/contract-gate.v1.json'))
+  const digest = computePackDigest(rawBytes, [protocolBytes])
   writeJson(path.join(sample.dir, 'atelier.lock.json'), {
     extensionPacks: [{ id: 'sample.readiness', version: 'v1', digest }],
   })

@@ -26,7 +26,7 @@ Subcommands:
       --json emits { schema: "${REPORT_SCHEMA}", packs, ok }.
 
   list [--json] [--project ./atelier.project.json]
-      Show declared packs with id, version, enabled, resolved path, digest,
+      Show declared packs with id, version, enabled, config-relative path, digest,
       protocol count, and lock status (locked, unlocked, or mismatch).
       This is the default subcommand.
 
@@ -103,6 +103,11 @@ function buildRows(project, result) {
     if (id) attributed.add(id)
     const status = record ? 'ok' : skippedEntry ? 'skipped' : 'error'
     const declaredPath = typeof entry?.path === 'string' && entry.path ? entry.path : null
+    // Log-safety: paths in output stay relative to the project config dir
+    // (same rationale as distribution.mjs) so neither text nor --json output
+    // ever leaks machine-local absolute paths.
+    const resolvedPath = record?.path ?? (declaredPath ? path.resolve(project.configDir, declaredPath) : null)
+    const displayPath = resolvedPath ? path.relative(project.configDir, resolvedPath) || '.' : null
     return {
       id: label,
       status,
@@ -111,7 +116,7 @@ function buildRows(project, result) {
       enabled: entry?.enabled === true && !skippedEntry,
       skippedReason: skippedEntry?.reason ?? null,
       version: record?.version ?? (typeof entry?.version === 'string' ? entry.version : null),
-      path: record?.path ?? (declaredPath ? path.resolve(project.configDir, declaredPath) : null),
+      path: displayPath,
       digest: record?.digest ?? null,
       protocolCount: record ? record.protocols.length : null,
       lock: record ? record.lock : errors.some((message) => LOCK_MISMATCH_PATTERN.test(message)) ? 'mismatch' : null,

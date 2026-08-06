@@ -150,8 +150,9 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
     },
     // Digest asymmetry, on purpose: the bundled pack is an in-memory object,
     // so its digest covers JSON.stringify of that object; loaded file packs
-    // carry raw-byte digests computed by the loader (computePackDigest), so
-    // any on-disk edit is visible byte-for-byte.
+    // carry raw-byte digests computed by the loader (computePackDigest) over
+    // the manifest bytes plus every referenced protocol file's bytes, so any
+    // on-disk edit to the manifest or a protocol is visible byte-for-byte.
     extensionPacks: [
       {
         id: bundledMnstryReadinessPackV1.id,
@@ -173,17 +174,12 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
 export function writeAtelierLock({ project, templateId = 'existing-workspace' } = {}) {
   const lockPath = lockPathForProject(project)
   // Packs load in throwing mode on purpose: a broken extension pack cannot be
-  // locked. The lock being replaced is set aside first so re-pinning is not
-  // blocked by the very drift it records (the loader hard-errors on lock
-  // digest mismatches); a load failure restores the previous lock untouched.
-  const setAside = fs.existsSync(lockPath) ? `${lockPath}.repin.tmp` : null
-  if (setAside) fs.renameSync(lockPath, setAside)
-  let packs
-  try {
-    ({ packs } = loadExtensionPacks(project))
-  } finally {
-    if (setAside) fs.renameSync(setAside, lockPath)
-  }
+  // locked. Lock verification is disabled for this one load so re-pinning is
+  // not blocked by the very drift it records; the previous lock is never
+  // moved or set aside, so it exists at every observable point, and writeJson
+  // replaces it atomically (temp file + renameSync). A load failure throws
+  // before any write and leaves the previous lock untouched.
+  const { packs } = loadExtensionPacks(project, { verifyLock: false })
   const lock = buildAtelierLock({ project, templateId, packs })
   writeJson(lockPath, lock)
   return lock

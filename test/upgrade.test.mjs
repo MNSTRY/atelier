@@ -289,7 +289,8 @@ test('lock write records a declared extension pack and lock check round-trips', 
   assert.ok(entry, 'declared pack must be recorded in the lock')
   assert.equal(entry.version, 'v1')
   const rawBytes = fs.readFileSync(path.join(root, 'packs', 'sample.readiness.v1.json'))
-  assert.equal(entry.digest, computePackDigest(rawBytes))
+  const protocolBytes = fs.readFileSync(path.join(root, 'packs', 'protocols', 'contract-gate.v1.json'))
+  assert.equal(entry.digest, computePackDigest(rawBytes, [protocolBytes]))
   const report = checkAtelierLock(project)
   assert.deepEqual(report.errors, [])
   assert.equal(report.ok, true)
@@ -311,6 +312,64 @@ test('a tampered pack file is detected as lock drift', () => {
   const report = checkAtelierLock(project)
   assert.equal(report.ok, false)
   assert.match(report.errors.join('\n'), /lock digest mismatch for extension pack sample\.readiness/)
+})
+
+// M1 replay at the lock-check level: the reviewer edited a protocol's
+// ui.agentPrompt behind a written lock; lock check passed and the tampered
+// prompt was served. The pinned digest now covers protocol file bytes.
+test('a tampered protocol file behind a written lock is detected as lock drift', () => {
+  const { root } = fixture()
+  const project = declarePack(root)
+  writeAtelierLock({ project })
+  assert.equal(checkAtelierLock(project).ok, true)
+  const protocolFile = path.join(root, 'packs', 'protocols', 'contract-gate.v1.json')
+  const doc = JSON.parse(fs.readFileSync(protocolFile, 'utf8'))
+  doc.ui.agentPrompt = 'Tampered agent prompt the lock must catch.'
+  writeJson(protocolFile, doc)
+  const report = checkAtelierLock(project)
+  assert.equal(report.ok, false)
+  assert.match(report.errors.join('\n'), /lock digest mismatch for extension pack sample\.readiness/)
+})
+
+// N1 replay: the old set-aside left no lock on disk if the process died
+// mid-load and strayed a .repin.tmp. The lock is now never moved; its
+// replacement lands atomically via temp file + renameSync.
+test('lock rewrite keeps the lock present throughout and never creates a set-aside', (t) => {
+  const { root } = fixture()
+  const project = declarePack(root)
+  writeAtelierLock({ project })
+  const lockPath = path.join(root, 'atelier.lock.json')
+  // Digest drift: the old implementation could only re-pin past this by
+  // renaming the lock out of the way.
+  reindentPack(root)
+
+  const writes = []
+  const renames = []
+  const realRename = fs.renameSync.bind(fs)
+  const realWrite = fs.writeFileSync.bind(fs)
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    renames.push({ from: String(from), to: String(to) })
+    if (String(to) === lockPath) {
+      // At the instant the replacement lands, the previous lock still exists:
+      // there is no observable point without a lock file.
+      assert.equal(fs.existsSync(lockPath), true, 'the previous lock must still be present when its replacement lands')
+    }
+    return realRename(from, to)
+  })
+  t.mock.method(fs, 'writeFileSync', (file, ...rest) => {
+    writes.push(String(file))
+    return realWrite(file, ...rest)
+  })
+
+  const lock = writeAtelierLock({ project })
+  const touched = [...writes, ...renames.flatMap((item) => [item.from, item.to])]
+  assert.equal(touched.some((item) => item.endsWith('.repin.tmp')), false, 'no set-aside path may ever be created')
+  assert.equal(renames.some((item) => item.from === lockPath), false, 'the lock file must never be renamed away')
+  assert.equal(writes.includes(lockPath), false, 'the lock must not be written in place; it lands via rename')
+  assert.equal(renames.filter((item) => item.to === lockPath).length, 1, 'exactly one atomic rename produces the new lock')
+  assert.equal(fs.existsSync(lockPath), true)
+  assert.ok(lock.extensionPacks.some((item) => item.id === 'sample.readiness'))
+  assert.equal(checkAtelierLock(project).ok, true, 'the rewrite must re-pin the drifted digest')
 })
 
 test('a declared pack absent from the lock is a loader warning and a lock check error', () => {

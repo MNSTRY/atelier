@@ -22,6 +22,11 @@ import {
 export const ATELIER_EXT_NAMESPACE = 'mnstry.atelier'
 export const EXTENSION_PACK_SCHEMA = 'mnstry-atelier-extension-pack@v1'
 export const RESERVED_NAMESPACE = 'mnstry'
+// Reserved-namespace rule covers lookalike labels too: 'mnstry' itself plus
+// any label extending it with '.' or '-' ('mnstry-core', 'mnstry-readiness'),
+// aligning with TRADEMARKS.md. Pack namespaces cannot contain '.', but the
+// pattern still guards it so the rule holds if the id grammar ever loosens.
+export const RESERVED_NAMESPACE_PATTERN = /^mnstry([.-]|$)/
 
 // Mirrors LOCK_FILE in src/upgrade/upgrade.mjs. Declared locally because the
 // upgrade module imports this loader (writeAtelierLock loads packs before
@@ -94,8 +99,23 @@ function ajvMessages(validate) {
 // Digest of the exact file bytes, not re-serialized JSON. The bundled entry in
 // buildAtelierLock digests JSON.stringify of an in-memory object instead; file
 // packs always digest raw bytes so on-disk edits are visible byte-for-byte.
-export function computePackDigest(rawBytes) {
-  return `sha256:${crypto.createHash('sha256').update(rawBytes).digest('hex')}`
+//
+// The digest pins the whole pack content, not just the manifest: it is sha256
+// over a length-prefixed concatenation of parts, where the parts are the pack
+// manifest's raw bytes followed by each referenced protocol file's raw bytes
+// in declaration order. Each part contributes the ASCII decimal byte length,
+// a single '\n', then the bytes themselves. The length prefix makes part
+// boundaries unambiguous, so no concatenation of different files can collide
+// with another split of the same bytes. A locked lock entry therefore fails
+// closed when any referenced protocol file changes, not only the manifest.
+export function computePackDigest(manifestBytes, protocolFilesBytes = []) {
+  const hash = crypto.createHash('sha256')
+  for (const part of [manifestBytes, ...protocolFilesBytes]) {
+    const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part)
+    hash.update(`${bytes.length}\n`)
+    hash.update(bytes)
+  }
+  return `sha256:${hash.digest('hex')}`
 }
 
 function relativePathError(value, { requireJsonSuffix }) {
@@ -108,6 +128,16 @@ function relativePathError(value, { requireJsonSuffix }) {
 
 function isUnder(baseDir, resolved) {
   return resolved === baseDir || resolved.startsWith(`${baseDir}${path.sep}`)
+}
+
+// Symlink-hardened containment. The lexical isUnder check alone is inert
+// against symlinks: a packs or protocols directory that is a symlink pointing
+// outside the config root resolves lexically inside it. Both the base and the
+// candidate are pushed through realpathSync before comparing, so any declared
+// path whose real resolution leaves the realpathed base is rejected. Call only
+// after the candidate is known to exist (realpathSync throws otherwise).
+function isUnderReal(baseDir, resolved) {
+  return isUnder(fs.realpathSync(baseDir), fs.realpathSync(resolved))
 }
 
 function entryShapeErrors(entry, label) {
@@ -169,7 +199,7 @@ function reservedNamespaceErrors(doc) {
   return errors
 }
 
-function loadProtocolRecords({ doc, packDir, seenProtocolIds, errors }) {
+function loadProtocolRecords({ doc, packDir, seenProtocolIds, errors, digestParts }) {
   const validators = compiledValidators()
   const records = []
   const refs = Array.isArray(doc.protocols) ? doc.protocols : []
@@ -189,9 +219,17 @@ function loadProtocolRecords({ doc, packDir, seenProtocolIds, errors }) {
       errors.push(`${label} protocol file not found: ${ref.path}`)
       return
     }
+    if (!isUnderReal(packDir, resolved)) {
+      errors.push(`${label}.path escapes the pack directory`)
+      return
+    }
+    // Raw bytes are read once and folded into the pack digest (declaration
+    // order), so the lock pins protocol content, not just the manifest.
+    const protocolBytes = fs.readFileSync(resolved)
+    digestParts.push(protocolBytes)
     let protocolDoc
     try {
-      protocolDoc = readJsonFile(resolved)
+      protocolDoc = JSON.parse(protocolBytes.toString('utf8'))
     } catch {
       errors.push(`${label} protocol file is not valid JSON: ${ref.path}`)
       return
@@ -252,8 +290,11 @@ function loadOnePack({ entry, configDir, lock, seenProtocolIds, errors, warnings
     errors.push(`pack file not found: ${entry.path}`)
     return null
   }
+  if (!isUnderReal(configDir, packPath)) {
+    errors.push(`pack path escapes the project config directory: ${entry.path}`)
+    return null
+  }
   const rawBytes = fs.readFileSync(packPath)
-  const digest = computePackDigest(rawBytes)
   let doc
   try {
     doc = JSON.parse(rawBytes.toString('utf8'))
@@ -270,7 +311,13 @@ function loadOnePack({ entry, configDir, lock, seenProtocolIds, errors, warnings
   if (doc.version !== entry.version) errors.push(`pack version ${doc.version} does not match the declared version ${entry.version}`)
   const idPrefix = String(doc.id).split('.')[0]
   if (doc.namespace !== idPrefix) errors.push(`pack namespace ${doc.namespace} must equal the pack id prefix ${idPrefix}`)
-  if (doc.namespace === RESERVED_NAMESPACE) errors.push(`pack namespace ${RESERVED_NAMESPACE} is reserved for the bundled runtime vocabulary`)
+  // The namespace-level check must hold even for a memberless pack: with no
+  // member ids to inspect, reservedNamespaceErrors never fires, so this line
+  // is the only thing standing between a reserved (or lookalike) namespace
+  // and a clean load.
+  if (RESERVED_NAMESPACE_PATTERN.test(String(doc.namespace))) {
+    errors.push(`pack namespace ${doc.namespace} is reserved for the bundled runtime vocabulary`)
+  }
   errors.push(...reservedNamespaceErrors(doc))
   if (errors.length) return null
 
@@ -287,11 +334,20 @@ function loadOnePack({ entry, configDir, lock, seenProtocolIds, errors, warnings
       errors.push(`fixtures[${index}] escapes the pack directory`)
       return
     }
-    // Fixtures are declarative references; a missing file is not a load error.
-    if (!fs.existsSync(resolved)) warnings.push(`fixtures[${index}] reference not found: ${fixtureRef}`)
+    // Fixtures are declarative references; a missing file is not a load error,
+    // but an existing one that resolves outside the pack through a symlink is.
+    if (!fs.existsSync(resolved)) {
+      warnings.push(`fixtures[${index}] reference not found: ${fixtureRef}`)
+    } else if (!isUnderReal(packDir, resolved)) {
+      errors.push(`fixtures[${index}] escapes the pack directory`)
+    }
   })
 
-  const protocolRecords = loadProtocolRecords({ doc, packDir, seenProtocolIds, errors })
+  // Digest parts: manifest bytes first, then each referenced protocol file's
+  // bytes in declaration order (see computePackDigest for the exact format).
+  const digestParts = []
+  const protocolRecords = loadProtocolRecords({ doc, packDir, seenProtocolIds, errors, digestParts })
+  const digest = computePackDigest(rawBytes, digestParts)
 
   const lockEntry = lock.entries.find((item) => item?.id === entry.id) ?? null
   let lockStatus = 'unlocked'
@@ -301,7 +357,12 @@ function loadOnePack({ entry, configDir, lock, seenProtocolIds, errors, warnings
       pinned = false
       errors.push(`lock version mismatch for extension pack ${entry.id}: locked ${lockEntry.version}, declared ${entry.version}; review the pack and run atelier lock write`)
     }
-    if (typeof lockEntry.digest === 'string' && lockEntry.digest !== digest) {
+    // A lock entry that carries no digest pins nothing; verifying it as
+    // 'locked' would be vacuous, so it is a load error with the remedy named.
+    if (typeof lockEntry.digest !== 'string' || !lockEntry.digest) {
+      pinned = false
+      errors.push(`lock entry for extension pack ${entry.id} is missing a string digest; review the pack and run atelier lock write`)
+    } else if (lockEntry.digest !== digest) {
       pinned = false
       errors.push(`lock digest mismatch for extension pack ${entry.id}; review the pack and run atelier lock write`)
     }
@@ -335,7 +396,11 @@ function formatLoadFailure(errors) {
 // default, used by runtime and lock paths) any error throws — fail closed.
 // With report: true (used by extension-pack validate) errors are collected per
 // pack as { packId, message } entries and the caller decides.
-export function loadExtensionPacks(project, { report = false } = {}) {
+// With verifyLock: false (used only by writeAtelierLock) the existing lock is
+// neither read nor compared: re-pinning must not be blocked by the very drift
+// the new lock records, and the old lock stays on disk untouched. Every pack
+// then reports lock status 'unlocked'; all other checks still fail closed.
+export function loadExtensionPacks(project, { report = false, verifyLock = true } = {}) {
   const errors = []
   const warnings = []
   const skipped = []
@@ -346,7 +411,7 @@ export function loadExtensionPacks(project, { report = false } = {}) {
   const declared = declaredEntries(project)
   if (declared.error) errors.push({ packId: null, message: declared.error })
 
-  const lock = readLockState(configDir)
+  const lock = verifyLock ? readLockState(configDir) : { exists: false, entries: [], error: null }
   if (lock.error) errors.push({ packId: null, message: lock.error })
 
   const overlayPacks = asObject(asObject(asObject(asObject(project?.localOverlay).overlay).preferences).extensionPacks)
