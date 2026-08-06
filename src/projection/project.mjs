@@ -5,8 +5,38 @@ import { summarizeReadinessJourney } from '../readiness-protocols/runtime.mjs'
 
 const esc = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 
+const HEX_COLOR = /^#[0-9a-fA-F]{3,8}$/
+const THEME_TOKENS = [
+  ['background', '--atelier-bg'],
+  ['surface', '--atelier-surface'],
+  ['text', '--atelier-text'],
+  ['accent', '--atelier-accent'],
+  ['eyebrow', '--atelier-eyebrow'],
+]
+
+function resolveDistributionBranding(project) {
+  const distribution = project.config?.ext?.['mnstry.atelier']?.distribution ?? {}
+  const theme = distribution.theme ?? {}
+  // Theme values are interpolated into a <style> block, so the hex-only rule
+  // is the CSS-injection guard; a deterministic build must not silently vary.
+  for (const token of Object.keys(theme)) {
+    if (typeof theme[token] !== 'string' || !HEX_COLOR.test(theme[token])) {
+      throw new Error(`distribution theme values must be hex colors (theme.${token})`)
+    }
+  }
+  const overrides = THEME_TOKENS
+    .filter(([token]) => typeof theme[token] === 'string')
+    .map(([token, property]) => `${property}:${theme[token]}`)
+  return {
+    name: distribution.name || 'MNSTRY Atelier',
+    eyebrow: distribution.eyebrow || 'local projection',
+    themeCss: overrides.length ? `:root{${overrides.join(';')}}\n` : '',
+  }
+}
+
 export function buildProjectProjection(project) {
   const graph = readJson(project.graphPath)
+  const branding = resolveDistributionBranding(project)
   const readinessJourney = summarizeReadinessJourney(project)
   const output = path.join(project.outputRoot, 'index.html')
   const dimensionCards = readinessJourney.dimensions.map((item) => `<article class="readiness-card" data-protocol="${esc(item.protocolId)}">
@@ -27,26 +57,27 @@ export function buildProjectProjection(project) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="mnstry:atelier" content="project-projection">
-<title>${esc(project.config.name || 'MNSTRY Atelier')}</title>
+<title>${esc(project.config.name || branding.name)}</title>
 <style>
-body{margin:0;font:16px/1.5 ui-sans-serif,system-ui;background:#151312;color:#f4eee5}
+:root{--atelier-bg:#151312;--atelier-surface:#201a18;--atelier-text:#f4eee5;--atelier-accent:#e3b56e;--atelier-eyebrow:#c39a5b}
+body{margin:0;font:16px/1.5 ui-sans-serif,system-ui;background:var(--atelier-bg);color:var(--atelier-text)}
 main{max-width:1120px;margin:0 auto;padding:32px 20px}
 h1{font-size:clamp(2rem,4vw,4rem);margin:.2em 0}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
-.card{border:1px solid #3a302b;border-radius:8px;padding:16px;background:#201a18}
+.card{border:1px solid #3a302b;border-radius:8px;padding:16px;background:var(--atelier-surface)}
 .readiness{margin:24px 0 32px;padding:20px;border:1px solid #463b34;border-radius:8px;background:#1c1715}
 .readiness-head{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
-.readiness-score{font-size:2rem;font-weight:700;color:#e3b56e}
+.readiness-score{font-size:2rem;font-weight:700;color:var(--atelier-accent)}
 .readiness-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:16px}
 .readiness-card{border:1px solid #342b26;border-radius:8px;padding:14px;background:#171312}
 .readiness-card h3{font-size:1.05rem;margin:.2rem 0}
-.readiness-card button{min-height:44px;border:1px solid #755f43;border-radius:6px;background:#241d18;color:#f4eee5;padding:8px 10px;cursor:pointer}
-.eyebrow{color:#c39a5b;text-transform:uppercase;letter-spacing:.08em;font-size:.8rem}
-a{color:#e3b56e}
-</style>
+.readiness-card button{min-height:44px;border:1px solid #755f43;border-radius:6px;background:#241d18;color:var(--atelier-text);padding:8px 10px;cursor:pointer}
+.eyebrow{color:var(--atelier-eyebrow);text-transform:uppercase;letter-spacing:.08em;font-size:.8rem}
+a{color:var(--atelier-accent)}
+${branding.themeCss}</style>
 </head>
 <body><main>
-<p class="eyebrow">MNSTRY Atelier · local projection</p>
+<p class="eyebrow">${esc(branding.name)} · ${esc(branding.eyebrow)}</p>
 <h1>${esc(project.config.name || 'Project Workspace')}</h1>
 <p>${graph.counts.nodes} graph nodes · ${graph.counts.edges} graph edges · ${graph.counts.diagnostics} diagnostics</p>
 <section class="readiness" aria-labelledby="tenant-readiness-title">

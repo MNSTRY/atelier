@@ -31,7 +31,7 @@ export async function runServerCommand(argv = process.argv.slice(2)) {
     if (!health.ok) throw new Error('health check failed')
     // @atelier-egress-local-computed
     const page = await fetch(`${base}/index.html`).then((res) => res.text())
-    if (!page.includes('MNSTRY Atelier')) throw new Error('projection smoke failed')
+    if (!page.includes('<meta name="mnstry:atelier"')) throw new Error('projection smoke failed')
     await sidecar.close()
     console.log('[atelier:browser:smoke] local projection and health endpoint passed')
     return
