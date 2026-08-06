@@ -14,11 +14,21 @@
 // Self-contained subcommand parser (no shared CLI plumbing) so the module can
 // be invoked directly: node src/commands/announcements.mjs <subcommand> ...
 //
+// Trust anchor rule: the public key is ALWAYS the package-committed key
+// (DEFAULT_PUBLIC_KEY) unless the operator explicitly passes --public-key.
+// --dir relocates only where announcement documents are read from; it never
+// relocates the key. A key loaded from inside the tree being verified is not
+// a trust anchor at all — anyone who can write that directory could mint an
+// attacker keypair under the genuine keyId and have forgeries list as
+// verified. Every list run prints the key it verified against for exactly
+// this reason.
+//
 // Exit codes: 0 success (all documents verified), 1 one or more documents
 // failed verification, 2 usage or input error. Log-safety contract: output
-// may name keyId, algorithm, file paths, and — only after a signature
-// verifies — announcement content. An unverified document's body is never
-// printed.
+// may name keyId, algorithm, package-relative file paths, and — only after a
+// signature verifies — announcement content. An unverified document's body is
+// never printed, and a key path outside the package is named by basename only
+// so machine layout never reaches a log.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -36,7 +46,10 @@ const USAGE = `Usage: atelier announcements <subcommand>
 Subcommands:
   list [--dir DIR] [--public-key FILE]
       List every announcement in the announcements directory (default: the
-      package's announcements/), verifying each against the public key.
+      package's announcements/), verifying each against the committed MNSTRY
+      announcements key. --dir changes only which documents are read; the
+      trust anchor stays the committed key unless you pass --public-key.
+      Every run prints the key path and keyId it verified against.
       Documents that do not verify are flagged loudly and fail the exit code.
 
   verify <file> [--public-key FILE] [--json]
@@ -104,6 +117,30 @@ function loadPublicKey(keyPath) {
     fail(`public key file has no publicKeyJwk member: ${keyPath}`)
   }
   return doc
+}
+
+// Name a key file for output. Inside the package it is named by its
+// package-relative path (stable across machines and checkouts); anywhere else
+// only the basename is printed, because an absolute path leaks the operator's
+// machine layout into logs and transcripts.
+function describeKeyPath(keyPath) {
+  const resolved = path.resolve(keyPath)
+  const relative = path.relative(PACKAGE_ROOT, resolved)
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    return relative.split(path.sep).join('/')
+  }
+  return `<outside package>/${path.basename(resolved)}`
+}
+
+// The key-identity header. Printing which key produced a verdict is what
+// makes a swapped trust anchor visible rather than silent, so it prints on
+// every run — and says so out loud when the key is not the committed default.
+function keyIdentityHeader(keyPath, keyDoc, { explicit }) {
+  const keyId = typeof keyDoc.keyId === 'string' && keyDoc.keyId.length > 0 ? keyDoc.keyId : '(none)'
+  const provenance = explicit
+    ? 'explicit --public-key, not the committed default key'
+    : 'committed default key'
+  return `key: ${describeKeyPath(keyPath)} (keyId ${keyId}, ${provenance})`
 }
 
 // Structural validation of the runtime-defined announcement shape. Returns
@@ -188,7 +225,16 @@ function runList(argv) {
   const options = parseOptions(argv, { dir: 'value', 'public-key': 'value' })
   if (options._.length) fail(`announcements list takes options only\n\n${USAGE}`)
   const dir = options.dir ?? DEFAULT_DIR
-  const publicKey = loadPublicKey(options['public-key'] ?? path.join(dir, 'keys', 'mnstry-announcements.public.v1.json'))
+  // The trust anchor is the committed key — the same one verify and show
+  // default to — never a key found under --dir. Only --public-key moves it,
+  // and the header below says so when it does.
+  const explicitKey = options['public-key'] !== undefined
+  const keyPath = explicitKey ? options['public-key'] : DEFAULT_PUBLIC_KEY
+  const publicKey = loadPublicKey(keyPath)
+  console.log(keyIdentityHeader(keyPath, publicKey, { explicit: explicitKey }))
+  if (options.dir !== undefined) {
+    console.log('--dir changes only which documents are read; the trust anchor above is unchanged.')
+  }
   let entries
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true })

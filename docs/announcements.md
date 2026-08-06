@@ -49,9 +49,21 @@ List and verify everything at once:
 
     atelier announcements list
 
-Each verified announcement prints its id, date, and title. A file that does
-not verify is flagged loudly and fails the exit code; treat its content as
-not from MNSTRY.
+Every run opens with the key it verified against — the package-relative key
+path, the `keyId`, and whether that key is the committed default:
+
+    key: announcements/keys/mnstry-announcements.public.v1.json (keyId mnstry-announcements-2026, committed default key)
+
+Each verified announcement then prints its id, date, and title. A file that
+does not verify is flagged loudly and fails the exit code; treat its content
+as not from MNSTRY.
+
+`--dir DIR` changes only which documents are read. It never relocates the
+trust anchor: `list` verifies against the same committed key that `verify`
+and `show` use, so a public key sitting inside the directory being listed is
+ignored. Pointing `list` at an untrusted copy of an announcements tree is
+therefore safe — a forgery signed with a key planted in that tree fails, no
+matter that the key file is named correctly and carries the genuine `keyId`.
 
 Verify a single file (the committed key is the default; pass
 `--public-key FILE` to pin your own copy):
@@ -69,10 +81,21 @@ without printing any content — otherwise.
 
 - Verification is offline and local. Anyone with the repository can reach
   the same verdict; no MNSTRY service participates.
+- The trust anchor is always the committed key, or a key you explicitly
+  passed with `--public-key`. Nothing else can become the anchor — in
+  particular no directory option, and no key file found next to the
+  documents being checked. A key that travels with the documents it signs
+  proves only that whoever wrote those documents also wrote that key.
+- Every `list` run names its anchor, so a non-default key is stated rather
+  than assumed. If the header does not say `committed default key`, the
+  verdicts came from a key you passed.
 - The committed public key travels with the repository. If you want
   protection against a compromised repository rewriting both the key and
   the announcements together, pin a known-good copy of the public key out
   of band and pass it with `--public-key`.
+- The private half of the announcements key is not in this repository, and
+  a test sweeps every JSON under `announcements/` for a JWK private member
+  to keep it that way. CI only ever verifies; it never signs.
 - A document under `announcements/` that fails verification is noise, not
   an announcement. The tooling never presents unverified content as if it
   were from MNSTRY.
