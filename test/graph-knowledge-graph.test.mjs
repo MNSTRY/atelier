@@ -7,6 +7,7 @@ import {
   REPO_ACCESS_SCHEMA,
   SOURCE_SIDECAR_SCHEMA,
   buildKnowledgeGraph,
+  portableText,
   validateRepoAccessConfig,
 } from '../src/graph/knowledge-graph.mjs'
 
@@ -165,4 +166,13 @@ kg:
   const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: repoAccess() })
   assert.equal(result.ok, true, result.errors.join('\n'))
   assert.ok(result.workspaceGraph.diagnostics.some((diagnostic) => diagnostic.type === 'private-repo-recommended'))
+})
+
+// The scrubber existed only for macOS home paths; Linux and Windows shapes
+// passed through untouched, and CI runs on ubuntu-latest.
+test('portableText strips home directories on every OS shape', () => {
+  assert.equal(portableText('/Users/erik/secret/notes.md'), '~/secret/notes.md')
+  assert.equal(portableText('/home/erik/secret/notes.md'), '~/secret/notes.md')
+  assert.equal(portableText('C:\\Users\\erik\\secret'), '~\\secret')
+  assert.equal(portableText('no paths here'), 'no paths here')
 })

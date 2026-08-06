@@ -31,11 +31,11 @@ jobs:
             exit 1
           fi
       # Trusted tools from main
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: trusted
       # Untrusted content, DATA ONLY — never install or execute anything in target/
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           path: target
@@ -47,7 +47,7 @@ jobs:
             echo "PR head moved to $actual — re-review"
             exit 1
           fi
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       # Content sweep only, no --commits: outside-author commits would fail the

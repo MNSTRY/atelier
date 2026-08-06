@@ -52,7 +52,10 @@ export function fallbackId(repoName, rel, ext = path.extname(rel).toLowerCase())
 }
 
 export function portableText(value) {
-  return String(value ?? '').replace(/\/Users\/[^/\s`'")]+/g, '~')
+  return String(value ?? '')
+    .replace(/\/Users\/[^/\s`'")]+/g, '~')
+    .replace(/\/home\/[^/\s`'")]+/g, '~')
+    .replace(/[A-Za-z]:\\Users\\[^\\\s`'")]+/g, '~')
 }
 
 export function readJsonFile(file, fallback = null) {

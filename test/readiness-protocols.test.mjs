@@ -122,6 +122,8 @@ test('each bundled readiness protocol has the required review sections', () => {
 test('bundled readiness pack stays neutral and package-safe', (t) => {
   const serialized = JSON.stringify(bundledMnstryReadinessPackV1)
   assert.doesNotMatch(serialized, /\/Users\//)
+  assert.doesNotMatch(serialized, /\/home\/[a-z]/i)
+  assert.doesNotMatch(serialized, /[A-Za-z]:\\\\Users\\\\/)
   assert.doesNotMatch(serialized, /\.codex/)
   assert.doesNotMatch(serialized, /BEGIN (RSA|OPENSSH|PRIVATE) KEY/)
   assert.equal(bundledMnstryReadinessPackV1.packageSafe, true)
