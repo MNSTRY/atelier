@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { buildGraph } from '../src/graph/graph.mjs'
+import { buildGraph, ignoredSidecarWarnings } from '../src/graph/graph.mjs'
 import { buildKnowledgeGraph, writeKnowledgeGraphs } from '../src/graph/knowledge-graph.mjs'
 import { commandProject, writeJson } from '../src/project/config.mjs'
 
@@ -33,9 +33,24 @@ const IGNORED_JUNK = [
   { rel: 'machine-notes/dataset.json', content: '{"local":true}\n' },
   { rel: 'machine-notes/dataset.json.kg.json', content: '{"schema":"mnstry.source-sidecar@v1"}\n' },
   { rel: 'vendor-cache/index.html', content: '<!doctype html><title>cache</title>\n' },
+  // The harder shape: an ignored sidecar next to a TRACKED asset. Nothing here
+  // is inside an ignored directory, so the walk sees the asset and only the
+  // sidecar is machine-local. An existence check enrolls it — with whatever
+  // audience it declares — and the census stops matching a clean checkout.
+  {
+    rel: 'catalogue/dataset.json.kg.json',
+    content: `${JSON.stringify({
+      schema: 'mnstry.source-sidecar@v1',
+      asset: 'dataset.json',
+      title: 'Machine-local dataset',
+      summary: '',
+      tags: [],
+      kg: { id: 'docs:catalogue-dataset', type: 'source', domain: 'docs', lifecycle: 'root', status: 'active', audience: 'public', relations: {} },
+    }, null, 2)}\n`,
+  },
 ]
 
-const GITIGNORE = ['.mnstry-local/', '.atelier-local/', 'support-bundles/', 'machine-notes/', 'vendor-cache/', 'atelier-output/'].join('\n')
+const GITIGNORE = ['.mnstry-local/', '.atelier-local/', 'support-bundles/', 'machine-notes/', 'vendor-cache/', 'atelier-output/', 'catalogue/*.kg.json'].join('\n')
 
 function git(repo, args) {
   return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
@@ -58,6 +73,10 @@ function makeWorkspace(t) {
   fs.writeFileSync(path.join(repo, '.gitignore'), `${GITIGNORE}\n`)
   writeDoc(repo, 'README.md', 'docs:readme')
   writeDoc(repo, 'guides/setup.md', 'docs:guides-setup')
+  // Tracked, sidecar-less foreign asset: out of the census until a TRACKED
+  // sidecar opts it in. It is the target of the ignored-sidecar junk above.
+  fs.mkdirSync(path.join(repo, 'catalogue'), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'catalogue/dataset.json'), '{"tracked":true}\n')
   git(repo, ['add', '.'])
   git(repo, ['commit', '--quiet', '-m', 'seed'])
 
@@ -143,6 +162,40 @@ test('workspace graph build ignores git-ignored machine-local files', (t) => {
     after.nodes.map((node) => node.path),
     before.nodes.map((node) => node.path),
     'git-ignored files entered the graph census',
+  )
+
+  // Refused, not silently dropped — and named on a channel that never reaches
+  // the artifact, so the refusal cannot churn it either.
+  assert.deepEqual(ignoredSidecarWarnings(project).map((warning) => warning.sidecar), ['catalogue/dataset.json.kg.json'])
+})
+
+test('an ignored sidecar beside a tracked asset is refused and reported out of band', (t) => {
+  const { root, repo } = makeWorkspace(t)
+  const workspaceGraphPath = path.join(root, 'atelier-output', 'knowledge.graph.json')
+  const artifacts = [path.join(repo, 'knowledge.graph.json'), workspaceGraphPath]
+
+  const build = () => {
+    const result = buildKnowledgeGraph({ workspaceRoot: root, repoRoots: [repo] })
+    assert.equal(result.ok, true, result.errors.join('\n'))
+    writeKnowledgeGraphs({ ...result, workspaceGraphPath })
+    return result
+  }
+
+  const before = build()
+  assert.deepEqual(before.ignoredSidecars, [])
+  const baseline = hashArtifacts(artifacts)
+
+  plantIgnoredJunk(repo)
+  const after = build()
+  assert.ok(
+    !after.workspaceGraph.nodes.some((node) => node.path === 'catalogue/dataset.json'),
+    'a git-ignored sidecar enrolled a tracked asset in the census',
+  )
+  assert.deepEqual(after.ignoredSidecars, [{ repo: 'docs', path: 'catalogue/dataset.json', sidecar: 'catalogue/dataset.json.kg.json' }])
+  assert.equal(
+    hashArtifacts(artifacts),
+    baseline,
+    'the refusal reached a committed artifact — machine-local observations must stay beside the graph, never inside it',
   )
 })
 

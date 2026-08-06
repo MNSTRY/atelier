@@ -314,11 +314,46 @@ export function walkDocuments(dir, root, acc = [], isIgnored = gitIgnoreFilter(r
       if (GENERATED_FILES.has(ent.name)) continue
       if (rel === 'index.html') continue
       const ext = path.extname(ent.name).toLowerCase()
-      if (!DOC_EXTENSIONS.has(ext) && !fs.existsSync(`${abs}.kg.json`)) continue
-      acc.push({ abs, rel, ext })
+      // Opt-in requires a VISIBLE sidecar. A git-ignored one is machine-local:
+      // it would enrol a node that exists in no tracked file, and hand it an
+      // audience, on one machine only. Markdown never consults a sidecar.
+      const sidecarVisible = ext === '.md' ? false : sidecarIsVisible(abs, root, isIgnored)
+      if (!DOC_EXTENSIONS.has(ext) && !sidecarVisible) continue
+      acc.push({ abs, rel, ext, sidecarVisible })
     }
   }
   return acc
+}
+
+function sidecarIsVisible(abs, root, isIgnored) {
+  const sidecar = `${abs}.kg.json`
+  return fs.existsSync(sidecar) && !isIgnored(relPath(root, sidecar))
+}
+
+// Sidecars that exist on disk but are git-ignored, next to a file the census
+// can see: metadata the walk refused. Reported alongside the graph (like
+// orphan sidecars) and never inside it, so committed artifacts stay a function
+// of tracked state alone.
+export function ignoredSourceSidecars(repoName, repoRoot, isIgnored = gitIgnoreFilter(repoRoot)) {
+  const found = []
+  function visit(dir) {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue
+      const abs = path.join(dir, ent.name)
+      const rel = relPath(repoRoot, abs)
+      if (ent.isDirectory()) {
+        if (!isIgnored(rel)) visit(abs)
+        continue
+      }
+      if (!ent.isFile() || !ent.name.endsWith('.kg.json') || !isIgnored(rel)) continue
+      const sourceRel = rel.replace(/\.kg\.json$/, '')
+      if (sourceRel.toLowerCase().endsWith('.md')) continue
+      if (isIgnored(sourceRel) || !fs.existsSync(path.join(repoRoot, sourceRel))) continue
+      found.push({ repo: repoName, path: sourceRel, sidecar: rel })
+    }
+  }
+  visit(repoRoot)
+  return found
 }
 
 export function walkSidecars(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
@@ -341,7 +376,10 @@ function sidecarPath(file) {
 
 function sidecarMetadata(file) {
   const sidecar = sidecarPath(file)
-  const exists = fs.existsSync(sidecar)
+  // The walk already decided whether this sidecar is visible in tracked state.
+  // An ignored one is treated as absent, so it can neither describe the asset
+  // nor satisfy the demand a document extension makes for a sidecar.
+  const exists = file.sidecarVisible === true
   let parsed = null
   let parseError = ''
   if (exists) {
@@ -674,10 +712,10 @@ export function graphDiagnostics(nodes) {
   return diagnostics
 }
 
-export function activeOrphanSidecars(repoName, repoRoot, files) {
+export function activeOrphanSidecars(repoName, repoRoot, files, isIgnored = gitIgnoreFilter(repoRoot)) {
   const indexedPaths = new Set(files.map((file) => file.rel))
   const orphans = []
-  for (const sidecar of walkSidecars(repoRoot, repoRoot)) {
+  for (const sidecar of walkSidecars(repoRoot, repoRoot, [], isIgnored)) {
     const sourceRel = sidecar.rel.replace(/\.kg\.json$/, '')
     if (indexedPaths.has(sourceRel)) continue
     if (fs.existsSync(path.join(repoRoot, sourceRel))) continue
@@ -781,12 +819,16 @@ export function buildKnowledgeGraph({
   const workspaceNodes = []
   const workspaceEdges = []
   const workspaceOrphanSidecars = []
+  const workspaceIgnoredSidecars = []
   const repoGraphs = []
 
   for (const repoRoot of roots) {
     const repoName = path.basename(repoRoot)
-    const files = walkDocuments(repoRoot, repoRoot)
-    workspaceOrphanSidecars.push(...activeOrphanSidecars(repoName, repoRoot, files))
+    // One batched ignore lookup per repo, shared by every walk below.
+    const isIgnored = gitIgnoreFilter(repoRoot)
+    const files = walkDocuments(repoRoot, repoRoot, [], isIgnored)
+    workspaceOrphanSidecars.push(...activeOrphanSidecars(repoName, repoRoot, files, isIgnored))
+    workspaceIgnoredSidecars.push(...ignoredSourceSidecars(repoName, repoRoot, isIgnored))
     const coverage = loadAtelierCoverage(repoRoot)
     const nodes = []
     const nodesByPath = new Map()
@@ -830,6 +872,7 @@ export function buildKnowledgeGraph({
     repoGraphs,
     workspaceGraph,
     orphanSidecars: workspaceOrphanSidecars,
+    ignoredSidecars: workspaceIgnoredSidecars,
   }
 }
 

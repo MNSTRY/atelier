@@ -14,10 +14,20 @@ const relPath = (root, file) => path.relative(root, file).split(path.sep).join('
 // Sidecar-first census. Document extensions are always sources; any other
 // file — json, yaml, csv, binary assets — opts in by carrying an adjacent
 // .kg.json sidecar. The sidecar itself is metadata, never a source asset.
-function isSourceFile(name, abs) {
+//
+// Membership asks whether the sidecar is VISIBLE, not whether it happens to
+// exist on this disk. A git-ignored sidecar is machine-local: obeying one
+// enrolls a node that no tracked file declares — audience and all — so a
+// clean checkout builds a different graph than the machine that wrote it.
+function isSourceFile(name, sidecarVisible) {
   if (name.endsWith('.kg.json')) return false
   if (DOC_EXTS.has(path.extname(name).toLowerCase())) return true
-  return fs.existsSync(`${abs}.kg.json`)
+  return sidecarVisible === true
+}
+
+function sidecarIsVisible(abs, root, isIgnored) {
+  const sidecar = sidecarFor(abs)
+  return fs.existsSync(sidecar) && !isIgnored(relPath(root, sidecar))
 }
 
 function walk(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
@@ -26,7 +36,11 @@ function walk(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
     const abs = path.join(dir, ent.name)
     if (isIgnored(relPath(root, abs))) continue
     if (ent.isDirectory()) walk(abs, root, acc, isIgnored)
-    if (ent.isFile() && isSourceFile(ent.name, abs)) acc.push({ abs, rel: relPath(root, abs), ext: path.extname(ent.name).toLowerCase() })
+    if (!ent.isFile() || ent.name.endsWith('.kg.json')) continue
+    const ext = path.extname(ent.name).toLowerCase()
+    // Markdown carries its own front matter and never consults a sidecar.
+    const sidecarVisible = ext === '.md' ? false : sidecarIsVisible(abs, root, isIgnored)
+    if (isSourceFile(ent.name, sidecarVisible)) acc.push({ abs, rel: relPath(root, abs), ext, sidecarVisible })
   }
   return acc
 }
@@ -150,7 +164,11 @@ function nodeFromMarkdown(repo, file, errors) {
 
 function nodeFromSidecar(repo, file, errors) {
   const sidecar = sidecarFor(file.abs)
-  if (!fs.existsSync(sidecar)) {
+  // Visibility again, and for the same reason: a git-ignored sidecar must not
+  // supply identity, audience, or relations. A document-extension asset whose
+  // only sidecar is ignored therefore fails closed with the ordinary
+  // missing-sidecar error — the same verdict a clean checkout reaches.
+  if (!file.sidecarVisible) {
     errors.push(`${repo.name}/${file.rel}: non-Markdown source requires sidecar ${path.basename(sidecar)}`)
     return null
   }
@@ -196,7 +214,9 @@ export function buildGraph(project) {
       errors.push(`configured repo is missing or unreadable: ${repo.name ?? '(unnamed)'}`)
       continue
     }
-    for (const file of walk(repo.path, repo.path)) {
+    // One batched ignore lookup per repo, shared by every walk below.
+    const isIgnored = gitIgnoreFilter(repo.path)
+    for (const file of walk(repo.path, repo.path, [], isIgnored)) {
       // Markdown is the one inline metadata format; every other source is
       // sidecar-described and its own bytes are never read.
       const node = file.ext === '.md' ? nodeFromMarkdown(repo, file, errors) : nodeFromSidecar(repo, file, errors)
@@ -213,7 +233,7 @@ export function buildGraph(project) {
       }
       nodes.push(node)
     }
-    for (const orphan of findOrphanSidecars(repo.path)) {
+    for (const orphan of findOrphanSidecars(repo.path, isIgnored)) {
       errors.push(`${repo.name}/${orphan}: sidecar has no matching source asset`)
     }
   }
@@ -256,9 +276,8 @@ function isExternalRelationTarget(target, { externalRelationPrefixes, externalRe
   return externalRelationPrefixes.has(prefix)
 }
 
-function findOrphanSidecars(root) {
+function findOrphanSidecars(root, isIgnored = gitIgnoreFilter(root)) {
   const orphans = []
-  const isIgnored = gitIgnoreFilter(root)
   function visit(dir) {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
       if (ent.name.startsWith('.') || SKIP_DIRS.has(ent.name)) continue
@@ -275,10 +294,61 @@ function findOrphanSidecars(root) {
   return orphans
 }
 
+// Sidecars that exist on disk but are git-ignored, next to a file the census
+// can see. Refused, never obeyed — and never silently: dropping them without a
+// word is what let an untracked sidecar mint a public node.
+function findIgnoredSidecars(root, isIgnored = gitIgnoreFilter(root)) {
+  const found = []
+  function visit(dir) {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name.startsWith('.') || SKIP_DIRS.has(ent.name)) continue
+      const abs = path.join(dir, ent.name)
+      const rel = relPath(root, abs)
+      if (ent.isDirectory()) {
+        if (!isIgnored(rel)) visit(abs)
+        continue
+      }
+      if (!ent.isFile() || !ent.name.endsWith('.kg.json') || !isIgnored(rel)) continue
+      const assetRel = rel.slice(0, -'.kg.json'.length)
+      // Nothing was refused if the asset is itself machine-local or absent, and
+      // Markdown never reads a sidecar in the first place.
+      if (assetRel.toLowerCase().endsWith('.md')) continue
+      if (isIgnored(assetRel) || !fs.existsSync(path.join(root, assetRel))) continue
+      found.push({ path: assetRel, sidecar: rel })
+    }
+  }
+  visit(root)
+  return found
+}
+
+// Deliberately NOT part of buildGraph's return value: that object is written
+// verbatim to the graph artifact, so a machine-local observation inside it
+// would make the artifact differ between a developer's tree and a clean
+// checkout — the exact churn the ignore filter exists to prevent. The operator
+// hears about the refusal; the shared artifact never does.
+export function ignoredSidecarWarnings(project) {
+  const warnings = []
+  for (const repo of project.repos ?? []) {
+    if (repo.external || !repo.name || !repo.path || !fs.existsSync(repo.path)) continue
+    for (const found of findIgnoredSidecars(repo.path)) {
+      warnings.push({
+        severity: 'warning',
+        code: 'ignored-sidecar',
+        repo: repo.name,
+        path: found.path,
+        sidecar: found.sidecar,
+        message: `${repo.name}/${found.sidecar}: sidecar is git-ignored and was refused; it cannot enroll ${found.path} or describe it`,
+      })
+    }
+  }
+  return warnings
+}
+
 export function runGraphCommand(argv = process.argv.slice(2)) {
   const check = argv.includes('--check')
   const project = commandProject({ argv })
   const graph = buildGraph(project)
+  for (const warning of ignoredSidecarWarnings(project)) console.warn(`warning: ${warning.message}`)
   if (graph.errors.length) {
     console.error(graph.errors.join('\n'))
     process.exit(1)

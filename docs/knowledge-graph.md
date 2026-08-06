@@ -31,6 +31,22 @@ Two census rules follow:
   knowledge-graph material — no error, no node. A sidecar whose adjacent asset
   is missing is still an orphan error either way.
 
+A sidecar that Git ignores cannot enroll a file. Membership asks whether the
+sidecar is *visible* in tracked state, not whether it exists on this disk: an
+untracked, ignored `<file>.kg.json` is machine-local, so obeying one mints a
+node — with whatever audience it declares, up to `public` — that appears in no
+tracked file and on no other machine. The refusal runs both ways: an ignored
+sidecar enrolls nothing and describes nothing, so a document-extension asset
+whose only sidecar is ignored still fails closed with the ordinary
+missing-sidecar error, which is the verdict a clean checkout reaches anyway.
+Refused sidecars are named — a warning, `ignored-sidecar`, on `buildGraph`'s
+`ignoredSidecarWarnings(project)` and on the workspace builder's
+`ignoredSidecars`, printed by `atelier graph` — because dropping them silently
+is what let the injection through. They are reported *beside* the graph and
+never inside it: `buildGraph`'s return value is written verbatim as the
+artifact, and a machine-local observation there would churn committed bytes
+per machine, which is the failure the ignore filter exists to prevent.
+
 The sidecar branch is binary-safe by construction: the asset's bytes are never
 read. Identity, audience, and relations all come from the sidecar, so
 audience-based projection filtering, disclosure diagnostics, and the repo
