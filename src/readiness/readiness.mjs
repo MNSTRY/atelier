@@ -267,7 +267,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
 
   if (subcommand === 'packet') {
     const project = commandProject({ argv })
-    const packet = buildTenantPacket(project)
+    const packet = buildTenantPacket(project, { registry: projectRegistry(project) })
     const file = writeTenantPacket(project, packet)
     console.log(`${JSON.stringify({
       ok: true,
@@ -280,7 +280,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
   if (subcommand === 'export') {
     if (!argv.includes('--dry-run')) throw new Error('readiness export only supports --dry-run')
     const project = commandProject({ argv })
-    const report = buildReadinessExportDryRun(project)
+    const report = buildReadinessExportDryRun(project, { registry: projectRegistry(project) })
     console.log(`${JSON.stringify(report, null, 2)}\n`)
     if (!report.accepted) process.exitCode = 1
     return

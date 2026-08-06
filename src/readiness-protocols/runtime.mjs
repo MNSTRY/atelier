@@ -381,8 +381,8 @@ export function writeTenantPacket(project, packet) {
   return file
 }
 
-export function buildReadinessExportDryRun(project) {
-  const packet = buildTenantPacket(project)
+export function buildReadinessExportDryRun(project, { registry = null } = {}) {
+  const packet = buildTenantPacket(project, { registry })
   return {
     schema: 'mnstry.readiness-export-dry-run@v1',
     generatedAt: 'deterministic',

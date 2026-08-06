@@ -232,3 +232,24 @@ test('tenant packet without a registry keeps an empty ext contribution', (t) => 
   const packet = buildTenantPacket(project)
   assert.deepEqual(packet.ext, { 'mnstry.atelier': { extensionPacks: [] } })
 })
+
+test('readiness export dry-run carries pack blockers when built with a registry', (t) => {
+  const { project, registry } = packProject(t, { gate: 'required' })
+
+  const report = buildReadinessExportDryRun(project, { registry })
+
+  const packBlocker = 'readiness-incomplete:sample.readiness:contract-gate'
+  assert.equal(report.worstOperationStatus, 'blocked')
+  assert.ok(
+    report.blockers.includes(packBlocker),
+    'an unfinished required pack protocol must block the export dry-run',
+  )
+  assert.ok(Array.isArray(report.tenantPacket.ext?.['mnstry.atelier']?.extensionPacks))
+  assert.notEqual(report.tenantPacket.ext['mnstry.atelier'].extensionPacks.length, 0)
+
+  const bare = buildReadinessExportDryRun(project)
+  assert.ok(
+    !bare.blockers.includes(packBlocker),
+    'precondition: without a registry the pack blocker is invisible — the CLI must pass one',
+  )
+})
