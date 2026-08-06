@@ -25,6 +25,24 @@ the reserved `ext` container — no schema change is involved. Attribution in
 `--version` output is a distribution-side test convention, not a runtime
 check.
 
+## Quiet software
+
+The kit, and anything carrying the "powered by MNSTRY Atelier" attribution, must not
+emit commercially motivated interruptions: no upsells, no calls-to-action, no
+prompts to sign up, upgrade, rate, subscribe, or purchase. Attribution stays a
+passive line — it identifies, it never solicits. MNSTRY binds itself to the
+same standard, including this channel policy: outbound communication is
+limited to user-initiated artifacts, inbound communication is pull-only, and
+there is no telemetry, ever. Violating this clause forfeits the right to carry
+the MNSTRY marks.
+
+## Applications
+
+An application powered by this package that ships no CLI carries the
+attribution in its user-facing credits or about surface. The wording
+requirements mirror the distribution rule above: the exact attribution string,
+byte for byte, with the surrounding text free.
+
 ## Naming your distribution
 
 MNSTRY marks may not appear in product names, package names, or domain names.

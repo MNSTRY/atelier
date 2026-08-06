@@ -41,6 +41,17 @@ requirement lives in `TRADEMARKS.md` under "Required attribution" — this
 document deliberately does not restate it, so the two cannot drift. See also
 `docs/attestation.md` for how admission decisions are recorded.
 
+Three related obligations live alongside it:
+
+- **Quiet software.** Anything carrying the MNSTRY marks is bound by the
+  "Quiet software" clause in `TRADEMARKS.md`: attribution is a passive line,
+  never an upsell, interruption, or call-to-action.
+- **Applications without a CLI.** An app powered by this package that ships no
+  CLI carries the attribution in its user-facing credits or about surface —
+  see "Applications" in `TRADEMARKS.md`.
+- **NOTICE.** The package ships a `NOTICE` file at its root; under
+  Apache-2.0 section 4(d), every derivative redistribution must reproduce it.
+
 Mechanically, attribution has three surfaces:
 
 - **CLI output — automatic.** `runCli` renders the attribution line in
