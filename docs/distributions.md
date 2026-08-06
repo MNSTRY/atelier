@@ -54,12 +54,21 @@ Mechanically, attribution has three surfaces:
   The `mnstry.atelier/attribution` key is distinct from the `mnstry.atelier`
   container used for projection branding.
 
-`atelier distribution check` verifies the last two: the README byte string is
-blocking (exit 1 when absent), the manifest key is reported but never blocks.
-Run it from the distribution root, or point it elsewhere with `--target DIR`;
-`--pack DIR` overrides the default `packs/*/atelier.pack.json` manifest
-lookup. Exit codes: 0 checks passed, 1 blocking attribution failure, 2 usage
-error.
+`atelier distribution check` verifies the last two, plus a CLI probe: the
+README byte string is blocking (exit 1 when absent), and when the target's
+`package.json` declares a bin, the check **executes that bin** with
+`--version` (spawned with the current Node, working directory set to the
+target, real pipes) and requires the attribution in its output — this closes
+the loophole where a wrapper injects no-op output streams into `runCli`.
+Because the probe runs the target's code, only point it at distributions you
+trust. A target that looks like a distribution (declares `@mnstry/atelier`,
+ships `packs/`, or carries `atelier.project.json`) but declares no probe-able
+bin — or whose `package.json` does not parse — is a blocking failure; only a
+target with none of those markers gets an advisory skip. The manifest key is
+reported but never blocks. Run it from the distribution root, or point it
+elsewhere with `--target DIR`; `--pack DIR` overrides the default
+`packs/*/atelier.pack.json` manifest lookup. Exit codes: 0 checks passed,
+1 blocking attribution failure, 2 usage error.
 
 ## Building a distribution: the Loomworks walkthrough
 

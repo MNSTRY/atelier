@@ -62,7 +62,7 @@ test('keygen, sign, verify roundtrip in a scratch directory', () => {
   // keygen refuses to overwrite an existing key file.
   const again = run(['keygen', '--key-id', 'cli-test-2026'], { cwd: dir })
   assert.equal(again.status, 2)
-  assert.match(again.stderr, /refusing to overwrite/)
+  assert.match(again.stderr, /refusing to write signing key file/)
 
   // Build an unsigned attestation over the sample export.
   const hash = JSON.parse(run(['hash', SAMPLE_EXPORT]).stdout)
@@ -125,7 +125,7 @@ test('keygen refuses a dangling symlink at the out path and never writes through
   fs.symlinkSync(exfilTarget, path.join(dir, LOCAL_KEY_FILE))
   const byDefault = run(['keygen', '--key-id', 'symlink-victim'], { cwd: dir })
   assert.equal(byDefault.status, 2)
-  assert.match(byDefault.stderr, /refusing to overwrite existing signing key file/)
+  assert.match(byDefault.stderr, /refusing to write signing key file/)
   assert.equal(fs.existsSync(exfilTarget), false, 'dangling symlink target must never receive key bytes')
 
   // Explicit --out pointing at a dangling symlink fails identically.
@@ -133,7 +133,7 @@ test('keygen refuses a dangling symlink at the out path and never writes through
   fs.symlinkSync(exfilTarget, outLink)
   const byOut = run(['keygen', '--key-id', 'symlink-victim', '--out', outLink], { cwd: dir })
   assert.equal(byOut.status, 2)
-  assert.match(byOut.stderr, /refusing to overwrite existing signing key file/)
+  assert.match(byOut.stderr, /refusing to write signing key file/)
   assert.equal(fs.existsSync(exfilTarget), false)
 
   // Error output stays path-only: no JWK members, no key bytes.

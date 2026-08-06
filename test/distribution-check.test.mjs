@@ -21,6 +21,16 @@ function runDistribution(args, cwd = ROOT) {
   })
 }
 
+// A minimal probe-able bin whose --version output carries the attribution,
+// for tests whose subject is something other than the bin rule (a packs/
+// marker makes the bin probe mandatory).
+function withPassingBin(dir) {
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'bin', 'sample.mjs'), `console.log('Sample Studio 1.0.0 — ${ATTRIBUTION} 0.0.0')\n`)
+  fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify({ name: 'sample-studio', version: '1.0.0', bin: { sample: 'bin/sample.mjs' } }, null, 2)}\n`)
+  return dir
+}
+
 function makeDistribution({ readme, manifest } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-distribution-check-'))
   if (readme !== undefined) fs.writeFileSync(path.join(dir, 'README.md'), readme)
@@ -79,10 +89,10 @@ test('check runs against the cwd when no --target is given', () => {
 })
 
 test('missing pack-manifest attribution key is reported as advisory and never blocks', () => {
-  const dir = makeDistribution({
+  const dir = withPassingBin(makeDistribution({
     readme: `${ATTRIBUTION}\n`,
     manifest: { schema: 'mnstry-atelier-extension-pack@v1', id: 'sample.pack' },
-  })
+  }))
   try {
     const result = runDistribution(['check', '--target', dir])
     assert.equal(result.status, 0, 'advisory findings must not change the exit code')
@@ -94,10 +104,10 @@ test('missing pack-manifest attribution key is reported as advisory and never bl
 })
 
 test('pack-manifest attribution key is reported satisfied when present', () => {
-  const dir = makeDistribution({
+  const dir = withPassingBin(makeDistribution({
     readme: `${ATTRIBUTION}\n`,
     manifest: { schema: 'mnstry-atelier-extension-pack@v1', id: 'sample.pack', ext: { [EXT_KEY]: ATTRIBUTION } },
-  })
+  }))
   try {
     const result = runDistribution(['check', '--target', dir])
     assert.equal(result.status, 0, result.stderr)
@@ -108,10 +118,10 @@ test('pack-manifest attribution key is reported satisfied when present', () => {
 })
 
 test('advisory key must equal the attribution string exactly, not merely exist', () => {
-  const dir = makeDistribution({
+  const dir = withPassingBin(makeDistribution({
     readme: `${ATTRIBUTION}\n`,
     manifest: { ext: { [EXT_KEY]: 'powered by something else' } },
-  })
+  }))
   try {
     const result = runDistribution(['check', '--target', dir])
     assert.equal(result.status, 0)
@@ -140,7 +150,7 @@ test('--pack overrides the packs/ convention and accepts a manifest file path', 
 })
 
 test('an unreadable pack manifest is an advisory note, not a failure', () => {
-  const dir = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  const dir = withPassingBin(makeDistribution({ readme: `${ATTRIBUTION}\n` }))
   try {
     const packDir = path.join(dir, 'packs', 'broken-pack')
     fs.mkdirSync(packDir, { recursive: true })
@@ -217,7 +227,7 @@ test('a package without any declared bin is only an advisory note', () => {
     fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify({ name: 'library-dist', version: '1.0.0' })}\n`)
     const result = runDistribution(['check', '--target', dir])
     assert.equal(result.status, 0, result.stderr)
-    assert.match(result.stdout, /advisory: no package\.json bin declared; CLI attribution probe skipped/)
+    assert.match(result.stdout, /advisory: no package\.json bin declared and no distribution markers; CLI attribution probe skipped/)
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
@@ -269,4 +279,43 @@ test('bare invocation defaults to the check subcommand', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// G1: the CLI attribution probe must not be opt-out-able by a target that
+// looks like a distribution. Six dodge shapes, all against a target carrying
+// a distribution marker (packs/), all blocking.
+test('a distribution-shaped target cannot dodge the bin probe', (t) => {
+  const dodges = [
+    ['no bin key', { name: 'dodger', version: '1.0.0' }],
+    ['empty bin object', { name: 'dodger', bin: {} }],
+    ['whitespace-only bin entry', { name: 'dodger', bin: { s: '   ' } }],
+    ['bin as array', { name: 'dodger', bin: ['x.mjs'] }],
+  ]
+  for (const [label, pkg] of dodges) {
+    const dir = makeDistribution({ readme: `${ATTRIBUTION}\n`, manifest: { schema: 'mnstry-atelier-extension-pack@v1' } })
+    fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`)
+    const result = runDistribution(['check', '--target', dir])
+    assert.equal(result.status, 1, `${label} must be blocking, got exit ${result.status}`)
+    assert.match(result.stdout + result.stderr, /no probe-able bin/, label)
+  }
+
+  // No package.json at all, but packs/ marker present — blocking.
+  const bare = makeDistribution({ readme: `${ATTRIBUTION}\n`, manifest: { schema: 'mnstry-atelier-extension-pack@v1' } })
+  const bareResult = runDistribution(['check', '--target', bare])
+  assert.equal(bareResult.status, 1, 'marker without manifest must be blocking')
+
+  // Malformed package.json — blocking, distinguishable from absent.
+  const malformed = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  fs.writeFileSync(path.join(malformed, 'package.json'), '{ not json')
+  const malformedResult = runDistribution(['check', '--target', malformed])
+  assert.equal(malformedResult.status, 1, 'malformed manifest must be blocking')
+  assert.match(malformedResult.stdout + malformedResult.stderr, /does not parse/)
+})
+
+test('a markerless target without a bin still gets the advisory skip', () => {
+  const dir = makeDistribution({ readme: `${ATTRIBUTION}\n` })
+  fs.writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify({ name: 'plain-lib', version: '1.0.0' }, null, 2)}\n`)
+  const result = runDistribution(['check', '--target', dir])
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /probe skipped/)
 })

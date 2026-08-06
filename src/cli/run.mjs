@@ -168,7 +168,7 @@ Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet dr
 Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks in the tracked project config and reports one line per pack. Packs load additively alongside the bundled MNSTRY protocols and can never replace them. list is the default subcommand.`,
     distribution: `Usage: ${c} distribution check [--target DIR] [--pack DIR]
 
-Checks a distribution package for the required MNSTRY attribution markers. The distribution README.md check is blocking; the extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/attestation.md and docs/distributions.md.`,
+Checks a distribution package for the required MNSTRY attribution markers. Blocking: the distribution README.md byte check, and a CLI probe that EXECUTES the target's declared bin with --version (spawned with the current Node, cwd set to the target — only run this against distributions you trust) and requires the attribution in its output; a target that looks like a distribution but declares no probe-able bin, or ships a malformed package.json, is also blocking. The extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/attestation.md and docs/distributions.md.`,
     attestation: `Usage:
   ${c} attestation hash <payload.json>
   ${c} attestation sign <attestation.json> [--key FILE] [--out FILE]

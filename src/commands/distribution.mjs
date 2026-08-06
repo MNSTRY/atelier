@@ -104,33 +104,53 @@ function reportPackAttribution(target, packOverride) {
 // through real pipes (not the wrapper's writers) and requires the exact
 // attribution byte string in the child's stdout.
 //
-// A package that declares no bin at all is only an advisory note (packages
+// The probe is opt-out-proof for anything that looks like a distribution:
+// a target that depends on @mnstry/atelier, ships packs/, or carries an
+// atelier.project.json MUST declare a probe-able bin — a missing or empty
+// bin, or a package.json that does not parse, is a blocking failure there.
+// Only a target with none of those markers gets the advisory skip (packages
 // without a CLI exist). A declared bin that cannot be resolved, or whose
-// --version stdout lacks the attribution bytes, is a blocking failure.
+// --version stdout lacks the attribution bytes, is always blocking.
+function looksLikeDistribution(target, pkg) {
+  if (pkg && (pkg.dependencies?.['@mnstry/atelier'] || pkg.peerDependencies?.['@mnstry/atelier'] || pkg.devDependencies?.['@mnstry/atelier'])) return true
+  if (fs.existsSync(path.join(target, 'packs'))) return true
+  if (fs.existsSync(path.join(target, 'atelier.project.json'))) return true
+  return false
+}
+
 function declaredBinEntries(target) {
   let pkg
   try {
     pkg = JSON.parse(fs.readFileSync(path.join(target, 'package.json'), 'utf8'))
-  } catch {
-    return null
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { pkg: null, entries: null }
+    // A manifest that exists but does not parse must never be
+    // indistinguishable from an absent one.
+    return { pkg: null, entries: null, malformed: true }
   }
   const bin = pkg?.bin
   if (typeof bin === 'string' && bin.trim()) {
-    return [{ name: typeof pkg.name === 'string' ? pkg.name : 'bin', file: bin.trim() }]
+    return { pkg, entries: [{ name: typeof pkg.name === 'string' ? pkg.name : 'bin', file: bin.trim() }] }
   }
   if (bin && typeof bin === 'object' && !Array.isArray(bin)) {
     const entries = Object.entries(bin)
       .filter(([, file]) => typeof file === 'string' && file.trim())
       .map(([name, file]) => ({ name, file: file.trim() }))
-    if (entries.length) return entries
+    if (entries.length) return { pkg, entries }
   }
-  return null
+  return { pkg, entries: null }
 }
 
 function checkBinAttribution(target) {
-  const entries = declaredBinEntries(target)
+  const { pkg, entries, malformed } = declaredBinEntries(target)
+  if (malformed) {
+    return { ok: false, reason: 'package.json exists but does not parse; the CLI attribution probe cannot be skipped by shipping a malformed manifest' }
+  }
   if (entries === null) {
-    return { ok: true, note: 'no package.json bin declared; CLI attribution probe skipped' }
+    if (looksLikeDistribution(target, pkg)) {
+      return { ok: false, reason: 'target looks like a distribution (declares @mnstry/atelier, ships packs/, or carries atelier.project.json) but declares no probe-able bin; a distribution CLI must exist and carry the attribution' }
+    }
+    return { ok: true, note: 'no package.json bin declared and no distribution markers; CLI attribution probe skipped' }
   }
   for (const { name, file } of entries) {
     const resolved = path.resolve(target, file)

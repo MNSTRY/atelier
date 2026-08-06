@@ -172,7 +172,7 @@ function runKeygen(argv) {
     fd = fs.openSync(outPath, 'wx', 0o600)
   } catch (error) {
     if (error?.code === 'EEXIST') {
-      fail(`refusing to overwrite existing signing key file: ${outPath}`)
+      fail(`refusing to write signing key file: path already exists or is a symlink: ${outPath}`)
     }
     fail(`cannot create signing key file: ${outPath}`)
   }

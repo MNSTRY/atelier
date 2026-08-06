@@ -81,3 +81,29 @@ test('readiness export --dry-run from the CLI carries the pack-specific blocker'
     'an unfinished required pack protocol must block the export dry-run from the command line')
   assert.notEqual(report.tenantPacket.ext['mnstry.atelier'].extensionPacks.length, 0)
 })
+
+test('readiness journey from the CLI carries packDimensions and packs', (t) => {
+  const sample = packProject(t)
+  const result = run(['journey', `--project=${sample.config}`], { cwd: sample.dir })
+
+  assert.equal(result.status, 0, result.stderr)
+  const journey = JSON.parse(result.stdout)
+  assert.equal(journey.packDimensions.length, 1,
+    'the declared pack protocol must appear as a pack dimension through the CLI')
+  assert.equal(journey.packDimensions[0].protocolId, PACK_PROTOCOL_ID)
+  assert.equal(journey.packs.length, 1)
+  assert.equal(journey.packs[0].id, 'sample.readiness')
+})
+
+test('readiness run resolves a pack protocol by namespaced id through the CLI', (t) => {
+  const sample = packProject(t)
+  const result = run(['run', PACK_PROTOCOL_ID, `--project=${sample.config}`], { cwd: sample.dir })
+
+  assert.notEqual(result.stderr.includes('unknown readiness protocol'), true,
+    'the CLI must resolve pack protocols through the project registry')
+  // Unanswered required protocol: blockers present, exit 1 — resolution is
+  // what this test pins, not completion.
+  const output = JSON.parse(result.stdout)
+  assert.equal(output.protocolId, PACK_PROTOCOL_ID)
+  assert.equal(typeof output.runId, 'string')
+})
