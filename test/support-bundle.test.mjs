@@ -8,6 +8,23 @@ import {
 
 const fixtureRoot = new URL('../fixtures/support/', import.meta.url)
 
+// PEM headers are assembled at runtime and never written as literals: the
+// repo-wide disclosure checker scans every tracked file for exactly this shape,
+// so a literal here would make this test file its own finding.
+const DASHES = '-'.repeat(5)
+const pemHeader = (...words) => `${DASHES}${['BEGIN', ...words].join(' ')}${DASHES}`
+
+function bannedValueErrors(value) {
+  return validateSupportBundlePayload({
+    schema: 'mnstry.atelier-support-bundle-preview@v1',
+    state: 'support_bundle',
+    sendPath: false,
+    background: false,
+    telemetry: 'none',
+    note: value,
+  }).join('\n')
+}
+
 test('support bundle preview is local, hashable, and has no send path', () => {
   const payload = buildSupportBundlePreview({ state: 'support_bundle' })
   assert.equal(payload.schema, 'mnstry.atelier-support-bundle-preview@v1')
@@ -60,4 +77,44 @@ test('support bundle rejects banned data classes and fixtures cover both sides',
     const payload = JSON.parse(fs.readFileSync(new URL(`invalid/${file}`, fixtureRoot), 'utf8'))
     assert.notDeepEqual(validateSupportBundlePayload(payload), [], `${file} should fail`)
   }
+})
+
+test('the private-key pattern covers every real PEM header, not only bare PKCS#8', () => {
+  // Reviewer demo: the pattern allowed exactly one word between BEGIN and KEY,
+  // so ssh-keygen's default header and every algorithm-qualified header walked
+  // through the scan untouched.
+  const headers = [
+    ['OPENSSH', 'PRIVATE', 'KEY'],
+    ['RSA', 'PRIVATE', 'KEY'],
+    ['EC', 'PRIVATE', 'KEY'],
+    ['DSA', 'PRIVATE', 'KEY'],
+    ['ENCRYPTED', 'PRIVATE', 'KEY'],
+    ['SSH2', 'ENCRYPTED', 'PRIVATE', 'KEY'],
+    ['PGP', 'PRIVATE', 'KEY', 'BLOCK'],
+    ['PRIVATE', 'KEY'],
+    // Bare forms the previous pattern happened to cover; kept so the widened
+    // pattern is a strict superset.
+    ['RSA', 'KEY'],
+    ['OPENSSH', 'KEY'],
+  ]
+  for (const words of headers) {
+    assert.match(bannedValueErrors(pemHeader(...words)), /banned value private-key at note/, words.join(' '))
+  }
+  assert.doesNotMatch(bannedValueErrors('the design doc explains where private keys are meant to live'), /private-key/)
+})
+
+test('a large address-shaped value is rejected promptly, not by backtracking', () => {
+  // The email pattern's local part and domain runs were unbounded, so a few
+  // hundred KB of address-shaped characters with no "@" backtracked for about
+  // a minute — enough to stall any command that scans a capped attachment.
+  // RFC 5321 bounds both parts, so real addresses are unaffected.
+  assert.match(bannedValueErrors('reach me at person@example.com'), /banned value email at note/)
+  assert.match(bannedValueErrors(`${'a'.repeat(64)}@example.com`), /banned value email at note/)
+  // The bound is asserted by elapsed time on purpose: node:test's own timeout
+  // option cannot interrupt a synchronous regex, so a reintroduced unbounded
+  // pattern would stall here and still pass. Bounded it is single-digit
+  // milliseconds against the minute the unbounded form took.
+  const started = Date.now()
+  assert.doesNotMatch(bannedValueErrors('ab.c-d_'.repeat(37449)), /banned value email/)
+  assert.ok(Date.now() - started < 5000, `scanning a capped value took ${Date.now() - started}ms`)
 })

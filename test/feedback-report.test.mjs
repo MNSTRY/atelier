@@ -27,6 +27,19 @@ function tempDir(t) {
   return dir
 }
 
+// PEM headers are assembled at runtime and never written as literals: the
+// repo-wide disclosure checker scans every tracked file for exactly this shape,
+// so a literal here would make this test file its own finding.
+const DASHES = '-'.repeat(5)
+const pemLine = (keyword, words) => `${DASHES}${[keyword, ...words].join(' ')}${DASHES}`
+const pemHeader = (...words) => pemLine('BEGIN', words)
+const pemFooter = (...words) => pemLine('END', words)
+
+// The plaintext prefix every ssh-keygen key starts with, base64-encoded. It is
+// key-file shaped but carries no key material, and on its own it matches no
+// banned pattern — which is what makes it a usable control below.
+const OPENSSH_BODY = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB'
+
 function writtenReport(dir, stdout) {
   const match = stdout.match(/^wrote (\.atelier-local\/feedback\/[0-9a-f]{64}\.json)$/m)
   assert.ok(match, stdout)
@@ -116,6 +129,123 @@ test('--context attaches a user-chosen file by basename and it is scanned like t
   assert.equal(refused.status, 1)
   assert.match(refused.stderr, /banned value \(email\) at context\.text/)
   assert.ok(!refused.stderr.includes('example.com'), refused.stderr)
+})
+
+test('--context carrying an ssh-keygen private key is refused, not embedded', (t) => {
+  // Reviewer demo: the private-key pattern required exactly one word between
+  // BEGIN and KEY, so a real ed25519 key attached with --context passed the
+  // scan and was written into the report byte for byte, under a message that
+  // pointed at the public issue tracker.
+  const dir = tempDir(t)
+  const key = [
+    pemHeader('OPENSSH', 'PRIVATE', 'KEY'),
+    OPENSSH_BODY,
+    pemFooter('OPENSSH', 'PRIVATE', 'KEY'),
+  ].join('\n')
+  fs.writeFileSync(path.join(dir, 'id_ed25519'), `${key}\n`)
+  const refused = run(['create', '--message', 'attaching what I was working with', '--context', 'id_ed25519'], { cwd: dir })
+  assert.equal(refused.status, 1, refused.stderr)
+  assert.match(refused.stderr, /refusing to write/)
+  assert.match(refused.stderr, /banned value \(private-key\) at context\.text/)
+  assert.match(refused.stderr, /nothing was written/)
+  // Log-safety: label and location only — never the header and never the body.
+  assert.ok(!refused.stderr.includes(OPENSSH_BODY), refused.stderr)
+  assert.ok(!refused.stderr.includes('OPENSSH'), refused.stderr)
+  assert.ok(!refused.stdout.includes('wrote'), refused.stdout)
+  assert.equal(fs.existsSync(path.join(dir, '.atelier-local')), false)
+
+  // Control: the same file without the header line is clean, so the refusal
+  // above came from the header rather than from anything else in the file.
+  fs.writeFileSync(path.join(dir, 'body-only.txt'), `${OPENSSH_BODY}\n`)
+  const clean = run(['create', '--message', 'attaching what I was working with', '--context', 'body-only.txt'], { cwd: dir })
+  assert.equal(clean.status, 0, clean.stderr)
+})
+
+test('every real PEM private-key header form is refused, not only bare PKCS#8', (t) => {
+  const dir = tempDir(t)
+  const forms = [
+    ['OPENSSH', 'PRIVATE', 'KEY'],
+    ['RSA', 'PRIVATE', 'KEY'],
+    ['EC', 'PRIVATE', 'KEY'],
+    ['DSA', 'PRIVATE', 'KEY'],
+    ['ENCRYPTED', 'PRIVATE', 'KEY'],
+    ['PGP', 'PRIVATE', 'KEY', 'BLOCK'],
+    ['PRIVATE', 'KEY'],
+  ]
+  for (const words of forms) {
+    fs.writeFileSync(path.join(dir, 'attached.txt'), `${pemHeader(...words)}\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo\n`)
+    const result = run(['create', '--message', 'attached the wrong file', '--context', 'attached.txt'], { cwd: dir })
+    const label = words.join(' ')
+    assert.equal(result.status, 1, `${label}: ${result.stdout}${result.stderr}`)
+    assert.match(result.stderr, /banned value \(private-key\) at context\.text/, label)
+  }
+  assert.equal(fs.existsSync(path.join(dir, '.atelier-local')), false)
+})
+
+test('an oversized context file is refused before anything is embedded', (t) => {
+  const dir = tempDir(t)
+  const cap = 256 * 1024
+  fs.writeFileSync(path.join(dir, 'huge.log'), 'x'.repeat(cap + 1))
+  const refused = run(['create', '--message', 'attaching the whole log', '--context', 'huge.log'], { cwd: dir })
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, new RegExp(`${cap + 1} bytes and the limit is ${cap} bytes`))
+  assert.match(refused.stderr, /nothing was embedded/)
+  assert.equal(fs.existsSync(path.join(dir, '.atelier-local')), false)
+
+  // Exactly at the cap still goes through: the refusal is the cap itself, not
+  // large-ish attachments in general.
+  fs.writeFileSync(path.join(dir, 'at-cap.log'), 'x'.repeat(cap))
+  const accepted = run(['create', '--message', 'attaching a trimmed log', '--context', 'at-cap.log'], { cwd: dir })
+  assert.equal(accepted.status, 0, accepted.stderr)
+  const { payload } = writtenReport(dir, accepted.stdout)
+  assert.equal(payload.context.text.length, cap)
+})
+
+test('a binary or non-UTF-8 context file is refused rather than embedded', (t) => {
+  const dir = tempDir(t)
+  fs.writeFileSync(path.join(dir, 'core.bin'), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01, 0x02, 0x03]))
+  const nul = run(['create', '--message', 'attached a binary by mistake', '--context', 'core.bin'], { cwd: dir })
+  assert.equal(nul.status, 2)
+  assert.match(nul.stderr, /NUL bytes/)
+  assert.match(nul.stderr, /nothing was embedded/)
+
+  fs.writeFileSync(path.join(dir, 'legacy.txt'), Buffer.from([0x68, 0x69, 0xff, 0xfe, 0x0a]))
+  const lossy = run(['create', '--message', 'attached a non-utf8 file', '--context', 'legacy.txt'], { cwd: dir })
+  assert.equal(lossy.status, 2)
+  assert.match(lossy.stderr, /not valid UTF-8/)
+  assert.match(lossy.stderr, /nothing was embedded/)
+  assert.equal(fs.existsSync(path.join(dir, '.atelier-local')), false)
+})
+
+test('a report landing where the local state directory is not ignored warns loudly', (t) => {
+  const dir = tempDir(t)
+  spawnSync('git', ['init', '--quiet'], { cwd: dir, encoding: 'utf8' })
+  const warned = run(['create', '--message', 'writing inside a checkout that tracks everything'], { cwd: dir })
+  assert.equal(warned.status, 0, warned.stderr)
+  writtenReport(dir, warned.stdout)
+  assert.match(warned.stderr, /not ignored/)
+  assert.match(warned.stderr, /could publish your own words/)
+  // The warning names the directory, never the machine path it resolved to.
+  assert.ok(!warned.stderr.includes(dir), warned.stderr)
+
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.atelier-local/\n')
+  const quiet = run(['create', '--message', 'writing where local state is ignored'], { cwd: dir })
+  assert.equal(quiet.status, 0, quiet.stderr)
+  assert.equal(quiet.stderr, '')
+})
+
+test('the success message reads as a backstop, not as clearance to share', (t) => {
+  const dir = tempDir(t)
+  const result = run(['create', '--message', 'the ordering surprised me'], { cwd: dir })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /Nothing was sent anywhere/)
+  assert.match(result.stdout, /backstop, not a guarantee/)
+  assert.match(result.stdout, /does not mean the file is safe to publish/)
+  assert.match(result.stdout, /Read the whole file yourself before you share it/)
+  assert.match(result.stdout, /bugs field/)
+  // No sentence may read as clearance, so nothing declares the report clean or
+  // safe to send.
+  assert.doesNotMatch(result.stdout, /safe to share|is clean|no sensitive/i)
 })
 
 test('check flags an existing report whose message carries a banned value', (t) => {

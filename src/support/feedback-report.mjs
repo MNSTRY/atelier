@@ -14,19 +14,31 @@
 // refuses the write. Log-safety contract: refusals name the pattern label
 // and the report location only, never the matched text.
 //
+// That scan is a backstop, not clearance to share: it matches known patterns
+// only, so the success path says so plainly and asks the user to read the
+// file. File inputs are bounded before they are embedded — at most
+// MAX_INPUT_FILE_BYTES, valid UTF-8 only — so an accidental `--context` of an
+// archive, dump, or key file is refused rather than copied into the report.
+//
 // Exit codes: 0 report written (or check clean), 1 the scan matched
 // (nothing written) or a checked report failed the scan, 2 usage or input
-// error.
+// error (including an oversized or non-UTF-8 input file).
 
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { LOCAL_STATE_DIR } from '../project/config.mjs'
+import { ensureLocalState, LOCAL_STATE_DIR } from '../project/config.mjs'
 import { BANNED_KEY_PATTERNS, BANNED_VALUE_PATTERNS } from './support-bundle.mjs'
 
 export const FEEDBACK_REPORT_SCHEMA = 'mnstry.atelier-feedback@v1'
+
+// An attached file is an excerpt a human will read, not an archive. The cap
+// bounds what can be embedded and what the scan has to walk, and it makes the
+// accidental `--context` of a database dump, core file, or whole log a refusal
+// instead of a silent copy into the report.
+export const MAX_INPUT_FILE_BYTES = 256 * 1024
 
 // Gate names use dashes rather than the npm-script colon form on purpose:
 // a colon-joined identifier is exactly the shape the chassis kg-node-id
@@ -54,6 +66,10 @@ Subcommands:
       --context FILE       attach one user-chosen file (scanned like the rest)
       --include-gates      record local gate names with pass or fail status
 
+      Files read by --message-file and --context must be valid UTF-8 text of
+      at most ${MAX_INPUT_FILE_BYTES} bytes; anything larger or binary is
+      refused rather than embedded.
+
   check FILE
       Re-run the banned key and value scan over an existing feedback report.
 
@@ -61,6 +77,9 @@ Beyond your own words the report records only the package name and version
 and the Node.js version, plus local gate names with pass or fail status when
 --include-gates is passed. Nothing is ever sent: this kit has no send path,
 so sharing the file is always your own explicit act.
+
+The scan is a backstop against an obvious mistake, not a guarantee: it matches
+known patterns only. Read the report yourself before you share it anywhere.
 
 Exit codes: 0 report written or check clean, 1 the scan matched (nothing
 written), 2 usage or input error.`
@@ -154,6 +173,18 @@ export function buildFeedbackReport({
 export function writeFeedbackReport(payload, { baseDir = process.cwd() } = {}) {
   const relative = path.join(LOCAL_STATE_DIR, 'feedback', `${feedbackReportHash(payload)}.json`)
   const file = path.join(baseDir, relative)
+  // "Local state" is only local if the directory it lands in is ignored, and
+  // feedback writes wherever the user happens to stand rather than in a
+  // configured workspace. Same git check-ignore test the project chassis runs
+  // (ensureLocalState), warned about here because this caller has no config to
+  // have run it. Warnings name the directory only, never the machine path.
+  const localState = ensureLocalState({ configDir: baseDir })
+  for (const warning of localState.warnings) console.error(`[atelier-feedback] warning: ${warning}`)
+  if (!localState.ignored) {
+    console.error(
+      '[atelier-feedback] warning: the report is landing inside a checkout that would track it, so a later commit could publish your own words and any attached context',
+    )
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 })
   // The mode option only applies on creation; re-writing the same report
@@ -162,13 +193,33 @@ export function writeFeedbackReport(payload, { baseDir = process.cwd() } = {}) {
   return relative
 }
 
+// Reads user-chosen input as text, with two refusals rather than a best-effort
+// embed: anything over the cap, and anything that is not valid UTF-8. Binary
+// input has no business in a report a human is expected to read before sharing,
+// and a lossy decode would put replacement characters (and whatever survived
+// the decode) into the payload while the scan patterns, all text-shaped, walk
+// straight past the bytes that matter.
 function readTextFile(label, file) {
+  let buffer
   try {
-    return fs.readFileSync(file, 'utf8')
+    buffer = fs.readFileSync(file)
   } catch {
     // The path is echoed exactly as the user typed it — their own input,
     // never a resolved machine-local path.
     throw new UsageError(`could not read ${label}: ${file}`)
+  }
+  if (buffer.byteLength > MAX_INPUT_FILE_BYTES) {
+    throw new UsageError(
+      `${label} is ${buffer.byteLength} bytes and the limit is ${MAX_INPUT_FILE_BYTES} bytes (${MAX_INPUT_FILE_BYTES / 1024} KiB); nothing was embedded. Attach a trimmed excerpt instead: ${file}`,
+    )
+  }
+  if (buffer.includes(0)) {
+    throw new UsageError(`${label} contains NUL bytes, so it is not UTF-8 text; nothing was embedded: ${file}`)
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+  } catch {
+    throw new UsageError(`${label} is not valid UTF-8 text; nothing was embedded: ${file}`)
   }
 }
 
@@ -243,7 +294,12 @@ function runCreate(argv) {
   const relative = writeFeedbackReport(payload)
   console.log(`wrote ${relative}`)
   console.log('This report stayed on this machine. Nothing was sent anywhere; this kit has no send path.')
-  console.log(`If you choose to share it, review the file first and attach it yourself to a new issue on the project issue tracker${shareHint()}.`)
+  // Deliberately not a clearance: a clean scan means no known pattern matched,
+  // which is a backstop against an obvious mistake and nothing more. Whether
+  // the contents are safe to publish is a judgement only the person who wrote
+  // them can make, on the actual file.
+  console.log('The scan that just passed is a backstop, not a guarantee: it matches known patterns only, so a clean run does not mean the file is safe to publish.')
+  console.log(`Read the whole file yourself before you share it. Attaching it to the project issue tracker publishes it${shareHint()}.`)
   return 0
 }
 

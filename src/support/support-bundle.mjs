@@ -32,10 +32,23 @@ export const BANNED_VALUE_PATTERNS = [
   { type: 'repo-file-path', re: /(?:^|[\s"'])(?:[a-z0-9._-]+)\/(?:APP|app|src|docs|private|secrets?)\/[^\s"']+/i },
   { type: 'kg-node-id', re: /(?:^|[\s"'])[a-z][a-z0-9._-]*:[a-z0-9._:-]*[a-z][a-z0-9._:-]*/i },
   { type: 'git-remote', re: /\b(?:git@|https:\/\/github\.com\/)[^\s"']+/i },
-  { type: 'email', re: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i },
+  // Bounded on purpose. The unbounded local-part and domain runs backtracked
+  // catastrophically on large non-email input: a few hundred KB of
+  // address-shaped characters with no "@" took about a minute to reject, which
+  // would turn any capped file attachment into a stall. RFC 5321 caps the
+  // local part at 64 octets and the domain at 255, so every real address
+  // still matches.
+  { type: 'email', re: /\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,255}\.[A-Z]{2,}\b/i },
   { type: 'hostname-or-url', re: /\b(?:https?:\/\/|wss?:\/\/)(?!localhost\b|127\.0\.0\.1\b|\[?::1\]?)[^\s"']+/i },
   { type: 'secret', re: /\b(?:sk|pk|ghp|gho|pat|xoxb|AKIA)[-_A-Za-z0-9]{12,}\b/ },
-  { type: 'private-key', re: /BEGIN (?:RSA|OPENSSH|PRIVATE) KEY/ },
+  // Every PEM private-key header, not only the bare PKCS#8 one. The previous
+  // form allowed exactly one word between BEGIN and KEY, so an ssh-keygen
+  // default key (OPENSSH PRIVATE KEY) and the RSA/EC/DSA/ENCRYPTED and PGP
+  // "PRIVATE KEY BLOCK" headers all passed the scan untouched. Kept identical
+  // to the structural pattern in scripts/structural-patterns.mjs.
+  // The literal must not match itself: this file ships in the tarball and
+  // release:audit scans it with that structural pattern.
+  { type: 'private-key', re: /BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?|BEGIN (?:RSA|OPENSSH) KEY/ },
 ]
 
 function stable(value) {

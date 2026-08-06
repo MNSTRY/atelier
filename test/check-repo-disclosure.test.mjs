@@ -111,6 +111,23 @@ test('structural patterns catch an absolute user path', (t) => {
   assert.match(output, /docs\/note\.md:1/)
 })
 
+test('structural patterns catch an ssh-keygen private key header', (t) => {
+  // Reviewer demo: the pattern required exactly one word between BEGIN and
+  // KEY, so a committed ed25519 key (OPENSSH PRIVATE KEY) scanned clean. The
+  // header is assembled at runtime — a literal would plant the very shape this
+  // gate scans every tracked file for.
+  const dir = makeRepo(t)
+  const dashes = '-'.repeat(5)
+  const header = `${dashes}${['BEGIN', 'OPENSSH', 'PRIVATE', 'KEY'].join(' ')}${dashes}`
+  const body = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB'
+  writeAndCommit(dir, 'keys/id_ed25519', `${header}\n${body}\n`)
+  const { status, output } = runChecker(dir, ['--structural-only'])
+  assert.equal(status, 1, output)
+  assert.match(output, /private key material/)
+  assert.match(output, /keys\/id_ed25519:1/)
+  assert.ok(!output.includes(body), 'log-safety: key material must never be printed')
+})
+
 test('the checker sources are structurally self-excluded, denylist patterns are not', (t) => {
   const dir = makeRepo(t)
   writeAndCommit(dir, 'scripts/check-repo-disclosure.mjs', 'const example = /\\/Users\\//\n')
