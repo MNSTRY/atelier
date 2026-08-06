@@ -1,0 +1,13 @@
+{
+  "description": "A source ref that RESOLVES to a private-audience node must be rejected as not public-projectable. The unresolved/disguised fixtures fail earlier, at resolution, so this fixture is the only one that reaches the public-projectability branch.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/provenance/sourceNodes/0/audience",
+      "value": "private"
+    }
+  ],
+  "expectedErrors": [
+    "source node sample-strategy:guides-offer-structure audience private is not public-projectable"
+  ]
+}

@@ -186,6 +186,39 @@ test('rejects provenance source nodes that use visibility instead of audience', 
   assert.match(result.report.errors.join('\n'), /must use audience, not visibility/)
 })
 
+// The headline boundary: a source ref that RESOLVES with a non-public
+// audience must be refused. The unresolved/disguised cases fail earlier, at
+// resolution, so without these tests both enforcement sites can be deleted
+// with every gate green — an external audit demonstrated exactly that.
+for (const audience of ['private', 'sensitive', 'team']) {
+  test(`rejects a public object whose resolved source node audience is ${audience}`, () => {
+    const file = writeFixtureVariant(`resolved-${audience}-source-ref`, (doc) => {
+      doc.provenance.sourceNodes[0].audience = audience
+    })
+    const result = runValidator(file)
+
+    assert.equal(result.status, 1)
+    assert.equal(result.report.accepted, false)
+    assert.match(result.report.errors.join('\n'), /is not public-projectable/)
+    assert.match(
+      result.report.errors.join('\n'),
+      new RegExp(`audience ${audience} is not public-projectable`)
+    )
+  })
+}
+
+test('rejects verified-graph provenance when a graph node contradicts the public audience', () => {
+  const doc = fixtureDoc()
+  setImportPlanReady(doc)
+  const graphNodes = graphNodesFromDoc(doc)
+  graphNodes[0].audience = 'team'
+  const report = validateAtelierExportDryRun(doc, { graphNodes })
+
+  assert.equal(report.accepted, false)
+  assert.match(report.errors.join('\n'), /not public-safe/)
+  assert.match(report.errors.join('\n'), /audience-team-blocked-for-public/)
+})
+
 test('rejects unresolved source refs', () => {
   const file = writeFixtureVariant('unresolved-source-ref', (doc) => {
     doc.objects.offers[0].sourceRefs[0] = 'sample-strategy:missing-source-node'

@@ -1,0 +1,13 @@
+{
+  "description": "A source ref that RESOLVES to a sensitive-audience node must be rejected as not public-projectable, the strongest audience class the boundary protects.",
+  "base": "../sample-studio-offer.v1.json",
+  "mutations": [
+    {
+      "path": "/provenance/sourceNodes/0/audience",
+      "value": "sensitive"
+    }
+  ],
+  "expectedErrors": [
+    "source node sample-strategy:guides-offer-structure audience sensitive is not public-projectable"
+  ]
+}

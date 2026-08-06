@@ -1,6 +1,8 @@
 import Ajv2020 from 'ajv/dist/2020.js'
 import addFormats from 'ajv-formats'
 
+import { publicSourceVerdict } from '../projection/policy.mjs'
+
 export const LOCAL_AUDIENCES = ['public', 'team', 'operator', 'staff', 'private', 'sensitive']
 export const RUNTIME_VISIBILITIES = ['private', 'shared', 'platform', 'public']
 
@@ -439,26 +441,6 @@ function validateGraphSourceRefs(nodes, publicSourceRefs, errors) {
       errors.push(`public sourceRef ${failure.kgId} is not public-safe: ${failure.reason}`)
     }
   }
-}
-
-function publicSourceVerdict(nodes, kgIds) {
-  const byId = new Map((nodes ?? []).map((node) => [node.id, node]))
-  const failures = []
-  for (const kgId of kgIds) {
-    const node = byId.get(kgId)
-    if (!node) {
-      failures.push({ kgId, reason: 'source-node-not-found' })
-      continue
-    }
-    if (node?.audience !== 'public') {
-      failures.push({
-        kgId,
-        reason: `audience-${node?.audience ?? 'missing'}-blocked-for-public`,
-        audience: node?.audience ?? null,
-      })
-    }
-  }
-  return { ok: failures.length === 0, failures }
 }
 
 function validateGraphProvenance(doc, nodes, errors) {
