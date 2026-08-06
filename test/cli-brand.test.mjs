@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { makeSampleProject } from './helpers/sample-project.mjs'
 
 import {
   DEFAULT_BRAND,
@@ -50,6 +52,15 @@ Core commands:
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.
   config check                    Validate project config.
+  extension-pack validate         Validate declared extension packs.
+  extension-pack list             List declared extension packs.
+  distribution check              Check a distribution for MNSTRY attribution.
+
+Attestation commands:
+  attestation hash FILE           Print the canonical payload hash of a payload.
+  attestation sign FILE           Sign an unsigned attestation with a signing key file.
+  attestation verify FILE         Verify an attestation against a public key file.
+  attestation keygen --key-id ID  Generate a signing key pair.
 
 Every project-aware command accepts --project-config=PATH or
 MNSTRY_ATELIER_PROJECT_CONFIG=PATH. Machine-local repo paths belong in
@@ -68,7 +79,18 @@ test('default-brand version text is the bare package version', () => {
 test('command map exposes the dispatch table for introspection', () => {
   assert.equal(commandMap instanceof Map, true)
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
-  assert.equal(commandMap.size, 41)
+  assert.equal(commandMap.size, 46)
+})
+
+test('command map dispatches the white-label commands to their own modules', () => {
+  assert.deepEqual(commandMap.get('extension-pack'), ['src/commands/extension-pack.mjs'])
+  assert.deepEqual(commandMap.get('extension-pack:validate'), ['src/commands/extension-pack.mjs', 'validate'])
+  assert.deepEqual(commandMap.get('extension-pack:list'), ['src/commands/extension-pack.mjs', 'list'])
+  assert.deepEqual(commandMap.get('distribution'), ['src/commands/distribution.mjs'])
+  assert.deepEqual(commandMap.get('distribution:check'), ['src/commands/distribution.mjs', 'check'])
+  assert.deepEqual(commandMap.get('attestation'), ['src/commands/attestation.mjs'])
+  // manifest keeps its historical config.mjs target.
+  assert.deepEqual(commandMap.get('manifest'), ['src/commands/config.mjs'])
 })
 
 test('branded help leads with the wrapper name then required attribution and drops alias lines', () => {
@@ -133,6 +155,76 @@ test('runCli reports unknown commands with the wrapper display name', async () =
   assert.equal(code, 1)
   assert.deepEqual(err, ['Unknown Loomworks Studio command: definitely-not-a-command'])
   assert.match(out[0], /^Loomworks Studio/)
+})
+
+// The tests below dispatch through bin/atelier.mjs, so they prove the
+// commandMap entry, the normalizeArgs splice, and the spawned module agree —
+// the unit tests above only exercise the builders.
+const BIN = path.join(ROOT, 'bin', 'atelier.mjs')
+const PACK_FIXTURES = path.join(ROOT, 'fixtures', 'atelier-extension-pack')
+
+function runBin(args, { cwd = ROOT } = {}) {
+  return spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' })
+}
+
+test('extension-pack validate dispatches to the extension-pack module', (t) => {
+  const sample = makeSampleProject(t)
+  fs.mkdirSync(path.join(sample.dir, 'packs', 'protocols'), { recursive: true })
+  fs.copyFileSync(
+    path.join(PACK_FIXTURES, 'valid', 'sample-pack.v1.json'),
+    path.join(sample.dir, 'packs', 'sample.readiness.v1.json'),
+  )
+  fs.copyFileSync(
+    path.join(PACK_FIXTURES, 'valid', 'protocols', 'contract-gate.v1.json'),
+    path.join(sample.dir, 'packs', 'protocols', 'contract-gate.v1.json'),
+  )
+  const config = JSON.parse(fs.readFileSync(sample.config, 'utf8'))
+  config.ext = {
+    'mnstry.atelier': {
+      extensionPacks: [
+        { id: 'sample.readiness', version: 'v1', path: 'packs/sample.readiness.v1.json', enabled: true },
+      ],
+    },
+  }
+  fs.writeFileSync(sample.config, `${JSON.stringify(config, null, 2)}\n`)
+
+  const result = runBin(['extension-pack', 'validate', '--project', sample.config])
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^sample\.readiness ok \(v1, 1 protocol, unlocked\)$/m)
+})
+
+test('distribution --help renders the command help without dispatching', () => {
+  const result = runBin(['distribution', '--help'])
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^Usage: atelier distribution check \[--target DIR\] \[--pack DIR\]/)
+  assert.match(result.stdout, /TRADEMARKS\.md/)
+})
+
+// The attestation module prints its own usage and exits 0 for a bare
+// invocation; only an unrecognized subcommand is a usage error (exit 2).
+test('attestation with no subcommand prints usage through the CLI', () => {
+  const result = runBin(['attestation'])
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^Usage: atelier attestation <subcommand>/)
+  assert.match(result.stdout, /signing key file/)
+  assert.doesNotMatch(result.stdout, /secret/i)
+  assert.equal(runBin(['attestation', 'frobnicate']).status, 2)
+})
+
+test('the default help lists the white-label commands and the attestation stanza', () => {
+  const help = runBin(['--help']).stdout
+  assert.match(help, /^ {2}extension-pack validate {9}Validate declared extension packs\.$/m)
+  assert.match(help, /^ {2}extension-pack list {13}List declared extension packs\.$/m)
+  assert.match(help, /^ {2}distribution check {14}Check a distribution for MNSTRY attribution\.$/m)
+  assert.match(help, /^Attestation commands:$/m)
+  assert.match(help, /^ {2}attestation keygen --key-id ID {2}Generate a signing key pair\.$/m)
+})
+
+test('init command help lists the distribution template and the rejection rule', () => {
+  const result = runBin(['init', '--help'])
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /--template private-domain\|shared-project\|sample-workspace\|distribution/)
+  assert.match(result.stdout, /An unrecognized --template exits 1 and writes nothing/)
 })
 
 test('runCli default-brand help and version match the pinned defaults', async () => {

@@ -46,7 +46,12 @@ export const commandMap = new Map([
   ['config', ['src/commands/config.mjs']],
   ['config:check', ['src/commands/config.mjs']],
   ['manifest', ['src/commands/config.mjs']],
-  ['extension-pack', ['src/commands/config.mjs']],
+  ['extension-pack', ['src/commands/extension-pack.mjs']],
+  ['extension-pack:validate', ['src/commands/extension-pack.mjs', 'validate']],
+  ['extension-pack:list', ['src/commands/extension-pack.mjs', 'list']],
+  ['distribution', ['src/commands/distribution.mjs']],
+  ['distribution:check', ['src/commands/distribution.mjs', 'check']],
+  ['attestation', ['src/commands/attestation.mjs']],
 ])
 
 function isDefaultBrand(brand) {
@@ -105,6 +110,15 @@ Core commands:
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.
   config check                    Validate project config.
+  extension-pack validate         Validate declared extension packs.
+  extension-pack list             List declared extension packs.
+  distribution check              Check a distribution for MNSTRY attribution.
+
+Attestation commands:
+  attestation hash FILE           Print the canonical payload hash of a payload.
+  attestation sign FILE           Sign an unsigned attestation with a signing key file.
+  attestation verify FILE         Verify an attestation against a public key file.
+  attestation keygen --key-id ID  Generate a signing key pair.
 
 Every project-aware command accepts --project-config=PATH or
 MNSTRY_ATELIER_PROJECT_CONFIG=PATH. Machine-local repo paths belong in
@@ -114,9 +128,9 @@ MNSTRY_ATELIER_PROJECT_CONFIG=PATH. Machine-local repo paths belong in
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
   const help = {
-    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace] [--target DIR] [--actor ID]
+    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution] [--target DIR] [--actor ID]
 
-Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately.`,
+Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,
     adopt: `Usage: ${c} adopt [--profile single-repo|private-domain|shared-project|multi-repo|monorepo|control-workspace] [--target DIR] [--yes]
 
 Creates or checks a tracked atelier.project.json for an existing workspace and writes machine-local path bindings only to ignored local overlay files.`,
@@ -141,6 +155,21 @@ Builds or checks the project knowledge graph from tracked sources plus ignored l
   ${c} readiness export --dry-run [--project ./atelier.project.json]
 
 Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet drafts stay in ignored .atelier-local/readiness/ unless explicitly materialized by a reviewed future flow.`,
+    'extension-pack': `Usage:
+  ${c} extension-pack validate [--json] [--project ./atelier.project.json]
+  ${c} extension-pack list [--json] [--project ./atelier.project.json]
+
+Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks in the tracked project config and reports one line per pack. Packs load additively alongside the bundled MNSTRY protocols and can never replace them. list is the default subcommand.`,
+    distribution: `Usage: ${c} distribution check [--target DIR] [--pack DIR]
+
+Checks a distribution package for the required MNSTRY attribution markers. The distribution README.md check is blocking; the extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/attestation.md and docs/distributions.md.`,
+    attestation: `Usage:
+  ${c} attestation hash <payload.json>
+  ${c} attestation sign <attestation.json> [--key FILE] [--out FILE]
+  ${c} attestation verify <attestation.json> --public-key FILE [--payload FILE] [--json]
+  ${c} attestation keygen --key-id ID [--algorithm ed25519|es256] [--out FILE]
+
+Records and checks admission decisions. hash prints the canonical payload hash (RFC 8785 JCS, SHA-256). sign reads the local signing key file. verify reads a public key file and exits 1 when it judges the attestation invalid. keygen writes the signing key file mode 0600, refuses to overwrite, and prints only the public key document.`,
   }
   return help[command] || `Usage: ${c} ${command} [args]\n\nRun ${c} --help for the command list.`
 }
@@ -167,6 +196,9 @@ function normalizeArgs(argv) {
   if (args[0] === 'lock' && args[1] === 'check') args.splice(0, 2, 'lock:check')
   if (args[0] === 'lock' && args[1] === 'write') args.splice(0, 2, 'lock:write')
   if (args[0] === 'config' && args[1] === 'check') args.splice(0, 2, 'config:check')
+  if (args[0] === 'extension-pack' && args[1] === 'validate') args.splice(0, 2, 'extension-pack:validate')
+  if (args[0] === 'extension-pack' && args[1] === 'list') args.splice(0, 2, 'extension-pack:list')
+  if (args[0] === 'distribution' && args[1] === 'check') args.splice(0, 2, 'distribution:check')
   if (args[0] === 'support' && args[1] === 'bundle') args.splice(0, 2, 'support:bundle')
   if (args[0] === 'support:bundle' && args[1] === '--dry-run') args.splice(1, 1)
   return { help: false, args }
