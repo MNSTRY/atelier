@@ -14,17 +14,13 @@ export const DEFAULT_EGRESS_SCAN_PATHS = [
   'src',
   'scripts',
   'bin',
-  'lib',
-  'server',
-  'ui',
-  'harness',
-  'support',
-  'egress',
-  'analysis',
-  'collaboration',
+  'templates',
+  'examples',
+  'skills',
 ]
 
 const SCRIPT_EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.sh'])
+const MARKUP_EXTS = new Set(['.html', '.htm', '.svg'])
 const SKIP_DIRS = new Set(['node_modules', '.git'])
 const INTERNAL_SCANNER_FILES = new Set(['forbidden-egress.mjs'])
 
@@ -37,7 +33,8 @@ function isMarkedTestFixture(file, text) {
 }
 
 function shouldScanFile(file, { includeTests = false } = {}) {
-  if (!SCRIPT_EXTS.has(path.extname(file))) return false
+  const ext = path.extname(file)
+  if (!SCRIPT_EXTS.has(ext) && !MARKUP_EXTS.has(ext)) return false
   if (INTERNAL_SCANNER_FILES.has(path.basename(file))) return false
   if (!includeTests && isTestFile(file)) return false
   return true
@@ -169,9 +166,19 @@ function jsFindingsForBlock(block, { findings, file, line, allowLocalComputed = 
     if (nonLocalNetwork) addFinding(findings, file, line, 'websocket-egress', nonLocalNetwork)
     else if (!localNetwork && !relativePath && !allowLocalComputed) addFinding(findings, file, line, 'websocket-unresolved', 'computed websocket target')
   }
-  if (/\bhttps?\.request\s*\(/.test(block)) {
+  if (/\bhttps?\.(?:request|get)\s*\(/.test(block) || /\bhttp2\.connect\s*\(/.test(block)) {
     if (nonLocalNetwork || nonLocalHost) addFinding(findings, file, line, 'non-localhost-http-request', nonLocalNetwork || nonLocalHost)
     else if (!localNetwork && !localHost && !allowLocalComputed) addFinding(findings, file, line, 'http-request-unresolved', 'computed HTTP request target')
+  }
+  if (/\bnavigator\.sendBeacon\s*\(/.test(block) || /\bnew\s+EventSource\s*\(/.test(block)) {
+    if (nonLocalNetwork) addFinding(findings, file, line, 'beacon-egress', nonLocalNetwork)
+    else if (!localNetwork && !relativePath && !allowLocalComputed) addFinding(findings, file, line, 'beacon-unresolved', 'computed beacon target')
+  }
+  if (/\bimport\s*\(/.test(block) && nonLocalNetwork) {
+    addFinding(findings, file, line, 'dynamic-import-egress', nonLocalNetwork)
+  }
+  if ((/\bnew\s+XMLHttpRequest\b/.test(block) || /\bnew\s+Image\s*\(/.test(block)) && nonLocalNetwork) {
+    addFinding(findings, file, line, 'browser-request-egress', nonLocalNetwork)
   }
   if (/\bnet\.connect\s*\(/.test(block) || /\bnet\.createConnection\s*\(/.test(block)) {
     if (nonLocalHost || nonLocalNetwork) addFinding(findings, file, line, 'net-connect-egress', nonLocalHost || nonLocalNetwork)
@@ -224,15 +231,42 @@ function shellFindingsForLine(line, { findings, file, lineNumber }) {
   if (opensslHost) addFinding(findings, file, lineNumber, 'shell-socket-egress', opensslHost)
 }
 
+const HTTP_CLIENT_MODULES = /\b(?:import|require)\b[^\n]*['"](?:undici|axios|node-fetch|got|superagent|needle|phin)['"]/
+
+function lineFindingsForCode(lineCode, { findings, file, lineNumber }) {
+  // A CSP directive string that names an external origin authorizes egress
+  // from every page it is served with, without any call site to match.
+  if (/(?:-src|content-security-policy)/i.test(lineCode)) {
+    const external = firstNonLocalNetworkLiteral(lineCode) ?? (isNetworkUrl(lineCode.match(/https?:\/\/[^\s'"`;]+/i)?.[0]) && !isLocalUrl(lineCode.match(/https?:\/\/[^\s'"`;]+/i)?.[0]) ? lineCode.match(/https?:\/\/[^\s'"`;]+/i)[0] : null)
+    if (external) addFinding(findings, file, lineNumber, 'csp-external-origin', external)
+  }
+  if (HTTP_CLIENT_MODULES.test(lineCode)) {
+    addFinding(findings, file, lineNumber, 'http-client-import', 'third-party HTTP client module')
+  }
+}
+
+function markupFindingsForLine(line, { findings, file, lineNumber }) {
+  const attrRe = /(?:src|href|action|data|poster|formaction)\s*=\s*["']?((?:https?:)?\/\/[^"'\s>]+)/gi
+  let match
+  while ((match = attrRe.exec(line))) {
+    const url = match[1].startsWith('//') ? `https:${match[1]}` : match[1]
+    if (isNetworkUrl(url) && !isLocalUrl(url)) {
+      addFinding(findings, file, lineNumber, 'markup-external-resource', url)
+    }
+  }
+}
+
 export function forbiddenEgressFindingsForText(text, { file = 'input' } = {}) {
   if (isMarkedTestFixture(file, text)) return []
   const findings = []
   const lines = String(text || '').split(/\r?\n/)
+  const isMarkup = MARKUP_EXTS.has(path.extname(file))
 
   for (let index = 0; index < lines.length; index += 1) {
     if (isFixtureAllowed(lines, index, file)) continue
     const lineCode = trimmedCodeLine(lines[index])
-    const hasJsPrimitive = /\b(?:fetch|https?\.request|new\s+WebSocket|net\.connect|net\.createConnection|dns\.(?:resolve|lookup|promises\.resolve|promises\.lookup))\s*\(/.test(lineCode)
+    const hasJsPrimitive = /\b(?:fetch|https?\.(?:request|get)|http2\.connect|navigator\.sendBeacon|new\s+EventSource|new\s+WebSocket|net\.connect|net\.createConnection|dns\.(?:resolve|lookup|promises\.resolve|promises\.lookup)|import)\s*\(/.test(lineCode)
+      || /\bnew\s+(?:XMLHttpRequest|Image)\b/.test(lineCode)
     const block = callBlock(lines, index)
     if (hasJsPrimitive) {
       jsFindingsForBlock(block, {
@@ -242,6 +276,10 @@ export function forbiddenEgressFindingsForText(text, { file = 'input' } = {}) {
         allowLocalComputed: isLocalComputedAllowed(lines, index),
       })
     }
+    // Raw line, not the comment-stripped one: a URL's own // reads as a
+    // comment and would truncate the literal these checks exist to find.
+    lineFindingsForCode(lines[index], { findings, file, lineNumber: index + 1 })
+    if (isMarkup) markupFindingsForLine(lines[index], { findings, file, lineNumber: index + 1 })
     shellFindingsForLine(lines[index], { findings, file, lineNumber: index + 1 })
   }
 

@@ -37,7 +37,9 @@ client-grade sharing.
 - Ships neutral Codex and Claude skill wrappers for readiness review work.
 - Records proposal metadata without browser apply/write endpoints.
 - Previews no-send support bundles.
-- Checks package runtime paths for forbidden non-localhost egress.
+- Checks first-party source, templates, and examples for forbidden
+  non-localhost egress — a fail-closed discipline gate over this repo's own
+  code, not a runtime sandbox.
 - Writes and checks `atelier.lock.json` for reviewable upstream package state.
 - Plans and applies branch-based upgrades without silently overwriting authored
   content.
