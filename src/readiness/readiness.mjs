@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { bundledReadinessProtocols } from '../readiness-protocols/bundled-pack.mjs'
+import { createProtocolRegistry, loadExtensionPacks } from '../extension-packs/loader.mjs'
 import {
   buildReadinessExportDryRun,
   buildTenantPacket,
@@ -191,20 +192,40 @@ export function stableReadinessForCheck(value) {
   }
 }
 
+// Loads declared extension packs (fail closed: any pack error throws before a
+// protocol becomes resolvable) and composes the explicit registry. Projects
+// with no declared packs get a bundled-only registry.
+function projectRegistry(project) {
+  const { packs } = loadExtensionPacks(project)
+  return createProtocolRegistry({ packs })
+}
+
 export function runReadinessCommand(argv = process.argv.slice(2)) {
   const parsed = parseArgs(argv)
   const subcommand = parsed._[0]
   if (subcommand === 'protocols') {
     const detail = parsed.json === true || parsed.format === 'json'
+    // Bundled-only by default; an explicit --project loads that project's
+    // extension packs and lists their protocols with a source marker.
+    const entries = bundledReadinessProtocols.map((protocol) => ({ protocol, source: null }))
+    if (parsed.project) {
+      const project = commandProject({ argv })
+      const registry = projectRegistry(project)
+      for (const pack of registry.packs) {
+        for (const record of pack.protocols ?? []) {
+          entries.push({ protocol: record.protocol, source: pack.id })
+        }
+      }
+    }
     if (detail) {
       console.log(`${JSON.stringify({
         schema: 'mnstry.readiness-protocol-list@v1',
-        protocols: bundledReadinessProtocols,
+        protocols: entries.map(({ protocol, source }) => (source ? { ...protocol, source } : protocol)),
       }, null, 2)}\n`)
     } else {
       console.log('MNSTRY readiness protocols')
-      for (const protocol of bundledReadinessProtocols) {
-        console.log(`- ${protocol.id}: ${protocol.title}`)
+      for (const { protocol, source } of entries) {
+        console.log(`- ${protocol.id}: ${protocol.title}${source ? ` (source: ${source})` : ''}`)
       }
     }
     return
@@ -212,7 +233,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
 
   if (subcommand === 'journey') {
     const project = commandProject({ argv })
-    const journey = summarizeReadinessJourney(project)
+    const journey = summarizeReadinessJourney(project, { registry: projectRegistry(project) })
     console.log(`${JSON.stringify(journey, null, 2)}\n`)
     return
   }
@@ -226,6 +247,7 @@ export function runReadinessCommand(argv = process.argv.slice(2)) {
       answers,
       write: parsed.write !== false,
       createProposal: parsed.proposal !== false && parsed['no-proposal'] !== true,
+      registry: projectRegistry(project),
     })
     console.log(`${JSON.stringify({
       ok: result.run.blockers.length === 0,

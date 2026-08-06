@@ -201,30 +201,52 @@ export function listProtocolRuns(project) {
     .filter(Boolean)
 }
 
-export function summarizeReadinessJourney(project, { runs = listProtocolRuns(project) } = {}) {
+// Shared per-dimension facts derived from a stored run. Used by both the
+// bundled journey dimensions and pack dimensions so one builder defines what
+// "run data" means everywhere.
+function dimensionRunFacts(run, protocolId) {
+  return {
+    status: run ? run.status : 'missing',
+    score: run ? run.score ?? 0 : 0,
+    blockers: run?.blockers ?? [`not-run:${protocolId}`],
+    warnings: run?.warnings ?? [],
+    sourceRefs: run ? [`readiness-run:${run.runId}`] : [],
+    proposedClaims: run?.claims?.map((claim) => claim.claimId) ?? [],
+  }
+}
+
+// Pack protocol records from an explicit registry (createProtocolRegistry).
+// Bundled behavior is the default: no registry means no pack records.
+function packProtocolRecords(registry) {
+  return (registry?.packs ?? []).flatMap((pack) => pack.protocols ?? [])
+}
+
+export function summarizeReadinessJourney(project, { runs = listProtocolRuns(project), registry = null } = {}) {
   const runsByProtocol = new Map()
   for (const run of runs) runsByProtocol.set(run.protocolId, run)
   const dimensions = DIMENSIONS.map(([key, label, protocolId]) => {
     const protocol = protocolById(protocolId)
-    const run = runsByProtocol.get(protocolId)
-    const status = run ? run.status : 'missing'
-    const score = run ? run.score ?? 0 : 0
-    const blockers = run?.blockers ?? [`not-run:${protocolId}`]
+    const facts = dimensionRunFacts(runsByProtocol.get(protocolId), protocolId)
     return {
       key,
       label,
       protocolId,
       title: protocol?.title ?? protocolId,
-      status,
-      score,
-      blockers,
-      warnings: run?.warnings ?? [],
-      sourceRefs: run ? [`readiness-run:${run.runId}`] : [],
-      proposedClaims: run?.claims?.map((claim) => claim.claimId) ?? [],
-      nextSuggestedProtocol: status === 'ready' || status === 'review-needed' ? null : protocolId,
+      ...facts,
+      nextSuggestedProtocol: facts.status === 'ready' || facts.status === 'review-needed' ? null : protocolId,
       agentPrompt: protocol?.ui?.agentPrompt ?? `Run atelier readiness run ${protocolId} --project ./atelier.project.json.`,
     }
   })
+  // Pack protocols never join the 12 canonical dimensions: score, ready, and
+  // nextProtocol stay bundled-only; packs report through the sibling array.
+  const packDimensions = packProtocolRecords(registry).map((record) => ({
+    key: record.id,
+    packId: record.packId,
+    gate: record.gate,
+    protocolId: record.id,
+    title: record.title ?? record.protocol?.title ?? record.id,
+    ...dimensionRunFacts(runsByProtocol.get(record.id), record.id),
+  }))
   const readyCount = dimensions.filter((item) => item.status === 'ready' || item.status === 'review-needed').length
   const score = Math.round((readyCount / dimensions.length) * 100)
   return {
@@ -234,12 +256,18 @@ export function summarizeReadinessJourney(project, { runs = listProtocolRuns(pro
     score,
     ready: readyCount === dimensions.length,
     dimensions,
+    packDimensions,
     nextProtocol: dimensions.find((item) => item.nextSuggestedProtocol)?.nextSuggestedProtocol ?? null,
     pack: {
       id: bundledReadinessPack.id,
       version: bundledReadinessPack.version,
       protocolCount: bundledReadinessProtocols.length,
     },
+    packs: (registry?.packs ?? []).map((pack) => ({
+      id: pack.id,
+      version: pack.version,
+      protocolCount: pack.protocols?.length ?? 0,
+    })),
   }
 }
 
@@ -247,9 +275,36 @@ function answersFor(run, key) {
   return run?.answers?.[key] ?? null
 }
 
-export function buildTenantPacket(project, { runs = listProtocolRuns(project) } = {}) {
+export function buildTenantPacket(project, { runs = listProtocolRuns(project), registry = null } = {}) {
   const byId = new Map(runs.map((run) => [run.protocolId, run]))
-  const journey = summarizeReadinessJourney(project, { runs })
+  const journey = summarizeReadinessJourney(project, { runs, registry })
+  // Generic pack contribution: built entirely from run fields, no per-field
+  // plucking (the literal byId.get(...) reads below stay bundled-only). Only
+  // required-gate pack protocols can block export; advisory ones just report.
+  const packRecords = packProtocolRecords(registry)
+  const packExportBlockers = packRecords
+    .filter((record) => {
+      if (record.gate !== 'required') return false
+      const status = byId.get(record.id)?.status ?? 'missing'
+      return status === 'missing' || status === 'draft'
+    })
+    .map((record) => `readiness-incomplete:${record.id}`)
+  const packContribution = (registry?.packs ?? []).map((pack) => ({
+    id: pack.id,
+    version: pack.version,
+    protocols: (pack.protocols ?? []).map((record) => {
+      const facts = dimensionRunFacts(byId.get(record.id), record.id)
+      return {
+        protocolId: record.id,
+        gate: record.gate,
+        status: facts.status,
+        score: facts.score,
+        blockers: facts.blockers,
+        warnings: facts.warnings,
+        proposedClaims: facts.proposedClaims,
+      }
+    }),
+  }))
   const packet = {
     schema: TENANT_PACKET_SCHEMA,
     generatedAt: 'deterministic',
@@ -300,9 +355,15 @@ export function buildTenantPacket(project, { runs = listProtocolRuns(project) } 
     exportBlockers: [
       ...journey.dimensions.filter((item) => item.status === 'missing' || item.status === 'draft').map((item) => `readiness-incomplete:${item.protocolId}`),
       ...(answersFor(byId.get('mnstry.readiness:tenant-packet'), 'exportBlockers') ?? []),
+      ...packExportBlockers,
     ],
     openQuestions: answersFor(byId.get('mnstry.readiness:tenant-packet'), 'openQuestions') ?? [],
     proposedClaims: runs.flatMap((run) => run.claims ?? []).map((claim) => claim.claimId),
+    ext: {
+      'mnstry.atelier': {
+        extensionPacks: packContribution,
+      },
+    },
   }
   return packet
 }
@@ -340,8 +401,11 @@ export function buildReadinessExportDryRun(project) {
   }
 }
 
-export function runProtocol(project, protocolId, { answers = {}, write = true, createProposal = true } = {}) {
-  const protocol = protocolById(protocolId)
+export function runProtocol(project, protocolId, { answers = {}, write = true, createProposal = true, registry = null } = {}) {
+  // An explicit registry (createProtocolRegistry) resolves bundled protocols
+  // first, then pack protocols by full namespaced id only; the default stays
+  // bundled-only so every existing call site is unchanged.
+  const protocol = registry ? registry.protocolById(protocolId) : protocolById(protocolId)
   if (!protocol) throw new Error(`unknown readiness protocol: ${protocolId}`)
   const run = buildReadinessRun({ project, protocol, answers })
   const file = write ? writeReadinessRun(project, run) : null
