@@ -17,6 +17,7 @@ const allowedFiles = [
   /^README\.md$/,
   /^CHANGELOG\.md$/,
   /^LICENSE$/,
+  /^TRADEMARKS\.md$/,
   /^bin\/atelier\.mjs$/,
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
@@ -92,6 +93,14 @@ if (!paths.includes('bin/atelier.mjs')) {
 
 if (!paths.includes('bin/mnstry-atelier.mjs')) {
   console.error('[release:audit] tarball must include bin/mnstry-atelier.mjs')
+  failures += 1
+}
+
+// The normative attribution and trademark policy every distribution points at.
+// Shipping the package without it would leave TRADEMARKS.md references in the
+// CLI, docs, and distribution check dangling for an installed consumer.
+if (!paths.includes('TRADEMARKS.md')) {
+  console.error('[release:audit] tarball must include TRADEMARKS.md')
   failures += 1
 }
 

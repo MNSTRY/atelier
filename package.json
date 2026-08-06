@@ -49,7 +49,8 @@
     "migrations:check": "node scripts/check-breaking-migrations.mjs",
     "contract:compat": "node scripts/check-contract-compat.mjs",
     "consumer:smoke": "node scripts/consumer-smoke.mjs",
-    "prepublishOnly": "npm run release:audit && npm run repo:check && npm run migrations:check && npm run contract:compat && npm run typecheck && npm test && npm run consumer:smoke"
+    "distribution:smoke": "node scripts/distribution-smoke.mjs",
+    "prepublishOnly": "npm run release:audit && npm run repo:check && npm run migrations:check && npm run contract:compat && npm run typecheck && npm test && npm run consumer:smoke && npm run distribution:smoke"
   },
   "dependencies": {
     "ajv": "8.18.0",
@@ -74,6 +75,7 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "TRADEMARKS.md",
     "bin/",
     "contracts/",
     "fixtures/",
