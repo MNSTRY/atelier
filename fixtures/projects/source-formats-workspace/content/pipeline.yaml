@@ -1,0 +1,4 @@
+sample: true
+steps:
+  - name: gather
+  - name: publish

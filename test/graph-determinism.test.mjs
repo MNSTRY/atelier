@@ -28,6 +28,10 @@ const IGNORED_JUNK = [
   { rel: 'support-bundles/bundle-1/notes.md', content: '# machine-local bundle\n' },
   { rel: 'machine-notes/scratch.md', content: '---\ntitle: "Scratch"\nkg:\n  id: "docs:scratch"\n  audience: "private"\n---\n\n# Scratch\n' },
   { rel: 'machine-notes/report.pdf.kg.json', content: '{"schema":"mnstry.source-sidecar@v1"}\n' },
+  // A sidecar-paired foreign-format asset: the sidecar-first opt-in census
+  // must also skip git-ignored paths, or machine-local data churns the graph.
+  { rel: 'machine-notes/dataset.json', content: '{"local":true}\n' },
+  { rel: 'machine-notes/dataset.json.kg.json', content: '{"schema":"mnstry.source-sidecar@v1"}\n' },
   { rel: 'vendor-cache/index.html', content: '<!doctype html><title>cache</title>\n' },
 ]
 

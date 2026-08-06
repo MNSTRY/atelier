@@ -1,0 +1,15 @@
+{
+  "assetFilename": "data.json",
+  "title": "Sample dataset",
+  "summary": "Neutral JSON dataset described entirely by its sidecar.",
+  "tags": [
+    "sample"
+  ],
+  "kg": {
+    "id": "source-formats:data-json",
+    "type": "source",
+    "status": "active",
+    "audience": "team",
+    "relations": {}
+  }
+}

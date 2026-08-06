@@ -1,0 +1,15 @@
+{
+  "assetFilename": "pipeline.yaml",
+  "title": "Sample pipeline",
+  "summary": "Neutral YAML file; atelier never parses it, the sidecar speaks for it.",
+  "tags": [
+    "sample"
+  ],
+  "kg": {
+    "id": "source-formats:pipeline-yaml",
+    "type": "source",
+    "status": "active",
+    "audience": "public",
+    "relations": {}
+  }
+}

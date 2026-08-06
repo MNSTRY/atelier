@@ -307,10 +307,14 @@ export function walkDocuments(dir, root, acc = [], isIgnored = gitIgnoreFilter(r
     if (ent.isDirectory()) {
       walkDocuments(abs, root, acc, isIgnored)
     } else if (ent.isFile()) {
-      const ext = path.extname(ent.name).toLowerCase()
-      if (!DOC_EXTENSIONS.has(ext)) continue
+      // Sidecar-first census: document extensions are always sources; any
+      // other file opts in by carrying an adjacent .kg.json sidecar. The
+      // sidecar itself is metadata, never a source asset.
+      if (ent.name.endsWith('.kg.json')) continue
       if (GENERATED_FILES.has(ent.name)) continue
       if (rel === 'index.html') continue
+      const ext = path.extname(ent.name).toLowerCase()
+      if (!DOC_EXTENSIONS.has(ext) && !fs.existsSync(`${abs}.kg.json`)) continue
       acc.push({ abs, rel, ext })
     }
   }

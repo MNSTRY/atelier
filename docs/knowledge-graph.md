@@ -14,6 +14,37 @@ projection readiness.
 - `kg.visibility` is invalid in local source metadata.
 - Declared relations emit semantic edges.
 
+## Source formats
+
+The graph is sidecar-first: Markdown front matter is the only inline metadata
+format the kit reads, and every other file becomes a first-class node through
+an adjacent `<file>.kg.json` sidecar
+(`contracts/knowledge-source-sidecar.v1.schema.json`). This is how any format
+— json, yaml, csv, images, arbitrary binaries — joins the census without
+atelier ever parsing the foreign format itself.
+
+Two census rules follow:
+
+- Document extensions (`.md`, `.html`, `.pdf`, `.docx`) are always sources.
+  Non-Markdown documents *demand* a sidecar and fail closed without one.
+- Any other file *opts in* by carrying a sidecar. Without one it is simply not
+  knowledge-graph material — no error, no node. A sidecar whose adjacent asset
+  is missing is still an orphan error either way.
+
+The sidecar branch is binary-safe by construction: the asset's bytes are never
+read. Identity, audience, and relations all come from the sidecar, so
+audience-based projection filtering, disclosure diagnostics, and the repo
+boundary guard treat a sidecar-described binary exactly like a Markdown
+document.
+
+Why the kit does not parse yaml (or csv, or anything else): the zero-dependency
+trust posture. Node ships no yaml parser, and pulling one in — or hand-rolling
+parsers for every format an adopter might commit — widens exactly the supply
+chain and attack surface the kit exists to keep auditable. Declared metadata in
+a schema-checked JSON sidecar is the trust boundary. Richer format adapters
+that derive metadata from asset contents belong to extension packs
+(`atelier-extension-pack.v1`), not the kit core.
+
 ## Census Rules
 
 Graph and projection walks skip git-ignored paths. A committed artifact must

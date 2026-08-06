@@ -1,0 +1,15 @@
+{
+  "assetFilename": "metrics.csv",
+  "title": "Sample metrics",
+  "summary": "Neutral CSV evidence table described by its sidecar.",
+  "tags": [
+    "sample"
+  ],
+  "kg": {
+    "id": "source-formats:metrics-csv",
+    "type": "evidence",
+    "status": "active",
+    "audience": "operator",
+    "relations": {}
+  }
+}

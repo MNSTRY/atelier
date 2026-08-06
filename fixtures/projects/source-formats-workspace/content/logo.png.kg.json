@@ -1,0 +1,15 @@
+{
+  "assetFilename": "logo.png",
+  "title": "Sample binary asset",
+  "summary": "Four-byte PNG-magic stub; the graph never reads the asset bytes.",
+  "tags": [
+    "sample"
+  ],
+  "kg": {
+    "id": "source-formats:logo-png",
+    "type": "artifact",
+    "status": "active",
+    "audience": "sensitive",
+    "relations": {}
+  }
+}

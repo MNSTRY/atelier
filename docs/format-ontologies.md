@@ -137,3 +137,5 @@ does not exist yet.
   `at-a-glance-opener`, `deepening-panel`, `page-navigation-semantic`
 - Corpus audit that motivated the system: mnstry-org, 2026-08-04
 - Slot data contract (when formats graduate): `contracts/atelier-extension-pack.v1.schema.json`
+- Non-Markdown assets a format references enter the graph through `.kg.json`
+  sidecars: see the source formats section of `docs/knowledge-graph.md`

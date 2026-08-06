@@ -6,11 +6,19 @@ import { gitIgnoreFilter } from '../project/git-ignore.mjs'
 export const VALID_AUDIENCES = new Set(['private', 'team', 'operator', 'staff', 'public', 'sensitive'])
 export const VALID_RELATIONS = new Set(['related', 'supports', 'supersedes', 'implements', 'depends_on', 'evidences', 'contradicts', 'belongs_to'])
 const DOC_EXTS = new Set(['.md', '.html', '.pdf', '.docx'])
-const NON_MD = new Set(['.html', '.pdf', '.docx'])
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'atelier-output', 'atelier-readers', '.mnstry', '.atelier-local'])
 
 const slug = (value) => String(value ?? '').toLowerCase().replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 const relPath = (root, file) => path.relative(root, file).split(path.sep).join('/')
+
+// Sidecar-first census. Document extensions are always sources; any other
+// file — json, yaml, csv, binary assets — opts in by carrying an adjacent
+// .kg.json sidecar. The sidecar itself is metadata, never a source asset.
+function isSourceFile(name, abs) {
+  if (name.endsWith('.kg.json')) return false
+  if (DOC_EXTS.has(path.extname(name).toLowerCase())) return true
+  return fs.existsSync(`${abs}.kg.json`)
+}
 
 function walk(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -18,7 +26,7 @@ function walk(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
     const abs = path.join(dir, ent.name)
     if (isIgnored(relPath(root, abs))) continue
     if (ent.isDirectory()) walk(abs, root, acc, isIgnored)
-    if (ent.isFile() && DOC_EXTS.has(path.extname(ent.name).toLowerCase())) acc.push({ abs, rel: relPath(root, abs), ext: path.extname(ent.name).toLowerCase() })
+    if (ent.isFile() && isSourceFile(ent.name, abs)) acc.push({ abs, rel: relPath(root, abs), ext: path.extname(ent.name).toLowerCase() })
   }
   return acc
 }
@@ -189,7 +197,9 @@ export function buildGraph(project) {
       continue
     }
     for (const file of walk(repo.path, repo.path)) {
-      const node = NON_MD.has(file.ext) ? nodeFromSidecar(repo, file, errors) : nodeFromMarkdown(repo, file, errors)
+      // Markdown is the one inline metadata format; every other source is
+      // sidecar-described and its own bytes are never read.
+      const node = file.ext === '.md' ? nodeFromMarkdown(repo, file, errors) : nodeFromSidecar(repo, file, errors)
       if (!node) continue
       const boundary = repoAccess.repos?.[repo.name]?.readBoundary ?? repo.readBoundary ?? repoAccess.defaultReadBoundary ?? 'team'
       node.repoAccess = { readBoundary: boundary }
