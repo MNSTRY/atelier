@@ -275,6 +275,11 @@ function answersFor(run, key) {
   return run?.answers?.[key] ?? null
 }
 
+// Contract note: the tenant packet (mnstry.tenant-readiness-packet@v1) is a
+// runtime-defined document with no JSON Schema under contracts/, so the
+// contract:compat gate cannot see shape changes here. Its shape is pinned by
+// the runtime and CLI tests instead; if it ever gets a schema, register it so
+// compat checking takes over.
 export function buildTenantPacket(project, { runs = listProtocolRuns(project), registry = null } = {}) {
   const byId = new Map(runs.map((run) => [run.protocolId, run]))
   const journey = summarizeReadinessJourney(project, { runs, registry })

@@ -146,7 +146,9 @@ The manifest carries the advisory attribution key:
 ```
 
 Extension protocols load alongside the bundled twelve; they never replace
-them.
+them. Note that pack contributions to the tenant readiness packet ride in an
+unschema'd runtime document (`mnstry.tenant-readiness-packet@v1`) whose shape
+is pinned by tests, not by the versioned contracts the compat gate checks.
 
 Declared pack paths resolve from the directory holding `atelier.project.json`
 and may not contain `..` segments, so the pack directory has to sit inside the
@@ -184,9 +186,11 @@ Theme token names: `background`, `surface`, `text`, `accent`, `eyebrow`. Each
 maps to a CSS custom property (`--atelier-bg`, `--atelier-surface`,
 `--atelier-text`, `--atelier-accent`, `--atelier-eyebrow`).
 
-Hex-only rule: every theme value must match `^#[0-9a-fA-F]{3,8}$`. Values are
-interpolated into a style block, so non-hex input fails the build fast — this
-is an injection guard, not a stylistic preference.
+Hex-only rule: every theme value must be a CSS hex color of 3, 4, 6, or 8
+digits (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), and unknown theme keys fail
+the build rather than silently dropping. Values are interpolated into a style
+block, so non-hex input fails the build fast — this is an injection guard, not
+a stylistic preference.
 
 ## Admission
 

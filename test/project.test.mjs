@@ -58,3 +58,36 @@ test('project projection rejects non-hex distribution theme values', (t) => {
   }
   assert.throws(() => buildProjectProjection(project), /distribution theme values must be hex colors/)
 })
+
+test('project projection rejects hex widths CSS does not define', (t) => {
+  const sample = makeSampleProject(t)
+  runGraphCommand([`--project=${sample.config}`])
+  const project = resolveProjectConfig({ argv: [`--project=${sample.config}`], cwd: sample.dir })
+  const themed = (theme) => {
+    project.config.ext = { 'mnstry.atelier': { distribution: { theme } } }
+    return () => buildProjectProjection(project)
+  }
+  // 5- and 7-digit strings pass a naive #[0-9a-f]{3,8} check but no browser
+  // parses them, so the projection would silently render an invalid color.
+  assert.throws(themed({ accent: '#abcde' }), /distribution theme values must be hex colors \(theme\.accent\)/)
+  assert.throws(themed({ accent: '#abcdef0' }), /distribution theme values must be hex colors \(theme\.accent\)/)
+  // The four CSS widths all remain accepted.
+  assert.match(themed({ accent: '#abc' })().html, /--atelier-accent:#abc\}/)
+  assert.match(themed({ accent: '#abcd' })().html, /--atelier-accent:#abcd\}/)
+  assert.match(themed({ accent: '#aabbcc' })().html, /--atelier-accent:#aabbcc\}/)
+  assert.match(themed({ accent: '#aabbccdd' })().html, /--atelier-accent:#aabbccdd\}/)
+})
+
+test('project projection throws on unknown theme keys instead of dropping them', (t) => {
+  const sample = makeSampleProject(t)
+  runGraphCommand([`--project=${sample.config}`])
+  const project = resolveProjectConfig({ argv: [`--project=${sample.config}`], cwd: sample.dir })
+  project.config.ext = {
+    'mnstry.atelier': {
+      // Misspelled theme key — before the guard this failed open: the
+      // override was silently dropped and the build rendered default styling.
+      distribution: { theme: { acccent: '#7a9e7e' } },
+    },
+  }
+  assert.throws(() => buildProjectProjection(project), /unknown distribution theme key \(theme\.acccent\)/)
+})

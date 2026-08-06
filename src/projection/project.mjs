@@ -5,7 +5,9 @@ import { summarizeReadinessJourney } from '../readiness-protocols/runtime.mjs'
 
 const esc = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 
-const HEX_COLOR = /^#[0-9a-fA-F]{3,8}$/
+// CSS hex colors come in exactly four widths: #rgb, #rgba, #rrggbb, #rrggbbaa.
+// A bare {3,8} range also admits 5- and 7-digit strings that no browser parses.
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
 const THEME_TOKENS = [
   ['background', '--atelier-bg'],
   ['surface', '--atelier-surface'],
@@ -13,13 +15,19 @@ const THEME_TOKENS = [
   ['accent', '--atelier-accent'],
   ['eyebrow', '--atelier-eyebrow'],
 ]
+const KNOWN_THEME_TOKENS = new Set(THEME_TOKENS.map(([token]) => token))
 
 function resolveDistributionBranding(project) {
   const distribution = project.config?.ext?.['mnstry.atelier']?.distribution ?? {}
   const theme = distribution.theme ?? {}
   // Theme values are interpolated into a <style> block, so the hex-only rule
   // is the CSS-injection guard; a deterministic build must not silently vary.
+  // Unknown keys throw for the same reason: a typo that silently drops an
+  // override would make two builds of the same config disagree by accident.
   for (const token of Object.keys(theme)) {
+    if (!KNOWN_THEME_TOKENS.has(token)) {
+      throw new Error(`unknown distribution theme key (theme.${token})`)
+    }
     if (typeof theme[token] !== 'string' || !HEX_COLOR.test(theme[token])) {
       throw new Error(`distribution theme values must be hex colors (theme.${token})`)
     }
