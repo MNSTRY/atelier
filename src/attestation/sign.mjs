@@ -53,12 +53,15 @@ export function payloadHashOf(document) {
   return { algorithm: 'sha-256', canonicalization: 'RFC8785-JCS', digest }
 }
 
-// The bytes an attestation signature covers (normative definition above).
-export function signingInput(attestation) {
-  if (!attestation || typeof attestation !== 'object') {
+// The bytes a detached signature covers: the UTF-8 encoding of the RFC 8785
+// canonicalization of the document with its `signature` member set to null.
+// This is the shared normative rule — attestations and announcements both
+// sign exactly these bytes.
+export function signingInput(document) {
+  if (!document || typeof document !== 'object') {
     throw new TypeError('signingInput requires an attestation object')
   }
-  const unsigned = structuredClone(attestation)
+  const unsigned = structuredClone(document)
   unsigned.signature = null
   return Buffer.from(canonicalize(unsigned), 'utf8')
 }
@@ -88,6 +91,72 @@ function jwkMatchesAlgorithm(jwk, algorithm) {
   if (algorithm === 'ed25519') return jwk.kty === 'OKP' && jwk.crv === 'Ed25519'
   if (algorithm === 'es256') return jwk.kty === 'EC' && jwk.crv === 'P-256'
   return false
+}
+
+// Generic detached-signature layer over any JSON document that carries a
+// `signature` member. No schema knowledge: callers layer their own document
+// validation (the attestation flow validates against its contract; the
+// announcements flow validates structurally in code). Signs the signingInput
+// bytes defined above. Never mutates the input document.
+export function signDocument(doc, { privateKey, keyId, algorithm } = {}) {
+  if (!doc || typeof doc !== 'object') throw new TypeError('signDocument requires a document object')
+  if (!privateKey || typeof privateKey !== 'object') throw new TypeError('signDocument requires a private key JWK')
+  if (!keyId || typeof keyId !== 'string') throw new TypeError('signDocument requires a keyId')
+  if (!SUPPORTED_ALGORITHMS.has(algorithm)) {
+    throw new Error(`unsupported attestation signature algorithm: ${algorithm}`)
+  }
+  if (!jwkMatchesAlgorithm(privateKey, algorithm)) {
+    throw new Error(`signing key ${keyId} privateKeyJwk does not match algorithm ${algorithm}`)
+  }
+  if (doc.signature !== null) {
+    throw new Error('document already carries a signature; refusing to re-sign. Set signature to null first if that is intended.')
+  }
+  const input = signingInput(doc)
+  const signatureBytes = signBytes(algorithm, input, importPrivateKey(privateKey))
+  const signed = structuredClone(doc)
+  signed.signature = { algorithm, keyId, value: signatureBytes.toString('base64url') }
+  return signed
+}
+
+// Generic verification for a signDocument-shaped signature. Never throws on
+// bad documents — returns { valid, reasons } with every applicable reason
+// collected. Throws only on programmer error. Reason messages may name keyId
+// and algorithm, never JWK member values or signing-input bytes.
+export function verifyDocument(doc, { publicKey } = {}) {
+  if (!doc || typeof doc !== 'object') throw new TypeError('verifyDocument requires a document object')
+  if (!publicKey || typeof publicKey !== 'object' || !publicKey.publicKeyJwk) {
+    throw new TypeError('verifyDocument requires a public key document with publicKeyJwk')
+  }
+  const reasons = []
+  const signature = doc.signature
+  if (!signature || typeof signature !== 'object') {
+    reasons.push({ code: 'signature.missing', message: 'signature is null; an unsigned document is non-authoritative and never verifies' })
+    return { valid: false, reasons }
+  }
+  if (signature.algorithm !== publicKey.algorithm || !jwkMatchesAlgorithm(publicKey.publicKeyJwk, signature.algorithm)) {
+    reasons.push({
+      code: 'signature.algorithm-mismatch',
+      message: `signature algorithm ${signature.algorithm} does not match public key algorithm ${publicKey.algorithm}`,
+    })
+  }
+  if (signature.keyId !== publicKey.keyId) {
+    reasons.push({
+      code: 'signature.key-id-mismatch',
+      message: `signature keyId ${signature.keyId} does not match public key keyId ${publicKey.keyId}`,
+    })
+  }
+  let cryptoValid = false
+  try {
+    const input = signingInput(doc)
+    const signatureBytes = Buffer.from(String(signature.value ?? ''), 'base64url')
+    cryptoValid = verifyBytes(signature.algorithm, input, importPublicKey(publicKey.publicKeyJwk), signatureBytes)
+  } catch {
+    cryptoValid = false
+  }
+  if (!cryptoValid) {
+    reasons.push({ code: 'signature.invalid', message: 'cryptographic verification failed over the canonical signing input' })
+  }
+  return { valid: reasons.length === 0, reasons }
 }
 
 // Generate a fresh signing key pair. Returns the private key document (shape
@@ -165,21 +234,10 @@ export function signAttestation({ attestation, key } = {}) {
   if (errors.length) {
     throw new Error(`attestation is not schema-valid; refusing to sign:\n${errors.join('\n')}`)
   }
-  if (attestation.signature !== null) {
-    throw new Error('attestation already carries a signature; refusing to re-sign. Set signature to null first if that is intended.')
-  }
   if (attestation.issuer?.keyId && attestation.issuer.keyId !== key.keyId) {
     throw new Error(`issuer.keyId ${attestation.issuer.keyId} does not match signing key ${key.keyId}; refusing to sign`)
   }
-  const input = signingInput(attestation)
-  const signatureBytes = signBytes(key.algorithm, input, importPrivateKey(key.privateKeyJwk))
-  const signed = structuredClone(attestation)
-  signed.signature = {
-    algorithm: key.algorithm,
-    keyId: key.keyId,
-    value: signatureBytes.toString('base64url'),
-  }
-  return signed
+  return signDocument(attestation, { privateKey: key.privateKeyJwk, keyId: key.keyId, algorithm: key.algorithm })
 }
 
 // Verify an attestation signature against a public key document.
@@ -195,39 +253,13 @@ export function verifyAttestation({ attestation, publicKey } = {}) {
     reasons.push({ code: 'schema.invalid', message })
   }
   const signature = attestation.signature
-  if (!signature || typeof signature !== 'object') {
-    reasons.push({ code: 'signature.missing', message: 'signature is null; an unsigned attestation is non-authoritative and never verifies' })
-    return { valid: false, reasons }
-  }
-  if (signature.algorithm !== publicKey.algorithm || !jwkMatchesAlgorithm(publicKey.publicKeyJwk, signature.algorithm)) {
-    reasons.push({
-      code: 'signature.algorithm-mismatch',
-      message: `signature algorithm ${signature.algorithm} does not match public key algorithm ${publicKey.algorithm}`,
-    })
-  }
-  if (signature.keyId !== publicKey.keyId) {
-    reasons.push({
-      code: 'signature.key-id-mismatch',
-      message: `signature keyId ${signature.keyId} does not match public key keyId ${publicKey.keyId}`,
-    })
-  }
-  if (attestation.issuer?.keyId && attestation.issuer.keyId !== signature.keyId) {
+  if (signature && typeof signature === 'object' && attestation.issuer?.keyId && attestation.issuer.keyId !== signature.keyId) {
     reasons.push({
       code: 'issuer.key-id-mismatch',
       message: `issuer.keyId ${attestation.issuer.keyId} does not match signature keyId ${signature.keyId}`,
     })
   }
-  let cryptoValid = false
-  try {
-    const input = signingInput(attestation)
-    const signatureBytes = Buffer.from(String(signature.value ?? ''), 'base64url')
-    cryptoValid = verifyBytes(signature.algorithm, input, importPublicKey(publicKey.publicKeyJwk), signatureBytes)
-  } catch {
-    cryptoValid = false
-  }
-  if (!cryptoValid) {
-    reasons.push({ code: 'signature.invalid', message: 'cryptographic verification failed over the canonical signing input' })
-  }
+  reasons.push(...verifyDocument(attestation, { publicKey }).reasons)
   return { valid: reasons.length === 0, reasons }
 }
 

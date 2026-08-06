@@ -1,0 +1,9 @@
+{
+  "keyId": "mnstry-announcements-2026",
+  "algorithm": "ed25519",
+  "publicKeyJwk": {
+    "crv": "Ed25519",
+    "x": "vU_2IhY0vdnvMl9i4pI3N3s77ZReYc3tAujldyG_6Ng",
+    "kty": "OKP"
+  }
+}

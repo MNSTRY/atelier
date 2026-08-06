@@ -1,0 +1,12 @@
+{
+  "schema": "mnstry.announcement@v1",
+  "announcementId": "announcement:2026-08-06:announcements-channel",
+  "publishedAt": "2026-08-06",
+  "title": "Signed announcements channel",
+  "body": "MNSTRY now publishes announcements as signed JSON documents committed\nunder `announcements/` in this repository. This is a pull-only channel:\nyou receive announcements by running `git pull`, and pulling is the\nconsent act. There is no push channel, no subscription, and no tracking —\nthe kit never fetches announcements or anything else over a network.\n\nEvery announcement is signed with the MNSTRY announcements key. The\npublic half is committed at\n`announcements/keys/mnstry-announcements.public.v1.json`; verify any\nannouncement with:\n\n    atelier announcements verify announcements/<file>.json\n\nor list and verify everything at once with\n`atelier announcements list`. A document that does not verify should be\ntreated as not from MNSTRY. See docs/announcements.md for the full\nconvention.",
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "mnstry-announcements-2026",
+    "value": "iiSYs00uJMhFEb6VSovZohv4zNrdEt3tBv4sqjs7v6XMN7EpxJnzHdBwb8jBGZ5zWp3SZEKsA76VYbarWfvBBA"
+  }
+}
