@@ -228,8 +228,11 @@ Fixtures in this package are fictional and generic. Project-specific adapter
 fixtures belong in their project repositories, not in the published Atelier
 package.
 
-## License
+## License and contributing
 
 Apache-2.0. See `LICENSE`, `NOTICE` (attribution obligations that survive
 forks), `TRADEMARKS.md` (naming), and `docs/continuity.md` (distribution
-continuity commitments).
+continuity commitments). Contributions are accepted under inbound-equals-
+outbound Apache-2.0 with a DCO sign-off — `CONTRIBUTING.md` is the working
+agreement, including how to contribute without exposing client material or
+your own private methodology.
