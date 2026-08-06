@@ -1,7 +1,7 @@
 # MNSTRY trademarks
 
 The names MNSTRY and MNSTRY Atelier, and the associated logos, are trademarks
-of MNSTRY. The Apache-2.0 license for this package (see LICENSE, section 6)
+of MNSTRY. The Apache-2.0 license for this package (see LICENSE section 6, "Trademarks")
 grants no trademark rights: you may use, modify, and redistribute the code
 without any right to use these marks except as described in this document.
 

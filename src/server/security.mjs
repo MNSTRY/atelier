@@ -10,8 +10,8 @@ export const ATELIER_HTML_CSP = [
   "img-src 'self' data:",
   "object-src 'none'",
   "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' data: https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
 ].join('; ')
 
 export const DENIED_STATIC_STATE_FILES = new Set([

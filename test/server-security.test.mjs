@@ -110,6 +110,14 @@ test('local sidecar refuses untrusted reads, state files, symlink escapes, and a
   assert.equal(staticHtml.status, 200)
   assert.match(staticHtml.headers.get('content-security-policy') || '', /default-src 'self'/)
   assert.match(staticHtml.headers.get('content-security-policy') || '', /frame-ancestors 'none'/)
+  // The CSP applies to arbitrary workspace HTML, so any allowlisted external
+  // origin is an author-controllable egress channel: a URL path leaves the
+  // machine even when the kit itself never uses the origin.
+  assert.doesNotMatch(
+    staticHtml.headers.get('content-security-policy') || '',
+    /(?:https?:)?\/\/(?!localhost|127\.0\.0\.1)[a-z0-9.-]+\.[a-z]{2,}/i,
+    'CSP must not authorize any external origin'
+  )
   assert.equal(staticHtml.headers.get('x-content-type-options'), 'nosniff')
 
   const apply = await fetch(`${base}/api/apply`, { method: 'POST', body: '{}' })
