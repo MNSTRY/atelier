@@ -1,0 +1,9 @@
+{
+  "schema": "mnstry.repo-access@v1",
+  "defaultReadBoundary": "team",
+  "repos": {
+    "project-alpha": {
+      "readBoundary": "team"
+    }
+  }
+}

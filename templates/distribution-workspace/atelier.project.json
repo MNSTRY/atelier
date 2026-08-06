@@ -1,0 +1,36 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "project-alpha",
+  "roots": {
+    "workspace": ".",
+    "repoOps": "."
+  },
+  "graph": {
+    "repoAccessPath": "repo-access.v1.json",
+    "outputPath": "atelier-output/knowledge.graph.json"
+  },
+  "projection": {
+    "outputRoot": "atelier-output",
+    "readinessPath": "atelier-output/atelier-readiness.json"
+  },
+  "boundaries": {
+    "policyPath": "boundary-policy.v1.json",
+    "governanceLedgerPath": "governance/repo-boundary-ledger.md",
+    "strictNewRepos": true
+  },
+  "repos": [
+    {
+      "name": "project-alpha",
+      "path": "project",
+      "readBoundary": "team"
+    }
+  ],
+  "ext": {
+    "mnstry.atelier": {
+      "distribution": {
+        "name": "Example Distribution",
+        "eyebrow": "distribution projection"
+      }
+    }
+  }
+}

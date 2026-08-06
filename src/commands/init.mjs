@@ -80,6 +80,19 @@ if (template === 'sample-workspace') {
     gitEmail: args['git-email'],
   })
   console.log(`created shared project Atelier workspace at ${target}`)
+} else if (template === 'distribution') {
+  copyDir(path.join(packageRoot, 'templates/distribution-workspace'), target)
+  personalizeBoundaryPolicy(target, {
+    actor: args.actor,
+    githubLogin: args['github-login'],
+    gitEmail: args['git-email'],
+  })
+  console.log(`created distribution Atelier workspace at ${target}`)
+} else if (template) {
+  // Unknown template names fail closed: a typo must not silently produce a
+  // blank scaffold that lacks the boundary policy the caller asked for.
+  console.error(`Unknown template: ${template}. Valid templates: private-domain, shared-project, sample-workspace, distribution.`)
+  process.exit(1)
 } else {
   fs.mkdirSync(target, { recursive: true })
   fs.mkdirSync(path.join(target, 'content'), { recursive: true })

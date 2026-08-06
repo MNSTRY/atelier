@@ -19,7 +19,7 @@ test('init writes a workspace .gitignore from the shipped gitignore template', (
       fs.cpSync(path.join(ROOT, entry), path.join(install, entry), { recursive: true })
     }
     fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(install, 'node_modules'), 'dir')
-    for (const template of ['private-domain', 'shared-project']) {
+    for (const template of ['private-domain', 'shared-project', 'distribution']) {
       const target = path.join(workspaces, template)
       execFileSync(process.execPath, [path.join(install, 'bin', 'atelier.mjs'), 'init', '--template', template, '--target', target], {
         encoding: 'utf8',
@@ -72,7 +72,7 @@ test('npm pack ships the template gitignore files', () => {
   })
   const [manifest] = JSON.parse(output)
   const files = manifest.files.map((file) => file.path)
-  for (const template of ['private-domain-workspace', 'shared-project-workspace']) {
+  for (const template of ['private-domain-workspace', 'shared-project-workspace', 'distribution-workspace']) {
     assert.ok(
       files.includes(`templates/${template}/gitignore`),
       `tarball missing templates/${template}/gitignore — npm pack strips .gitignore, so templates must ship the file as gitignore`,
