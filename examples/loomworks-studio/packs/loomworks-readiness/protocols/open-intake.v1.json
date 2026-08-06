@@ -1,0 +1,122 @@
+{
+  "schema": "atelier-readiness-protocol@v1",
+  "contractVersion": "1.0.0",
+  "id": "loomworks.readiness:open-intake",
+  "slug": "open-intake",
+  "version": "v1",
+  "stage": "formation",
+  "title": "Open a studio intake",
+  "purpose": "Record who a Loomworks studio is preparing for, and the evidence that answer came from, before any downstream readiness work is accepted.",
+  "questions": [
+    {
+      "id": "studio",
+      "prompt": "Which studio is opening this intake?",
+      "inputFields": ["studio.name", "studio.sourceRef"],
+      "required": true
+    },
+    {
+      "id": "audience",
+      "prompt": "Who is the intake for?",
+      "inputFields": ["audience.summary"],
+      "required": true
+    }
+  ],
+  "inputFields": [
+    {
+      "id": "studio.name",
+      "type": "string",
+      "required": true,
+      "description": "Studio name as the operator states it."
+    },
+    {
+      "id": "studio.sourceRef",
+      "type": "string",
+      "required": true,
+      "description": "Evidence reference the studio name was read from."
+    },
+    {
+      "id": "audience.summary",
+      "type": "string",
+      "required": true,
+      "description": "One-line description of who the intake serves."
+    }
+  ],
+  "outputHints": [
+    {
+      "id": "open-intake.summary",
+      "text": "Render the studio, its evidence reference, and the audience line before review."
+    }
+  ],
+  "outputs": {
+    "runSchema": "atelier-readiness-run@v1",
+    "artifacts": [
+      {
+        "id": "loomworks.readiness:open-intake.summary",
+        "kind": "draft",
+        "schema": "atelier-readiness-run@v1",
+        "description": "Draft intake summary for operator review."
+      }
+    ]
+  },
+  "claimMappings": [
+    {
+      "id": "loomworks.readiness:open-intake.studio-supports-review",
+      "claimPredicate": "supports",
+      "sourceFields": ["studio.name"],
+      "target": "atelier-claim@v1",
+      "evidence": "studio.sourceRef"
+    }
+  ],
+  "readinessRules": [
+    {
+      "id": "loomworks.readiness:open-intake.studio-present",
+      "severity": "blocker",
+      "condition": "Studio name and evidence reference are present.",
+      "remediation": "Add studio.name and studio.sourceRef.",
+      "failClosed": true
+    }
+  ],
+  "graphLenses": [
+    {
+      "id": "loomworks.readiness:open-intake.lens",
+      "title": "Studio intake lens",
+      "query": { "protocolId": "loomworks.readiness:open-intake" }
+    }
+  ],
+  "exportMappings": [
+    {
+      "id": "loomworks.readiness:open-intake.export",
+      "sourceField": "studio",
+      "sourceTerm": "loomworks.readiness:open-intake.studio",
+      "target": "core.artifact",
+      "runtimeOwner": "audit",
+      "targetCollection": "staffPrep"
+    }
+  ],
+  "ui": {
+    "section": "readiness-journey",
+    "title": "Open a studio intake",
+    "description": "Branded Loomworks protocol; loads alongside the bundled MNSTRY readiness pack.",
+    "agentPrompt": "Run loomworks readiness run loomworks.readiness:open-intake --project ./atelier.project.json."
+  },
+  "safety": {
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "canonicalWrites": false,
+    "claimOnly": true,
+    "telemetry": false,
+    "egress": false,
+    "sendPath": false,
+    "browserApply": false,
+    "dryRunOnly": true
+  },
+  "safetyPosture": {
+    "runtimeMutation": false,
+    "externalEgress": false,
+    "defaultVisibility": "private",
+    "authority": "proposal-only",
+    "reviewMode": "static-inspection",
+    "failClosedOnMissingEvidence": true,
+    "refuses": ["runtime writes"]
+  }
+}

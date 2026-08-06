@@ -1,0 +1,64 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "contractVersion": "1.0.0",
+  "id": "loomworks.readiness",
+  "namespace": "loomworks",
+  "version": "v1",
+  "terms": [
+    {
+      "id": "loomworks.readiness:intake",
+      "label": "Studio intake",
+      "kind": "concept"
+    },
+    {
+      "id": "loomworks.readiness:loom",
+      "label": "Loom",
+      "kind": "concept"
+    }
+  ],
+  "migrations": [],
+  "fixtures": [],
+  "protocols": [
+    {
+      "id": "loomworks.readiness:open-intake",
+      "schema": "atelier-readiness-protocol@v1",
+      "path": "protocols/open-intake.v1.json",
+      "gate": "required",
+      "title": "Open a studio intake"
+    },
+    {
+      "id": "loomworks.readiness:loom-alignment",
+      "schema": "atelier-readiness-protocol@v1",
+      "path": "protocols/loom-alignment.v1.json",
+      "gate": "advisory",
+      "title": "Align a loom with its intake"
+    }
+  ],
+  "lenses": [
+    {
+      "id": "loomworks.readiness:intake-lens",
+      "title": "Studio intake lens",
+      "query": {
+        "protocolId": "loomworks.readiness:open-intake"
+      }
+    }
+  ],
+  "readinessRules": [
+    {
+      "id": "loomworks.readiness:intake-named",
+      "severity": "blocker",
+      "condition": "An intake names its studio and cites the evidence the name came from."
+    }
+  ],
+  "actionRules": [],
+  "exportMappings": [
+    {
+      "id": "loomworks.readiness:intake-export",
+      "sourceTerm": "loomworks.readiness:intake",
+      "target": "core.artifact"
+    }
+  ],
+  "ext": {
+    "mnstry.atelier/attribution": "powered by MNSTRY Atelier"
+  }
+}

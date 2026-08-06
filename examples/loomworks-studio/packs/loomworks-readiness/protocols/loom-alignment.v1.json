@@ -1,0 +1,110 @@
+{
+  "schema": "atelier-readiness-protocol@v1",
+  "contractVersion": "1.0.0",
+  "id": "loomworks.readiness:loom-alignment",
+  "slug": "loom-alignment",
+  "version": "v1",
+  "stage": "formation",
+  "title": "Align a loom with its intake",
+  "purpose": "Check that a loom's declared purpose still matches the intake it was opened from, and cite where the mismatch would show.",
+  "questions": [
+    {
+      "id": "loom",
+      "prompt": "Which loom is being aligned?",
+      "inputFields": ["loom.name", "loom.sourceRef"],
+      "required": true
+    }
+  ],
+  "inputFields": [
+    {
+      "id": "loom.name",
+      "type": "string",
+      "required": true,
+      "description": "Loom name as the operator states it."
+    },
+    {
+      "id": "loom.sourceRef",
+      "type": "string",
+      "required": true,
+      "description": "Evidence reference the loom purpose was read from."
+    }
+  ],
+  "outputHints": [
+    {
+      "id": "loom-alignment.summary",
+      "text": "Render the loom, its intake, and the evidence reference side by side."
+    }
+  ],
+  "outputs": {
+    "runSchema": "atelier-readiness-run@v1",
+    "artifacts": [
+      {
+        "id": "loomworks.readiness:loom-alignment.summary",
+        "kind": "draft",
+        "schema": "atelier-readiness-run@v1",
+        "description": "Draft alignment summary for operator review."
+      }
+    ]
+  },
+  "claimMappings": [
+    {
+      "id": "loomworks.readiness:loom-alignment.loom-supports-review",
+      "claimPredicate": "supports",
+      "sourceFields": ["loom.name"],
+      "target": "atelier-claim@v1",
+      "evidence": "loom.sourceRef"
+    }
+  ],
+  "readinessRules": [
+    {
+      "id": "loomworks.readiness:loom-alignment.loom-present",
+      "severity": "warning",
+      "condition": "Loom name and evidence reference are present.",
+      "remediation": "Add loom.name and loom.sourceRef.",
+      "failClosed": true
+    }
+  ],
+  "graphLenses": [
+    {
+      "id": "loomworks.readiness:loom-alignment.lens",
+      "title": "Loom alignment lens",
+      "query": { "protocolId": "loomworks.readiness:loom-alignment" }
+    }
+  ],
+  "exportMappings": [
+    {
+      "id": "loomworks.readiness:loom-alignment.export",
+      "sourceField": "loom",
+      "sourceTerm": "loomworks.readiness:loom-alignment.loom",
+      "target": "core.artifact",
+      "runtimeOwner": "audit",
+      "targetCollection": "staffPrep"
+    }
+  ],
+  "ui": {
+    "section": "readiness-journey",
+    "title": "Align a loom with its intake",
+    "description": "Branded Loomworks protocol; advisory gate.",
+    "agentPrompt": "Run loomworks readiness run loomworks.readiness:loom-alignment --project ./atelier.project.json."
+  },
+  "safety": {
+    "runtimeMutation": false,
+    "runtimeImport": false,
+    "canonicalWrites": false,
+    "claimOnly": true,
+    "telemetry": false,
+    "egress": false,
+    "sendPath": false,
+    "browserApply": false,
+    "dryRunOnly": true
+  },
+  "safetyPosture": {
+    "runtimeMutation": false,
+    "externalEgress": false,
+    "defaultVisibility": "private",
+    "authority": "proposal-only",
+    "reviewMode": "static-inspection",
+    "failClosedOnMissingEvidence": true,
+    "refuses": ["runtime writes"]
+  }
+}

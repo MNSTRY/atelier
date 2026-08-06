@@ -1,0 +1,8 @@
+node_modules/
+package-lock.json
+atelier-output/
+.atelier-local/
+atelier.local.json
+atelier.workspace.local.json
+atelier-attestation-key.local.json
+.DS_Store

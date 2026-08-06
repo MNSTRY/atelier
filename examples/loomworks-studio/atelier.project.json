@@ -1,0 +1,42 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "loomworks-studio",
+  "roots": {
+    "workspace": ".",
+    "repoOps": "."
+  },
+  "graph": {
+    "repoAccessPath": "repo-access.v1.json",
+    "outputPath": "atelier-output/knowledge.graph.json"
+  },
+  "projection": {
+    "outputRoot": "atelier-output",
+    "readinessPath": "atelier-output/atelier-readiness.json"
+  },
+  "repos": [
+    {
+      "name": "workspace",
+      "path": "workspace",
+      "readBoundary": "team"
+    }
+  ],
+  "ext": {
+    "mnstry.atelier": {
+      "distribution": {
+        "name": "Loomworks Studio",
+        "eyebrow": "studio projection",
+        "theme": {
+          "accent": "#7a9e7e"
+        }
+      },
+      "extensionPacks": [
+        {
+          "id": "loomworks.readiness",
+          "version": "v1",
+          "path": "packs/loomworks-readiness/atelier.pack.json",
+          "enabled": true
+        }
+      ]
+    }
+  }
+}

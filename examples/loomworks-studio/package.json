@@ -1,0 +1,13 @@
+{
+  "name": "loomworks-studio",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Reference white-label distribution built on MNSTRY Atelier.",
+  "bin": {
+    "loomworks": "bin/loomworks.mjs"
+  },
+  "dependencies": {
+    "@mnstry/atelier": "file:../.."
+  }
+}
