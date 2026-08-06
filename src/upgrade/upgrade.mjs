@@ -21,6 +21,7 @@ import {
   loadBoundaryPolicy,
 } from '../boundary/policy.mjs'
 import { bundledMnstryReadinessPackV1 } from '../readiness-protocols/bundled-pack.mjs'
+import { loadExtensionPacks } from '../extension-packs/loader.mjs'
 
 export const ATELIER_LOCK_SCHEMA = 'mnstry.atelier-lock@v1'
 export const ATELIER_MIGRATION_SCHEMA = 'mnstry.atelier-migration@v1'
@@ -117,7 +118,7 @@ function loadPolicyForLock(project) {
   }
 }
 
-export function buildAtelierLock({ project, templateId = 'existing-workspace', appliedMigrations = [] } = {}) {
+export function buildAtelierLock({ project, templateId = 'existing-workspace', appliedMigrations = [], packs = [] } = {}) {
   const policy = loadPolicyForLock(project)
   return {
     schema: ATELIER_LOCK_SCHEMA,
@@ -147,11 +148,18 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
       boundaryPolicy: BOUNDARY_POLICY_SCHEMA,
       exportContract: 'atelier-export@v1',
     },
-    extensionPacks: [{
-      id: bundledMnstryReadinessPackV1.id,
-      version: bundledMnstryReadinessPackV1.version,
-      digest: `sha256:${sha256(bundledMnstryReadinessPackV1)}`,
-    }],
+    // Digest asymmetry, on purpose: the bundled pack is an in-memory object,
+    // so its digest covers JSON.stringify of that object; loaded file packs
+    // carry raw-byte digests computed by the loader (computePackDigest), so
+    // any on-disk edit is visible byte-for-byte.
+    extensionPacks: [
+      {
+        id: bundledMnstryReadinessPackV1.id,
+        version: bundledMnstryReadinessPackV1.version,
+        digest: `sha256:${sha256(bundledMnstryReadinessPackV1)}`,
+      },
+      ...packs.map((pack) => ({ id: pack.id, version: pack.version, digest: pack.digest })),
+    ],
     boundaryPolicy: {
       path: policy.policyPath ? path.relative(project.configDir, policy.policyPath) : null,
       digest: policy.digest,
@@ -163,8 +171,21 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
 }
 
 export function writeAtelierLock({ project, templateId = 'existing-workspace' } = {}) {
-  const lock = buildAtelierLock({ project, templateId })
-  writeJson(lockPathForProject(project), lock)
+  const lockPath = lockPathForProject(project)
+  // Packs load in throwing mode on purpose: a broken extension pack cannot be
+  // locked. The lock being replaced is set aside first so re-pinning is not
+  // blocked by the very drift it records (the loader hard-errors on lock
+  // digest mismatches); a load failure restores the previous lock untouched.
+  const setAside = fs.existsSync(lockPath) ? `${lockPath}.repin.tmp` : null
+  if (setAside) fs.renameSync(lockPath, setAside)
+  let packs
+  try {
+    ({ packs } = loadExtensionPacks(project))
+  } finally {
+    if (setAside) fs.renameSync(setAside, lockPath)
+  }
+  const lock = buildAtelierLock({ project, templateId, packs })
+  writeJson(lockPath, lock)
   return lock
 }
 
@@ -259,6 +280,22 @@ export const BASE_MIGRATIONS = [
   },
   {
     schema: ATELIER_MIGRATION_SCHEMA,
+    id: 'extension-pack-sync@0.2.0-alpha.0',
+    from: '*',
+    to: packageJson.version,
+    class: 'extension_pack',
+    title: 'Sync extension pack lock entries',
+    description: 'Re-verify declared extension packs and record their digests in the lock.',
+    files: [LOCK_FILE],
+    safety: 'safe',
+    reviewMarkerRequired: false,
+    explicitConfirmationRequired: false,
+    apply: 'syncExtensionPacks',
+    requiredPostChecks: ['lock check'],
+    authority: safeAuthority(),
+  },
+  {
+    schema: ATELIER_MIGRATION_SCHEMA,
     id: 'boundary-policy-schema-pin@0.1.0-alpha.0',
     from: '*',
     to: packageJson.version,
@@ -341,7 +378,7 @@ function selectedMigrations({ lock, migrations = BASE_MIGRATIONS } = {}) {
     return selected.filter(Boolean)
   }
   if (lock.package?.version !== packageJson.version || lock.package?.name !== packageJson.name) {
-    selected.push(...migrations.filter((migration) => migration.active !== false && ['generated_refresh', 'hook_update', 'template_scaffold', 'config_schema', 'breaking'].includes(migration.class)))
+    selected.push(...migrations.filter((migration) => migration.active !== false && ['generated_refresh', 'hook_update', 'template_scaffold', 'config_schema', 'extension_pack', 'breaking'].includes(migration.class)))
   }
   return selected.filter(Boolean)
 }
@@ -515,6 +552,12 @@ export function applyMigration(project, migration) {
   } else if (migration.apply === 'validateBoundarySchema') {
     const loaded = loadBoundaryPolicy(project)
     if (!loaded.ok) throw new Error(loaded.errors.join('\n'))
+  } else if (migration.apply === 'syncExtensionPacks') {
+    // Re-verify declared packs and re-pin their digests. writeAtelierLock
+    // loads packs in throwing mode, so a broken pack fails the migration
+    // closed instead of being recorded; drifted digests are re-pinned for the
+    // 'lock check' post-check.
+    writeAtelierLock({ project })
   } else if (migration.apply === 'semanticReviewCheck') {
     const findings = stagedSemanticFindings(project)
     if (findings.length) throw new Error(findings.join('\n'))
@@ -579,6 +622,36 @@ export function checkAtelierLock(project) {
   const loadedPolicy = loadPolicyForLock(project)
   if (lock?.boundaryPolicy?.digest && loadedPolicy.digest && lock.boundaryPolicy.digest !== loadedPolicy.digest) {
     errors.push('boundary policy digest has changed; run upgrade --dry-run before applying')
+  }
+  if (lock) {
+    // Pack drift, both directions. The loader treats a declared pack missing
+    // from the lock as a warning; lock check turns it into an error.
+    const packReport = loadExtensionPacks(project, { report: true })
+    for (const item of packReport.errors) {
+      errors.push(item.packId ? `extension pack ${item.packId}: ${item.message}` : `extension packs: ${item.message}`)
+    }
+    const lockPacks = asArray(lock.extensionPacks)
+    for (const pack of packReport.packs) {
+      const entry = lockPacks.find((item) => item?.id === pack.id)
+      if (!entry) {
+        errors.push(`extension pack ${pack.id} is not recorded in the lock; run upgrade --dry-run before applying`)
+      } else if (entry.version !== pack.version || entry.digest !== pack.digest) {
+        errors.push(`extension pack ${pack.id} has drifted from the lock; run upgrade --dry-run before applying`)
+      }
+    }
+    // Declared covers loaded packs, disabled (skipped) packs, and packs whose
+    // load failed — those failures are already reported above.
+    const declaredIds = new Set([
+      ...packReport.packs.map((pack) => pack.id),
+      ...packReport.skipped.map((item) => item.packId),
+      ...packReport.errors.map((item) => item.packId).filter(Boolean),
+    ])
+    for (const entry of lockPacks) {
+      if (!isObject(entry) || entry.id === bundledMnstryReadinessPackV1.id) continue
+      if (!declaredIds.has(entry.id)) {
+        errors.push(`lock records extension pack ${entry.id} that is no longer declared; run upgrade --dry-run before applying`)
+      }
+    }
   }
   return { ok: errors.length === 0, lockPath, errors, lock }
 }

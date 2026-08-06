@@ -4,16 +4,22 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import {
   ATELIER_LOCK_SCHEMA,
   ATELIER_MIGRATION_SCHEMA,
+  BASE_MIGRATIONS,
+  applyMigration,
   applyUpgrade,
   checkAtelierLock,
   planUpgrade,
   validateMigrationRecord,
   writeAtelierLock,
 } from '../src/upgrade/upgrade.mjs'
+import { computePackDigest, loadExtensionPacks } from '../src/extension-packs/loader.mjs'
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
+
+const PACK_FIXTURES = path.join(fileURLToPath(new URL('..', import.meta.url)), 'fixtures', 'atelier-extension-pack')
 
 function git(cwd, args) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
@@ -86,6 +92,31 @@ function boundaryPolicy(overrides = {}) {
     forbiddenPaths: [],
     ...overrides,
   }
+}
+
+// Copies the committed valid pack fixture into the temp project and declares
+// it in the tracked config; returns a freshly resolved project.
+function declarePack(root, { enabled = true } = {}) {
+  fs.mkdirSync(path.join(root, 'packs', 'protocols'), { recursive: true })
+  fs.copyFileSync(path.join(PACK_FIXTURES, 'valid', 'sample-pack.v1.json'), path.join(root, 'packs', 'sample.readiness.v1.json'))
+  fs.copyFileSync(path.join(PACK_FIXTURES, 'valid', 'protocols', 'contract-gate.v1.json'), path.join(root, 'packs', 'protocols', 'contract-gate.v1.json'))
+  const configPath = path.join(root, 'atelier.project.json')
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+  config.ext = {
+    'mnstry.atelier': {
+      extensionPacks: [{ id: 'sample.readiness', version: 'v1', path: 'packs/sample.readiness.v1.json', enabled }],
+    },
+  }
+  writeJson(configPath, config)
+  return resolveProjectConfig({ cwd: root, argv: ['--project', configPath] })
+}
+
+// Rewrites the pack file with identical content but different bytes, so its
+// raw-byte digest drifts from the lock while the pack stays loadable.
+function reindentPack(root) {
+  const packFile = path.join(root, 'packs', 'sample.readiness.v1.json')
+  const doc = JSON.parse(fs.readFileSync(packFile, 'utf8'))
+  fs.writeFileSync(packFile, `${JSON.stringify(doc, null, 4)}\n`)
 }
 
 function writeOldLock(project) {
@@ -247,6 +278,100 @@ test('breaking migrations require explicit confirmation', () => {
   }
   const plan = planUpgrade({ project, migrations: [breaking] })
   assert.deepEqual(plan.requiredConfirmations, ['breaking-test@1'])
+})
+
+test('lock write records a declared extension pack and lock check round-trips', () => {
+  const { root } = fixture()
+  const project = declarePack(root)
+  const lock = writeAtelierLock({ project })
+  assert.equal(lock.extensionPacks[0].id, 'mnstry-readiness-pack')
+  const entry = lock.extensionPacks.find((item) => item.id === 'sample.readiness')
+  assert.ok(entry, 'declared pack must be recorded in the lock')
+  assert.equal(entry.version, 'v1')
+  const rawBytes = fs.readFileSync(path.join(root, 'packs', 'sample.readiness.v1.json'))
+  assert.equal(entry.digest, computePackDigest(rawBytes))
+  const report = checkAtelierLock(project)
+  assert.deepEqual(report.errors, [])
+  assert.equal(report.ok, true)
+})
+
+test('a disabled pack is not pinned and does not fail lock check', () => {
+  const { root } = fixture()
+  const project = declarePack(root, { enabled: false })
+  const lock = writeAtelierLock({ project })
+  assert.equal(lock.extensionPacks.some((item) => item.id === 'sample.readiness'), false)
+  assert.equal(checkAtelierLock(project).ok, true)
+})
+
+test('a tampered pack file is detected as lock drift', () => {
+  const { root } = fixture()
+  const project = declarePack(root)
+  writeAtelierLock({ project })
+  reindentPack(root)
+  const report = checkAtelierLock(project)
+  assert.equal(report.ok, false)
+  assert.match(report.errors.join('\n'), /lock digest mismatch for extension pack sample\.readiness/)
+})
+
+test('a declared pack absent from the lock is a loader warning and a lock check error', () => {
+  const { root, project } = fixture()
+  writeAtelierLock({ project })
+  const declared = declarePack(root)
+  const loaded = loadExtensionPacks(declared, { report: true })
+  assert.deepEqual(loaded.errors, [])
+  assert.match(loaded.warnings.map((item) => item.message).join('\n'), /is not recorded in atelier\.lock\.json/)
+  const report = checkAtelierLock(declared)
+  assert.equal(report.ok, false)
+  assert.match(report.errors.join('\n'), /extension pack sample\.readiness is not recorded in the lock; run upgrade --dry-run/)
+})
+
+test('a lock entry for a pack that is no longer declared is drift', () => {
+  const { root } = fixture()
+  const project = declarePack(root)
+  writeAtelierLock({ project })
+  const configPath = path.join(root, 'atelier.project.json')
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+  delete config.ext
+  writeJson(configPath, config)
+  const undeclared = resolveProjectConfig({ cwd: root, argv: ['--project', configPath] })
+  const report = checkAtelierLock(undeclared)
+  assert.equal(report.ok, false)
+  assert.match(report.errors.join('\n'), /lock records extension pack sample\.readiness that is no longer declared; run upgrade --dry-run/)
+})
+
+test('a package version change selects the extension pack sync migration', () => {
+  const { project } = fixture()
+  writeOldLock(project)
+  const plan = planUpgrade({ project })
+  const sync = plan.migrations.find((migration) => migration.id.startsWith('extension-pack-sync@'))
+  assert.ok(sync, 'version change must select extension-pack-sync')
+  assert.equal(sync.class, 'extension_pack')
+  assert.equal(sync.apply, 'syncExtensionPacks')
+})
+
+test('syncExtensionPacks re-verifies packs and re-pins drifted digests', () => {
+  const { root } = fixture()
+  const project = declarePack(root)
+  writeAtelierLock({ project })
+  reindentPack(root)
+  assert.equal(checkAtelierLock(project).ok, false)
+  const sync = BASE_MIGRATIONS.find((migration) => migration.apply === 'syncExtensionPacks')
+  assert.ok(sync, 'registry must carry the extension-pack-sync migration')
+  applyMigration(project, sync)
+  const report = checkAtelierLock(project)
+  assert.deepEqual(report.errors, [])
+  assert.equal(report.ok, true)
+})
+
+test('syncExtensionPacks fails closed on a broken pack and preserves the lock', () => {
+  const { root } = fixture()
+  const project = declarePack(root)
+  const before = writeAtelierLock({ project })
+  fs.writeFileSync(path.join(root, 'packs', 'sample.readiness.v1.json'), 'not json')
+  const sync = BASE_MIGRATIONS.find((migration) => migration.apply === 'syncExtensionPacks')
+  assert.throws(() => applyMigration(project, sync), /extension pack loading failed/)
+  const after = JSON.parse(fs.readFileSync(path.join(root, 'atelier.lock.json'), 'utf8'))
+  assert.deepEqual(after.extensionPacks, before.extensionPacks, 'a failed sync must leave the lock untouched')
 })
 
 test('migration authority cannot introduce deferred non-goals', () => {
