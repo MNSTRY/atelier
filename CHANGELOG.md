@@ -2,6 +2,32 @@
 
 ## 0.2.0-alpha.0
 
+- **Security:** an independent external audit deleted both enforcement sites
+  of the public-projectability boundary with every gate green — the invalid
+  fixtures named for the property fail earlier, at resolution, so the branch
+  had no witness. Resolved-private and resolved-sensitive fixtures now assert
+  the registered `is not public-projectable` reason, and the export path uses
+  the tested projection-policy verdict instead of a near-copy that could
+  drift.
+- **Security:** the served CSP authorized two Google Fonts origins nothing in
+  the kit uses. Workspace HTML is author-controlled, so the dead permission
+  was an exfiltration channel; it is removed and the security test refuses
+  any external origin in the policy.
+- The egress gate detects the shapes the same audit showed it missed —
+  `https.get`, `http2.connect`, dynamic import of a URL, beacons, XHR/Image,
+  third-party HTTP client imports, CSP directives naming external origins,
+  and markup resource attributes — and its scan-path list names directories
+  that exist (eight of eleven were `src/` subdirectories listed as top level,
+  silently scanning nothing). Every previously-missed probe is pinned in a
+  permanent test.
+- `LICENSE` ships the full Apache-2.0 text instead of the 18-line short-form
+  notice, so the section 6 that `TRADEMARKS.md` cites exists. CI actions are
+  pinned to commit SHAs, the `fast-uri` advisory is closed with an override,
+  and `portableText` scrubs Linux and Windows home paths, not only macOS.
+- The `typecheck` script is renamed `syntax:check` — it runs `node --check`
+  and never was a type system. The quickstart's boundary check step works on
+  the sample workspace it creates, the fresh-clone denylist skip is
+  documented, and the unread `#atelier-data` script block is gone.
 - Every attacker-reachable label is sanitized, including the key path: a key
   file whose *name* carried an escape sequence could erase the key-identity
   line and rewrite it, and an over-long basename wrapped the header so the
