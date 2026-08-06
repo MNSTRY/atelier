@@ -11,6 +11,7 @@
   },
   "exports": {
     ".": "./src/index.mjs",
+    "./cli": "./src/cli/run.mjs",
     "./project": "./src/project/config.mjs",
     "./graph": "./src/graph/graph.mjs",
     "./projection": "./src/projection/project.mjs",
