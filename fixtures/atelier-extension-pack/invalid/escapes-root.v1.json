@@ -1,0 +1,22 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "id": "sample.readiness",
+  "namespace": "sample",
+  "version": "v1",
+  "terms": [],
+  "migrations": [],
+  "fixtures": [],
+  "protocols": [
+    {
+      "id": "sample.readiness:contract-gate",
+      "schema": "atelier-readiness-protocol@v1",
+      "path": "../escape.v1.json",
+      "gate": "advisory",
+      "title": "Escapes the pack directory"
+    }
+  ],
+  "lenses": [],
+  "readinessRules": [],
+  "actionRules": [],
+  "exportMappings": []
+}

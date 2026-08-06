@@ -1,0 +1,22 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "id": "sample.readiness",
+  "namespace": "sample",
+  "version": "v1",
+  "terms": [],
+  "migrations": [],
+  "fixtures": [],
+  "protocols": [
+    {
+      "id": "sample.readiness:offer-map",
+      "schema": "atelier-readiness-protocol@v1",
+      "path": "protocols/offer-map.v1.json",
+      "gate": "advisory",
+      "title": "Collides with a bundled slug"
+    }
+  ],
+  "lenses": [],
+  "readinessRules": [],
+  "actionRules": [],
+  "exportMappings": []
+}

@@ -1,0 +1,19 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "id": "sample.readiness",
+  "namespace": "other",
+  "version": "v1",
+  "terms": [
+    {
+      "id": "sample.readiness:scope",
+      "label": "Sample scope",
+      "kind": "concept"
+    }
+  ],
+  "migrations": [],
+  "fixtures": [],
+  "lenses": [],
+  "readinessRules": [],
+  "actionRules": [],
+  "exportMappings": []
+}
