@@ -349,6 +349,15 @@ export function resolveProjectConfig({
 
 export function commandProject({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd() } = {}) {
   const project = resolveProjectConfig({ argv, env, cwd })
+  // Fail closed at CLI entry, but only when a real config file was loaded; the
+  // defaults/no-file path resolves with an empty config that would spuriously
+  // fail document validation.
+  if (project.configPath != null) {
+    const configErrors = validateProjectConfigDoc(project.config)
+    if (configErrors.length) {
+      throw new Error(`invalid atelier project config at ${project.configPath}:\n${configErrors.join('\n')}`)
+    }
+  }
   if (project.schema !== PROJECT_CONFIG_SCHEMA) {
     throw new Error(`project config schema must be ${PROJECT_CONFIG_SCHEMA}`)
   }
@@ -422,11 +431,27 @@ function stringPathErrors(value, label) {
   return typeof value === 'string' && value.trim() ? [] : [`${label} must be a non-empty string path`]
 }
 
+// The contract reserves `ext` as an extension container whose members are
+// namespaced objects; contents beyond that are deliberately unvalidated at v1
+// and carry no authority over first-class fields. Structured consumers of an
+// ext member (for example the extension-pack loader) fail closed on their own.
+function extErrors(value, label) {
+  if (value == null) return []
+  if (typeof value !== 'object' || Array.isArray(value)) return [`${label} must be an object`]
+  return Object.entries(value)
+    .filter(([, member]) => !member || typeof member !== 'object' || Array.isArray(member))
+    .map(([key]) => `${label}.${key} must be an object; ext members are namespaced objects`)
+}
+
 export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) {
   const errors = []
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return ['project config must be a JSON object']
-  errors.push(...unknownKeyErrors(doc, '/', new Set(['schema', 'name', 'roots', 'graph', 'projection', 'alignment', 'runtime', 'boundaries', 'setup', 'repos'])))
+  errors.push(...unknownKeyErrors(doc, '/', new Set(['schema', 'contractVersion', 'name', 'roots', 'graph', 'projection', 'alignment', 'runtime', 'boundaries', 'setup', 'repos', 'ext'])))
   if (doc.schema !== PROJECT_CONFIG_SCHEMA) errors.push(`schema must be ${PROJECT_CONFIG_SCHEMA}`)
+  if (doc.contractVersion != null && (typeof doc.contractVersion !== 'string' || !/^1\.\d+\.\d+$/.test(doc.contractVersion))) {
+    errors.push('contractVersion must be a string matching 1.<minor>.<patch>')
+  }
+  errors.push(...extErrors(doc.ext, 'ext'))
 
   const roots = asObject(doc.roots)
   const graph = asObject(doc.graph)
@@ -446,13 +471,20 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
   const hasAlignmentScaffold = Boolean(firstString(alignment.appRepo) && firstString(alignment.root, alignment.path))
   if (!hasRepoArray && !hasAlignmentScaffold) errors.push('repos must be a non-empty array or alignment must define appRepo and root')
 
-  errors.push(...unknownKeyErrors(roots, 'roots', new Set(['workspace', 'workspaceRoot', 'repoOps', 'repoOpsRoot'])))
-  errors.push(...unknownKeyErrors(graph, 'graph', new Set(['repoAccessPath', 'repoAccessConfig', 'outputPath', 'workspaceGraphPath', 'workspaceGraph', 'externalRelationPrefixes', 'externalRelationIds'])))
-  errors.push(...unknownKeyErrors(projection, 'projection', new Set(['outputRoot', 'root', 'readinessPath', 'readiness'])))
-  errors.push(...unknownKeyErrors(alignment, 'alignment', new Set(['appRepo', 'appRoot', 'root', 'path'])))
-  errors.push(...unknownKeyErrors(runtime, 'runtime', new Set(['root', 'mnstryRuntimeRoot'])))
-  errors.push(...unknownKeyErrors(boundaries, 'boundaries', new Set(['policyPath', 'governanceLedgerPath', 'strictNewRepos'])))
-  errors.push(...unknownKeyErrors(setup, 'setup', new Set(['profile', 'include', 'exclude'])))
+  errors.push(...unknownKeyErrors(roots, 'roots', new Set(['workspace', 'workspaceRoot', 'repoOps', 'repoOpsRoot', 'ext'])))
+  errors.push(...unknownKeyErrors(graph, 'graph', new Set(['repoAccessPath', 'repoAccessConfig', 'outputPath', 'workspaceGraphPath', 'workspaceGraph', 'externalRelationPrefixes', 'externalRelationIds', 'ext'])))
+  errors.push(...unknownKeyErrors(projection, 'projection', new Set(['outputRoot', 'root', 'readinessPath', 'readiness', 'ext'])))
+  errors.push(...unknownKeyErrors(alignment, 'alignment', new Set(['appRepo', 'appRoot', 'root', 'path', 'ext'])))
+  errors.push(...unknownKeyErrors(runtime, 'runtime', new Set(['root', 'mnstryRuntimeRoot', 'ext'])))
+  errors.push(...unknownKeyErrors(boundaries, 'boundaries', new Set(['policyPath', 'governanceLedgerPath', 'strictNewRepos', 'ext'])))
+  errors.push(...unknownKeyErrors(setup, 'setup', new Set(['profile', 'include', 'exclude', 'ext'])))
+  errors.push(...extErrors(roots.ext, 'roots.ext'))
+  errors.push(...extErrors(graph.ext, 'graph.ext'))
+  errors.push(...extErrors(projection.ext, 'projection.ext'))
+  errors.push(...extErrors(alignment.ext, 'alignment.ext'))
+  errors.push(...extErrors(runtime.ext, 'runtime.ext'))
+  errors.push(...extErrors(boundaries.ext, 'boundaries.ext'))
+  errors.push(...extErrors(setup.ext, 'setup.ext'))
   errors.push(...stringPathErrors(roots.workspace, 'roots.workspace'))
   errors.push(...stringPathErrors(graph.outputPath, 'graph.outputPath'))
   errors.push(...stringPathErrors(graph.repoAccessPath, 'graph.repoAccessPath'))
@@ -477,11 +509,13 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
       errors.push(`repos[${index}] must be an object`)
       continue
     }
-    errors.push(...unknownKeyErrors(repo, `repos[${index}]`, new Set(['name', 'path', 'readBoundary', 'role', 'kind', 'remote', 'identity', 'aliases', 'required'])))
+    errors.push(...unknownKeyErrors(repo, `repos[${index}]`, new Set(['name', 'path', 'readBoundary', 'role', 'kind', 'remote', 'identity', 'aliases', 'required', 'ext'])))
+    errors.push(...extErrors(repo.ext, `repos[${index}].ext`))
     if (!firstString(repo.name)) errors.push(`repos[${index}].name is required`)
     if (repo.identity != null) {
       const identity = asObject(repo.identity)
-      errors.push(...unknownKeyErrors(identity, `repos[${index}].identity`, new Set(['provider', 'id'])))
+      errors.push(...unknownKeyErrors(identity, `repos[${index}].identity`, new Set(['provider', 'id', 'ext'])))
+      errors.push(...extErrors(identity.ext, `repos[${index}].identity.ext`))
       if (!SUPPORTED_IDENTITY_PROVIDERS.includes(identity.provider)) {
         errors.push(`repos[${index}].identity.provider must be one of ${SUPPORTED_IDENTITY_PROVIDERS.join(', ')}`)
       }

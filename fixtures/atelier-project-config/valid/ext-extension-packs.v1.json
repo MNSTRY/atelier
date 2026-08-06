@@ -1,0 +1,36 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "contractVersion": "1.1.0",
+  "name": "sample-workspace",
+  "roots": {
+    "workspace": ".",
+    "repoOps": "."
+  },
+  "graph": {
+    "repoAccessPath": "repo-access.v1.json",
+    "outputPath": "atelier-output/knowledge.graph.json"
+  },
+  "projection": {
+    "outputRoot": "atelier-output",
+    "readinessPath": "atelier-output/atelier-readiness.json"
+  },
+  "ext": {
+    "mnstry.atelier": {
+      "extensionPacks": [
+        {
+          "id": "sample.readiness",
+          "version": "v1",
+          "path": "packs/sample.readiness.v1.json",
+          "enabled": true
+        }
+      ]
+    }
+  },
+  "repos": [
+    {
+      "name": "content",
+      "path": "content",
+      "readBoundary": "private"
+    }
+  ]
+}

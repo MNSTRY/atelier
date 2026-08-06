@@ -1,0 +1,12 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "sample-workspace",
+  "ext": "packs/sample.readiness.v1.json",
+  "repos": [
+    {
+      "name": "content",
+      "path": "content",
+      "readBoundary": "private"
+    }
+  ]
+}

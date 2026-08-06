@@ -20,6 +20,7 @@ const INVALID_EXPECTATIONS = new Map([
     ['missing-repos-and-alignment.v1.json', /must match a schema in anyOf/],
     ['absolute-repo-path.v1.json', /\/repos\/0\/path.*must NOT be valid/],
     ['external-kind-read-boundary.v1.json', /\/repos\/0.*must NOT be valid/],
+    ['ext-not-object.v1.json', /\/ext must be object/],
   ])],
   ['atelier-readiness', new Map([
     ['dry-run-only-false.v1.json', /\/runtimeDryRun\/dryRunOnly.*must be equal to constant/],
