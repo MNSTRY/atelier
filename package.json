@@ -55,7 +55,7 @@
     "prepublishOnly": "npm run release:audit && npm run repo:check && npm run migrations:check && npm run contract:compat && npm run syntax:check && npm test && npm run consumer:smoke && npm run distribution:smoke"
   },
   "dependencies": {
-    "ajv": "8.18.0",
+    "ajv": "8.20.0",
     "ajv-formats": "3.0.1"
   },
   "devDependencies": {
