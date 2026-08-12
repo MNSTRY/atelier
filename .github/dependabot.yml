@@ -17,6 +17,14 @@ updates:
     commit-message:
       prefix: deps
       include: scope
+    ignore:
+      # package.json pins engines to Node >=22.18.0 <23, so the type
+      # definitions track the supported runtime rather than the newest
+      # release. Dependabot proposed 22 -> 26 immediately, which would have
+      # described APIs this package does not run on. Minor and patch updates
+      # within the supported major still come through.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
