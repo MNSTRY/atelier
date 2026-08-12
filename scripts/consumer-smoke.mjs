@@ -37,11 +37,18 @@ try {
   // package root caches dependency *tarballs* by their locked resolved URL and
   // does not necessarily cache the *packuments* npm needs to resolve the
   // tarball's own dependency ranges — so on a cold runner the offline install
-  // failed with ENOTCACHED on `ajv` even though `npm ci` had just run. Warm both
-  // explicitly from the declared runtime dependencies, so the precondition is
-  // stated here rather than inherited by accident from another step.
-  const runtimeDeps = Object.entries(packageJson.dependencies ?? {}).map(([name, range]) => `${name}@${range}`)
-  if (runtimeDeps.length > 0) run('npm', ['cache', 'add', ...runtimeDeps])
+  // failed with ENOTCACHED even though `npm ci` had just run.
+  //
+  // Warm the whole non-dev closure from the lockfile, not just the direct
+  // dependencies: resolving `ajv` also requires `fast-deep-equal` and the rest
+  // of its tree, and warming one level deep only moved the error down a layer.
+  // The lockfile is the right source because it already carries exact resolved
+  // versions, including anything pinned by `overrides`.
+  const lockfile = JSON.parse(readFileSync(join(packageRoot, 'package-lock.json'), 'utf8'))
+  const closure = Object.entries(lockfile.packages ?? {})
+    .filter(([path, entry]) => path.startsWith('node_modules/') && !entry.dev && entry.version)
+    .map(([path, entry]) => `${path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length)}@${entry.version}`)
+  if (closure.length > 0) run('npm', ['cache', 'add', ...closure])
 
   run('npm', ['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
     cwd: tempRoot,
