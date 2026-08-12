@@ -31,6 +31,18 @@ try {
   tarballPath = join(packageRoot, pack.filename)
 
   writeFileSync(join(tempRoot, 'package.json'), `${JSON.stringify({ type: 'module' }, null, 2)}\n`)
+
+  // The install below is deliberately --offline: a consumer must be able to
+  // install the tarball from a warm cache with no registry. But `npm ci` in the
+  // package root caches dependency *tarballs* by their locked resolved URL and
+  // does not necessarily cache the *packuments* npm needs to resolve the
+  // tarball's own dependency ranges — so on a cold runner the offline install
+  // failed with ENOTCACHED on `ajv` even though `npm ci` had just run. Warm both
+  // explicitly from the declared runtime dependencies, so the precondition is
+  // stated here rather than inherited by accident from another step.
+  const runtimeDeps = Object.entries(packageJson.dependencies ?? {}).map(([name, range]) => `${name}@${range}`)
+  if (runtimeDeps.length > 0) run('npm', ['cache', 'add', ...runtimeDeps])
+
   run('npm', ['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
     cwd: tempRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
