@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- Open-source readiness: `SECURITY.md` states the vulnerability reporting
+  channel, what counts as a vulnerability against this package's claims
+  (egress, boundary guard, disclosure scanners, audience/visibility,
+  attestation, upgrade, contract compatibility), and what is deliberately out
+  of scope — the loopback sidecar's on-host trust boundary is the design, not
+  a finding. It ships in the tarball alongside `NOTICE` and `TRADEMARKS.md`,
+  so a consumer who only has the package still has a reporting path.
+- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1) governs conduct;
+  `CONTRIBUTING.md` continues to govern contributions, and boundary
+  violations stay an operational matter handled there rather than a conduct
+  dispute.
+- The DCO sign-off that `CONTRIBUTING.md` requires is now enforced by a `dco`
+  workflow instead of being documentation only. Merge commits are exempt —
+  a contributor cannot sign a merge a maintainer made.
+- Issue forms and a pull-request template carry the disclosure rules to the
+  point of submission: no client material, no private methodology, no key
+  material, no absolute home paths. The issue chooser routes vulnerabilities
+  to private reporting and routes contract, dependency, guard, and network
+  changes to the conversation-first proposal form. Blank issues are off.
+- Dependabot watches npm and the SHA-pinned actions weekly. Its pull requests
+  receive Dependabot-scoped secrets rather than Actions secrets, so the
+  denylist must also be stored as a Dependabot secret or every Dependabot
+  pull request blocks on `secret-sweep` exactly as a fork does.
+
 ## 0.2.0-alpha.0
 
 - **Breaking:** the internal analysis-engine codename is fully removed from

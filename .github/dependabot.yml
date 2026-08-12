@@ -1,0 +1,30 @@
+version: 2
+
+# Dependabot pull requests do NOT receive regular Actions secrets — they get
+# Dependabot-scoped secrets instead. The secret-sweep job fails closed when the
+# denylist is unavailable, so every Dependabot PR blocks until the same value is
+# also stored as a Dependabot secret named ATELIER_RELEASE_DENYLIST
+# (Settings -> Secrets and variables -> Dependabot). Without that, clearing a
+# Dependabot PR needs the same fork-sweep dispatch a fork PR needs.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    # The package ships two runtime dependencies and intends to keep it that
+    # way; a version bump is welcome, a new transitive surface is a decision.
+    commit-message:
+      prefix: deps
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    # Actions are pinned to full commit SHAs on purpose. Dependabot rewrites the
+    # SHA and updates the trailing version comment; review the SHA, not the tag.
+    commit-message:
+      prefix: ci
+      include: scope

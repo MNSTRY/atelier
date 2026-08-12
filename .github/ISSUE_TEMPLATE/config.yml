@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/MNSTRY/atelier/security/advisories/new
+    about: Never open a public issue for a vulnerability. Use private reporting — see SECURITY.md.
+  - name: Build a distribution or extension pack
+    url: https://github.com/MNSTRY/atelier/blob/main/docs/distributions.md
+    about: Distributions live in your own repository and need no contribution here.
+  - name: Contribution working agreement
+    url: https://github.com/MNSTRY/atelier/blob/main/CONTRIBUTING.md
+    about: What you keep, what is welcome, and what needs a conversation first.

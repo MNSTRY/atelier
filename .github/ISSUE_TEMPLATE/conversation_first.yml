@@ -1,0 +1,65 @@
+name: Proposal (contracts, dependencies, guards, network behavior)
+description: The four changes that need a conversation before code. A PR without this will be declined regardless of quality.
+labels: [proposal]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `CONTRIBUTING.md` names four changes that carry obligations a pull
+        request cannot see. Open this first — it is not a formality, and a
+        good patch that skips it is still declined.
+
+        Everything else (bug fixes, tests, docs, fictional fixtures) needs no
+        proposal. Just send it.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change
+      options:
+        - Contract change
+        - New runtime dependency
+        - Anything touching the guards
+        - New network behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is not possible today, and who is blocked by it. Not the solution — the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The proposed change
+      description: What you want to change, and what stays the same.
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility
+      description: >
+        For a contract change: does it widen anything outside an `ext`
+        container, and does it need a new contract version with a recorded
+        migration? For a dependency: what does it add transitively, and why
+        can the standard library not do it? For a guard: what does the change
+        stop refusing, and how would you attack it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >
+        Extension packs, sidecars, and distributions in your own repository
+        solve many of these without changing this package. Say why they do not
+        solve yours.
+    validations:
+      required: true

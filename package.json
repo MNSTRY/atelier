@@ -79,6 +79,7 @@
     "LICENSE",
     "NOTICE",
     "TRADEMARKS.md",
+    "SECURITY.md",
     "bin/",
     "contracts/",
     "fixtures/",

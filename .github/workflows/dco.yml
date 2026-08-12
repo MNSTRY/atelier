@@ -1,0 +1,53 @@
+name: dco
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: dco-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sign-off:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # CONTRIBUTING.md requires a DCO 1.1 sign-off on every commit and says
+      # unsigned commits are not merged; without this job that rule was
+      # documentation only. Repo values reach shell via env vars ("$VAR"), never
+      # by ${{ }} interpolation inside the run: block (expression injection).
+      #
+      # Only the pull request's own commits are checked, and merge commits are
+      # skipped: a maintainer merging main into a branch produces a commit the
+      # contributor never authored and cannot sign.
+      - name: every commit carries a sign-off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          missing=0
+          # Enumerate SHAs, then read each message separately. Packing SHA and
+          # message into one delimited stream invites a parsing bug for no gain:
+          # rev-list emits bare hex, which is safe to split on whitespace, and a
+          # commit message can then contain anything at all without confusing
+          # the reader.
+          for sha in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+            if ! git log -1 --format=%B "$sha" \
+              | grep -qiE '^Signed-off-by: .+ <[^<>]+@[^<>]+>[[:space:]]*$'; then
+              echo "missing DCO sign-off: $sha"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo ""
+            echo "$missing commit(s) without a Developer Certificate of Origin sign-off."
+            echo "Sign new commits with 'git commit -s'."
+            echo "To sign the commits already on this branch:"
+            echo "  git rebase --signoff $BASE_SHA && git push --force-with-lease"
+            echo "See CONTRIBUTING.md -> Certifying your contribution."
+            exit 1
+          fi
+          echo "all commits carry a DCO sign-off"

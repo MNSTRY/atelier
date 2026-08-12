@@ -1,0 +1,90 @@
+name: Bug report
+description: Something the Atelier does that it should not, or refuses to do that it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you write: this repository's gates scan every contribution for
+        disclosure patterns, and an issue is public and permanent.
+
+        **Do not paste client material, private methodology, key material, or
+        absolute home paths.** Fictionalize the shape — invented brands,
+        invented content, real mechanics. If you cannot show the bug without
+        sensitive content, describe the mechanism and say so.
+
+        For a vulnerability, stop here and use private reporting instead:
+        <https://github.com/MNSTRY/atelier/security/advisories/new>
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The behavior you observed, and the behavior you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        Exact commands, and the smallest fictional workspace that shows it.
+        `atelier init --fixture=sample-workspace` is a good starting point
+        because it is already fictional.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Relevant output, with any private paths or names replaced.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Atelier version
+      description: From `package.json`, or the tag you installed.
+      placeholder: 0.2.0-alpha.0
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Output of `node --version`. Supported range is >=22.18.0 <23.
+      placeholder: v22.18.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: guard
+    attributes:
+      label: Does this touch a guard?
+      description: >
+        The egress gate, disclosure scanners, boundary guard, release audit,
+        or contract compatibility. Changes here need adversarial review, and a
+        bug here may be a vulnerability — if it lets something through that
+        should be refused, report it privately instead.
+      options:
+        - "No"
+        - "Yes — a guard refuses something it should allow"
+        - "Yes — a guard allows something it should refuse (report privately instead)"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before submitting
+      options:
+        - label: This report contains no client material, private methodology, key material, or absolute home paths.
+          required: true
+        - label: I have read CONTRIBUTING.md.
+          required: true

@@ -19,6 +19,7 @@ const allowedFiles = [
   /^LICENSE$/,
   /^NOTICE$/,
   /^TRADEMARKS\.md$/,
+  /^SECURITY\.md$/,
   /^bin\/atelier\.mjs$/,
   /^bin\/mnstry-atelier\.mjs$/,
   /^contracts\/[a-z0-9.-]+\.json$/,
