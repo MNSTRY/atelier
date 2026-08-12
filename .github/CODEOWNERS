@@ -1,0 +1,23 @@
+# Every path needs a maintainer review by default. The guards are called out
+# separately not because the owner differs, but because CONTRIBUTING.md holds
+# them to a different bar: changes here need an adversarial review, not a green
+# suite. A reviewer seeing these paths should read them that way.
+*                               @erikdesrosiers
+
+# Guards and release machinery
+/scripts/                       @erikdesrosiers
+/.github/workflows/             @erikdesrosiers
+/src/egress/                    @erikdesrosiers
+/src/boundary/                  @erikdesrosiers
+/src/attestation/               @erikdesrosiers
+
+# Published contracts: under a compatibility epoch, breaking changes need a new
+# contract version and a recorded migration.
+/contracts/                     @erikdesrosiers
+
+# The terms themselves
+/LICENSE                        @erikdesrosiers
+/NOTICE                         @erikdesrosiers
+/TRADEMARKS.md                  @erikdesrosiers
+/SECURITY.md                    @erikdesrosiers
+/CONTRIBUTING.md                @erikdesrosiers
