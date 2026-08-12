@@ -47,8 +47,23 @@ const STRUCTURAL_SELF_EXCLUDED = [
 
 // Hardcoded on purpose — the identity allowlist is not a secret. Authors must
 // match exactly; committers additionally allow GitHub-UI merge commits.
+//
+// Dependabot is listed because it is an expected author for this repository:
+// .github/dependabot.yml opens npm and actions update pull requests, whose
+// commits GitHub authors as dependabot[bot] and commits as GitHub. Without it,
+// every Dependabot branch fails the identity gate — and because --commits all
+// walks every ref, those branches would fail the gate on unrelated pull
+// requests too, leaving CI permanently red for reasons no contributor could
+// act on. The address is GitHub's fixed no-reply identity for that app, so
+// this widens the allowlist by exactly one bot, not by a pattern.
 const ALLOWED_AUTHOR = { name: 'Erik Desrosiers', email: 'erik@mnstry.ai' }
-const ALLOWED_COMMITTERS = [ALLOWED_AUTHOR, { name: 'GitHub', email: 'noreply@github.com' }]
+const DEPENDABOT = {
+  name: 'dependabot[bot]',
+  email: '49699333+dependabot[bot]@users.noreply.github.com',
+}
+const GITHUB_COMMITTER = { name: 'GitHub', email: 'noreply@github.com' }
+const ALLOWED_AUTHORS = [ALLOWED_AUTHOR, DEPENDABOT]
+const ALLOWED_COMMITTERS = [ALLOWED_AUTHOR, DEPENDABOT, GITHUB_COMMITTER]
 
 function usageError(message) {
   console.error(`[repo:check] ${message}`)
@@ -224,7 +239,7 @@ function scanCommits() {
     // every PR. Their messages are still scanned below.
     const isMergeCommit = parents.trim().split(/\s+/).filter(Boolean).length > 1
     if (!isMergeCommit) {
-      if (authorName !== ALLOWED_AUTHOR.name || authorEmail !== ALLOWED_AUTHOR.email) {
+      if (!ALLOWED_AUTHORS.some((id) => id.name === authorName && id.email === authorEmail)) {
         // Log-safety: the offending identity is not echoed, only the SHA.
         report('commit-identity (author)', sha)
       }

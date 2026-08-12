@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { generateKeyPair } from '../src/attestation/sign.mjs'
-import { MAX_INPUT_FILE_BYTES } from '../src/support/feedback-report.mjs'
+import { MAX_INPUT_FILE_BYTES, runFeedbackCommand } from '../src/support/feedback-report.mjs'
 import { BANNED_VALUE_PATTERNS } from '../src/support/support-bundle.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -88,7 +88,43 @@ test('an oversized --message is refused the way an oversized file is', (t) => {
 
   const result = run(['create', '--message', huge], { cwd: dir })
 
-  assert.equal(result.status, 2)
-  assert.match(result.stderr, /--message is longer than the \d+ byte limit/)
+  // Linux caps a single argv entry at MAX_ARG_STRLEN (32 pages = 128 KiB),
+  // which is below MAX_INPUT_FILE_BYTES, so execve refuses the spawn before
+  // the CLI can refuse the message. macOS has no per-argument cap and reaches
+  // the CLI's own guard. Both are refusals, so assert the guarantee that holds
+  // either way — nothing is written — and assert the CLI's specific refusal
+  // only when the process actually ran. The guard itself is covered on every
+  // platform by the direct assertion below, which needs no spawn.
+  if (result.error?.code === 'E2BIG') {
+    assert.equal(result.status, null)
+  } else {
+    assert.equal(result.status, 2)
+    assert.match(result.stderr, /--message is longer than the \d+ byte limit/)
+  }
+  assert.equal(fs.existsSync(path.join(dir, '.atelier-local')), false)
+})
+
+test('the oversized-message guard holds without spawning a process', (t) => {
+  // Platform-independent cover for the case above: on Linux the CLI can never
+  // be handed an oversized --message, so the spawn test cannot exercise the
+  // guard there. This calls the command directly. It reports refusal by
+  // returning 2 and writing to stderr, so capture stderr rather than expecting
+  // a throw.
+  const dir = workspace(t)
+  const huge = 'a'.repeat(MAX_INPUT_FILE_BYTES + 1)
+  const errors = []
+  const originalError = console.error
+  const originalCwd = process.cwd()
+  console.error = (...args) => errors.push(args.join(' '))
+  process.chdir(dir)
+  t.after(() => {
+    console.error = originalError
+    process.chdir(originalCwd)
+  })
+
+  const status = runFeedbackCommand(['create', '--message', huge])
+
+  assert.equal(status, 2)
+  assert.match(errors.join('\n'), /--message is longer than the \d+ byte limit/)
   assert.equal(fs.existsSync(path.join(dir, '.atelier-local')), false)
 })
