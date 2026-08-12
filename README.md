@@ -22,8 +22,9 @@ without it.
 - Runtime: Node.js `>=22.18.0 <23`
 - Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at
   runtime
-- Distribution: private-preview Git tag
-  `git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0`
+- Distribution: `@mnstry/atelier@0.2.0-alpha.0` on npm; the Git tag
+  `git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0` resolves to the
+  same reviewed commit
 - Telemetry: none. Network egress: none.
 
 ## Claims you can check
@@ -66,7 +67,7 @@ receive.
 ## Quickstart
 
 ```bash
-npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.0
 
 atelier init --fixture=sample-workspace --target ./sample
 atelier graph --project ./sample/atelier.project.json

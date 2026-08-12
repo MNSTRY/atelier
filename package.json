@@ -91,7 +91,7 @@
     "!fixtures/projects/source-formats-workspace/content/logo.png"
   ],
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   },
   "overrides": {
     "fast-uri": "3.1.5"

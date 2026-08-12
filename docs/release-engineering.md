@@ -143,7 +143,7 @@ A version bump touches exactly:
 
 - `package.json` (`version`)
 - `CHANGELOG.md` (a `## <version>` heading)
-- the pinned install tags in `README.md`, `docs/private-preview-install.md`,
+- the pinned install tags in `README.md`, `docs/install.md`,
   and `docs/upgrade.md`
 
 The release scripts derive the expected version and tarball name from

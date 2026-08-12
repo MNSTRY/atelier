@@ -5,9 +5,8 @@ the Atelier more useful than any of us could make it alone.
 
 This document is the working agreement for contributions. It is written to be
 read once and relied on: what you keep, what the project keeps, what is
-welcome, and what will be refused. While the repository is in private
-preview, it applies to invited collaborators; when the repository becomes
-public, the same terms apply to everyone.
+welcome, and what will be refused. It applies to everyone equally: there is
+no separate arrangement for invited collaborators, and none for MNSTRY.
 
 ## The license terms: inbound equals outbound
 
@@ -76,8 +75,8 @@ both ways for contributors:
 
 ## What needs a conversation first
 
-Open an issue (or, in private preview, a feedback report) before writing
-code for any of these — they carry obligations a pull request cannot see:
+Open an issue before writing code for any of these — they carry obligations
+a pull request cannot see:
 
 - **Contract changes.** The published contracts are under a stability epoch:
   widening outside `ext` containers is refused by the compatibility gate, and
@@ -123,26 +122,29 @@ Contributing grants no rights to the MNSTRY or MNSTRY Atelier names or marks.
 attribution. You may accurately say you contributed; you may not imply
 affiliation, endorsement, or official standing.
 
-## Private preview confidentiality
+## What the private preview left behind
 
-While the repository is private, its contents, discussions, and unreleased
-plans are shared with you in confidence: do not republish, quote, or
-circulate them outside the collaborator circle without explicit consent.
-This obligation ends for material that MNSTRY itself makes public, and it
-never restricts what was always yours — your own work, made with the
-Atelier, in your own repositories.
+This repository was developed in private preview before it was made public.
+Everything in the repository at the moment it went public is public, and no
+confidentiality obligation attaches to any of it. What survives is narrow and
+specific: material shared with preview collaborators that MNSTRY has *not*
+published — unreleased plans, private correspondence, anything shown in
+confidence outside the repository — stays confidential. That obligation never
+restricted what was always yours: your own work, made with the Atelier, in
+your own repositories.
 
-## If you leave, or are asked to leave
+## If your commit access ends
 
-Access to the private repository is invitation-based and can end — by your
-choice or MNSTRY's. What that does and does not change:
+Commit access can end — by your choice or MNSTRY's. What that does and does
+not change:
 
 - Everything you lawfully received stays yours under Apache-2.0, per
   `docs/continuity.md`. Nothing is clawed back.
 - Your merged contributions remain in the project under Apache-2.0, with
   your authorship intact. They are not removed, and cannot be, retroactively.
-- The private-preview confidentiality obligation survives for material that
-  was never made public.
+- You keep every right any other member of the public has, which — this
+  repository being public and Apache-2.0 — is every right that matters:
+  read it, fork it, build on it, ship it.
 
 ## Disagreements and boundary violations
 

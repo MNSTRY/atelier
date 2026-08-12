@@ -45,11 +45,18 @@ atelier lock write --project ./atelier.project.json
 atelier lock check --project ./atelier.project.json
 ```
 
-For private-preview installs, pin the install command to the release tag and
-record the resolved Git SHA in the lockfile:
+For Git tag installs, pin the install command to the release tag and record
+the resolved Git SHA in the lockfile:
 
 ```bash
 npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
+atelier lock write --project ./atelier.project.json
+```
+
+For registry installs, pin the exact version:
+
+```bash
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.0
 atelier lock write --project ./atelier.project.json
 ```
 

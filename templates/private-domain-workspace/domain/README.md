@@ -3,7 +3,7 @@ title: "Private Domain Seed"
 kg:
   id: "tenant-private-domain:seed"
   type: "domain-note"
-  domain: "private-preview"
+  domain: "example-domain"
   lifecycle: "draft"
   status: "seed"
   audience: "private"

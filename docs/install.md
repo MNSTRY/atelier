@@ -1,10 +1,10 @@
-# Private Preview Install
+# Install
 
-Repo Boundary Guard V1 is a local-first preview pattern for Atelier workspaces.
-It keeps private domain source in user-owned Git repositories and keeps shared
+Repo Boundary Guard V1 is a local-first pattern for Atelier workspaces. It
+keeps private domain source in user-owned Git repositories and keeps shared
 project work in shared project repositories.
 
-## Preview Posture
+## Posture
 
 - No telemetry.
 - No cloud service is required by Atelier.
@@ -21,22 +21,28 @@ Use `atelier` as the primary CLI command in copied workspaces. The older
 
 ## Install Shape
 
-Install the private preview from the accepted Git tag. Public npm publishing is
-deferred until the public package path is ready:
+The registry is the distribution channel of record (`docs/continuity.md`):
+
+```bash
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.0
+```
+
+Installing from the Git tag remains supported and resolves to the same
+reviewed commit:
 
 ```bash
 npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
 ```
 
-Invited users who prefer SSH may use:
+Or over SSH:
 
 ```bash
 npm install --save-dev git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
 ```
 
-The workspace `atelier.lock.json` should record the resolved Git SHA from this
-tag install. Treat the tag as the collaborator-friendly handle and the SHA as
-the review authority.
+The workspace `atelier.lock.json` should record the resolved version or Git
+SHA from the install. Treat the tag or version as the friendly handle and the
+SHA as the review authority.
 
 Use one private domain repository per user:
 
@@ -119,8 +125,8 @@ These commands read local files and write generated local outputs only.
 The starter commands create `atelier.lock.json` inside the copied workspace so
 the installed Atelier package source, version, contracts, and migration state
 are reviewable. Refresh it from inside the copied workspace after choosing a
-private GitHub tag install. Local tarballs remain release-audit and smoke-test
-tools; they are not the default collaborator install path.
+registry or Git tag install. Local tarballs remain release-audit and
+smoke-test tools; they are not the default install path.
 
 See `docs/tenant-readiness.md` for the readiness review format and
 `docs/upgrade.md` for the full upgrade flow and boundary review checklist.

@@ -5,6 +5,18 @@ of MNSTRY. The Apache-2.0 license for this package (see LICENSE section 6, "Trad
 grants no trademark rights: you may use, modify, and redistribute the code
 without any right to use these marks except as described in this document.
 
+## What this document binds
+
+These terms are conditions on using the MNSTRY marks and on claiming
+Distribution status. They are not conditions on the code. Apache-2.0 governs
+copying, modification, and redistribution, section 4 states those conditions
+in full, and this document adds none: you may redistribute this package,
+modified or not, without displaying the attribution string, so long as you
+make no use of the MNSTRY marks and claim no Distribution status. Everything
+below is the price of carrying the marks, not the price of using the
+software — including the attribution that `atelier distribution check`
+verifies, which checks distributions that have chosen to carry the marks.
+
 ## Required attribution
 
 Distributions built on this package must display the exact attribution string
