@@ -17,7 +17,13 @@ jobs:
       # a structural-only run explicitly. Never add this to secret-sweep.
       ATELIER_ALLOW_MISSING_DENYLIST: '1'
     steps:
+      # fetch-depth: 0 because contract:compat resolves the baseline by TAG and
+      # a depth-1 checkout fetches no tags. The gate fails closed on an
+      # unresolvable ref, so a shallow checkout turns it red rather than
+      # silently vacuous — but red for a reason unrelated to compatibility.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
