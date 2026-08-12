@@ -31,11 +31,11 @@ jobs:
             exit 1
           fi
       # Trusted tools from main
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: trusted
       # Untrusted content, DATA ONLY — never install or execute anything in target/
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           path: target
