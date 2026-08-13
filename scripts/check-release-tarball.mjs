@@ -76,7 +76,7 @@ if (packageJson.private !== false) fail('package.json must set private false bef
 if (packageJson.license !== 'Apache-2.0') fail('package license must be Apache-2.0')
 if (packageJson.name !== expectedPackageName) fail(`package name must be ${expectedPackageName}`)
 if (!packageJson.bin?.atelier) fail('package must expose the atelier CLI')
-if (!packageJson.bin?.mnstry) fail('package must expose the mnstry CLI')
+if (packageJson.bin?.mnstry) fail('package must not claim the bare mnstry command name')
 if (!packageJson.bin?.['mnstry-atelier']) fail('package must expose the mnstry-atelier legacy CLI')
 if (!Array.isArray(packageJson.files) || packageJson.files.length === 0) fail('package must use a files allowlist')
 
