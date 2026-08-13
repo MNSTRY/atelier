@@ -9,15 +9,19 @@ welcome, and what will be refused. Its license terms apply to everyone
 equally: there is no separate arrangement for invited collaborators, and none
 for MNSTRY.
 
-> **Not yet accepting outside pull requests.** The repository is public so the
-> work can be read, installed, and referenced — not because there is capacity
-> to steward contributions. A required CI check currently asserts maintainer
-> commit identity, so a pull request from outside will fail it with no action
-> you can take. That is a deliberate posture, not a bug you have hit.
+> **Outside pull requests are not open yet — the intent is that they will be.**
+> We want outside contributors. What we do not yet have is a worked-out way to
+> steward them well, and opening the door before that is settled would waste
+> your time more than ours.
 >
-> Issues and questions are welcome now. If you want to contribute code, please
-> open an issue first and say so — that is the signal that will move this. The
-> agreement below is what will govern contributions when they open.
+> Concretely, today: a required CI check asserts maintainer commit identity, so
+> a pull request from outside fails it with nothing you can do about it. That
+> is the current state, not a judgment about your patch.
+>
+> Issues and questions are welcome now, and they are the most useful thing you
+> can send. If you want to contribute code, open an issue saying so — that is
+> the signal that moves this forward. The agreement below is what will govern
+> contributions once they open, and it is written to be ready when they do.
 
 ## The license terms: inbound equals outbound
 

@@ -21,30 +21,32 @@ Use `atelier` as the primary CLI command in copied workspaces. The older
 
 ## Install Shape
 
-**This package is not yet published to npm.** `docs/continuity.md` records a
-commitment to publish tagged releases to the registry under `@mnstry/atelier`;
-that commitment is outstanding, and until it is met the repository is the
-distribution channel. Install from a pinned commit:
+The registry is the distribution channel of record, as `docs/continuity.md`
+commits:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
+```
+
+Installing from the matching Git tag resolves to the same reviewed commit:
+
+```bash
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.1"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.1"
 ```
 
-Do not install from the `v0.2.0-alpha.0` tag. It predates the current tree by
-several commits, carries `publishConfig.access: "restricted"`, and does not
-contain `SECURITY.md` or `CODE_OF_CONDUCT.md`. It will be superseded by a
-re-cut annotated tag.
+Keep the `@mnstry/` scope. The unscoped name `atelier` on npm belongs to an
+unrelated third-party package, so a bare `npx atelier` runs someone else's code.
 
-A pinned SHA in a document can only ever name a commit that already exists, so
-the pin above trails `main` by the commit that updated it. That trailing commit
-changes these instructions and nothing else — the installed code is the same.
-When a release tag is re-cut, it replaces this pin and the problem goes away.
+Do not install from `v0.2.0-alpha.0`. That tag is the **contract epoch
+marker** — `contracts/compat-baseline.json` pins the compatibility gate to it,
+so it stays where it is permanently. It predates the current tree and carries
+`publishConfig.access: "restricted"`.
 
 The workspace `atelier.lock.json` should record the resolved version or Git
 SHA from the install. Treat the tag or version as the friendly handle and the

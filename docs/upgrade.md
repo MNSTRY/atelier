@@ -5,6 +5,19 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.1
+
+No contract changes and no authored-content changes: documents valid against
+`0.2.0-alpha.0` remain valid, and `npm run contract:compat` is clean against
+the same epoch baseline. Upgrading is a dependency bump.
+
+Two things worth knowing. The package is now on the npm registry, so the
+install command changes from a Git reference to `@mnstry/atelier@0.2.0-alpha.1`
+— keep the `@mnstry/` scope, since the unscoped name belongs to an unrelated
+package. And a local sidecar that previously exited on a malformed request now
+answers it, so anything that supervised `atelier dev` through restarts can stop
+compensating for that.
+
 ## Upgrading to 0.2.0-alpha.0
 
 This release breaks the export vocabulary. The runtime owner names are now
@@ -45,17 +58,21 @@ atelier lock write --project ./atelier.project.json
 atelier lock check --project ./atelier.project.json
 ```
 
-For Git tag installs, pin the install command to the release tag and record
-the resolved Git SHA in the lockfile:
+For registry installs, pin the exact version and record the resolved version
+in the lockfile:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
 npx atelier lock write --project ./atelier.project.json
 ```
 
-Pin the full commit SHA rather than a tag or branch, so the lock file records
-exactly what was reviewed. The package is not yet on npm; when it is published,
-pin the exact version instead.
+For Git installs, pin the release tag rather than a branch, so the lock file
+records exactly what was reviewed:
+
+```bash
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.1"
+npx atelier lock write --project ./atelier.project.json
+```
 
 Before accepting upstream changes, run the non-mutating upgrade planner:
 
