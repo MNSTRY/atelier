@@ -6,7 +6,6 @@
   "type": "module",
   "bin": {
     "atelier": "bin/atelier.mjs",
-    "mnstry": "bin/mnstry-atelier.mjs",
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
   "exports": {

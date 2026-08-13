@@ -24,10 +24,16 @@ public access. Prior versions were installable only from the repository.
   `contracts/compat-baseline.json` pins to, and is not an install target.
 - **Agent skills no longer suggest `npx atelier`**, which resolves to an
   unrelated third-party package on npm.
+- **Removed the undocumented bare `mnstry` bin alias.** The package installs
+  `atelier` (primary) and `mnstry-atelier` (legacy alias). It no longer claims
+  the bare `mnstry` command name, which no documentation mentioned and nothing
+  used, and which belongs to whatever MNSTRY ships under that name in the
+  future rather than to this authoring kit.
 
-## Unreleased
+This release also carries the open-source readiness work that landed between
+the epoch tag and the public flip, previously listed as unreleased:
 
-- Open-source readiness: `SECURITY.md` states the vulnerability reporting
+- `SECURITY.md` states the vulnerability reporting
   channel, what counts as a vulnerability against this package's claims
   (egress, boundary guard, disclosure scanners, audience/visibility,
   attestation, upgrade, contract compatibility), and what is deliberately out

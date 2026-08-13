@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -79,13 +79,16 @@ assert.equal(bundledReadinessProtocols[0].safety.runtimeMutation, false)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
   const cliOutput = run(process.execPath, [
-    'node_modules/.bin/mnstry',
-    'atelier',
+    'node_modules/.bin/atelier',
     'dry-run',
     'node_modules/@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json',
   ], { cwd: tempRoot })
   const cliReport = JSON.parse(cliOutput)
   if (cliReport.accepted !== true) throw new Error('atelier dry-run did not accept the sample fixture')
+
+  if (existsSync(join(tempRoot, 'node_modules', '.bin', 'mnstry'))) {
+    throw new Error('install must not create a bare mnstry command')
+  }
 
   const directCliOutput = run(process.execPath, ['node_modules/.bin/atelier', '--version'], { cwd: tempRoot })
   if (directCliOutput.trim() !== expectedVersion) {
