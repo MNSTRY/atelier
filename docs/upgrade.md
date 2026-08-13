@@ -49,7 +49,7 @@ For Git tag installs, pin the install command to the release tag and record
 the resolved Git SHA in the lockfile:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
 npx atelier lock write --project ./atelier.project.json
 ```
 
