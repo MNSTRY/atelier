@@ -126,3 +126,79 @@ test('local sidecar refuses untrusted reads, state files, symlink escapes, and a
   const prototype = await fetch(`${base}/api/__proto__`, { method: 'POST', body: '{}' })
   assert.equal(prototype.status, 403)
 })
+
+// Regression: a request must never be able to end the process. Before the
+// handler gained a catch, `GET /proposals/_` threw out of readProposal (the id
+// cleans to empty) and killed the sidecar — reachable from any page the user
+// visited, and self-inflicted by any half-written file in .atelier-proposals.
+test('local sidecar survives unusable proposal ids and unreadable proposal files', async (t) => {
+  const workspaceRoot = makeWorkspace()
+  const proposalsDir = path.join(workspaceRoot, '.atelier-proposals')
+  fs.mkdirSync(proposalsDir, { recursive: true })
+  fs.writeFileSync(path.join(proposalsDir, 'proposal-truncated.json'), '{ not json')
+
+  const sidecar = createAtelierSidecarServer({ workspaceRoot })
+  t.after(async () => {
+    await sidecar.close()
+    fs.rmSync(workspaceRoot, { recursive: true, force: true })
+  })
+  const address = await sidecar.listen()
+  const base = `http://127.0.0.1:${address.port}`
+
+  // Ids that clean to nothing, and ids that name a file we cannot parse.
+  const survivable = [
+    '/proposals/_',
+    '/proposals/%20',
+    '/api/proposals/@@@',
+    '/api/proposals/_',
+    '/proposals/proposal-truncated',
+    '/api/proposals/proposal-truncated',
+  ]
+  for (const route of survivable) {
+    const res = await rawGet(`${base}${route}`)
+    assert.ok(
+      res.status === 200 || res.status === 404,
+      `${route} answered ${res.status}; expected a response, not a dead socket`
+    )
+    const alive = await rawGet(`${base}/api/health`)
+    assert.equal(alive.status, 200, `sidecar died after ${route}`)
+  }
+
+  // The drive-by shape: a cross-origin image request from an attacker page.
+  const driveBy = await rawGet(`${base}/proposals/_`, {
+    Origin: 'https://attacker.invalid',
+    'Sec-Fetch-Site': 'cross-site',
+    'Sec-Fetch-Dest': 'image',
+    'Sec-Fetch-Mode': 'no-cors',
+  })
+  assert.ok(driveBy.status === 200 || driveBy.status === 404)
+  const stillServing = await rawGet(`${base}/index.html`)
+  assert.equal(stillServing.status, 200, 'sidecar died on a cross-origin proposal request')
+
+  // The list route has always guarded its parse; the read route now matches it.
+  const list = await rawGet(`${base}/api/proposals`)
+  assert.equal(list.status, 200)
+  assert.deepEqual(list.json().proposals, [])
+})
+
+// Regression: a busy port is an ordinary condition. It used to surface as an
+// unhandled 'error' event that killed the process with a raw stack trace.
+test('local sidecar reports a busy port as a rejection, not a crash', async (t) => {
+  const workspaceRoot = makeWorkspace()
+  const first = createAtelierSidecarServer({ workspaceRoot })
+  const second = createAtelierSidecarServer({ workspaceRoot })
+  t.after(async () => {
+    await first.close()
+    fs.rmSync(workspaceRoot, { recursive: true, force: true })
+  })
+  const address = await first.listen()
+
+  await assert.rejects(
+    () => second.listen(address.port),
+    (error) => {
+      assert.match(error.message, /already in use/)
+      assert.match(error.message, /--port=/)
+      return true
+    }
+  )
+})

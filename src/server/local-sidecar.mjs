@@ -454,7 +454,7 @@ export function createAtelierSidecarServer({
     fs.createReadStream(resolved.real).pipe(res)
   }
 
-  const server = http.createServer(async (req, res) => {
+  async function handleRequest(req, res) {
     const expectedOrigin = expectedOriginForRequest(req.headers, port)
     const url = new URL(req.url || '/', expectedOrigin || 'http://127.0.0.1')
 
@@ -573,6 +573,20 @@ export function createAtelierSidecarServer({
       return
     }
     serveStatic(req, res, url)
+  }
+
+  // A request must never be able to end the process. Any unhandled throw in a
+  // route becomes a 500 for that request; the sidecar keeps serving. Without
+  // this, a single malformed path terminated the whole review surface.
+  const server = http.createServer((req, res) => {
+    handleRequest(req, res).catch((error) => {
+      console.error(`[atelier] request failed: ${req.method} ${req.url}`, error)
+      if (res.headersSent) {
+        res.destroy()
+        return
+      }
+      json(res, 500, { ok: false, error: 'internal error' })
+    })
   })
 
   return {
@@ -583,8 +597,21 @@ export function createAtelierSidecarServer({
     mutationNonce,
     proposals,
     listen(listenPort = port, host = '127.0.0.1') {
-      return new Promise((resolve) => {
-        server.listen(listenPort, host, () => resolve(server.address()))
+      // A busy port is an ordinary condition, not a crash: surface it as a
+      // rejection the CLI can print, instead of an unhandled 'error' event.
+      return new Promise((resolve, reject) => {
+        const onError = (error) => {
+          server.removeListener('listening', onListening)
+          reject(error.code === 'EADDRINUSE'
+            ? new Error(`port ${listenPort} is already in use — pass --port=<free port> to choose another`)
+            : error)
+        }
+        const onListening = () => {
+          server.removeListener('error', onError)
+          resolve(server.address())
+        }
+        server.once('error', onError)
+        server.listen(listenPort, host, onListening)
       })
     },
     close() {
