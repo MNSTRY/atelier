@@ -79,7 +79,7 @@ receive.
 ## Quickstart
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
 
 npx atelier init --fixture=sample-workspace --target ./sample
 npx atelier graph --project ./sample/atelier.project.json

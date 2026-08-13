@@ -27,19 +27,24 @@ that commitment is outstanding, and until it is met the repository is the
 distribution channel. Install from a pinned commit:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
 ```
 
 Do not install from the `v0.2.0-alpha.0` tag. It predates the current tree by
 several commits, carries `publishConfig.access: "restricted"`, and does not
 contain `SECURITY.md` or `CODE_OF_CONDUCT.md`. It will be superseded by a
 re-cut annotated tag.
+
+A pinned SHA in a document can only ever name a commit that already exists, so
+the pin above trails `main` by the commit that updated it. That trailing commit
+changes these instructions and nothing else — the installed code is the same.
+When a release tag is re-cut, it replaces this pin and the problem goes away.
 
 The workspace `atelier.lock.json` should record the resolved version or Git
 SHA from the install. Treat the tag or version as the friendly handle and the
