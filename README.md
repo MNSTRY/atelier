@@ -16,15 +16,15 @@ without it.
 
 ## Status
 
-- Version: `0.2.0-alpha.0`
-- Stability: alpha — contracts are under a compatibility gate from this tag
-  onward; everything else may still move
+- Version: `0.2.0-alpha.1`
+- Stability: alpha — contracts are under a compatibility gate from the
+  `v0.2.0-alpha.0` epoch tag onward; everything else may still move
 - Runtime: Node.js `>=22.18.0 <23`
 - Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at
   runtime
-- Distribution: **not yet published to npm.** Install from this repository,
-  pinned to a commit — see `docs/install.md`. The `v0.2.0-alpha.0` tag
-  predates the current tree and is superseded; do not install from it.
+- Distribution: `@mnstry/atelier@0.2.0-alpha.1` on npm, published from the
+  `v0.2.0-alpha.1` tag. The older `v0.2.0-alpha.0` tag is the contract
+  epoch marker, not an install target — it predates the current tree.
 - Telemetry: none. Network egress: none, with one documented exception —
   see "Nothing leaves your machine" below.
 
@@ -79,7 +79,7 @@ receive.
 ## Quickstart
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#a7a8470f015f7722e8d63996229685f95ca3486f"
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
 
 npx atelier init --fixture=sample-workspace --target ./sample
 npx atelier graph --project ./sample/atelier.project.json
@@ -89,9 +89,9 @@ MNSTRY_ATELIER_ACTOR=owner npx atelier boundary check --project ./sample/atelier
 npx atelier dev --project ./sample/atelier.project.json
 ```
 
-`npx` here runs the binary already installed in `./node_modules/.bin`. Do not
-run `npx atelier` without installing first — the unscoped name belongs to an
-unrelated third-party package.
+`npx` here runs the binary already installed in `./node_modules/.bin`. Always
+install first, and keep the `@mnstry/` scope — the unscoped name `atelier`
+belongs to an unrelated third-party package.
 
 `init` scaffolds a fictional sample workspace, `graph` builds the knowledge
 graph from front matter and sidecars, `project` generates the local review

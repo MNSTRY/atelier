@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0-alpha.1
+
+First release published to the npm registry, under `@mnstry/atelier` with
+public access. Prior versions were installable only from the repository.
+
+- **Removed `docs/format-ontologies.md`.** It documented mnstry.org's
+  editorial composition system rather than the Atelier, and named a private
+  repository, an unpublished package with a version pin, and dated internal
+  review decisions. Nothing referenced it. No private repository content was
+  exposed by it.
+- **A request can no longer end the local sidecar.** An unusable proposal id
+  or an unreadable proposal file used to throw out of the request handler and
+  exit the process; both are now answered with a response, and a busy port is
+  reported instead of crashing. Regression tests cover both shapes.
+- **Claims narrowed to what the gates enforce.** `boundary check` and `doctor`
+  may call the `gh` CLI to resolve a GitHub login when no actor is configured;
+  the egress gate scans `src/`, `bin/`, `scripts/` and `examples/` and does not
+  model `child_process`; the compatibility differ does not resolve `$ref`
+  pointers. All three are stated in the README rather than implied away.
+- **Install path corrected.** The registry is now the channel of record.
+  `v0.2.0-alpha.0` remains the contract epoch marker that
+  `contracts/compat-baseline.json` pins to, and is not an install target.
+- **Agent skills no longer suggest `npx atelier`**, which resolves to an
+  unrelated third-party package on npm.
+
 ## Unreleased
 
 - Open-source readiness: `SECURITY.md` states the vulnerability reporting
