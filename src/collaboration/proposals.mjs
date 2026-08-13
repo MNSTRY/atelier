@@ -124,10 +124,22 @@ export function createProposalStore({
     return file
   }
 
+  // Read is a lookup, not an assertion: an unusable id and an unreadable file
+  // are both "no such proposal", never a throw. Callers render 404 from null.
+  // listProposals() has always guarded its parse; this is the same contract.
   function readProposal(id) {
-    const file = proposalPath(id)
+    let file
+    try {
+      file = proposalPath(id)
+    } catch {
+      return null
+    }
     if (!fs.existsSync(file)) return null
-    return JSON.parse(fs.readFileSync(file, 'utf8'))
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'))
+    } catch {
+      return null
+    }
   }
 
   function listProposals() {
