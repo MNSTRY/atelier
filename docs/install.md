@@ -21,24 +21,25 @@ Use `atelier` as the primary CLI command in copied workspaces. The older
 
 ## Install Shape
 
-The registry is the distribution channel of record (`docs/continuity.md`):
+**This package is not yet published to npm.** `docs/continuity.md` records a
+commitment to publish tagged releases to the registry under `@mnstry/atelier`;
+that commitment is outstanding, and until it is met the repository is the
+distribution channel. Install from a pinned commit:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.0
-```
-
-Installing from the Git tag remains supported and resolves to the same
-reviewed commit:
-
-```bash
-npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
 ```
+
+Do not install from the `v0.2.0-alpha.0` tag. It predates the current tree by
+several commits, carries `publishConfig.access: "restricted"`, and does not
+contain `SECURITY.md` or `CODE_OF_CONDUCT.md`. It will be superseded by a
+re-cut annotated tag.
 
 The workspace `atelier.lock.json` should record the resolved version or Git
 SHA from the install. Treat the tag or version as the friendly handle and the

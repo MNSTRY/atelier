@@ -5,8 +5,19 @@ the Atelier more useful than any of us could make it alone.
 
 This document is the working agreement for contributions. It is written to be
 read once and relied on: what you keep, what the project keeps, what is
-welcome, and what will be refused. It applies to everyone equally: there is
-no separate arrangement for invited collaborators, and none for MNSTRY.
+welcome, and what will be refused. Its license terms apply to everyone
+equally: there is no separate arrangement for invited collaborators, and none
+for MNSTRY.
+
+> **Not yet accepting outside pull requests.** The repository is public so the
+> work can be read, installed, and referenced — not because there is capacity
+> to steward contributions. A required CI check currently asserts maintainer
+> commit identity, so a pull request from outside will fail it with no action
+> you can take. That is a deliberate posture, not a bug you have hit.
+>
+> Issues and questions are welcome now. If you want to contribute code, please
+> open an issue first and say so — that is the signal that will move this. The
+> agreement below is what will govern contributions when they open.
 
 ## The license terms: inbound equals outbound
 

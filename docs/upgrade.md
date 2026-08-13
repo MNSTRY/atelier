@@ -49,16 +49,13 @@ For Git tag installs, pin the install command to the release tag and record
 the resolved Git SHA in the lockfile:
 
 ```bash
-npm install --save-dev git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0
-atelier lock write --project ./atelier.project.json
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
+npx atelier lock write --project ./atelier.project.json
 ```
 
-For registry installs, pin the exact version:
-
-```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.0
-atelier lock write --project ./atelier.project.json
-```
+Pin the full commit SHA rather than a tag or branch, so the lock file records
+exactly what was reviewed. The package is not yet on npm; when it is published,
+pin the exact version instead.
 
 Before accepting upstream changes, run the non-mutating upgrade planner:
 

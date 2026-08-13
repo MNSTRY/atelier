@@ -25,8 +25,12 @@ name (`atelier`) and use the port the harness returns. The equivalent manual
 command is:
 
 ```
-npx atelier server
+./node_modules/.bin/atelier server
 ```
+
+Use the local binary path. Do **not** run `npx atelier` — this package is not
+yet published to npm, and the unscoped name `atelier` belongs to an unrelated
+third-party package that `npx` would download and execute.
 
 `atelier server` resolves its port as **argv > `PORT` env > 8137**, so a
 supervisor can hand it a free port without a config edit.

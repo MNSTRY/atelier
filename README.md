@@ -22,31 +22,43 @@ without it.
 - Runtime: Node.js `>=22.18.0 <23`
 - Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at
   runtime
-- Distribution: `@mnstry/atelier@0.2.0-alpha.0` on npm; the Git tag
-  `git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.0` resolves to the
-  same reviewed commit
-- Telemetry: none. Network egress: none.
+- Distribution: **not yet published to npm.** Install from this repository,
+  pinned to a commit — see `docs/install.md`. The `v0.2.0-alpha.0` tag
+  predates the current tree and is superseded; do not install from it.
+- Telemetry: none. Network egress: none, with one documented exception —
+  see "Nothing leaves your machine" below.
 
 ## Claims you can check
 
 This package makes three promises. None of them asks for your trust — each
 one names the command that proves it.
 
-**Nothing leaves your machine.** There is no telemetry, no update check, no
-crash reporting, and no send path anywhere in the package. The only network
-client refuses non-loopback URLs, the served pages carry a policy that
-authorizes no external origin, and a fail-closed gate scans first-party
-source, templates, and examples for egress primitives:
+**Nothing leaves your machine, with one exception you can see.** There is no
+telemetry, no update check, no crash reporting, and no send path anywhere in
+the package. The exception: when no actor is configured, `boundary check` and
+`doctor` fall back to the `gh` CLI to resolve your GitHub login, which is an
+authenticated request to GitHub made with your own credentials. Set
+`MNSTRY_ATELIER_ACTOR` and that path is never taken. The only network client
+refuses non-loopback URLs, the served pages carry a policy that authorizes no
+external origin, and a fail-closed gate scans the executable and markup files
+under `src/`, `bin/`, `scripts/`, and `examples/` for egress primitives. Two
+limits worth stating plainly: the gate does not read the `.json` and `.md`
+files under `templates/` and `skills/`, and it does not model
+`child_process`, which is why the `gh` fallback above does not trip it:
 
 ```bash
 npm run egress:check
 ```
 
-**Compatibility is enforced by machinery, not memory.** Documents valid
+**Compatibility is checked by machinery, not memory.** Documents valid
 against the `v0.2.0-alpha.0` contracts stay valid: every change is checked
 against the baseline tag's validators, and schema widening outside `ext`
 containers is refused by a schema-vs-schema differ. Breaking changes require
-a new contract version and a recorded migration:
+a new contract version and a recorded migration. Known limit: the differ
+compares schemas structurally and does not resolve `$ref` pointers, so a
+`$ref` retargeted at a looser definition is not caught by this gate — the
+fixture tests catch that for contracts with negative fixtures, and closing
+the gap in the differ is tracked work:
 
 ```bash
 npm run contract:compat
@@ -67,15 +79,19 @@ receive.
 ## Quickstart
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.0
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#f15c3f8e2606158df6d37230c5a0cc6cd54d5dc0"
 
-atelier init --fixture=sample-workspace --target ./sample
-atelier graph --project ./sample/atelier.project.json
-atelier project --project ./sample/atelier.project.json
-atelier readiness --project ./sample/atelier.project.json
-MNSTRY_ATELIER_ACTOR=owner atelier boundary check --project ./sample/atelier.project.json
-atelier dev --project ./sample/atelier.project.json
+npx atelier init --fixture=sample-workspace --target ./sample
+npx atelier graph --project ./sample/atelier.project.json
+npx atelier project --project ./sample/atelier.project.json
+npx atelier readiness --project ./sample/atelier.project.json
+MNSTRY_ATELIER_ACTOR=owner npx atelier boundary check --project ./sample/atelier.project.json
+npx atelier dev --project ./sample/atelier.project.json
 ```
+
+`npx` here runs the binary already installed in `./node_modules/.bin`. Do not
+run `npx atelier` without installing first — the unscoped name belongs to an
+unrelated third-party package.
 
 `init` scaffolds a fictional sample workspace, `graph` builds the knowledge
 graph from front matter and sidecars, `project` generates the local review
@@ -179,12 +195,19 @@ nothing phones home to ask.
 
 `npm test` includes one fail-closed check that expects a private denylist
 file (`release-denylist.local.json`, gitignored) used by MNSTRY's release
-lane. On a fresh clone that file is absent, so the check reports a visible
-skip and records a failure by design — it never passes silently on missing
-protection. To run the suite without it:
+lane. On a fresh clone that file is absent, so the check **fails** — it never
+passes silently on missing protection. Expect this, after `npm install`:
 
 ```bash
-ATELIER_ALLOW_MISSING_DENYLIST=1 npm test
+npm install
+npm test     # 507 tests: 506 pass, 1 fail — the denylist check, by design
+```
+
+To acknowledge the missing file and run the rest, which turns that failure
+into a recorded skip:
+
+```bash
+ATELIER_ALLOW_MISSING_DENYLIST=1 npm test     # 506 pass, 0 fail, 1 skipped
 ```
 
 ## Command reference
