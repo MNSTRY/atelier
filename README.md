@@ -1,18 +1,101 @@
 # MNSTRY Atelier
 
-A methodology that creates real transformation cannot scale through static
-content, generic AI, or manual labor. The Atelier is a local-first toolkit for
-authoring that body of work as structured documents machines can validate —
-in plain files, on your machine, under your control.
+**Author your methodology once, in files you own, in a form machines can
+validate and runtimes can honor.**
 
-It is built for methodology holders and the studios that serve them: you
-author primitives, sources, and offers in your own repositories; the Atelier
-builds a knowledge graph over them, projects a local review surface, checks
-readiness against published protocols, and validates exports against public
-contracts. The MNSTRY runtime remains the authority for identity, consent,
-visibility, provisioning, bookings, commerce, sessions, audit, and
-client-grade sharing — using it is optional, and everything here works
-without it.
+A methodology that creates real transformation cannot scale through static
+content, generic AI, or manual labor. Scaling it means giving it a form
+machines can carry — and most tools do that by taking the work into their
+platform, their format, their database, where it stops being fully yours.
+The Atelier answers the same problem the other way around.
+
+The Atelier is a local-first toolkit for authoring a body of work as
+structured documents machines can validate — plain files, in your own Git
+repositories, on your machine, under your control. You author primitives,
+sources, and offers; the Atelier builds a knowledge graph over them,
+projects a local review surface, checks readiness against published
+protocols, and validates exports against public contracts. There is no
+telemetry and no send path, and the commands that prove the package's
+promises are further down this page.
+
+It is built for methodology holders and the studios that serve them. The
+MNSTRY runtime — the governed platform for identity, consent, visibility,
+provisioning, bookings, commerce, sessions, audit, and client-grade
+sharing — is a separate, optional destination. The Atelier is the front
+porch, not the house: everything here works without ever talking to MNSTRY.
+
+## What authoring looks like
+
+A source document is a plain file with a small structured header. This is a
+complete, working example — fictional, like every fixture in this package:
+
+```markdown
+---
+title: "Grounding practice"
+summary: "The opening practice every offer in this catalog builds on."
+kg:
+  id: "my-studio:grounding-practice"
+  type: "document"
+  status: "active"
+  audience: "team"
+  relations:
+    supports: "my-studio:flagship-offer"
+---
+
+# Grounding practice
+
+The practice itself, in your words, in your file, in your repository.
+```
+
+That header is the entire enrollment. The graph builder reads front matter
+like this, and `.kg.json` sidecars for files that are not Markdown — JSON,
+YAML, CSV, media, anything — without ever parsing the foreign format. From
+there the working loop is four commands:
+
+```bash
+atelier graph --project ./atelier.project.json      # build the knowledge graph
+atelier project --project ./atelier.project.json    # generate the local review surface
+atelier readiness --project ./atelier.project.json  # check against published protocols
+atelier dry-run ./atelier-export.json               # validate against the public contracts
+```
+
+Each one reads local files and writes local files. The `audience` field in
+the header is the load-bearing word: it declares who a source is written
+for (`public`, `team`, `operator`, `staff`, `private`, `sensitive`), and
+the machinery downstream refuses to let material travel further than its
+audience allows. A public export that references a non-public source is
+rejected — that check is fixture-pinned and mutation-tested.
+
+## Quickstart
+
+```bash
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
+
+npx atelier init --fixture=sample-workspace --target ./sample
+npx atelier graph --project ./sample/atelier.project.json
+npx atelier project --project ./sample/atelier.project.json
+npx atelier readiness --project ./sample/atelier.project.json
+MNSTRY_ATELIER_ACTOR=owner npx atelier boundary check --project ./sample/atelier.project.json
+npx atelier dev --project ./sample/atelier.project.json
+```
+
+`npx` here runs the binary already installed in `./node_modules/.bin`. Always
+install first, and keep the `@mnstry/` scope — the unscoped name `atelier`
+belongs to an unrelated third-party package.
+
+`init` scaffolds a fictional sample workspace, `graph` builds the knowledge
+graph from front matter and sidecars, `project` generates the local review
+surface, `dev` serves it on loopback only. From there:
+
+```js
+import { validateAtelierExportDryRun } from '@mnstry/atelier'
+
+const report = validateAtelierExportDryRun(exportDocument)
+console.log(report.accepted, report.importable, report.errors)
+```
+
+Real projects start from the `private-domain`, `shared-project`, or
+`distribution` templates instead of the sample fixture.
 
 ## Status
 
@@ -76,37 +159,6 @@ atelier dry-run ./atelier-export.json
 claims, including the perpetual Apache-2.0 grant on every tagged release you
 receive.
 
-## Quickstart
-
-```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
-
-npx atelier init --fixture=sample-workspace --target ./sample
-npx atelier graph --project ./sample/atelier.project.json
-npx atelier project --project ./sample/atelier.project.json
-npx atelier readiness --project ./sample/atelier.project.json
-MNSTRY_ATELIER_ACTOR=owner npx atelier boundary check --project ./sample/atelier.project.json
-npx atelier dev --project ./sample/atelier.project.json
-```
-
-`npx` here runs the binary already installed in `./node_modules/.bin`. Always
-install first, and keep the `@mnstry/` scope — the unscoped name `atelier`
-belongs to an unrelated third-party package.
-
-`init` scaffolds a fictional sample workspace, `graph` builds the knowledge
-graph from front matter and sidecars, `project` generates the local review
-surface, `dev` serves it on loopback only. From there:
-
-```js
-import { validateAtelierExportDryRun } from '@mnstry/atelier'
-
-const report = validateAtelierExportDryRun(exportDocument)
-console.log(report.accepted, report.importable, report.errors)
-```
-
-Real projects start from the `private-domain`, `shared-project`, or
-`distribution` templates instead of the sample fixture.
-
 ## What this package does
 
 - Initializes neutral local Atelier projects.
@@ -136,7 +188,7 @@ Real projects start from the `private-domain`, `shared-project`, or
   non-localhost egress — a fail-closed discipline gate over this repo's own
   code, not a runtime sandbox.
 
-## What this package does not do
+## What this package will not do
 
 - It does not write to a MNSTRY runtime database.
 - It does not import, provision, publish, or send anything.
@@ -166,7 +218,8 @@ contracts, guards, and conformance stay canonical underneath. Start by
 copying the worked example:
 
 - `examples/loomworks-studio` — a complete fictional distribution: branded
-  bin, extension pack, themed workspace template.
+  bin, extension pack, themed workspace template. It lives in this
+  repository and deliberately never ships in the npm tarball.
 - `docs/distributions.md` — the contract a distribution must honor.
 - `TRADEMARKS.md` — naming rules; Apache-2.0 grants code rights, not brand
   rights. Every distribution carries "powered by MNSTRY Atelier" attribution,
@@ -174,14 +227,15 @@ copying the worked example:
 
 ## The MNSTRY relationship
 
-The Atelier is the front porch, not the house. Conformance — is this document
-valid against the published contracts? — is public, offline, and free,
-forever. Admission — will MNSTRY's governed runtime accept it for delivery to
-clients? — is a separate, opt-in step: a signed attestation issued by MNSTRY
-against criteria this package publishes (`docs/attestation.md`). You can
-build on the Atelier without ever talking to MNSTRY. If you want your work to
-run on MNSTRY runtimes, the path is admission, and the rejection message is
-part of the contract.
+The Atelier export format is MNSTRY's format, offered openly. Conformance —
+is this document valid against the published contracts? — is public,
+offline, and free, forever. Admission — will MNSTRY's governed runtime
+accept it for delivery to clients? — is a separate, opt-in step: a signed
+attestation issued by MNSTRY against criteria this package publishes
+(`docs/attestation.md`). The criteria are public; the checker is private;
+the rejection message is part of the contract. You can build on the Atelier
+without ever talking to MNSTRY, and a document MNSTRY declines can still be
+fully conformant.
 
 ## Feedback and announcements
 
