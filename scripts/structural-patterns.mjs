@@ -30,5 +30,18 @@ export const STRUCTURAL_FORBIDDEN_CONTENT = [
   // and that exclusion should never be what keeps the repo clean.
   { pattern: /"d"\s*:\s*"[A-Za-z0-9_-]{20,}"/, label: 'JWK private key material' },
   { pattern: /BEGIN (?:[A-Z0-9]+ ){0,4}PRIVATE KEY(?: BLOCK)?|BEGIN (?:RSA|OPENSSH) KEY/, label: 'private key material' },
-  { pattern: /\b(api[_-]?key|secret|password|token)\b\s*[:=]/i, label: 'secret-like assignment' },
+  // `id-token` is exempt because it is a GitHub Actions *permission key*, not a
+  // credential: `id-token: write` requests an OIDC token be minted at runtime
+  // and carries no secret material. The exemption is deliberately the single
+  // literal `id-` prefix rather than a value allowlist — exempting on the value
+  // (`: write`) would let any `token: write` line through, and every other
+  // compound still matches, including `auth-token:`, `refresh-token:`, and a
+  // bare `token:`. Residual, stated plainly: any `id-token:` line is exempt
+  // whatever its value. That is proportionate — this pattern only ever caught
+  // conventionally-named assignments, and a value hidden under a name nobody
+  // uses for credentials was already invisible to it.
+  {
+    pattern: /\b(api[_-]?key|secret|password|(?<!id-)token)\b\s*[:=]/i,
+    label: 'secret-like assignment',
+  },
 ]

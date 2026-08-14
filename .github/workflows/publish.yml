@@ -1,0 +1,76 @@
+name: publish
+# Publishes to npm when a v* tag is pushed. A tag is the release act; this
+# workflow is only the mechanical part that used to be a local `npm publish`.
+#
+# Auth is npm Trusted Publishing (OIDC): no NPM_TOKEN, no stored credential,
+# no OTP prompt. The trust relationship lives in the package settings on
+# npmjs.com and names THIS filename — renaming this file breaks publishing
+# until the trusted publisher is updated to match.
+#
+# Publishing is effectively irreversible (npm unpublish is restricted to a
+# 72-hour window with no dependents), so every gate runs before the upload:
+# `prepublishOnly` is the full chain (release:audit, repo:check,
+# migrations:check, contract:compat, syntax:check, 509 tests, consumer:smoke,
+# distribution:smoke) and npm aborts the publish if any step fails.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # A GitHub Environment can require a human approval before this job runs.
+    # Uncomment after creating the environment, to make the publish one click
+    # rather than fully automatic.
+    # environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write # OIDC token for trusted publishing; without it npm falls back to token auth and fails
+    steps:
+      # fetch-depth: 0 because contract:compat resolves the compatibility
+      # baseline by TAG, and a shallow checkout fetches none. The gate fails
+      # closed on an unresolvable ref, so a shallow checkout turns the publish
+      # red for the wrong reason.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      # Node 22 bundles npm 10, which has no OIDC support. Trusted publishing
+      # needs 11.5.1+; pinned exactly, in the same spirit as the SHA-pinned
+      # actions above.
+      - run: npm install -g npm@11.19.0
+      - name: refuse a tag that disagrees with package.json
+        # Without this, pushing v0.3.0 against a tree still saying 0.2.0 would
+        # publish 0.2.0 under a tag that claims otherwise — permanently, and
+        # silently. Repo values reach the shell only through env vars, never
+        # ${{ }} interpolation inside run: (expression injection).
+        env:
+          TAG_REF: ${{ github.ref_name }}
+        run: |
+          PKG_VERSION="$(node -p 'require("./package.json").version')"
+          if [ "$TAG_REF" != "v$PKG_VERSION" ]; then
+            echo "tag $TAG_REF does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+          echo "tag $TAG_REF matches package.json version $PKG_VERSION"
+      # --ignore-scripts so no dependency lifecycle script runs in a job that
+      # holds the denylist secret, matching the secret-sweep lane's discipline.
+      - run: npm ci --ignore-scripts
+      - name: publish
+        # The denylist is scoped to this step alone. prepublishOnly's
+        # release:audit and repo:check need it; nothing else in this job does.
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+        run: |
+          if [ -z "$ATELIER_DENYLIST_JSON" ]; then
+            echo "denylist secret unavailable — refusing to publish unscanned"
+            exit 1
+          fi
+          npm publish
