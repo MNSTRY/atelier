@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.2",
+  "version": "0.2.0-alpha.3",
   "private": false,
   "description": "Local CLI that compiles a Git repository into a validated knowledge graph — front-matter ontology, fail-closed audience boundaries, offline contract conformance. No telemetry, no service, no account.",
   "keywords": [

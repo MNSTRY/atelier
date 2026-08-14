@@ -30,19 +30,19 @@ The registry is the distribution channel of record, as `docs/continuity.md`
 commits:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.2
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.3
 ```
 
 Installing from the matching Git tag resolves to the same reviewed commit:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.3"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.3"
 ```
 
 Keep the `@mnstry/` scope — see the command-form note above for why the

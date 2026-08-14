@@ -19,7 +19,7 @@ body of work that must outlive the tools that touch it. Every promise on
 this page ends in a command you can run.
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.2
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.3
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 ```
@@ -272,14 +272,14 @@ code yours. Start by copying the worked example:
 
 ## Status
 
-- Version: `0.2.0-alpha.2`
+- Version: `0.2.0-alpha.3`
 - Stability: alpha — contracts are under a compatibility gate from the
   `v0.2.0-alpha.0` epoch tag onward; everything else may still move
 - Runtime: Node.js `>=22.18.0 <23`
 - Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at
   runtime
-- Distribution: `@mnstry/atelier@0.2.0-alpha.2` on npm, published from the
-  `v0.2.0-alpha.2` tag. The `v0.2.0-alpha.0` tag is the contract epoch
+- Distribution: `@mnstry/atelier@0.2.0-alpha.3` on npm, published from the
+  `v0.2.0-alpha.3` tag. The `v0.2.0-alpha.0` tag is the contract epoch
   marker, not an install target — it predates the current tree. The version
   `0.2.0` was published in error and unpublished the same day; that number
   is permanently retired on npm and will never be reused.

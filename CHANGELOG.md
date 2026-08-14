@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.3
 
 Documentation and metadata release. No contract changes and no runtime
 behaviour changes: documents valid against `0.2.0-alpha.0` remain valid.
