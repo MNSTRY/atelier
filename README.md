@@ -1,28 +1,25 @@
 # MNSTRY Atelier
 
-**Author your methodology once, in files you own, in a form machines can
-validate and runtimes can honor.**
+**The Atelier makes a repository mean something.** Files declare what they
+are, who they are for, and how they relate, and machinery enforces it.
 
-A methodology that creates real transformation cannot scale through static
-content, generic AI, or manual labor. Scaling it means giving it a form
-machines can carry — and most tools do that by taking the work into their
-platform, their format, their database, where it stops being fully yours.
-The Atelier answers the same problem the other way around.
+Git is the database. The ontology is the schema. The validators are the
+constraints. The runtime is local.
 
-The Atelier is a local-first toolkit for authoring a body of work as
-structured documents machines can validate — plain files, in your own Git
+It is a local-first authoring system: plain files, in your own Git
 repositories, on your machine, under your control. You author primitives,
 sources, and offers; the Atelier builds a knowledge graph over them,
 projects a local review surface, checks readiness against published
 protocols, and validates exports against public contracts. There is no
-telemetry and no send path, and the commands that prove the package's
-promises are further down this page.
+telemetry and no send path, and every promise below names the command that
+proves it.
 
-It is built for methodology holders and the studios that serve them. The
-MNSTRY runtime — the governed platform for identity, consent, visibility,
-provisioning, bookings, commerce, sessions, audit, and client-grade
-sharing — is a separate, optional destination. The Atelier is the front
-porch, not the house: everything here works without ever talking to MNSTRY.
+MNSTRY runs its own authoring workspaces on it, and publishes it for anyone
+to use, with or without a MNSTRY runtime. It is built first for methodology
+holders and the studios that serve them — the MNSTRY runtime, the governed
+platform for identity, consent, visibility, provisioning, bookings,
+commerce, sessions, audit, and client-grade sharing, is a separate and
+optional destination. The Atelier is the front porch, not the house.
 
 ## What authoring looks like
 
@@ -68,10 +65,9 @@ rejected — that check is fixture-pinned and mutation-tested.
 
 ## The system
 
-Git is the database. The ontology is the schema. The validators are the
-constraints. The runtime is local. The design is five movements, each
-grounded in shipped machinery — [docs/design.md](docs/design.md) states
-them in full, ending each one with the command that proves it:
+The design is five movements, each grounded in shipped machinery.
+[`docs/design.md`](docs/design.md) states them in full, ending each one
+with the command that proves it.
 
 **A repository with an ontology.** Front matter — or a `.kg.json` sidecar
 beside any format the kit never parses — declares a file's identity, type,
@@ -80,35 +76,39 @@ deterministic knowledge graph. No import step, no database: the repository
 is the store, and Git is the history, the review process, and the read
 boundary.
 
-**Rules that refuse.** Eighteen contracts under a compatibility epoch
-define the vocabulary; fail-closed validators enforce it. A public export
-that references a non-public source is rejected — fixture-pinned and
-mutation-tested — and dry-run reports are deterministic: `accepted`,
-`importable`, `worstOperationStatus`. Twelve bundled claim-first readiness
-protocols check the work against published criteria and produce proposed
-claims, never runtime mutations.
+**Rules that refuse.** Eighteen JSON Schema contracts under a compatibility
+epoch define the vocabulary; fail-closed validators enforce it. The
+load-bearing separation is local `audience` versus runtime `visibility`: a
+public export that references a non-public source is rejected, and that
+check is pinned by fixtures and mutation tests. Dry-run reports are
+deterministic — `accepted`, `importable`, `worstOperationStatus` — and
+twelve claim-first readiness protocols check a workspace against published
+criteria to produce proposed claims, never runtime mutations.
 
-**Collaboration as governed disclosure.** Private-domain and shared-project
-repos have enforced roles: the boundary guard fails closed when private or
-sensitive material lands in shared space, when protected local files are
-staged, or when private-domain material appears in shared work without a
-recorded `git.promote` disclosure event. Disclosure is a commit, not an
-accident. Change to the machinery itself is governed the same way — the
-lockfile records exactly what a workspace runs, and upgrades are
-branch-based, review-first, and refuse dirty repos.
+**Collaboration as governed disclosure.** Repositories have enforced roles:
+private-domain repos hold one person's source material, shared-project
+repos hold what a team may read, and the boundary guard fails closed when
+private or sensitive material lands in shared space, when protected local
+files are staged, or when private-domain material appears in shared work
+without a record. Crossing the boundary requires a recorded `git.promote`
+disclosure event. Disclosure is a commit, not an accident. Change to the
+machinery itself is governed the same way: the lockfile records exactly
+what a workspace runs, and upgrades are branch-based, review-first, and
+refuse dirty repositories.
 
-**A local runtime for humans and for agents.** The workspace projects two
-ways: a generated review surface over a loopback-only sidecar for humans,
-and session-bound context and capability envelopes for agent harnesses — a
-governed view with proposals recorded as metadata and no apply endpoints.
-Context without authority. Neutral Claude and Codex skill wrappers ship in
-the package.
+**A local runtime for humans and for agents.** The same workspace projects
+a generated review surface over a loopback-only sidecar for humans, and
+session-bound context and capability envelopes for agent harnesses. Agents
+get a governed view and a place to record proposals; there are no apply
+endpoints and no write authority to grant. Context without authority.
+Neutral Claude and Codex skill wrappers ship in the package.
 
-**A platform for your own tool.** A distribution wraps the CLI under your
+**A platform for your own tool.** A distribution wraps the CLI under its
 own name, contributes a validated extension pack, and themes the
 projection, while the root contracts, guards, and conformance stay
-canonical underneath — commercially if you want. See "Build your own tool
-on it" below.
+canonical underneath. Commercial use is an Apache-2.0 right, not a favor;
+the trademark policy governs the name, and attribution is checked by a
+command.
 
 Methodology authoring is the first application, not the ceiling. MNSTRY
 built the Atelier to carry its own most demanding case — private
@@ -211,7 +211,7 @@ atelier dry-run ./atelier-export.json
 claims, including the perpetual Apache-2.0 grant on every tagged release you
 receive.
 
-## What this package will not do
+## What it will not do
 
 - It does not write to a MNSTRY runtime database.
 - It does not import, provision, publish, or send anything.
@@ -227,10 +227,26 @@ trust by what it refuses to be able to do.
 What you author is yours. Documents live in your repositories, in formats you
 chose, readable without this tool. The one vocabulary the contracts enforce:
 `audience` describes local source readership (`public`, `team`, `operator`,
-`staff`, `private`, `sensitive`); runtime/export `visibility` describes
+`staff`, `private`, `sensitive`); runtime and export `visibility` describes
 runtime exposure and accepts only `private`, `shared`, `platform`, or
 `public`. A public export referencing a source whose audience is not public
 is refused — that check is fixture-pinned and mutation-tested.
+
+## Conformance is public, admission is separate
+
+The Atelier export format is MNSTRY's format, offered openly.
+
+**Anyone can check a document against the published contracts, forever,
+offline.** The contracts, fixtures, and dry-run validator all ship in the
+package, so conformance needs no account, no network, and no MNSTRY
+involvement.
+
+Admission is a narrower, opt-in decision: whether a MNSTRY governed runtime
+accepts a document for delivery to clients. Admission is a signed MNSTRY
+attestation against criteria this package publishes (`docs/attestation.md`).
+The criteria are public, the checker is private, and the rejection message
+is part of the contract. You can build on the Atelier without ever talking
+to MNSTRY, and a document MNSTRY declines can still be fully conformant.
 
 ## Build your own tool on it
 
@@ -249,18 +265,6 @@ code yours. Start by copying the worked example:
 - `TRADEMARKS.md` — naming rules; Apache-2.0 grants code rights, not brand
   rights. Every distribution carries "powered by MNSTRY Atelier" attribution,
   checked by `atelier distribution check`.
-
-## The MNSTRY relationship
-
-The Atelier export format is MNSTRY's format, offered openly. Conformance —
-is this document valid against the published contracts? — is public,
-offline, and free, forever. Admission — will MNSTRY's governed runtime
-accept it for delivery to clients? — is a separate, opt-in step: a signed
-attestation issued by MNSTRY against criteria this package publishes
-(`docs/attestation.md`). The criteria are public; the checker is private;
-the rejection message is part of the contract. You can build on the Atelier
-without ever talking to MNSTRY, and a document MNSTRY declines can still be
-fully conformant.
 
 ## Feedback and announcements
 
@@ -322,8 +326,8 @@ atelier dev --project ./atelier.project.json
 authored repos, preserves unrelated user hooks through composed hook files,
 runs only registered migrations, refreshes generated projections, and leaves
 a Git commit for review. It will not weaken boundary policy, introduce
-telemetry, enable non-localhost egress, run model-assisted analysis, or write/import/apply
-runtime state.
+telemetry, enable non-loopback egress, run model-assisted analysis, or
+write, import, or apply runtime state.
 
 ## Sample fixtures
 
