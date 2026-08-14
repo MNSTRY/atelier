@@ -5,6 +5,16 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.2
+
+No contract changes and no runtime behaviour changes: documents valid against
+`0.2.0-alpha.0` remain valid, and `npm run contract:compat` is clean against
+the same epoch baseline. Upgrading is a dependency bump.
+
+Note on version numbering: `0.2.0` was published in error and unpublished the
+same day. If a lockfile anywhere pins `0.2.0`, repin it to `0.2.0-alpha.2` —
+that number is permanently retired on npm and will not resolve.
+
 ## Upgrading to 0.2.0-alpha.1
 
 No contract changes and no authored-content changes: documents valid against
@@ -12,7 +22,7 @@ No contract changes and no authored-content changes: documents valid against
 the same epoch baseline. Upgrading is a dependency bump.
 
 Two things worth knowing. The package is now on the npm registry, so the
-install command changes from a Git reference to `@mnstry/atelier@0.2.0-alpha.1`
+install command changes from a Git reference to `@mnstry/atelier@0.2.0-alpha.2`
 — keep the `@mnstry/` scope, since the unscoped name belongs to an unrelated
 package. And a local sidecar that previously exited on a malformed request now
 answers it, so anything that supervised `atelier dev` through restarts can stop
@@ -62,7 +72,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.2
 npx atelier lock write --project ./atelier.project.json
 ```
 
@@ -70,7 +80,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.1"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
 npx atelier lock write --project ./atelier.project.json
 ```
 

@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0-alpha.2",
   "private": false,
   "description": "Local-first MNSTRY Atelier workspace for agentic authoring, graph projection, and dry-run runtime readiness.",
   "type": "module",

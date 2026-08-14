@@ -46,6 +46,21 @@ jobs:
       # needs 11.5.1+; pinned exactly, in the same spirit as the SHA-pinned
       # actions above.
       - run: npm install -g npm@11.19.0
+      - name: refuse a tag whose commit never landed on main
+        # `git push --follow-tags` pushes tags even when the branch update is
+        # rejected, so a version-bump commit refused by branch protection can
+        # still arrive here as a tag and publish code that passed no review.
+        # That is not hypothetical: it is how v0.2.0 was published and had to
+        # be unpublished. Main is the only thing branch protection guards, so
+        # the tagged commit must be an ancestor of it.
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "tagged commit $GITHUB_SHA is not an ancestor of origin/main"
+            echo "land the release commit through a pull request, then tag the merged commit"
+            exit 1
+          fi
+          echo "tagged commit is on main"
       - name: refuse a tag that disagrees with package.json
         # Without this, pushing v0.3.0 against a tree still saying 0.2.0 would
         # publish 0.2.0 under a tag that claims otherwise — permanently, and

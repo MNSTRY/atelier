@@ -25,19 +25,19 @@ The registry is the distribution channel of record, as `docs/continuity.md`
 commits:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.2
 ```
 
 Installing from the matching Git tag resolves to the same reviewed commit:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.1"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.1"
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
 ```
 
 Keep the `@mnstry/` scope. The unscoped name `atelier` on npm belongs to an
