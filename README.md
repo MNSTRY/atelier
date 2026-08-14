@@ -277,14 +277,14 @@ passes silently on missing protection. Expect this, after `npm install`:
 
 ```bash
 npm install
-npm test     # 509 tests: 508 pass, 1 fail — the denylist check, by design
+npm test     # 510 tests: 509 pass, 1 fail — the denylist check, by design
 ```
 
 To acknowledge the missing file and run the rest, which turns that failure
 into a recorded skip:
 
 ```bash
-ATELIER_ALLOW_MISSING_DENYLIST=1 npm test     # 508 pass, 0 fail, 1 skipped
+ATELIER_ALLOW_MISSING_DENYLIST=1 npm test     # 509 pass, 0 fail, 1 skipped
 ```
 
 ## Command reference

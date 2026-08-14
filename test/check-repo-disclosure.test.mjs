@@ -128,6 +128,25 @@ test('structural patterns catch an ssh-keygen private key header', (t) => {
   assert.ok(!output.includes(body), 'log-safety: key material must never be printed')
 })
 
+test('the OIDC permission key is exempt while every real token assignment still fails', (t) => {
+  // `id-token: write` is a GitHub Actions permission requesting that an OIDC
+  // token be minted at runtime; it carries no secret. The publish workflow
+  // cannot omit the line, so before this exemption the release lane could not
+  // adopt trusted publishing without the disclosure gate failing closed on it.
+  const clean = makeRepo(t)
+  writeAndCommit(clean, '.github/workflows/publish.yml', 'permissions:\n  id-token: write\n')
+  assert.equal(runChecker(clean, ['--structural-only']).status, 0, 'id-token permission must scan clean')
+
+  // The exemption is the `id-` prefix alone, so nothing else relaxes.
+  for (const line of ['token: abc123def456', 'auth-token: abc123def456', 'refresh-token: abc123def456']) {
+    const dir = makeRepo(t)
+    writeAndCommit(dir, 'config/app.yml', `${line}\n`)
+    const { status, output } = runChecker(dir, ['--structural-only'])
+    assert.equal(status, 1, `${line} must still fail: ${output}`)
+    assert.match(output, /secret-like assignment/)
+  }
+})
+
 test('the checker sources are structurally self-excluded, denylist patterns are not', (t) => {
   const dir = makeRepo(t)
   writeAndCommit(dir, 'scripts/check-repo-disclosure.mjs', 'const example = /\\/Users\\//\n')
