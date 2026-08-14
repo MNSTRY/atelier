@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0-alpha.2
+
+Documentation and release-lane release. No contract changes and no runtime
+behaviour changes: documents valid against `0.2.0-alpha.0` remain valid.
+
+- **The README is rebuilt around the system rather than its first
+  application.** New `docs/design.md` states the design in five movements —
+  a repository with an ontology, rules that refuse, collaboration as governed
+  disclosure, a local runtime for humans and for agents, and a platform for
+  your own tool — each ending with the command that proves it. Methodology
+  authoring is stated as the first application, not the ceiling.
+- **Publishing is automated on tag push** via npm trusted publishing (OIDC),
+  so releases carry a provenance attestation and no registry token is stored
+  anywhere. Two fail-closed guards: the tagged commit must be an ancestor of
+  `main`, and the tag must equal `package.json`'s version.
+- **The disclosure scanner no longer flags the OIDC permission key.**
+  `id-token` is a GitHub Actions permission, not a credential; the exemption
+  is the literal `id-` prefix only, and every other compound still matches.
+- **`0.2.0` was published in error and unpublished the same day.** A
+  `npm version patch` against an alpha resolves the prerelease to `0.2.0`
+  rather than advancing it, and `git push --follow-tags` delivered the tag
+  even though branch protection rejected the commit, so a release published
+  from a commit that never landed on `main`. That number is permanently
+  retired on npm. The ancestry guard above exists so this cannot recur.
+
 ## 0.2.0-alpha.1
 
 First release published to the npm registry, under `@mnstry/atelier` with

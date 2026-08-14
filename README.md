@@ -119,7 +119,7 @@ govern with it.
 ## Quickstart
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.1
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.2
 
 npx atelier init --fixture=sample-workspace --target ./sample
 npx atelier graph --project ./sample/atelier.project.json
@@ -149,15 +149,17 @@ Real projects start from the `private-domain`, `shared-project`, or
 
 ## Status
 
-- Version: `0.2.0-alpha.1`
+- Version: `0.2.0-alpha.2`
 - Stability: alpha — contracts are under a compatibility gate from the
   `v0.2.0-alpha.0` epoch tag onward; everything else may still move
 - Runtime: Node.js `>=22.18.0 <23`
 - Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at
   runtime
-- Distribution: `@mnstry/atelier@0.2.0-alpha.1` on npm, published from the
-  `v0.2.0-alpha.1` tag. The older `v0.2.0-alpha.0` tag is the contract
-  epoch marker, not an install target — it predates the current tree.
+- Distribution: `@mnstry/atelier@0.2.0-alpha.2` on npm, published from the
+  `v0.2.0-alpha.2` tag. The `v0.2.0-alpha.0` tag is the contract epoch
+  marker, not an install target — it predates the current tree. The version
+  `0.2.0` was published in error and unpublished the same day; that number
+  is permanently retired on npm and will never be reused.
 - Telemetry: none. Network egress: none, with one documented exception —
   see "Nothing leaves your machine" below.
 
