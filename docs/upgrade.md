@@ -5,6 +5,19 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.3
+
+No contract changes and no runtime behaviour changes: documents valid against
+`0.2.0-alpha.0` remain valid, and `npm run contract:compat` is clean against
+the same epoch baseline. Upgrading is a dependency bump.
+
+One thing worth knowing, because it changes what you type. Outside an
+installed workspace, use `npx mnstry-atelier` rather than `npx atelier`: the
+unscoped npm name `atelier` belongs to an unrelated third-party package, so a
+bare `npx atelier` there runs someone else's code. Inside an installed
+workspace both names resolve from `node_modules/.bin`, so npm scripts and
+workspace shells need no change.
+
 ## Upgrading to 0.2.0-alpha.2
 
 No contract changes and no runtime behaviour changes: documents valid against
@@ -72,7 +85,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.2
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.3
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -80,7 +93,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.3"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
