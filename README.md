@@ -159,34 +159,55 @@ atelier dry-run ./atelier-export.json
 claims, including the perpetual Apache-2.0 grant on every tagged release you
 receive.
 
-## What this package does
+## The system
 
-- Initializes neutral local Atelier projects.
-- Builds a front-matter and sidecar-led knowledge graph; a `.kg.json` sidecar
-  enrolls any file — Markdown, JSON, YAML, CSV, media — without the kit ever
-  parsing the foreign format.
-- Generates and serves a local GUI projection over a loopback-only sidecar.
-- Produces agent-harness context and capability envelopes, and ships neutral
-  Codex and Claude skill wrappers for readiness review work.
-- Records proposal metadata without browser apply/write endpoints.
-- Enforces the local source `audience` and runtime `visibility` boundary, and
-  rejects unresolved, disguised, or non-public-projectable source references.
-- Enforces Repo Boundary Guard V1 for private domain and shared project
-  repos: strict policies fail closed when private or sensitive source is
-  placed in a shared repo, when protected local files are staged, or when
-  private-domain material appears in shared work without a `git.promote`
-  disclosure record.
-- Validates `atelier-export@v1` JSON against the published schema and
-  produces deterministic dry-run reports with `accepted`, `importable`, and
-  `worstOperationStatus`.
-- Ships the bundled `mnstry-readiness-pack@v1` with twelve claim-first
-  readiness protocols, extensible through validated extension packs.
-- Writes and checks `atelier.lock.json`, and applies branch-based,
-  review-first upgrades that refuse dirty repos and never silently overwrite
-  authored content.
-- Checks first-party source, templates, and examples for forbidden
-  non-localhost egress — a fail-closed discipline gate over this repo's own
-  code, not a runtime sandbox.
+Git is the database. The ontology is the schema. The validators are the
+constraints. The runtime is local. The design is five movements, each
+grounded in shipped machinery — [docs/design.md](docs/design.md) states
+them in full, ending each one with the command that proves it:
+
+**A repository with an ontology.** Front matter — or a `.kg.json` sidecar
+beside any format the kit never parses — declares a file's identity, type,
+audience, and relations. The graph builder compiles the repository into a
+deterministic knowledge graph. No import step, no database: the repository
+is the store, and Git is the history, the review process, and the read
+boundary.
+
+**Rules that refuse.** Eighteen contracts under a compatibility epoch
+define the vocabulary; fail-closed validators enforce it. A public export
+that references a non-public source is rejected — fixture-pinned and
+mutation-tested — and dry-run reports are deterministic: `accepted`,
+`importable`, `worstOperationStatus`. Twelve bundled claim-first readiness
+protocols check the work against published criteria and produce proposed
+claims, never runtime mutations.
+
+**Collaboration as governed disclosure.** Private-domain and shared-project
+repos have enforced roles: the boundary guard fails closed when private or
+sensitive material lands in shared space, when protected local files are
+staged, or when private-domain material appears in shared work without a
+recorded `git.promote` disclosure event. Disclosure is a commit, not an
+accident. Change to the machinery itself is governed the same way — the
+lockfile records exactly what a workspace runs, and upgrades are
+branch-based, review-first, and refuse dirty repos.
+
+**A local runtime for humans and for agents.** The workspace projects two
+ways: a generated review surface over a loopback-only sidecar for humans,
+and session-bound context and capability envelopes for agent harnesses — a
+governed view with proposals recorded as metadata and no apply endpoints.
+Context without authority. Neutral Claude and Codex skill wrappers ship in
+the package.
+
+**A platform for your own tool.** A distribution wraps the CLI under your
+own name, contributes a validated extension pack, and themes the
+projection, while the root contracts, guards, and conformance stay
+canonical underneath — commercially if you want. See "Build your own tool
+on it" below.
+
+Methodology authoring is the first application, not the ceiling. MNSTRY
+built the Atelier to carry its own most demanding case — private
+transformational work, where a leaked document is a betrayal — and a
+system trustworthy enough for that is trustworthy enough for whatever you
+govern with it.
 
 ## What this package will not do
 
@@ -209,13 +230,15 @@ runtime exposure and accepts only `private`, `shared`, `platform`, or
 `public`. A public export referencing a source whose audience is not public
 is refused — that check is fixture-pinned and mutation-tested.
 
-## Build a branded distribution
+## Build your own tool on it
 
-The Atelier is designed to be white-labeled. A distribution wraps the CLI
-under its own name, contributes a validated extension pack (branded
-protocols, terms, templates), and themes the projection — while the root
-contracts, guards, and conformance stay canonical underneath. Start by
-copying the worked example:
+The Atelier is designed to be built on, under your name — including
+commercially. A distribution wraps the CLI under its own command,
+contributes a validated extension pack (branded protocols, terms,
+templates), and themes the projection, while the root contracts, guards,
+and conformance stay canonical underneath. Apache-2.0 makes commercial use
+a right, not a favor; the trademark policy keeps the name ours and the
+code yours. Start by copying the worked example:
 
 - `examples/loomworks-studio` — a complete fictional distribution: branded
   bin, extension pack, themed workspace template. It lives in this
