@@ -21,10 +21,9 @@ NOTICE attribution obligation and the trademark limits in `TRADEMARKS.md`).
    tag you fetched, with full Apache-2.0 rights over it. MNSTRY will not ask
    for deletion of received tagged source and has no license mechanism to do
    so.
-2. **npm publication at public release.** When the package's public flip
-   happens, tagged releases will be published to the npm registry under
-   `@mnstry/atelier` with public access, making the registry — not repository
-   permission — the distribution channel of record.
+2. **npm publication.** Tagged releases are published to the npm registry
+   under `@mnstry/atelier` with public access, making the registry — not
+   repository permission — the distribution channel of record.
 3. **Contract compatibility by machinery.** From tag `v0.2.0-alpha.0`
    onward, the published contracts are under a compatibility gate
    (`npm run contract:compat`): documents valid against the baseline tag must

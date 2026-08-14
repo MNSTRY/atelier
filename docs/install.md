@@ -1,8 +1,9 @@
 # Install
 
-Repo Boundary Guard V1 is a local-first pattern for Atelier workspaces. It
-keeps private domain source in user-owned Git repositories and keeps shared
-project work in shared project repositories.
+This is the install guide for Atelier workspaces. The workspace pattern it
+installs — Repo Boundary Guard V1 — keeps private domain source in
+user-owned Git repositories and keeps shared project work in shared project
+repositories.
 
 ## Posture
 
@@ -16,10 +17,14 @@ Git repository access is the hard read boundary for source files. Local
 `kg.audience` labels guide projection and review, but they do not hide files
 from anyone who can read the repository.
 
-Use `atelier` as the primary CLI command in copied workspaces. The older
-`mnstry-atelier` binary is a legacy alias for compatibility.
+Two command forms ship, and each has a place. Inside an installed
+workspace, use `atelier` — it resolves from `node_modules/.bin`, so npm
+scripts and workspace shells get the real binary. From outside a
+workspace, always use the branded `npx mnstry-atelier` form: the unscoped
+npm name `atelier` belongs to an unrelated third-party package, so a bare
+`npx atelier` outside a workspace runs someone else's code.
 
-## Install Shape
+## Install shape
 
 The registry is the distribution channel of record, as `docs/continuity.md`
 commits:
@@ -40,8 +45,8 @@ Or over SSH:
 npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
 ```
 
-Keep the `@mnstry/` scope. The unscoped name `atelier` on npm belongs to an
-unrelated third-party package, so a bare `npx atelier` runs someone else's code.
+Keep the `@mnstry/` scope — see the command-form note above for why the
+unscoped name is dangerous.
 
 Do not install from `v0.2.0-alpha.0`. That tag is the **contract epoch
 marker** — `contracts/compat-baseline.json` pins the compatibility gate to it,
@@ -68,7 +73,7 @@ github.com/<org>/project-shared-library
 The repository names above are examples. Create and permission repositories in
 GitHub or your internal Git host before pointing Atelier at them.
 
-## Tenant Workspace Example
+## Tenant workspace example
 
 Default placeholder shape:
 
@@ -82,7 +87,7 @@ values only inside the copied private workspace or through initializer flags.
 The example repositories are placeholders, not repositories created by this
 package release.
 
-## Local Setup
+## Local setup
 
 Copy one of the starter templates:
 
@@ -128,7 +133,7 @@ atelier readiness export --dry-run --project ./atelier.project.json
 
 These commands read local files and write generated local outputs only.
 
-## Upgrade Path
+## Upgrade path
 
 The starter commands create `atelier.lock.json` inside the copied workspace so
 the installed Atelier package source, version, contracts, and migration state

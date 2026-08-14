@@ -117,6 +117,15 @@ npm run contract && npm run contract:compat
 npm run egress:check && npm run repo:check && npm run migrations:check
 ```
 
+A note on the test suite from a fresh clone: plain `npm test` includes one
+fail-closed check that expects a private denylist file
+(`release-denylist.local.json`, gitignored) used by MNSTRY's release lane.
+On a fresh clone that file is absent, so that one check **fails** — it
+never passes silently on missing protection. That is why the command above
+sets `ATELIER_ALLOW_MISSING_DENYLIST=1`: it acknowledges the missing file
+and turns the failure into a recorded skip, and every other test runs
+normally either way.
+
 All gates green is the entry condition, not the goal — tests that prove the
 change is the goal.
 
