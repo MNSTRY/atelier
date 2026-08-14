@@ -88,4 +88,19 @@ jobs:
             echo "denylist secret unavailable — refusing to publish unscanned"
             exit 1
           fi
-          npm publish
+          # npm refuses to publish a prerelease without an explicit dist-tag,
+          # because defaulting it to `latest` would hand every plain
+          # `npm install` an unstable version. Derive the tag from the version
+          # itself: 0.2.0-alpha.2 publishes under `alpha`, 0.3.0 under
+          # `latest`. Nothing here decides what `latest` points at for a
+          # prerelease — that stays a deliberate `npm dist-tag` decision.
+          VERSION="$(node -p 'require("./package.json").version')"
+          case "$VERSION" in
+            *-*)
+              PRERELEASE="${VERSION#*-}"
+              NPM_TAG="${PRERELEASE%%.*}"
+              ;;
+            *) NPM_TAG=latest ;;
+          esac
+          echo "publishing $VERSION under dist-tag $NPM_TAG"
+          npm publish --tag "$NPM_TAG"
