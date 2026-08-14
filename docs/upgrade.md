@@ -73,7 +73,7 @@ in the lockfile:
 
 ```bash
 npm install --save-dev @mnstry/atelier@0.2.0-alpha.2
-npx atelier lock write --project ./atelier.project.json
+npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
 For Git installs, pin the release tag rather than a branch, so the lock file
@@ -81,7 +81,7 @@ records exactly what was reviewed:
 
 ```bash
 npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.2"
-npx atelier lock write --project ./atelier.project.json
+npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
 Before accepting upstream changes, run the non-mutating upgrade planner:

@@ -35,9 +35,10 @@ atelier graph --check --project ./atelier.project.json
 
 The ontology is not documentation. It is the enforcement mechanism.
 
-Eighteen JSON Schema contracts define the vocabulary — exports, project
-configuration, boundary policy, sidecars, locks, migrations, readiness,
-attestation — and fail-closed validators enforce it. The load-bearing
+The JSON Schema contracts under `contracts/` define the vocabulary —
+exports, project configuration, boundary policy, sidecars, locks,
+migrations, readiness, attestation — and fail-closed validators enforce
+it. The load-bearing
 separation is `audience` versus `visibility`: audience is local readership
 (`public`, `team`, `operator`, `staff`, `private`, `sensitive`), visibility
 is runtime authority (`private`, `shared`, `platform`, `public`), and the
@@ -103,9 +104,12 @@ without authority. Neutral Claude and Codex skill wrappers ship in the
 package, so a harness can do readiness review work against the workspace
 without a single line of custom glue.
 
-This is the honest answer to the question every team has right now: how do
-you put an agent inside private material safely? Not by trusting the
-agent — by projecting a bounded view and making writing impossible.
+This is a deliberately narrow answer to a broad question. It does not make
+an agent safe around private material in general; it makes one surface
+checkable: within the Atelier sidecar, a harness receives session-bound
+context and can record proposals, and there is no apply endpoint and no
+write authority to grant. A bounded view, with writing made impossible —
+a testable control, not a trust exercise.
 
 ```bash
 atelier dev --project ./atelier.project.json
@@ -127,9 +131,11 @@ in one sitting: a wrapper bin, a pack, a themed workspace.
 Apache-2.0 makes commercial use a right, not a favor. The trademark policy
 keeps the name ours and the code yours: every distribution carries
 "powered by MNSTRY Atelier" attribution, and the check is a command, not a
-request. Contributions run inbound-equals-outbound with a DCO sign-off and
-no CLA — nobody, including MNSTRY, holds rights over your contribution
-that you do not also hold.
+request. The contribution terms are inbound-equals-outbound with a DCO
+sign-off and no CLA — nobody, including MNSTRY, holds rights over a
+contribution that the contributor does not also hold. Outside pull
+requests are not open yet; `CONTRIBUTING.md` states the posture and the
+terms that will govern them when they open.
 
 ```bash
 atelier distribution check --target ./my-distribution
@@ -144,9 +150,10 @@ transformational work, where a leaked document is not a bug but a
 betrayal. That case set the bar — fail-closed boundaries, no telemetry, no
 send path, agents without authority, disclosure as a recorded event.
 
-A system trustworthy enough for that is trustworthy enough for whatever
-you govern with it: a research corpus, a client practice, an editorial
-pipeline, a body of work that must outlive the tools that touch it.
+That case shaped the defaults. Other bodies of work — a research corpus, a
+client practice, an editorial pipeline, anything that must outlive the
+tools that touch it — reuse the mechanics, and each defines and validates
+its own ontology, protocols, and boundary policies.
 
 The claims behind this page are stated precisely, with their known limits,
 in the README's "Claims you can check" — each with the command that proves

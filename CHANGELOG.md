@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+Documentation and metadata release. No contract changes and no runtime
+behaviour changes: documents valid against `0.2.0-alpha.0` remain valid.
+
+- **The package's promises are now under a gate.** The checkable claims,
+  the will-not-do list, the conformance/admission separation, and the
+  audience/visibility rule live canonically in `docs/blocks/`, the README
+  embeds them verbatim between markers, and a test fails when they drift.
+  Promises converge by machinery; framing diverges by audience.
+- **The README is restructured as a depth ramp** — category and trust
+  posture first, the working loop with its visible result second, the
+  checkable claims third, boundaries fourth, architecture fifth, reference
+  last — and a new "Where the Atelier stops" section states the boundary
+  with MNSTRY's managed platform as a literal table.
+- **Overbroad claims are corrected.** "Trustworthy enough for whatever you
+  govern with it" is gone from the README and `docs/design.md` — controls
+  shaped for one demanding case do not establish adequacy everywhere; the
+  agent-runtime passage now states the narrow, testable control rather
+  than a general safety claim; "does not contact external services" now
+  carries its documented `gh` exception inline; contract and test counts
+  are stated by command, not by number; the contributions text now matches
+  `CONTRIBUTING.md`'s outside-PRs-not-open-yet posture; and
+  `docs/continuity.md` speaks of npm publication in the present tense.
+- **`npx` examples use the collision-free `mnstry-atelier` form.** The
+  unscoped npm name `atelier` belongs to an unrelated third-party package,
+  so a bare `npx atelier` outside an installed workspace runs someone
+  else's code. Every `npx` example on every surface now uses the branded
+  binary, `atelier` remains the documented command inside installed
+  workspaces, and `docs/install.md` no longer calls `mnstry-atelier` a
+  legacy alias — it is the safe form.
+- **npm metadata describes the package from the outside.** A concrete
+  description, registry keywords, and a homepage that resolves to the
+  published documentation page.
+
 ## 0.2.0-alpha.2
 
 Documentation and release-lane release. No contract changes and no runtime

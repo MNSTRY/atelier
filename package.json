@@ -2,7 +2,21 @@
   "name": "@mnstry/atelier",
   "version": "0.2.0-alpha.2",
   "private": false,
-  "description": "Local-first MNSTRY Atelier workspace for agentic authoring, graph projection, and dry-run runtime readiness.",
+  "description": "Local CLI that compiles a Git repository into a validated knowledge graph — front-matter ontology, fail-closed audience boundaries, offline contract conformance. No telemetry, no service, no account.",
+  "keywords": [
+    "knowledge-graph",
+    "ontology",
+    "front-matter",
+    "local-first",
+    "json-schema",
+    "validation",
+    "provenance",
+    "governance",
+    "markdown",
+    "cli",
+    "agent-context",
+    "offline"
+  ],
   "type": "module",
   "bin": {
     "atelier": "bin/atelier.mjs",
@@ -65,7 +79,7 @@
     "type": "git",
     "url": "git+https://github.com/MNSTRY/atelier.git"
   },
-  "homepage": "https://mnstry.org",
+  "homepage": "https://docs.mnstry.ai/public-product/developers/atelier",
   "bugs": {
     "url": "https://github.com/MNSTRY/atelier/issues"
   },
