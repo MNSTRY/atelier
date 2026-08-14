@@ -66,6 +66,56 @@ the machinery downstream refuses to let material travel further than its
 audience allows. A public export that references a non-public source is
 rejected — that check is fixture-pinned and mutation-tested.
 
+## The system
+
+Git is the database. The ontology is the schema. The validators are the
+constraints. The runtime is local. The design is five movements, each
+grounded in shipped machinery — [docs/design.md](docs/design.md) states
+them in full, ending each one with the command that proves it:
+
+**A repository with an ontology.** Front matter — or a `.kg.json` sidecar
+beside any format the kit never parses — declares a file's identity, type,
+audience, and relations. The graph builder compiles the repository into a
+deterministic knowledge graph. No import step, no database: the repository
+is the store, and Git is the history, the review process, and the read
+boundary.
+
+**Rules that refuse.** Eighteen contracts under a compatibility epoch
+define the vocabulary; fail-closed validators enforce it. A public export
+that references a non-public source is rejected — fixture-pinned and
+mutation-tested — and dry-run reports are deterministic: `accepted`,
+`importable`, `worstOperationStatus`. Twelve bundled claim-first readiness
+protocols check the work against published criteria and produce proposed
+claims, never runtime mutations.
+
+**Collaboration as governed disclosure.** Private-domain and shared-project
+repos have enforced roles: the boundary guard fails closed when private or
+sensitive material lands in shared space, when protected local files are
+staged, or when private-domain material appears in shared work without a
+recorded `git.promote` disclosure event. Disclosure is a commit, not an
+accident. Change to the machinery itself is governed the same way — the
+lockfile records exactly what a workspace runs, and upgrades are
+branch-based, review-first, and refuse dirty repos.
+
+**A local runtime for humans and for agents.** The workspace projects two
+ways: a generated review surface over a loopback-only sidecar for humans,
+and session-bound context and capability envelopes for agent harnesses — a
+governed view with proposals recorded as metadata and no apply endpoints.
+Context without authority. Neutral Claude and Codex skill wrappers ship in
+the package.
+
+**A platform for your own tool.** A distribution wraps the CLI under your
+own name, contributes a validated extension pack, and themes the
+projection, while the root contracts, guards, and conformance stay
+canonical underneath — commercially if you want. See "Build your own tool
+on it" below.
+
+Methodology authoring is the first application, not the ceiling. MNSTRY
+built the Atelier to carry its own most demanding case — private
+transformational work, where a leaked document is a betrayal — and a
+system trustworthy enough for that is trustworthy enough for whatever you
+govern with it.
+
 ## Quickstart
 
 ```bash
@@ -158,56 +208,6 @@ atelier dry-run ./atelier-export.json
 `docs/continuity.md` records the distribution commitments behind these
 claims, including the perpetual Apache-2.0 grant on every tagged release you
 receive.
-
-## The system
-
-Git is the database. The ontology is the schema. The validators are the
-constraints. The runtime is local. The design is five movements, each
-grounded in shipped machinery — [docs/design.md](docs/design.md) states
-them in full, ending each one with the command that proves it:
-
-**A repository with an ontology.** Front matter — or a `.kg.json` sidecar
-beside any format the kit never parses — declares a file's identity, type,
-audience, and relations. The graph builder compiles the repository into a
-deterministic knowledge graph. No import step, no database: the repository
-is the store, and Git is the history, the review process, and the read
-boundary.
-
-**Rules that refuse.** Eighteen contracts under a compatibility epoch
-define the vocabulary; fail-closed validators enforce it. A public export
-that references a non-public source is rejected — fixture-pinned and
-mutation-tested — and dry-run reports are deterministic: `accepted`,
-`importable`, `worstOperationStatus`. Twelve bundled claim-first readiness
-protocols check the work against published criteria and produce proposed
-claims, never runtime mutations.
-
-**Collaboration as governed disclosure.** Private-domain and shared-project
-repos have enforced roles: the boundary guard fails closed when private or
-sensitive material lands in shared space, when protected local files are
-staged, or when private-domain material appears in shared work without a
-recorded `git.promote` disclosure event. Disclosure is a commit, not an
-accident. Change to the machinery itself is governed the same way — the
-lockfile records exactly what a workspace runs, and upgrades are
-branch-based, review-first, and refuse dirty repos.
-
-**A local runtime for humans and for agents.** The workspace projects two
-ways: a generated review surface over a loopback-only sidecar for humans,
-and session-bound context and capability envelopes for agent harnesses — a
-governed view with proposals recorded as metadata and no apply endpoints.
-Context without authority. Neutral Claude and Codex skill wrappers ship in
-the package.
-
-**A platform for your own tool.** A distribution wraps the CLI under your
-own name, contributes a validated extension pack, and themes the
-projection, while the root contracts, guards, and conformance stay
-canonical underneath — commercially if you want. See "Build your own tool
-on it" below.
-
-Methodology authoring is the first application, not the ceiling. MNSTRY
-built the Atelier to carry its own most demanding case — private
-transformational work, where a leaked document is a betrayal — and a
-system trustworthy enough for that is trustworthy enough for whatever you
-govern with it.
 
 ## What this package will not do
 
