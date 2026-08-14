@@ -1,30 +1,31 @@
 # MNSTRY Atelier
 
-**The Atelier makes a repository mean something.** Files declare what they
-are, who they are for, and how they relate, and machinery enforces it.
+**The Atelier makes a repository mean something.** An ordinary file gains
+a small structured header: what this is, who it is for, what it relates
+to. That is the entire enrollment. From those declarations the Atelier
+builds a knowledge graph over your work, projects a local review surface,
+checks readiness against published protocols, and rejects what must never
+happen — like a public export that quietly references a private source.
 
 Git is the database. The ontology is the schema. The validators are the
-constraints. The runtime is local.
+constraints. The runtime is local. There is no telemetry, no send path,
+and no account — and every promise on this page ends in a command you can
+run.
 
-It is a local-first authoring system: plain files, in your own Git
-repositories, on your machine, under your control. You author primitives,
-sources, and offers; the Atelier builds a knowledge graph over them,
-projects a local review surface, checks readiness against published
-protocols, and validates exports against public contracts. There is no
-telemetry and no send path, and every promise below names the command that
-proves it.
-
-MNSTRY runs its own authoring workspaces on it, and publishes it for anyone
-to use, with or without a MNSTRY runtime. It is built first for methodology
-holders and the studios that serve them — the MNSTRY runtime, the governed
-platform for identity, consent, visibility, provisioning, bookings,
-commerce, sessions, audit, and client-grade sharing, is a separate and
-optional destination. The Atelier is the front porch, not the house.
+It exists because some bodies of work are too important to live inside
+someone else's platform. MNSTRY builds the technology platform for human
+transformation, for practitioners whose method is their life's work and
+whose client material is held in trust; the Atelier is that platform's
+front porch, not the house. MNSTRY authors its own workspaces with it and
+publishes it under Apache-2.0, and everything here runs without ever
+talking to a MNSTRY runtime — so it can govern a methodology, a research
+corpus, an editorial pipeline, or any body of work that must outlive the
+tools that touch it.
 
 ## What authoring looks like
 
-A source document is a plain file with a small structured header. This is a
-complete, working example — fictional, like every fixture in this package:
+Here is a complete, working source document — fictional, like every
+fixture in this package:
 
 ```markdown
 ---
