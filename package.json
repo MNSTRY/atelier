@@ -1,8 +1,8 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.3",
+  "version": "0.2.0-alpha.4",
   "private": false,
-  "description": "Local CLI that compiles a Git repository into a validated knowledge graph — front-matter ontology, fail-closed audience boundaries, offline contract conformance. No telemetry, no service, no account.",
+  "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry, service, or account.",
   "keywords": [
     "knowledge-graph",
     "ontology",

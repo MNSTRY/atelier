@@ -1,77 +1,111 @@
 # MNSTRY Atelier
 
-**The Atelier makes a repository mean something.** It is a local governance
-toolkit for file-based bodies of work — a Node CLI and library with no
-service, no account, and no telemetry. Git is the database. The ontology is
-the schema. The validators are the constraints. The runtime is local.
+**Turn a repository into a living, governed system.**
 
-An ordinary file gains a small structured header: what this is, who it is
-for, what it relates to. That is the entire enrollment. From those
-declarations the Atelier builds a knowledge graph over your work, generates
-a review page you read in a browser on loopback, checks the work against
-published readiness protocols, and rejects what must never happen — a
-public export that quietly references a private source.
+Important bodies of work often begin as files: methods, research, programs,
+policies, editorial systems, product knowledge, or something no existing app
+quite understands. A folder can hold that work, but it cannot explain what each
+file is, how the pieces relate, who may see them, or whether the whole is ready
+to use.
 
-MNSTRY publishes it under Apache-2.0 and authors its own workspaces with
-it. Everything here runs without ever talking to a MNSTRY runtime, so it
-can govern a methodology, a research corpus, an editorial pipeline, or any
-body of work that must outlive the tools that touch it. Every promise on
-this page ends in a command you can run.
+The Atelier adds that missing layer without taking the work away from you. It
+turns a repository into an ontology-governed knowledge graph, gives rules the
+power to refuse invalid states, and produces bounded views for people, teams,
+agents, and tools. Git remains the source of record. Your files remain readable.
+The runtime remains local.
 
-```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.3
-npx mnstry-atelier init --fixture=sample-workspace --target ./sample
-npx mnstry-atelier graph --project ./sample/atelier.project.json
+That makes the same repository useful at several levels:
+
+- A **steward** can shape a coherent system without surrendering it to a
+  proprietary database.
+- A **team** can collaborate through explicit roles, handoffs, and disclosure
+  boundaries.
+- A **person or agent** can receive the right context and capabilities for the
+  task, without receiving the entire repository.
+- A **toolmaker** can build a specialized or commercial product on the graph,
+  contracts, validators, and projections instead of inventing a new source of
+  truth.
+
+MNSTRY built the Atelier for a demanding case: a living body of methodology
+that must stay legible, internally connected, privacy-aware, and usable across
+many interfaces. Methodology authoring is one application of the system, not
+its definition or ceiling.
+
+## From files to a working system
+
+```text
+files you own
+    ↓ declare identity, type, audience, and relationships
+ontology-governed graph
+    ↓ apply contracts, policies, and readiness rules
+governed projections
+    ├── local review
+    ├── bounded agent context
+    ├── collaboration and disclosure
+    └── specialized tools and commercial distributions
 ```
 
-`npx` here runs the binary already installed in `./node_modules/.bin` —
-always install first. Keep the `@mnstry/` scope: the unscoped npm name
-`atelier` belongs to an unrelated third-party package, so a bare
-`npx atelier` outside an installed workspace runs someone else's code.
-The branded `npx mnstry-atelier` form never collides with it; inside an
-installed workspace the shorter `atelier` command is also available, and
-that is the form npm scripts and the command reference below use.
+You can see the complete loop in a disposable sample workspace:
+
+```bash
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
+npx mnstry-atelier init --fixture=sample-workspace --target ./sample
+npx mnstry-atelier graph --project ./sample/atelier.project.json
+npx mnstry-atelier project --project ./sample/atelier.project.json
+npx mnstry-atelier dev --project ./sample/atelier.project.json
+```
+
+Open the loopback URL printed by `dev`. The browser page is generated from
+the same graph and rules that the CLI and library expose.
+
+`npx` here runs the binary installed in `./node_modules/.bin`, so install the
+scoped package first. Keep the `@mnstry/` scope: the unscoped npm package
+`atelier` is unrelated. The branded `npx mnstry-atelier` command avoids that
+collision; inside an installed workspace, the shorter `atelier` command is
+also available.
 
 ## What authoring looks like
 
-Here is a complete, working source document — fictional, like every
-fixture in this package:
+Enrollment is deliberately small. A source file declares its identity, type,
+audience, and relationships in front matter:
 
 ```markdown
 ---
-title: "Grounding practice"
-summary: "The opening practice every offer in this catalog builds on."
+title: Breath practice
+summary: A simple preparation practice.
+tags: []
 kg:
-  id: "my-studio:grounding-practice"
-  type: "document"
-  status: "active"
-  audience: "team"
+  id: example:breath-practice
+  type: document
+  status: active
+  audience: public
   relations:
-    supports: "my-studio:flagship-offer"
+    belongs_to: example:flagship-program
 ---
 
-# Grounding practice
+# Breath practice
 
-The practice itself, in your words, in your file, in your repository.
+Let the exhale become slightly longer than the inhale.
 ```
 
-That header is the entire enrollment. The graph builder reads front matter
-like this, and `.kg.json` sidecars for files that are not Markdown — JSON,
-YAML, CSV, media, anything — without ever parsing the foreign format. Your
-documents stay in your repositories, in formats you chose, readable
-without this tool. From there the working loop is four commands:
+The file is still Markdown. Git still records its history. The declarations
+let the Atelier resolve one canonical identity, validate its declared shape,
+connect it to neighboring work, and decide where it may
+travel.
 
-```bash
-npx mnstry-atelier graph --project ./sample/atelier.project.json      # build the knowledge graph
-npx mnstry-atelier project --project ./sample/atelier.project.json    # generate the local review page
-npx mnstry-atelier readiness --project ./sample/atelier.project.json  # check against published protocols
-npx mnstry-atelier dry-run ./atelier-export.json                      # validate against the public contracts
-```
+When a source format cannot carry front matter, a sidecar can provide the same
+declarations. The graph does not require every source to become Markdown.
 
-After those four commands you have a generated graph, a browsable review
-page under your project's output directory, a readiness summary, and a
-dry-run report — all of them files in your repository, all of them
-diffable. `npx mnstry-atelier dev` serves the review page on loopback.
+From there, one source can inform a human-readable review page, a session-bound
+context envelope for an agent, or structured input to another tool. These are
+interfaces to the same governed repository, not copies that quietly drift apart.
+
+## Rules travel with the work
+
+The ontology is not only a vocabulary. It is an enforcement surface. Contracts
+define valid shapes, policies govern movement and disclosure, readiness rules
+make completion testable, and validators fail closed when a boundary cannot be
+proven.
 
 <!-- atelier:block:audience-visibility:start -->
 The `audience` field in the header is the load-bearing word. It declares who
@@ -85,20 +119,114 @@ public is refused. That check is fixture-pinned and mutation-tested —
 deleting its enforcement fails tests, not documentation.
 <!-- atelier:block:audience-visibility:end -->
 
-The same machinery is a library:
+That distinction matters whenever several interfaces share one body of work.
+A public site, an internal review tool, and an agent session can all use the
+same graph while receiving different, mechanically checked projections.
+
+## The system beneath it
+
+### 1. The repository becomes an ontology
+
+The project manifest tells the Atelier where sources live and which boundaries
+govern the workspace. Source declarations establish typed nodes and relationships. The
+graph command resolves those declarations into a deterministic index that can
+be queried, validated, rendered, and extended.
+
+This is what makes a collection of files behave like a system while remaining
+portable. The repository contains both the knowledge and the terms needed to
+interpret it.
+
+### 2. Rules can refuse
+
+A useful rule must do more than advise. The Atelier checks schema validity,
+relationship integrity, audience boundaries, readiness protocols, and export
+contracts. Invalid or ambiguous states produce a failing command instead of a
+best-effort publication.
+
+Because the checks are local and versioned with the work, the repository can
+prove its state in CI, on a laptop, or inside a larger toolchain.
+
+### 3. Collaboration becomes governed disclosure
+
+Collaboration is not equivalent to giving every participant every file. The
+Atelier models audience, runtime visibility, roles, and capability envelopes
+as separate concerns. A projection can therefore disclose the material needed
+for a task while withholding material outside that boundary.
+
+This creates a shared language for human handoffs, agent sessions, reviews,
+and eventual managed delivery. The open package validates the declared
+boundary; it does not silently make access decisions on your behalf.
+
+### 4. The local runtime serves people and agents
+
+`atelier dev` exposes a loopback-only review surface backed by the compiled
+graph. The library exposes the same project, graph, validation, and projection
+primitives to code.
+
+The shipped agent model is intentionally bounded: the Atelier can assemble
+session context, capability envelopes, and proposed changes, but it does not
+apply those proposals or grant direct write access. It is a local context and
+control layer that another interface can build on, not an autonomous editor.
+
+### 5. The repository can power another product
+
+The CLI is one interface. The package is also a library, and its contracts are
+published artifacts. A tool can use the repository as its durable source of
+truth, compile the graph, select an audience-safe projection, and present a
+purpose-built experience without reimplementing the governance model.
+
+That tool may be private, open source, or commercial. Apache-2.0 permits all
+three. Conformance to the public Atelier contracts does not require a MNSTRY
+account or service.
+
+Read [the design document](./docs/design.md) for the five-part architecture and
+[the ontology](./docs/ontology.md) and
+[contract-stability policy](./docs/contract-stability.md) for the stable
+boundaries.
+
+## Build your own tool on it
+
+Use the CLI when a shell command or CI gate is enough. Use the library when the
+Atelier is the substrate beneath a custom interface:
 
 ```js
-import { validateAtelierExportDryRun } from '@mnstry/atelier'
+import {
+  buildGraph,
+  resolveProjectConfig,
+} from '@mnstry/atelier'
 
-const report = validateAtelierExportDryRun(exportDocument)
-console.log(report.accepted, report.importable, report.errors)
+const project = resolveProjectConfig({
+  cwd: process.cwd(),
+  argv: ['--project=./atelier.project.json'],
+})
+const graph = buildGraph(project)
+
+if (graph.errors.length > 0) throw new Error(graph.errors.join('\n'))
+console.log(graph.nodes)
 ```
 
-Real projects start from the `private-domain`, `shared-project`, or
-`distribution` templates instead of the sample fixture —
-[`docs/install.md`](docs/install.md) is the full install guide.
+The package exports change over the alpha series, so pin the exact prerelease
+version and treat the package export map and shipped source modules as the
+executable API reference. [Distribution contracts](./docs/distributions.md) explain
+how a governed subset can be packaged for another surface without widening its
+audience.
 
-## Claims you can check
+## Where the Atelier stops
+
+The open package owns repository-side structure and proof. A managed runtime
+may consume a conformant export, but that is a separate system with a separate
+trust boundary.
+
+| The local Atelier does | A managed runtime may do |
+| --- | --- |
+| Parse sources and sidecars | Authenticate participants |
+| Compile and query the graph | Resolve live authorization |
+| Validate contracts and relationships | Persist runtime state |
+| Enforce export audience boundaries | Deliver governed experiences |
+| Generate local review and agent context | Record consent and operational events |
+| Check offline conformance | Decide optional admission |
+
+### Claims you can verify
 
 <!-- atelier:block:claims:start -->
 This package makes three promises. None of them asks for your trust — each
@@ -148,7 +276,7 @@ claims, including the perpetual Apache-2.0 grant on every tagged release you
 receive.
 <!-- atelier:block:claims:end -->
 
-## What it will not do
+### What it will not do
 
 <!-- atelier:block:will-not-do:start -->
 - It does not write to a MNSTRY runtime database.
@@ -162,7 +290,7 @@ These limits are the design. An authoring tool for private material earns
 trust by what it refuses to be able to do.
 <!-- atelier:block:will-not-do:end -->
 
-## Conformance is public, admission is separate
+### Conformance and admission
 
 <!-- atelier:block:conformance-admission:start -->
 The Atelier export format is MNSTRY's format, offered openly.
@@ -182,167 +310,63 @@ is part of the contract. You can build on the Atelier without ever talking
 to MNSTRY, and a document MNSTRY declines can still be fully conformant.
 <!-- atelier:block:conformance-admission:end -->
 
-## Where the Atelier stops
+## Install and go deeper
 
-The Atelier is a complete, standalone tool; nothing on the right side of
-this table is required to use it. MNSTRY's managed platform begins where
-local preparation ends:
-
-| The Atelier, today                    | The MNSTRY managed platform        |
-| ------------------------------------- | ---------------------------------- |
-| Local files and Git authority         | Runtime authority                  |
-| Knowledge graph and review projection | Governed delivery                  |
-| Readiness checks and proposed claims  | Runtime consent and identity       |
-| Offline conformance                   | Signed admission                   |
-| Proposal-only harness access          | Tenant applications and operations |
-
-## The system
-
-The full design lives in [`docs/design.md`](docs/design.md) — five
-movements, each grounded in shipped machinery, each ending with the command
-that proves it. In brief:
-
-**A repository with an ontology.** Front matter — or a `.kg.json` sidecar
-beside any format the kit never parses — declares a file's identity, type,
-audience, and relations. A node's `kg.id` names its canonical: the stable
-source-of-truth version of a thing that people, tools, and agents can refer
-to without losing meaning. The graph builder compiles the repository into a
-deterministic knowledge graph. No import step, no database: the repository
-is the store, and Git is the history, the review process, and the read
-boundary.
-
-**Rules that refuse.** JSON Schema contracts under a compatibility epoch
-define the vocabulary, and fail-closed validators enforce it — including
-the audience/visibility refusal above. Schema widening outside `ext`
-containers is refused by a schema-vs-schema differ, breaking changes
-require a new contract version with a recorded migration, and twelve
-claim-first readiness protocols check a workspace against published
-criteria to produce proposed claims, never runtime mutations.
-
-**Collaboration as governed disclosure.** Repositories have enforced roles:
-private-domain repos hold one person's source material, shared-project
-repos hold what a team may read, and the boundary guard fails closed when
-material crosses without a record. Crossing the boundary requires a
-recorded `git.promote` disclosure event — disclosure is a commit, not an
-accident. Change to the machinery itself is governed the same way: the
-lockfile records exactly what a workspace runs, and upgrades are
-branch-based, review-first, and refuse dirty repositories.
-
-**A local runtime for humans and for agents.** `atelier project` renders a
-projection — a contextual view of the same governed workspace. Humans get a
-generated review page over a loopback-only sidecar; agent harnesses get
-session-bound context and capability envelopes, with a place to record
-proposals and no apply endpoints. That is a narrow, testable control — a
-bounded view, and no write authority to grant — not a general claim that an
-agent is safe around private material. Neutral Claude and Codex skill
-wrappers ship in the package.
-
-**A platform for your own tool.** A distribution wraps the CLI under its
-own name, contributes a validated extension pack, and themes the
-projection, while the root contracts, guards, and conformance stay
-canonical underneath.
-
-It exists because some bodies of work are too important to live inside
-someone else's platform. MNSTRY built the Atelier to carry its own most
-demanding case — private transformational work, where a leaked document is
-a betrayal — and that case shaped the defaults: fail-closed boundaries, no
-telemetry, no send path, agents without authority, disclosure as a recorded
-event. Other domains reuse the mechanics and define their own ontology,
-protocols, and boundary policies. Methodology authoring is the first
-application, not the ceiling.
-
-## Build your own tool on it
-
-The Atelier is designed to be built on, under your name — including
-commercially. A distribution wraps the CLI under its own command,
-contributes a validated extension pack (branded protocols, terms,
-templates), and themes the projection, while the root contracts, guards,
-and conformance stay canonical underneath. Apache-2.0 makes commercial use
-a right, not a favor; the trademark policy keeps the name ours and the
-code yours. Start by copying the worked example:
-
-- `examples/loomworks-studio` — a complete fictional distribution: branded
-  bin, extension pack, themed workspace template. It lives in this
-  repository and deliberately never ships in the npm tarball.
-- [`docs/distributions.md`](docs/distributions.md) — the contract a
-  distribution must honor.
-- `TRADEMARKS.md` — naming rules; Apache-2.0 grants code rights, not brand
-  rights. Every distribution carries "powered by MNSTRY Atelier"
-  attribution, checked by `atelier distribution check`.
-
-## Status
-
-- Version: `0.2.0-alpha.3`
-- Stability: alpha — contracts are under a compatibility gate from the
-  `v0.2.0-alpha.0` epoch tag onward; everything else may still move
-- Runtime: Node.js `>=22.18.0 <23`
-- Dependencies: ajv, ajv-formats (JSON Schema validation); nothing else at
-  runtime
-- Distribution: `@mnstry/atelier@0.2.0-alpha.3` on npm, published from the
-  `v0.2.0-alpha.3` tag. The `v0.2.0-alpha.0` tag is the contract epoch
-  marker, not an install target — it predates the current tree. The version
-  `0.2.0` was published in error and unpublished the same day; that number
-  is permanently retired on npm and will never be reused.
-- Telemetry: none. Network egress: none, with one documented exception —
-  see "Claims you can check" above.
-
-## Command reference
-
-Commands below use the `atelier` form, which is what an installed
-workspace sees; from outside a workspace, invoke the same commands as
-`npx mnstry-atelier`.
+Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
+remains in alpha:
 
 ```bash
-atelier dry-run ./atelier-export.json
-atelier contract check
-atelier graph --project ./atelier.project.json
-atelier project --project ./atelier.project.json
-atelier readiness --project ./atelier.project.json
-atelier readiness protocols
-atelier readiness journey --project ./atelier.project.json
-atelier readiness run mnstry.readiness:identity-map --project ./atelier.project.json
-atelier readiness packet --project ./atelier.project.json
-atelier readiness export --dry-run --project ./atelier.project.json
-atelier boundary check --project ./atelier.project.json
-atelier boundary check --staged --project ./atelier.project.json
-atelier boundary install-hooks --project ./atelier.project.json
-atelier promote --source-repo tenant-private-domain --target-repo project-alpha --kg-id tenant-private-domain:seed
-atelier lock write --project ./atelier.project.json
-atelier lock check --project ./atelier.project.json
-atelier upgrade --dry-run --project ./atelier.project.json
-atelier upgrade --apply --project ./atelier.project.json --branch codex/atelier-upgrade-YYYYMMDD
-atelier extension-pack validate --project ./atelier.project.json
-atelier attestation verify ./attestation.json
-atelier feedback create --message "what happened"
-atelier announcements list
-atelier distribution check --target ./my-distribution
-atelier dev --project ./atelier.project.json
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
 ```
 
-`upgrade --apply` creates or switches to the requested branch, refuses dirty
-authored repos, preserves unrelated user hooks through composed hook files,
-runs only registered migrations, refreshes generated projections, and leaves
-a Git commit for review. It will not weaken boundary policy, introduce
-telemetry, enable non-loopback egress, run model-assisted analysis, or
-write, import, or apply runtime state.
+Then choose the path that matches what you are building:
 
-`feedback create` writes a scanned, redaction-checked report to a local
-file — there is no send path; you choose whether and where to share it.
-`announcements list` verifies project-shipped announcements against a
-committed public key — pull-only, nothing phones home to ask
-([`docs/announcements.md`](docs/announcements.md)).
+- [Installation and first run](./docs/install.md)
+- [Design and architecture](./docs/design.md)
+- [Knowledge graph and source model](./docs/knowledge-graph.md)
+- [Local runtime and agent boundary](./docs/atelier-runtime.md)
+- [Distribution contracts](./docs/distributions.md)
+- [Conformance and attestation](./docs/attestation.md)
+- [Continuity commitments](./docs/continuity.md)
+- [Upgrade notes](./docs/upgrade.md)
 
-## License and contributing
+## Status and command reference
 
-Apache-2.0. See `LICENSE`, `NOTICE` (attribution obligations that survive
-forks), `TRADEMARKS.md` (naming), and `docs/continuity.md` (distribution
-continuity commitments).
+Current package: `@mnstry/atelier@0.2.0-alpha.4`.
 
-Issues and questions are welcome. Outside pull requests are not open yet —
-a required CI check currently asserts maintainer commit identity — and
-`CONTRIBUTING.md` states that posture plainly, along with the
-inbound-equals-outbound Apache-2.0 terms and DCO sign-off that will govern
-contributions when they open. One expectation worth knowing before you run
-the suite: `npm test` from a fresh clone fails exactly one check by
-design — a release-lane protection whose private file is absent — and
-`CONTRIBUTING.md` explains the acknowledged-skip form.
+The alpha package is usable and contract-tested, but its library API may still
+change before a stable release. Pin the exact version in production toolchains.
+
+```text
+atelier init
+atelier adopt
+atelier setup
+atelier graph
+atelier project
+atelier build
+atelier dev
+atelier generated check
+atelier config check
+atelier extension-pack
+atelier distribution check
+atelier egress check
+atelier boundary
+atelier readiness
+atelier export
+atelier context flow
+atelier support bundle
+atelier feedback
+atelier announcements
+atelier attestation
+atelier promote
+atelier upgrade
+atelier lock
+```
+
+Run `atelier --help` or `atelier <command> --help` for the current flags. The
+full command behavior is also covered by the package's executable tests.
+
+## Contributing and license
+
+Contributions are welcome through [the contribution guide](./CONTRIBUTING.md).
+MNSTRY Atelier is released under [Apache-2.0](./LICENSE).
