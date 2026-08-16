@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0-alpha.4
+
+Presentation release. No contract changes and no runtime behaviour changes:
+documents valid against `0.2.0-alpha.0` remain valid.
+
+- **The README now explains the system before the package.** It begins with
+  the repository as a durable substrate, then shows how ontology, enforcement,
+  governed projections, and a local runtime make the same work usable by
+  people, teams, agents, and tools.
+- **The story progresses with the reader.** Stewards and collaborators get the
+  purpose and working loop first; builders get the graph and library surfaces;
+  technical readers retain the exact, test-gated claims, limitations, and
+  conformance boundaries.
+- **Methodology authoring is presented as the proving ground, not the
+  category.** The package can support any file-based body of work whose
+  structure, relationships, disclosure, and readiness must remain portable and
+  enforceable.
+- **Package and installation metadata match the new public presentation.** The
+  prerelease remains explicitly pinned, and the coordinated MNSTRY developer
+  documentation carries the same conceptual spine.
+- **Bundled client instructions match the released CLI.** The Codex and Claude
+  open-Atelier skills use `atelier dev` and point registry users to the scoped,
+  collision-free install path.
+
 ## 0.2.0-alpha.3
 
 Documentation and metadata release. No contract changes and no runtime
