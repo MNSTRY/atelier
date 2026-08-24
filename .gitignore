@@ -22,3 +22,4 @@ atelier-attestation-key.local.json
 support-bundles/
 tmp/
 coverage/
+.artifacts/
