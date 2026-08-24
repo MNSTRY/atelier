@@ -260,22 +260,23 @@ function writeFile(repo, rel, contents) {
   fs.writeFileSync(abs, contents)
 }
 
-// graph.mjs sidecar dialect.
+// Project graph and workspace graph share the canonical sidecar contract.
 function projectSidecar(assetRel, id, audience) {
   return `${JSON.stringify(
     {
-      assetFilename: path.basename(assetRel),
+      schema: SOURCE_SIDECAR_SCHEMA,
+      asset: path.basename(assetRel),
       title: 'Injected title',
       summary: '',
       tags: [],
-      kg: { id, type: 'artifact', status: 'active', audience, relations: {} },
+      kg: { id, type: 'artifact', domain: 'app', lifecycle: 'root', status: 'active', audience, relations: {} },
     },
     null,
     2,
   )}\n`
 }
 
-// knowledge-graph.mjs sidecar dialect.
+// The workspace builder consumes the same canonical sidecar contract.
 function workspaceSidecar(assetRel, id, type, audience) {
   return `${JSON.stringify(
     {

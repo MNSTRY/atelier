@@ -1,5 +1,6 @@
 {
-  "assetFilename": "data.json",
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "data.json",
   "title": "Sample dataset",
   "summary": "Neutral JSON dataset described entirely by its sidecar.",
   "tags": [
@@ -8,6 +9,8 @@
   "kg": {
     "id": "source-formats:data-json",
     "type": "source",
+    "domain": "sample",
+    "lifecycle": "source",
     "status": "active",
     "audience": "team",
     "relations": {}

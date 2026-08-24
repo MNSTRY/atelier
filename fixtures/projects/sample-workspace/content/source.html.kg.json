@@ -1,5 +1,6 @@
 {
-  "assetFilename": "source.html",
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "source.html",
   "title": "Sample Source",
   "summary": "Neutral non-Markdown source with durable sidecar identity.",
   "tags": [
@@ -8,6 +9,8 @@
   "kg": {
     "id": "sample-workspace:source-html",
     "type": "source",
+    "domain": "sample",
+    "lifecycle": "source",
     "status": "active",
     "audience": "private",
     "relations": {}
