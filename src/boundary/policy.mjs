@@ -308,7 +308,7 @@ export function stagedPathsForProject(project) {
 function forbiddenPathFindings({ policy, stagedPaths }) {
   const patterns = [...DEFAULT_FORBIDDEN_PATHS, ...asArray(policy.forbiddenPaths)]
   const findings = []
-  const severity = severityFor(policy)
+  const severity = 'error'
   for (const item of stagedPaths) {
     const matched = patterns.find((pattern) => matchesPathPattern(pattern, item.path))
     if (matched) {
@@ -392,7 +392,7 @@ export function semanticChangesInFile(file) {
 
 function semanticDiffFindings({ policy, project }) {
   const findings = []
-  const severity = severityFor(policy)
+  const severity = 'error'
   for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
@@ -560,21 +560,19 @@ function promotionFindings({ policy, project, graph }) {
 export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
-  const findings = validationErrors.map((message) => finding({ severity: severityFor(policy), code: 'boundary-policy-invalid', message }))
-  if (validationErrors.length === 0) {
-    if (!stagedOnly) {
-      graph = buildGraph(project)
-      findings.push(...graph.errors.map((message) => finding({ severity: severityFor(policy), code: 'knowledge-graph-invalid', message })))
-      for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
-      findings.push(...promotionFindings({ policy, project, graph }))
-    }
-    findings.push(...actorFindings({ policy, project, actor }))
-    if (staged) {
-      const stagedPaths = stagedPathsForProject(project)
-      findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
-      findings.push(...semanticDiffFindings({ policy, project }))
-      findings.push(...stagedContentFindings({ policy, project }))
-    }
+  const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
+  if (!stagedOnly) {
+    graph = buildGraph(project)
+    findings.push(...graph.errors.map((message) => finding({ severity: 'error', code: 'knowledge-graph-invalid', message })))
+    for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
+    findings.push(...promotionFindings({ policy, project, graph }))
+  }
+  findings.push(...actorFindings({ policy, project, actor }))
+  if (staged) {
+    const stagedPaths = stagedPathsForProject(project)
+    findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
+    findings.push(...semanticDiffFindings({ policy, project }))
+    findings.push(...stagedContentFindings({ policy, project }))
   }
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')

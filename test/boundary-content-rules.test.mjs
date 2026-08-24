@@ -110,13 +110,33 @@ test('a new violation in the same push is still blocked', (t) => {
   assert.equal(found.line, 1)
 })
 
-test('public environment templates are allowed while real environment files remain blocked', () => {
+test('environment templates require an exact reasoned exception and credentials still block', () => {
   const templateFiles = ['.env.example', '.env.sample', '.env.template'].map((filePath) => ({
     path: filePath,
     added: true,
     addedLines: [],
   }))
-  assert.deepEqual(scanAddedContent({ files: templateFiles, repo: 'site' }), [])
+  const templateFindings = scanAddedContent({ files: templateFiles, repo: 'site' })
+  assert.equal(templateFindings.length, 3)
+  assert.ok(templateFindings.every((finding) => finding.rule === 'private-financial-filename'))
+
+  const exceptions = [{
+    rule: 'private-financial-filename',
+    repo: 'site',
+    paths: ['.env.example'],
+    reason: 'reviewed public variable-name template with no values',
+  }]
+  const excepted = scanAddedContent({
+    files: [{
+      path: '.env.example',
+      added: true,
+      addedLines: [{ number: 1, text: ['gh', 'p_', 'a'.repeat(36)].join('') }],
+    }],
+    exceptions,
+    repo: 'site',
+  })
+  assert.ok(excepted.some((finding) => finding.rule === 'secret-material'), 'a path exception must not suppress credential content')
+  assert.equal(excepted.some((finding) => finding.rule === 'private-financial-filename'), false)
 
   const findings = scanAddedContent({
     files: [
@@ -203,6 +223,17 @@ test('policy validation rejects exceptions for repos it does not declare', (t) =
     { rule: 'browser-persistence', repo: 'some-other-repo', paths: ['src/a.ts'], reason: 'documented product decision' },
   ]
   assert.match(validateBoundaryPolicy(policy, project).join('\n'), /contentRuleExceptions\[0\]\.repo some-other-repo is not declared in repos/)
+})
+
+test('an empty content-rule list is invalid and cannot bypass default exception validation', (t) => {
+  const { policy, project } = makeWorkspace(t)
+  policy.contentRules = []
+  policy.contentRuleExceptions = [
+    { rule: 'invented', repo: 'example-site', paths: ['src/a.ts'], reason: 'documented product decision' },
+  ]
+  const errors = validateBoundaryPolicy(policy, project).join('\n')
+  assert.match(errors, /contentRules must contain at least one rule/)
+  assert.match(errors, /is not a declared content rule/)
 })
 
 test('the shared guard script contains no repo-specific paths', (t) => {

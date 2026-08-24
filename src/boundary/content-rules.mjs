@@ -34,7 +34,7 @@ export const DEFAULT_CONTENT_RULES = Object.freeze(
       kind: 'path',
       severity: 'error',
       pattern:
-        '(\\.env(?![.-](?:example|sample|template)(?:$|[.]))($|\\.)|invoice|payroll|(^|[-_/])salar(y|ies)|bank[-_]?statement|tax[-_]?return|credential|(^|[-_/])password([-_.]|$)|(^|[-_/])secret([-_.]|$)|id_rsa)',
+        '((^|/)\\.env(?:$|[.-])|invoice|payroll|(^|[-_/])salar(y|ies)|bank[-_]?statement|tax[-_]?return|credential|(^|[-_/])password([-_.]|$)|(^|[-_/])secret([-_.]|$)|id_rsa)',
       description: 'Private or financial material does not belong in a source repo.',
     },
   ].map(Object.freeze),
@@ -46,6 +46,7 @@ const trimmed = (value) => (typeof value === 'string' ? value.trim() : '')
 export function validateContentRules(rules, { label = 'contentRules' } = {}) {
   const errors = []
   if (!Array.isArray(rules)) return [`${label} must be an array`]
+  if (rules.length === 0) errors.push(`${label} must contain at least one rule; omit the field to use the defaults`)
   const seen = new Set()
   for (const [index, rule] of rules.entries()) {
     const at = `${label}[${index}]`
@@ -113,7 +114,8 @@ export function validateContentRuleExceptions(exceptions, rules = DEFAULT_CONTEN
 
 export function resolveContentRules(policy) {
   const declared = Array.isArray(policy?.contentRules) ? policy.contentRules : null
-  return declared ?? DEFAULT_CONTENT_RULES
+  if (!declared?.length || validateContentRules(declared).length > 0) return DEFAULT_CONTENT_RULES
+  return declared
 }
 
 export function findException({ exceptions = [], rule, repo, path: filePath }) {

@@ -101,6 +101,16 @@ test('the kit keeps no second copy of the classification', () => {
   assert.ok(matchesPathPattern('atelier-output/**', 'atelier-output/index.html'))
 })
 
+test('the shared matcher is segment-aware, case-stable, and portable', () => {
+  assert.equal(matchesPathPattern('private/*.md', 'private/note.md'), true)
+  assert.equal(matchesPathPattern('private/*.md', 'private/nested/note.md'), false, '`*` must not cross a segment')
+  assert.equal(matchesPathPattern('private/**/*.md', 'private/nested/note.md'), true)
+  assert.equal(matchesPathPattern('private/**/*.md', 'private/note.md'), true, '`**/` may match zero segments')
+  assert.equal(matchesPathPattern('*.md', 'deeply/nested/note.md'), true, 'slashless patterns retain match-base behavior')
+  assert.equal(matchesPathPattern('ATELIER-OUTPUT/**', 'atelier-output/index.html'), true, 'case behavior must not vary by filesystem')
+  assert.equal(matchesPathPattern('private/**', 'PRIVATE\\nested\\note.md'), true, 'Windows separators use the same dialect')
+})
+
 test('kit manifest fixtures agree with the file-class contract', () => {
   const schema = readJson('contracts/atelier-kit-manifest.v1.schema.json')
   const validate = new Ajv2020({ allErrors: true, strict: false }).compile(schema)

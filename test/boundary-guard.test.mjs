@@ -160,6 +160,20 @@ test('legacy-warning mode reports placement problems without failing', () => {
   assert.ok(report.warnings.some((item) => item.code === 'private-audience-in-shared-repo'))
 })
 
+test('invalid policy remains blocking in legacy mode and does not suppress staged judging', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  policy.mode = 'legacy-warning'
+  policy.contentRules = []
+  fs.mkdirSync(path.join(privateRepo, '.atelier-local'), { recursive: true })
+  fs.writeFileSync(path.join(privateRepo, '.atelier-local/session.json'), '{}\n')
+  git(privateRepo, ['add', '.'])
+
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((item) => item.code === 'boundary-policy-invalid'))
+  assert.ok(report.errors.some((item) => item.code === 'forbidden-path-staged'))
+})
+
 test('staged guard blocks forbidden paths and semantic field changes without review marker', () => {
   const { project: cfg, policy, privateRepo } = makeWorkspace()
   writeDoc(privateRepo, 'doc.md', 'mnstry-private-author:doc', 'private')
