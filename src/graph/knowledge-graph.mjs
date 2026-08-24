@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { VALID_AUDIENCES } from '../projection/policy.mjs'
-import { generatedProjectionBasenames } from '../project/file-class.mjs'
+import { generatedProjectionBasenames, generatedProjectionDirectoryBasenames } from '../project/file-class.mjs'
 import { gitIgnoreFilter } from '../project/git-ignore.mjs'
 
 export const KNOWLEDGE_GRAPH_SCHEMA = 'mnstry.knowledge-graph@v1'
@@ -14,7 +14,7 @@ export const VALID_STATUSES = new Set(['active', 'draft', 'archived', 'template'
 export const VALID_KG_TYPES = new Set(['document', 'artifact', 'evidence', 'source', 'index', 'contract', 'guide', 'runbook', 'policy', 'report', 'prototype', 'research', 'decision', 'map', 'manifest', 'html', 'pdf', 'docx'])
 export const VALID_SIDECAR_KG_TYPES = new Set(['html', 'pdf', 'docx', 'artifact', 'evidence', 'source', 'prototype', 'research', 'report', 'manifest'])
 
-const SKIP_DIRS = new Set(['.git', '.agents', '.claude', '.github', 'node_modules', 'output', 'uploads', 'scripts', 'lib'])
+const SKIP_DIRS = new Set(['.git', '.agents', '.claude', '.github', 'node_modules', 'output', 'uploads', 'scripts', 'lib', ...generatedProjectionDirectoryBasenames()])
 // Derived from the kit's file-class declaration, never restated here.
 const GENERATED_FILES = generatedProjectionBasenames()
 const PRIVATE_AUDIENCES = new Set(['private', 'sensitive'])

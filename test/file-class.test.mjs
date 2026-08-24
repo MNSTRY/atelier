@@ -12,6 +12,7 @@ import {
   classifyPath,
   createPathClassifier,
   generatedProjectionBasenames,
+  generatedProjectionDirectoryBasenames,
   validateFileClasses,
 } from '../src/project/file-class.mjs'
 import { matchesPathPattern } from '../src/project/path-match.mjs'
@@ -94,6 +95,7 @@ test('the kit keeps no second copy of the classification', () => {
   for (const name of ['atelier.manifest.json', 'atelier-ledger.html', 'atelier-shell.js', 'knowledge.graph.json']) {
     assert.ok(derived.has(name), `${name} must be reachable from the declaration, not a shadow list`)
   }
+  assert.deepEqual([...generatedProjectionDirectoryBasenames()].sort(), ['atelier-output', 'atelier-readers'])
 
   // The glob dialect lives in one place too.
   const policySource = fs.readFileSync(path.join(ROOT, 'src/boundary/policy.mjs'), 'utf8')

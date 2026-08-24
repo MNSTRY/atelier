@@ -11,6 +11,8 @@
 - Consolidate graph classification in one canonical engine. Markdown without a
   `kg` block is now represented as `unclassified` with a private audience and
   diagnostics; empty, partial, or malformed declarations remain blocking.
+  Generated projection directories remain derived from the file-class manifest
+  so graph validation and generated-only upgrade recovery cannot drift apart.
 - Bind release egress verification to the exact `npm pack` inventory, including
   test-shaped paths that are actually published, and make the legacy egress
   checker a thin delegate to the canonical scanner.
