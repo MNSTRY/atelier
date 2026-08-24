@@ -7,15 +7,21 @@ import test from 'node:test'
 import {
   BOUNDARY_POLICY_SCHEMA,
   auditContentRules,
+  boundaryHookScript,
+  checkBoundaryPolicy,
   checkPushContent,
   installBoundaryHooks,
+  readBoundaryPushInput,
   validateBoundaryPolicy,
 } from '../src/boundary/policy.mjs'
 import {
   DEFAULT_CONTENT_RULES,
+  BINARY_FILE_MAX_BYTES,
+  parsePushRefInput,
   parseAddedContent,
   parsePushRefUpdates,
   scanAddedContent,
+  scanStagedRepository,
   validateContentRuleExceptions,
 } from '../src/boundary/content-rules.mjs'
 import { PROJECT_CONFIG_SCHEMA, commandProject, writeJson } from '../src/project/config.mjs'
@@ -200,6 +206,19 @@ test('the exception appears in a human-readable audit that never blocks', (t) =>
   )
 })
 
+test('audit defaults to the working tree and keeps HEAD as an explicit snapshot', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, 'unstaged.ts'), 'sessionStorage.setItem("draft", "1")\n')
+
+  const working = auditContentRules({ project, policy })
+  assert.equal(working.source, 'working-tree')
+  assert.ok(working.findings.some((item) => item.path === 'unstaged.ts'))
+
+  const snapshot = auditContentRules({ project, policy, source: 'head' })
+  assert.equal(snapshot.source, 'head')
+  assert.equal(snapshot.findings.some((item) => item.path === 'unstaged.ts'), false)
+})
+
 test('exceptions must name a rule, a repo, real paths, and a reason', () => {
   const ok = [{ rule: 'browser-persistence', repo: 'site', paths: ['src/a.ts'], reason: 'documented product decision' }]
   assert.deepEqual(validateContentRuleExceptions(ok, DEFAULT_CONTENT_RULES), [])
@@ -260,9 +279,57 @@ test('a brand new branch is scanned in full rather than silently skipped', (t) =
 
 test('ref updates parse, and branch deletions carry no content to judge', () => {
   const zero = '0'.repeat(40)
-  const updates = parsePushRefUpdates(`refs/heads/main abc123 refs/heads/main def456\nrefs/heads/gone ${zero} refs/heads/gone def456\n\n`)
+  const local = 'a'.repeat(40)
+  const remote = 'b'.repeat(40)
+  const updates = parsePushRefUpdates(`refs/heads/main ${local} refs/heads/main ${remote}\nrefs/heads/gone ${zero} refs/heads/gone ${remote}\n\n`)
   assert.equal(updates.length, 1)
-  assert.equal(updates[0].localSha, 'abc123')
+  assert.equal(updates[0].localSha, local)
+  assert.equal(parsePushRefInput('   \n').kind, 'empty')
+  const invalid = parsePushRefInput('refs/heads/main short refs/heads/main also-short\n')
+  assert.equal(invalid.ok, false)
+  assert.equal(invalid.kind, 'invalid')
+  assert.deepEqual(readBoundaryPushInput(() => { throw new Error('unreadable') }), {
+    ok: false,
+    text: '',
+    error: 'stdin-read-failed',
+  })
+})
+
+test('Git evidence acquisition reports ENOBUFS as a blocking completeness diagnostic', () => {
+  const error = Object.assign(new Error('buffer exceeded'), { code: 'ENOBUFS' })
+  const result = scanStagedRepository({
+    repoRoot: '.',
+    repo: 'site',
+    gitRunner: () => ({ status: null, stdout: '', stderr: '', error }),
+  })
+  assert.equal(result.findings.length, 0)
+  assert.equal(result.diagnostics[0].code, 'content-scan-incomplete')
+  assert.equal(result.diagnostics[0].details.reason, 'git-output-limit-exceeded')
+})
+
+test('staged binary credentials block and oversized binary evidence cannot pass incomplete', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  const signature = Buffer.from(['-----BEGIN ', 'PRIVATE KEY-----'].join(''))
+  fs.writeFileSync(path.join(site, 'opaque.bin'), Buffer.concat([Buffer.from([0]), signature]))
+  git(site, ['add', 'opaque.bin'])
+  let report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.rule === 'secret-material' && item.path === 'opaque.bin' && item.binary === true))
+
+  git(site, ['reset', '--quiet', 'opaque.bin'])
+  fs.writeFileSync(path.join(site, 'large.bin'), Buffer.alloc(BINARY_FILE_MAX_BYTES + 1, 0))
+  git(site, ['add', 'large.bin'])
+  report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.path === 'large.bin'))
+})
+
+test('generated hooks single-quote config paths and reject control characters', () => {
+  const config = '/tmp/project $(touch marker).json'
+  const script = boundaryHookScript(config, 'pre-push', '/tmp/elsewhere')
+  assert.match(script, /--project-config='\/tmp\/project \$\(touch marker\)\.json'/)
+  assert.throws(
+    () => boundaryHookScript('/tmp/project\nconfig.json', 'pre-push', '/tmp/elsewhere'),
+    /unsupported control characters/,
+  )
 })
 
 test('added lines are numbered against the new file', () => {

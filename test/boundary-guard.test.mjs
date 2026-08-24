@@ -267,8 +267,36 @@ test('repo-local project config follows the active worktree instead of the insta
   installBoundaryHooks({ project: cfg })
   const hook = fs.readFileSync(path.join(repo, '.git/hooks/pre-commit'), 'utf8')
   assert.match(hook, /git rev-parse --show-toplevel/)
-  assert.match(hook, /\$ATELIER_HOOK_REPO_ROOT\/atelier\.project\.json/)
+  assert.match(hook, /\$ATELIER_HOOK_REPO_ROOT"\/'atelier\.project\.json'/)
   assert.doesNotMatch(hook, new RegExp(repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+})
+
+test('hook installation resolves the real Git hook path from a linked worktree', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-linked-hook-'))
+  const main = path.join(root, 'main')
+  const linked = path.join(root, 'linked')
+  fs.mkdirSync(main)
+  git(main, ['init'])
+  git(main, ['config', 'user.email', 'author@example.invalid'])
+  git(main, ['config', 'user.name', 'Author'])
+  writeJson(path.join(main, 'atelier.project.json'), {
+    schema: 'mnstry.atelier-project-config@v1',
+    roots: { workspace: '.', repoOps: '.' },
+    boundaries: { policyPath: 'boundary-policy.v1.json' },
+    repos: [{ name: 'site', path: '.', readBoundary: 'team' }],
+  })
+  git(main, ['add', '.'])
+  git(main, ['commit', '-m', 'seed'])
+  execFileSync('git', ['-C', main, 'worktree', 'add', '--quiet', '-b', 'linked-hook-test', linked])
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  const cfg = commandProject({ argv: ['--project', path.join(linked, 'atelier.project.json')], cwd: linked, env: {} })
+  installBoundaryHooks({ project: cfg })
+  const gitPath = git(linked, ['rev-parse', '--git-path', 'hooks'])
+  const hooksDir = path.isAbsolute(gitPath) ? gitPath : path.resolve(linked, gitPath)
+  const hook = fs.readFileSync(path.join(hooksDir, 'pre-push'), 'utf8')
+  assert.match(hook, /ATELIER_HOOK_REPO_ROOT="\$\(git rev-parse --show-toplevel\)"/)
+  assert.doesNotMatch(hook, new RegExp(main.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 })
 
 test('applying the kit fail-closed front-matter default does not need a review marker', () => {

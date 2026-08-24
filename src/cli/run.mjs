@@ -155,9 +155,9 @@ Ensures ignored local Atelier state exists, verifies ignore coverage, and record
     doctor: `Usage: ${c} doctor [--project ./atelier.project.json] [--fix] [--dry-run]
 
 Reports project config, local overlay, and repo boundary readiness. --fix only repairs ignored local state.`,
-    boundary: `Usage: ${c} boundary check|push-check|audit|install-hooks [--project ./atelier.project.json] [--staged]
+    boundary: `Usage: ${c} boundary check|push-check|audit|install-hooks [--project ./atelier.project.json] [--staged] [--source=working-tree|head]
 
-check --staged judges the staged diff. push-check reads pre-push ref updates on stdin and judges only the pushed range. audit scans the whole tree and reports without blocking, so an accepted usage never strands unrelated work.`,
+check --staged judges the staged diff. push-check reads pre-push ref updates on stdin and judges only the pushed range. audit scans the working tree by default and reports without blocking; --source=head selects the committed snapshot.`,
     graph: `Usage: ${c} graph [--check] [--project ./atelier.project.json]
 
 Builds or checks the project knowledge graph from tracked sources plus ignored local path bindings.`,
