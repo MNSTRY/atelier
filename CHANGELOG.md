@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Document the client-zero adapter rule that exact package identity, installed
+  dependency resolution, CLI version, and `atelier.lock.json` must agree. This
+  prevents a stale sibling checkout from satisfying a current adapter proof.
+- Declare the audited `fast-uri` pin as a direct runtime dependency so packed
+  offline consumer installs resolve the same dependency closure as the source
+  checkout.
+
 ## 0.2.0-alpha.4
 
 Presentation release. No contract changes and no runtime behaviour changes:

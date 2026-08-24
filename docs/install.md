@@ -57,6 +57,24 @@ The workspace `atelier.lock.json` should record the resolved version or Git
 SHA from the install. Treat the tag or version as the friendly handle and the
 SHA as the review authority.
 
+### Adapter runners must bind package identity
+
+An early downstream adapter exposed a subtle failure mode worth making a
+general rule: a wrapper that scans arbitrary sibling checkouts and accepts the
+first matching binary can validate against an archived tree while appearing
+current. Adapter and distribution runners must therefore:
+
+1. declare one exact `@mnstry/atelier` version in their package manifest;
+2. prefer the installed `node_modules/@mnstry/atelier` package over incidental
+   sibling checkouts;
+3. accept an explicit local checkout only when its package name and version
+   match the declared dependency;
+4. run `atelier --version` and `atelier lock check` as part of adapter proof;
+5. fail closed when the declared version, resolved package, and lock disagree.
+
+This rule binds which Atelier implementation ran. It does not make generated
+output authoritative or grant runtime mutation.
+
 Use one private domain repository per user:
 
 ```text
