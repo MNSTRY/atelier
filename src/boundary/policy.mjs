@@ -621,7 +621,7 @@ export function installBoundaryHooks({ project, force = false } = {}) {
     for (const hookName of ['pre-commit', 'pre-push']) {
       const hookPath = path.join(hooksDir, hookName)
       const existing = fs.existsSync(hookPath) ? fs.readFileSync(hookPath, 'utf8') : ''
-      const script = hookScript(project.configPath, hookName)
+      const script = hookScript(project.configPath, hookName, repo.path)
       if (existing && !existing.includes('MNSTRY_ATELIER_BOUNDARY_GUARD') && !force) {
         const sidecar = `${hookPath}.mnstry-atelier-boundary`
         fs.writeFileSync(sidecar, script)
@@ -637,8 +637,18 @@ export function installBoundaryHooks({ project, force = false } = {}) {
   return { installed, skipped }
 }
 
-function hookScript(projectConfigPath, hookName) {
-  const config = projectConfigPath ? `--project-config=${projectConfigPath.replaceAll('"', '\\"')}` : ''
+function hookScript(projectConfigPath, hookName, repoPath) {
+  const relativeConfigPath = projectConfigPath && repoPath ? path.relative(repoPath, projectConfigPath) : null
+  const configLivesInRepo = relativeConfigPath && relativeConfigPath !== '..' && !relativeConfigPath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeConfigPath)
+  const configSetup = configLivesInRepo
+    ? `ATELIER_HOOK_REPO_ROOT="$(git rev-parse --show-toplevel)"
+ATELIER_HOOK_PROJECT_CONFIG="$ATELIER_HOOK_REPO_ROOT/${relativeConfigPath.replaceAll('"', '\\"')}"`
+    : ''
+  const config = configLivesInRepo
+    ? '--project-config="$ATELIER_HOOK_PROJECT_CONFIG"'
+    : projectConfigPath
+      ? `--project-config=${projectConfigPath.replaceAll('"', '\\"')}`
+      : ''
   // pre-push reads the ref updates git writes to stdin and judges only that range;
   // pre-commit judges the staged diff. Neither scans the whole tree — that view is
   // `atelier boundary audit`, which reports without blocking.
@@ -646,6 +656,7 @@ function hookScript(projectConfigPath, hookName) {
   return `#!/usr/bin/env bash
 # MNSTRY_ATELIER_BOUNDARY_GUARD ${hookName}
 set -euo pipefail
+${configSetup}
 if command -v atelier >/dev/null 2>&1; then
   exec atelier ${invocation}
 elif [ -x "./node_modules/.bin/atelier" ]; then

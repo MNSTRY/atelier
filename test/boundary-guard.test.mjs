@@ -239,6 +239,24 @@ test('hook installer writes sidecar hook when user hook already exists', () => {
   assert.match(sharedHook, /node_modules\/\.bin\/atelier/)
 })
 
+test('repo-local project config follows the active worktree instead of the installer checkout', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-hook-worktree-'))
+  git(repo, ['init'])
+  writeJson(path.join(repo, 'atelier.project.json'), {
+    schema: 'mnstry.atelier-project-config@v1',
+    roots: { workspace: '.', repoOps: '.' },
+    boundaries: { policyPath: 'boundary-policy.v1.json' },
+    repos: [{ name: 'site', path: '.', readBoundary: 'team' }],
+  })
+  const cfg = commandProject({ argv: ['--project', path.join(repo, 'atelier.project.json')], cwd: repo, env: {} })
+
+  installBoundaryHooks({ project: cfg })
+  const hook = fs.readFileSync(path.join(repo, '.git/hooks/pre-commit'), 'utf8')
+  assert.match(hook, /git rev-parse --show-toplevel/)
+  assert.match(hook, /\$ATELIER_HOOK_REPO_ROOT\/atelier\.project\.json/)
+  assert.doesNotMatch(hook, new RegExp(repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+})
+
 test('applying the kit fail-closed front-matter default does not need a review marker', () => {
   const { project: cfg, policy, privateRepo } = makeWorkspace()
   const rel = 'notes/unlabelled.md'

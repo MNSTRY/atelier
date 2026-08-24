@@ -33,7 +33,8 @@ export const DEFAULT_CONTENT_RULES = Object.freeze(
       id: 'private-financial-filename',
       kind: 'path',
       severity: 'error',
-      pattern: '(\\.env($|\\.)|invoice|payroll|(^|[-_/])salar(y|ies)|bank[-_]?statement|tax[-_]?return|credential|(^|[-_/])password([-_.]|$)|(^|[-_/])secret([-_.]|$)|id_rsa)',
+      pattern:
+        '(\\.env(?![.-](?:example|sample|template)(?:$|[.]))($|\\.)|invoice|payroll|(^|[-_/])salar(y|ies)|bank[-_]?statement|tax[-_]?return|credential|(^|[-_/])password([-_.]|$)|(^|[-_/])secret([-_.]|$)|id_rsa)',
       description: 'Private or financial material does not belong in a source repo.',
     },
   ].map(Object.freeze),

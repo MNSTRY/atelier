@@ -30,7 +30,10 @@ try {
   }
   tarballPath = join(packageRoot, pack.filename)
 
-  writeFileSync(join(tempRoot, 'package.json'), `${JSON.stringify({ type: 'module' }, null, 2)}\n`)
+  writeFileSync(
+    join(tempRoot, 'package.json'),
+    `${JSON.stringify({ type: 'module', overrides: packageJson.overrides ?? {} }, null, 2)}\n`,
+  )
 
   // The install below is deliberately --offline: a consumer must be able to
   // install the tarball from a warm cache with no registry. But `npm ci` in the
@@ -59,7 +62,11 @@ try {
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { validateAtelierExportDryRun, bundledReadinessProtocols } from '@mnstry/atelier'
+import {
+  bundledReadinessProtocols,
+  validateAtelierExportDryRun,
+  validateAuthoringProviderDescriptor,
+} from '@mnstry/atelier'
 
 const fixturePath = fileURLToPath(import.meta.resolve('@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json'))
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
@@ -75,6 +82,15 @@ assert.equal(invalidReport.accepted, false)
 assert.match(invalidReport.errors.join('\\n'), /must use audience, not visibility/)
 assert.equal(bundledReadinessProtocols.length, 12)
 assert.equal(bundledReadinessProtocols[0].safety.runtimeMutation, false)
+assert.equal(validateAuthoringProviderDescriptor({
+  schema: 'atelier-authoring-provider@v1',
+  providerId: 'synthetic-provider',
+  peerId: 'peer:synthetic:publication',
+  operations: ['getContext', 'submitDraft'],
+  sourceRepositoryRequired: false,
+  directWrite: false,
+  applyEndpoint: null,
+}).ok, true)
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
