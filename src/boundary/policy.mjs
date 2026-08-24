@@ -230,8 +230,13 @@ function gitEmailsForProject(project) {
   const emails = []
   for (const root of roots) {
     if (!root || !fs.existsSync(root)) continue
-    const result = spawnSync('git', ['-C', root, 'config', 'user.email'], { encoding: 'utf8' })
-    if (result.status === 0 && result.stdout.trim()) emails.push(result.stdout.trim())
+    for (const args of [
+      ['config', 'user.email'],
+      ['log', '-1', '--format=%ae'],
+    ]) {
+      const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+      if (result.status === 0 && result.stdout.trim()) emails.push(result.stdout.trim())
+    }
   }
   return unique(emails)
 }

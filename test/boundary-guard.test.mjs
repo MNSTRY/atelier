@@ -10,6 +10,7 @@ import {
   createPromoteEvent,
   diffFileSections,
   installBoundaryHooks,
+  resolveCurrentActor,
   runBoundaryCheckCommand,
   semanticChangesInFile,
   validateBoundaryPolicy,
@@ -192,6 +193,22 @@ test('private domain actor mismatch fails closed in strict mode', () => {
   const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'other' })
   assert.equal(report.ok, false)
   assert.ok(report.errors.some((item) => item.code === 'private-domain-actor-mismatch'))
+})
+
+test('immutable clones resolve the actor from the checked-out commit author', () => {
+  const { project: cfg, policy, privateRepo, sharedRepo } = makeWorkspace()
+  for (const repo of [privateRepo, sharedRepo]) {
+    fs.writeFileSync(path.join(repo, 'README.md'), '# Boundary fixture\n')
+    git(repo, ['add', 'README.md'])
+    git(repo, ['commit', '-m', 'seed actor identity'])
+    git(repo, ['config', '--unset', 'user.email'])
+    git(repo, ['config', '--unset', 'user.name'])
+  }
+
+  const resolved = resolveCurrentActor({ policy, project: cfg, env: {} })
+  assert.equal(resolved.actorId, 'author')
+  assert.equal(resolved.source, 'git-email')
+  assert.ok(resolved.gitEmails.includes('author@example.invalid'))
 })
 
 test('private-to-shared supersession requires a git.promote record and passes after one exists', () => {
