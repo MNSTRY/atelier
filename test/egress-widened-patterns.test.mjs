@@ -81,7 +81,7 @@ test('every default egress scan path exists in the repo', () => {
 
 test('the discovery walk reaches examples in the real repo', () => {
   const files = discoverForbiddenEgressScanFiles({ root: ROOT })
-  const rels = files.map((file) => path.relative(ROOT, file))
+  const rels = files.map((file) => path.relative(ROOT, file).split(path.sep).join('/'))
   assert.ok(rels.some((rel) => rel.startsWith('examples/')), 'examples/ not scanned')
 })
 

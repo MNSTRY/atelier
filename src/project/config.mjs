@@ -380,6 +380,11 @@ function gitRootFor(dir) {
   return result.status === 0 ? result.stdout.trim() : null
 }
 
+function gitPrefixFor(dir) {
+  const result = spawnSync('git', ['-C', dir, 'rev-parse', '--show-prefix'], { encoding: 'utf8' })
+  return result.status === 0 ? result.stdout.trim() : null
+}
+
 function isIgnoredByGit(gitRoot, rel) {
   const result = spawnSync('git', ['-C', gitRoot, 'check-ignore', '-q', rel], { encoding: 'utf8' })
   return result.status === 0
@@ -388,8 +393,18 @@ function isIgnoredByGit(gitRoot, rel) {
 export function ensureLocalState(project, { write = false } = {}) {
   const root = localStateRoot(project)
   const gitRoot = gitRootFor(project.configDir)
-  const rel = gitRoot ? path.relative(gitRoot, root).split(path.sep).join('/') : LOCAL_STATE_DIR
-  const ignored = gitRoot ? isIgnoredByGit(gitRoot, `${rel}/`) || isIgnoredByGit(gitRoot, rel) : true
+  // Git owns the repository-relative spelling. Deriving it by comparing
+  // filesystem paths breaks when Windows exposes the cwd through an 8.3 short
+  // name (RUNNER~1) but Git reports the same root through its long name.
+  const gitPrefix = gitRoot ? gitPrefixFor(project.configDir) : null
+  const rel = gitRoot && gitPrefix !== null ? `${gitPrefix}${LOCAL_STATE_DIR}` : LOCAL_STATE_DIR
+  // A directory-only ignore rule such as `.atelier-local/` is not evaluated
+  // consistently by Git for an absent directory on every host. Probe a
+  // hypothetical child as well: it proves the directory rule before Atelier
+  // creates any local state, including on Git for Windows.
+  const ignored = gitRoot && gitPrefix !== null
+    ? isIgnoredByGit(gitRoot, `${rel}/.atelier-ignore-probe`) || isIgnoredByGit(gitRoot, `${rel}/`) || isIgnoredByGit(gitRoot, rel)
+    : gitRoot === null
   const report = {
     root,
     ignored,

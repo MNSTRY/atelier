@@ -38,7 +38,7 @@ test('collaboration event ledger is append-only, private, and optimistic', () =>
     })
     assert.equal(reviewed.event.version, 2)
     assert.equal(ledger.eventsFor('proposal-synthetic-one').length, 2)
-    assert.equal(fs.statSync(ledger.ledgerPath).mode & 0o777, 0o600)
+    if (process.platform !== 'win32') assert.equal(fs.statSync(ledger.ledgerPath).mode & 0o777, 0o600)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

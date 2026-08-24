@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { ensureLocalState } from '../src/project/config.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const COMMAND = path.join(ROOT, 'src', 'commands', 'feedback.mjs')
@@ -26,6 +27,22 @@ function tempDir(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   return dir
 }
+
+test('local-state ignore detection follows Git identity across an aliased checkout path', (t) => {
+  const parent = tempDir(t)
+  const real = path.join(parent, 'real-checkout')
+  const alias = path.join(parent, 'checkout-alias')
+  fs.mkdirSync(real)
+  spawnSync('git', ['init', '--quiet'], { cwd: real, encoding: 'utf8' })
+  fs.writeFileSync(path.join(real, '.gitignore'), '.atelier-local/\n')
+  fs.symlinkSync(real, alias, process.platform === 'win32' ? 'junction' : 'dir')
+
+  const report = ensureLocalState({ configDir: alias })
+
+  assert.equal(report.ignored, true)
+  assert.deepEqual(report.warnings, [])
+  assert.equal(fs.existsSync(path.join(alias, '.atelier-local')), false, 'the ignore probe must not create local state')
+})
 
 // PEM headers are assembled at runtime and never written as literals: the
 // repo-wide disclosure checker scans every tracked file for exactly this shape,
@@ -61,7 +78,7 @@ test('create writes a clean report locally, says nothing was sent, and check acc
   assert.equal(payload.environment.packageName, '@mnstry/atelier')
   assert.match(payload.environment.packageVersion, /^\d/)
   assert.equal(payload.environment.nodeVersion, process.version)
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600)
   const check = run(['check', relative], { cwd: dir })
   assert.equal(check.status, 0, check.stderr)
   assert.match(check.stdout, /ok: no banned key or value patterns matched/)

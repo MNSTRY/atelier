@@ -3,9 +3,10 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseArgs, resolveProjectConfig, writeJson } from '../project/config.mjs'
+import { packageRootFrom } from '../project/package-root.mjs'
 import { writeAtelierLock } from '../upgrade/upgrade.mjs'
 
-const packageRoot = path.resolve(new URL('../..', import.meta.url).pathname)
+const packageRoot = packageRootFrom(import.meta.url)
 
 function slug(value) {
   return String(value || '')

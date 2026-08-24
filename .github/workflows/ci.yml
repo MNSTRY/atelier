@@ -46,6 +46,28 @@ jobs:
       # npm ci warms the cache so the tarball's ajv deps resolve under --offline
       - run: npm ci
       - run: npm run consumer:smoke
+  portability-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run syntax:check
+      - run: node --test test/package-root-portability.test.mjs test/init-gitignore.test.mjs
+      - run: npm test
+        env:
+          # The real private-name assertions remain in secret-sweep. Cross-OS
+          # runners exercise the complete structural suite explicitly.
+          ATELIER_ALLOW_MISSING_DENYLIST: '1'
+      - run: npm run consumer:smoke
+      - run: npm run distribution:smoke
   structural-sweep:
     runs-on: ubuntu-latest
     steps:

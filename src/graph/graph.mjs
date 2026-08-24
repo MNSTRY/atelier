@@ -47,10 +47,11 @@ function walk(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
 }
 
 function splitFrontmatter(raw) {
-  if (!raw.startsWith('---\n')) return null
-  const end = raw.indexOf('\n---', 4)
+  const normalized = String(raw).replace(/\r\n?/g, '\n')
+  if (!normalized.startsWith('---\n')) return null
+  const end = normalized.indexOf('\n---', 4)
   if (end === -1) return null
-  return raw.slice(4, end)
+  return normalized.slice(4, end)
 }
 
 function parseValue(value) {

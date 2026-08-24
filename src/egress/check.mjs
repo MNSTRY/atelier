@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { packageRootFrom } from '../project/package-root.mjs'
 
-const ROOT = path.resolve(new URL('../..', import.meta.url).pathname)
+const ROOT = packageRootFrom(import.meta.url)
 const SCAN_DIRS = ['bin', 'src']
 const FORBIDDEN = [
   { pattern: /fetch\(\s*['"]https?:\/\/(?!127\.0\.0\.1|localhost|\[::1\])/, label: 'non-localhost fetch' },
