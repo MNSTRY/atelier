@@ -51,6 +51,8 @@ export const commandMap = new Map([
   ['extension-pack:list', ['src/commands/extension-pack.mjs', 'list']],
   ['distribution', ['src/commands/distribution.mjs']],
   ['distribution:check', ['src/commands/distribution.mjs', 'check']],
+  ['disclosure', ['src/commands/disclosure.mjs']],
+  ['disclosure:check', ['src/commands/disclosure.mjs', 'check']],
   ['attestation', ['src/commands/attestation.mjs']],
   ['feedback', ['src/commands/feedback.mjs']],
   ['feedback:check', ['src/commands/feedback.mjs', 'check']],
@@ -125,6 +127,7 @@ Core commands:
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
   distribution check              Check a distribution for MNSTRY attribution.
+  disclosure check                Scan tracked or staged content for disclosure risks.
 
 Attestation commands:
   attestation hash FILE           Print the canonical payload hash of a payload.
@@ -175,6 +178,9 @@ Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks i
     distribution: `Usage: ${c} distribution check [--target DIR] [--pack DIR]
 
 Checks a distribution package for the required MNSTRY attribution markers. Blocking: the distribution README.md byte check, and a CLI probe that EXECUTES the target's declared bin with --version (spawned with the current Node, cwd set to the target — only run this against distributions you trust) and requires the attribution in its output; a target that looks like a distribution but declares no probe-able bin, or ships a malformed package.json, is also blocking. The extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/attestation.md and docs/distributions.md.`,
+    disclosure: `Usage: ${c} disclosure check [--root DIR] [--staged] [--denylist FILE | --structural-only] [--fail-on-binary] [--untrusted]
+
+Scans Git-tracked files, or staged index blobs with --staged, without following symlinks. A private denylist is required by default and must be supplied through ATELIER_DENYLIST_JSON, --denylist, or ignored .atelier-local/disclosure-denylist.json. --structural-only is the explicit no-denylist lane. --untrusted suppresses finding details.`,
     attestation: `Usage:
   ${c} attestation hash <payload.json>
   ${c} attestation sign <attestation.json> [--key FILE] [--out FILE]
@@ -219,6 +225,7 @@ function normalizeArgs(argv) {
   if (args[0] === 'extension-pack' && args[1] === 'validate') args.splice(0, 2, 'extension-pack:validate')
   if (args[0] === 'extension-pack' && args[1] === 'list') args.splice(0, 2, 'extension-pack:list')
   if (args[0] === 'distribution' && args[1] === 'check') args.splice(0, 2, 'distribution:check')
+  if (args[0] === 'disclosure' && args[1] === 'check') args.splice(0, 2, 'disclosure:check')
   if (args[0] === 'support' && args[1] === 'bundle') args.splice(0, 2, 'support:bundle')
   if (args[0] === 'support:bundle' && args[1] === '--dry-run') args.splice(1, 1)
   return { help: false, args }

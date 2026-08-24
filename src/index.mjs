@@ -72,6 +72,12 @@ export {
 } from './egress/forbidden-egress.mjs'
 
 export {
+  STRUCTURAL_DISCLOSURE_PATTERNS,
+  compileDisclosurePatterns,
+  scanDisclosureContent,
+} from './disclosure/content-scan.mjs'
+
+export {
   BOUNDARY_POLICY_SCHEMA,
   checkBoundaryPolicy,
   createPromoteEvent,

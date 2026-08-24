@@ -91,6 +91,19 @@ if (pack.filename !== expectedTarballName) fail(`npm pack filename must be ${exp
 const paths = pack.files.map((entry) => entry.path).sort()
 let failures = 0
 
+for (const requiredPortableFile of [
+  'docs/local-services.md',
+  'skills/codex/atelier-local-service/SKILL.md',
+  'skills/claude/atelier-local-service/SKILL.md',
+  'skills/codex/atelier-public-boundary/SKILL.md',
+  'skills/claude/atelier-public-boundary/SKILL.md',
+]) {
+  if (!paths.includes(requiredPortableFile)) {
+    console.error(`[release:audit] tarball must include ${requiredPortableFile}`)
+    failures += 1
+  }
+}
+
 if (!paths.includes('bin/atelier.mjs')) {
   console.error('[release:audit] tarball must include bin/atelier.mjs')
   failures += 1

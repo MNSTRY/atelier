@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a portable `atelier disclosure check` command that scans tracked or
+  staged consumer content, requires private denylist coverage by default, and
+  refuses tracked repository-local denylist files.
+- Add public agent instructions and mirrored skills for extracting reusable
+  mechanisms from private implementations without carrying tenant material
+  into Atelier, plus a managed local-service contract for durable loopback
+  authoring and review tools.
 - Document the client-zero adapter rule that exact package identity, installed
   dependency resolution, CLI version, and `atelier.lock.json` must agree. This
   prevents a stale sibling checkout from satisfying a current adapter proof.

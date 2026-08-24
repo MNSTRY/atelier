@@ -43,6 +43,27 @@ Git-tracked tree, not just the tarball:
 Exit codes match `release:audit`: `0` clean, `1` findings, `2` configuration or
 usage error.
 
+### disclosure check
+
+`atelier disclosure check` is the portable consumer-facing content gate. It
+scans every tracked text file by default or the exact staged index with
+`--staged`, never follows tracked symlinks, and reports labels plus locations
+without echoing matched content. `--untrusted` suppresses finding details.
+
+The command loads private patterns from `ATELIER_DENYLIST_JSON`, an explicit
+`--denylist` path, or ignored
+`.atelier-local/disclosure-denylist.json`. A repository-local denylist is
+refused if it is tracked or not covered by `.gitignore`. Missing private
+patterns are a configuration failure unless `--structural-only` explicitly
+acknowledges the reduced verdict. Public text-only packaging can also use
+`--fail-on-binary`; Atelier's own tarball audit separately refuses packed
+binary files.
+
+The public Atelier repository keeps the stronger `repo:check` identity and
+commit-message controls. The portable command exists so consumer repositories
+can enforce the same public/private content boundary without inheriting
+MNSTRY-specific commit identities.
+
 ### Commit-identity gate
 
 Part of `repo:check --commits`. Commit authors must match a hardcoded
@@ -105,7 +126,7 @@ maintainer-reviewed before entering the list.
 Four jobs run on pushes to `main` and on pull requests, and all four are
 required status checks:
 
-- `test`: syntax check (`node --check`, not a type system), the full test suite, contract checks, `egress:check`, and
+- `test`: syntax check (`node --check`, not a type system), the full test suite (including isolated consumer disclosure-command proofs), contract checks, `egress:check`, and
   `migrations:check`. This job sets `ATELIER_ALLOW_MISSING_DENYLIST=1` scoped
   to the job only — denylist assertions belong to the secret lane.
 - `consumer-smoke`: warms the npm cache with `npm ci` (the offline tarball

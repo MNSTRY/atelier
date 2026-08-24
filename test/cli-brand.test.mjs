@@ -57,6 +57,7 @@ Core commands:
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
   distribution check              Check a distribution for MNSTRY attribution.
+  disclosure check                Scan tracked or staged content for disclosure risks.
 
 Attestation commands:
   attestation hash FILE           Print the canonical payload hash of a payload.
@@ -81,7 +82,7 @@ test('default-brand version text is the bare package version', () => {
 test('command map exposes the dispatch table for introspection', () => {
   assert.equal(commandMap instanceof Map, true)
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
-  assert.equal(commandMap.size, 50)
+  assert.equal(commandMap.size, 52)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {
@@ -90,6 +91,8 @@ test('command map dispatches the white-label commands to their own modules', () 
   assert.deepEqual(commandMap.get('extension-pack:list'), ['src/commands/extension-pack.mjs', 'list'])
   assert.deepEqual(commandMap.get('distribution'), ['src/commands/distribution.mjs'])
   assert.deepEqual(commandMap.get('distribution:check'), ['src/commands/distribution.mjs', 'check'])
+  assert.deepEqual(commandMap.get('disclosure'), ['src/commands/disclosure.mjs'])
+  assert.deepEqual(commandMap.get('disclosure:check'), ['src/commands/disclosure.mjs', 'check'])
   assert.deepEqual(commandMap.get('attestation'), ['src/commands/attestation.mjs'])
   // manifest keeps its historical config.mjs target.
   assert.deepEqual(commandMap.get('manifest'), ['src/commands/config.mjs'])
@@ -247,6 +250,7 @@ test('the default help lists the white-label commands and the attestation stanza
   assert.match(help, /^ {2}extension-pack validate {9}Validate declared extension packs\.$/m)
   assert.match(help, /^ {2}extension-pack list {13}List declared extension packs\.$/m)
   assert.match(help, /^ {2}distribution check {14}Check a distribution for MNSTRY attribution\.$/m)
+  assert.match(help, /^ {2}disclosure check {16}Scan tracked or staged content for disclosure risks\.$/m)
   assert.match(help, /^Attestation commands:$/m)
   assert.match(help, /^ {2}attestation keygen --key-id ID {2}Generate a signing key pair\.$/m)
 })
