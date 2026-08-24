@@ -15,6 +15,7 @@ import {
   DEFAULT_CONTENT_RULES,
   parseAddedContent,
   parsePushRefUpdates,
+  scanAddedContent,
   validateContentRuleExceptions,
 } from '../src/boundary/content-rules.mjs'
 import { PROJECT_CONFIG_SCHEMA, commandProject, writeJson } from '../src/project/config.mjs'
@@ -107,6 +108,26 @@ test('a new violation in the same push is still blocked', (t) => {
   const found = report.errors.find((item) => item.rule === 'browser-persistence')
   assert.equal(found.path, 'src/scripts/tracker.ts')
   assert.equal(found.line, 1)
+})
+
+test('public environment templates are allowed while real environment files remain blocked', () => {
+  const templateFiles = ['.env.example', '.env.sample', '.env.template'].map((filePath) => ({
+    path: filePath,
+    added: true,
+    addedLines: [],
+  }))
+  assert.deepEqual(scanAddedContent({ files: templateFiles, repo: 'site' }), [])
+
+  const findings = scanAddedContent({
+    files: [
+      { path: '.env', added: true, addedLines: [] },
+      { path: '.env.local', added: true, addedLines: [] },
+      { path: '.env.production', added: true, addedLines: [] },
+    ],
+    repo: 'site',
+  })
+  assert.equal(findings.length, 3)
+  assert.ok(findings.every((finding) => finding.rule === 'private-financial-filename'))
 })
 
 test('a declared exception unblocks exactly its rule and path, and removing it re-blocks', (t) => {
