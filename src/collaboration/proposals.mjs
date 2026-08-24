@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createCollaborationEventLedger } from './event-ledger.mjs'
 
 export const ATELIER_PROPOSAL_SCHEMA = 'atelier-proposal@v1'
 export const ATELIER_PROPOSALS_SCHEMA = 'atelier-proposals@v1'
@@ -112,6 +113,10 @@ export function createProposalStore({
 } = {}) {
   const workspaceRootReal = fs.realpathSync(workspaceRoot)
   ensurePrivateDir(proposalsDir)
+  const eventLedger = createCollaborationEventLedger({
+    workspaceRoot,
+    ledgerPath: path.join(proposalsDir, 'events.ndjson'),
+  })
 
   function proposalPath(id) {
     const clean = String(id || '').replace(/[^a-z0-9-]/gi, '')
@@ -124,9 +129,37 @@ export function createProposalStore({
     return file
   }
 
+  function reduceProposal(state, event) {
+    if (event.type === 'proposal-created' || event.type === 'proposal-imported') {
+      return event.payload.record
+    }
+    if (event.type === 'proposal-reviewed' && state) {
+      const next = {
+        ...state,
+        proposal: {
+          ...state.proposal,
+          status: event.payload.status,
+          updatedAt: event.at,
+          review: event.payload.review,
+          eventVersion: event.version,
+        },
+      }
+      if (event.payload.copyable) next.copyable = event.payload.copyable
+      else delete next.copyable
+      return next
+    }
+    return state
+  }
+
+  function materializedProposal(id) {
+    const events = eventLedger.eventsFor(id)
+    if (events.length === 0) return null
+    return events.reduce(reduceProposal, null)
+  }
+
   // Read is a lookup, not an assertion: an unusable id and an unreadable file
-  // are both "no such proposal", never a throw. Callers render 404 from null.
-  // listProposals() has always guarded its parse; this is the same contract.
+  // are both "no such proposal", never a throw. New records materialize from
+  // the append-only ledger. Per-proposal JSON remains a compatibility snapshot.
   function readProposal(id) {
     let file
     try {
@@ -134,6 +167,8 @@ export function createProposalStore({
     } catch {
       return null
     }
+    const materialized = materializedProposal(id)
+    if (materialized) return materialized
     if (!fs.existsSync(file)) return null
     try {
       return JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -144,18 +179,30 @@ export function createProposalStore({
 
   function listProposals() {
     if (!fs.existsSync(proposalsDir)) return []
-    return fs.readdirSync(proposalsDir)
+    const ledgerIds = eventLedger.readAll().map((event) => event.aggregateId)
+    const snapshotIds = fs.readdirSync(proposalsDir)
       .filter((name) => name.endsWith('.json'))
+      .map((name) => name.slice(0, -'.json'.length))
+    return [...new Set([...ledgerIds, ...snapshotIds])]
       .sort(stableCompare)
-      .map((name) => {
-        try {
-          return JSON.parse(fs.readFileSync(path.join(proposalsDir, name), 'utf8'))
-        } catch {
-          return null
-        }
-      })
+      .map(readProposal)
       .filter(Boolean)
       .sort((left, right) => stableCompare(right.proposal?.updatedAt || '', left.proposal?.updatedAt || ''))
+  }
+
+  function ensureLedgerSeed(id, record) {
+    const existing = eventLedger.eventsFor(id)
+    if (existing.length > 0) return existing.length
+    const seeded = eventLedger.append({
+      aggregateId: id,
+      expectedVersion: 0,
+      type: 'proposal-imported',
+      actor: 'atelier compatibility importer',
+      at: record.proposal?.createdAt || nowIso(),
+      payload: { record },
+    })
+    if (!seeded.ok) throw new Error(seeded.error)
+    return 1
   }
 
   function createProposal(body = {}) {
@@ -196,9 +243,21 @@ export function createProposalStore({
           ignored: true,
         },
         authority: copyOnlyActionSummary(action),
+        eventVersion: 1,
       },
       diff: safeJsonText(body.diff || body.proposal?.diff || ''),
       payload: body.proposal && typeof body.proposal === 'object' ? body.proposal : {},
+    }
+    const appended = eventLedger.append({
+      aggregateId: id,
+      expectedVersion: 0,
+      type: 'proposal-created',
+      actor: cleanIdentity(body.actor || body.proposal?.createdBy || 'local contributor', 160),
+      at: createdAt,
+      payload: { record },
+    })
+    if (!appended.ok) {
+      return { ok: false, status: appended.status, error: appended.error }
     }
     secureWriteJson(proposalPath(id), record)
     return { ok: true, status: 200, record }
@@ -232,27 +291,47 @@ export function createProposalStore({
     }
 
     const updatedAt = nowIso()
-    record.proposal = {
+    const review = {
+      reviewer: cleanIdentity(body.reviewer || 'unknown reviewer', 160),
+      notes: cleanIdentity(body.notes, 2000),
+      reviewedAt: updatedAt,
+    }
+    const nextProposal = {
       ...record.proposal,
       status: nextStatus,
       updatedAt,
-      review: {
-        reviewer: cleanIdentity(body.reviewer || 'unknown reviewer', 160),
-        notes: cleanIdentity(body.notes, 2000),
-        reviewedAt: updatedAt,
-      },
+      review,
     }
+    const nextRecord = { ...record, proposal: nextProposal }
     if (nextStatus === 'accepted') {
-      record.copyable = acceptedProposalCopy(record)
+      nextRecord.copyable = acceptedProposalCopy(nextRecord)
     } else {
-      delete record.copyable
+      delete nextRecord.copyable
     }
-    secureWriteJson(proposalPath(id), record)
-    return { ok: true, status: 200, record }
+    const expectedVersion = ensureLedgerSeed(id, record)
+    const appended = eventLedger.append({
+      aggregateId: id,
+      expectedVersion,
+      type: 'proposal-reviewed',
+      actor: review.reviewer,
+      at: updatedAt,
+      payload: {
+        status: nextStatus,
+        review,
+        ...(nextRecord.copyable ? { copyable: nextRecord.copyable } : {}),
+      },
+    })
+    if (!appended.ok) {
+      return { ok: false, status: appended.status, error: appended.error }
+    }
+    nextRecord.proposal.eventVersion = appended.event.version
+    secureWriteJson(proposalPath(id), nextRecord)
+    return { ok: true, status: 200, record: nextRecord }
   }
 
   return {
     proposalsDir,
+    eventLedger,
     proposalPath,
     readProposal,
     listProposals,

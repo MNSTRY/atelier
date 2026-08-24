@@ -129,6 +129,19 @@ test('proposal lifecycle is nonce-protected, local, and copy-only', async (t) =>
   assert.equal(accepted.body.copyable.diff, diff)
   assert.match(accepted.body.copyable.agentInstructions, /normal repo editing/)
   assert.deepEqual(fingerprint(sourceFile), before)
+  const ledgerPath = path.join(workspaceRoot, '.atelier-proposals', 'events.ndjson')
+  const events = fs
+    .readFileSync(ledgerPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+  assert.deepEqual(events.map((event) => event.type), [
+    'proposal-created',
+    'proposal-reviewed',
+    'proposal-reviewed',
+  ])
+  assert.equal(events.at(-1).version, 3)
+  assert.equal(fs.statSync(ledgerPath).mode & 0o777, 0o600)
 
   const page = await fetch(`${base}/proposals/${id}`)
   const pageText = await page.text()
