@@ -10,25 +10,33 @@ a location, never the matched content.
 ### release:audit
 
 `npm run release:audit` (`scripts/check-release-tarball.mjs`) audits the exact
-tarball `npm pack` would publish:
+tarball `npm pack` would publish. `npm run release:candidate` packs once and
+passes the same archive and expected SHA-256 through this audit and both
+consumer smokes:
 
 - Package metadata: name, license, exposed CLI bins, and a mandatory `files`
   allowlist in `package.json`.
 - Tarball allowlist: every packed path must match a known-good pattern; any
-  unexpected file fails the audit.
+  unexpected file fails the audit. The extracted archive inventory must match
+  the `npm pack --json` inventory exactly.
 - Content scan: every packed file is scanned against committed structural
   patterns (absolute user paths, machine-local temp paths, agent-local state
   paths, key material, secret-like assignments) and against the maintainer-held
   denylist described below.
 - Egress scan: the canonical egress control receives the exact `npm pack`
   inventory and inspects every packed executable or markup file, including a
-  test-shaped path if one is ever admitted to the artifact.
+  test-shaped path if one is ever admitted to the artifact. Packed test-fixture
+  suppression markers are refused; reviewed local-computed markers are counted.
 - Version drift: `CHANGELOG.md` must contain a `## <version>` heading and
   `README.md` must mention the version. The expected version and tarball name
   are derived from `package.json`, never hardcoded.
 
 Exit codes: `0` clean, `1` findings, `2` configuration error (for example an
 unavailable denylist without explicit acknowledgment).
+
+`release:candidate` additionally requires a clean tree, records the candidate
+commit and tarball digest, and refuses a version already bound to a different
+tagged commit. It is a release-evidence command, not a publication command.
 
 ### repo:check
 
@@ -89,6 +97,13 @@ changelog and the migration registry honest about breaking changes:
 - Every registered migration record is re-validated against the migration
   record contract.
 
+### public-api:compat
+
+`npm run public-api:compat` compares every package subpath and named JavaScript
+export published by `v0.2.0-alpha.4` with the current package. Removing one
+fails closed. It also rejects modified source that retains the already-tagged
+baseline version, independently of the release-candidate check.
+
 ### egress:check
 
 `npm run egress:check` (`atelier egress check`) scans package runtime paths for
@@ -103,13 +118,16 @@ disabled and without copying the publisher's `overrides`, checks the installed
 dependency tree, imports every declared JavaScript export, parses every
 declared JSON export, and validates a sample export through both API and CLI.
 It proves the tarball is installable and functional exactly as a bare consumer
-receives it.
+receives it from disk. The offline smoke deliberately warms the locked registry
+dependency closure first; it does not prove that a not-yet-published version
+resolves from a cold or live registry.
 
 ### assurance:mutation-smoke
 
 `npm run assurance:mutation-smoke` runs local, synthetic negative controls for
-the boundary, graph, egress, sidecar, and distribution families. Every fixture
-introduces one named failure and must be refused. This is part of
+the boundary, graph, packed and direct egress, sidecar, and distribution
+families. Every fixture introduces one named failure and must be refused by the
+terminal CLI or release command where one exists. This is part of
 `prepublishOnly`; a control that stops detecting its failure mode blocks the
 release even if positive-path tests remain green.
 

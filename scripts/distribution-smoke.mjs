@@ -10,9 +10,10 @@
 // assert, clean up in finally.
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -26,6 +27,7 @@ const ATTRIBUTION = 'powered by MNSTRY Atelier'
 const tempRoot = mkdtempSync(join(tmpdir(), 'mnstry-atelier-distribution-'))
 const wrapperRoot = join(tempRoot, 'loomworks-studio')
 let tarballPath
+let ownsTarball = false
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -51,8 +53,17 @@ function assert(condition, message) {
 }
 
 try {
-  const pack = JSON.parse(run('npm', ['pack', '--json']))[0]
-  tarballPath = join(packageRoot, pack.filename)
+  const suppliedTarball = process.env.ATELIER_CANDIDATE_TARBALL
+  if (suppliedTarball) tarballPath = resolve(suppliedTarball)
+  else {
+    const pack = JSON.parse(run('npm', ['pack', '--json']))[0]
+    tarballPath = join(packageRoot, pack.filename)
+    ownsTarball = true
+  }
+  const tarballSha256 = createHash('sha256').update(readFileSync(tarballPath)).digest('hex')
+  if (process.env.ATELIER_EXPECTED_TARBALL_SHA256 && process.env.ATELIER_EXPECTED_TARBALL_SHA256 !== tarballSha256) {
+    throw new Error(`candidate tarball SHA-256 mismatch: expected ${process.env.ATELIER_EXPECTED_TARBALL_SHA256}, got ${tarballSha256}`)
+  }
 
   cpSync(examplePath, wrapperRoot, {
     recursive: true,
@@ -121,8 +132,8 @@ try {
     'distribution check must report the advisory pack-manifest marker as satisfied',
   )
 
-  console.log('[distribution:smoke] the reference distribution installs, brands, loads its pack, and passes attribution checks')
+  console.log(`[distribution:smoke] SHA-256 ${tarballSha256}; the reference distribution installs, brands, loads its pack, and passes attribution checks`)
 } finally {
-  if (tarballPath) rmSync(tarballPath, { force: true })
+  if (tarballPath && ownsTarball) rmSync(tarballPath, { force: true })
   rmSync(tempRoot, { recursive: true, force: true })
 }

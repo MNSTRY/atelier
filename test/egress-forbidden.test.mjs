@@ -144,4 +144,13 @@ test('marked test fixtures can contain non-local examples', () => {
     { file: 'test/example.test.mjs' },
   )
   assert.deepEqual(marked, [])
+
+  const packed = forbiddenEgressFindingsForText(
+    `
+      // ${TEST_FIXTURE_ALLOW_MARKER}
+      await fetch('https://mnstry.example/fixture')
+    `,
+    { file: 'src/test/example.test.mjs', allowTestFixtures: false },
+  )
+  assert.equal(packed.some((finding) => finding.type === 'non-localhost-fetch'), true)
 })

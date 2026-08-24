@@ -28,8 +28,8 @@ function isTestFile(file) {
   return /(?:^|[/.])test(?:s)?[/.]/.test(file) || /\.(?:test|spec)\.[cm]?[jt]s$/.test(file)
 }
 
-function isMarkedTestFixture(file, text) {
-  return isTestFile(file) && text.includes(TEST_FIXTURE_ALLOW_MARKER)
+function isMarkedTestFixture(file, text, allowTestFixtures) {
+  return allowTestFixtures && isTestFile(file) && text.includes(TEST_FIXTURE_ALLOW_MARKER)
 }
 
 function shouldScanFile(file, { includeTests = true } = {}) {
@@ -146,8 +146,8 @@ function callBlock(lines, index) {
   return lines.slice(index, Math.min(lines.length, index + 5)).join('\n')
 }
 
-function isFixtureAllowed(lines, index, file) {
-  return isTestFile(file) && callBlock(lines, Math.max(0, index - 2)).includes(TEST_FIXTURE_ALLOW_MARKER)
+function isFixtureAllowed(lines, index, file, allowTestFixtures) {
+  return allowTestFixtures && isTestFile(file) && callBlock(lines, Math.max(0, index - 2)).includes(TEST_FIXTURE_ALLOW_MARKER)
 }
 
 function isLocalComputedAllowed(lines, index) {
@@ -267,14 +267,14 @@ function markupFindingsForLine(line, { findings, file, lineNumber }) {
   }
 }
 
-export function forbiddenEgressFindingsForText(text, { file = 'input' } = {}) {
-  if (isMarkedTestFixture(file, text)) return []
+export function forbiddenEgressFindingsForText(text, { file = 'input', allowTestFixtures = true } = {}) {
+  if (isMarkedTestFixture(file, text, allowTestFixtures)) return []
   const findings = []
   const lines = String(text || '').split(/\r?\n/)
   const isMarkup = MARKUP_EXTS.has(path.extname(file))
 
   for (let index = 0; index < lines.length; index += 1) {
-    if (isFixtureAllowed(lines, index, file)) continue
+    if (isFixtureAllowed(lines, index, file, allowTestFixtures)) continue
     const lineCode = trimmedCodeLine(lines[index])
     const hasJsPrimitive = /\b(?:fetch|https?\.(?:request|get)|http2\.connect|navigator\.sendBeacon|new\s+EventSource|new\s+WebSocket|net\.connect|net\.createConnection|dns\.(?:resolve|lookup|promises\.resolve|promises\.lookup)|import)\s*\(/.test(lineCode)
       || /\bnew\s+(?:XMLHttpRequest|Image)\b/.test(lineCode)
@@ -308,11 +308,12 @@ export function checkForbiddenEgress({
   scanPaths = DEFAULT_EGRESS_SCAN_PATHS,
   includeTests = true,
   files = null,
+  allowTestFixtures = true,
 } = {}) {
   const findings = []
   for (const file of discoverForbiddenEgressScanFiles({ root, scanPaths, includeTests, files })) {
     const rel = path.relative(root, file)
-    findings.push(...forbiddenEgressFindingsForText(fs.readFileSync(file, 'utf8'), { file: rel }))
+    findings.push(...forbiddenEgressFindingsForText(fs.readFileSync(file, 'utf8'), { file: rel, allowTestFixtures }))
   }
   return findings
 }

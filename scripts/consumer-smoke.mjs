@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -13,6 +14,7 @@ const expectedVersion = packageJson.version
 const expectedTarballName = `${packageName.replace(/^@/, '').replace('/', '-')}-${expectedVersion}.tgz`
 const tempRoot = mkdtempSync(join(tmpdir(), 'mnstry-atelier-consumer-'))
 let tarballPath
+let ownsTarball = false
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -23,12 +25,20 @@ function run(command, args, options = {}) {
 }
 
 try {
-  const pack = JSON.parse(run('npm', ['pack', '--json']))[0]
+  const suppliedTarball = process.env.ATELIER_CANDIDATE_TARBALL
+  const pack = suppliedTarball
+    ? { name: packageName, filename: basename(suppliedTarball) }
+    : JSON.parse(run('npm', ['pack', '--json']))[0]
   if (pack.name !== packageName) throw new Error(`expected npm pack name ${packageName}, got ${pack.name}`)
   if (pack.filename !== expectedTarballName) {
     throw new Error(`expected npm pack filename ${expectedTarballName}, got ${pack.filename}`)
   }
-  tarballPath = join(packageRoot, pack.filename)
+  tarballPath = suppliedTarball ? resolve(suppliedTarball) : join(packageRoot, pack.filename)
+  ownsTarball = !suppliedTarball
+  const tarballSha256 = createHash('sha256').update(readFileSync(tarballPath)).digest('hex')
+  if (process.env.ATELIER_EXPECTED_TARBALL_SHA256 && process.env.ATELIER_EXPECTED_TARBALL_SHA256 !== tarballSha256) {
+    throw new Error(`candidate tarball SHA-256 mismatch: expected ${process.env.ATELIER_EXPECTED_TARBALL_SHA256}, got ${tarballSha256}`)
+  }
 
   writeFileSync(
     join(tempRoot, 'package.json'),
@@ -144,8 +154,8 @@ for (const [subpath, target] of Object.entries(declaredExports)) {
     throw new Error('packed disclosure command did not scan the staged consumer fixture')
   }
 
-  console.log(`[consumer:smoke] packed tarball installs without publisher overrides and imports ${Object.keys(packageJson.exports).length} declared exports`)
+  console.log(`[consumer:smoke] SHA-256 ${tarballSha256}; packed tarball installs without publisher overrides and imports ${Object.keys(packageJson.exports).length} declared exports`)
 } finally {
-  if (tarballPath) rmSync(tarballPath, { force: true })
+  if (tarballPath && ownsTarball) rmSync(tarballPath, { force: true })
   rmSync(tempRoot, { recursive: true, force: true })
 }

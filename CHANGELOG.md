@@ -15,7 +15,8 @@
   so graph validation and generated-only upgrade recovery cannot drift apart.
 - Bind release egress verification to the exact `npm pack` inventory, including
   test-shaped paths that are actually published, and make the legacy egress
-  checker a thin delegate to the canonical scanner.
+  checker a thin delegate to the canonical scanner. Packed fixture-suppression
+  markers are refused and reviewed local-computed suppressions are counted.
 - Harden `atelier dev` so it binds only to loopback, requires a generated
   `atelier.manifest.json`, serves only enrolled safe static files after
   realpath validation, and applies host, fetch-site, origin, method, and nonce
@@ -23,12 +24,18 @@
 - Make collaboration records fail closed with typed corrupt-record results,
   bounded ledger reads, write locking, and explicit compaction. Proposal
   authority now follows declared capabilities and apply endpoints rather than
-  action-like words, and the unused provider-analysis surface was removed.
+  action-like words, and the never-released provider-analysis experiment was
+  removed before it became part of a published API.
 - Render expected project and JSON failures as typed, actionable CLI messages
   without stacks by default; set `ATELIER_DEBUG=1` to include diagnostic stacks.
 - Strengthen release proof with negative-control mutations and a bare consumer
   that installs without publisher overrides, validates its dependency tree,
-  and imports every declared package export.
+  and imports every declared package export. A candidate is packed once, bound
+  by SHA-256, and passed unchanged through tarball audit, consumer, and branded
+  distribution gates.
+- Pin every JavaScript subpath and named export from `v0.2.0-alpha.4` in a
+  compatibility baseline. Release tooling refuses removals and refuses to bind
+  modified source to an already-tagged package version.
 - Add a portable `atelier disclosure check` command that scans tracked or
   staged consumer content, requires private denylist coverage by default, and
   refuses tracked repository-local denylist files.
