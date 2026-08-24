@@ -34,8 +34,9 @@
   by SHA-256, and passed unchanged through tarball audit, consumer, and branded
   distribution gates.
 - Pin every JavaScript subpath and named export from `v0.2.0-alpha.4` in a
-  compatibility baseline. Release tooling refuses removals and refuses to bind
-  modified source to an already-tagged package version.
+  registry-verified compatibility baseline with immutable tag-commit and
+  public-artifact provenance. Release tooling refuses removals, provenance
+  drift, and binding modified source to an already-tagged package version.
 - Add a portable `atelier disclosure check` command that scans tracked or
   staged consumer content, requires private denylist coverage by default, and
   refuses tracked repository-local denylist files.

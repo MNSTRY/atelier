@@ -54,13 +54,17 @@ async function main() {
     console.error(`[public-api:compat] baseline tag is unavailable: ${baseline.baselineTag}`)
     process.exit(2)
   }
+  if (!baseline.baselineCommit || baseline.baselineCommit !== baselineCommit) {
+    console.error(`[public-api:compat] baseline provenance mismatch: ${baseline.baselineTag} resolves to ${baselineCommit}, recorded ${baseline.baselineCommit ?? 'none'}`)
+    findings.push('public API baseline provenance drift')
+  }
   if (packageJson.version === baseline.baselineVersion && head !== baselineCommit) {
     console.error(`[public-api:compat] version ${packageJson.version} is already bound to ${baseline.baselineTag} at ${baselineCommit}; current HEAD ${head} must use a new version`)
     findings.push('published version identity reused')
   }
 
   if (findings.length > 0) process.exit(1)
-  console.log(`[public-api:compat] ${baseline.requiredSubpaths.length} published subpath(s) and ${Object.values(baseline.requiredModuleExports).reduce((sum, names) => sum + names.length, 0)} named export(s) remain compatible with ${baseline.baselineTag}`)
+  console.log(`[public-api:compat] ${baseline.requiredSubpaths.length} published subpath(s) and ${Object.values(baseline.requiredModuleExports).reduce((sum, names) => sum + names.length, 0)} named export(s) remain compatible with registry-verified ${baseline.baselineTag} (${baseline.baselineCommit})`)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === fileURLToPath(pathToFileURL(process.argv[1]))) {

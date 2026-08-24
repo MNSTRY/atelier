@@ -102,7 +102,11 @@ changelog and the migration registry honest about breaking changes:
 `npm run public-api:compat` compares every package subpath and named JavaScript
 export published by `v0.2.0-alpha.4` with the current package. Removing one
 fails closed. It also rejects modified source that retains the already-tagged
-baseline version, independently of the release-candidate check.
+baseline version, independently of the release-candidate check. The baseline
+records and verifies its tag commit and the public npm artifact identity; the
+published archive was independently checked to contain all 20 subpaths and 212
+named exports. This is runtime JavaScript shape continuity, not a promise about
+function signatures, types, or behavior.
 
 ### egress:check
 

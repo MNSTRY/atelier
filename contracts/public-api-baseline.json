@@ -1,7 +1,17 @@
 {
   "schema": "mnstry.atelier-public-api-baseline@v1",
   "baselineTag": "v0.2.0-alpha.4",
+  "baselineCommit": "6fed5b9e1077b361e26b2b581ea67a55e7634963",
   "baselineVersion": "0.2.0-alpha.4",
+  "publishedRegistryArtifact": {
+    "package": "@mnstry/atelier",
+    "version": "0.2.0-alpha.4",
+    "shasum": "9f67f5b7fabc748ec235bbe85587a71b5ad639c8",
+    "integrity": "sha512-mt2vWnFZtBAc8C+bzjcgrIPYRGgVOhFHm4SPDrnXvWgcdDY/G2aUY5KP6YPmjkRCMvewGMsH7Wg+8i63f1/onQ==",
+    "sha256": "a032971977d9fbd3b7adc94f204739d4202b1754d72a77cbc79f4c473850e531",
+    "entryCount": 265,
+    "verifiedAt": "2026-08-25"
+  },
   "requiredSubpaths": [
     ".",
     "./cli",
