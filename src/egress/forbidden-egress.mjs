@@ -32,7 +32,7 @@ function isMarkedTestFixture(file, text) {
   return isTestFile(file) && text.includes(TEST_FIXTURE_ALLOW_MARKER)
 }
 
-function shouldScanFile(file, { includeTests = false } = {}) {
+function shouldScanFile(file, { includeTests = true } = {}) {
   const ext = path.extname(file)
   if (!SCRIPT_EXTS.has(ext) && !MARKUP_EXTS.has(ext)) return false
   if (INTERNAL_SCANNER_FILES.has(path.basename(file))) return false
@@ -61,17 +61,28 @@ function uniqueFiles(files) {
 export function discoverForbiddenEgressScanFiles({
   root = packageRoot,
   scanPaths = DEFAULT_EGRESS_SCAN_PATHS,
-  includeTests = false,
+  includeTests = true,
+  files = null,
 } = {}) {
-  const files = []
+  if (Array.isArray(files)) {
+    const resolvedRoot = path.resolve(root)
+    return uniqueFiles(
+      files
+        .map((file) => path.resolve(resolvedRoot, file))
+        .filter((file) => file === resolvedRoot || file.startsWith(`${resolvedRoot}${path.sep}`))
+        .filter((file) => fs.existsSync(file) && fs.statSync(file).isFile())
+        .filter((file) => shouldScanFile(file, { includeTests })),
+    )
+  }
+  const discovered = []
   for (const rel of scanPaths) {
     const abs = path.resolve(root, rel)
     if (!fs.existsSync(abs)) continue
     const stat = fs.statSync(abs)
-    if (stat.isDirectory()) files.push(...walk(abs, { includeTests }))
-    else if (shouldScanFile(abs, { includeTests })) files.push(abs)
+    if (stat.isDirectory()) discovered.push(...walk(abs, { includeTests }))
+    else if (shouldScanFile(abs, { includeTests })) discovered.push(abs)
   }
-  return uniqueFiles(files)
+  return uniqueFiles(discovered)
 }
 
 function hostnameFromNetworkUrl(value) {
@@ -295,10 +306,11 @@ export function forbiddenEgressFindingsForText(text, { file = 'input' } = {}) {
 export function checkForbiddenEgress({
   root = packageRoot,
   scanPaths = DEFAULT_EGRESS_SCAN_PATHS,
-  includeTests = false,
+  includeTests = true,
+  files = null,
 } = {}) {
   const findings = []
-  for (const file of discoverForbiddenEgressScanFiles({ root, scanPaths, includeTests })) {
+  for (const file of discoverForbiddenEgressScanFiles({ root, scanPaths, includeTests, files })) {
     const rel = path.relative(root, file)
     findings.push(...forbiddenEgressFindingsForText(fs.readFileSync(file, 'utf8'), { file: rel }))
   }

@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compileScanPatterns, STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
+import { checkForbiddenEgress, discoverForbiddenEgressScanFiles } from '../src/egress/forbidden-egress.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -90,6 +91,15 @@ if (pack.name !== expectedPackageName) fail(`npm pack name must be ${expectedPac
 if (pack.filename !== expectedTarballName) fail(`npm pack filename must be ${expectedTarballName}`)
 const paths = pack.files.map((entry) => entry.path).sort()
 let failures = 0
+
+// Release claims are about the exact tarball, not a hand-maintained source
+// directory list. This inventory includes test-like directories under shipped
+// paths; only an explicit, reviewable fixture marker may suppress a fixture.
+const packedEgressFiles = discoverForbiddenEgressScanFiles({ root: packageRoot, files: paths })
+for (const finding of checkForbiddenEgress({ root: packageRoot, files: paths })) {
+  console.error(`[release:audit] packed egress finding ${finding.file}:${finding.line} ${finding.type}: ${finding.detail}`)
+  failures += 1
+}
 
 for (const requiredPortableFile of [
   'docs/local-services.md',
@@ -210,4 +220,4 @@ if (failures > 0 || process.exitCode) {
   process.exit(1)
 }
 
-console.log(`[release:audit] ${paths.length} tarball file(s) passed OSS scrub`)
+console.log(`[release:audit] ${paths.length} tarball file(s) passed OSS scrub; ${packedEgressFiles.length} executable/markup file(s) passed egress scan`)

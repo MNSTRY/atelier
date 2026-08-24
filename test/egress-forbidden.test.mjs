@@ -10,6 +10,7 @@ import {
   discoverForbiddenEgressScanFiles,
   forbiddenEgressFindingsForText,
 } from '../src/egress/forbidden-egress.mjs'
+import { checkForbiddenEgress as compatibilityCheckForbiddenEgress } from '../src/egress/check.mjs'
 
 function makeTempRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-egress-'))
@@ -19,6 +20,10 @@ function writeFile(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, text)
 }
+
+test('legacy egress module delegates to the canonical scanner', () => {
+  assert.equal(compatibilityCheckForbiddenEgress, checkForbiddenEgress)
+})
 
 test('egress check allows explicit local sidecar calls', () => {
   assert.deepEqual(
@@ -81,11 +86,12 @@ test('egress check fails closed for computed primitives unless marked local-comp
   assert.deepEqual(allowed, [])
 })
 
-test('egress scan discovery covers package paths and ignores unmarked tests by default', () => {
+test('egress scan discovery covers package paths and scans shipped test-like directories', () => {
   const root = makeTempRoot()
   writeFile(path.join(root, 'src', 'server', 'safe.mjs'), "await fetch('http://127.0.0.1:8137/api/health')\n")
   writeFile(path.join(root, 'src', 'ui', 'shell.js'), "await fetch('/api/context')\n")
   writeFile(path.join(root, 'src', 'support', 'unsafe.mjs'), "await fetch('https://mnstry.example/support')\n")
+  writeFile(path.join(root, 'src', 'runtime', 'test', 'shipped-unsafe.mjs'), "await fetch('https://mnstry.example/shipped')\n")
   writeFile(path.join(root, 'test', 'unsafe.test.mjs'), "await fetch('https://mnstry.example/test-only')\n")
   writeFile(path.join(root, 'scripts', 'guard.sh'), 'curl http://127.0.0.1:8137/api/health\n')
   writeFile(path.join(root, 'scripts', 'bad.sh'), 'curl https://mnstry.example/fleet\n')
@@ -94,6 +100,7 @@ test('egress scan discovery covers package paths and ignores unmarked tests by d
   assert.ok(rels.includes(path.join('src', 'server', 'safe.mjs')))
   assert.ok(rels.includes(path.join('src', 'ui', 'shell.js')))
   assert.ok(rels.includes(path.join('src', 'support', 'unsafe.mjs')))
+  assert.ok(rels.includes(path.join('src', 'runtime', 'test', 'shipped-unsafe.mjs')))
   assert.ok(rels.includes(path.join('scripts', 'guard.sh')))
   assert.ok(!rels.includes(path.join('test', 'unsafe.test.mjs')))
 
@@ -102,9 +109,29 @@ test('egress scan discovery covers package paths and ignores unmarked tests by d
     findings.map((item) => `${item.file}:${item.type}`).sort(),
     [
       `${path.join('scripts', 'bad.sh')}:shell-http-egress`,
+      `${path.join('src', 'runtime', 'test', 'shipped-unsafe.mjs')}:non-localhost-fetch`,
       `${path.join('src', 'support', 'unsafe.mjs')}:non-localhost-fetch`,
     ].sort(),
   )
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('an explicit pack inventory is the scan boundary and refuses traversal', () => {
+  const root = makeTempRoot()
+  writeFile(path.join(root, 'src', 'safe.mjs'), 'export {}\n')
+  writeFile(path.join(root, 'src', 'test', 'packed.mjs'), "await fetch('https://mnstry.example/packed')\n")
+  writeFile(path.join(root, 'not-packed.mjs'), "await fetch('https://mnstry.example/unpacked')\n")
+
+  const files = discoverForbiddenEgressScanFiles({
+    root,
+    files: ['src/safe.mjs', 'src/test/packed.mjs', 'not-packed.mjs', '../outside.mjs'],
+  })
+  assert.deepEqual(
+    files.map((file) => path.relative(root, file)).sort(),
+    ['not-packed.mjs', path.join('src', 'safe.mjs'), path.join('src', 'test', 'packed.mjs')].sort(),
+  )
+  const findings = checkForbiddenEgress({ root, files: ['src/safe.mjs', 'src/test/packed.mjs'] })
+  assert.deepEqual(findings.map((finding) => finding.file), [path.join('src', 'test', 'packed.mjs')])
   fs.rmSync(root, { recursive: true, force: true })
 })
 
