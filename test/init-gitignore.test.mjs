@@ -5,8 +5,10 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { execNpmSync } from '../scripts/npm-cli.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
+const DIRECTORY_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir'
 
 test('init writes a workspace .gitignore from the shipped gitignore template', () => {
   // Simulate the installed layout: npm pack strips files named .gitignore, so
@@ -18,7 +20,7 @@ test('init writes a workspace .gitignore from the shipped gitignore template', (
     for (const entry of ['bin', 'src', 'templates', 'contracts', 'package.json']) {
       fs.cpSync(path.join(ROOT, entry), path.join(install, entry), { recursive: true })
     }
-    fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(install, 'node_modules'), 'dir')
+    fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(install, 'node_modules'), DIRECTORY_LINK_TYPE)
     for (const template of ['private-domain', 'shared-project', 'distribution']) {
       const target = path.join(workspaces, template)
       execFileSync(process.execPath, [path.join(install, 'bin', 'atelier.mjs'), 'init', '--template', template, '--target', target], {
@@ -27,7 +29,7 @@ test('init writes a workspace .gitignore from the shipped gitignore template', (
       })
       const gitignorePath = path.join(target, '.gitignore')
       assert.ok(fs.existsSync(gitignorePath), `${template}: workspace .gitignore missing`)
-      const [firstLine] = fs.readFileSync(gitignorePath, 'utf8').split('\n')
+      const [firstLine] = fs.readFileSync(gitignorePath, 'utf8').split(/\r?\n/)
       assert.equal(firstLine, '.atelier-local/', `${template}: workspace .gitignore first line`)
       assert.equal(fs.existsSync(path.join(target, 'gitignore')), false, `${template}: literal gitignore must be renamed, not copied`)
     }
@@ -46,7 +48,7 @@ test('init renames gitignore only at the template root, not nested files', () =>
     for (const entry of ['bin', 'src', 'templates', 'contracts', 'package.json']) {
       fs.cpSync(path.join(ROOT, entry), path.join(install, entry), { recursive: true })
     }
-    fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(install, 'node_modules'), 'dir')
+    fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(install, 'node_modules'), DIRECTORY_LINK_TYPE)
     const nestedDir = path.join(install, 'templates', 'private-domain-workspace', 'nested-fixture')
     fs.mkdirSync(nestedDir, { recursive: true })
     fs.writeFileSync(path.join(nestedDir, 'gitignore'), 'nested-content\n')
@@ -65,7 +67,7 @@ test('init renames gitignore only at the template root, not nested files', () =>
 })
 
 test('npm pack ships the template gitignore files', () => {
-  const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+  const output = execNpmSync(['pack', '--dry-run', '--json'], {
     cwd: ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

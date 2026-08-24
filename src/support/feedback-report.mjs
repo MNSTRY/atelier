@@ -56,7 +56,7 @@ const USAGE = `Usage: atelier feedback <subcommand>
 Subcommands:
   create --message TEXT | --message-file PATH [--context FILE] [--include-gates]
       Assemble a local feedback report from your own words and write it to
-      ${LOCAL_STATE_DIR}/feedback/<hash>.json (mode 0600). This is the
+      ${LOCAL_STATE_DIR}/feedback/<hash>.json (mode 0600 on POSIX). This is the
       default subcommand. The report is first walked with the support-bundle
       banned key and value patterns; if anything matches, nothing is written
       and the refusal names the pattern label and location only.
@@ -202,8 +202,9 @@ export function buildFeedbackReport({
 }
 
 export function writeFeedbackReport(payload, { baseDir = process.cwd() } = {}) {
-  const relative = path.join(LOCAL_STATE_DIR, 'feedback', `${feedbackReportHash(payload)}.json`)
-  const file = path.join(baseDir, relative)
+  const nativeRelative = path.join(LOCAL_STATE_DIR, 'feedback', `${feedbackReportHash(payload)}.json`)
+  const relative = nativeRelative.split(path.sep).join('/')
+  const file = path.join(baseDir, nativeRelative)
   // "Local state" is only local if the directory it lands in is ignored, and
   // feedback writes wherever the user happens to stand rather than in a
   // configured workspace. Same git check-ignore test the project chassis runs

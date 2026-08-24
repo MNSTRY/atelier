@@ -14,6 +14,7 @@ import {
   resolvePathValue,
   writeJson,
 } from '../project/config.mjs'
+import { packageRootFrom } from '../project/package-root.mjs'
 import {
   BOUNDARY_POLICY_SCHEMA,
   checkBoundaryPolicy,
@@ -36,7 +37,7 @@ export const MIGRATION_CLASSES = new Set([
   'breaking',
 ])
 
-const packageRoot = path.resolve(new URL('../..', import.meta.url).pathname)
+const packageRoot = packageRootFrom(import.meta.url)
 const packageJson = readJson(path.join(packageRoot, 'package.json'))
 const lockSchema = readJson(path.join(packageRoot, 'contracts', 'atelier-lock.v1.schema.json'))
 const REVIEW_MARKER_RE = /(Atelier-Boundary-Review|boundary-review)\s*:\s*(approved|reviewed)/i

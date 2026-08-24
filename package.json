@@ -49,7 +49,7 @@
     "contract": "node src/check-atelier-export-contract.mjs",
     "dry-run": "node src/validate-atelier-export-dry-run.mjs fixtures/atelier-export/sample-studio-offer.v1.json",
     "test": "node --test test/*.test.mjs",
-    "syntax:check": "find bin src -name '*.mjs' -print0 | xargs -0 -n1 node --check",
+    "syntax:check": "node scripts/check-syntax.mjs",
     "graph:test": "node --test test/graph.test.mjs test/graph-knowledge-graph.test.mjs test/graph-determinism.test.mjs test/graph-source-formats.test.mjs",
     "project:test": "node --test test/project.test.mjs test/project-config.test.mjs test/projection-policy.test.mjs test/projection-alignment.test.mjs",
     "server:security:test": "node --test test/server.test.mjs test/server-security.test.mjs test/server-proposals.test.mjs",

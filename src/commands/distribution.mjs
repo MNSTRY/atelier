@@ -22,7 +22,8 @@ const logError = (message) => console.error(`${PREFIX} ${message}`)
 
 // Paths in output stay relative to the checked distribution so logs never
 // leak machine-local absolute paths.
-const displayPath = (target, file) => path.relative(target, file) || path.basename(file)
+const portablePath = (file) => file.split(path.sep).join('/')
+const displayPath = (target, file) => portablePath(path.relative(target, file) || path.basename(file))
 
 function checkReadmeAttribution(target) {
   const readmePath = path.join(target, 'README.md')

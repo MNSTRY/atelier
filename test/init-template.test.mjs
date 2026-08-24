@@ -72,7 +72,7 @@ test('init --template distribution writes the branded ext block, lock, and attri
     assert.ok(readme.includes('powered by MNSTRY Atelier'), 'template README must carry the exact attribution byte string')
 
     const gitignore = fs.readFileSync(path.join(target, '.gitignore'), 'utf8')
-    assert.ok(gitignore.split('\n').includes('atelier-attestation-key.local.json'), 'template .gitignore must ignore the local attestation signing key')
+    assert.ok(gitignore.split(/\r?\n/).includes('atelier-attestation-key.local.json'), 'template .gitignore must ignore the local attestation signing key')
 
     // Boundary personalization must have run unchanged on the cloned policy.
     const policy = JSON.parse(fs.readFileSync(path.join(target, 'boundary-policy.v1.json'), 'utf8'))

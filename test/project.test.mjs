@@ -14,7 +14,7 @@ test('neutral project config resolves without adapter-specific names', (t) => {
   const project = resolveProjectConfig({ argv: [`--project=${sample.config}`], cwd: sample.dir })
   assert.equal(project.config.name, 'sample-workspace')
   assert.equal(project.repos[0].name, 'content')
-  assert.match(project.graphPath, /atelier-output\/knowledge\.graph\.json$/)
+  assert.match(project.graphPath, /atelier-output[\\/]knowledge\.graph\.json$/)
 })
 
 test('project projection writes a readable local GUI from the graph', (t) => {

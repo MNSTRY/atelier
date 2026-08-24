@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execNpmSync } from './npm-cli.mjs'
 import { compileScanPatterns, STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -63,7 +63,7 @@ function fail(message) {
 }
 
 function packDryRun() {
-  const stdout = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+  const stdout = execNpmSync(['pack', '--dry-run', '--json'], {
     cwd: packageRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

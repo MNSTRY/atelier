@@ -88,7 +88,7 @@ test('validate --json emits the report schema with digest and protocol count', (
   // Log-safety: emitted paths are config-relative, never machine-local
   // absolute paths (same rationale as distribution.mjs output).
   assert.equal(path.isAbsolute(pack.path), false)
-  assert.equal(pack.path, path.join('packs', 'sample.readiness.v1.json'))
+  assert.equal(pack.path, 'packs/sample.readiness.v1.json')
   const rawBytes = fs.readFileSync(path.join(sample.dir, 'packs/sample.readiness.v1.json'))
   const protocolBytes = fs.readFileSync(path.join(sample.dir, 'packs/protocols/contract-gate.v1.json'))
   assert.equal(pack.digest, computePackDigest(rawBytes, [protocolBytes]))

@@ -181,12 +181,12 @@ Checks a distribution package for the required MNSTRY attribution markers. Block
   ${c} attestation verify <attestation.json> --public-key FILE [--payload FILE] [--json]
   ${c} attestation keygen --key-id ID [--algorithm ed25519|es256] [--out FILE]
 
-Records and checks admission decisions. hash prints the canonical payload hash (RFC 8785 JCS, SHA-256). sign reads the local signing key file. verify reads a public key file and exits 1 when it judges the attestation invalid. keygen writes the signing key file mode 0600, refuses to overwrite, and prints only the public key document.`,
+Records and checks admission decisions. hash prints the canonical payload hash (RFC 8785 JCS, SHA-256). sign reads the local signing key file. verify reads a public key file and exits 1 when it judges the attestation invalid. keygen writes the signing key file mode 0600 on POSIX, refuses to overwrite, and prints only the public key document.`,
     feedback: `Usage:
   ${c} feedback create --message TEXT | --message-file PATH [--context FILE] [--include-gates]
   ${c} feedback check FILE
 
-Assembles a local feedback report under ignored .atelier-local/feedback/ (mode 0600), scanned with the support-bundle banned key and value patterns before writing; any match refuses the write naming pattern label and location only. Files given to --message-file and --context must be valid UTF-8 text of at most 262144 bytes. The scan is a backstop, not clearance: read the whole report before sharing it. The kit has no send path — sharing the file is always the user's own explicit act.`,
+Assembles a local feedback report under ignored .atelier-local/feedback/ (mode 0600 on POSIX), scanned with the support-bundle banned key and value patterns before writing; any match refuses the write naming pattern label and location only. Files given to --message-file and --context must be valid UTF-8 text of at most 262144 bytes. The scan is a backstop, not clearance: read the whole report before sharing it. The kit has no send path — sharing the file is always the user's own explicit act.`,
     announcements: `Usage: ${c} announcements list [--dir DIR] [--public-key FILE] | verify <file> [--public-key FILE] [--json] | show <file> [--public-key FILE]
 
 MNSTRY announcements are a pull-only channel: signed JSON documents under announcements/ in the repository. The trust anchor is always the committed MNSTRY key, or one you pass explicitly with --public-key; --dir changes only where documents are read from and never which key verifies them. Every run names the key and keyId it used. The kit never fetches anything — receiving announcements is the git pull you chose to run, and show refuses to print a body whose signature does not verify.`,

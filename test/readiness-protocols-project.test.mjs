@@ -108,15 +108,18 @@ test('protocols honors the MNSTRY_ATELIER_PROJECT_CONFIG env var without any arg
 test('bare protocols stays bundled-only and never auto-detects a project from the cwd', (t) => {
   const sample = makePackProject(t)
   const previousCwd = process.cwd()
-  t.after(() => process.chdir(previousCwd))
   // Run from inside a directory that DOES contain a resolvable
   // atelier.project.json with packs: a cwd auto-detect would list the pack
   // protocol (or throw); bundled-only must list none.
-  process.chdir(sample.dir)
-  withEnv(undefined, () => {
-    const protocols = listedProtocolIds(['protocols', '--json'])
-    assert.ok(protocols.length > 0, 'bundled protocols must still be listed')
-    assert.equal(protocols.some((protocol) => protocol.id === PACK_PROTOCOL_ID), false)
-    assert.equal(protocols.some((protocol) => 'source' in protocol), false)
-  })
+  try {
+    process.chdir(sample.dir)
+    withEnv(undefined, () => {
+      const protocols = listedProtocolIds(['protocols', '--json'])
+      assert.ok(protocols.length > 0, 'bundled protocols must still be listed')
+      assert.equal(protocols.some((protocol) => protocol.id === PACK_PROTOCOL_ID), false)
+      assert.equal(protocols.some((protocol) => 'source' in protocol), false)
+    })
+  } finally {
+    process.chdir(previousCwd)
+  }
 })

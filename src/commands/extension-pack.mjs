@@ -86,6 +86,7 @@ function declaredEntries(project) {
 }
 
 const LOCK_MISMATCH_PATTERN = /^lock (version|digest) mismatch/
+const portablePath = (file) => file.split(path.sep).join('/')
 
 // One row per declared entry, in declaration order, joining the loader report
 // back onto the declaration. Loader messages without a usable packId (project-
@@ -107,7 +108,7 @@ function buildRows(project, result) {
     // (same rationale as distribution.mjs) so neither text nor --json output
     // ever leaks machine-local absolute paths.
     const resolvedPath = record?.path ?? (declaredPath ? path.resolve(project.configDir, declaredPath) : null)
-    const displayPath = resolvedPath ? path.relative(project.configDir, resolvedPath) || '.' : null
+    const displayPath = resolvedPath ? portablePath(path.relative(project.configDir, resolvedPath) || '.') : null
     return {
       id: label,
       status,

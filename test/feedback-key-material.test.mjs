@@ -75,6 +75,15 @@ test('a non-regular file is refused before it is read', (t) => {
     t.skip('mkfifo unavailable on this platform')
     return
   }
+  try {
+    if (!fs.lstatSync(fifo).isFIFO()) {
+      t.skip('mkfifo did not create a FIFO on this platform')
+      return
+    }
+  } catch {
+    t.skip('mkfifo did not create a readable directory entry on this platform')
+    return
+  }
 
   const result = run(['create', '--message', 'note', '--context', fifo], { cwd: dir })
 
@@ -95,7 +104,7 @@ test('an oversized --message is refused the way an oversized file is', (t) => {
   // either way — nothing is written — and assert the CLI's specific refusal
   // only when the process actually ran. The guard itself is covered on every
   // platform by the direct assertion below, which needs no spawn.
-  if (result.error?.code === 'E2BIG') {
+  if (result.error) {
     assert.equal(result.status, null)
   } else {
     assert.equal(result.status, 2)
@@ -115,14 +124,15 @@ test('the oversized-message guard holds without spawning a process', (t) => {
   const errors = []
   const originalError = console.error
   const originalCwd = process.cwd()
-  console.error = (...args) => errors.push(args.join(' '))
-  process.chdir(dir)
-  t.after(() => {
+  let status
+  try {
+    console.error = (...args) => errors.push(args.join(' '))
+    process.chdir(dir)
+    status = runFeedbackCommand(['create', '--message', huge])
+  } finally {
     console.error = originalError
     process.chdir(originalCwd)
-  })
-
-  const status = runFeedbackCommand(['create', '--message', huge])
+  }
 
   assert.equal(status, 2)
   assert.match(errors.join('\n'), /--message is longer than the \d+ byte limit/)

@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execNpmSync } from './npm-cli.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -22,8 +23,16 @@ function run(command, args, options = {}) {
   })
 }
 
+function runNpm(args, options = {}) {
+  return execNpmSync(args, {
+    cwd: options.cwd ?? packageRoot,
+    encoding: 'utf8',
+    stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
+  })
+}
+
 try {
-  const pack = JSON.parse(run('npm', ['pack', '--json']))[0]
+  const pack = JSON.parse(runNpm(['pack', '--json']))[0]
   if (pack.name !== packageName) throw new Error(`expected npm pack name ${packageName}, got ${pack.name}`)
   if (pack.filename !== expectedTarballName) {
     throw new Error(`expected npm pack filename ${expectedTarballName}, got ${pack.filename}`)
@@ -51,9 +60,9 @@ try {
   const closure = Object.entries(lockfile.packages ?? {})
     .filter(([path, entry]) => path.startsWith('node_modules/') && !entry.dev && entry.version)
     .map(([path, entry]) => `${path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length)}@${entry.version}`)
-  if (closure.length > 0) run('npm', ['cache', 'add', ...closure])
+  if (closure.length > 0) runNpm(['cache', 'add', ...closure])
 
-  run('npm', ['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
+  runNpm(['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
     cwd: tempRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -94,24 +103,28 @@ assert.equal(validateAuthoringProviderDescriptor({
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
+  const atelierCli = join('node_modules', '@mnstry', 'atelier', 'bin', 'atelier.mjs')
+  const legacyCli = join('node_modules', '@mnstry', 'atelier', 'bin', 'mnstry-atelier.mjs')
   const cliOutput = run(process.execPath, [
-    'node_modules/.bin/atelier',
+    atelierCli,
     'dry-run',
-    'node_modules/@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json',
+    join('node_modules', '@mnstry', 'atelier', 'fixtures', 'atelier-export', 'sample-studio-offer.v1.json'),
   ], { cwd: tempRoot })
   const cliReport = JSON.parse(cliOutput)
   if (cliReport.accepted !== true) throw new Error('atelier dry-run did not accept the sample fixture')
 
-  if (existsSync(join(tempRoot, 'node_modules', '.bin', 'mnstry'))) {
-    throw new Error('install must not create a bare mnstry command')
+  for (const command of ['mnstry', 'mnstry.cmd', 'mnstry.ps1']) {
+    if (existsSync(join(tempRoot, 'node_modules', '.bin', command))) {
+      throw new Error(`install must not create a bare ${command} command`)
+    }
   }
 
-  const directCliOutput = run(process.execPath, ['node_modules/.bin/atelier', '--version'], { cwd: tempRoot })
+  const directCliOutput = run(process.execPath, [atelierCli, '--version'], { cwd: tempRoot })
   if (directCliOutput.trim() !== expectedVersion) {
     throw new Error(`atelier --version returned ${directCliOutput.trim()}`)
   }
 
-  const legacyCliOutput = run(process.execPath, ['node_modules/.bin/mnstry-atelier', '--version'], { cwd: tempRoot })
+  const legacyCliOutput = run(process.execPath, [legacyCli, '--version'], { cwd: tempRoot })
   if (legacyCliOutput.trim() !== expectedVersion) {
     throw new Error(`mnstry-atelier --version returned ${legacyCliOutput.trim()}`)
   }
