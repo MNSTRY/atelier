@@ -168,6 +168,29 @@ kg:
   assert.ok(result.workspaceGraph.diagnostics.some((diagnostic) => diagnostic.type === 'private-repo-recommended'))
 })
 
+test('unclassified Markdown is enrolled privately with an explicit diagnostic', () => {
+  const { root, repo } = makeWorkspace()
+  const fixtures = {
+    'absent.md': '# Absent\n\nNo front matter.',
+    'empty.md': '---\n\n---\n\n# Empty',
+    'malformed.md': '---\ntitle "Malformed"\n---\n\n# Malformed',
+    'missing-kg.md': '---\ntitle: "Missing KG"\n---\n\n# Missing KG',
+  }
+  for (const [rel, contents] of Object.entries(fixtures)) writeAsset(repo, rel, `${contents}\n`)
+
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: repoAccess() })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.equal(result.workspaceGraph.nodes.length, 4)
+  assert.ok(result.workspaceGraph.nodes.every((node) => node.audience === 'private' && node.classification === 'unclassified'))
+  assert.deepEqual(
+    result.workspaceGraph.diagnostics
+      .filter((diagnostic) => diagnostic.code === 'unclassified-content')
+      .map((diagnostic) => diagnostic.reason)
+      .sort(),
+    ['absent-frontmatter', 'empty-frontmatter', 'malformed-frontmatter', 'missing-kg-block'],
+  )
+})
+
 // The scrubber existed only for macOS home paths; Linux and Windows shapes
 // passed through untouched, and CI runs on ubuntu-latest. The probe paths are
 // assembled at runtime so the repo disclosure gate never sees a literal one.
