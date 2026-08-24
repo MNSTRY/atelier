@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Harden boundary enforcement so path globs use segment-aware matching, an
+  explicitly empty or malformed content-rule policy is invalid, staged and
+  pushed binary evidence is scanned within bounded budgets, incomplete Git
+  reads fail closed, linked worktrees install hooks in the correct Git common
+  directory, and `boundary audit` defaults to the current working tree with an
+  explicit `--head` snapshot mode.
+- Consolidate graph classification in one canonical engine. Markdown without a
+  `kg` block is now represented as `unclassified` with a private audience and
+  diagnostics; empty, partial, or malformed declarations remain blocking.
+- Bind release egress verification to the exact `npm pack` inventory, including
+  test-shaped paths that are actually published, and make the legacy egress
+  checker a thin delegate to the canonical scanner.
+- Harden `atelier dev` so it binds only to loopback, requires a generated
+  `atelier.manifest.json`, serves only enrolled safe static files after
+  realpath validation, and applies host, fetch-site, origin, method, and nonce
+  checks to the relevant read and mutation routes.
+- Make collaboration records fail closed with typed corrupt-record results,
+  bounded ledger reads, write locking, and explicit compaction. Proposal
+  authority now follows declared capabilities and apply endpoints rather than
+  action-like words, and the unused provider-analysis surface was removed.
+- Render expected project and JSON failures as typed, actionable CLI messages
+  without stacks by default; set `ATELIER_DEBUG=1` to include diagnostic stacks.
+- Strengthen release proof with negative-control mutations and a bare consumer
+  that installs without publisher overrides, validates its dependency tree,
+  and imports every declared package export.
 - Add a portable `atelier disclosure check` command that scans tracked or
   staged consumer content, requires private denylist coverage by default, and
   refuses tracked repository-local denylist files.

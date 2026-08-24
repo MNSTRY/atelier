@@ -12,11 +12,15 @@ proves it — because a design document that cannot be checked is marketing.
 
 ## 1. A repository with an ontology
 
-A small structured header turns a file into a node: front matter on
+A small structured header turns a file into a governed node: front matter on
 Markdown, or a `.kg.json` sidecar beside any other format — JSON, YAML,
 CSV, media, anything — which the kit enrolls without ever parsing the
 foreign format. The header declares identity (`kg.id`), type, status,
 audience, and relations to other nodes.
+
+Markdown without a `kg` block is still counted by the canonical graph engine,
+but only as private `unclassified` material with a diagnostic. Once a `kg`
+block is present, partial or malformed declarations are blocking errors.
 
 The graph builder compiles the repository into a knowledge graph,
 deterministically: same tree in, same graph out, and `--check` mode fails
@@ -92,14 +96,16 @@ atelier lock check --project ./atelier.project.json
 The same governed workspace projects two ways.
 
 For humans: a generated review surface, served by a sidecar that binds to
-loopback only. The served pages carry a policy that authorizes no external
-origin, and the only network client in the package refuses non-loopback
-URLs.
+loopback only. It requires a generated publication manifest and serves only
+enrolled safe static files after realpath validation. The served pages carry a
+policy that authorizes no external origin, and the only network client in the
+package refuses non-loopback URLs.
 
 For agents: session-bound context and capability envelopes that hand an
 agent harness a governed view of the workspace — what exists, what it may
-look at, what it may propose. Proposals are recorded as metadata; there
-are no browser apply endpoints and no write authority to grant. Context
+look at, what it may propose. Proposals are recorded as typed copy-only
+metadata; capability declarations expose no apply endpoint, source write,
+execution, or Git authority. Context
 without authority. Neutral Claude and Codex skill wrappers ship in the
 package, so a harness can do readiness review work against the workspace
 without a single line of custom glue.

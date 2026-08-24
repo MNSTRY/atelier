@@ -32,7 +32,7 @@ try {
 
   writeFileSync(
     join(tempRoot, 'package.json'),
-    `${JSON.stringify({ type: 'module', overrides: packageJson.overrides ?? {} }, null, 2)}\n`,
+    `${JSON.stringify({ name: 'atelier-bare-consumer', private: true, type: 'module' }, null, 2)}\n`,
   )
 
   // The install below is deliberately --offline: a consumer must be able to
@@ -45,8 +45,9 @@ try {
   // Warm the whole non-dev closure from the lockfile, not just the direct
   // dependencies: resolving `ajv` also requires `fast-deep-equal` and the rest
   // of its tree, and warming one level deep only moved the error down a layer.
-  // The lockfile is the right source because it already carries exact resolved
-  // versions, including anything pinned by `overrides`.
+  // The lockfile is the right source because it already carries the exact
+  // resolved versions. The consumer itself intentionally has no publisher
+  // overrides: the packed package must resolve correctly on its own.
   const lockfile = JSON.parse(readFileSync(join(packageRoot, 'package-lock.json'), 'utf8'))
   const closure = Object.entries(lockfile.packages ?? {})
     .filter(([path, entry]) => path.startsWith('node_modules/') && !entry.dev && entry.version)
@@ -57,6 +58,13 @@ try {
     cwd: tempRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+
+  const consumerPackage = JSON.parse(readFileSync(join(tempRoot, 'package.json'), 'utf8'))
+  if ('overrides' in consumerPackage) throw new Error('bare consumer must not inherit publisher overrides')
+  const installedTree = JSON.parse(run('npm', ['ls', '--all', '--json'], { cwd: tempRoot }))
+  if (installedTree.problems?.length) {
+    throw new Error(`bare consumer dependency closure is invalid: ${installedTree.problems.join('; ')}`)
+  }
 
   writeFileSync(join(tempRoot, 'smoke.mjs'), `
 import assert from 'node:assert/strict'
@@ -83,6 +91,18 @@ assert.match(invalidReport.errors.join('\\n'), /must use audience, not visibilit
 assert.equal(bundledReadinessProtocols.length, 12)
 assert.equal(bundledReadinessProtocols[0].safety.runtimeMutation, false)
 assert.equal(typeof scanDisclosureContent, 'function')
+
+const declaredExports = ${JSON.stringify(packageJson.exports, null, 2)}
+for (const [subpath, target] of Object.entries(declaredExports)) {
+  const specifier = subpath === '.' ? '${packageName}' : '${packageName}/' + subpath.slice(2)
+  if (target.endsWith('.json')) {
+    const resolved = fileURLToPath(import.meta.resolve(specifier))
+    JSON.parse(readFileSync(resolved, 'utf8'))
+  } else {
+    const loaded = await import(specifier)
+    assert.equal(typeof loaded, 'object', 'expected ' + specifier + ' to import as a module namespace')
+  }
+}
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
@@ -124,7 +144,7 @@ assert.equal(typeof scanDisclosureContent, 'function')
     throw new Error('packed disclosure command did not scan the staged consumer fixture')
   }
 
-  console.log('[consumer:smoke] packed tarball installs and validates in a clean temp project')
+  console.log(`[consumer:smoke] packed tarball installs without publisher overrides and imports ${Object.keys(packageJson.exports).length} declared exports`)
 } finally {
   if (tarballPath) rmSync(tarballPath, { force: true })
   rmSync(tempRoot, { recursive: true, force: true })

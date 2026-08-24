@@ -7,6 +7,18 @@ specialized; its lifecycle and data-boundary behavior should not be improvised.
 This contract applies to consumer services other than `atelier dev`. It does
 not change the Atelier sidecar's own lifecycle.
 
+## Atelier sidecar reference boundary
+
+The built-in `atelier dev` sidecar is the reference for its request and
+publication boundary, not for the managed lifecycle below. It binds only to a
+literal loopback host and refuses startup without a valid generated
+`atelier.manifest.json`. Static reads are limited to manifest-enrolled,
+supported file types after realpath containment; hidden, state, secret-shaped,
+symlinked, unknown, and unenrolled paths are denied. API reads require a trusted
+loopback host and same-site fetch metadata. Mutations additionally require an
+allowed method, exact expected origin, and the session nonce. Its collaboration
+records are copy-only proposals, not an apply channel.
+
 ## Kit and adapter boundary
 
 The portable Atelier layer owns these invariants:

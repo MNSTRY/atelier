@@ -20,6 +20,9 @@ tarball `npm pack` would publish:
   patterns (absolute user paths, machine-local temp paths, agent-local state
   paths, key material, secret-like assignments) and against the maintainer-held
   denylist described below.
+- Egress scan: the canonical egress control receives the exact `npm pack`
+  inventory and inspects every packed executable or markup file, including a
+  test-shaped path if one is ever admitted to the artifact.
 - Version drift: `CHANGELOG.md` must contain a `## <version>` heading and
   `README.md` must mention the version. The expected version and tarball name
   are derived from `package.json`, never hardcoded.
@@ -96,8 +99,19 @@ paths; this gate is the mechanical check behind that claim.
 
 `npm run consumer:smoke` (`scripts/consumer-smoke.mjs`) packs the real tarball,
 installs it offline into a throwaway consumer project with lifecycle scripts
-disabled, and imports the public API to validate a sample export. It proves the
-tarball is installable and functional exactly as a consumer receives it.
+disabled and without copying the publisher's `overrides`, checks the installed
+dependency tree, imports every declared JavaScript export, parses every
+declared JSON export, and validates a sample export through both API and CLI.
+It proves the tarball is installable and functional exactly as a bare consumer
+receives it.
+
+### assurance:mutation-smoke
+
+`npm run assurance:mutation-smoke` runs local, synthetic negative controls for
+the boundary, graph, egress, sidecar, and distribution families. Every fixture
+introduces one named failure and must be refused. This is part of
+`prepublishOnly`; a control that stops detecting its failure mode blocks the
+release even if positive-path tests remain green.
 
 ### Egress-marker inventory
 
@@ -126,7 +140,7 @@ maintainer-reviewed before entering the list.
 Four jobs run on pushes to `main` and on pull requests, and all four are
 required status checks:
 
-- `test`: syntax check (`node --check`, not a type system), the full test suite (including isolated consumer disclosure-command proofs), contract checks, `egress:check`, and
+- `test`: syntax check (`node --check`, not a type system), the full test suite (including isolated consumer disclosure-command proofs), contract checks, `egress:check`, `assurance:mutation-smoke`, and
   `migrations:check`. This job sets `ATELIER_ALLOW_MISSING_DENYLIST=1` scoped
   to the job only — denylist assertions belong to the secret lane.
 - `consumer-smoke`: warms the npm cache with `npm ci` (the offline tarball

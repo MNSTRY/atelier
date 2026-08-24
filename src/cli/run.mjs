@@ -135,8 +135,10 @@ Attestation commands:
   attestation verify FILE         Verify an attestation against a public key file.
   attestation keygen --key-id ID  Generate a signing key pair.
 
-Every project-aware command accepts --project-config=PATH or
-MNSTRY_ATELIER_PROJECT_CONFIG=PATH. Machine-local repo paths belong in
+Commands whose usage names --project accept --project=PATH or --project PATH.
+The project resolver also accepts --project-config=PATH and
+MNSTRY_ATELIER_PROJECT_CONFIG=PATH; each command's own help is authoritative.
+Machine-local repo paths belong in
 .atelier-local/, atelier.local.json, or atelier.workspace.local.json.`
 }
 
@@ -268,12 +270,13 @@ export async function runCli({
 
   const [script, ...prefixArgs] = target
   const scriptPath = path.join(packageRoot, script)
+  const executorPath = path.join(packageRoot, 'src', 'cli', 'execute-command.mjs')
   if (!fs.existsSync(scriptPath)) {
     stderr(`${brand.displayName} command is not available in this package install: ${command}`)
     return 1
   }
 
-  const result = spawnSync(process.execPath, [scriptPath, ...prefixArgs, ...rest], {
+  const result = spawnSync(process.execPath, [executorPath, scriptPath, ...prefixArgs, ...rest], {
     cwd,
     stdio: 'inherit',
     env: {

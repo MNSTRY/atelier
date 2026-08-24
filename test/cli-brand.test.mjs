@@ -65,8 +65,10 @@ Attestation commands:
   attestation verify FILE         Verify an attestation against a public key file.
   attestation keygen --key-id ID  Generate a signing key pair.
 
-Every project-aware command accepts --project-config=PATH or
-MNSTRY_ATELIER_PROJECT_CONFIG=PATH. Machine-local repo paths belong in
+Commands whose usage names --project accept --project=PATH or --project PATH.
+The project resolver also accepts --project-config=PATH and
+MNSTRY_ATELIER_PROJECT_CONFIG=PATH; each command's own help is authoritative.
+Machine-local repo paths belong in
 .atelier-local/, atelier.local.json, or atelier.workspace.local.json.`
 
 const LOOMWORKS = Object.freeze({ command: 'loomworks', displayName: 'Loomworks Studio', version: '1.4.0' })
@@ -197,9 +199,33 @@ test('runCli reports unknown commands with the wrapper display name', async () =
 const BIN = path.join(ROOT, 'bin', 'atelier.mjs')
 const PACK_FIXTURES = path.join(ROOT, 'fixtures', 'atelier-extension-pack')
 
-function runBin(args, { cwd = ROOT } = {}) {
-  return spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' })
+function runBin(args, { cwd = ROOT, env = process.env } = {}) {
+  return spawnSync(process.execPath, [BIN, ...args], { cwd, env, encoding: 'utf8' })
 }
+
+test('expected project failures are typed, actionable, and stack-free by default', (t) => {
+  const sample = makeSampleProject(t)
+  const missingArtifact = runBin(['project', '--project', sample.config], { cwd: sample.dir })
+  assert.equal(missingArtifact.status, 2)
+  assert.match(missingArtifact.stderr, /^\[artifact-missing\]/m)
+  assert.match(missingArtifact.stderr, /Next: Run atelier graph/)
+  assert.doesNotMatch(missingArtifact.stderr, /\n\s+at /)
+
+  fs.writeFileSync(sample.config, '{ malformed\n')
+  const malformed = runBin(['graph', '--project', sample.config], { cwd: sample.dir })
+  assert.equal(malformed.status, 2)
+  assert.match(malformed.stderr, /^\[project-config-json-invalid\]/m)
+  assert.match(malformed.stderr, /Next: Repair the JSON syntax/)
+  assert.doesNotMatch(malformed.stderr, /\n\s+at /)
+
+  const debug = runBin(['graph', '--project', sample.config], {
+    cwd: sample.dir,
+    env: { ...process.env, ATELIER_DEBUG: '1' },
+  })
+  assert.equal(debug.status, 2)
+  assert.match(debug.stderr, /AtelierDiagnosticError/)
+  assert.match(debug.stderr, /\n\s+at /)
+})
 
 test('extension-pack validate dispatches to the extension-pack module', (t) => {
   const sample = makeSampleProject(t)

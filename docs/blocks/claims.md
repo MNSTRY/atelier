@@ -3,16 +3,22 @@ one names the command that proves it.
 
 **Nothing leaves your machine, with one exception you can see.** There is no
 telemetry, no update check, no crash reporting, and no send path anywhere in
-the package. The exception: when no actor is configured, `boundary check` and
-`doctor` fall back to the `gh` CLI to resolve your GitHub login, which is an
-authenticated request to GitHub made with your own credentials. Set
-`MNSTRY_ATELIER_ACTOR` and that path is never taken. The only network client
+the package. The exceptions are explicit: `boundary check` may invoke `gh api
+user` after no declared actor matches an explicit `--actor`,
+`MNSTRY_ATELIER_ACTOR`, `GITHUB_ACTOR`, or a configured Git email; repository
+identity checks may invoke `gh api repos/...` to resolve a canonical GitHub
+identity. Those authenticated requests use your own `gh` credentials. A
+recognized explicit actor prevents the boundary actor fallback; recorded
+repository identities let identity checks keep working when the provider is
+unavailable. The only network client
 refuses non-loopback URLs, the served pages carry a policy that authorizes no
-external origin, and a fail-closed gate scans the executable and markup files
-under `src/`, `bin/`, `scripts/`, and `examples/` for egress primitives. Two
-limits worth stating plainly: the gate does not read the `.json` and `.md`
-files under `templates/` and `skills/`, and it does not model
-`child_process`, which is why the `gh` fallback above does not trip it:
+external origin, and release audit scans every executable or markup file in
+the exact `npm pack` inventory for egress primitives. The standalone gate also
+scans executable and markup files under `src/`, `bin/`, `scripts/`,
+`templates/`, `examples/`, and `skills/`. Two limits worth stating plainly:
+the egress control does not interpret data-only `.json` or `.md` files, and it
+does not model `child_process`; the two reviewed `gh` paths above are therefore
+documented exceptions rather than scanner detections:
 
 ```bash
 npm run egress:check
