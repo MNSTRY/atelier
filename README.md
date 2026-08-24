@@ -146,6 +146,20 @@ best-effort publication.
 Because the checks are local and versioned with the work, the repository can
 prove its state in CI, on a laptop, or inside a larger toolchain.
 
+Repositories that may contribute to a public or shared surface can add a
+private, ignored disclosure denylist and scan either the tracked tree or the
+exact staged index:
+
+```bash
+npx mnstry-atelier disclosure check --staged
+```
+
+The built-in structural pass catches machine-local paths, key material, and
+secret-shaped assignments. A client-aware verdict additionally requires the
+private denylist; the command fails closed when it is absent unless
+`--structural-only` is chosen explicitly. Denylist patterns and matched text
+never belong in the shared repository.
+
 ### 3. Collaboration becomes governed disclosure
 
 Collaboration is not equivalent to giving every participant every file. The
@@ -162,6 +176,11 @@ boundary; it does not silently make access decisions on your behalf.
 `atelier dev` exposes a loopback-only review surface backed by the compiled
 graph. The library exposes the same project, graph, validation, and projection
 primitives to code.
+
+Consumer-owned authoring or review services that need a separate durable
+lifecycle follow [the managed local-service contract](./docs/local-services.md).
+That contract standardizes process ownership, private local state, and browser
+recovery without putting a tenant's service details into Atelier.
 
 The shipped agent model is intentionally bounded: the Atelier can assemble
 session context, capability envelopes, and proposed changes, but it does not

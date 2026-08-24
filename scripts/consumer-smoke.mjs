@@ -64,6 +64,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   bundledReadinessProtocols,
+  scanDisclosureContent,
   validateAtelierExportDryRun,
   validateAuthoringProviderDescriptor,
 } from '@mnstry/atelier'
@@ -91,6 +92,7 @@ assert.equal(validateAuthoringProviderDescriptor({
   directWrite: false,
   applyEndpoint: null,
 }).ok, true)
+assert.equal(typeof scanDisclosureContent, 'function')
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
@@ -114,6 +116,22 @@ assert.equal(validateAuthoringProviderDescriptor({
   const legacyCliOutput = run(process.execPath, ['node_modules/.bin/mnstry-atelier', '--version'], { cwd: tempRoot })
   if (legacyCliOutput.trim() !== expectedVersion) {
     throw new Error(`mnstry-atelier --version returned ${legacyCliOutput.trim()}`)
+  }
+
+  run('git', ['init', '--quiet'], { cwd: tempRoot })
+  writeFileSync(join(tempRoot, 'public-note.md'), 'invented public fixture\n')
+  run('git', ['add', 'public-note.md'], { cwd: tempRoot })
+  const disclosureOutput = run(process.execPath, [
+    'node_modules/.bin/atelier',
+    'disclosure',
+    'check',
+    '--root',
+    '.',
+    '--staged',
+    '--structural-only',
+  ], { cwd: tempRoot })
+  if (!disclosureOutput.includes('[disclosure:check] clean')) {
+    throw new Error('packed disclosure command did not scan the staged consumer fixture')
   }
 
   console.log('[consumer:smoke] packed tarball installs and validates in a clean temp project')

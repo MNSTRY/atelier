@@ -35,6 +35,7 @@
     "./collaboration": "./src/collaboration/index.mjs",
     "./support": "./src/support/support-bundle.mjs",
     "./egress": "./src/egress/forbidden-egress.mjs",
+    "./disclosure": "./src/disclosure/content-scan.mjs",
     "./boundary": "./src/boundary/policy.mjs",
     "./upgrade": "./src/upgrade/upgrade.mjs",
     "./attestation": "./src/attestation/sign.mjs",
