@@ -1,5 +1,6 @@
 {
-  "assetFilename": "metrics.csv",
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "metrics.csv",
   "title": "Sample metrics",
   "summary": "Neutral CSV evidence table described by its sidecar.",
   "tags": [
@@ -8,6 +9,8 @@
   "kg": {
     "id": "source-formats:metrics-csv",
     "type": "evidence",
+    "domain": "sample",
+    "lifecycle": "source",
     "status": "active",
     "audience": "operator",
     "relations": {}

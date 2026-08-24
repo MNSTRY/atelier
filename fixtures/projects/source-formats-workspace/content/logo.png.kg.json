@@ -1,5 +1,6 @@
 {
-  "assetFilename": "logo.png",
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "logo.png",
   "title": "Sample binary asset",
   "summary": "Four-byte PNG-magic stub; the graph never reads the asset bytes.",
   "tags": [
@@ -8,6 +9,8 @@
   "kg": {
     "id": "source-formats:logo-png",
     "type": "artifact",
+    "domain": "sample",
+    "lifecycle": "source",
     "status": "active",
     "audience": "sensitive",
     "relations": {}

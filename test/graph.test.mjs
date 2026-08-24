@@ -20,7 +20,7 @@ test('knowledge graph builds with stable Markdown and sidecar identities', (t) =
   fs.renameSync(path.join(sample.dir, 'content/source.html.kg.json'), path.join(sample.dir, 'content/source-renamed.html.kg.json'))
   const sidecar = path.join(sample.dir, 'content/source-renamed.html.kg.json')
   const meta = JSON.parse(fs.readFileSync(sidecar, 'utf8'))
-  meta.assetFilename = 'source-renamed.html'
+  meta.asset = 'source-renamed.html'
   fs.writeFileSync(sidecar, `${JSON.stringify(meta, null, 2)}\n`)
   const moved = buildGraph(project)
   assert.deepEqual(moved.errors, [])

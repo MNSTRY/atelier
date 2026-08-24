@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { commandProject, gitRemoteUrl, loadRepoAccess, readJson, remoteHost, writeJson } from '../project/config.mjs'
 import { gitIgnoreFilter } from '../project/git-ignore.mjs'
+import { validateSourceSidecar } from './knowledge-graph.mjs'
 
 export const VALID_AUDIENCES = new Set(['private', 'team', 'operator', 'staff', 'public', 'sensitive'])
 export const VALID_RELATIONS = new Set(['related', 'supports', 'supersedes', 'implements', 'depends_on', 'evidences', 'contradicts', 'belongs_to'])
@@ -128,17 +129,6 @@ function sidecarFor(file) {
   return `${file}.kg.json`
 }
 
-function validateSidecar(meta, repo, file, errors) {
-  const allowed = new Set(['assetFilename', 'title', 'summary', 'tags', 'kg'])
-  const kgAllowed = new Set(['id', 'title', 'type', 'domain', 'lifecycle', 'status', 'audience', 'relations'])
-  for (const key of Object.keys(meta || {})) {
-    if (!allowed.has(key)) errors.push(`${repo.name}/${file.rel}: sidecar has unknown key ${key}`)
-  }
-  for (const key of Object.keys(meta?.kg || {})) {
-    if (!kgAllowed.has(key)) errors.push(`${repo.name}/${file.rel}: sidecar kg has unknown key ${key}`)
-  }
-}
-
 function nodeFromMarkdown(repo, file, errors) {
   const raw = fs.readFileSync(file.abs, 'utf8')
   const fm = splitFrontmatter(raw)
@@ -173,9 +163,10 @@ function nodeFromSidecar(repo, file, errors) {
     return null
   }
   const meta = readJson(sidecar)
-  validateSidecar(meta, repo, file, errors)
+  for (const error of validateSourceSidecar(meta, path.basename(file.abs))) {
+    errors.push(`${repo.name}/${file.rel}: ${error}`)
+  }
   const kg = meta.kg ?? {}
-  if (meta.assetFilename && meta.assetFilename !== path.basename(file.abs)) errors.push(`${repo.name}/${file.rel}: sidecar assetFilename must match source filename`)
   if (!kg.id) errors.push(`${repo.name}/${file.rel}: sidecar kg.id is required`)
   if (!kg.audience) errors.push(`${repo.name}/${file.rel}: sidecar kg.audience is required`)
   if (kg.visibility) errors.push(`${repo.name}/${file.rel}: sidecar kg.visibility is invalid; use kg.audience`)
