@@ -53,12 +53,8 @@ export {
 } from './harness/context.mjs'
 
 export {
-  ATELIER_AUTHORING_PROVIDER_SCHEMA,
   ATELIER_COLLABORATION_EVENT_SCHEMA,
-  createAuthoringProvider,
   createCollaborationEventLedger,
-  renderAuthoringProviderHarnessContext,
-  validateAuthoringProviderDescriptor,
   validateCollaborationEvent,
 } from './collaboration/index.mjs'
 

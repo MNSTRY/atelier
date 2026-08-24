@@ -66,7 +66,6 @@ import {
   bundledReadinessProtocols,
   scanDisclosureContent,
   validateAtelierExportDryRun,
-  validateAuthoringProviderDescriptor,
 } from '@mnstry/atelier'
 
 const fixturePath = fileURLToPath(import.meta.resolve('@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json'))
@@ -83,15 +82,6 @@ assert.equal(invalidReport.accepted, false)
 assert.match(invalidReport.errors.join('\\n'), /must use audience, not visibility/)
 assert.equal(bundledReadinessProtocols.length, 12)
 assert.equal(bundledReadinessProtocols[0].safety.runtimeMutation, false)
-assert.equal(validateAuthoringProviderDescriptor({
-  schema: 'atelier-authoring-provider@v1',
-  providerId: 'synthetic-provider',
-  peerId: 'peer:synthetic:publication',
-  operations: ['getContext', 'submitDraft'],
-  sourceRepositoryRequired: false,
-  directWrite: false,
-  applyEndpoint: null,
-}).ok, true)
 assert.equal(typeof scanDisclosureContent, 'function')
 `)
 

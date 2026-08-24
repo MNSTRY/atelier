@@ -9,6 +9,7 @@ import { createAtelierSidecarServer } from '../src/server/local-sidecar.mjs'
 test('harness flow proves session-bound local context without direct write authority', async (t) => {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-harness-'))
   fs.writeFileSync(path.join(workspaceRoot, 'index.html'), '<!doctype html><title>Atelier</title>\n')
+  fs.writeFileSync(path.join(workspaceRoot, 'atelier.manifest.json'), '{"schema":"mnstry.atelier-manifest@v1","entry":"index.html"}\n')
   const sidecar = createAtelierSidecarServer({ workspaceRoot })
   t.after(async () => {
     await sidecar.close()

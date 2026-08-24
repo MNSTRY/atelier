@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url'
 import {
   expectedOriginForRequest,
   htmlDocumentHeaders,
+  isLoopbackHost,
+  loadPublishedWorkspaceManifest,
+  publishedStaticPathVerdict,
   requestHeader,
   resolveWorkspacePath,
   staticHeaders,
@@ -69,13 +72,14 @@ function readOrCreateNonce(noncePath) {
   return nonce
 }
 
-function json(res, code, obj) {
+function json(res, code, obj, headers = {}) {
   const body = Buffer.from(`${JSON.stringify(obj, null, 2)}\n`)
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': String(body.length),
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
+    ...headers,
   })
   res.end(body)
 }
@@ -205,6 +209,7 @@ export function createAtelierSidecarServer({
 } = {}) {
   const root = path.resolve(workspaceRoot)
   const rootReal = fs.realpathSync(root)
+  const publication = loadPublishedWorkspaceManifest(root)
   const workspaceId = workspaceIdForRoot(root)
   const noncePath = path.join(stateDir, '.atelier-nonce')
   const presencePath = path.join(stateDir, '.atelier-presence.json')
@@ -214,6 +219,17 @@ export function createAtelierSidecarServer({
     proposalsDir: path.join(stateDir, '.atelier-proposals'),
     workspaceId,
   })
+
+  function resolvePublishedPath({ rel, requireFile = false, requireHtml = false } = {}) {
+    const resolved = resolveWorkspacePath({
+      workspaceRoot: root,
+      workspaceRootReal: rootReal,
+      rel,
+      requireFile,
+      requireHtml,
+    })
+    return publishedStaticPathVerdict({ resolved, publication })
+  }
 
   function readPresence() {
     const presence = readJsonFile(presencePath, defaultPresence())
@@ -229,12 +245,7 @@ export function createAtelierSidecarServer({
   }
 
   function recordView(rel, hints = {}) {
-    const resolved = resolveWorkspacePath({
-      workspaceRoot: root,
-      workspaceRootReal: rootReal,
-      rel,
-      requireHtml: true,
-    })
+    const resolved = resolvePublishedPath({ rel, requireHtml: true })
     if (!resolved.ok) return { ok: false, error: 'unknown workspace html file' }
     const entry = {
       sessionId: cleanIdentity(hints.sessionId, 120),
@@ -295,12 +306,7 @@ export function createAtelierSidecarServer({
     const viewId = cleanIdentity(url.searchParams.get('viewId'), 120)
     const rel = cleanIdentity(url.searchParams.get('path') || 'index.html', 500)
     const expectedWorkspaceId = cleanIdentity(url.searchParams.get('expectedWorkspaceId'), 120)
-    const resolved = resolveWorkspacePath({
-      workspaceRoot: root,
-      workspaceRootReal: rootReal,
-      rel,
-      requireHtml: true,
-    })
+    const resolved = resolvePublishedPath({ rel, requireHtml: true })
     const current = resolveCurrentContext({ sessionId })
     const workspaceVerified = Boolean(expectedWorkspaceId && expectedWorkspaceId === workspaceId)
     const caps = capabilityContract()
@@ -366,12 +372,7 @@ export function createAtelierSidecarServer({
     }
 
     if (url.pathname === '/api/proposals') {
-      const resolved = resolveWorkspacePath({
-        workspaceRoot: root,
-        workspaceRootReal: rootReal,
-        rel: body.path || body.rel,
-        requireHtml: true,
-      })
+      const resolved = resolvePublishedPath({ rel: body.path || body.rel, requireHtml: true })
       if (!resolved.ok) {
         json(res, 200, { ok: false, error: 'unknown workspace html file' })
         return
@@ -430,12 +431,7 @@ export function createAtelierSidecarServer({
     }
 
     const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1)
-    const resolved = resolveWorkspacePath({
-      workspaceRoot: root,
-      workspaceRootReal: rootReal,
-      rel,
-      requireFile: true,
-    })
+    const resolved = resolvePublishedPath({ rel, requireFile: true })
     if (!resolved.ok) {
       text(res, resolved.status || 403, `${resolved.error || 'forbidden'}\n`)
       return
@@ -463,6 +459,16 @@ export function createAtelierSidecarServer({
       return
     }
 
+    if (!['GET', 'HEAD', 'POST'].includes(req.method || '')) {
+      json(res, 405, { ok: false, error: 'method not allowed' }, { Allow: 'GET, HEAD, POST' })
+      return
+    }
+
+    if (!trustedReadRequest(req.headers, { expectedOrigin })) {
+      json(res, 403, { ok: false, error: 'cross-origin or unclassified request refused' })
+      return
+    }
+
     if (req.method === 'POST') {
       await handlePost(req, res, url)
       return
@@ -478,12 +484,7 @@ export function createAtelierSidecarServer({
         return
       }
       const rel = url.searchParams.get('path') || 'index.html'
-      const resolved = resolveWorkspacePath({
-        workspaceRoot: root,
-        workspaceRootReal: rootReal,
-        rel,
-        requireHtml: true,
-      })
+      const resolved = resolvePublishedPath({ rel, requireHtml: true })
       if (!resolved.ok) {
         json(res, 404, { ok: false, error: 'unknown workspace html file' })
         return
@@ -509,12 +510,7 @@ export function createAtelierSidecarServer({
       return
     }
     if (url.pathname === '/api/resolve') {
-      const resolved = resolveWorkspacePath({
-        workspaceRoot: root,
-        workspaceRootReal: rootReal,
-        rel: url.searchParams.get('path') || 'index.html',
-        requireHtml: true,
-      })
+      const resolved = resolvePublishedPath({ rel: url.searchParams.get('path') || 'index.html', requireHtml: true })
       json(res, resolved.ok ? 200 : (resolved.status || 404), {
         ok: resolved.ok,
         schema: ATELIER_RESOLVE_SCHEMA,
@@ -533,37 +529,49 @@ export function createAtelierSidecarServer({
       return
     }
     if (url.pathname === '/api/proposals') {
+      const listed = proposals.listProposals()
+      if (!listed.ok) {
+        json(res, listed.status, { ok: false, error: listed.error, diagnostics: listed.diagnostics })
+        return
+      }
       json(res, 200, {
         ok: true,
         schema: 'atelier-proposals@v1',
         workspaceId,
-        proposals: proposals.listProposals(),
+        proposals: listed.proposals,
       })
       return
     }
     const proposalReadMatch = url.pathname.match(/^\/api\/proposals\/([^/]+)$/)
     if (proposalReadMatch) {
-      const record = proposals.readProposal(proposalReadMatch[1])
-      json(res, record ? 200 : 404, record ? {
+      const result = proposals.readProposal(proposalReadMatch[1])
+      const record = result.record
+      json(res, result.ok ? 200 : result.status, result.ok ? {
         ok: true,
         schema: record.schema,
         workspaceId,
         proposal: record.proposal,
         diff: record.diff,
         copyable: record.copyable,
-      } : { ok: false, error: 'proposal not found' })
+      } : { ok: false, error: result.error, diagnostics: result.diagnostics })
       return
     }
     if (url.pathname === '/proposals') {
-      const body = renderProposalListPageHtml(proposals.listProposals())
+      const listed = proposals.listProposals()
+      if (!listed.ok) {
+        text(res, listed.status, `${listed.error}\n`)
+        return
+      }
+      const body = renderProposalListPageHtml(listed.proposals)
       res.writeHead(200, htmlDocumentHeaders(Buffer.byteLength(body)))
       res.end(body)
       return
     }
     const proposalPageMatch = url.pathname.match(/^\/proposals\/([^/]+)$/)
     if (proposalPageMatch) {
-      const body = renderProposalDetailPageHtml(proposals.readProposal(proposalPageMatch[1]))
-      res.writeHead(200, htmlDocumentHeaders(Buffer.byteLength(body)))
+      const result = proposals.readProposal(proposalPageMatch[1])
+      const body = renderProposalDetailPageHtml(result.record)
+      res.writeHead(result.ok ? 200 : result.status, htmlDocumentHeaders(Buffer.byteLength(body)))
       res.end(body)
       return
     }
@@ -595,8 +603,12 @@ export function createAtelierSidecarServer({
     workspaceRootReal: rootReal,
     workspaceId,
     mutationNonce,
+    publication,
     proposals,
     listen(listenPort = port, host = '127.0.0.1') {
+      if (!isLoopbackHost(host)) {
+        return Promise.reject(new Error(`non-loopback listen host refused: ${host}`))
+      }
       // A busy port is an ordinary condition, not a crash: surface it as a
       // rejection the CLI can print, instead of an unhandled 'error' event.
       return new Promise((resolve, reject) => {
@@ -615,6 +627,7 @@ export function createAtelierSidecarServer({
       })
     },
     close() {
+      if (!server.listening) return Promise.resolve()
       return new Promise((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error)

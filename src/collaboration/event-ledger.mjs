@@ -3,6 +3,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export const ATELIER_COLLABORATION_EVENT_SCHEMA = 'atelier-collaboration-event@v1'
+export const COLLABORATION_LEDGER_LIMITS = Object.freeze({
+  maxLineBytes: 256 * 1024,
+  maxBytes: 16 * 1024 * 1024,
+  maxEvents: 10_000,
+  retainPerAggregate: 50,
+  retainDays: 180,
+})
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -21,15 +28,33 @@ function ensurePrivateDir(dir) {
   }
 }
 
-function secureAppendLine(file, value) {
+function secureAppendLine(file, line) {
   ensurePrivateDir(path.dirname(file))
   const descriptor = fs.openSync(file, 'a', 0o600)
   try {
-    fs.writeFileSync(descriptor, `${JSON.stringify(value)}\n`)
+    fs.writeFileSync(descriptor, line)
     fs.fsyncSync(descriptor)
   } finally {
     fs.closeSync(descriptor)
   }
+  try {
+    fs.chmodSync(file, 0o600)
+  } catch {
+    // Best effort for filesystems without POSIX modes.
+  }
+}
+
+function secureReplace(file, text) {
+  ensurePrivateDir(path.dirname(file))
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  const descriptor = fs.openSync(tmp, 'wx', 0o600)
+  try {
+    fs.writeFileSync(descriptor, text)
+    fs.fsyncSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  fs.renameSync(tmp, file)
   try {
     fs.chmodSync(file, 0o600)
   } catch {
@@ -44,6 +69,10 @@ function eventId(aggregateId, version, at) {
     .digest('hex')
     .slice(0, 32)
   return `event-${digest}`
+}
+
+function boundedLimit(value, hardLimit) {
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), hardLimit) : hardLimit
 }
 
 export function validateCollaborationEvent(event) {
@@ -64,6 +93,9 @@ export function createCollaborationEventLedger({
   workspaceRoot = process.cwd(),
   ledgerPath = path.join(workspaceRoot, '.atelier-proposals', 'events.ndjson'),
   clock = () => new Date().toISOString(),
+  maxLineBytes = COLLABORATION_LEDGER_LIMITS.maxLineBytes,
+  maxBytes = COLLABORATION_LEDGER_LIMITS.maxBytes,
+  maxEvents = COLLABORATION_LEDGER_LIMITS.maxEvents,
 } = {}) {
   const root = fs.realpathSync(workspaceRoot)
   const resolvedLedger = path.resolve(ledgerPath)
@@ -75,63 +107,236 @@ export function createCollaborationEventLedger({
     throw new Error('collaboration ledger escapes workspace')
   }
 
+  const limits = Object.freeze({
+    maxLineBytes: boundedLimit(maxLineBytes, COLLABORATION_LEDGER_LIMITS.maxLineBytes),
+    maxBytes: boundedLimit(maxBytes, COLLABORATION_LEDGER_LIMITS.maxBytes),
+    maxEvents: boundedLimit(maxEvents, COLLABORATION_LEDGER_LIMITS.maxEvents),
+  })
+  const lockPath = `${ledgerReal}.lock`
+
+  function failure(status, error, diagnostics = [], stats = {}) {
+    return { ok: false, status, error, events: [], diagnostics, stats }
+  }
+
   function readAll() {
-    if (!fs.existsSync(ledgerReal)) return []
-    return fs
-      .readFileSync(ledgerReal, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .map((line, index) => {
-        try {
-          const event = JSON.parse(line)
-          const validation = validateCollaborationEvent(event)
-          if (!validation.ok) throw new Error(validation.issues.join('; '))
-          return event
-        } catch (error) {
-          throw new Error(`invalid collaboration ledger line ${index + 1}: ${error.message}`)
-        }
-      })
+    const startedAt = performance.now()
+    if (!fs.existsSync(ledgerReal)) {
+      return { ok: true, status: 200, events: [], diagnostics: [], stats: { bytes: 0, eventCount: 0, durationMs: performance.now() - startedAt } }
+    }
+
+    let bytes
+    try {
+      bytes = fs.statSync(ledgerReal).size
+    } catch (error) {
+      return failure(500, `collaboration ledger cannot be inspected: ${error.message}`)
+    }
+    if (bytes > limits.maxBytes) {
+      return failure(413, `collaboration ledger exceeds ${limits.maxBytes} byte hard ceiling`, [{ code: 'ledger-byte-limit', bytes }], { bytes, eventCount: 0 })
+    }
+
+    let raw
+    try {
+      raw = fs.readFileSync(ledgerReal, 'utf8')
+    } catch (error) {
+      return failure(500, `collaboration ledger cannot be read: ${error.message}`, [], { bytes, eventCount: 0 })
+    }
+
+    const diagnostics = []
+    const events = []
+    const versions = new Map()
+    const eventIds = new Set()
+    const lines = raw.split('\n')
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]
+      if (!line) continue
+      const lineNumber = index + 1
+      const lineBytes = Buffer.byteLength(line)
+      if (lineBytes > limits.maxLineBytes) {
+        diagnostics.push({ line: lineNumber, code: 'ledger-line-limit', message: `line exceeds ${limits.maxLineBytes} bytes` })
+        continue
+      }
+      if (events.length >= limits.maxEvents) {
+        diagnostics.push({ line: lineNumber, code: 'ledger-event-limit', message: `ledger exceeds ${limits.maxEvents} events` })
+        break
+      }
+      let event
+      try {
+        event = JSON.parse(line)
+      } catch (error) {
+        diagnostics.push({ line: lineNumber, code: 'ledger-json-invalid', message: error.message })
+        continue
+      }
+      const validation = validateCollaborationEvent(event)
+      if (!validation.ok) {
+        diagnostics.push({ line: lineNumber, code: 'ledger-event-invalid', message: validation.issues.join('; ') })
+        continue
+      }
+      if (eventIds.has(event.id)) {
+        diagnostics.push({ line: lineNumber, code: 'ledger-event-duplicate', message: `duplicate event id ${event.id}` })
+        continue
+      }
+      const previousVersion = versions.get(event.aggregateId) ?? 0
+      if (event.version <= previousVersion) {
+        diagnostics.push({ line: lineNumber, code: 'ledger-version-order', message: `version ${event.version} does not advance aggregate ${event.aggregateId}` })
+        continue
+      }
+      eventIds.add(event.id)
+      versions.set(event.aggregateId, event.version)
+      events.push(event)
+    }
+
+    const stats = { bytes, eventCount: events.length, durationMs: performance.now() - startedAt }
+    if (diagnostics.length) {
+      return { ok: false, status: 422, error: `collaboration ledger validation failed at ${diagnostics.length} line(s)`, events, diagnostics, stats }
+    }
+    return { ok: true, status: 200, events, diagnostics: [], stats }
   }
 
   function eventsFor(aggregateId) {
-    return readAll().filter((event) => event.aggregateId === aggregateId)
+    const id = String(aggregateId || '').trim()
+    if (!id) return failure(400, 'aggregateId is required')
+    const result = readAll()
+    if (!result.ok) return result
+    const events = result.events.filter((event) => event.aggregateId === id)
+    return {
+      ...result,
+      events,
+      currentVersion: events.at(-1)?.version ?? 0,
+    }
+  }
+
+  function withWriteLock(operation) {
+    let descriptor
+    try {
+      descriptor = fs.openSync(lockPath, 'wx', 0o600)
+      fs.writeFileSync(descriptor, `${process.pid}\n`)
+      fs.fsyncSync(descriptor)
+    } catch (error) {
+      if (descriptor != null) fs.closeSync(descriptor)
+      if (error?.code === 'EEXIST') return { ok: false, status: 423, error: 'collaboration ledger is locked; retry after the active writer finishes' }
+      return { ok: false, status: 500, error: `collaboration ledger lock failed: ${error.message}` }
+    }
+    try {
+      return operation()
+    } finally {
+      fs.closeSync(descriptor)
+      try {
+        fs.unlinkSync(lockPath)
+      } catch {
+        // The completed write remains authoritative; cleanup can be diagnosed
+        // by the next writer's explicit locked result.
+      }
+    }
   }
 
   function append({ aggregateId, expectedVersion = 0, type, actor, at = clock(), payload = {} }) {
-    const current = eventsFor(aggregateId)
-    if (current.length !== expectedVersion) {
-      return {
-        ok: false,
-        status: 409,
-        error: `stale collaboration event refused: expected ${expectedVersion}, current ${current.length}`,
+    return withWriteLock(() => {
+      const current = eventsFor(aggregateId)
+      if (!current.ok) return current
+      if (current.currentVersion !== expectedVersion) {
+        return {
+          ok: false,
+          status: 409,
+          error: `stale collaboration event refused: expected ${expectedVersion}, current ${current.currentVersion}`,
+        }
       }
-    }
-    const version = current.length + 1
-    const event = {
-      schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
-      id: eventId(aggregateId, version, at),
-      aggregateId,
-      version,
-      type,
-      actor: String(actor || '').trim(),
-      at,
-      payload,
-    }
-    const validation = validateCollaborationEvent(event)
-    if (!validation.ok) return { ok: false, status: 400, error: validation.issues.join('; ') }
-    secureAppendLine(ledgerReal, event)
-    return { ok: true, status: 200, event }
+      if (current.stats.eventCount >= limits.maxEvents) {
+        return { ok: false, status: 413, error: `collaboration ledger reached ${limits.maxEvents} event hard ceiling; compact it explicitly before appending` }
+      }
+      const version = current.currentVersion + 1
+      const event = {
+        schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
+        id: eventId(aggregateId, version, at),
+        aggregateId,
+        version,
+        type,
+        actor: String(actor || '').trim(),
+        at,
+        payload,
+      }
+      const validation = validateCollaborationEvent(event)
+      if (!validation.ok) return { ok: false, status: 400, error: validation.issues.join('; ') }
+      const line = `${JSON.stringify(event)}\n`
+      const lineBytes = Buffer.byteLength(line)
+      if (lineBytes > limits.maxLineBytes) {
+        return { ok: false, status: 413, error: `collaboration event exceeds ${limits.maxLineBytes} byte line ceiling` }
+      }
+      if (current.stats.bytes + lineBytes > limits.maxBytes) {
+        return { ok: false, status: 413, error: `collaboration ledger would exceed ${limits.maxBytes} byte hard ceiling; compact it explicitly before appending` }
+      }
+      secureAppendLine(ledgerReal, line)
+      return { ok: true, status: 200, event }
+    })
   }
 
   function materialize(aggregateId, reducer, initial = null) {
-    return eventsFor(aggregateId).reduce((state, event) => reducer(state, event), initial)
+    if (typeof reducer !== 'function') return { ok: false, status: 400, error: 'reducer is required', value: initial }
+    const result = eventsFor(aggregateId)
+    if (!result.ok) return { ...result, value: initial }
+    return {
+      ...result,
+      value: result.events.reduce((state, event) => reducer(state, event), initial),
+    }
+  }
+
+  function compact({
+    now = clock(),
+    retainPerAggregate = COLLABORATION_LEDGER_LIMITS.retainPerAggregate,
+    retainDays = COLLABORATION_LEDGER_LIMITS.retainDays,
+  } = {}) {
+    return withWriteLock(() => {
+      const current = readAll()
+      if (!current.ok) return current
+      const perAggregate = Math.max(2, boundedLimit(retainPerAggregate, COLLABORATION_LEDGER_LIMITS.retainPerAggregate))
+      const days = boundedLimit(retainDays, COLLABORATION_LEDGER_LIMITS.retainDays)
+      const cutoff = Date.parse(now) - days * 24 * 60 * 60 * 1000
+      if (!Number.isFinite(cutoff)) return { ok: false, status: 400, error: 'compaction timestamp is invalid' }
+
+      const grouped = new Map()
+      for (const event of current.events) {
+        const group = grouped.get(event.aggregateId) ?? []
+        group.push(event)
+        grouped.set(event.aggregateId, group)
+      }
+      const kept = []
+      for (const events of grouped.values()) {
+        const first = events[0]
+        const latest = events.at(-1)
+        const recent = events.filter((event) => Date.parse(event.at) >= cutoff)
+        const candidates = [first, ...recent, latest]
+        const unique = [...new Map(candidates.map((event) => [event.id, event])).values()]
+          .sort((left, right) => left.version - right.version)
+        const selected = unique.length <= perAggregate
+          ? unique
+          : [unique[0], ...unique.slice(-(perAggregate - 1))]
+        kept.push(...selected)
+      }
+      kept.sort((left, right) => Date.parse(left.at) - Date.parse(right.at) || left.id.localeCompare(right.id))
+      const text = kept.length ? `${kept.map((event) => JSON.stringify(event)).join('\n')}\n` : ''
+      if (Buffer.byteLength(text) > limits.maxBytes) {
+        return { ok: false, status: 413, error: 'compacted collaboration ledger still exceeds the byte hard ceiling' }
+      }
+      secureReplace(ledgerReal, text)
+      return {
+        ok: true,
+        status: 200,
+        before: current.events.length,
+        after: kept.length,
+        removed: current.events.length - kept.length,
+        retainPerAggregate: perAggregate,
+        retainDays: days,
+      }
+    })
   }
 
   return Object.freeze({
     ledgerPath: ledgerReal,
+    lockPath,
+    limits,
     readAll,
     eventsFor,
     append,
     materialize,
+    compact,
   })
 }

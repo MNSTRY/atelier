@@ -59,7 +59,7 @@
     "egress:check": "node bin/atelier.mjs egress check",
     "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs test/readiness-protocol-contract.test.mjs test/readiness-protocols.test.mjs test/readiness-protocol-runtime.test.mjs",
     "harness:test": "node --test test/harness.test.mjs test/harness-context.test.mjs",
-    "collaboration:test": "node --test test/collaboration-ledger.test.mjs test/collaboration-provider.test.mjs test/server-proposals.test.mjs",
+    "collaboration:test": "node --test test/collaboration-ledger.test.mjs test/server-proposals.test.mjs",
     "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-guard.test.mjs",
     "upgrade:test": "node --test test/upgrade-contract.test.mjs test/upgrade.test.mjs",
     "release:audit": "node scripts/check-release-tarball.mjs",

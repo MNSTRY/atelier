@@ -6,8 +6,7 @@ import { createCollaborationEventLedger } from './event-ledger.mjs'
 export const ATELIER_PROPOSAL_SCHEMA = 'atelier-proposal@v1'
 export const ATELIER_PROPOSALS_SCHEMA = 'atelier-proposals@v1'
 export const PROPOSAL_REVIEW_STATUSES = new Set(['reviewed', 'accepted', 'rejected', 'superseded'])
-
-const DIRECT_WRITE_ACTION_RE = /(?:^|[._:-])(apply|write|commit|persist|mutate|db|database)(?:$|[._:-])/i
+export const COPY_ONLY_PROPOSAL_CAPABILITY = 'proposal.copy-only'
 
 function nowIso() {
   return new Date().toISOString()
@@ -62,15 +61,25 @@ function proposalId(seed = crypto.randomBytes(16).toString('hex')) {
   return `proposal-${crypto.createHash('sha256').update(seed).digest('hex').slice(0, 32)}`
 }
 
-export function actionIsCopyOnly(action) {
-  const value = String(action || '')
-  return Boolean(value) && !DIRECT_WRITE_ACTION_RE.test(value)
+export function validateCopyOnlyProposalAuthority(input = {}) {
+  const authority = input.authority && typeof input.authority === 'object' ? input.authority : {}
+  const capability = input.capability ?? authority.capability
+  const directWrite = input.directWrite ?? authority.directWrite
+  const applyEndpoint = input.applyEndpoint ?? authority.applyEndpoint
+  const issues = []
+  if (capability != null && capability !== COPY_ONLY_PROPOSAL_CAPABILITY) {
+    issues.push(`capability must be ${COPY_ONLY_PROPOSAL_CAPABILITY}`)
+  }
+  if (directWrite != null && directWrite !== false) issues.push('direct-write capability must be false')
+  if (applyEndpoint != null) issues.push('applyEndpoint must be null')
+  return issues.length ? { ok: false, status: 409, issues } : { ok: true, status: 200 }
 }
 
 export function copyOnlyActionSummary(action) {
   return {
     action: String(action || ''),
-    copyOnly: actionIsCopyOnly(action),
+    capability: COPY_ONLY_PROPOSAL_CAPABILITY,
+    copyOnly: true,
     directWrite: false,
     applyEndpoint: null,
   }
@@ -152,9 +161,11 @@ export function createProposalStore({
   }
 
   function materializedProposal(id) {
-    const events = eventLedger.eventsFor(id)
-    if (events.length === 0) return null
-    return events.reduce(reduceProposal, null)
+    const result = eventLedger.materialize(id, reduceProposal, null)
+    if (!result.ok) return { ...result, record: null }
+    return result.value
+      ? { ...result, record: result.value }
+      : { ...result, ok: false, status: 404, error: 'proposal not found', record: null }
   }
 
   // Read is a lookup, not an assertion: an unusable id and an unreadable file
@@ -165,34 +176,42 @@ export function createProposalStore({
     try {
       file = proposalPath(id)
     } catch {
-      return null
+      return { ok: false, status: 404, error: 'proposal not found', record: null }
     }
     const materialized = materializedProposal(id)
-    if (materialized) return materialized
-    if (!fs.existsSync(file)) return null
+    if (materialized.ok) return materialized
+    if (materialized.status !== 404) return materialized
+    if (!fs.existsSync(file)) return materialized
     try {
-      return JSON.parse(fs.readFileSync(file, 'utf8'))
-    } catch {
-      return null
+      return { ok: true, status: 200, record: JSON.parse(fs.readFileSync(file, 'utf8')), source: 'compatibility-snapshot' }
+    } catch (error) {
+      return { ok: false, status: 422, error: `proposal snapshot cannot be read: ${error.message}`, record: null }
     }
   }
 
   function listProposals() {
-    if (!fs.existsSync(proposalsDir)) return []
-    const ledgerIds = eventLedger.readAll().map((event) => event.aggregateId)
+    if (!fs.existsSync(proposalsDir)) return { ok: true, status: 200, proposals: [] }
+    const ledger = eventLedger.readAll()
+    if (!ledger.ok) return { ...ledger, proposals: [] }
+    const ledgerIds = ledger.events.map((event) => event.aggregateId)
     const snapshotIds = fs.readdirSync(proposalsDir)
       .filter((name) => name.endsWith('.json'))
       .map((name) => name.slice(0, -'.json'.length))
-    return [...new Set([...ledgerIds, ...snapshotIds])]
+    const reads = [...new Set([...ledgerIds, ...snapshotIds])]
       .sort(stableCompare)
       .map(readProposal)
-      .filter(Boolean)
+    const failed = reads.find((result) => !result.ok)
+    if (failed) return { ...failed, proposals: [] }
+    const proposals = reads
+      .map((result) => result.record)
       .sort((left, right) => stableCompare(right.proposal?.updatedAt || '', left.proposal?.updatedAt || ''))
+    return { ok: true, status: 200, proposals, diagnostics: ledger.diagnostics, stats: ledger.stats }
   }
 
   function ensureLedgerSeed(id, record) {
     const existing = eventLedger.eventsFor(id)
-    if (existing.length > 0) return existing.length
+    if (!existing.ok) return existing
+    if (existing.events.length > 0) return { ok: true, version: existing.currentVersion }
     const seeded = eventLedger.append({
       aggregateId: id,
       expectedVersion: 0,
@@ -201,17 +220,21 @@ export function createProposalStore({
       at: record.proposal?.createdAt || nowIso(),
       payload: { record },
     })
-    if (!seeded.ok) throw new Error(seeded.error)
-    return 1
+    if (!seeded.ok) return seeded
+    return { ok: true, version: seeded.event.version }
   }
 
   function createProposal(body = {}) {
     const action = cleanIdentity(body.action || body.proposal?.action || 'copy.repoPath', 120)
-    if (!actionIsCopyOnly(action)) {
+    const authority = validateCopyOnlyProposalAuthority({
+      ...(body.proposal && typeof body.proposal === 'object' ? body.proposal : {}),
+      ...body,
+    })
+    if (!authority.ok) {
       return {
         ok: false,
-        status: 409,
-        error: 'direct-write proposal action refused',
+        status: authority.status,
+        error: `proposal authority refused: ${authority.issues.join('; ')}`,
       }
     }
 
@@ -264,10 +287,9 @@ export function createProposalStore({
   }
 
   function reviewProposal(id, body = {}) {
-    const record = readProposal(id)
-    if (!record) {
-      return { ok: false, status: 404, error: 'proposal not found' }
-    }
+    const read = readProposal(id)
+    if (!read.ok) return read
+    const record = read.record
     if (body.proposalId && body.proposalId !== id) {
       return { ok: false, status: 409, error: 'ambiguous proposal review refused' }
     }
@@ -308,10 +330,11 @@ export function createProposalStore({
     } else {
       delete nextRecord.copyable
     }
-    const expectedVersion = ensureLedgerSeed(id, record)
+    const seeded = ensureLedgerSeed(id, record)
+    if (!seeded.ok) return seeded
     const appended = eventLedger.append({
       aggregateId: id,
-      expectedVersion,
+      expectedVersion: seeded.version,
       type: 'proposal-reviewed',
       actor: review.reviewer,
       at: updatedAt,
