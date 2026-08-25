@@ -14,6 +14,10 @@ export const ATELIER_RUNTIME_ENROLLMENT_SCHEMA = 'atelier-runtime-enrollment@v1'
 export const ATELIER_RUNTIME_TRACE_SCHEMA = 'atelier-runtime-operation@v1'
 export const ATELIER_RUNTIME_TRACE_MAX_BYTES = 2 * 1024 * 1024
 export const ATELIER_RUNTIME_TRACE_MAX_RECORDS = 2048
+export const ATELIER_RUNTIME_TRACE_MAX_EVENT_BYTES = 256 * 1024
+export const ATELIER_RUNTIME_PLAN_MAX_AGE_MS = 24 * 60 * 60 * 1000
+export const ATELIER_RUNTIME_PLAN_MAX_FILES = 256
+export const ATELIER_RUNTIME_PLAN_MAX_BYTES = 4 * 1024 * 1024
 
 function lstatIfPresent(file) {
   try {
@@ -51,6 +55,34 @@ export function readJsonIfPresent(file) {
   const secured = secureRuntimeLeaf(file)
   if (!lstatIfPresent(secured)) return null
   return JSON.parse(readRegularTextNoFollow(secured))
+}
+
+export function removeRuntimeLeaf(file) {
+  const secured = secureRuntimeLeaf(file)
+  const stat = lstatIfPresent(secured)
+  if (!stat) return false
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('state leaf is not a regular file')
+  fs.unlinkSync(secured)
+  return true
+}
+
+export function runtimePlanInventory(plansPath) {
+  const directory = ensureContainedPrivateDirectory({
+    workspaceRoot: runtimeWorkspaceRoot(plansPath),
+    directory: plansPath,
+    label: 'runtime plans directory',
+  })
+  const files = []
+  let bytes = 0
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.name.endsWith('.json')) continue
+    if (entry.isSymbolicLink() || !entry.isFile()) throw new Error('runtime plans directory contains a redirected or non-file entry')
+    const file = path.join(directory, entry.name)
+    const stat = fs.lstatSync(file)
+    files.push({ file, name: entry.name, bytes: stat.size, mtimeMs: stat.mtimeMs })
+    bytes += stat.size
+  }
+  return { files, bytes }
 }
 
 export function runtimePaths(repoRoot) {
@@ -119,18 +151,59 @@ export function readOperationTrace(tracePath) {
   return records
 }
 
+function boundedTraceEvent(event) {
+  const encoded = JSON.stringify(event)
+  const originalBytes = Buffer.byteLength(encoded)
+  if (originalBytes <= ATELIER_RUNTIME_TRACE_MAX_EVENT_BYTES) return event
+  return {
+    at: event?.at,
+    operation: event?.operation || 'trace-event',
+    outcome: event?.outcome || 'recorded',
+    ...(event?.operationId ? { operationId: String(event.operationId) } : {}),
+    ...(event?.mode ? { mode: String(event.mode) } : {}),
+    details: {
+      truncated: true,
+      originalBytes,
+      originalSha256: crypto.createHash('sha256').update(encoded).digest('hex'),
+    },
+  }
+}
+
+function traceRecoveryCheckpoint(secured, event, reason) {
+  const stat = lstatIfPresent(secured)
+  const checkpointUnsigned = {
+    schema: ATELIER_RUNTIME_TRACE_SCHEMA,
+    sequence: 1,
+    previousHash: null,
+    at: event.at,
+    operation: 'trace-checkpoint',
+    outcome: 'recovered',
+    details: { reason, priorBytes: stat?.size ?? 0 },
+  }
+  const checkpoint = { ...checkpointUnsigned, hash: digest(checkpointUnsigned) }
+  atomicReplacePrivateText(secured, `${JSON.stringify(checkpoint)}\n`)
+  return checkpoint
+}
+
 export function appendOperationTrace(tracePath, event) {
   const secured = secureRuntimeLeaf(tracePath)
-  let records = readOperationTrace(secured)
+  const boundedEvent = boundedTraceEvent(event)
+  let records
+  try {
+    records = readOperationTrace(secured)
+  } catch (error) {
+    if (!/resident (?:byte|record) ceiling/.test(error.message)) throw error
+    records = [traceRecoveryCheckpoint(secured, boundedEvent, error.message)]
+  }
   let previousHash = records.at(-1)?.hash ?? null
-  const nextProbe = JSON.stringify({ schema: ATELIER_RUNTIME_TRACE_SCHEMA, sequence: records.length + 1, previousHash, ...event, hash: '0'.repeat(64) })
+  const nextProbe = JSON.stringify({ schema: ATELIER_RUNTIME_TRACE_SCHEMA, sequence: records.length + 1, previousHash, ...boundedEvent, hash: '0'.repeat(64) })
   const currentBytes = lstatIfPresent(secured)?.size ?? 0
   if (records.length >= ATELIER_RUNTIME_TRACE_MAX_RECORDS || currentBytes + Buffer.byteLength(`${nextProbe}\n`) > ATELIER_RUNTIME_TRACE_MAX_BYTES) {
     const checkpointUnsigned = {
       schema: ATELIER_RUNTIME_TRACE_SCHEMA,
       sequence: 1,
       previousHash: null,
-      at: event.at,
+      at: boundedEvent.at,
       operation: 'trace-checkpoint',
       outcome: 'compacted',
       details: { compactedRecords: records.length, priorLastHash: previousHash },
@@ -144,7 +217,7 @@ export function appendOperationTrace(tracePath, event) {
     schema: ATELIER_RUNTIME_TRACE_SCHEMA,
     sequence: records.length + 1,
     previousHash,
-    ...event,
+    ...boundedEvent,
   }
   const record = { ...unsigned, hash: digest(unsigned) }
   const descriptor = openRegularFileNoFollow(
@@ -195,17 +268,26 @@ export function acquireRepositoryLock(paths, { operation, clock = () => new Date
     fs.mkdirSync(paths.lock, { mode: 0o700 })
   } catch (error) {
     if (error.code !== 'EEXIST') throw error
+    const lockStat = lstatIfPresent(paths.lock)
+    if (!lockStat || lockStat.isSymbolicLink() || !lockStat.isDirectory()) {
+      throw new Error('runtime lock is redirected or not a directory')
+    }
     let owner = null
     try {
       owner = readJsonIfPresent(path.join(paths.lock, 'owner.json'))
-    } catch {
+    } catch (ownerError) {
+      if (/redirected|regular file|escapes workspace/.test(ownerError.message)) throw ownerError
       // A truncated owner file is not authority to delete a possibly live lock.
     }
     if (owner && processAlive(owner.pid)) {
       return { ok: false, code: 'repository-busy', owner }
     }
     if (!owner) {
-      const ageMs = Date.now() - fs.statSync(paths.lock).mtimeMs
+      const currentLockStat = lstatIfPresent(paths.lock)
+      if (!currentLockStat || currentLockStat.isSymbolicLink() || !currentLockStat.isDirectory()) {
+        throw new Error('runtime lock is redirected or not a directory')
+      }
+      const ageMs = Date.now() - currentLockStat.mtimeMs
       if (ageMs < ownerWriteGraceMs) return { ok: false, code: 'repository-busy', owner: { operation: 'lock-owner-pending', ageMs } }
     }
     const claimPath = path.join(paths.lock, 'recovery.claim')
@@ -229,7 +311,8 @@ export function acquireRepositoryLock(paths, { operation, clock = () => new Date
     let currentOwner = null
     try {
       currentOwner = readJsonIfPresent(path.join(paths.lock, 'owner.json'))
-    } catch {
+    } catch (ownerError) {
+      if (/redirected|regular file|escapes workspace/.test(ownerError.message)) throw ownerError
       // The exclusive recovery claim and age gate permit quarantining a stale,
       // corrupt owner record; corruption is never authority to touch a new lock.
     }

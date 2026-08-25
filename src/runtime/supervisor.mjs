@@ -6,6 +6,9 @@ import { commandProject } from '../project/config.mjs'
 import { inspectGitEngine, redactGitDiagnostic, resolveGitExecutable, runGit } from './git-adapter.mjs'
 import {
   ATELIER_RUNTIME_ENROLLMENT_SCHEMA,
+  ATELIER_RUNTIME_PLAN_MAX_AGE_MS,
+  ATELIER_RUNTIME_PLAN_MAX_BYTES,
+  ATELIER_RUNTIME_PLAN_MAX_FILES,
   acquireRepositoryLock,
   appendOperationTrace,
   atomicWriteJson,
@@ -13,6 +16,8 @@ import {
   readJsonIfPresent,
   readOperationTrace,
   readRuntimeControl,
+  removeRuntimeLeaf,
+  runtimePlanInventory,
   runtimePaths,
   writeRuntimeControl,
   writeRuntimeState,
@@ -21,12 +26,19 @@ import { observeRepository, resolveRepositoryRoot } from './repository-observati
 
 export const ATELIER_COMMIT_PLAN_SCHEMA = 'atelier-commit-plan@v1'
 
+const ENROLLMENT_KEYS = ['schema', 'enrolledAt', 'repoRoot', 'projectConfig', 'git', 'mode']
+const ENROLLMENT_GIT_KEYS = ['executable', 'version', 'supported', 'minimum', 'executableSha256']
+
 function nowIso() {
   return new Date().toISOString()
 }
 
 function hash(value, length = 32) {
   return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, length)
+}
+
+function fileSha256(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
 
 function stableJson(value) {
@@ -116,13 +128,14 @@ function enrollmentProjectConfig(repoRoot, value) {
 }
 
 export function enrollRepository({ repoPath = process.cwd(), projectConfig = null, gitExecutable = null, clock = nowIso } = {}) {
-  const git = gitExecutable || resolveGitExecutable()
+  const selectedGit = gitExecutable || resolveGitExecutable()
+  const git = fs.realpathSync.native ? fs.realpathSync.native(selectedGit) : fs.realpathSync(selectedGit)
   const resolved = resolveRepositoryRoot(repoPath, git)
   if (!resolved.ok) throw new Error(resolved.error || `unsupported repository root: ${resolved.filesystem?.code || 'unknown'}`)
   const paths = ensureRuntimeStateRoot(resolved.root, git)
   const observation = observeRepository({ repoRoot: resolved.root, gitExecutable: git, observedAt: clock() })
   if (observation.bare) throw new Error('bare repositories cannot be enrolled')
-  const engine = inspectGitEngine(git)
+  const engine = { ...inspectGitEngine(git), executableSha256: fileSha256(git) }
   if (!engine.supported) throw new Error(`Git ${engine.version} is unsupported; Atelier requires ${engine.minimum} or newer`)
   const enrollment = {
     schema: ATELIER_RUNTIME_ENROLLMENT_SCHEMA,
@@ -141,7 +154,18 @@ export function enrollRepository({ repoPath = process.cwd(), projectConfig = nul
   return { ok: true, enrollment, state }
 }
 
-export function loadEnrollment(repoPath = process.cwd()) {
+function isContainedPath(root, candidate) {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+}
+
+function requireClosedObject(value, allowed, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key))
+  if (unknown.length) throw new Error(`${label} contains unsupported fields: ${unknown.join(', ')}`)
+}
+
+export function loadEnrollment(repoPath = process.cwd(), { env = process.env } = {}) {
   let root = path.resolve(repoPath)
   try {
     root = fs.realpathSync.native(root)
@@ -151,9 +175,25 @@ export function loadEnrollment(repoPath = process.cwd()) {
   const paths = runtimePaths(root)
   const enrollment = readJsonIfPresent(paths.enrollment)
   if (!enrollment) throw new Error(`repository is not enrolled: ${root}`)
+  requireClosedObject(enrollment, ENROLLMENT_KEYS, 'runtime enrollment')
   if (enrollment.schema !== ATELIER_RUNTIME_ENROLLMENT_SCHEMA) throw new Error('runtime enrollment schema is unsupported')
+  if (enrollment.mode !== 'explicit-single-repository') throw new Error('runtime enrollment mode is unsupported')
+  if (!Number.isFinite(Date.parse(enrollment.enrolledAt))) throw new Error('runtime enrollment timestamp is invalid')
   if (path.resolve(enrollment.repoRoot) !== root) throw new Error('runtime enrollment root does not match the requested repository')
+  if (enrollment.projectConfig != null && (!path.isAbsolute(enrollment.projectConfig) || !isContainedPath(root, path.resolve(enrollment.projectConfig)))) {
+    throw new Error('runtime enrollment project config escapes the enrolled repository')
+  }
+  requireClosedObject(enrollment.git, ENROLLMENT_GIT_KEYS, 'runtime enrollment Git identity')
   if (!path.isAbsolute(enrollment.git?.executable || '')) throw new Error('runtime enrollment does not pin an absolute Git executable')
+  const expectedGit = resolveGitExecutable({ env })
+  if (enrollment.git.executable !== expectedGit) throw new Error('runtime enrollment Git executable does not match the current trusted Git selection')
+  if (isContainedPath(root, enrollment.git.executable)) throw new Error('runtime enrollment Git executable must live outside the enrolled repository')
+  const engine = { ...inspectGitEngine(expectedGit, { env }), executableSha256: fileSha256(expectedGit) }
+  if (stableJson(engine) !== stableJson(enrollment.git)) throw new Error('runtime enrollment Git identity no longer matches the inspected executable')
+  if (!engine.supported) throw new Error(`Git ${engine.version} is unsupported; Atelier requires ${engine.minimum} or newer`)
+  const ignored = runGit(expectedGit, root, ['check-ignore', '-q', '--', '.atelier-local/runtime/enrollment.json'], { allowFailure: true, env })
+  const tracked = runGit(expectedGit, root, ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', '.atelier-local/runtime/enrollment.json'], { allowFailure: true, env })
+  if (!ignored.ok || tracked.ok) throw new Error('runtime enrollment must remain Git-ignored and untracked')
   return { enrollment, paths }
 }
 
@@ -317,7 +357,7 @@ function sameToken(left, right) {
   return first.length === second.length && crypto.timingSafeEqual(first, second)
 }
 
-function validateStoredPlan(plan, operationId, confirmation) {
+function validateStoredPlan(plan, operationId, confirmation, currentAt = nowIso()) {
   const allowed = [
     'schema', 'operationId', 'mode', 'createdAt', 'repoRoot', 'gitExecutable',
     'observedHead', 'observedBranch', 'observedStatusDigest', 'paths', 'message',
@@ -327,6 +367,10 @@ function validateStoredPlan(plan, operationId, confirmation) {
   const unknown = Object.keys(plan).filter((key) => !allowed.includes(key))
   if (unknown.length) throw new Error(`commit plan contains unsupported fields: ${unknown.join(', ')}`)
   if (plan.schema !== ATELIER_COMMIT_PLAN_SCHEMA || plan.mode !== 'user-confirmed') throw new Error('commit plan schema or mode is unsupported')
+  const createdMs = Date.parse(plan.createdAt)
+  const currentMs = Date.parse(currentAt)
+  if (!Number.isFinite(createdMs) || !Number.isFinite(currentMs)) throw new Error('commit plan timestamp is invalid')
+  if (createdMs > currentMs + 60_000 || currentMs - createdMs > ATELIER_RUNTIME_PLAN_MAX_AGE_MS) throw new Error('commit plan expired; create a new commit plan')
   const expected = operationIdFor(plan)
   if (!sameToken(expected, operationId) || !sameToken(plan.operationId, operationId)) throw new Error('commit plan content does not match its operation id')
   if (plan.confirmation?.required !== true || !sameToken(plan.confirmation?.operationId, confirmation)) throw new Error('commit plan is not eligible for user-confirmed execution')
@@ -339,7 +383,7 @@ function validateStoredPlan(plan, operationId, confirmation) {
 
 function stagedManifest(gitExecutable, root, selected) {
   return selected.map((itemPath) => {
-    const result = runGit(gitExecutable, root, ['ls-files', '--stage', '-z', '--', itemPath])
+    const result = runGit(gitExecutable, root, ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', itemPath])
     const records = result.stdout.split('\0').filter(Boolean)
     if (!records.length) return { path: itemPath, worktree: null }
     if (records.length !== 1) throw new Error(`staged path has unresolved index stages: ${itemPath}`)
@@ -347,6 +391,44 @@ function stagedManifest(gitExecutable, root, selected) {
     if (!match) throw new Error(`staged path evidence is malformed: ${itemPath}`)
     return { path: itemPath, worktree: { mode: match[1], blob: match[2] } }
   })
+}
+
+function treeManifest(gitExecutable, root, tree, selected) {
+  return selected.map((itemPath) => {
+    const result = runGit(gitExecutable, root, ['--literal-pathspecs', 'ls-tree', '-z', tree, '--', itemPath])
+    const records = result.stdout.split('\0').filter(Boolean)
+    if (!records.length) return { path: itemPath, worktree: null }
+    if (records.length !== 1) throw new Error(`reviewed tree path evidence is ambiguous: ${itemPath}`)
+    const match = records[0].match(/^(\d{6}) blob ([0-9a-f]{40,64})\t/)
+    if (!match) throw new Error(`reviewed tree path evidence is malformed: ${itemPath}`)
+    return { path: itemPath, worktree: { mode: match[1], blob: match[2] } }
+  })
+}
+
+function treeChangedPaths(gitExecutable, root, base, tree) {
+  const result = runGit(gitExecutable, root, ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', base, tree])
+  return unique(result.stdout.split('\0').filter(Boolean).map(normalizePath)).sort((left, right) => left.localeCompare(right, 'en'))
+}
+
+function pruneAndBoundPlans(paths, currentAt) {
+  const now = Date.parse(currentAt)
+  if (!Number.isFinite(now)) throw new Error('commit plan timestamp is invalid')
+  let inventory = runtimePlanInventory(paths.plans)
+  for (const item of inventory.files) {
+    let createdAt = item.mtimeMs
+    try {
+      const stored = readJsonIfPresent(item.file)
+      const parsed = Date.parse(stored?.createdAt)
+      if (Number.isFinite(parsed)) createdAt = parsed
+    } catch {
+      // Corrupt or redirected plan state fails closed below; it is never pruned as authority.
+    }
+    if (now - createdAt > ATELIER_RUNTIME_PLAN_MAX_AGE_MS) removeRuntimeLeaf(item.file)
+  }
+  inventory = runtimePlanInventory(paths.plans)
+  if (inventory.files.length >= ATELIER_RUNTIME_PLAN_MAX_FILES || inventory.bytes >= ATELIER_RUNTIME_PLAN_MAX_BYTES) {
+    throw new Error('runtime commit plan storage reached its resident ceiling; remove or consume existing plans')
+  }
 }
 
 export function planUserConfirmedCommit({
@@ -378,10 +460,12 @@ export function planUserConfirmedCommit({
     const target = publishTarget(observation)
     if (publish && !target) throw new Error('publish was requested but the current branch has no supported upstream target')
     const commitMessage = cleanMessage(message)
+    const createdAt = clock()
+    pruneAndBoundPlans(paths, createdAt)
     const plan = {
       schema: ATELIER_COMMIT_PLAN_SCHEMA,
       mode: 'user-confirmed',
-      createdAt: clock(),
+      createdAt,
       repoRoot: enrollment.repoRoot,
       gitExecutable: enrollment.git.executable,
       observedHead: observation.branch.head,
@@ -400,6 +484,11 @@ export function planUserConfirmedCommit({
         operationId,
         instruction: `Run atelier sync commit --operation ${operationId} --confirm ${operationId}`,
     }
+    const encodedBytes = Buffer.byteLength(`${JSON.stringify(plan, null, 2)}\n`)
+    const inventory = runtimePlanInventory(paths.plans)
+    if (encodedBytes > ATELIER_RUNTIME_PLAN_MAX_BYTES || inventory.bytes + encodedBytes > ATELIER_RUNTIME_PLAN_MAX_BYTES) {
+      throw new Error('runtime commit plan storage would exceed its resident byte ceiling')
+    }
     atomicWriteJson(path.join(paths.plans, `${operationId}.json`), plan)
     trace(paths, { operation: 'commit-plan-created', operationId, outcome: 'awaiting-user-confirmation', mode: 'user-confirmed', details: { paths: selected, publish: Boolean(plan.publish) } }, clock)
     return { ok: true, plan }
@@ -413,30 +502,36 @@ function projectBoundaryCheck(enrollment) {
   const project = commandProject({ argv: ['--project', enrollment.projectConfig], cwd: enrollment.repoRoot })
   const loaded = loadBoundaryPolicy(project)
   if (!loaded.ok) return { ok: false, configured: true, report: { errors: loaded.errors.map((message) => ({ code: 'boundary-policy-missing', message })) } }
-  const report = checkBoundaryPolicy({ project, policy: loaded.policy, staged: true, stagedOnly: true })
+  const report = checkBoundaryPolicy({ project, policy: loaded.policy, staged: true, stagedOnly: true, gitExecutable: enrollment.git.executable })
   return { ok: report.ok, configured: true, report }
-}
-
-function unstage(gitExecutable, root, selected) {
-  const reset = runGit(gitExecutable, root, ['--literal-pathspecs', 'reset', '--quiet', 'HEAD', '--', ...selected], { allowFailure: true })
-  if (reset.ok) return
-  runGit(gitExecutable, root, ['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '--', ...selected], { allowFailure: true })
 }
 
 function restoreIndex(gitExecutable, root) {
   runGit(gitExecutable, root, ['reset', '--mixed', '--quiet', 'HEAD'], { allowFailure: true })
 }
 
+function normalizeCommitMessage(value) {
+  return String(value || '').replaceAll('\r\n', '\n').replace(/\n+$/, '')
+}
+
+function rollbackCommit(gitExecutable, root, priorHead, createdCommit) {
+  const rolledBack = runGit(gitExecutable, root, ['update-ref', 'HEAD', priorHead, createdCommit], { allowFailure: true })
+  if (!rolledBack.ok) return false
+  restoreIndex(gitExecutable, root)
+  return true
+}
+
 export function executeUserConfirmedCommit({ repoPath = process.cwd(), operationId, confirmation, clock = nowIso } = {}) {
   if (!/^operation-[0-9a-f]{64}$/.test(String(operationId || '')) || !sameToken(confirmation, operationId)) throw new Error('exact operation confirmation token is required')
   const { enrollment, paths } = loadEnrollment(repoPath)
   const planFile = path.join(paths.plans, `${operationId}.json`)
-  const plan = validateStoredPlan(readJsonIfPresent(planFile), operationId, confirmation)
-  if (plan.repoRoot !== enrollment.repoRoot || plan.gitExecutable !== enrollment.git.executable) throw new Error('commit plan does not match the current enrollment')
   const lock = acquireRepositoryLock(paths, { operation: `execute-${operationId}`, clock })
   if (!lock.ok) throw new Error('repository is busy with another Atelier operation')
   let staged = false
   try {
+    const executionAt = clock()
+    const plan = validateStoredPlan(readJsonIfPresent(planFile), operationId, confirmation, executionAt)
+    if (plan.repoRoot !== enrollment.repoRoot || plan.gitExecutable !== enrollment.git.executable) throw new Error('commit plan does not match the current enrollment')
     const control = readRuntimeControl(paths)
     if (control.paused) throw new Error(`repository is paused: ${control.reason || 'paused by user'}`)
     const observed = fullStateOrAttention(enrollment, clock)
@@ -464,15 +559,44 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
       throw new Error(`boundary validation refused the commit: ${messages || 'unknown boundary failure'}`)
     }
     const expectedTree = runGit(enrollment.git.executable, enrollment.repoRoot, ['write-tree']).stdout.trim()
+    const expectedTreePaths = treeChangedPaths(enrollment.git.executable, enrollment.repoRoot, plan.observedHead, expectedTree)
+    if (JSON.stringify(expectedTreePaths) !== JSON.stringify(expectedStaged)) {
+      throw new Error(`reviewed tree change set drifted before commit: expected ${expectedStaged.join(', ')}, got ${expectedTreePaths.join(', ')}`)
+    }
+    const expectedTreeManifest = treeManifest(enrollment.git.executable, enrollment.repoRoot, expectedTree, expectedStaged)
+    if (stableJson(expectedTreeManifest) !== stableJson(plan.reviewedManifest)) throw new Error('reviewed tree bytes or modes drifted before commit')
     const committed = runGit(enrollment.git.executable, enrollment.repoRoot, ['commit', '-m', plan.message], { allowFailure: true, allowPrompt: true })
-    if (!committed.ok) throw new Error(`Git commit failed: ${gitFailure(committed)}`)
+    if (!committed.ok) {
+      const headAfterFailure = runGit(enrollment.git.executable, enrollment.repoRoot, ['rev-parse', 'HEAD'], { allowFailure: true }).stdout.trim()
+      if (headAfterFailure && headAfterFailure !== plan.observedHead) {
+        const rolledBack = rollbackCommit(enrollment.git.executable, enrollment.repoRoot, plan.observedHead, headAfterFailure)
+        staged = false
+        if (!rolledBack) {
+          const state = attentionState('commit-rollback-failed', 'Git commit failed after HEAD moved and automatic rollback could not prove recovery', null, { operationId, headAfterFailure })
+          persistState(paths, state, clock)
+          throw new Error('Git commit failed after HEAD moved; automatic rollback failed and repository attention is required')
+        }
+        throw new Error('Git hook moved HEAD while the reviewed commit failed; the unexpected commit was rolled back')
+      }
+      throw new Error(`Git commit failed: ${gitFailure(committed)}`)
+    }
     const commit = runGit(enrollment.git.executable, enrollment.repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
     const committedTree = runGit(enrollment.git.executable, enrollment.repoRoot, ['rev-parse', `${commit}^{tree}`]).stdout.trim()
-    if (committedTree !== expectedTree) {
-      runGit(enrollment.git.executable, enrollment.repoRoot, ['update-ref', 'HEAD', plan.observedHead, commit])
-      restoreIndex(enrollment.git.executable, enrollment.repoRoot)
+    const parentFields = runGit(enrollment.git.executable, enrollment.repoRoot, ['rev-list', '--parents', '-n', '1', commit]).stdout.trim().split(/\s+/)
+    const committedMessage = runGit(enrollment.git.executable, enrollment.repoRoot, ['show', '-s', '--format=%B', commit]).stdout
+    const postCommitFailures = []
+    if (committedTree !== expectedTree) postCommitFailures.push('tree')
+    if (parentFields.length !== 2 || parentFields[1] !== plan.observedHead) postCommitFailures.push('parent')
+    if (normalizeCommitMessage(committedMessage) !== normalizeCommitMessage(plan.message)) postCommitFailures.push('message')
+    if (postCommitFailures.length) {
+      const rolledBack = rollbackCommit(enrollment.git.executable, enrollment.repoRoot, plan.observedHead, commit)
       staged = false
-      throw new Error('Git hook or concurrent index change altered the reviewed commit tree; commit was rolled back')
+      if (!rolledBack) {
+        const state = attentionState('commit-rollback-failed', 'Git altered reviewed commit authority and automatic rollback could not prove recovery', null, { operationId, commit, failures: postCommitFailures })
+        persistState(paths, state, clock)
+        throw new Error(`Git altered reviewed commit ${postCommitFailures.join(', ')}; automatic rollback failed and repository attention is required`)
+      }
+      throw new Error(`Git hook or concurrent change altered the reviewed commit ${postCommitFailures.join(', ')}; commit was rolled back`)
     }
     staged = false
     trace(paths, { operation: 'commit-created', operationId, outcome: 'committed', mode: 'user-confirmed', details: { commit, paths: plan.paths, boundaryConfigured: boundary.configured } }, clock)
@@ -481,7 +605,7 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
       const beforePublish = fullStateOrAttention(enrollment, clock)
       if (beforePublish.attention) throw new Error(`repository became incomplete before publish: ${beforePublish.attention.message}`)
       if (stableJson(publishTarget(beforePublish.observation)) !== stableJson(plan.publish)) throw new Error('publish target changed after review; commit remains local and was not published')
-      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', plan.publish.remote, `HEAD:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
+      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', '--', plan.publish.remote, `HEAD:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
       publish = { ok: pushed.ok, remote: plan.publish.remote, branch: plan.publish.branch, error: pushed.ok ? null : gitFailure(pushed) }
       trace(paths, { operation: 'commit-publish', operationId, outcome: pushed.ok ? 'published' : 'attention', mode: 'user-confirmed', details: { commit, ...publish } }, clock)
       if (!pushed.ok) {
@@ -500,7 +624,11 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
     trace(paths, { operation: 'commit-execution', operationId, outcome: 'refused', mode: 'user-confirmed', details: { reason: redactGitDiagnostic(error.message) } }, clock)
     throw error
   } finally {
-    lock.release()
+    try {
+      removeRuntimeLeaf(planFile)
+    } finally {
+      lock.release()
+    }
   }
 }
 

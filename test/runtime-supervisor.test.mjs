@@ -100,6 +100,7 @@ test('user-confirmed commit stages only reviewed files and can publish through t
   const result = executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId })
   assert.equal(result.ok, true)
   assert.equal(result.publish.ok, true)
+  assert.equal(fs.existsSync(planFile(root, plan.operationId)), false)
   assert.equal(runGit(git, root, ['status', '--porcelain']).stdout.trim(), '?? leave-local.md')
   assert.equal(runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim(), result.commit)
   const trace = readOperationTrace(runtimePaths(root).trace)
@@ -141,6 +142,23 @@ test('local work blocks upstream reconciliation and produces one stable attentio
   assert.equal(first.state.code, 'update-blocked-by-local-changes')
   assert.equal(first.state.incidentId, second.state.incidentId)
   assert.equal(fs.existsSync(path.join(root, 'upstream.md')), false)
+})
+
+test('bounded fetch failures become attention and prevent publish-plan creation', (t) => {
+  const { base, root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  runGit(git, root, ['remote', 'set-url', 'origin', path.join(base, 'missing-remote.git')])
+  const reconciled = reconcileRepository({ repoPath: root, fetchAttempts: 1 })
+  assert.equal(reconciled.ok, false)
+  assert.equal(reconciled.state.code, 'fetch-unavailable')
+  assert.equal(reconciled.state.details.attempts, 1)
+
+  fs.writeFileSync(path.join(root, 'publish.md'), 'reviewed\n')
+  assert.throws(
+    () => planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: no fetch no publish', publish: true, fetchAttempts: 1 }),
+    /cannot prepare a publish plan because fetch failed/,
+  )
+  assert.deepEqual(fs.readdirSync(runtimePaths(root).plans), [])
 })
 
 test('pause, resume, busy locks, and stale-lock recovery remain machine-local', (t) => {
@@ -204,6 +222,45 @@ test('runtime state refuses redirected leaves without modifying their targets', 
   }
   assert.throws(() => setRepositoryPaused({ repoPath: root, paused: true }), /regular file/)
   assert.equal(fs.readFileSync(target, 'utf8'), 'outside\n')
+})
+
+test('enrollment remains closed, ignored, untracked, and bound to the inspected system Git', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const enrollmentFile = runtimePaths(root).enrollment
+  const original = JSON.parse(fs.readFileSync(enrollmentFile, 'utf8'))
+
+  fs.writeFileSync(enrollmentFile, `${JSON.stringify({ ...original, unsupported: true }, null, 2)}\n`)
+  assert.throws(() => runtimeStatus({ repoPath: root }), /unsupported fields/)
+
+  fs.writeFileSync(enrollmentFile, `${JSON.stringify(original, null, 2)}\n`)
+  runGit(git, root, ['add', '-f', '.atelier-local/runtime/enrollment.json'])
+  assert.throws(() => runtimeStatus({ repoPath: root }), /Git-ignored and untracked/)
+  runGit(git, root, ['reset', '--quiet', 'HEAD', '--', '.atelier-local/runtime/enrollment.json'])
+
+  fs.writeFileSync(enrollmentFile, `${JSON.stringify({ ...original, git: { ...original.git, executableSha256: '0'.repeat(64) } }, null, 2)}\n`)
+  assert.throws(() => runtimeStatus({ repoPath: root }), /Git identity no longer matches/)
+
+  const substituted = structuredClone(original)
+  substituted.git.executable = path.join(root, 'repo-owned-git')
+  fs.writeFileSync(enrollmentFile, `${JSON.stringify(substituted, null, 2)}\n`)
+  assert.throws(() => runtimeStatus({ repoPath: root }), /trusted Git selection|outside the enrolled repository/)
+})
+
+test('a redirected operation lock is refused without writing through its target', (t) => {
+  const { base, root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const paths = runtimePaths(root)
+  const outside = path.join(base, 'outside-lock')
+  fs.mkdirSync(outside)
+  try {
+    fs.symlinkSync(outside, paths.lock, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (error) {
+    if (process.platform === 'win32' && error?.code === 'EPERM') return t.skip('symlink privilege unavailable')
+    throw error
+  }
+  assert.throws(() => acquireRepositoryLock(paths, { operation: 'must-refuse' }), /redirected or not a directory/)
+  assert.deepEqual(fs.readdirSync(outside), [])
 })
 
 test('a retained confirmation cannot authorize a mutated plan or unsafe operation path', (t) => {
@@ -270,6 +327,59 @@ test('a hook that enlarges the index cannot create or publish an unreviewed comm
   assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
 })
 
+test('a hook-created parent cannot authorize a commit and the reviewed plan is consumed', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const before = head(root)
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: reviewed parent' })
+  const hook = path.join(root, '.git', 'hooks', 'pre-commit')
+  fs.writeFileSync(hook, '#!/bin/sh\ngit commit --no-verify -m "hook commit"\n')
+  fs.chmodSync(hook, 0o755)
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /HEAD.*rolled back|parent.*rolled back/,
+  )
+  assert.equal(head(root), before)
+  assert.equal(fs.existsSync(planFile(root, plan.operationId)), false)
+})
+
+test('a commit-msg hook cannot substitute the reviewed message', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const before = head(root)
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: exact reviewed message' })
+  const hook = path.join(root, '.git', 'hooks', 'commit-msg')
+  fs.writeFileSync(hook, '#!/bin/sh\nprintf "%s\\n" "substituted by hook" > "$1"\n')
+  fs.chmodSync(hook, 0o755)
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /commit message.*rolled back/,
+  )
+  assert.equal(head(root), before)
+  assert.equal(fs.existsSync(planFile(root, plan.operationId)), false)
+})
+
+test('commit plans expire, are consumed, and refuse an unbounded resident plan set', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const oldAt = '2026-01-01T00:00:00.000Z'
+  const { plan: expired } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: expiring plan', clock: () => oldAt })
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: expired.operationId, confirmation: expired.operationId, clock: () => '2026-01-03T00:00:00.000Z' }),
+    /commit plan expired/,
+  )
+  assert.equal(fs.existsSync(planFile(root, expired.operationId)), false)
+  const plans = runtimePaths(root).plans
+  for (let index = 0; index < 256; index += 1) fs.writeFileSync(path.join(plans, `resident-${index}.json`), '{}\n')
+  assert.throws(
+    () => planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: bounded plans' }),
+    /resident ceiling/,
+  )
+})
+
 test('post-fast-forward completeness blockers produce attention, not healthy state', (t) => {
   const { base, remote, root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -293,12 +403,28 @@ test('resident operation trace checkpoints before crossing its byte ceiling', (t
   enrollRepository({ repoPath: root, gitExecutable: git })
   const trace = runtimePaths(root).trace
   const large = 'x'.repeat(700_000)
-  appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'large-1', outcome: 'ok', details: { large } })
-  appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'large-2', outcome: 'ok', details: { large } })
-  appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'large-3', outcome: 'ok', details: { large } })
+  const truncated = appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'large-1', outcome: 'ok', details: { large } })
+  assert.equal(truncated.details.truncated, true)
+  const bounded = 'x'.repeat(250_000)
+  for (let index = 0; index < 10; index += 1) {
+    appendOperationTrace(trace, { at: new Date().toISOString(), operation: `bounded-${index}`, outcome: 'ok', details: { bounded } })
+  }
   const records = readOperationTrace(trace)
   assert.equal(records[0].operation, 'trace-checkpoint')
-  assert.equal(records.at(-1).operation, 'large-3')
+  assert.equal(records.at(-1).operation, 'bounded-9')
+})
+
+test('an externally oversized trace recovers to a bounded checkpoint on the next append', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const trace = runtimePaths(root).trace
+  fs.writeFileSync(trace, 'x'.repeat((2 * 1024 * 1024) + 1))
+  appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'after-oversize', outcome: 'ok', details: {} })
+  const records = readOperationTrace(trace)
+  assert.equal(records[0].operation, 'trace-checkpoint')
+  assert.equal(records[0].outcome, 'recovered')
+  assert.equal(records.at(-1).operation, 'after-oversize')
+  assert.equal(fs.statSync(trace).size < 2 * 1024 * 1024, true)
 })
 
 test('an existing stale-recovery claim blocks deletion of the observed lock', (t) => {

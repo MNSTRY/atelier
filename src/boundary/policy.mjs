@@ -296,11 +296,11 @@ function actorFindings({ policy, project, actor }) {
   return findings
 }
 
-export function stagedPathsForProject(project) {
+export function stagedPathsForProject(project, { gitExecutable = 'git' } = {}) {
   const paths = []
   for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
-    const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf8' })
+    const result = spawnSync(gitExecutable, ['-C', repo.path, 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf8' })
     if (result.status !== 0) continue
     for (const rel of result.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
       paths.push({ repo: repo.name, repoRoot: repo.path, path: normalize(rel) })
@@ -394,7 +394,7 @@ export function semanticChangesInFile(file) {
   return changes
 }
 
-function semanticDiffFindings({ policy, project }) {
+function semanticDiffFindings({ policy, project, gitExecutable = 'git' }) {
   const findings = []
   const severity = 'error'
   for (const repo of managedRepos(project)) {
@@ -402,7 +402,7 @@ function semanticDiffFindings({ policy, project }) {
       findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
       continue
     }
-    const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
+    const result = spawnSync(gitExecutable, ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
     if (result.status !== 0) {
       findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
       continue
@@ -430,7 +430,7 @@ function semanticDiffFindings({ policy, project }) {
   return findings
 }
 
-function stagedContentFindings({ policy, project }) {
+function stagedContentFindings({ policy, project, gitExecutable = 'git' }) {
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
   const findings = []
@@ -440,7 +440,7 @@ function stagedContentFindings({ policy, project }) {
       findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
       continue
     }
-    const result = scanStagedRepository({ repoRoot: repo.path, rules, exceptions, repo: repo.name })
+    const result = scanStagedRepository({ repoRoot: repo.path, rules, exceptions, repo: repo.name, gitExecutable })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
     if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
@@ -603,7 +603,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git' } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
@@ -615,10 +615,10 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
   }
   findings.push(...actorFindings({ policy, project, actor }))
   if (staged) {
-    const stagedPaths = stagedPathsForProject(project)
+    const stagedPaths = stagedPathsForProject(project, { gitExecutable })
     findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
-    findings.push(...semanticDiffFindings({ policy, project }))
-    findings.push(...stagedContentFindings({ policy, project }))
+    findings.push(...semanticDiffFindings({ policy, project, gitExecutable }))
+    findings.push(...stagedContentFindings({ policy, project, gitExecutable }))
   }
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')

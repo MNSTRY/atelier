@@ -13,25 +13,28 @@ runtime object.
 ## Authority contract
 
 - Enrollment names exactly one repository. Atelier never scans a home folder.
-- One resolved absolute system Git executable owns Git semantics for the
-  enrollment. Git `2.39.0` or newer is required.
+- One resolved absolute system Git executable, version, and executable digest
+  owns Git semantics for the enrollment. Git `2.39.0` or newer is required.
 - Every cycle observes the full repository. There is no watcher correctness
   dependency in Deliverable Zero.
 - Fetch and fast-forward-only reconciliation are mechanical operations.
 - Commit creation is a two-phase, user-confirmed operation. Planning records
   the head, branch, complete status digest, exact file paths, commit message,
   reviewed blob/mode manifest, diff summary, and exact optional upstream
-  identity. The remote identity includes a secret-safe digest of the complete
-  configured URL, while persisted display evidence strips authentication
-  material. Every authoritative field is bound into the operation id.
+  identity. The remote identity digest covers the normalized credential-free
+  target; persisted display evidence likewise strips authentication material,
+  query strings, and fragments. Every authoritative field is bound into the operation id.
   Execution requires that exact id and refuses if the plan, repository,
-  staged bytes/modes, commit tree, or publish target changed.
+  staged bytes/modes, written tree, commit parent/message, or publish target
+  changed. Plans expire after 24 hours, are consumed by a definitive execution
+  attempt, and are held under resident file/count ceilings.
 - A commit plan cannot absorb pre-existing staged work. It stages only literal,
   explicitly reviewed paths.
 - Configured Atelier boundary policy is checked against the staged change set
-  before commit creation. Ordinary Git hooks still run; the resulting commit
-  tree must equal the reviewed staged tree or the local commit is rolled back
-  and publication is refused.
+  before commit creation using the enrolled Git executable. Ordinary Git hooks
+  still run; the resulting commit tree, single parent, and message must equal
+  the reviewed authority or the local commit is rolled back and publication is
+  refused.
 - Push is present only when the reviewed plan requested it. Push is never
   forced, and a failed push preserves the local commit and creates one stable
   attention state.
@@ -43,8 +46,9 @@ runtime object.
 `atelier sync status` emits an `atelier-repository-observation@v1` document.
 It cannot report `complete: true` when any of these are unresolved:
 
-- provider-managed, UNC/network, WSL-cross-boundary, or unclassified external
-  filesystem roots;
+- lexically identifiable provider-managed, UNC/network, WSL-cross-boundary, or
+  unclassified external filesystem roots (mapped-drive classification remains
+  an operating-system integration concern for the signed beta);
 - an unsupported Git engine or bare repository;
 - sparse checkout or partial clone state;
 - missing or unhealthy submodules;
@@ -65,7 +69,7 @@ Ignored `.atelier-local/runtime/` contains:
 - `enrollment.json` — exact repository and Git engine;
 - `state.json` — healthy, attention, or paused state;
 - `control.json` — user pause/freeze state;
-- `plans/` — reviewed commit plans;
+- `plans/` — expiring, consumed reviewed commit plans under count/byte ceilings;
 - `operations.ndjson` — sequence- and hash-chained resident trace with explicit
   hash-bound checkpoints before its byte or record ceiling; and
 - an atomic per-repository operation lock.
@@ -102,6 +106,11 @@ atelier sync commit \
 
 The future native shell may label the final two commands **Commit & sync**.
 It must not bypass either phase.
+
+The repeated operation id is a visible user-intent confirmation gate, not an
+authorization secret. Local software able to read and modify the repository is
+inside the same operating-system trust domain; the control prevents implicit
+or stale execution, not a hostile process with the user's filesystem access.
 
 ## Evidence boundary
 

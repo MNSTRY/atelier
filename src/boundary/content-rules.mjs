@@ -252,12 +252,13 @@ export function parsePushRefInput(text) {
 
 export function gitOutputResult(repoRoot, args, {
   encoding = 'utf8',
+  gitExecutable = 'git',
   maxBuffer = DIFF_RESULT_MAX_BYTES,
   runner = spawnSync,
 } = {}) {
   let result
   try {
-    result = runner('git', ['-C', repoRoot, ...args], { encoding, maxBuffer })
+    result = runner(gitExecutable, ['-C', repoRoot, ...args], { encoding, maxBuffer })
   } catch (error) {
     return { ok: false, code: 'git-command-failed', error: error instanceof Error ? error.message : String(error), stdout: null }
   }
@@ -355,7 +356,7 @@ function scanBinaryBuffer({ buffer, filePath, rules, exceptions, repo }) {
   return findings
 }
 
-function readBinaryChanges({ repoRoot, revision, diff, rules, exceptions, repo }) {
+function readBinaryChanges({ repoRoot, revision, diff, rules, exceptions, repo, gitExecutable, gitRunner }) {
   const findings = []
   const diagnostics = []
   let totalBytes = 0
@@ -363,7 +364,9 @@ function readBinaryChanges({ repoRoot, revision, diff, rules, exceptions, repo }
     const spec = revision === ':' ? `:${filePath}` : `${revision}:${filePath}`
     const result = gitOutputResult(repoRoot, ['show', spec], {
       encoding: 'buffer',
+      gitExecutable,
       maxBuffer: BINARY_FILE_MAX_BYTES + 1,
+      runner: gitRunner,
     })
     if (!result.ok) {
       diagnostics.push(incompleteDiagnostic({
@@ -403,9 +406,10 @@ export function scanStagedRepository({
   rules = DEFAULT_CONTENT_RULES,
   exceptions = [],
   repo = null,
+  gitExecutable = 'git',
   gitRunner = spawnSync,
 } = {}) {
-  const acquired = stagedDiff(repoRoot, { runner: gitRunner })
+  const acquired = stagedDiff(repoRoot, { gitExecutable, runner: gitRunner })
   if (!acquired.ok) {
     return {
       findings: [],
@@ -414,7 +418,7 @@ export function scanStagedRepository({
     }
   }
   const files = parseAddedContent(acquired.diff)
-  const binary = readBinaryChanges({ repoRoot, revision: ':', diff: acquired.diff, rules, exceptions, repo })
+  const binary = readBinaryChanges({ repoRoot, revision: ':', diff: acquired.diff, rules, exceptions, repo, gitExecutable, gitRunner })
   return {
     findings: [...scanAddedContent({ files, rules, exceptions, repo }), ...binary.findings],
     diagnostics: binary.diagnostics,

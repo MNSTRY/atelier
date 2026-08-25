@@ -144,7 +144,7 @@ function remoteState(gitExecutable, root, failures) {
     return {
       name,
       url: sanitizeRemoteUrl(url),
-      identityDigest: sha256(String(url || '')),
+      identityDigest: sha256(sanitizeRemoteUrl(url)),
       authentication: classifyRemoteAuthentication(url),
     }
   })
@@ -226,7 +226,7 @@ function gitMode(stat) {
 }
 
 function indexEntry(gitExecutable, root, itemPath, failures) {
-  const result = runGit(gitExecutable, root, ['ls-files', '--stage', '-z', '--', itemPath], { allowFailure: true })
+  const result = runGit(gitExecutable, root, ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', itemPath], { allowFailure: true })
   if (!result.ok) {
     failures.push(blocker('observation-evidence-unavailable', 'required Git index evidence is unavailable', { path: itemPath }))
     return null
@@ -260,13 +260,18 @@ function worktreeEntry(gitExecutable, root, itemPath, failures) {
     failures.push(blocker('observation-evidence-invalid', 'changed worktree path is not a regular file or symlink', { path: itemPath }))
     return null
   }
-  const result = runGit(gitExecutable, root, ['hash-object', '--no-filters', '--', itemPath], { allowFailure: true })
+  const symlinkBytes = stat.isSymbolicLink() ? fs.readlinkSync(absolute, { encoding: 'buffer' }) : null
+  const result = symlinkBytes
+    ? runGit(gitExecutable, root, ['hash-object', '--stdin'], { allowFailure: true, input: symlinkBytes })
+    : runGit(gitExecutable, root, ['--literal-pathspecs', 'hash-object', '--no-filters', '--', itemPath], { allowFailure: true })
   const blob = result.ok ? result.stdout.trim() : null
   if (!blob || !/^[0-9a-f]{40,64}$/.test(blob)) {
     failures.push(blocker('observation-evidence-unavailable', 'required worktree blob evidence is unavailable', { path: itemPath }))
     return null
   }
-  const indexResult = runGit(gitExecutable, root, ['hash-object', `--path=${itemPath}`, '--', itemPath], { allowFailure: true })
+  const indexResult = symlinkBytes
+    ? runGit(gitExecutable, root, ['hash-object', '--stdin'], { allowFailure: true, input: symlinkBytes })
+    : runGit(gitExecutable, root, ['--literal-pathspecs', 'hash-object', `--path=${itemPath}`, '--', itemPath], { allowFailure: true })
   const indexBlob = indexResult.ok ? indexResult.stdout.trim() : null
   if (!indexBlob || !/^[0-9a-f]{40,64}$/.test(indexBlob)) {
     failures.push(blocker('observation-evidence-unavailable', 'required filtered blob evidence is unavailable', { path: itemPath }))

@@ -46,7 +46,7 @@ test('full observation proves a normal local clone complete', (t) => {
   assert.deepEqual(validateRepositoryObservation(report), [])
 })
 
-test('remote identity binds the exact configured target without persisting credentials', (t) => {
+test('remote identity binds the credential-free target without creating a secret digest oracle', (t) => {
   const { root } = repository(t)
   const firstMaterial = ['sentinel', '-remote-one'].join('')
   const secondMaterial = ['sentinel', '-remote-two'].join('')
@@ -56,9 +56,31 @@ test('remote identity binds the exact configured target without persisting crede
   runGit(git, root, ['remote', 'set-url', 'origin', `https://user:${secondMaterial}@example.test/org/repo.git?${queryKey}=${secondMaterial}`])
   const second = observeRepository({ repoRoot: root, gitExecutable: git })
   assert.equal(first.remotes[0].url, second.remotes[0].url)
-  assert.notEqual(first.remotes[0].identityDigest, second.remotes[0].identityDigest)
+  assert.equal(first.remotes[0].identityDigest, second.remotes[0].identityDigest)
   assert.equal(JSON.stringify(first).includes(firstMaterial), false)
   assert.equal(JSON.stringify(second).includes(secondMaterial), false)
+})
+
+test('symlink fingerprints hash the link text rather than following its target', (t) => {
+  const { root } = repository(t)
+  const target = path.join(root, 'target.txt')
+  const link = path.join(root, 'linked.txt')
+  fs.writeFileSync(target, 'first target bytes\n')
+  try {
+    fs.symlinkSync('target.txt', link, 'file')
+  } catch (error) {
+    if (process.platform === 'win32' && error?.code === 'EPERM') return t.skip('symlink privilege unavailable')
+    throw error
+  }
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  const fingerprint = report.status.fingerprints.find((item) => item.path === 'linked.txt')
+  const expected = runGit(git, root, ['hash-object', '--stdin'], { input: 'target.txt' }).stdout.trim()
+  assert.equal(fingerprint.worktree.mode, '120000')
+  assert.equal(fingerprint.worktree.blob, expected)
+  assert.equal(fingerprint.worktree.indexBlob, expected)
+  fs.writeFileSync(target, 'different target bytes\n')
+  const after = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(after.status.fingerprints.find((item) => item.path === 'linked.txt').worktree.indexBlob, expected)
 })
 
 test('observation fails closed on sparse and partial workspace state', (t) => {

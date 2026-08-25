@@ -116,8 +116,12 @@ function signatures, types, or behavior.
 ### egress:check
 
 `npm run egress:check` (`atelier egress check`) scans package runtime paths for
-forbidden non-localhost egress. The package claims no network egress in runtime
-paths; this gate is the mechanical check behind that claim.
+forbidden non-localhost HTTP egress primitives. The package claims no silent or
+undocumented runtime egress; this gate is one mechanical check behind that
+claim. It does not interpret data-only Markdown/JSON and does not model
+`child_process`, so the reviewed `gh` identity-resolution subprocesses and the
+explicitly enrolled Atelier Sync Git fetch/non-force-push subprocesses are
+documented exceptions backed by dedicated refusal tests.
 
 ### consumer:smoke
 
