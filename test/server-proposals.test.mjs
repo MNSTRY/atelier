@@ -147,7 +147,7 @@ test('proposal lifecycle is nonce-protected, local, and copy-only', async (t) =>
     'proposal-reviewed',
   ])
   assert.equal(events.at(-1).version, 3)
-  assert.equal(fs.statSync(ledgerPath).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(ledgerPath).mode & 0o777, 0o600)
 
   const page = await fetch(`${base}/proposals/${id}`, {
     headers: { Origin: base, 'Sec-Fetch-Site': 'same-origin' },

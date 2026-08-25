@@ -42,7 +42,7 @@ test('collaboration event ledger returns typed optimistic results', (t) => {
   assert.equal(events.ok, true)
   assert.equal(events.events.length, 2)
   assert.equal(events.currentVersion, 2)
-  assert.equal(fs.statSync(ledger.ledgerPath).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(ledger.ledgerPath).mode & 0o777, 0o600)
 })
 
 test('partial corruption is diagnosed and blocks subsequent writes', (t) => {

@@ -58,7 +58,9 @@ test('keygen, sign, verify roundtrip in a scratch directory', () => {
   fs.writeFileSync(publicKeyPath, keygen.stdout)
   const keyFilePath = path.join(dir, LOCAL_KEY_FILE)
   const privateDoc = JSON.parse(fs.readFileSync(keyFilePath, 'utf8'))
-  assert.equal(fs.statSync(keyFilePath).mode & 0o777, 0o600)
+  // Windows does not expose its ACL security model through POSIX mode bits.
+  // The installed-runtime gate must prove the Windows ACL separately.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(keyFilePath).mode & 0o777, 0o600)
   // keygen refuses to overwrite an existing key file.
   const again = run(['keygen', '--key-id', 'cli-test-2026'], { cwd: dir })
   assert.equal(again.status, 2)

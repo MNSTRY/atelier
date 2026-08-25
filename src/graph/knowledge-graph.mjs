@@ -100,7 +100,7 @@ function uniqueStringArrayErrors(value, label) {
 }
 
 export function splitFrontmatter(raw) {
-  const normalized = raw.replace(/\r\n/g, '\n')
+  const normalized = String(raw).replace(/\r\n?/g, '\n')
   if (!normalized.startsWith('---\n')) return null
   const rest = normalized.slice(4)
   const match = rest.match(/\n---\s*\n/)

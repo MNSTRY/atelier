@@ -147,7 +147,7 @@ test('package scripts wire the atelier export dry-run validator and focused test
 
   assert.equal(
     packageJson.scripts['dry-run'],
-    `node ${VALIDATOR} ${relative(ROOT, SAMPLE_FIXTURE)}`
+    `node ${VALIDATOR} ${relative(ROOT, SAMPLE_FIXTURE).split('\\').join('/')}`
   )
   assert.match(packageJson.scripts.test, /node --test test\/\*\.test\.mjs/)
   assert.match(packageJson.scripts.contract, /check-atelier-export-contract/)

@@ -15,6 +15,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execNpmSync } from './npm-cli.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
@@ -31,6 +32,14 @@ let ownsTarball = false
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
+    cwd: options.cwd ?? packageRoot,
+    encoding: 'utf8',
+    stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
+  })
+}
+
+function runNpm(args, options = {}) {
+  return execNpmSync(args, {
     cwd: options.cwd ?? packageRoot,
     encoding: 'utf8',
     stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
@@ -56,7 +65,7 @@ try {
   const suppliedTarball = process.env.ATELIER_CANDIDATE_TARBALL
   if (suppliedTarball) tarballPath = resolve(suppliedTarball)
   else {
-    const pack = JSON.parse(run('npm', ['pack', '--json']))[0]
+    const pack = JSON.parse(runNpm(['pack', '--json']))[0]
     tarballPath = join(packageRoot, pack.filename)
     ownsTarball = true
   }
@@ -88,11 +97,11 @@ try {
     dependencies: { 'loomworks-studio': 'file:./loomworks-studio' },
   }, null, 2)}\n`)
 
-  runChecked('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
+  runNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
     cwd: tempRoot,
   })
 
-  const loomworks = join(tempRoot, 'node_modules', '.bin', 'loomworks')
+  const loomworks = join(tempRoot, 'node_modules', 'loomworks-studio', 'bin', 'loomworks.mjs')
   const atelier = join(tempRoot, 'node_modules', '@mnstry', 'atelier', 'bin', 'atelier.mjs')
 
   const versionOutput = runChecked(process.execPath, [loomworks, '--version'], { cwd: tempRoot }).trim()

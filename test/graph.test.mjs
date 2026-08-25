@@ -27,6 +27,18 @@ test('knowledge graph builds with stable Markdown and sidecar identities', (t) =
   assert.ok(moved.nodes.some((node) => node.id === 'sample-workspace:source-html' && node.path === 'source-renamed.html'))
 })
 
+test('knowledge graph accepts Windows CRLF front matter without dropping the Markdown node', (t) => {
+  const sample = makeSampleProject(t)
+  const readme = path.join(sample.dir, 'content/README.md')
+  const lf = fs.readFileSync(readme, 'utf8').replace(/\r\n?/g, '\n')
+  fs.writeFileSync(readme, lf.replace(/\n/g, '\r\n'))
+  const project = resolveProjectConfig({ argv: [`--project=${sample.config}`], cwd: sample.dir })
+  const graph = buildGraph(project)
+  assert.deepEqual(graph.errors, [])
+  assert.equal(graph.counts.nodes, 2)
+  assert.ok(graph.nodes.some((node) => node.id === 'sample-workspace:readme'))
+})
+
 test('graph compatibility output retains unclassified Markdown as private', (t) => {
   const sample = makeSampleProject(t)
   fs.writeFileSync(path.join(sample.dir, 'content/unclassified.md'), '# Unclassified\n\nStill part of the census.\n')
@@ -42,7 +54,7 @@ test('graph compatibility output retains unclassified Markdown as private', (t) 
 test('graph validation fails closed for missing id, legacy visibility, missing sidecar, and orphan sidecar', (t) => {
   const sample = makeSampleProject(t)
   const readme = path.join(sample.dir, 'content/README.md')
-  fs.writeFileSync(readme, fs.readFileSync(readme, 'utf8').replace('  id: "sample-workspace:readme"\n', ''))
+  fs.writeFileSync(readme, fs.readFileSync(readme, 'utf8').replace(/\r\n?/g, '\n').replace('  id: "sample-workspace:readme"\n', ''))
   let project = resolveProjectConfig({ argv: [`--project=${sample.config}`], cwd: sample.dir })
   assert.match(buildGraph(project).errors.join('\n'), /kg\.id is required/)
 

@@ -37,7 +37,7 @@ Subcommands:
 
   keygen --key-id ID [--algorithm ed25519|es256] [--out FILE]
       Generate a signing key pair. Writes the private key file (default
-      ${LOCAL_KEY_FILE}, mode 0600, refuses to overwrite)
+      ${LOCAL_KEY_FILE}, mode 0600 on POSIX, refuses to overwrite)
       and prints only the public key document.
 
 Exit codes: 0 success or valid, 1 verify judged the attestation invalid,
@@ -162,11 +162,24 @@ function runKeygen(argv) {
     fail(`--algorithm must be ed25519 or es256, got ${algorithm}`)
   }
   const outPath = path.resolve(options.out ?? LOCAL_KEY_FILE)
+  // On Windows, O_EXCL alone can still follow a planted dangling symlink.
+  // lstat examines the directory entry itself, so refuse every existing entry
+  // (including a dangling link) before the exclusive create. The subsequent
+  // 'wx' retains the atomic no-overwrite guarantee for ordinary files created
+  // after this check.
+  try {
+    fs.lstatSync(outPath)
+    fail(`refusing to write signing key file: path already exists or is a symlink: ${outPath}`)
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      if (error?.code === undefined) throw error
+      fail(`cannot inspect signing key file path: ${outPath}`)
+    }
+  }
   const { privateKeyDoc, publicKeyDoc } = generateKeyPair({ algorithm, keyId })
-  // Atomic create-exclusive ('wx' = O_CREAT|O_EXCL, mode 0600): fails on any
-  // existing path AND on symlinks — including dangling ones — so a planted
-  // link can never redirect the private key to an attacker-chosen path, and
-  // there is no check-then-write race window. Error output stays path-only.
+  // Atomic create-exclusive ('wx' = O_CREAT|O_EXCL, mode 0600 on POSIX): an
+  // ordinary competing create cannot overwrite the destination. Error output
+  // stays path-only.
   let fd = null
   try {
     fd = fs.openSync(outPath, 'wx', 0o600)
@@ -181,7 +194,8 @@ function runKeygen(argv) {
   } finally {
     fs.closeSync(fd)
   }
-  console.error(`signing key file written to ${outPath} (mode 0600). Keep it out of version control; ${LOCAL_KEY_FILE} is gitignored by default.`)
+  const permissions = process.platform === 'win32' ? 'containing-directory Windows ACLs inherited' : 'mode 0600'
+  console.error(`signing key file written to ${outPath} (${permissions}). Keep it out of version control; ${LOCAL_KEY_FILE} is gitignored by default.`)
   console.log(JSON.stringify(publicKeyDoc, null, 2))
 }
 

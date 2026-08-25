@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execNpmSync } from './npm-cli.mjs'
 import { compileScanPatterns, STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 import {
   LOCAL_COMPUTED_ALLOW_MARKER,
@@ -81,7 +82,7 @@ function resolveCandidatePack() {
     return { pack: Array.isArray(parsed) ? parsed[0] : parsed, tarballPath: resolve(suppliedTarball), ownedRoot: null }
   }
   const ownedRoot = mkdtempSync(join(tmpdir(), 'atelier-release-audit-pack-'))
-  const stdout = execFileSync('npm', ['pack', '--json', '--pack-destination', ownedRoot], {
+  const stdout = execNpmSync(['pack', '--json', '--pack-destination', ownedRoot], {
     cwd: packageRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
