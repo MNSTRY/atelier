@@ -1,0 +1,12 @@
+{
+  "schema": "atelier-repository-observation@v1",
+  "observedAt": "2026-08-25T00:00:00.000Z",
+  "complete": true,
+  "root": "/workspace/project",
+  "filesystem": {
+    "supported": true,
+    "code": "local-filesystem"
+  },
+  "blockers": [],
+  "warnings": []
+}

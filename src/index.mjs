@@ -98,3 +98,32 @@ export {
 export {
   analysisAdapterDryRun,
 } from './analysis/adapter.mjs'
+
+export {
+  GitCommandError,
+  classifyRemoteAuthentication,
+  inspectGitEngine,
+  parseGitVersion,
+  resolveGitExecutable,
+  runGit,
+  sanitizeRemoteUrl,
+} from './runtime/git-adapter.mjs'
+
+export {
+  ATELIER_REPOSITORY_OBSERVATION_SCHEMA,
+  classifyFilesystemRoot,
+  observeRepository,
+  resolveRepositoryRoot,
+  validateRepositoryObservation,
+} from './runtime/repository-observation.mjs'
+
+export {
+  ATELIER_COMMIT_PLAN_SCHEMA,
+  enrollRepository,
+  executeUserConfirmedCommit,
+  operationTrace,
+  planUserConfirmedCommit,
+  reconcileRepository,
+  runtimeStatus,
+  setRepositoryPaused,
+} from './runtime/supervisor.mjs'

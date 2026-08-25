@@ -187,6 +187,12 @@ session context, capability envelopes, and proposed changes, but it does not
 apply those proposals or grant direct write access. It is a local context and
 control layer that another interface can build on, not an autonomous editor.
 
+The separate headless repository supervisor can observe one explicitly
+enrolled Git repository, fetch and fast-forward it, and prepare a bounded
+commit plan. A commit still requires an exact user confirmation and an
+unchanged re-observation; the loopback browser receives no apply endpoint.
+See [Atelier Sync: Deliverable Zero](docs/atelier-sync.md).
+
 ### 5. The repository can power another product
 
 The CLI is one interface. The package is also a library, and its contracts are

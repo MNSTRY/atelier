@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add Deliverable Zero for Atelier Sync: explicit single-repository
+  enrollment, a pinned direct-process Git adapter, executable repository
+  completeness observations, fast-forward-only reconciliation, per-repository
+  locking, hash-chained local operation traces, pause/resume control, and a
+  two-phase user-confirmed commit-and-publish path. No desktop shell, watcher
+  dependency, semantic conflict resolution, force operation, browser apply
+  endpoint, telemetry, or hidden upload is introduced.
+
 ## 0.2.0-alpha.5
 
 - Harden boundary enforcement so path globs use segment-aware matching, an

@@ -45,6 +45,12 @@ Core commands:
   support bundle --dry-run        Preview a no-send support bundle.
   feedback --message TEXT         Write a local, never-sent feedback report.
   announcements list              List and verify MNSTRY announcements.
+  sync enroll                     Explicitly enroll one repository for supervision.
+  sync status                     Fully observe the enrolled repository.
+  sync reconcile                  Fetch and perform only proven fast-forwards.
+  sync plan                       Prepare one bounded, reviewable commit plan.
+  sync commit                     Execute an exactly confirmed commit plan.
+  sync run --once                 Run one full-state supervisor cycle.
   egress check                    Check extracted Atelier paths for forbidden egress.
   boundary check                  Enforce private/shared repo placement rules.
   boundary audit                  Report content-rule matches tree-wide without blocking.
@@ -84,7 +90,8 @@ test('default-brand version text is the bare package version', () => {
 test('command map exposes the dispatch table for introspection', () => {
   assert.equal(commandMap instanceof Map, true)
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
-  assert.equal(commandMap.size, 52)
+  assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
+  assert.equal(commandMap.size, 53)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {

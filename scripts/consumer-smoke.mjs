@@ -94,6 +94,15 @@ import {
   scanDisclosureContent,
   validateAtelierExportDryRun,
 } from '@mnstry/atelier'
+import {
+  enrollRepository,
+  planUserConfirmedCommit,
+  runtimeStatus,
+} from '@mnstry/atelier/runtime'
+import {
+  observeRepository,
+  validateRepositoryObservation,
+} from '@mnstry/atelier/runtime/observation'
 
 const fixturePath = fileURLToPath(import.meta.resolve('@mnstry/atelier/fixtures/atelier-export/sample-studio-offer.v1.json'))
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
@@ -122,6 +131,11 @@ for (const [subpath, target] of Object.entries(declaredExports)) {
     assert.equal(typeof loaded, 'object', 'expected ' + specifier + ' to import as a module namespace')
   }
 }
+assert.equal(typeof enrollRepository, 'function')
+assert.equal(typeof planUserConfirmedCommit, 'function')
+assert.equal(typeof runtimeStatus, 'function')
+assert.equal(typeof observeRepository, 'function')
+assert.equal(typeof validateRepositoryObservation, 'function')
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })

@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-repository-observation.v1.schema.json",
+  "$comment": "contract revision 1.0.0 (contract-stability epoch)",
+  "title": "atelier-repository-observation@v1",
+  "description": "Full-state evidence for one explicitly enrolled local Git repository. A complete observation cannot conceal a partial clone, sparse checkout, missing submodule or LFS content, custom filter, or unsupported filesystem root.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "observedAt",
+    "complete",
+    "root",
+    "filesystem",
+    "blockers",
+    "warnings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-repository-observation@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "root": {
+      "type": ["string", "null"]
+    },
+    "filesystem": {
+      "type": "object"
+    },
+    "git": {
+      "type": "object"
+    },
+    "bare": {
+      "type": "boolean"
+    },
+    "branch": {
+      "type": "object"
+    },
+    "remotes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "features": {
+      "type": "object"
+    },
+    "submodules": {
+      "type": "object"
+    },
+    "lfs": {
+      "type": "object"
+    },
+    "status": {
+      "type": "object"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members; consumers MUST ignore members they do not recognize."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "complete": {
+            "const": true
+          }
+        },
+        "required": ["complete"]
+      },
+      "then": {
+        "properties": {
+          "blockers": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "details"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "type": "object"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members; consumers MUST ignore members they do not recognize."
+        }
+      }
+    }
+  }
+}
