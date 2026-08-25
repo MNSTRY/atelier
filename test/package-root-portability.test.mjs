@@ -62,3 +62,13 @@ test('programmatic npm invocations use the cross-platform npm CLI helper', () =>
 
   assert.deepEqual(offenders, [])
 })
+
+test('Node entrypoints do not target platform-specific node_modules bin shims', () => {
+  const binShimEntrypoint = /\b(?:execFileSync|spawnSync|run)\(\s*process\.execPath\s*,\s*\[\s*['"][^'"]*node_modules[/\\]\.bin[/\\]/
+  const offenders = [path.join(ROOT, 'scripts'), path.join(ROOT, 'test')]
+    .flatMap((directory) => modulesUnder(directory))
+    .filter((file) => binShimEntrypoint.test(fs.readFileSync(file, 'utf8')))
+    .map((file) => path.relative(ROOT, file))
+
+  assert.deepEqual(offenders, [])
+})

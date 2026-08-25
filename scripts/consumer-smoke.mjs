@@ -155,7 +155,7 @@ for (const [subpath, target] of Object.entries(declaredExports)) {
   writeFileSync(join(tempRoot, 'public-note.md'), 'invented public fixture\n')
   run('git', ['add', 'public-note.md'], { cwd: tempRoot })
   const disclosureOutput = run(process.execPath, [
-    'node_modules/.bin/atelier',
+    atelierCli,
     'disclosure',
     'check',
     '--root',
