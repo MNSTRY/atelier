@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { checkBoundaryPolicy, loadBoundaryPolicy } from '../boundary/policy.mjs'
 import { commandProject } from '../project/config.mjs'
-import { inspectGitEngine, resolveGitExecutable, runGit } from './git-adapter.mjs'
+import { inspectGitEngine, redactGitDiagnostic, resolveGitExecutable, runGit } from './git-adapter.mjs'
 import {
   ATELIER_RUNTIME_ENROLLMENT_SCHEMA,
   acquireRepositoryLock,
@@ -27,6 +27,16 @@ function nowIso() {
 
 function hash(value, length = 32) {
   return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, length)
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (!value || typeof value !== 'object') return JSON.stringify(value)
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
+}
+
+function gitFailure(result) {
+  return redactGitDiagnostic(result?.stderr?.trim() || result?.error || 'Git operation failed')
 }
 
 function normalizePath(value) {
@@ -198,7 +208,7 @@ export function reconcileRepository({ repoPath = process.cwd(), fetchAttempts = 
     }
     const fetched = fetchWithRetries({ enrollment, attempts: fetchAttempts })
     if (!fetched.ok) {
-      const state = attentionState('fetch-unavailable', 'Git fetch did not succeed after bounded retries', before.observation, { attempts: fetched.attempts, error: fetched.result?.stderr?.trim() || fetched.result?.error })
+      const state = attentionState('fetch-unavailable', 'Git fetch did not succeed after bounded retries', before.observation, { attempts: fetched.attempts, error: gitFailure(fetched.result) })
       persistState(paths, state, clock)
       trace(paths, { operation: 'reconcile', outcome: 'attention', details: { code: state.code, attempts: fetched.attempts } }, clock)
       return { ok: false, state }
@@ -217,11 +227,11 @@ export function reconcileRepository({ repoPath = process.cwd(), fetchAttempts = 
       state = attentionState('update-blocked-by-local-changes', 'upstream changes cannot fast-forward over local work', observation)
     } else if (observation.branch.behind) {
       const merged = runGit(enrollment.git.executable, enrollment.repoRoot, ['merge', '--ff-only', '@{upstream}'], { allowFailure: true })
-      if (!merged.ok) state = attentionState('fast-forward-refused', 'Git refused a fast-forward-only reconciliation', observation, { error: merged.stderr.trim() })
+      if (!merged.ok) state = attentionState('fast-forward-refused', 'Git refused a fast-forward-only reconciliation', observation, { error: gitFailure(merged) })
       else {
         action = 'fast-forward'
-        const finalObservation = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
-        state = healthyState('fast-forwarded', 'repository fast-forwarded to its upstream', finalObservation)
+        const final = fullStateOrAttention(enrollment, clock)
+        state = final.attention || healthyState('fast-forwarded', 'repository fast-forwarded to its upstream', final.observation)
       }
     } else if (observation.branch.ahead) {
       state = attentionState('local-commits-unpublished', 'local commits are waiting for a user-driven publish action', observation)
@@ -242,7 +252,13 @@ function publishTarget(observation) {
   const remotes = [...(observation.remotes || [])].sort((left, right) => right.name.length - left.name.length)
   const remote = remotes.find((item) => upstream === item.name || upstream.startsWith(`${item.name}/`))
   if (!remote || upstream === remote.name) return null
-  return { remote: remote.name, branch: upstream.slice(remote.name.length + 1), url: remote.url, authentication: remote.authentication }
+  return {
+    remote: remote.name,
+    branch: upstream.slice(remote.name.length + 1),
+    url: remote.url,
+    identityDigest: remote.identityDigest,
+    authentication: remote.authentication,
+  }
 }
 
 function diffSummary(gitExecutable, root, selected) {
@@ -258,6 +274,79 @@ function diffSummary(gitExecutable, root, selected) {
     if (fs.existsSync(absolute) && fs.statSync(absolute).isFile()) lines.push({ path: item, added: null, deleted: null, bytes: fs.statSync(absolute).size, untracked: true })
   }
   return lines.sort((left, right) => left.path.localeCompare(right.path, 'en'))
+}
+
+function reviewedManifest(observation, selected) {
+  return selected.map((itemPath) => {
+    const entry = (observation.status?.fingerprints || []).find((item) => item.path === itemPath || item.originalPath === itemPath)
+    if (!entry) throw new Error(`review fingerprint is unavailable for ${itemPath}`)
+    return {
+      path: itemPath,
+      worktree: entry.path === itemPath && entry.worktree
+        ? { mode: entry.worktree.mode, blob: entry.worktree.indexBlob }
+        : null,
+    }
+  })
+}
+
+function planAuthority(plan) {
+  return {
+    schema: plan.schema,
+    mode: plan.mode,
+    createdAt: plan.createdAt,
+    repoRoot: plan.repoRoot,
+    gitExecutable: plan.gitExecutable,
+    observedHead: plan.observedHead,
+    observedBranch: plan.observedBranch,
+    observedStatusDigest: plan.observedStatusDigest,
+    paths: plan.paths,
+    message: plan.message,
+    diff: plan.diff,
+    reviewedManifest: plan.reviewedManifest,
+    publish: plan.publish,
+  }
+}
+
+function operationIdFor(plan) {
+  return `operation-${hash(stableJson(planAuthority(plan)), 64)}`
+}
+
+function sameToken(left, right) {
+  const first = Buffer.from(String(left || ''))
+  const second = Buffer.from(String(right || ''))
+  return first.length === second.length && crypto.timingSafeEqual(first, second)
+}
+
+function validateStoredPlan(plan, operationId, confirmation) {
+  const allowed = [
+    'schema', 'operationId', 'mode', 'createdAt', 'repoRoot', 'gitExecutable',
+    'observedHead', 'observedBranch', 'observedStatusDigest', 'paths', 'message',
+    'diff', 'reviewedManifest', 'publish', 'confirmation',
+  ]
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new Error(`commit plan not found: ${operationId}`)
+  const unknown = Object.keys(plan).filter((key) => !allowed.includes(key))
+  if (unknown.length) throw new Error(`commit plan contains unsupported fields: ${unknown.join(', ')}`)
+  if (plan.schema !== ATELIER_COMMIT_PLAN_SCHEMA || plan.mode !== 'user-confirmed') throw new Error('commit plan schema or mode is unsupported')
+  const expected = operationIdFor(plan)
+  if (!sameToken(expected, operationId) || !sameToken(plan.operationId, operationId)) throw new Error('commit plan content does not match its operation id')
+  if (plan.confirmation?.required !== true || !sameToken(plan.confirmation?.operationId, confirmation)) throw new Error('commit plan is not eligible for user-confirmed execution')
+  const expectedInstruction = `Run atelier sync commit --operation ${operationId} --confirm ${operationId}`
+  if (plan.confirmation?.instruction !== expectedInstruction) throw new Error('commit plan confirmation instruction is invalid')
+  if (plan.repoRoot == null || !path.isAbsolute(plan.repoRoot) || !path.isAbsolute(plan.gitExecutable || '')) throw new Error('commit plan repository or Git identity is invalid')
+  if (!Array.isArray(plan.paths) || !Array.isArray(plan.reviewedManifest)) throw new Error('commit plan path evidence is invalid')
+  return plan
+}
+
+function stagedManifest(gitExecutable, root, selected) {
+  return selected.map((itemPath) => {
+    const result = runGit(gitExecutable, root, ['ls-files', '--stage', '-z', '--', itemPath])
+    const records = result.stdout.split('\0').filter(Boolean)
+    if (!records.length) return { path: itemPath, worktree: null }
+    if (records.length !== 1) throw new Error(`staged path has unresolved index stages: ${itemPath}`)
+    const match = records[0].match(/^(\d{6}) ([0-9a-f]{40,64}) 0\t/)
+    if (!match) throw new Error(`staged path evidence is malformed: ${itemPath}`)
+    return { path: itemPath, worktree: { mode: match[1], blob: match[2] } }
+  })
 }
 
 export function planUserConfirmedCommit({
@@ -276,7 +365,7 @@ export function planUserConfirmedCommit({
     if (control.paused) throw new Error(`repository is paused: ${control.reason || 'paused by user'}`)
     if (publish) {
       const fetched = fetchWithRetries({ enrollment, attempts: fetchAttempts })
-      if (!fetched.ok) throw new Error(`cannot prepare a publish plan because fetch failed: ${fetched.result?.stderr?.trim() || fetched.result?.error}`)
+      if (!fetched.ok) throw new Error(`cannot prepare a publish plan because fetch failed: ${gitFailure(fetched.result)}`)
     }
     const observed = fullStateOrAttention(enrollment, clock)
     if (observed.attention) throw new Error(observed.attention.message)
@@ -289,11 +378,8 @@ export function planUserConfirmedCommit({
     const target = publishTarget(observation)
     if (publish && !target) throw new Error('publish was requested but the current branch has no supported upstream target')
     const commitMessage = cleanMessage(message)
-    const seed = JSON.stringify({ root: enrollment.repoRoot, head: observation.branch.head, status: observation.status.digest, selected, commitMessage, publish: publish ? target : null })
-    const operationId = `operation-${hash(seed)}`
     const plan = {
       schema: ATELIER_COMMIT_PLAN_SCHEMA,
-      operationId,
       mode: 'user-confirmed',
       createdAt: clock(),
       repoRoot: enrollment.repoRoot,
@@ -304,12 +390,15 @@ export function planUserConfirmedCommit({
       paths: selected,
       message: commitMessage,
       diff: diffSummary(enrollment.git.executable, enrollment.repoRoot, selected),
+      reviewedManifest: reviewedManifest(observation, selected),
       publish: publish ? target : null,
-      confirmation: {
+    }
+    const operationId = operationIdFor(plan)
+    plan.operationId = operationId
+    plan.confirmation = {
         required: true,
         operationId,
         instruction: `Run atelier sync commit --operation ${operationId} --confirm ${operationId}`,
-      },
     }
     atomicWriteJson(path.join(paths.plans, `${operationId}.json`), plan)
     trace(paths, { operation: 'commit-plan-created', operationId, outcome: 'awaiting-user-confirmation', mode: 'user-confirmed', details: { paths: selected, publish: Boolean(plan.publish) } }, clock)
@@ -334,13 +423,16 @@ function unstage(gitExecutable, root, selected) {
   runGit(gitExecutable, root, ['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '--', ...selected], { allowFailure: true })
 }
 
+function restoreIndex(gitExecutable, root) {
+  runGit(gitExecutable, root, ['reset', '--mixed', '--quiet', 'HEAD'], { allowFailure: true })
+}
+
 export function executeUserConfirmedCommit({ repoPath = process.cwd(), operationId, confirmation, clock = nowIso } = {}) {
-  if (!operationId || confirmation !== operationId) throw new Error('exact operation confirmation token is required')
+  if (!/^operation-[0-9a-f]{64}$/.test(String(operationId || '')) || !sameToken(confirmation, operationId)) throw new Error('exact operation confirmation token is required')
   const { enrollment, paths } = loadEnrollment(repoPath)
   const planFile = path.join(paths.plans, `${operationId}.json`)
-  const plan = readJsonIfPresent(planFile)
-  if (!plan || plan.schema !== ATELIER_COMMIT_PLAN_SCHEMA) throw new Error(`commit plan not found: ${operationId}`)
-  if (plan.mode !== 'user-confirmed' || plan.confirmation?.operationId !== confirmation) throw new Error('commit plan is not eligible for user-confirmed execution')
+  const plan = validateStoredPlan(readJsonIfPresent(planFile), operationId, confirmation)
+  if (plan.repoRoot !== enrollment.repoRoot || plan.gitExecutable !== enrollment.git.executable) throw new Error('commit plan does not match the current enrollment')
   const lock = acquireRepositoryLock(paths, { operation: `execute-${operationId}`, clock })
   if (!lock.ok) throw new Error('repository is busy with another Atelier operation')
   let staged = false
@@ -355,6 +447,7 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
     }
     if (observation.status.stagedCount) throw new Error('repository gained staged changes after review; create a new commit plan')
     validateSelectedPaths(plan.paths, observation)
+    if (plan.publish && stableJson(publishTarget(observation)) !== stableJson(plan.publish)) throw new Error('publish target changed after review; create a new commit plan')
     runGit(enrollment.git.executable, enrollment.repoRoot, ['--literal-pathspecs', 'add', '--', ...plan.paths])
     staged = true
     const stagedObservation = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
@@ -363,20 +456,33 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
     if (JSON.stringify(actualStaged) !== JSON.stringify(expectedStaged)) {
       throw new Error(`staged change set does not match the reviewed plan: expected ${expectedStaged.join(', ')}, got ${actualStaged.join(', ')}`)
     }
+    const actualManifest = stagedManifest(enrollment.git.executable, enrollment.repoRoot, expectedStaged)
+    if (stableJson(actualManifest) !== stableJson(plan.reviewedManifest)) throw new Error('staged bytes or modes do not match the reviewed plan')
     const boundary = projectBoundaryCheck(enrollment)
     if (!boundary.ok) {
       const messages = (boundary.report?.errors || []).map((item) => item.message).join('; ')
       throw new Error(`boundary validation refused the commit: ${messages || 'unknown boundary failure'}`)
     }
+    const expectedTree = runGit(enrollment.git.executable, enrollment.repoRoot, ['write-tree']).stdout.trim()
     const committed = runGit(enrollment.git.executable, enrollment.repoRoot, ['commit', '-m', plan.message], { allowFailure: true, allowPrompt: true })
-    if (!committed.ok) throw new Error(`Git commit failed: ${committed.stderr.trim() || committed.error}`)
-    staged = false
+    if (!committed.ok) throw new Error(`Git commit failed: ${gitFailure(committed)}`)
     const commit = runGit(enrollment.git.executable, enrollment.repoRoot, ['rev-parse', 'HEAD']).stdout.trim()
+    const committedTree = runGit(enrollment.git.executable, enrollment.repoRoot, ['rev-parse', `${commit}^{tree}`]).stdout.trim()
+    if (committedTree !== expectedTree) {
+      runGit(enrollment.git.executable, enrollment.repoRoot, ['update-ref', 'HEAD', plan.observedHead, commit])
+      restoreIndex(enrollment.git.executable, enrollment.repoRoot)
+      staged = false
+      throw new Error('Git hook or concurrent index change altered the reviewed commit tree; commit was rolled back')
+    }
+    staged = false
     trace(paths, { operation: 'commit-created', operationId, outcome: 'committed', mode: 'user-confirmed', details: { commit, paths: plan.paths, boundaryConfigured: boundary.configured } }, clock)
     let publish = null
     if (plan.publish) {
+      const beforePublish = fullStateOrAttention(enrollment, clock)
+      if (beforePublish.attention) throw new Error(`repository became incomplete before publish: ${beforePublish.attention.message}`)
+      if (stableJson(publishTarget(beforePublish.observation)) !== stableJson(plan.publish)) throw new Error('publish target changed after review; commit remains local and was not published')
       const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', plan.publish.remote, `HEAD:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
-      publish = { ok: pushed.ok, remote: plan.publish.remote, branch: plan.publish.branch, error: pushed.ok ? null : pushed.stderr.trim() || pushed.error }
+      publish = { ok: pushed.ok, remote: plan.publish.remote, branch: plan.publish.branch, error: pushed.ok ? null : gitFailure(pushed) }
       trace(paths, { operation: 'commit-publish', operationId, outcome: pushed.ok ? 'published' : 'attention', mode: 'user-confirmed', details: { commit, ...publish } }, clock)
       if (!pushed.ok) {
         const observationAfterCommit = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
@@ -385,13 +491,13 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
         return { ok: false, committed: true, commit, publish, state }
       }
     }
-    const finalObservation = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
-    const state = healthyState(plan.publish ? 'committed-and-published' : 'committed-locally', plan.publish ? 'reviewed change set was committed and published' : 'reviewed change set was committed locally', finalObservation, { operationId, commit })
+    const final = fullStateOrAttention(enrollment, clock)
+    const state = final.attention || healthyState(plan.publish ? 'committed-and-published' : 'committed-locally', plan.publish ? 'reviewed change set was committed and published' : 'reviewed change set was committed locally', final.observation, { operationId, commit })
     persistState(paths, state, clock)
-    return { ok: true, committed: true, commit, publish, state }
+    return { ok: state.status !== 'attention', committed: true, commit, publish, state }
   } catch (error) {
-    if (staged) unstage(enrollment.git.executable, enrollment.repoRoot, plan.paths)
-    trace(paths, { operation: 'commit-execution', operationId, outcome: 'refused', mode: 'user-confirmed', details: { reason: error.message } }, clock)
+    if (staged) restoreIndex(enrollment.git.executable, enrollment.repoRoot)
+    trace(paths, { operation: 'commit-execution', operationId, outcome: 'refused', mode: 'user-confirmed', details: { reason: redactGitDiagnostic(error.message) } }, clock)
     throw error
   } finally {
     lock.release()

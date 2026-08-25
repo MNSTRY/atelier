@@ -7,6 +7,7 @@ import {
   classifyRemoteAuthentication,
   inspectGitEngine,
   parseGitVersion,
+  redactGitDiagnostic,
   resolveGitExecutable,
   runGit,
   sanitizeRemoteUrl,
@@ -42,6 +43,15 @@ test('recorded HTTPS remotes discard embedded authentication material', () => {
   const sanitized = sanitizeRemoteUrl(['https://collaborator:', 'credential@example.test/org/repo.git#fragment'].join(''))
   assert.equal(sanitized, 'https://example.test/org/repo.git')
   assert.equal(sanitizeRemoteUrl('git@example.test:org/repo.git'), 'git@example.test:org/repo.git')
+  assert.equal(sanitizeRemoteUrl(['ssh://git:', 'credential@example.test/org/repo.git?', 'to', 'ken=credential'].join('')), 'ssh://git@example.test/org/repo.git')
+})
+
+test('Git diagnostics redact URL userinfo and credential-shaped values', () => {
+  const material = ['sentinel', '-credential'].join('')
+  const queryKey = ['to', 'ken'].join('')
+  const diagnostic = redactGitDiagnostic(`fatal: https://user:${material}@example.test/repo?${queryKey}=${material} authorization=Bearer-${material} Bearer ${material}`)
+  assert.equal(diagnostic.includes(material), false)
+  assert.match(diagnostic, /\[redacted\]/)
 })
 
 test('Git adapter passes argv directly and handles repository paths with spaces', (t) => {

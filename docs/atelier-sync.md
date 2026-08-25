@@ -20,12 +20,18 @@ runtime object.
 - Fetch and fast-forward-only reconciliation are mechanical operations.
 - Commit creation is a two-phase, user-confirmed operation. Planning records
   the head, branch, complete status digest, exact file paths, commit message,
-  diff summary, and optional upstream target. Execution requires the exact
-  operation id and refuses if any observed fact changed.
+  reviewed blob/mode manifest, diff summary, and exact optional upstream
+  identity. The remote identity includes a secret-safe digest of the complete
+  configured URL, while persisted display evidence strips authentication
+  material. Every authoritative field is bound into the operation id.
+  Execution requires that exact id and refuses if the plan, repository,
+  staged bytes/modes, commit tree, or publish target changed.
 - A commit plan cannot absorb pre-existing staged work. It stages only literal,
   explicitly reviewed paths.
 - Configured Atelier boundary policy is checked against the staged change set
-  before commit creation. Ordinary Git hooks still run.
+  before commit creation. Ordinary Git hooks still run; the resulting commit
+  tree must equal the reviewed staged tree or the local commit is rolled back
+  and publication is refused.
 - Push is present only when the reviewed plan requested it. Push is never
   forced, and a failed push preserves the local commit and creates one stable
   attention state.
@@ -45,6 +51,8 @@ It cannot report `complete: true` when any of these are unresolved:
 - required Git LFS content without a working LFS integration;
 - an unclassified custom clean, smudge, or process filter; or
 - a remote URL whose authentication shape cannot be classified.
+- any required Git evidence read that fails, times out, exceeds its budget, or
+  cannot be parsed.
 
 HTTPS through Git Credential Manager, SSH through the user's existing SSH
 configuration, and local test remotes are classified explicitly. Atelier does
@@ -58,8 +66,15 @@ Ignored `.atelier-local/runtime/` contains:
 - `state.json` — healthy, attention, or paused state;
 - `control.json` — user pause/freeze state;
 - `plans/` — reviewed commit plans;
-- `operations.ndjson` — append-only, sequence- and hash-chained trace; and
+- `operations.ndjson` — sequence- and hash-chained resident trace with explicit
+  hash-bound checkpoints before its byte or record ceiling; and
 - an atomic per-repository operation lock.
+
+Every directory component is containment-checked and every state leaf is
+opened without following redirects where the platform supports it, with leaf
+type and identity checks on every platform. Stale-lock recovery uses an
+exclusive recovery claim and quarantines only the claimed stale directory; it
+never recursively deletes a newly acquired lock.
 
 Deleting this directory removes convenience and diagnostics. It cannot change
 repository meaning. Git plus readable files remain authoritative.

@@ -30,8 +30,11 @@ runtime authority.
 
 ## Safety Posture
 
-The default package posture is no telemetry, no external network egress, no
-runtime mutation, no browser apply endpoint, and no model-assisted analysis execution.
+The default package posture is no telemetry, no MNSTRY runtime mutation, no
+browser apply endpoint, and no model-assisted analysis execution. Conformance
+is offline. The only documented subprocess network paths are the bounded `gh`
+actor-resolution fallback and explicitly enrolled Atelier Sync Git fetch and
+user-confirmed non-force push operations.
 Provider analysis output may only enter as proposed `atelier-claim@v1` records
 until explicitly reviewed by the project owner.
 

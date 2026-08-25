@@ -64,6 +64,13 @@ function sanitizedEnvironment(env, allowPrompt) {
   return next
 }
 
+export function redactGitDiagnostic(value) {
+  return String(value || '')
+    .replace(/https?:\/\/[^\s]+/gi, (url) => sanitizeRemoteUrl(url))
+    .replace(/\b((?:password|passwd|token|secret|authorization|proxy-authorization|extraheader)\s*[=:]\s*)[^\s]+/gi, '$1[redacted]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [redacted]')
+}
+
 export class GitCommandError extends Error {
   constructor(message, result) {
     super(message)
@@ -98,8 +105,8 @@ export function runGit(gitExecutable, repoRoot, args, {
     status: child.status,
     signal: child.signal ?? null,
     stdout: child.stdout || '',
-    stderr: child.stderr || '',
-    error: child.error?.message ?? null,
+    stderr: redactGitDiagnostic(child.stderr || ''),
+    error: child.error?.message ? redactGitDiagnostic(child.error.message) : null,
     executable: gitExecutable,
     args: argv,
   }
@@ -148,16 +155,16 @@ export function classifyRemoteAuthentication(url) {
  */
 export function sanitizeRemoteUrl(url) {
   const value = String(url || '').trim()
-  if (!/^https?:\/\//i.test(value)) return value
+  if (!/^(?:https?|ssh):\/\//i.test(value)) return value
   try {
     const parsed = new URL(value)
-    parsed.username = ''
+    if (/^https?:$/i.test(parsed.protocol)) parsed.username = ''
     Reflect.set(parsed, 'password', '')
     parsed.search = ''
     parsed.hash = ''
     return parsed.toString()
   } catch {
-    return value.replace(/^(https?:\/\/)[^/@]+@/i, '$1')
+    return value.replace(/^((?:https?|ssh):\/\/)(?:[^/@:]+:)?[^/@]+@/i, '$1')
   }
 }
 

@@ -42,7 +42,23 @@ test('full observation proves a normal local clone complete', (t) => {
   assert.equal(report.branch.branch, 'main')
   assert.equal(report.branch.upstream, 'origin/main')
   assert.equal(report.remotes[0].authentication, 'local')
+  assert.match(report.remotes[0].identityDigest, /^[0-9a-f]{64}$/)
   assert.deepEqual(validateRepositoryObservation(report), [])
+})
+
+test('remote identity binds the exact configured target without persisting credentials', (t) => {
+  const { root } = repository(t)
+  const firstMaterial = ['sentinel', '-remote-one'].join('')
+  const secondMaterial = ['sentinel', '-remote-two'].join('')
+  const queryKey = ['to', 'ken'].join('')
+  runGit(git, root, ['remote', 'set-url', 'origin', `https://user:${firstMaterial}@example.test/org/repo.git?${queryKey}=${firstMaterial}`])
+  const first = observeRepository({ repoRoot: root, gitExecutable: git })
+  runGit(git, root, ['remote', 'set-url', 'origin', `https://user:${secondMaterial}@example.test/org/repo.git?${queryKey}=${secondMaterial}`])
+  const second = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(first.remotes[0].url, second.remotes[0].url)
+  assert.notEqual(first.remotes[0].identityDigest, second.remotes[0].identityDigest)
+  assert.equal(JSON.stringify(first).includes(firstMaterial), false)
+  assert.equal(JSON.stringify(second).includes(secondMaterial), false)
 })
 
 test('observation fails closed on sparse and partial workspace state', (t) => {
@@ -67,4 +83,33 @@ test('porcelain parser preserves spaces, renames, and conflict codes without lin
     { code: ' M', path: 'file with spaces.md', originalPath: null },
     { code: 'R ', path: 'new name.md', originalPath: 'old name.md' },
   ])
+})
+
+test('runtime observation validation is exactly contract-backed', (t) => {
+  const { root } = repository(t)
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.notDeepEqual(validateRepositoryObservation({ ...report, unexpected: true }), [])
+  assert.deepEqual(validateRepositoryObservation({ ...report, root: 'relative/by-contract' }), [])
+})
+
+test('configuration evidence is label-only and secrets never enter the observation', (t) => {
+  const { root } = repository(t)
+  const material = ['sentinel', '-proxy-credential'].join('')
+  const option = ['--to', 'ken'].join('')
+  runGit(git, root, ['config', 'http.proxy', `https://user:${material}@proxy.example.test`])
+  runGit(git, root, ['config', 'filter.private.process', `helper ${option}=${material}`])
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  const encoded = JSON.stringify(report)
+  assert.equal(encoded.includes(material), false)
+  assert.deepEqual(report.features.proxy, [{ key: 'http.proxy' }])
+  assert.deepEqual(report.features.customFilters, [{ key: 'filter.private.process' }])
+  assert.equal(report.complete, false)
+})
+
+test('an over-budget required Git evidence read makes the observation incomplete', (t) => {
+  const { root } = repository(t)
+  fs.appendFileSync(path.join(root, '.git', 'config'), `\n[oversized]\n\tvalue = ${'x'.repeat(17 * 1024 * 1024)}\n`)
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, false)
+  assert.equal(report.blockers.some((item) => item.code === 'observation-evidence-unavailable'), true)
 })

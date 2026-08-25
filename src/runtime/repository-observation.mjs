@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { validateJsonSchema } from '../export/atelier-export-contract.mjs'
 import {
   classifyRemoteAuthentication,
   gitText,
@@ -11,6 +12,7 @@ import {
 } from './git-adapter.mjs'
 
 export const ATELIER_REPOSITORY_OBSERVATION_SCHEMA = 'atelier-repository-observation@v1'
+const OBSERVATION_CONTRACT = JSON.parse(fs.readFileSync(new URL('../../contracts/atelier-repository-observation.v1.schema.json', import.meta.url), 'utf8'))
 
 const CLOUD_PATH_PATTERNS = [
   { code: 'provider-managed-onedrive', pattern: /(?:^|[\\/])OneDrive(?:\s*-[^\\/]+)?(?:[\\/]|$)/i },
@@ -32,9 +34,11 @@ function firstLine(value) {
   return String(value || '').split(/\r?\n/)[0].trim()
 }
 
-function optionalText(gitExecutable, repoRoot, args) {
+function optionalText(gitExecutable, repoRoot, args, { failures = null, label = args[0], allowMissing = false } = {}) {
   const result = runGit(gitExecutable, repoRoot, args, { allowFailure: true })
-  return result.ok ? result.stdout.trim() : null
+  if (result.ok) return result.stdout.trim()
+  if (!allowMissing && failures) failures.push(blocker('observation-evidence-unavailable', `required Git evidence is unavailable: ${label}`, { probe: label }))
+  return null
 }
 
 function boolConfig(config, key) {
@@ -42,8 +46,8 @@ function boolConfig(config, key) {
   return /^(?:true|yes|on|1)$/i.test(item?.value || '')
 }
 
-function configValues(config, pattern) {
-  return config.filter((entry) => pattern.test(entry.key)).map((entry) => ({ key: entry.key, value: entry.value }))
+function configValues(config, pattern, { includeValue = false } = {}) {
+  return config.filter((entry) => pattern.test(entry.key)).map((entry) => includeValue ? { key: entry.key, value: entry.value } : { key: entry.key })
 }
 
 export function classifyFilesystemRoot(candidate, { platform = process.platform } = {}) {
@@ -114,28 +118,35 @@ export function parsePorcelainStatus(text) {
   return entries.sort((left, right) => left.path.localeCompare(right.path, 'en'))
 }
 
-function branchState(gitExecutable, root) {
-  const branch = optionalText(gitExecutable, root, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
-  const head = optionalText(gitExecutable, root, ['rev-parse', '--verify', 'HEAD'])
-  const upstream = optionalText(gitExecutable, root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
+function branchState(gitExecutable, root, failures) {
+  const branch = optionalText(gitExecutable, root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { failures, label: 'current branch', allowMissing: true })
+  const head = optionalText(gitExecutable, root, ['rev-parse', '--verify', 'HEAD'], { failures, label: 'HEAD identity' })
+  const upstream = optionalText(gitExecutable, root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { failures, label: 'upstream identity', allowMissing: true })
   let ahead = 0
   let behind = 0
   if (upstream) {
-    const counts = optionalText(gitExecutable, root, ['rev-list', '--left-right', '--count', `HEAD...${upstream}`])
+    const counts = optionalText(gitExecutable, root, ['rev-list', '--left-right', '--count', `HEAD...${upstream}`], { failures, label: 'upstream divergence counts' })
     const match = counts?.match(/^(\d+)\s+(\d+)$/)
     if (match) {
       ahead = Number(match[1])
       behind = Number(match[2])
+    } else if (counts != null) {
+      failures.push(blocker('observation-evidence-invalid', 'required Git evidence is malformed: upstream divergence counts', { probe: 'upstream divergence counts' }))
     }
   }
   return { branch, detached: !branch, head, upstream, ahead, behind }
 }
 
-function remoteState(gitExecutable, root) {
-  const names = (optionalText(gitExecutable, root, ['remote']) || '').split(/\r?\n/).filter(Boolean).sort()
+function remoteState(gitExecutable, root, failures) {
+  const names = (optionalText(gitExecutable, root, ['remote'], { failures, label: 'remote names' }) || '').split(/\r?\n/).filter(Boolean).sort()
   return names.map((name) => {
-    const url = optionalText(gitExecutable, root, ['remote', 'get-url', name])
-    return { name, url: sanitizeRemoteUrl(url), authentication: classifyRemoteAuthentication(url) }
+    const url = optionalText(gitExecutable, root, ['remote', 'get-url', name], { failures, label: `remote URL for ${name}` })
+    return {
+      name,
+      url: sanitizeRemoteUrl(url),
+      identityDigest: sha256(String(url || '')),
+      authentication: classifyRemoteAuthentication(url),
+    }
   })
 }
 
@@ -150,12 +161,20 @@ function submoduleState(gitExecutable, root) {
   return { declared: true, entries, complete, error: result.ok ? null : firstLine(result.stderr) || 'submodule status failed' }
 }
 
-function lfsState(gitExecutable, root) {
-  const trackedAttributes = (optionalText(gitExecutable, root, ['ls-files', '--', '**/.gitattributes', '.gitattributes']) || '')
+function lfsState(gitExecutable, root, failures) {
+  const trackedAttributes = (optionalText(gitExecutable, root, ['ls-files', '--', '**/.gitattributes', '.gitattributes'], { failures, label: 'tracked attributes' }) || '')
     .split(/\r?\n/)
     .filter(Boolean)
   const attributeFiles = trackedAttributes.filter((file) => fs.existsSync(path.join(root, file)))
-  const required = attributeFiles.some((file) => /filter\s*=\s*lfs|filter=lfs/i.test(fs.readFileSync(path.join(root, file), 'utf8')))
+  const required = attributeFiles.some((file) => {
+    const absolute = path.join(root, file)
+    const stat = fs.lstatSync(absolute)
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      failures.push(blocker('observation-evidence-unavailable', 'tracked attributes evidence is redirected or not a regular file', { path: file }))
+      return false
+    }
+    return /filter\s*=\s*lfs|filter=lfs/i.test(fs.readFileSync(absolute, 'utf8'))
+  })
   const version = runGit(gitExecutable, root, ['lfs', 'version'], { allowFailure: true })
   if (!required) return { required: false, available: version.ok, complete: true, attributeFiles }
   if (!version.ok) return { required: true, available: false, complete: false, attributeFiles, error: 'Git LFS is required but unavailable' }
@@ -169,11 +188,11 @@ function lfsState(gitExecutable, root) {
   }
 }
 
-function repositoryFeatures(gitExecutable, root, config) {
-  const gitDir = optionalText(gitExecutable, root, ['rev-parse', '--absolute-git-dir'])
-  const commonDirRaw = optionalText(gitExecutable, root, ['rev-parse', '--git-common-dir'])
+function repositoryFeatures(gitExecutable, root, config, failures) {
+  const gitDir = optionalText(gitExecutable, root, ['rev-parse', '--absolute-git-dir'], { failures, label: 'absolute Git directory' })
+  const commonDirRaw = optionalText(gitExecutable, root, ['rev-parse', '--git-common-dir'], { failures, label: 'Git common directory' })
   const commonDir = commonDirRaw ? path.resolve(root, commonDirRaw) : null
-  const worktrees = (optionalText(gitExecutable, root, ['worktree', 'list', '--porcelain']) || '')
+  const worktrees = (optionalText(gitExecutable, root, ['worktree', 'list', '--porcelain'], { failures, label: 'worktree inventory' }) || '')
     .split(/\r?\n/)
     .filter((line) => line.startsWith('worktree '))
     .map((line) => line.slice('worktree '.length))
@@ -190,23 +209,77 @@ function repositoryFeatures(gitExecutable, root, config) {
     partialClone,
     filters,
     customFilters,
-    hooksPath: config.find((entry) => entry.key.toLowerCase() === 'core.hookspath')?.value || null,
+    hooksPathConfigured: config.some((entry) => entry.key.toLowerCase() === 'core.hookspath'),
     signing: {
       required: boolConfig(config, 'commit.gpgsign'),
-      key: config.find((entry) => entry.key.toLowerCase() === 'user.signingkey')?.value || null,
-      format: config.find((entry) => entry.key.toLowerCase() === 'gpg.format')?.value || null,
+      keyConfigured: config.some((entry) => entry.key.toLowerCase() === 'user.signingkey'),
+      formatConfigured: config.some((entry) => entry.key.toLowerCase() === 'gpg.format'),
     },
     proxy: configValues(config, /^(?:http|https)\.proxy$/i),
   }
 }
 
-function statusFingerprints(gitExecutable, root, entries) {
+function gitMode(stat) {
+  if (stat.isSymbolicLink()) return '120000'
+  if (!stat.isFile()) return null
+  return (stat.mode & 0o111) === 0 ? '100644' : '100755'
+}
+
+function indexEntry(gitExecutable, root, itemPath, failures) {
+  const result = runGit(gitExecutable, root, ['ls-files', '--stage', '-z', '--', itemPath], { allowFailure: true })
+  if (!result.ok) {
+    failures.push(blocker('observation-evidence-unavailable', 'required Git index evidence is unavailable', { path: itemPath }))
+    return null
+  }
+  const records = result.stdout.split('\0').filter(Boolean)
+  if (!records.length) return null
+  const parsed = records.map((record) => {
+    const match = record.match(/^(\d{6}) ([0-9a-f]{40,64}) (\d)\t/)
+    if (!match) return null
+    return { mode: match[1], blob: match[2], stage: Number(match[3]) }
+  })
+  if (parsed.some((item) => !item)) {
+    failures.push(blocker('observation-evidence-invalid', 'required Git index evidence is malformed', { path: itemPath }))
+    return null
+  }
+  return parsed
+}
+
+function worktreeEntry(gitExecutable, root, itemPath, failures) {
+  const absolute = path.join(root, itemPath)
+  let stat
+  try {
+    stat = fs.lstatSync(absolute)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    failures.push(blocker('observation-evidence-unavailable', 'required worktree evidence is unavailable', { path: itemPath }))
+    return null
+  }
+  const mode = gitMode(stat)
+  if (!mode) {
+    failures.push(blocker('observation-evidence-invalid', 'changed worktree path is not a regular file or symlink', { path: itemPath }))
+    return null
+  }
+  const result = runGit(gitExecutable, root, ['hash-object', '--no-filters', '--', itemPath], { allowFailure: true })
+  const blob = result.ok ? result.stdout.trim() : null
+  if (!blob || !/^[0-9a-f]{40,64}$/.test(blob)) {
+    failures.push(blocker('observation-evidence-unavailable', 'required worktree blob evidence is unavailable', { path: itemPath }))
+    return null
+  }
+  const indexResult = runGit(gitExecutable, root, ['hash-object', `--path=${itemPath}`, '--', itemPath], { allowFailure: true })
+  const indexBlob = indexResult.ok ? indexResult.stdout.trim() : null
+  if (!indexBlob || !/^[0-9a-f]{40,64}$/.test(indexBlob)) {
+    failures.push(blocker('observation-evidence-unavailable', 'required filtered blob evidence is unavailable', { path: itemPath }))
+    return null
+  }
+  return { mode, blob, indexBlob }
+}
+
+function statusFingerprints(gitExecutable, root, entries, failures) {
   return entries.map((entry) => {
-    const worktree = optionalText(gitExecutable, root, ['hash-object', '--no-filters', '--', entry.path])
-    const index = optionalText(gitExecutable, root, ['rev-parse', '--verify', `:${entry.path}`])
-    const originalIndex = entry.originalPath
-      ? optionalText(gitExecutable, root, ['rev-parse', '--verify', `:${entry.originalPath}`])
-      : null
+    const worktree = worktreeEntry(gitExecutable, root, entry.path, failures)
+    const index = indexEntry(gitExecutable, root, entry.path, failures)
+    const originalIndex = entry.originalPath ? indexEntry(gitExecutable, root, entry.originalPath, failures) : null
     return {
       code: entry.code,
       path: entry.path,
@@ -222,8 +295,8 @@ function blocker(code, message, details = {}) {
   return { code, message, details }
 }
 
-function completenessFor({ filesystem, engine, bare, remotes, features, submodules, lfs }) {
-  const blockers = []
+function completenessFor({ filesystem, engine, bare, remotes, features, submodules, lfs, acquisitionFailures }) {
+  const blockers = [...acquisitionFailures]
   const warnings = []
   if (!filesystem.supported) blockers.push(blocker(filesystem.code, 'repository root is not on a supported local filesystem'))
   if (!engine.supported) blockers.push(blocker('git-version-unsupported', `Git ${engine.version} is older than ${engine.minimum}`))
@@ -256,22 +329,24 @@ export function observeRepository({ repoRoot, gitExecutable, observedAt = new Da
     }
   }
   const root = resolved.root
+  const acquisitionFailures = []
   const engine = inspectGitEngine(gitExecutable)
   const bare = gitText(gitExecutable, root, ['rev-parse', '--is-bare-repository']) === 'true'
   const configResult = runGit(gitExecutable, root, ['config', '--null', '--list'], { allowFailure: true })
   const config = configResult.ok ? parseNullConfig(configResult.stdout) : []
-  const branch = branchState(gitExecutable, root)
+  if (!configResult.ok) acquisitionFailures.push(blocker('observation-evidence-unavailable', 'required Git evidence is unavailable: configuration inventory', { probe: 'configuration inventory' }))
+  const branch = branchState(gitExecutable, root, acquisitionFailures)
   const statusResult = runGit(gitExecutable, root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
   const entries = parsePorcelainStatus(statusResult.stdout)
-  const remotes = remoteState(gitExecutable, root)
-  const features = repositoryFeatures(gitExecutable, root, config)
+  const remotes = remoteState(gitExecutable, root, acquisitionFailures)
+  const features = repositoryFeatures(gitExecutable, root, config, acquisitionFailures)
   const submodules = submoduleState(gitExecutable, root)
-  const lfs = lfsState(gitExecutable, root)
-  const completeness = completenessFor({ filesystem: resolved.filesystem, engine, bare, remotes, features, submodules, lfs })
+  const lfs = lfsState(gitExecutable, root, acquisitionFailures)
   const conflicts = entries.filter((entry) => entry.code.includes('U') || ['AA', 'DD'].includes(entry.code))
   const staged = entries.filter((entry) => entry.code[0] && entry.code[0] !== '?' && entry.code[0] !== ' ')
   const unstaged = entries.filter((entry) => entry.code[1] && entry.code[1] !== ' ')
-  const fingerprints = statusFingerprints(gitExecutable, root, entries)
+  const fingerprints = statusFingerprints(gitExecutable, root, entries, acquisitionFailures)
+  const completeness = completenessFor({ filesystem: resolved.filesystem, engine, bare, remotes, features, submodules, lfs, acquisitionFailures })
   const statusDigest = sha256(JSON.stringify({ head: branch.head, branch: branch.branch, fingerprints }))
   return {
     schema: ATELIER_REPOSITORY_OBSERVATION_SCHEMA,
@@ -301,13 +376,5 @@ export function observeRepository({ repoRoot, gitExecutable, observedAt = new Da
 }
 
 export function validateRepositoryObservation(doc) {
-  const issues = []
-  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return ['observation must be an object']
-  if (doc.schema !== ATELIER_REPOSITORY_OBSERVATION_SCHEMA) issues.push('observation schema is unsupported')
-  if (typeof doc.observedAt !== 'string' || !Number.isFinite(Date.parse(doc.observedAt))) issues.push('observedAt must be an ISO timestamp')
-  if (typeof doc.complete !== 'boolean') issues.push('complete must be boolean')
-  if (!Array.isArray(doc.blockers) || !Array.isArray(doc.warnings)) issues.push('blockers and warnings must be arrays')
-  if (doc.complete && doc.blockers?.length) issues.push('complete observation cannot carry blockers')
-  if (doc.root != null && !path.isAbsolute(doc.root)) issues.push('root must be an absolute path')
-  return issues
+  return validateJsonSchema(OBSERVATION_CONTRACT, doc)
 }

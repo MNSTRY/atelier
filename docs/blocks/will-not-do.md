@@ -1,7 +1,10 @@
 - It does not write to a MNSTRY runtime database.
-- It does not import, provision, publish, or send anything.
-- Except for the documented `gh` actor-resolution fallback, it initiates no
-  external network requests.
+- It does not import, provision, publish, or send project content to a MNSTRY
+  managed runtime.
+- Conformance remains offline. Network access is limited to the documented
+  `gh` actor-resolution fallback and explicitly enrolled Atelier Sync Git
+  operations: bounded fetch for observation/reconciliation, and non-force push
+  only when the exact reviewed commit plan requested and confirmed it.
 - It does not execute model-assisted analysis or any model provider.
 - It does not include client project content.
 

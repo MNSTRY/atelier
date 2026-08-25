@@ -4,7 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { resolveGitExecutable, runGit } from '../src/runtime/git-adapter.mjs'
-import { acquireRepositoryLock, readOperationTrace, runtimePaths } from '../src/runtime/local-state.mjs'
+import {
+  acquireRepositoryLock,
+  appendOperationTrace,
+  atomicWriteJson,
+  readOperationTrace,
+  runtimePaths,
+} from '../src/runtime/local-state.mjs'
 import {
   enrollRepository,
   executeUserConfirmedCommit,
@@ -42,6 +48,10 @@ function fixture(t) {
 
 function head(root) {
   return runGit(git, root, ['rev-parse', 'HEAD']).stdout.trim()
+}
+
+function planFile(root, operationId) {
+  return path.join(runtimePaths(root).plans, `${operationId}.json`)
 }
 
 test('explicit enrollment writes ignored local state and reports healthy status', (t) => {
@@ -159,4 +169,148 @@ test('pause, resume, busy locks, and stale-lock recovery remain machine-local', 
   const recovered = acquireRepositoryLock(paths, { operation: 'recover' })
   assert.equal(recovered.ok, true)
   recovered.release()
+})
+
+test('runtime state refuses redirected ancestors and leaves outside targets untouched', (t) => {
+  const { base, root } = fixture(t)
+  const outside = path.join(base, 'outside')
+  fs.mkdirSync(outside)
+  const local = path.join(root, '.atelier-local')
+  try {
+    fs.symlinkSync(outside, local, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (error) {
+    if (process.platform === 'win32' && error?.code === 'EPERM') return t.skip('symlink privilege unavailable')
+    throw error
+  }
+  assert.throws(
+    () => atomicWriteJson(path.join(local, 'runtime', 'state.json'), { unsafe: true }),
+    /redirected|non-directory/,
+  )
+  assert.throws(() => enrollRepository({ repoPath: root, gitExecutable: git }), /Git-ignored|redirected|non-directory/)
+  assert.equal(fs.existsSync(path.join(outside, 'runtime', 'enrollment.json')), false)
+})
+
+test('runtime state refuses redirected leaves without modifying their targets', (t) => {
+  const { base, root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const target = path.join(base, 'outside-control.json')
+  fs.writeFileSync(target, 'outside\n')
+  const control = runtimePaths(root).control
+  try {
+    fs.symlinkSync(target, control, 'file')
+  } catch (error) {
+    if (process.platform === 'win32' && error?.code === 'EPERM') return t.skip('symlink privilege unavailable')
+    throw error
+  }
+  assert.throws(() => setRepositoryPaused({ repoPath: root, paused: true }), /regular file/)
+  assert.equal(fs.readFileSync(target, 'utf8'), 'outside\n')
+})
+
+test('a retained confirmation cannot authorize a mutated plan or unsafe operation path', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'notes.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['notes.md'], message: 'docs: reviewed' })
+  const original = JSON.parse(fs.readFileSync(planFile(root, plan.operationId), 'utf8'))
+  const mutations = [
+    (stored) => { stored.message = 'docs: substituted after confirmation' },
+    (stored) => { stored.paths = ['substituted.md'] },
+    (stored) => { stored.observedHead = '0'.repeat(40) },
+    (stored) => { stored.observedStatusDigest = '0'.repeat(64) },
+    (stored) => { stored.repoRoot = path.dirname(root) },
+    (stored) => { stored.gitExecutable = path.join(root, 'other-git') },
+    (stored) => { stored.reviewedManifest[0].worktree.blob = '0'.repeat(40) },
+    (stored) => { stored.publish = { remote: 'other', branch: 'main', url: '/tmp/other.git', authentication: 'local' } },
+  ]
+  for (const mutate of mutations) {
+    const stored = structuredClone(original)
+    mutate(stored)
+    fs.writeFileSync(planFile(root, plan.operationId), `${JSON.stringify(stored, null, 2)}\n`)
+    assert.throws(
+      () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+      /content does not match/,
+    )
+  }
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: '../state', confirmation: '../state' }),
+    /exact operation confirmation/,
+  )
+})
+
+test('publish target drift after review is refused before commit or push', (t) => {
+  const { base, root } = fixture(t)
+  const redirected = path.join(base, 'redirected.git')
+  runGit(git, null, ['init', '--bare', redirected])
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'publish.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: reviewed target', publish: true })
+  runGit(git, root, ['remote', 'set-url', 'origin', redirected])
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /publish target changed/,
+  )
+  assert.equal(runGit(git, root, ['log', '-1', '--format=%s']).stdout.trim(), 'initial')
+})
+
+test('a hook that enlarges the index cannot create or publish an unreviewed commit', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  fs.writeFileSync(path.join(root, 'hook-added.md'), 'must stay out\n')
+  const before = head(root)
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: bounded hook test' })
+  const hook = path.join(root, '.git', 'hooks', 'pre-commit')
+  fs.writeFileSync(hook, '#!/bin/sh\ngit add hook-added.md\n')
+  fs.chmodSync(hook, 0o755)
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /commit tree.*rolled back/,
+  )
+  assert.equal(head(root), before)
+  assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
+})
+
+test('post-fast-forward completeness blockers produce attention, not healthy state', (t) => {
+  const { base, remote, root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const writer = path.join(base, 'submodule-writer')
+  runGit(git, null, ['clone', '--branch', 'main', remote, writer])
+  configure(writer)
+  const gitlink = head(writer)
+  fs.writeFileSync(path.join(writer, '.gitmodules'), '[submodule "missing"]\n\tpath = vendor/missing\n\turl = ../missing.git\n')
+  runGit(git, writer, ['add', '.gitmodules'])
+  runGit(git, writer, ['update-index', '--add', '--cacheinfo', `160000,${gitlink},vendor/missing`])
+  runGit(git, writer, ['commit', '-m', 'add unresolved submodule'])
+  runGit(git, writer, ['push', 'origin', 'main'])
+  const result = reconcileRepository({ repoPath: root, fetchAttempts: 1 })
+  assert.equal(result.ok, false)
+  assert.equal(result.state.code, 'repository-incomplete')
+  assert.equal(result.state.observation.blockers.some((item) => item.code === 'submodules-incomplete'), true)
+})
+
+test('resident operation trace checkpoints before crossing its byte ceiling', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const trace = runtimePaths(root).trace
+  const large = 'x'.repeat(700_000)
+  appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'large-1', outcome: 'ok', details: { large } })
+  appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'large-2', outcome: 'ok', details: { large } })
+  appendOperationTrace(trace, { at: new Date().toISOString(), operation: 'large-3', outcome: 'ok', details: { large } })
+  const records = readOperationTrace(trace)
+  assert.equal(records[0].operation, 'trace-checkpoint')
+  assert.equal(records.at(-1).operation, 'large-3')
+})
+
+test('an existing stale-recovery claim blocks deletion of the observed lock', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const paths = runtimePaths(root)
+  fs.mkdirSync(paths.lock)
+  atomicWriteJson(path.join(paths.lock, 'owner.json'), { lockNonce: 'stale', pid: 99999999, operation: 'dead' })
+  fs.writeFileSync(path.join(paths.lock, 'recovery.claim'), 'other-contender')
+  const contender = acquireRepositoryLock(paths, { operation: 'contender' })
+  assert.equal(contender.ok, false)
+  assert.equal(contender.code, 'repository-busy')
+  assert.equal(fs.existsSync(paths.lock), true)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(paths.lock, 'owner.json'), 'utf8')).lockNonce, 'stale')
 })
