@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { matchesPathPattern, normalizeRelPath } from '../project/path-match.mjs'
+import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 
 export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 export const ZERO_SHA_RE = /^0{40,}$/
@@ -258,7 +259,7 @@ export function gitOutputResult(repoRoot, args, {
 } = {}) {
   let result
   try {
-    result = runner(gitExecutable, ['-C', repoRoot, ...args], { encoding, maxBuffer })
+    result = runner(gitExecutable, ['-C', repoRoot, ...args], { encoding, maxBuffer, env: sanitizedGitEnvironment() })
   } catch (error) {
     return { ok: false, code: 'git-command-failed', error: error instanceof Error ? error.message : String(error), stdout: null }
   }

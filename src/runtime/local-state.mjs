@@ -19,6 +19,7 @@ export const ATELIER_RUNTIME_PLAN_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const ATELIER_RUNTIME_PLAN_MAX_FILES = 256
 export const ATELIER_RUNTIME_PLAN_MAX_BYTES = 4 * 1024 * 1024
 export const ATELIER_RUNTIME_STATE_MAX_BYTES = 512 * 1024
+export const ATELIER_RUNTIME_LIVE_OWNER_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 function lstatIfPresent(file) {
   try {
@@ -174,7 +175,9 @@ function traceRecoveryCheckpoint(secured, event, reason) {
   const stat = lstatIfPresent(secured)
   let priorSha256 = null
   try {
-    priorSha256 = crypto.createHash('sha256').update(readRegularTextNoFollow(secured)).digest('hex')
+    if ((stat?.size ?? 0) <= ATELIER_RUNTIME_TRACE_MAX_BYTES) {
+      priorSha256 = crypto.createHash('sha256').update(readRegularTextNoFollow(secured)).digest('hex')
+    }
   } catch {
     // The recovery checkpoint still records the size and reason if the old
     // regular file cannot be read completely.
@@ -286,17 +289,17 @@ export function acquireRepositoryLock(paths, { operation, clock = () => new Date
       if (/redirected|regular file|escapes workspace/.test(ownerError.message)) throw ownerError
       // A truncated owner file is not authority to delete a possibly live lock.
     }
-    if (owner && processAlive(owner.pid)) {
+    const ownerTimestamp = Date.parse(owner?.acquiredAt || '')
+    const ownerAgeMs = Date.now() - (Number.isFinite(ownerTimestamp) ? ownerTimestamp : lockStat.mtimeMs)
+    if (owner && processAlive(owner.pid) && ownerAgeMs < ATELIER_RUNTIME_LIVE_OWNER_MAX_AGE_MS) {
       return { ok: false, code: 'repository-busy', owner }
     }
-    if (!owner) {
-      const currentLockStat = lstatIfPresent(paths.lock)
-      if (!currentLockStat || currentLockStat.isSymbolicLink() || !currentLockStat.isDirectory()) {
-        throw new Error('runtime lock is redirected or not a directory')
-      }
-      const ageMs = Date.now() - currentLockStat.mtimeMs
-      if (ageMs < ownerWriteGraceMs) return { ok: false, code: 'repository-busy', owner: { operation: 'lock-owner-pending', ageMs } }
+    const currentLockStat = lstatIfPresent(paths.lock)
+    if (!currentLockStat || currentLockStat.isSymbolicLink() || !currentLockStat.isDirectory()) {
+      throw new Error('runtime lock is redirected or not a directory')
     }
+    const ageMs = Date.now() - currentLockStat.mtimeMs
+    if (ageMs < ownerWriteGraceMs) return { ok: false, code: 'repository-busy', owner: owner || { operation: 'lock-owner-pending', ageMs } }
     const claimPath = path.join(paths.lock, 'recovery.claim')
     let claimDescriptor
     try {
@@ -353,7 +356,9 @@ export function acquireRepositoryLock(paths, { operation, clock = () => new Date
       // The exclusive recovery claim and age gate permit quarantining a stale,
       // corrupt owner record; corruption is never authority to touch a new lock.
     }
-    if (currentOwner && processAlive(currentOwner.pid)) {
+    const currentOwnerTimestamp = Date.parse(currentOwner?.acquiredAt || '')
+    const currentOwnerAgeMs = Date.now() - (Number.isFinite(currentOwnerTimestamp) ? currentOwnerTimestamp : lockStat.mtimeMs)
+    if (currentOwner && processAlive(currentOwner.pid) && currentOwnerAgeMs < ATELIER_RUNTIME_LIVE_OWNER_MAX_AGE_MS) {
       try {
         if (readRegularTextNoFollow(claimPath) === lockNonce) fs.unlinkSync(claimPath)
       } catch {
@@ -363,7 +368,16 @@ export function acquireRepositoryLock(paths, { operation, clock = () => new Date
     }
     const quarantine = `${paths.lock}.stale-${lockNonce}`
     try {
+      const beforeRecovery = lstatIfPresent(paths.lock)
+      if (!beforeRecovery || beforeRecovery.dev !== lockStat.dev || beforeRecovery.ino !== lockStat.ino) {
+        return { ok: false, code: 'repository-busy', owner: { operation: 'stale-lock-recovery-identity-changed' } }
+      }
       fs.renameSync(paths.lock, quarantine)
+      const movedLock = lstatIfPresent(quarantine)
+      if (!movedLock || movedLock.dev !== lockStat.dev || movedLock.ino !== lockStat.ino) {
+        if (movedLock && !lstatIfPresent(paths.lock)) fs.renameSync(quarantine, paths.lock)
+        return { ok: false, code: 'repository-busy', owner: { operation: 'stale-lock-recovery-identity-changed' } }
+      }
       fs.mkdirSync(paths.lock, { mode: 0o700 })
     } catch (recoveryError) {
       if (recoveryError?.code === 'EEXIST' || recoveryError?.code === 'ENOENT') {

@@ -14,7 +14,9 @@ runtime object.
 
 - Enrollment names exactly one repository. Atelier never scans a home folder.
 - One resolved absolute system Git executable, version, and executable digest
-  owns Git semantics for the enrollment. Git `2.39.0` or newer is required.
+  owns Git semantics for the enrollment. Repository- and config-retargeting
+  `GIT_*` environment variables are stripped from every supervised Git call.
+  Git `2.39.0` or newer is required.
 - Every cycle observes the full repository. There is no watcher correctness
   dependency in Deliverable Zero.
 - Fetch and fast-forward-only reconciliation are mechanical operations.
@@ -33,14 +35,17 @@ runtime object.
 - A commit plan cannot absorb pre-existing staged work. It stages only literal,
   explicitly reviewed paths.
 - Configured Atelier boundary policy is checked against the staged change set
-  before commit creation using the enrolled Git executable. Ordinary Git hooks
-  still run; the resulting commit tree, single parent, and message must equal
-  the reviewed authority or the local commit is rolled back and publication is
-  refused.
+  before commit creation using the enrolled Git executable, including actor
+  email resolution. The Sync path disables the boundary command's optional
+  network `gh api user` fallback and fails closed when local actor evidence is
+  insufficient. Ordinary Git hooks still run; the resulting commit tree,
+  single parent, and message must equal the reviewed authority or the local
+  commit is rolled back and publication is refused.
 - Push is present only when the reviewed plan requested it, the branch had no
   prior unpublished commits, and HEAD still names the exact verified commit.
-  Push is never forced, and a failed push preserves the local commit and
-  creates one stable attention state.
+  Push is never forced, never follows tags, and never recursively publishes
+  submodule refs. A failed push preserves the local commit and creates one
+  stable attention state.
 - Semantic conflict resolution, merge commits, rebase, reset, force push,
   browser apply, broad path scans, telemetry, and hidden upload are absent.
 
@@ -55,7 +60,9 @@ It cannot report `complete: true` when any of these are unresolved:
 - an unsupported Git engine or bare repository;
 - sparse checkout or partial clone state;
 - missing or unhealthy submodules;
-- required Git LFS content without a working LFS integration;
+- required Git LFS content without a working LFS integration, including LFS
+  semantics declared by tracked or untracked worktree attributes, repository
+  info attributes, and default global or system attributes;
 - an unclassified custom clean, smudge, or process filter; or
 - a remote URL whose authentication shape cannot be classified.
 - any required Git evidence read that fails, times out, exceeds its budget, or
@@ -85,9 +92,12 @@ Every directory component is containment-checked and every state leaf is
 opened without following redirects where the platform supports it, with leaf
 type and identity checks on every platform. Stale-lock recovery uses an
 exclusive recovery claim, ages out an abandoned recovery claim after the owner
-grace interval, and quarantines only the claimed stale directory; it never
-recursively deletes a newly acquired lock. Enrollment takes the same lock as
-every other authoritative state mutation.
+grace interval, identity-checks the lock directory before and after quarantine,
+and quarantines only the claimed stale directory; it never recursively deletes
+a newly acquired lock. A live PID without durable process identity cannot wedge
+the repository forever: its owner record becomes recoverable after the 24-hour
+maximum operation age. Enrollment takes the same lock as every other
+authoritative state mutation.
 
 Deleting this directory removes convenience and diagnostics. It cannot change
 repository meaning. Git plus readable files remain authoritative.
@@ -112,6 +122,10 @@ atelier sync commit \
   --operation operation-... \
   --confirm operation-...
 ```
+
+`status`, `audit`, `reconcile`, and `run --once` return a non-zero process exit
+when their result is not healthy, so automation cannot treat an attention state
+as success merely because JSON was emitted.
 
 The future native shell may label the final two commands **Commit & sync**.
 It must not bypass either phase.

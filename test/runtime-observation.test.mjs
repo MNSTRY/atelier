@@ -161,3 +161,29 @@ test('external Git attributes configuration is a completeness blocker', (t) => {
   assert.equal(report.blockers.some((item) => item.code === 'external-attributes-file-unclassified'), true)
   assert.equal(JSON.stringify(report).includes(attributes), false)
 })
+
+test('untracked worktree attributes participate in LFS completeness', (t) => {
+  const { root } = repository(t)
+  fs.writeFileSync(path.join(root, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n')
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.lfs.required, true)
+  assert.equal(report.lfs.attributeFiles.includes('.gitattributes'), true)
+})
+
+test('default global attributes participate in LFS completeness without persisting their path', (t) => {
+  const { base, root } = repository(t)
+  const xdg = path.join(base, 'xdg')
+  const attributes = path.join(xdg, 'git', 'attributes')
+  fs.mkdirSync(path.dirname(attributes), { recursive: true })
+  fs.writeFileSync(attributes, '*.asset filter=lfs diff=lfs merge=lfs -text\n')
+  const previous = process.env.XDG_CONFIG_HOME
+  process.env.XDG_CONFIG_HOME = xdg
+  t.after(() => {
+    if (previous == null) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previous
+  })
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.lfs.required, true)
+  assert.equal(report.lfs.attributeFiles.includes('global Git attributes'), true)
+  assert.equal(JSON.stringify(report).includes(attributes), false)
+})

@@ -57,10 +57,30 @@ export function resolveGitExecutable({ env = process.env, platform = process.pla
   throw new Error('compatible system Git was not found on PATH')
 }
 
-function sanitizedEnvironment(env, allowPrompt) {
+const REPOSITORY_REDIRECT_ENV = new Set([
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_COMMON_DIR',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_QUARANTINE_PATH',
+  'GIT_NAMESPACE',
+  'GIT_SHALLOW_FILE',
+  'GIT_GRAFT_FILE',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  'GIT_ATTR_NOSYSTEM',
+])
+
+export function sanitizedGitEnvironment(env = process.env, allowPrompt = false) {
   const next = { ...env }
+  for (const key of Object.keys(next)) {
+    if (REPOSITORY_REDIRECT_ENV.has(key) || key === 'GIT_CONFIG_NOSYSTEM' || key.startsWith('GIT_CONFIG_')) delete next[key]
+  }
   if (!allowPrompt) next.GIT_TERMINAL_PROMPT = '0'
   next.GIT_OPTIONAL_LOCKS = next.GIT_OPTIONAL_LOCKS || '1'
+  next.GIT_NO_REPLACE_OBJECTS = '1'
   return next
 }
 
@@ -93,7 +113,7 @@ export function runGit(gitExecutable, repoRoot, args, {
   const argv = repoRoot ? ['-C', repoRoot, ...args] : args
   const child = spawnSync(gitExecutable, argv, {
     encoding: 'utf8',
-    env: sanitizedEnvironment(env, allowPrompt),
+    env: sanitizedGitEnvironment(env, allowPrompt),
     input,
     maxBuffer: DEFAULT_MAX_BUFFER,
     shell: false,
@@ -155,10 +175,12 @@ export function classifyRemoteAuthentication(url) {
  */
 export function sanitizeRemoteUrl(url) {
   const value = String(url || '').trim()
-  if (!/^(?:https?|ssh):\/\//i.test(value)) return value
+  const scpLike = value.match(/^[^/@\s]+@([^:/\s]+:.+)$/)
+  if (scpLike) return scpLike[1]
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value
   try {
     const parsed = new URL(value)
-    if (/^https?:$/i.test(parsed.protocol)) parsed.username = ''
+    parsed.username = ''
     Reflect.set(parsed, 'password', '')
     parsed.search = ''
     parsed.hash = ''

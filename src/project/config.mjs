@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 
 export const PROJECT_CONFIG_ARG_PREFIX = '--project-config='
 export const PROJECT_CONFIG_ENV = 'MNSTRY_ATELIER_PROJECT_CONFIG'
@@ -195,25 +196,25 @@ function overlayRepoPath(overlay, repoName) {
   return firstString(direct, repo.path, repo.localPath)
 }
 
-function resolveRepoPath({ repo, repoName, configDir, workspaceRoot, overlay, cliRepoPaths }) {
+function resolveRepoPath({ repo, repoName, configDir, workspaceRoot, overlay, cliRepoPaths, gitExecutable, env }) {
   if (repoName && cliRepoPaths.has(repoName)) return cliRepoPaths.get(repoName)
   const overlayPath = overlayRepoPath(overlay, repoName)
   const fromOverlay = resolvePathValue(overlayPath, configDir)
   if (fromOverlay) return fromOverlay
   const fromConfig = resolvePathValue(repo.path, configDir) || resolvePathValue(repo.path, workspaceRoot)
   if (fromConfig) return fromConfig
-  return discoverSiblingRepoPath({ repo, repoName, configDir, workspaceRoot })
+  return discoverSiblingRepoPath({ repo, repoName, configDir, workspaceRoot, gitExecutable, env })
 }
 
-function repoPathSource({ repo, repoName, overlay, cliRepoPaths, workspaceRoot, configDir }) {
+function repoPathSource({ repo, repoName, overlay, cliRepoPaths, workspaceRoot, configDir, gitExecutable, env }) {
   if (repoName && cliRepoPaths.has(repoName)) return 'cli'
   if (overlayRepoPath(overlay, repoName)) return 'local-overlay'
   if (firstString(repo.path)) return 'tracked-config'
-  if (discoverSiblingRepoPath({ repo, repoName, configDir, workspaceRoot })) return 'sibling-discovery'
+  if (discoverSiblingRepoPath({ repo, repoName, configDir, workspaceRoot, gitExecutable, env })) return 'sibling-discovery'
   return null
 }
 
-function discoverSiblingRepoPath({ repo, repoName, configDir, workspaceRoot }) {
+function discoverSiblingRepoPath({ repo, repoName, configDir, workspaceRoot, gitExecutable = 'git', env = process.env }) {
   if (!repoName) return null
   const candidates = [
     path.join(workspaceRoot, repoName),
@@ -222,14 +223,14 @@ function discoverSiblingRepoPath({ repo, repoName, configDir, workspaceRoot }) {
   ]
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue
-    if (repo.remote && !gitRemoteMatches(candidate, repo.remote)) continue
+    if (repo.remote && !gitRemoteMatches(candidate, repo.remote, { gitExecutable, env })) continue
     return path.resolve(candidate)
   }
   return null
 }
 
-function gitRemoteMatches(repoPath, expected) {
-  const result = spawnSync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], { encoding: 'utf8' })
+function gitRemoteMatches(repoPath, expected, { gitExecutable = 'git', env = process.env } = {}) {
+  const result = spawnSync(gitExecutable, ['-C', repoPath, 'remote', 'get-url', 'origin'], { encoding: 'utf8', env: sanitizedGitEnvironment(env) })
   if (result.status !== 0) return false
   const actual = normalizeRemote(result.stdout.trim())
   return actual === normalizeRemote(expected)
@@ -243,9 +244,9 @@ function normalizeRemote(value) {
     .toLowerCase()
 }
 
-export function gitRemoteUrl(repoPath) {
+export function gitRemoteUrl(repoPath, { gitExecutable = 'git', env = process.env } = {}) {
   if (!repoPath || !fs.existsSync(repoPath)) return null
-  const result = spawnSync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], { encoding: 'utf8' })
+  const result = spawnSync(gitExecutable, ['-C', repoPath, 'remote', 'get-url', 'origin'], { encoding: 'utf8', env: sanitizedGitEnvironment(env) })
   return result.status === 0 ? firstString(result.stdout) : null
 }
 
@@ -268,6 +269,7 @@ export function resolveProjectConfig({
   env = process.env,
   cwd = process.cwd(),
   configArgPrefix = PROJECT_CONFIG_ARG_PREFIX,
+  gitExecutable = 'git',
   configEnv = PROJECT_CONFIG_ENV,
   defaults = {},
 } = {}) {
@@ -373,7 +375,7 @@ export function resolveProjectConfig({
     localOverlay,
     repos: (Array.isArray(config.repos) ? config.repos : []).map((repo) => {
       const repoName = firstString(repo.name) || (repo.path ? path.basename(repo.path) : null)
-      const repoPath = resolveRepoPath({ repo, repoName, configDir, workspaceRoot, overlay: localOverlay.overlay, cliRepoPaths })
+      const repoPath = resolveRepoPath({ repo, repoName, configDir, workspaceRoot, overlay: localOverlay.overlay, cliRepoPaths, gitExecutable, env })
       const external = isExternalRepo(repo)
       return {
         ...repo,
@@ -381,16 +383,16 @@ export function resolveProjectConfig({
         path: repoPath,
         external,
         readBoundary: external ? null : firstString(repo.readBoundary) || 'team',
-        pathSource: repoPath ? repoPathSource({ repo, repoName, overlay: localOverlay.overlay, cliRepoPaths, workspaceRoot, configDir }) : null,
+        pathSource: repoPath ? repoPathSource({ repo, repoName, overlay: localOverlay.overlay, cliRepoPaths, workspaceRoot, configDir, gitExecutable, env }) : null,
       }
     }),
   }
-  resolved.localState = ensureLocalState(resolved, { write: true })
+  resolved.localState = ensureLocalState(resolved, { write: true, gitExecutable, env })
   return resolved
 }
 
-export function commandProject({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd() } = {}) {
-  const project = resolveProjectConfig({ argv, env, cwd })
+export function commandProject({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), gitExecutable = 'git' } = {}) {
+  const project = resolveProjectConfig({ argv, env, cwd, gitExecutable })
   // Fail closed at CLI entry, but only when a real config file was loaded; the
   // defaults/no-file path resolves with an empty config that would spuriously
   // fail document validation.
@@ -419,35 +421,35 @@ export function localStateRoot(projectOrDir) {
   return path.join(configDir || process.cwd(), LOCAL_STATE_DIR)
 }
 
-function gitRootFor(dir) {
-  const result = spawnSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' })
+function gitRootFor(dir, { gitExecutable = 'git', env = process.env } = {}) {
+  const result = spawnSync(gitExecutable, ['-C', dir, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', env: sanitizedGitEnvironment(env) })
   return result.status === 0 ? result.stdout.trim() : null
 }
 
-function gitPrefixFor(dir) {
-  const result = spawnSync('git', ['-C', dir, 'rev-parse', '--show-prefix'], { encoding: 'utf8' })
+function gitPrefixFor(dir, { gitExecutable = 'git', env = process.env } = {}) {
+  const result = spawnSync(gitExecutable, ['-C', dir, 'rev-parse', '--show-prefix'], { encoding: 'utf8', env: sanitizedGitEnvironment(env) })
   return result.status === 0 ? result.stdout.trim() : null
 }
 
-function isIgnoredByGit(gitRoot, rel) {
-  const result = spawnSync('git', ['-C', gitRoot, 'check-ignore', '-q', rel], { encoding: 'utf8' })
+function isIgnoredByGit(gitRoot, rel, { gitExecutable = 'git', env = process.env } = {}) {
+  const result = spawnSync(gitExecutable, ['-C', gitRoot, 'check-ignore', '-q', rel], { encoding: 'utf8', env: sanitizedGitEnvironment(env) })
   return result.status === 0
 }
 
-export function ensureLocalState(project, { write = false } = {}) {
+export function ensureLocalState(project, { write = false, gitExecutable = 'git', env = process.env } = {}) {
   const root = localStateRoot(project)
-  const gitRoot = gitRootFor(project.configDir)
+  const gitRoot = gitRootFor(project.configDir, { gitExecutable, env })
   // Git owns the repository-relative spelling. Deriving it by comparing
   // filesystem paths breaks when Windows exposes the cwd through an 8.3 short
   // name (RUNNER~1) but Git reports the same root through its long name.
-  const gitPrefix = gitRoot ? gitPrefixFor(project.configDir) : null
+  const gitPrefix = gitRoot ? gitPrefixFor(project.configDir, { gitExecutable, env }) : null
   const rel = gitRoot && gitPrefix !== null ? `${gitPrefix}${LOCAL_STATE_DIR}` : LOCAL_STATE_DIR
   // A directory-only ignore rule such as `.atelier-local/` is not evaluated
   // consistently by Git for an absent directory on every host. Probe a
   // hypothetical child as well: it proves the directory rule before Atelier
   // creates any local state, including on Git for Windows.
   const ignored = gitRoot && gitPrefix !== null
-    ? isIgnoredByGit(gitRoot, `${rel}/.atelier-ignore-probe`) || isIgnoredByGit(gitRoot, `${rel}/`) || isIgnoredByGit(gitRoot, rel)
+    ? isIgnoredByGit(gitRoot, `${rel}/.atelier-ignore-probe`, { gitExecutable, env }) || isIgnoredByGit(gitRoot, `${rel}/`, { gitExecutable, env }) || isIgnoredByGit(gitRoot, rel, { gitExecutable, env })
     : gitRoot === null
   const report = {
     root,

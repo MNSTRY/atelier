@@ -250,7 +250,7 @@ export function runtimeStatus({ repoPath = process.cwd(), clock = nowIso } = {})
 function fetchWithRetries({ enrollment, attempts = 3 }) {
   let last = null
   for (let attempt = 1; attempt <= Math.max(1, attempts); attempt += 1) {
-    last = runGit(enrollment.git.executable, enrollment.repoRoot, ['fetch', '--prune'], { allowFailure: true, timeout: 60_000 })
+    last = runGit(enrollment.git.executable, enrollment.repoRoot, ['fetch', '--prune', '--no-tags', '--recurse-submodules=no'], { allowFailure: true, timeout: 60_000 })
     if (last.ok) return { ok: true, attempts: attempt, result: last }
   }
   return { ok: false, attempts: Math.max(1, attempts), result: last }
@@ -537,7 +537,7 @@ export function planUserConfirmedCommit({
 
 function projectBoundaryCheck(enrollment) {
   if (!enrollment.projectConfig) return { ok: true, configured: false, report: null }
-  const project = commandProject({ argv: ['--project', enrollment.projectConfig], cwd: enrollment.repoRoot })
+  const project = commandProject({ argv: ['--project', enrollment.projectConfig], cwd: enrollment.repoRoot, gitExecutable: enrollment.git.executable })
   const scannedRepoRoots = (project.repos || [])
     .filter((repo) => !repo.external && repo.path)
     .map((repo) => {
@@ -548,7 +548,14 @@ function projectBoundaryCheck(enrollment) {
   }
   const loaded = loadBoundaryPolicy(project)
   if (!loaded.ok) return { ok: false, configured: true, scannedRepoRoots, report: { errors: loaded.errors.map((message) => ({ code: 'boundary-policy-missing', message })) } }
-  const report = checkBoundaryPolicy({ project, policy: loaded.policy, staged: true, stagedOnly: true, gitExecutable: enrollment.git.executable })
+  const report = checkBoundaryPolicy({
+    project,
+    policy: loaded.policy,
+    staged: true,
+    stagedOnly: true,
+    gitExecutable: enrollment.git.executable,
+    allowNetworkActorResolution: false,
+  })
   return { ok: report.ok, configured: true, scannedRepoRoots, report }
 }
 
@@ -652,7 +659,7 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
       if (beforePublish.attention) throw new Error(`repository became incomplete before publish: ${beforePublish.attention.message}`)
       if (stableJson(publishTarget(beforePublish.observation)) !== stableJson(plan.publish)) throw new Error('publish target changed after review; commit remains local and was not published')
       if (beforePublish.observation.branch.head !== commit) throw new Error('repository HEAD changed after the reviewed commit; commit remains local and was not published')
-      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', '--', plan.publish.remote, `${commit}:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
+      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', '--no-follow-tags', '--recurse-submodules=no', '--', plan.publish.remote, `${commit}:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
       publish = { ok: pushed.ok, remote: plan.publish.remote, branch: plan.publish.branch, error: pushed.ok ? null : gitFailure(pushed) }
       trace(paths, { operation: 'commit-publish', operationId, outcome: pushed.ok ? 'published' : 'attention', mode: 'user-confirmed', details: { commit, ...publish } }, clock)
       if (!pushed.ok) {

@@ -51,11 +51,17 @@ const repoPath = firstString(args.repo) || process.cwd()
 
 try {
   if (subcommand === 'enroll') {
-    print(enrollRepository({ repoPath, projectConfig: firstString(args.project, args['project-config']), gitExecutable: firstString(args.git) }))
+    const result = enrollRepository({ repoPath, projectConfig: firstString(args.project, args['project-config']), gitExecutable: firstString(args.git) })
+    print(result)
+    process.exitCode = result.ok ? 0 : 1
   } else if (subcommand === 'status' || subcommand === 'audit') {
-    print(runtimeStatus({ repoPath }))
+    const result = runtimeStatus({ repoPath })
+    print(result)
+    process.exitCode = result.ok ? 0 : 1
   } else if (subcommand === 'reconcile') {
-    print(reconcileRepository({ repoPath, fetchAttempts: integer(args.retries, 3) }))
+    const result = reconcileRepository({ repoPath, fetchAttempts: integer(args.retries, 3) })
+    print(result)
+    process.exitCode = result.ok ? 0 : 1
   } else if (subcommand === 'run') {
     process.exitCode = await runLoop({
       repoPath,

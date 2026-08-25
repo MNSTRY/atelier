@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,7 +34,7 @@ function fixture(t) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-supervisor-'))
   const remote = path.join(base, 'remote.git')
   const root = path.join(base, 'workspace')
-  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
   runGit(git, null, ['init', '--bare', remote])
   fs.mkdirSync(root)
   runGit(git, root, ['init', '--initial-branch=main'])
@@ -45,6 +46,83 @@ function fixture(t) {
   runGit(git, root, ['remote', 'add', 'origin', remote])
   runGit(git, root, ['push', '-u', 'origin', 'main'])
   return { base, remote, root }
+}
+
+function writePrivateBoundaryProject(root, { actorEmail }) {
+  fs.writeFileSync(path.join(root, 'atelier.project.json'), `${JSON.stringify({
+    schema: 'mnstry.atelier-project-config@v1',
+    name: 'workspace',
+    roots: { workspace: '.', repoOps: '.' },
+    graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' },
+    projection: { outputRoot: 'atelier-output', readinessPath: 'atelier-output/atelier-readiness.json' },
+    boundaries: { policyPath: 'boundary-policy.v1.json', governanceLedgerPath: 'governance/repo-boundary-ledger.md', strictNewRepos: true },
+    repos: [{ name: 'workspace', path: '.', readBoundary: 'private' }],
+  }, null, 2)}\n`)
+  fs.writeFileSync(path.join(root, 'repo-access.v1.json'), `${JSON.stringify({
+    schema: 'mnstry.atelier-repo-access@v1',
+    defaultReadBoundary: 'private',
+    repos: { workspace: { readBoundary: 'private' } },
+  }, null, 2)}\n`)
+  fs.writeFileSync(path.join(root, 'boundary-policy.v1.json'), `${JSON.stringify({
+    schema: 'mnstry.atelier-boundary-policy@v1',
+    mode: 'strict',
+    actors: { owner: { githubLogin: 'owner-login', gitEmails: [actorEmail], privateDomainRepo: 'workspace' } },
+    repos: {
+      workspace: {
+        kind: 'private_domain',
+        ownerActor: 'owner',
+        readBoundary: 'private',
+        allowedAudiences: ['private', 'sensitive', 'team', 'operator', 'staff', 'public'],
+        forbiddenAudiences: [],
+        autoCommit: 'guarded',
+      },
+    },
+    promotion: { requiresGitPromote: true, recordsPath: 'governance/git-promote-events.jsonl' },
+    governanceLedgerPath: 'governance/repo-boundary-ledger.md',
+  }, null, 2)}\n`)
+}
+
+function pinWrapperEnvironment(t, { base, root }) {
+  const log = path.join(base, 'pinned-git.log')
+  const ambientGitMarker = path.join(base, 'ambient-git-ran')
+  const ghMarker = path.join(base, 'gh-ran')
+  const wrapper = path.join(base, 'pinned-git')
+  const fakeBin = path.join(base, 'fake-bin')
+  const redirected = path.join(base, 'redirected')
+  fs.mkdirSync(fakeBin)
+  fs.mkdirSync(redirected)
+  runGit(git, redirected, ['init', '--initial-branch=main'])
+  fs.writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexec ${JSON.stringify(git)} "$@"\n`)
+  fs.writeFileSync(path.join(fakeBin, 'git'), `#!/bin/sh\nprintf invoked > ${JSON.stringify(ambientGitMarker)}\nexit 97\n`)
+  fs.writeFileSync(path.join(fakeBin, 'gh'), `#!/bin/sh\nprintf invoked > ${JSON.stringify(ghMarker)}\nprintf '%s\\n' owner-login\n`)
+  fs.chmodSync(wrapper, 0o755)
+  fs.chmodSync(path.join(fakeBin, 'git'), 0o755)
+  fs.chmodSync(path.join(fakeBin, 'gh'), 0o755)
+  const previous = {
+    path: process.env.PATH,
+    gitPath: process.env.ATELIER_GIT_PATH,
+    gitDir: process.env.GIT_DIR,
+    actor: process.env.MNSTRY_ATELIER_ACTOR,
+    githubActor: process.env.GITHUB_ACTOR,
+  }
+  process.env.PATH = `${fakeBin}${path.delimiter}${previous.path || ''}`
+  process.env.ATELIER_GIT_PATH = wrapper
+  process.env.GIT_DIR = path.join(redirected, '.git')
+  delete process.env.MNSTRY_ATELIER_ACTOR
+  delete process.env.GITHUB_ACTOR
+  t.after(() => {
+    if (previous.path == null) delete process.env.PATH
+    else process.env.PATH = previous.path
+    if (previous.gitPath == null) delete process.env.ATELIER_GIT_PATH
+    else process.env.ATELIER_GIT_PATH = previous.gitPath
+    if (previous.gitDir == null) delete process.env.GIT_DIR
+    else process.env.GIT_DIR = previous.gitDir
+    if (previous.actor == null) delete process.env.MNSTRY_ATELIER_ACTOR
+    else process.env.MNSTRY_ATELIER_ACTOR = previous.actor
+    if (previous.githubActor == null) delete process.env.GITHUB_ACTOR
+    else process.env.GITHUB_ACTOR = previous.githubActor
+  })
+  return { wrapper, log, ambientGitMarker, ghMarker }
 }
 
 function head(root) {
@@ -92,6 +170,9 @@ test('commit plan requires an exact confirmation and re-observes before staging'
 test('user-confirmed commit stages only reviewed files and can publish through the declared upstream', (t) => {
   const { root, remote } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
+  runGit(git, root, ['tag', '-a', 'local-only', '-m', 'must not follow'])
+  runGit(git, root, ['config', 'push.followTags', 'true'])
+  runGit(git, root, ['config', 'push.recurseSubmodules', 'on-demand'])
   fs.writeFileSync(path.join(root, 'publish.md'), 'publish me\n')
   fs.writeFileSync(path.join(root, 'leave-local.md'), 'do not include\n')
   const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: publish bounded change', publish: true })
@@ -104,6 +185,7 @@ test('user-confirmed commit stages only reviewed files and can publish through t
   assert.equal(fs.existsSync(planFile(root, plan.operationId)), false)
   assert.equal(runGit(git, root, ['status', '--porcelain']).stdout.trim(), '?? leave-local.md')
   assert.equal(runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim(), result.commit)
+  assert.equal(runGit(git, null, ['--git-dir', remote, 'for-each-ref', '--format=%(refname)', 'refs/tags']).stdout, '')
   const trace = readOperationTrace(runtimePaths(root).trace)
   assert.deepEqual(trace.map((item) => item.operation), ['enroll', 'commit-plan-created', 'commit-created', 'commit-publish'])
 })
@@ -204,9 +286,35 @@ test('pause, resume, busy locks, and stale-lock recovery remain machine-local', 
 
   fs.mkdirSync(paths.lock)
   fs.writeFileSync(path.join(paths.lock, 'owner.json'), JSON.stringify({ lockNonce: 'stale', pid: 99999999, operation: 'dead' }))
+  fs.utimesSync(paths.lock, old, old)
   const recovered = acquireRepositoryLock(paths, { operation: 'recover' })
   assert.equal(recovered.ok, true)
   recovered.release()
+
+  fs.mkdirSync(paths.lock)
+  const agedAt = new Date(Date.now() - (25 * 60 * 60 * 1000))
+  fs.writeFileSync(path.join(paths.lock, 'owner.json'), JSON.stringify({ lockNonce: 'reused-pid', pid: process.pid, operation: 'wedged', acquiredAt: agedAt.toISOString() }))
+  fs.utimesSync(paths.lock, agedAt, agedAt)
+  const reusedPidRecovered = acquireRepositoryLock(paths, { operation: 'recover-reused-pid' })
+  assert.equal(reusedPidRecovered.ok, true)
+  reusedPidRecovered.release()
+})
+
+test('status and reconcile use non-zero process exits for attention and failure', (t) => {
+  const { base, root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'ahead.md'), 'ahead\n')
+  runGit(git, root, ['add', 'ahead.md'])
+  runGit(git, root, ['commit', '-m', 'local ahead'])
+  const syncCommand = path.resolve('src/commands/sync.mjs')
+  const status = spawnSync(process.execPath, [syncCommand, 'status', '--repo', root], { encoding: 'utf8' })
+  assert.equal(status.status, 1)
+  assert.equal(JSON.parse(status.stdout).state.code, 'local-commits-unpublished')
+  runGit(git, root, ['reset', '--hard', 'origin/main'])
+  runGit(git, root, ['remote', 'set-url', 'origin', path.join(base, 'missing.git')])
+  const reconcile = spawnSync(process.execPath, [syncCommand, 'reconcile', '--repo', root, '--retries', '1'], { encoding: 'utf8' })
+  assert.equal(reconcile.status, 1)
+  assert.equal(JSON.parse(reconcile.stdout).state.code, 'fetch-unavailable')
 })
 
 test('runtime state refuses redirected ancestors and leaves outside targets untouched', (t) => {
@@ -427,6 +535,37 @@ test('configured boundary policy must actually include the enrolled repository',
   assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
 })
 
+test('confirmed commit boundary evidence uses only the enrolled Git and strips repository redirection', (t) => {
+  const { base, root } = fixture(t)
+  writePrivateBoundaryProject(root, { actorEmail: 'atelier@example.invalid' })
+  const pinned = pinWrapperEnvironment(t, { base, root })
+  enrollRepository({ repoPath: root, projectConfig: 'atelier.project.json', gitExecutable: pinned.wrapper })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: pinned boundary evidence' })
+  fs.writeFileSync(pinned.log, '')
+  const result = executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId })
+  assert.equal(result.ok, true)
+  assert.match(fs.readFileSync(pinned.log, 'utf8'), /config user[.]email/)
+  assert.equal(fs.existsSync(pinned.ambientGitMarker), false)
+  assert.equal(fs.existsSync(pinned.ghMarker), false)
+})
+
+test('confirmed commit suppresses the boundary network actor fallback', (t) => {
+  const { base, root } = fixture(t)
+  writePrivateBoundaryProject(root, { actorEmail: 'different@example.invalid' })
+  const pinned = pinWrapperEnvironment(t, { base, root })
+  enrollRepository({ repoPath: root, projectConfig: 'atelier.project.json', gitExecutable: pinned.wrapper })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: no network actor fallback' })
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /boundary validation refused.*could not verify local actor/,
+  )
+  assert.equal(fs.existsSync(pinned.ambientGitMarker), false)
+  assert.equal(fs.existsSync(pinned.ghMarker), false)
+  assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
+})
+
 test('a hook-created parent cannot authorize a commit and the reviewed plan is consumed', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -595,6 +734,7 @@ test('an existing stale-recovery claim blocks deletion of the observed lock', (t
 
   const old = new Date(Date.now() - 60_000)
   fs.utimesSync(path.join(paths.lock, 'recovery.claim'), old, old)
+  fs.utimesSync(paths.lock, old, old)
   const recovered = acquireRepositoryLock(paths, { operation: 'recover-abandoned-claim' })
   assert.equal(recovered.ok, true)
   recovered.release()

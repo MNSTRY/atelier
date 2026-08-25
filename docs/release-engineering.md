@@ -123,7 +123,10 @@ claim. It does not interpret data-only Markdown/JSON and does not model
 explicitly enrolled Atelier Sync Git fetch/non-force-push subprocesses are
 documented exceptions backed by dedicated refusal tests. Sync refuses fetch on
 an incomplete observation, refuses publish while prior local commits are
-unpublished, and pushes the exact post-hook-verified commit object.
+unpublished, strips repository/config retargeting environment variables, and
+pushes the exact post-hook-verified commit object without following tags or
+recursively publishing submodule refs. Its boundary check also suppresses the
+optional network actor fallback.
 
 ### consumer:smoke
 

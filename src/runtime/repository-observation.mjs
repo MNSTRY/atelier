@@ -162,18 +162,33 @@ function submoduleState(gitExecutable, root) {
   return { declared: true, entries, complete, error: result.ok ? null : firstLine(result.stderr) || 'submodule status failed' }
 }
 
-function lfsState(gitExecutable, root, config, gitDir, failures) {
+function lfsState(gitExecutable, root, config, gitDir, statusEntries, failures) {
   const trackedAttributes = (optionalText(gitExecutable, root, ['ls-files', '--', '**/.gitattributes', '.gitattributes'], { failures, label: 'tracked attributes' }) || '')
     .split(/\r?\n/)
     .filter(Boolean)
   const attributeFiles = trackedAttributes.filter((file) => fs.existsSync(path.join(root, file))).map((file) => ({ label: file, absolute: path.join(root, file) }))
+  for (const entry of statusEntries) {
+    if (path.basename(entry.path) !== '.gitattributes') continue
+    const absolute = path.resolve(root, entry.path)
+    const relative = path.relative(root, absolute)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      failures.push(blocker('observation-evidence-unavailable', 'worktree attributes evidence escapes the repository root'))
+      continue
+    }
+    if (fs.existsSync(absolute)) attributeFiles.push({ label: entry.path, absolute })
+  }
   const infoAttributes = gitDir ? path.join(gitDir, 'info', 'attributes') : null
   if (infoAttributes && fs.existsSync(infoAttributes)) attributeFiles.push({ label: '.git/info/attributes', absolute: infoAttributes })
+  for (const [variable, label] of [['GIT_ATTR_GLOBAL', 'global Git attributes'], ['GIT_ATTR_SYSTEM', 'system Git attributes']]) {
+    const absolute = optionalText(gitExecutable, root, ['var', variable], { failures, label: `${label} location` })
+    if (absolute && fs.existsSync(absolute)) attributeFiles.push({ label, absolute })
+  }
   const externalAttributes = config.find((entry) => entry.key.toLowerCase() === 'core.attributesfile')
   if (externalAttributes) {
     failures.push(blocker('external-attributes-file-unclassified', 'core.attributesFile can change Git filter semantics and must be removed or classified', { key: externalAttributes.key }))
   }
-  const required = attributeFiles.some(({ label, absolute }) => {
+  const uniqueAttributeFiles = [...new Map(attributeFiles.map((item) => [item.absolute, item])).values()]
+  const required = uniqueAttributeFiles.some(({ label, absolute }) => {
     const stat = fs.lstatSync(absolute)
     if (stat.isSymbolicLink() || !stat.isFile()) {
       failures.push(blocker('observation-evidence-unavailable', 'Git attributes evidence is redirected or not a regular file', { path: label }))
@@ -182,7 +197,7 @@ function lfsState(gitExecutable, root, config, gitDir, failures) {
     return /filter\s*=\s*lfs|filter=lfs/i.test(fs.readFileSync(absolute, 'utf8'))
   })
   const version = runGit(gitExecutable, root, ['lfs', 'version'], { allowFailure: true })
-  const labels = attributeFiles.map((item) => item.label)
+  const labels = uniqueAttributeFiles.map((item) => item.label)
   if (!required) return { required: false, available: version.ok, complete: !externalAttributes, attributeFiles: labels, error: externalAttributes ? 'external Git attributes are unclassified' : null }
   if (!version.ok) return { required: true, available: false, complete: false, attributeFiles: labels, error: 'Git LFS is required but unavailable' }
   const status = runGit(gitExecutable, root, ['lfs', 'fsck'], { allowFailure: true, timeout: 120_000 })
@@ -361,7 +376,7 @@ export function observeRepository({ repoRoot, gitExecutable, observedAt = new Da
   const remotes = remoteState(gitExecutable, root, acquisitionFailures)
   const features = repositoryFeatures(gitExecutable, root, config, acquisitionFailures)
   const submodules = submoduleState(gitExecutable, root)
-  const lfs = lfsState(gitExecutable, root, config, features.gitDir, acquisitionFailures)
+  const lfs = lfsState(gitExecutable, root, config, features.gitDir, allEntries, acquisitionFailures)
   const conflicts = allEntries.filter((entry) => entry.code.includes('U') || ['AA', 'DD'].includes(entry.code))
   const staged = allEntries.filter((entry) => entry.code[0] && entry.code[0] !== '?' && entry.code[0] !== ' ')
   const unstaged = allEntries.filter((entry) => entry.code[1] && entry.code[1] !== ' ')
