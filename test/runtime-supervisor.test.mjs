@@ -110,7 +110,7 @@ test('reconciliation ignores watcher history and performs only a clean fast-forw
   const result = reconcileRepository({ repoPath: root, fetchAttempts: 1 })
   assert.equal(result.ok, true)
   assert.equal(result.state.code, 'fast-forwarded')
-  assert.equal(fs.readFileSync(path.join(root, 'upstream.md'), 'utf8'), 'upstream\n')
+  assert.equal(fs.readFileSync(path.join(root, 'upstream.md'), 'utf8').replaceAll('\r\n', '\n'), 'upstream\n')
   assert.equal(runGit(git, root, ['status', '--porcelain']).stdout, '')
 })
 
