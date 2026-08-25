@@ -88,6 +88,53 @@ test('line ceilings and an active writer lock fail closed', (t) => {
   assert.match(countRefused.error, /event hard ceiling/)
 })
 
+test('read-side ceilings, duplicate ids, and non-advancing versions block mutations', (t) => {
+  const root = makeRoot(t)
+
+  const oversizedRoot = fs.mkdtempSync(path.join(root, 'oversized-line-'))
+  const oversized = createCollaborationEventLedger({ workspaceRoot: oversizedRoot, maxLineBytes: 512 })
+  fs.writeFileSync(oversized.ledgerPath, `${'x'.repeat(513)}\n`, { mode: 0o600 })
+  const oversizedBefore = fs.readFileSync(oversized.ledgerPath)
+  assert.equal(oversized.readAll().diagnostics[0].code, 'ledger-line-limit')
+  assert.equal(oversized.append(eventInput(0)).status, 422)
+  assert.equal(oversized.compact().status, 422)
+  assert.deepEqual(fs.readFileSync(oversized.ledgerPath), oversizedBefore)
+
+  const byteRoot = fs.mkdtempSync(path.join(root, 'byte-limit-'))
+  const byteBound = createCollaborationEventLedger({ workspaceRoot: byteRoot, maxBytes: 128 })
+  fs.writeFileSync(byteBound.ledgerPath, Buffer.alloc(129, 0x20), { mode: 0o600 })
+  assert.equal(byteBound.readAll().status, 413)
+  assert.equal(byteBound.append(eventInput(0)).status, 413)
+  assert.equal(byteBound.compact().status, 413)
+
+  const countRoot = fs.mkdtempSync(path.join(root, 'read-count-'))
+  const writer = createCollaborationEventLedger({ workspaceRoot: countRoot, maxEvents: 2 })
+  assert.equal(writer.append(eventInput(0)).ok, true)
+  assert.equal(writer.append(eventInput(0, { aggregateId: 'proposal-synthetic-two' })).ok, true)
+  const countBound = createCollaborationEventLedger({ workspaceRoot: countRoot, maxEvents: 1 })
+  assert.equal(countBound.readAll().diagnostics[0].code, 'ledger-event-limit')
+  assert.equal(countBound.append(eventInput(1)).status, 422)
+  assert.equal(countBound.compact().status, 422)
+
+  function assertCorruptSequence(code, mutate) {
+    const sequenceRoot = fs.mkdtempSync(path.join(root, `${code}-`))
+    const ledger = createCollaborationEventLedger({ workspaceRoot: sequenceRoot })
+    assert.equal(ledger.append(eventInput(0)).ok, true)
+    assert.equal(ledger.append(eventInput(1)).ok, true)
+    const events = fs.readFileSync(ledger.ledgerPath, 'utf8').trim().split('\n').map(JSON.parse)
+    mutate(events)
+    fs.writeFileSync(ledger.ledgerPath, `${events.map(JSON.stringify).join('\n')}\n`, { mode: 0o600 })
+    const before = fs.readFileSync(ledger.ledgerPath)
+    assert.ok(ledger.readAll().diagnostics.some((item) => item.code === code))
+    assert.equal(ledger.append(eventInput(2)).status, 422)
+    assert.equal(ledger.compact().status, 422)
+    assert.deepEqual(fs.readFileSync(ledger.ledgerPath), before)
+  }
+
+  assertCorruptSequence('ledger-event-duplicate', (events) => { events[1].id = events[0].id })
+  assertCorruptSequence('ledger-version-order', (events) => { events[1].version = events[0].version })
+})
+
 test('explicit compaction retains bounded aggregate history and its latest version', (t) => {
   const root = makeRoot(t)
   const ledger = createCollaborationEventLedger({ workspaceRoot: root })

@@ -102,5 +102,18 @@ jobs:
               ;;
             *) NPM_TAG=latest ;;
           esac
-          echo "publishing $VERSION under dist-tag $NPM_TAG"
-          npm publish --tag "$NPM_TAG"
+          CANDIDATE_DIR="$RUNNER_TEMP/atelier-release-candidate"
+          ATELIER_RELEASE_OUTPUT_DIR="$CANDIDATE_DIR" npm run prepublishOnly
+          RECEIPT="$CANDIDATE_DIR/release-candidate.json"
+          CANDIDATE_TARBALL="$(node -e 'const fs = require("node:fs"); const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(receipt.tarballPath)' "$RECEIPT")"
+          EXPECTED_SHA="$(node -e 'const fs = require("node:fs"); const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(receipt.tarballSha256)' "$RECEIPT")"
+          ACTUAL_SHA="$(sha256sum "$CANDIDATE_TARBALL" | cut -d' ' -f1)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "retained candidate digest mismatch: expected $EXPECTED_SHA, got $ACTUAL_SHA"
+            exit 1
+          fi
+          echo "publishing exact audited candidate $ACTUAL_SHA under dist-tag $NPM_TAG"
+          # Publishing a tarball does not run the source checkout's lifecycle
+          # scripts. prepublishOnly ran explicitly above and retained the exact
+          # audited bytes that this command sends to the registry.
+          npm publish "$CANDIDATE_TARBALL" --tag "$NPM_TAG"

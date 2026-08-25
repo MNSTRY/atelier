@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { createAtelierSidecarServer } from '../src/server/local-sidecar.mjs'
+import { loadPublishedWorkspaceManifest } from '../src/server/security.mjs'
 
 function makeWorkspace() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-server-'))
@@ -227,6 +228,53 @@ test('local sidecar requires a generated manifest and loopback listen host', asy
     fs.rmSync(workspaceRoot, { recursive: true, force: true })
   })
   await assert.rejects(() => sidecar.listen(0, '0.0.0.0'), /non-loopback listen host refused/)
+})
+
+test('publication manifests refuse malformed, hidden, unavailable, and symlink-enrolled paths', (t) => {
+  function fixture(manifest, files = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-manifest-invalid-'))
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+    fs.writeFileSync(path.join(root, 'index.html'), '<title>Atelier</title>\n')
+    for (const [relative, contents] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true })
+      fs.writeFileSync(path.join(root, relative), contents)
+    }
+    fs.writeFileSync(path.join(root, 'atelier.manifest.json'), typeof manifest === 'string' ? manifest : `${JSON.stringify(manifest)}\n`)
+    return root
+  }
+
+  const valid = { schema: 'mnstry.atelier-manifest@v1', entry: 'index.html' }
+  for (const [label, manifest, files, expected] of [
+    ['invalid JSON', '{', {}, /valid JSON/],
+    ['invalid schema', { ...valid, schema: 'unsupported' }, {}, /schema must be/],
+    ['non-string entry', { ...valid, entry: 7 }, {}, /entry must be/],
+    ['non-HTML entry', { ...valid, entry: 'index.svg' }, { 'index.svg': '<svg></svg>' }, /entry must be an HTML/],
+    ['non-array files', { ...valid, files: {} }, {}, /files must be an array/],
+    ['non-array assets', { ...valid, assets: {} }, {}, /assets must be an array/],
+    ['hidden file', { ...valid, assets: ['.draft.html'] }, { '.draft.html': '<title>Draft</title>' }, /hidden, state, or secret-shaped/],
+    ['state file', { ...valid, assets: ['.atelier-presence.json'] }, { '.atelier-presence.json': '{}' }, /hidden, state, or secret-shaped/],
+    ['credential-shaped file', { ...valid, assets: ['credential-note.html'] }, { 'credential-note.html': '<title>Note</title>' }, /hidden, state, or secret-shaped/],
+    ['unsupported type', { ...valid, assets: ['data.txt'] }, { 'data.txt': 'text' }, /unsupported static file type/],
+    ['unavailable file', { ...valid, assets: ['missing.html'] }, {}, /enrolled path is unavailable/],
+  ]) {
+    const root = fixture(manifest, files)
+    assert.throws(() => loadPublishedWorkspaceManifest(root), expected, label)
+    assert.throws(() => createAtelierSidecarServer({ workspaceRoot: root }), expected, `${label} must block server startup`)
+  }
+
+  const symlinkRoot = fixture(valid)
+  fs.symlinkSync(path.join(symlinkRoot, 'index.html'), path.join(symlinkRoot, 'linked.html'))
+  fs.writeFileSync(path.join(symlinkRoot, 'atelier.manifest.json'), `${JSON.stringify({ ...valid, assets: ['linked.html'] })}\n`)
+  assert.throws(() => loadPublishedWorkspaceManifest(symlinkRoot), /must not be a symlink/)
+
+  const escapingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-manifest-link-'))
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-manifest-outside-'))
+  t.after(() => fs.rmSync(escapingRoot, { recursive: true, force: true }))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(escapingRoot, 'index.html'), '<title>Atelier</title>\n')
+  fs.writeFileSync(path.join(outside, 'manifest.json'), `${JSON.stringify(valid)}\n`)
+  fs.symlinkSync(path.join(outside, 'manifest.json'), path.join(escapingRoot, 'atelier.manifest.json'))
+  assert.throws(() => loadPublishedWorkspaceManifest(escapingRoot), /realpath escapes/)
 })
 
 // Regression: a busy port is an ordinary condition. It used to surface as an

@@ -37,6 +37,11 @@ unavailable denylist without explicit acknowledgment).
 `release:candidate` additionally requires a clean tree, records the candidate
 commit and tarball digest, and refuses a version already bound to a different
 tagged commit. It is a release-evidence command, not a publication command.
+When `ATELIER_RELEASE_OUTPUT_DIR` is set, it atomically retains the verified
+tarball, npm-pack metadata, and a machine-readable receipt. The trusted
+publishing workflow runs `prepublishOnly` explicitly with that output directory,
+re-verifies the retained digest, and publishes the retained tarball path rather
+than repacking the source checkout.
 
 ### repo:check
 

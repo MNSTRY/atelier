@@ -473,7 +473,7 @@ function repoForCwd(project, cwd) {
  * which reports without blocking, so an accepted usage elsewhere in the repo can
  * never strand unrelated work on the machine.
  */
-export function checkPushContent({ project, policy, repo, updates, cwd = process.cwd() } = {}) {
+export function checkPushContent({ project, policy, repo, updates, cwd = process.cwd(), gitRunner = spawnSync } = {}) {
   const target = repo ?? repoForCwd(project, cwd)
   if (!target) {
     // Fail closed. This hook is only installed into managed repos, so failing to
@@ -491,7 +491,7 @@ export function checkPushContent({ project, policy, repo, updates, cwd = process
   const findings = []
   let totalBytes = 0
   for (const update of updates) {
-    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name })
+    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, gitRunner })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
     if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {

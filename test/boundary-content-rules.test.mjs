@@ -21,6 +21,7 @@ import {
   parseAddedContent,
   parsePushRefUpdates,
   scanAddedContent,
+  scanPushUpdate,
   scanStagedRepository,
   validateContentRuleExceptions,
 } from '../src/boundary/content-rules.mjs'
@@ -305,6 +306,37 @@ test('Git evidence acquisition reports ENOBUFS as a blocking completeness diagno
   assert.equal(result.findings.length, 0)
   assert.equal(result.diagnostics[0].code, 'content-scan-incomplete')
   assert.equal(result.diagnostics[0].details.reason, 'git-output-limit-exceeded')
+
+  const update = {
+    localRef: 'refs/heads/main',
+    localSha: 'a'.repeat(40),
+    remoteRef: 'refs/heads/main',
+    remoteSha: 'b'.repeat(40),
+  }
+  const pushed = scanPushUpdate({
+    repoRoot: '.',
+    repo: 'site',
+    update,
+    gitRunner: () => ({ status: null, stdout: '', stderr: '', error }),
+  })
+  assert.equal(pushed.findings.length, 0)
+  assert.equal(pushed.diagnostics[0].code, 'content-scan-incomplete')
+  assert.equal(pushed.diagnostics[0].details.reason, 'git-output-limit-exceeded')
+})
+
+test('the terminal push report blocks when push evidence acquisition exceeds its buffer', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  commit(site, 'README.md', '# Site\n', 'docs')
+  const error = Object.assign(new Error('buffer exceeded'), { code: 'ENOBUFS' })
+  const report = checkPushContent({
+    project,
+    policy,
+    updates: pushUpdate(site),
+    cwd: site,
+    gitRunner: () => ({ status: null, stdout: '', stderr: '', error }),
+  })
+  assert.equal(report.ok, false)
+  assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete'))
 })
 
 test('staged binary credentials block and oversized binary evidence cannot pass incomplete', (t) => {

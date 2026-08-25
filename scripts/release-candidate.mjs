@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { persistReleaseCandidate } from './release-candidate-output.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const tempRoot = mkdtempSync(join(tmpdir(), 'atelier-release-candidate-'))
@@ -58,7 +59,22 @@ try {
   run('npm', ['run', 'consumer:smoke'], candidateEnv)
   run('npm', ['run', 'distribution:smoke'], candidateEnv)
 
+  let retained = null
+  if (process.env.ATELIER_RELEASE_OUTPUT_DIR) {
+    retained = persistReleaseCandidate({
+      outputDir: process.env.ATELIER_RELEASE_OUTPUT_DIR,
+      tarballPath,
+      packJsonPath,
+      candidateSha,
+      packageName: packageJson.name,
+      version: packageJson.version,
+      tarballSha256,
+      entryCount: pack.entryCount,
+    })
+  }
+
   console.log(`[release:candidate] commit ${candidateSha}; SHA-256 ${tarballSha256}; ${pack.entryCount} packed file(s); one artifact passed audit, consumer, and distribution gates`)
+  if (retained) console.log(`[release:candidate] retained exact artifact ${retained.tarballPath}; receipt ${retained.receiptPath}`)
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
 }
