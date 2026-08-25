@@ -78,6 +78,9 @@ function resolveCandidatePack() {
     if (!suppliedTarball || !suppliedPackJson) {
       throw new Error('ATELIER_CANDIDATE_TARBALL and ATELIER_CANDIDATE_PACK_JSON must be supplied together')
     }
+    if (!process.env.ATELIER_EXPECTED_TARBALL_SHA256) {
+      throw new Error('ATELIER_EXPECTED_TARBALL_SHA256 is required with a supplied candidate tarball')
+    }
     const parsed = JSON.parse(readFileSync(resolve(suppliedPackJson), 'utf8'))
     return { pack: Array.isArray(parsed) ? parsed[0] : parsed, tarballPath: resolve(suppliedTarball), ownedRoot: null }
   }
@@ -144,6 +147,9 @@ if (JSON.stringify(paths) !== JSON.stringify(actualTarballPaths)) {
 }
 let failures = 0
 let localComputedSuppressions = 0
+// Every packed suppression is individually reviewed. Raising this baseline is
+// a release-control change, so new markers cannot accumulate silently.
+const MAX_LOCAL_COMPUTED_SUPPRESSIONS = 4
 
 // Release claims are about the exact tarball, not a hand-maintained source
 // directory list. This inventory includes test-like directories under shipped
@@ -273,6 +279,11 @@ for (const filePath of paths) {
 
 if (paths.some((filePath) => filePath.includes('node_modules/'))) {
   console.error('[release:audit] tarball must not include node_modules')
+  failures += 1
+}
+
+if (localComputedSuppressions > MAX_LOCAL_COMPUTED_SUPPRESSIONS) {
+  console.error(`[release:audit] packed artifact carries ${localComputedSuppressions} local-computed egress suppression(s); maximum is ${MAX_LOCAL_COMPUTED_SUPPRESSIONS}`)
   failures += 1
 }
 

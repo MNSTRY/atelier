@@ -67,6 +67,18 @@ test('structural-only is an explicit reduced-verdict lane', (t) => {
   assert.match(blocked.output, /absolute user path/)
 })
 
+test('the portable scanner refuses real private-key headers', (t) => {
+  const repo = makeRepo(t)
+  const dashes = '-'.repeat(5)
+  const header = `${dashes}${['BEGIN', 'OPENSSH', 'PRIVATE', 'KEY'].join(' ')}${dashes}`
+  fs.writeFileSync(path.join(repo, 'id_ed25519'), `${header}\nsynthetic-key-body\n`)
+  git(repo, ['add', 'id_ed25519'])
+
+  const blocked = run(repo, ['--staged', '--structural-only'])
+  assert.equal(blocked.status, 1, blocked.output)
+  assert.match(blocked.output, /private key material/)
+})
+
 test('an ignored private denylist catches content without echoing the match', (t) => {
   const repo = makeRepo(t)
   fs.mkdirSync(path.join(repo, '.atelier-local'), { recursive: true })

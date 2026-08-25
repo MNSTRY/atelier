@@ -63,6 +63,15 @@ export function validateCollaborationEvent(event) {
   if (typeof event.actor !== 'string' || !event.actor.trim()) issues.push('actor is required')
   if (!validTimestamp(event.at)) issues.push('event timestamp is invalid')
   if (!isRecord(event.payload)) issues.push('event payload must be an object')
+  if (
+    typeof event.id === 'string' && /^event-[a-f0-9]{32}$/.test(event.id) &&
+    typeof event.aggregateId === 'string' && event.aggregateId &&
+    Number.isInteger(event.version) && event.version > 0 &&
+    validTimestamp(event.at) &&
+    event.id !== eventId(event.aggregateId, event.version, event.at)
+  ) {
+    issues.push('event id does not match aggregate, version, and timestamp')
+  }
   return issues.length === 0 ? { ok: true, value: event } : { ok: false, issues }
 }
 

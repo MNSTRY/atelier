@@ -22,7 +22,7 @@ export const DEFAULT_EGRESS_SCAN_PATHS = [
 const SCRIPT_EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.sh'])
 const MARKUP_EXTS = new Set(['.html', '.htm', '.svg'])
 const SKIP_DIRS = new Set(['node_modules', '.git'])
-const INTERNAL_SCANNER_FILES = new Set(['forbidden-egress.mjs'])
+const INTERNAL_SCANNER_PATH = 'src/egress/forbidden-egress.mjs'
 
 function isTestFile(file) {
   return /(?:^|[/.])test(?:s)?[/.]/.test(file) || /\.(?:test|spec)\.[cm]?[jt]s$/.test(file)
@@ -32,10 +32,11 @@ function isMarkedTestFixture(file, text, allowTestFixtures) {
   return allowTestFixtures && isTestFile(file) && text.includes(TEST_FIXTURE_ALLOW_MARKER)
 }
 
-function shouldScanFile(file, { includeTests = true } = {}) {
+function shouldScanFile(file, { includeTests = true, root = packageRoot } = {}) {
   const ext = path.extname(file)
   if (!SCRIPT_EXTS.has(ext) && !MARKUP_EXTS.has(ext)) return false
-  if (INTERNAL_SCANNER_FILES.has(path.basename(file))) return false
+  const relative = path.relative(path.resolve(root), path.resolve(file)).split(path.sep).join('/')
+  if (relative === INTERNAL_SCANNER_PATH) return false
   if (!includeTests && isTestFile(file)) return false
   return true
 }
@@ -71,7 +72,7 @@ export function discoverForbiddenEgressScanFiles({
         .map((file) => path.resolve(resolvedRoot, file))
         .filter((file) => file === resolvedRoot || file.startsWith(`${resolvedRoot}${path.sep}`))
         .filter((file) => fs.existsSync(file) && fs.statSync(file).isFile())
-        .filter((file) => shouldScanFile(file, { includeTests })),
+        .filter((file) => shouldScanFile(file, { includeTests, root: resolvedRoot })),
     )
   }
   const discovered = []
@@ -79,8 +80,8 @@ export function discoverForbiddenEgressScanFiles({
     const abs = path.resolve(root, rel)
     if (!fs.existsSync(abs)) continue
     const stat = fs.statSync(abs)
-    if (stat.isDirectory()) discovered.push(...walk(abs, { includeTests }))
-    else if (shouldScanFile(abs, { includeTests })) discovered.push(abs)
+    if (stat.isDirectory()) discovered.push(...walk(abs, { includeTests, root }))
+    else if (shouldScanFile(abs, { includeTests, root })) discovered.push(abs)
   }
   return uniqueFiles(discovered)
 }

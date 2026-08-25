@@ -49,9 +49,20 @@ export function ensureContainedPrivateDirectory({ workspaceRoot, directory, labe
 }
 
 export function openRegularFileNoFollow(file, flags = fs.constants.O_RDONLY, mode) {
+  const before = lstatIfPresent(file)
+  if (before && (before.isSymbolicLink() || !before.isFile())) {
+    throw new Error('state leaf is not a regular file')
+  }
   const descriptor = fs.openSync(file, flags | (fs.constants.O_NOFOLLOW ?? 0), mode)
   try {
-    if (!fs.fstatSync(descriptor).isFile()) throw new Error('state leaf is not a regular file')
+    const opened = fs.fstatSync(descriptor)
+    if (!opened.isFile()) throw new Error('state leaf is not a regular file')
+    // Windows does not expose O_NOFOLLOW. Refuse a pre-existing redirected
+    // leaf before open and bind the opened descriptor back to that same file
+    // identity where the filesystem supplies stable device/inode values.
+    if (before && before.ino !== 0 && (before.dev !== opened.dev || before.ino !== opened.ino)) {
+      throw new Error('state leaf changed while opening')
+    }
     return descriptor
   } catch (error) {
     fs.closeSync(descriptor)

@@ -135,6 +135,19 @@ test('an explicit pack inventory is the scan boundary and refuses traversal', ()
   fs.rmSync(root, { recursive: true, force: true })
 })
 
+test('only the canonical scanner path is self-excluded, not matching basenames elsewhere', () => {
+  const root = makeTempRoot()
+  writeFile(path.join(root, 'src', 'egress', 'forbidden-egress.mjs'), "await fetch('https://mnstry.example/canonical-literal')\n")
+  writeFile(path.join(root, 'src', 'copied', 'forbidden-egress.mjs'), "await fetch('https://mnstry.example/copied')\n")
+
+  const files = discoverForbiddenEgressScanFiles({ root })
+  const rels = files.map((file) => path.relative(root, file))
+  assert.ok(!rels.includes(path.join('src', 'egress', 'forbidden-egress.mjs')))
+  assert.ok(rels.includes(path.join('src', 'copied', 'forbidden-egress.mjs')))
+  assert.deepEqual(checkForbiddenEgress({ root }).map((item) => item.file), [path.join('src', 'copied', 'forbidden-egress.mjs')])
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
 test('marked test fixtures can contain non-local examples', () => {
   const marked = forbiddenEgressFindingsForText(
     `

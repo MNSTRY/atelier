@@ -92,14 +92,23 @@ jobs:
       - name: trusted sweep of untrusted tree
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
-        run: node trusted/scripts/check-repo-disclosure.mjs --root target --untrusted --commits range --base "$BASE_SHA" --external-contributor-range
+        run: |
+          if [ -z "$ATELIER_DENYLIST_JSON" ]; then
+            echo 'release denylist secret unavailable — refusing to certify the fork'
+            exit 1
+          fi
+          node trusted/scripts/check-repo-disclosure.mjs --root target --untrusted --commits range --base "$BASE_SHA" --external-contributor-range
       - name: report check-run "secret-sweep" on the SHA
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_REPO: ${{ github.repository }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           conclusion=failure
-          [ "${{ job.status }}" = "success" ] && conclusion=success
-          gh api "repos/${{ github.repository }}/check-runs" \
+          if [ "$JOB_STATUS" = "success" ]; then
+            conclusion=success
+          fi
+          gh api "repos/$EXPECTED_REPO/check-runs" \
             -f name='secret-sweep' -f head_sha="$HEAD_SHA" \
             -f status=completed -f conclusion="$conclusion"

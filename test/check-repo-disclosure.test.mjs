@@ -74,6 +74,34 @@ test('a clean repo passes the content scan', (t) => {
   assert.match(output, /\[repo:check\] clean/)
 })
 
+test('tracked binary and invalid UTF-8 files fail closed instead of disappearing from the count', (t) => {
+  for (const [name, bytes, label] of [
+    ['opaque.bin', Buffer.from([0, 1, 2, 3]), 'binary-uninspectable'],
+    ['invalid.txt', Buffer.from([0xc3, 0x28]), 'text-encoding-invalid'],
+  ]) {
+    const dir = makeRepo(t)
+    writeAndCommit(dir, name, bytes)
+    const { status, output } = runChecker(dir, ['--structural-only'])
+    assert.equal(status, 1, output)
+    assert.match(output, new RegExp(label))
+  }
+})
+
+test('the one reviewed binary fixture is bound to its exact path and digest', (t) => {
+  const dir = makeRepo(t)
+  const fixturePath = 'fixtures/projects/source-formats-workspace/content/logo.png'
+  writeAndCommit(dir, fixturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+  const accepted = runChecker(dir, ['--structural-only'])
+  assert.equal(accepted.status, 0, accepted.output)
+  assert.match(accepted.output, /1 reviewed binary fixture/)
+
+  fs.writeFileSync(path.join(dir, fixturePath), Buffer.from([0x89, 0x50, 0x4e, 0x48]))
+  git(dir, ['add', fixturePath])
+  const changed = runChecker(dir, ['--structural-only', '--staged'])
+  assert.equal(changed.status, 1, changed.output)
+  assert.match(changed.output, /text-encoding-invalid/)
+})
+
 test('a planted denylist match reports label and location but never the matched text', (t) => {
   const dir = makeRepo(t)
   writeAndCommit(dir, 'src/leak.txt', `line one\nthe ${SENTINEL} marker\n`)

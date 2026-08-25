@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -26,6 +27,11 @@ function eventInput(expectedVersion, overrides = {}) {
     payload: { value: 'Synthetic proposal' },
     ...overrides,
   }
+}
+
+function syntheticEventId(aggregateId, version, at) {
+  const digest = crypto.createHash('sha256').update([aggregateId, version, at].join('\0')).digest('hex').slice(0, 32)
+  return `event-${digest}`
 }
 
 test('collaboration event ledger returns typed optimistic results', (t) => {
@@ -132,8 +138,11 @@ test('read-side ceilings, duplicate ids, and non-advancing versions block mutati
     assert.deepEqual(fs.readFileSync(ledger.ledgerPath), before)
   }
 
-  assertCorruptSequence('ledger-event-duplicate', (events) => { events[1].id = events[0].id })
-  assertCorruptSequence('ledger-version-order', (events) => { events[1].version = events[0].version })
+  assertCorruptSequence('ledger-event-invalid', (events) => { events[1].id = events[0].id })
+  assertCorruptSequence('ledger-version-order', (events) => {
+    events[1].version = events[0].version
+    events[1].id = syntheticEventId(events[1].aggregateId, events[1].version, events[1].at)
+  })
 })
 
 test('explicit compaction retains bounded aggregate history and its latest version', (t) => {
@@ -182,14 +191,16 @@ test('ten-thousand-event synthetic ledger reads within the target budget', (t) =
   const ledger = createCollaborationEventLedger({ workspaceRoot: root })
   const lines = []
   for (let index = 0; index < COLLABORATION_LEDGER_LIMITS.maxEvents; index += 1) {
+    const aggregateId = `aggregate-${index}`
+    const at = '2026-08-25T00:00:00Z'
     lines.push(JSON.stringify({
       schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
-      id: `event-${index.toString(16).padStart(32, '0')}`,
-      aggregateId: `aggregate-${index}`,
+      id: syntheticEventId(aggregateId, 1, at),
+      aggregateId,
       version: 1,
       type: 'proposal-created',
       actor: 'synthetic-reader',
-      at: '2026-08-25T00:00:00Z',
+      at,
       payload: {},
     }))
   }
@@ -207,14 +218,15 @@ test('proposal listing materializes the ten-thousand-event ceiling from one ledg
   const lines = []
   for (let index = 0; index < COLLABORATION_LEDGER_LIMITS.maxEvents; index += 1) {
     const id = `proposal-${index.toString(16).padStart(32, '0')}`
+    const at = '2026-08-25T00:00:00Z'
     lines.push(JSON.stringify({
       schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
-      id: `event-${index.toString(16).padStart(32, '0')}`,
+      id: syntheticEventId(id, 1, at),
       aggregateId: id,
       version: 1,
       type: 'proposal-created',
       actor: 'synthetic-reader',
-      at: '2026-08-25T00:00:00Z',
+      at,
       payload: {
         record: {
           schema: 'atelier-proposal@v1',

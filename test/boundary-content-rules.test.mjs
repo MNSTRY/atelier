@@ -393,6 +393,17 @@ test('the push guard fails closed when it cannot identify the repo', (t) => {
   assert.equal(report.errors[0].code, 'push-check-repo-unresolved')
 })
 
+test('boundary check and audit diagnose an unscannable configured repo', (t) => {
+  const { root, policy, project } = makeWorkspace(t)
+  project.repos[0].path = path.join(root, 'missing-repo')
+
+  const checked = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.ok(checked.errors.some((item) => item.code === 'repo-unscannable'))
+
+  const audited = auditContentRules({ project, policy })
+  assert.ok(audited.diagnostics.some((item) => item.code === 'repo-unscannable'))
+})
+
 test('the push guard matches its repo through a symlinked path', (t) => {
   const { root, site, policy, project } = makeWorkspace(t)
   const link = path.join(root, 'site-link')

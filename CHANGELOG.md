@@ -22,7 +22,8 @@
   realpath validation, and applies host, fetch-site, origin, method, and nonce
   checks to the relevant read and mutation routes.
 - Make collaboration records fail closed with typed corrupt-record results,
-  bounded ledger reads, no-follow state leaves, write locking, explicit
+  bounded ledger reads, POSIX no-follow and cross-platform state-leaf identity
+  validation, content-bound event identifiers, write locking, explicit
   compaction, and one-pass proposal-list materialization. Compatibility
   snapshots are best-effort projections of committed events rather than a
   second authority. Proposal authority now follows declared capabilities and
@@ -43,9 +44,13 @@
   drift, and binding modified source to an already-tagged package version.
 - Add a portable `atelier disclosure check` command that scans tracked or
   staged consumer content, requires private denylist coverage by default, and
-  refuses tracked repository-local denylist files. Repository release sweeps
-  also inspect every bounded blob introduced by the commit range, so content
-  added and deleted before the final tree cannot become public history unseen.
+  refuses tracked repository-local denylist files. Portable and repository
+  sweeps now detect the full bounded family of private-key headers and refuse
+  binary or invalid-UTF-8 evidence instead of omitting it. Fork sweeps require
+  the trusted denylist secret and cannot fall back to the untrusted checkout.
+  Repository release sweeps also inspect every bounded blob introduced by the
+  commit range, so content added and deleted before the final tree cannot
+  become public history unseen.
 - Add public agent instructions and mirrored skills for extracting reusable
   mechanisms from private implementations without carrying tenant material
   into Atelier, plus a managed local-service contract for durable loopback

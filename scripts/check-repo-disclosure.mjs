@@ -9,8 +9,8 @@
 //     [--structural-only] [--commits none|range|all] [--base <ref>] [--untrusted]
 //     [--external-contributor-range]
 //
-// Denylist source precedence: ATELIER_DENYLIST_JSON env -> the scanned root's
-// release-denylist.local.json -> fail closed (exit 2) unless --structural-only
+// Denylist source precedence: ATELIER_DENYLIST_JSON env -> this trusted
+// package's release-denylist.local.json -> fail closed (exit 2) unless --structural-only
 // or ATELIER_ALLOW_MISSING_DENYLIST=1 acknowledges a structural-only run.
 //
 // Log-safety contract: findings print label + file:line (or commit SHA) only —
@@ -23,9 +23,11 @@
 // Exit codes: 0 clean, 1 findings, 2 config or usage error.
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compileDisclosurePatterns } from '../src/disclosure/content-scan.mjs'
 import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -36,10 +38,15 @@ const MAX_HISTORY_OBJECTS = 300_000
 const MAX_HISTORY_BLOBS = 100_000
 const MAX_HISTORY_BLOB_BYTES = 16 * 1024 * 1024
 const MAX_HISTORY_TOTAL_BYTES = 256 * 1024 * 1024
+const REVIEWED_TRACKED_BINARY_SHA256 = new Map([
+  // Four-byte synthetic PNG signature used only to prove graph-sidecar
+  // handling. It is excluded from the published package; any byte change
+  // invalidates this narrow allowance and blocks the sweep.
+  ['fixtures/projects/source-formats-workspace/content/logo.png', '0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543'],
+])
 
-// Duplicated from scripts/check-release-tarball.mjs (that audit scans only the
-// published tarball; this script scans the whole tracked tree). Drift risk:
-// keep the two lists identical when either changes.
+// Shared with the release tarball audit; this script scans the whole tracked
+// tree while the release audit scans only the packed artifact.
 const structuralForbiddenContent = STRUCTURAL_FORBIDDEN_CONTENT
 
 // These files carry structural pattern literals (or exercise this gate) and
@@ -133,20 +140,16 @@ try {
 
 function compileDenylist(doc) {
   if (!doc || !Array.isArray(doc.patterns)) usageError('denylist document must be {"patterns": [...]}')
-  return doc.patterns.map(({ pattern, flags = '', label }) => {
-    try {
-      // g/y flags would make .test stateful across lines — strip them.
-      return { pattern: new RegExp(pattern, flags.replace(/[gy]/g, '')), label }
-    } catch {
-      // Log-safety: a broken pattern is never echoed back.
-      return usageError(`denylist pattern failed to compile: ${label}`)
-    }
-  })
+  try {
+    return compileDisclosurePatterns(doc.patterns)
+  } catch (error) {
+    usageError(error instanceof Error ? error.message : 'denylist pattern failed to compile')
+  }
 }
 
 let denylist = []
 if (!structuralOnly) {
-  const denylistPath = join(root, 'release-denylist.local.json')
+  const denylistPath = join(packageRoot, 'release-denylist.local.json')
   if (process.env.ATELIER_DENYLIST_JSON) {
     let doc
     try {
@@ -155,8 +158,16 @@ if (!structuralOnly) {
       usageError('ATELIER_DENYLIST_JSON is not valid JSON')
     }
     denylist = compileDenylist(doc)
-  } else if (existsSync(denylistPath)) {
-    denylist = compileDenylist(JSON.parse(readFileSync(denylistPath, 'utf8')))
+  } else if (untrusted) {
+    usageError('ATELIER_DENYLIST_JSON is required when scanning an untrusted checkout')
+  } else if (resolve(root) === resolve(packageRoot) && existsSync(denylistPath)) {
+    let doc
+    try {
+      doc = JSON.parse(readFileSync(denylistPath, 'utf8'))
+    } catch {
+      usageError('release-denylist.local.json is not valid JSON')
+    }
+    denylist = compileDenylist(doc)
   } else if (process.env.ATELIER_ALLOW_MISSING_DENYLIST === '1') {
     console.warn('[repo:check] denylist unavailable — ATELIER_ALLOW_MISSING_DENYLIST=1 acknowledged; structural patterns only')
   } else {
@@ -188,11 +199,39 @@ function scanLine(line, relPath, lineNumber, displayPath = relPath) {
 }
 
 let scannedFiles = 0
+let uninspectableFiles = 0
+let reviewedBinaryFiles = 0
+
+function isReviewedTrackedBinary(buffer, relPath) {
+  const expected = REVIEWED_TRACKED_BINARY_SHA256.get(relPath)
+  if (!expected) return false
+  return createHash('sha256').update(buffer).digest('hex') === expected
+}
 
 function scanBuffer(buffer, relPath, displayPath = relPath, countFile = true) {
-  if (buffer.subarray(0, 8192).includes(0)) return // binary
+  let text
+  if (buffer.includes(0)) {
+    if (isReviewedTrackedBinary(buffer, relPath)) {
+      reviewedBinaryFiles += 1
+      return
+    }
+    report('binary-uninspectable', displayPath)
+    uninspectableFiles += 1
+    return
+  }
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+  } catch {
+    if (isReviewedTrackedBinary(buffer, relPath)) {
+      reviewedBinaryFiles += 1
+      return
+    }
+    report('text-encoding-invalid', displayPath)
+    uninspectableFiles += 1
+    return
+  }
   if (countFile) scannedFiles += 1
-  const lines = buffer.toString('utf8').split('\n')
+  const lines = text.split('\n')
   for (let i = 0; i < lines.length; i += 1) scanLine(lines[i], relPath, i + 1, displayPath)
 }
 
@@ -250,7 +289,10 @@ function scanCommits(selector) {
     report('commit-count-limit', 'history')
     shas = shas.slice(0, MAX_HISTORY_COMMITS)
   }
-  if (shas.length === 0) return 0
+  if (shas.length === 0) {
+    if (commitsMode === 'range') report('commit-range-empty', `${base}..HEAD`)
+    return 0
+  }
 
   let checks
   try {
@@ -545,4 +587,4 @@ if (findings > 0) {
 
 const contentNote = staged ? `${scannedFiles} staged file(s)` : `${scannedFiles} tracked file(s)`
 const commitNote = commitsMode === 'none' ? '' : `, ${scannedCommits} commit(s) and ${scannedHistoryBlobs} historical blob(s) [${commitsMode}]`
-console.log(`[repo:check] clean: ${contentNote}${commitNote}`)
+console.log(`[repo:check] clean: ${contentNote}, ${reviewedBinaryFiles} reviewed binary fixture(s), ${uninspectableFiles} uninspectable file(s)${commitNote}`)

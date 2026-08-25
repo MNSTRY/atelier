@@ -8,11 +8,11 @@ export const STRUCTURAL_DISCLOSURE_PATTERNS = Object.freeze([
   { pattern: new RegExp('\\.' + 'codex'), label: 'agent-local state path' },
   {
     pattern: new RegExp([
-      'BEGIN',
+      'BEGIN ',
       '(?:[A-Z0-9]+ ){0,4}',
-      'PRIVATE',
-      'KEY(?: BLOCK)?|BEGIN (?:RSA|OPENSSH) KEY',
-    ].join(' ')),
+      'PRIVATE KEY(?: BLOCK)?',
+      '|BEGIN (?:RSA|OPENSSH) KEY',
+    ].join('')),
     label: 'private key material',
   },
   { pattern: /"d"\s*:\s*"[A-Za-z0-9_-]{20,}"/, label: 'JWK private key material' },

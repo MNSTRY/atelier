@@ -398,9 +398,16 @@ function semanticDiffFindings({ policy, project }) {
   const findings = []
   const severity = 'error'
   for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+      findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
+      continue
+    }
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
-    if (result.status !== 0 || !result.stdout.trim()) continue
+    if (result.status !== 0) {
+      findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
+      continue
+    }
+    if (!result.stdout.trim()) continue
     for (const file of diffFileSections(result.stdout)) {
       const changes = semanticChangesInFile(file)
       if (!changes.length) continue
@@ -429,7 +436,10 @@ function stagedContentFindings({ policy, project }) {
   const findings = []
   let totalBytes = 0
   for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+      findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
+      continue
+    }
     const result = scanStagedRepository({ repoRoot: repo.path, rules, exceptions, repo: repo.name })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
@@ -514,7 +524,10 @@ export function auditContentRules({ project, policy, source = 'working-tree' } =
   const findings = []
   const diagnostics = []
   for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+      diagnostics.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
+      continue
+    }
     const result = scanTree(repo.path, { rules, exceptions, repo: repo.name, source })
     findings.push(...result.findings)
     diagnostics.push(...result.diagnostics)
@@ -527,6 +540,15 @@ export function auditContentRules({ project, policy, source = 'working-tree' } =
     }
   }
   return { schema: BOUNDARY_POLICY_SCHEMA, source, findings, diagnostics, accepted }
+}
+
+function unscannableRepoFinding(repo, reason) {
+  return finding({
+    severity: 'error',
+    code: 'repo-unscannable',
+    repo: repo?.name ?? null,
+    message: `${repo?.name ?? '(unnamed repo)'} cannot be scanned: ${reason}`,
+  })
 }
 
 function promotionRecords(project, policy) {
