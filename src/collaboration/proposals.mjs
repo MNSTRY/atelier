@@ -154,6 +154,7 @@ export function createProposalStore({
       return event.payload.record
     }
     if (event.type === 'proposal-reviewed' && state) {
+      if (event.payload.record) return event.payload.record
       const next = {
         ...state,
         proposal: {
@@ -176,6 +177,7 @@ export function createProposalStore({
       return { ok: false, status: 404, error: 'proposal not found', record: null }
     }
     let state = null
+    let previousVersion = 0
     for (const event of events) {
       if (state === null) {
         if (event.version !== 1 || !['proposal-created', 'proposal-imported'].includes(event.type)) {
@@ -190,14 +192,26 @@ export function createProposalStore({
           return { ok: false, status: 422, error: 'proposal ledger record is invalid', record: null }
         }
       } else {
+        const checkpoint = event.payload?.record
+        const checkpointValid = (
+          isRecord(checkpoint) && checkpoint.schema === ATELIER_PROPOSAL_SCHEMA &&
+          isRecord(checkpoint.proposal) && checkpoint.proposal.id === id &&
+          checkpoint.proposal.status === event.payload?.status &&
+          checkpoint.proposal.eventVersion === event.version
+        )
+        const hasCompactionGap = event.version > previousVersion + 1
         if (
           event.type !== 'proposal-reviewed' || !PROPOSAL_REVIEW_STATUSES.has(event.payload?.status) ||
-          !isRecord(event.payload?.review) || !canTransitionProposal(state.proposal.status, event.payload.status)
+          !isRecord(event.payload?.review) ||
+          (checkpoint !== undefined && !checkpointValid) ||
+          (hasCompactionGap && !checkpointValid) ||
+          (!hasCompactionGap && !canTransitionProposal(state.proposal.status, event.payload.status))
         ) {
           return { ok: false, status: 422, error: 'proposal ledger review sequence is invalid', record: null }
         }
       }
       state = reduceProposal(state, event)
+      previousVersion = event.version
     }
     return { ok: true, status: 200, record: state }
   }
@@ -415,6 +429,7 @@ export function createProposalStore({
     }
     const seeded = ensureLedgerSeed(id, record)
     if (!seeded.ok) return seeded
+    nextRecord.proposal.eventVersion = seeded.version + 1
     const appended = eventLedger.append({
       aggregateId: id,
       expectedVersion: seeded.version,
@@ -424,13 +439,13 @@ export function createProposalStore({
       payload: {
         status: nextStatus,
         review,
+        record: nextRecord,
         ...(nextRecord.copyable ? { copyable: nextRecord.copyable } : {}),
       },
     })
     if (!appended.ok) {
       return { ok: false, status: appended.status, error: appended.error }
     }
-    nextRecord.proposal.eventVersion = appended.event.version
     const diagnostics = writeSnapshotProjectionWith(snapshotWriter, proposalPath(id), nextRecord)
     return { ok: true, status: 200, record: nextRecord, diagnostics }
   }
