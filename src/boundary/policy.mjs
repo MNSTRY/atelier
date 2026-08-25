@@ -749,6 +749,10 @@ export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdi
   process.exit(report.ok ? 0 : 1)
 }
 
+export function resolveBoundaryAuditSource(args = {}) {
+  return args.head ? 'head' : firstString(args.source) || 'working-tree'
+}
+
 export function runBoundaryAuditCommand(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
   const project = commandProject({ argv })
@@ -757,7 +761,7 @@ export function runBoundaryAuditCommand(argv = process.argv.slice(2)) {
     console.error(loaded.errors.join('\n'))
     process.exit(1)
   }
-  const source = firstString(args.source) || 'working-tree'
+  const source = resolveBoundaryAuditSource(args)
   if (!['working-tree', 'head'].includes(source)) {
     console.error('boundary audit --source must be working-tree or head')
     process.exit(1)

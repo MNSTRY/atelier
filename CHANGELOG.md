@@ -22,10 +22,13 @@
   realpath validation, and applies host, fetch-site, origin, method, and nonce
   checks to the relevant read and mutation routes.
 - Make collaboration records fail closed with typed corrupt-record results,
-  bounded ledger reads, write locking, and explicit compaction. Proposal
-  authority now follows declared capabilities and apply endpoints rather than
-  action-like words, and the never-released provider-analysis experiment was
-  removed before it became part of a published API.
+  bounded ledger reads, no-follow state leaves, write locking, explicit
+  compaction, and one-pass proposal-list materialization. Compatibility
+  snapshots are best-effort projections of committed events rather than a
+  second authority. Proposal authority now follows declared capabilities and
+  apply endpoints rather than action-like words, and the never-released
+  provider-analysis experiment was removed before it became part of a
+  published API.
 - Render expected project and JSON failures as typed, actionable CLI messages
   without stacks by default; set `ATELIER_DEBUG=1` to include diagnostic stacks.
 - Strengthen release proof with negative-control mutations and a bare consumer

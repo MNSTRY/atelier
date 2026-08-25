@@ -211,3 +211,53 @@ test('proposal listing materializes the ten-thousand-event ceiling from one ledg
   assert.equal(listed.proposals.length, COLLABORATION_LEDGER_LIMITS.maxEvents)
   assert.ok(durationMs < 1500, `proposal listing took ${durationMs.toFixed(1)}ms`)
 })
+
+test('ledger and proposal snapshot leaf symlinks fail closed without outside reads or writes', (t) => {
+  const root = makeRoot(t)
+  const proposalsDir = path.join(root, '.atelier-proposals')
+  fs.mkdirSync(proposalsDir, { recursive: true })
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-ledger-outside-'))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+
+  const outsideLedger = path.join(outside, 'events.ndjson')
+  fs.writeFileSync(outsideLedger, 'outside ledger sentinel\n')
+  fs.symlinkSync(outsideLedger, path.join(proposalsDir, 'events.ndjson'))
+  const ledger = createCollaborationEventLedger({ workspaceRoot: root })
+  assert.equal(ledger.readAll().ok, false)
+  assert.equal(ledger.append(eventInput(0)).ok, false)
+  assert.equal(fs.readFileSync(outsideLedger, 'utf8'), 'outside ledger sentinel\n')
+
+  fs.unlinkSync(path.join(proposalsDir, 'events.ndjson'))
+  const outsideSnapshot = path.join(outside, 'proposal-external.json')
+  fs.writeFileSync(outsideSnapshot, '{"secret":"outside snapshot sentinel"}\n')
+  fs.symlinkSync(outsideSnapshot, path.join(proposalsDir, 'proposal-external.json'))
+  const store = createProposalStore({ workspaceRoot: root, proposalsDir })
+  const read = store.readProposal('proposal-external')
+  assert.equal(read.ok, false)
+  assert.equal(read.status, 422)
+  assert.doesNotMatch(read.error, /outside snapshot sentinel/)
+  const listed = store.listProposals()
+  assert.equal(listed.ok, false)
+  assert.equal(listed.status, 422)
+  assert.doesNotMatch(listed.error, /outside snapshot sentinel/)
+})
+
+test('compatibility snapshot failures stay diagnostic after authoritative events commit', (t) => {
+  const root = makeRoot(t)
+  const store = createProposalStore({
+    workspaceRoot: root,
+    snapshotWriter() { throw new Error('synthetic projection failure') },
+  })
+  const created = store.createProposal({ path: 'index.html' })
+  assert.equal(created.ok, true)
+  assert.equal(created.diagnostics[0].code, 'proposal-snapshot-write-failed')
+  assert.equal(store.eventLedger.eventsFor(created.record.proposal.id).events.length, 1)
+
+  const reviewed = store.reviewProposal(created.record.proposal.id, {
+    status: 'reviewed',
+    reviewer: 'synthetic reviewer',
+  })
+  assert.equal(reviewed.ok, true)
+  assert.equal(reviewed.diagnostics[0].code, 'proposal-snapshot-write-failed')
+  assert.equal(store.eventLedger.eventsFor(created.record.proposal.id).events.length, 2)
+})

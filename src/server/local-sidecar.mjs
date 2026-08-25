@@ -45,18 +45,33 @@ function nowMs() {
 }
 
 function readJsonFile(file, fallback) {
+  let descriptor
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'))
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    if (!fs.fstatSync(descriptor).isFile()) return fallback
+    return JSON.parse(fs.readFileSync(descriptor, 'utf8'))
   } catch {
     return fallback
+  } finally {
+    if (descriptor != null) fs.closeSync(descriptor)
   }
 }
 
 function secureWriteJson(file, payload, mode = 0o600) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode })
-  fs.renameSync(tmp, file)
+  try {
+    if (fs.existsSync(file) && !fs.lstatSync(file).isFile()) throw new Error('state leaf is not a regular file')
+    fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode, flag: 'wx' })
+    fs.renameSync(tmp, file)
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {
+      // The temporary file may not have been created.
+    }
+    throw error
+  }
   try {
     fs.chmodSync(file, mode)
   } catch {
@@ -65,11 +80,38 @@ function secureWriteJson(file, payload, mode = 0o600) {
 }
 
 function readOrCreateNonce(noncePath) {
-  const existing = fs.existsSync(noncePath) ? fs.readFileSync(noncePath, 'utf8').trim() : ''
+  let existing = ''
+  if (fs.existsSync(noncePath)) {
+    const stat = fs.lstatSync(noncePath)
+    if (!stat.isFile()) throw new Error('nonce state leaf is not a regular file')
+    const descriptor = fs.openSync(noncePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    try {
+      if (!fs.fstatSync(descriptor).isFile()) throw new Error('nonce state leaf is not a regular file')
+      existing = fs.readFileSync(descriptor, 'utf8').trim()
+    } finally {
+      fs.closeSync(descriptor)
+    }
+  }
   if (/^[a-f0-9]{64}$/.test(existing)) return existing
   const nonce = crypto.randomBytes(32).toString('hex')
-  fs.writeFileSync(noncePath, `${nonce}\n`, { mode: 0o600 })
+  const tmp = `${noncePath}.${process.pid}.${Date.now()}.tmp`
+  try {
+    fs.writeFileSync(tmp, `${nonce}\n`, { mode: 0o600, flag: 'wx' })
+    fs.renameSync(tmp, noncePath)
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {
+      // The temporary file may not have been created.
+    }
+    throw error
+  }
   return nonce
+}
+
+function pathContainedBy(root, candidate) {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 function json(res, code, obj, headers = {}) {
@@ -209,14 +251,17 @@ export function createAtelierSidecarServer({
 } = {}) {
   const root = path.resolve(workspaceRoot)
   const rootReal = fs.realpathSync(root)
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const stateDirReal = fs.realpathSync(stateDir)
+  if (!pathContainedBy(rootReal, stateDirReal)) throw new Error('Atelier state directory escapes workspace')
   const publication = loadPublishedWorkspaceManifest(root)
   const workspaceId = workspaceIdForRoot(root)
-  const noncePath = path.join(stateDir, '.atelier-nonce')
-  const presencePath = path.join(stateDir, '.atelier-presence.json')
+  const noncePath = path.join(stateDirReal, '.atelier-nonce')
+  const presencePath = path.join(stateDirReal, '.atelier-presence.json')
   const mutationNonce = readOrCreateNonce(noncePath)
   const proposals = createProposalStore({
     workspaceRoot: root,
-    proposalsDir: path.join(stateDir, '.atelier-proposals'),
+    proposalsDir: path.join(stateDirReal, '.atelier-proposals'),
     workspaceId,
   })
 
@@ -393,6 +438,7 @@ export function createAtelierSidecarServer({
         schema: result.record.schema,
         workspaceId,
         proposal: result.record.proposal,
+        diagnostics: result.diagnostics,
       })
       return
     }
@@ -417,6 +463,7 @@ export function createAtelierSidecarServer({
         proposal: result.record.proposal,
         diff: result.record.diff,
         copyable: result.record.copyable,
+        diagnostics: result.diagnostics,
       })
       return
     }

@@ -15,7 +15,8 @@ literal loopback host and refuses startup without a valid generated
 `atelier.manifest.json`. Static reads are limited to manifest-enrolled,
 supported file types after realpath containment; hidden, state, secret-shaped,
 symlinked, unknown, and unenrolled paths are denied. API reads require a trusted
-loopback host and same-site fetch metadata. Mutations additionally require an
+loopback host and `Sec-Fetch-Site: same-origin` or `none`; `same-site` and
+cross-site requests are refused. Mutations additionally require an
 allowed method, exact expected origin, and the session nonce. Its collaboration
 records are copy-only proposals, not an apply channel.
 

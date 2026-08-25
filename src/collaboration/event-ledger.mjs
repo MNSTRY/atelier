@@ -28,9 +28,28 @@ function ensurePrivateDir(dir) {
   }
 }
 
+function noFollowFlag() {
+  return fs.constants.O_NOFOLLOW ?? 0
+}
+
+function openRegularFile(file, flags, mode) {
+  const descriptor = fs.openSync(file, flags | noFollowFlag(), mode)
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) throw new Error('state leaf is not a regular file')
+    return descriptor
+  } catch (error) {
+    fs.closeSync(descriptor)
+    throw error
+  }
+}
+
 function secureAppendLine(file, line) {
   ensurePrivateDir(path.dirname(file))
-  const descriptor = fs.openSync(file, 'a', 0o600)
+  const descriptor = openRegularFile(
+    file,
+    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT,
+    0o600,
+  )
   try {
     fs.writeFileSync(descriptor, line)
     fs.fsyncSync(descriptor)
@@ -124,21 +143,26 @@ export function createCollaborationEventLedger({
       return { ok: true, status: 200, events: [], diagnostics: [], stats: { bytes: 0, eventCount: 0, durationMs: performance.now() - startedAt } }
     }
 
+    let descriptor
     let bytes
     try {
-      bytes = fs.statSync(ledgerReal).size
+      descriptor = openRegularFile(ledgerReal, fs.constants.O_RDONLY)
+      bytes = fs.fstatSync(descriptor).size
     } catch (error) {
       return failure(500, `collaboration ledger cannot be inspected: ${error.message}`)
     }
     if (bytes > limits.maxBytes) {
+      fs.closeSync(descriptor)
       return failure(413, `collaboration ledger exceeds ${limits.maxBytes} byte hard ceiling`, [{ code: 'ledger-byte-limit', bytes }], { bytes, eventCount: 0 })
     }
 
     let raw
     try {
-      raw = fs.readFileSync(ledgerReal, 'utf8')
+      raw = fs.readFileSync(descriptor, 'utf8')
     } catch (error) {
       return failure(500, `collaboration ledger cannot be read: ${error.message}`, [], { bytes, eventCount: 0 })
+    } finally {
+      fs.closeSync(descriptor)
     }
 
     const diagnostics = []
@@ -264,7 +288,11 @@ export function createCollaborationEventLedger({
       if (current.stats.bytes + lineBytes > limits.maxBytes) {
         return { ok: false, status: 413, error: `collaboration ledger would exceed ${limits.maxBytes} byte hard ceiling; compact it explicitly before appending` }
       }
-      secureAppendLine(ledgerReal, line)
+      try {
+        secureAppendLine(ledgerReal, line)
+      } catch (error) {
+        return { ok: false, status: 500, error: `collaboration ledger cannot be appended: ${error.message}` }
+      }
       return { ok: true, status: 200, event }
     })
   }

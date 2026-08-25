@@ -42,12 +42,43 @@ function ensurePrivateDir(dir) {
 function secureWriteJson(file, payload) {
   ensurePrivateDir(path.dirname(file))
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 })
-  fs.renameSync(tmp, file)
+  try {
+    if (fs.existsSync(file) && !fs.lstatSync(file).isFile()) {
+      throw new Error('proposal snapshot leaf is not a regular file')
+    }
+    fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600, flag: 'wx' })
+    fs.renameSync(tmp, file)
+  } catch (error) {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {
+      // The temporary file may not have been created.
+    }
+    throw error
+  }
   try {
     fs.chmodSync(file, 0o600)
   } catch {
     // Best effort on filesystems that do not support chmod.
+  }
+}
+
+function readRegularJson(file) {
+  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) throw new Error('proposal snapshot leaf is not a regular file')
+    return JSON.parse(fs.readFileSync(descriptor, 'utf8'))
+  } finally {
+    fs.closeSync(descriptor)
+  }
+}
+
+function writeSnapshotProjectionWith(writer, file, payload) {
+  try {
+    writer(file, payload)
+    return []
+  } catch (error) {
+    return [{ code: 'proposal-snapshot-write-failed', message: `compatibility snapshot was not updated: ${error.message}` }]
   }
 }
 
@@ -119,6 +150,7 @@ export function createProposalStore({
   workspaceRoot = process.cwd(),
   proposalsDir = path.join(workspaceRoot, '.atelier-proposals'),
   workspaceId = null,
+  snapshotWriter = secureWriteJson,
 } = {}) {
   const workspaceRootReal = fs.realpathSync(workspaceRoot)
   ensurePrivateDir(proposalsDir)
@@ -177,7 +209,11 @@ export function createProposalStore({
     }
     if (!fs.existsSync(file)) return { ok: false, status: 404, error: 'proposal not found', record: null }
     try {
-      return { ok: true, status: 200, record: JSON.parse(fs.readFileSync(file, 'utf8')), source: 'compatibility-snapshot' }
+      const resolved = fs.realpathSync(file)
+      if (!pathContainedBy(fs.realpathSync(proposalsDir), resolved)) {
+        throw new Error('proposal snapshot escapes workspace')
+      }
+      return { ok: true, status: 200, record: readRegularJson(file), source: 'compatibility-snapshot' }
     } catch (error) {
       return { ok: false, status: 422, error: `proposal snapshot cannot be read: ${error.message}`, record: null }
     }
@@ -205,9 +241,13 @@ export function createProposalStore({
       )
     }
     const ledgerIds = [...ledgerRecords.keys()]
-    const snapshotIds = fs.readdirSync(proposalsDir)
-      .filter((name) => name.endsWith('.json'))
-      .map((name) => name.slice(0, -'.json'.length))
+    const snapshotEntries = fs.readdirSync(proposalsDir, { withFileTypes: true })
+      .filter((entry) => entry.name.endsWith('.json'))
+    const unsafeSnapshot = snapshotEntries.find((entry) => !entry.isFile())
+    if (unsafeSnapshot) {
+      return { ok: false, status: 422, error: 'proposal snapshot cannot be read: state leaf is not a regular file', proposals: [] }
+    }
+    const snapshotIds = snapshotEntries.map((entry) => entry.name.slice(0, -'.json'.length))
     const reads = [...new Set([...ledgerIds, ...snapshotIds])]
       .sort(stableCompare)
       .map((id) => {
@@ -297,8 +337,8 @@ export function createProposalStore({
     if (!appended.ok) {
       return { ok: false, status: appended.status, error: appended.error }
     }
-    secureWriteJson(proposalPath(id), record)
-    return { ok: true, status: 200, record }
+    const diagnostics = writeSnapshotProjectionWith(snapshotWriter, proposalPath(id), record)
+    return { ok: true, status: 200, record, diagnostics }
   }
 
   function reviewProposal(id, body = {}) {
@@ -363,8 +403,8 @@ export function createProposalStore({
       return { ok: false, status: appended.status, error: appended.error }
     }
     nextRecord.proposal.eventVersion = appended.event.version
-    secureWriteJson(proposalPath(id), nextRecord)
-    return { ok: true, status: 200, record: nextRecord }
+    const diagnostics = writeSnapshotProjectionWith(snapshotWriter, proposalPath(id), nextRecord)
+    return { ok: true, status: 200, record: nextRecord, diagnostics }
   }
 
   return {

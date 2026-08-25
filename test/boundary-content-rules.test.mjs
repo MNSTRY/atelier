@@ -12,6 +12,7 @@ import {
   checkPushContent,
   installBoundaryHooks,
   readBoundaryPushInput,
+  resolveBoundaryAuditSource,
   validateBoundaryPolicy,
 } from '../src/boundary/policy.mjs'
 import {
@@ -25,7 +26,7 @@ import {
   scanStagedRepository,
   validateContentRuleExceptions,
 } from '../src/boundary/content-rules.mjs'
-import { PROJECT_CONFIG_SCHEMA, commandProject, writeJson } from '../src/project/config.mjs'
+import { PROJECT_CONFIG_SCHEMA, commandProject, parseArgs, writeJson } from '../src/project/config.mjs'
 
 // A client-zero private-domain site shipped an owner-authorized mock cart whose
 // whole design is localStorage. The whole-tree guard matched it, so every push failed
@@ -218,6 +219,9 @@ test('audit defaults to the working tree and keeps HEAD as an explicit snapshot'
   const snapshot = auditContentRules({ project, policy, source: 'head' })
   assert.equal(snapshot.source, 'head')
   assert.equal(snapshot.findings.some((item) => item.path === 'unstaged.ts'), false)
+  assert.equal(resolveBoundaryAuditSource(parseArgs(['--head'])), 'head')
+  assert.equal(resolveBoundaryAuditSource(parseArgs(['--source=head'])), 'head')
+  assert.equal(resolveBoundaryAuditSource(parseArgs([])), 'working-tree')
 })
 
 test('exceptions must name a rule, a repo, real paths, and a reason', () => {

@@ -230,6 +230,22 @@ test('local sidecar requires a generated manifest and loopback listen host', asy
   await assert.rejects(() => sidecar.listen(0, '0.0.0.0'), /non-loopback listen host refused/)
 })
 
+test('local state leaf symlinks block startup without touching outside targets', (t) => {
+  const workspaceRoot = makeWorkspace()
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-state-outside-'))
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  const target = path.join(outside, 'nonce.txt')
+  fs.writeFileSync(target, 'outside nonce sentinel\n')
+  fs.symlinkSync(target, path.join(workspaceRoot, '.atelier-nonce'))
+
+  assert.throws(
+    () => createAtelierSidecarServer({ workspaceRoot }),
+    /nonce state leaf is not a regular file/,
+  )
+  assert.equal(fs.readFileSync(target, 'utf8'), 'outside nonce sentinel\n')
+})
+
 test('publication manifests refuse malformed, hidden, unavailable, and symlink-enrolled paths', (t) => {
   function fixture(manifest, files = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-manifest-invalid-'))
