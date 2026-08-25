@@ -34,8 +34,11 @@ runtime object.
   staged bytes/modes, written tree, commit parent/message, or publish target
   changed. A publish plan is refused while any earlier local commit remains
   unpublished, and publication names the exact verified commit object rather
-  than a movable `HEAD` ref. Plans expire after 24 hours, are consumed by a definitive execution
-  attempt, and are held under resident file/count ceilings.
+  than a movable `HEAD` ref. Plans expire after 24 hours, are consumed by a
+  definitive execution attempt, and are held under resident file/count
+  ceilings. Expired, malformed, or oversized retained plan files are removed
+  under the repository lock before those ceilings are enforced; redirected
+  plan state remains a hard refusal.
 - A commit plan cannot absorb pre-existing staged work. It stages only literal,
   explicitly reviewed paths.
 - Configured Atelier boundary policy is checked against the staged change set
@@ -53,21 +56,28 @@ runtime object.
   Atelier re-resolves the single push URL immediately before publication and
   pushes the exact commit object directly to that reviewed destination. Push is
   never forced, never follows tags, and never recursively publishes submodule
-  refs. A failed push preserves the local commit, creates one stable attention
-  state, and returns a non-zero command exit.
+  refs. When fetch and push resolve to the same credential-free identity,
+  Atelier refreshes the exact remote-tracking branch and re-observes before it
+  reports `committed-and-published`. A distinct configured push URL is honored,
+  but remains an explicit attention state because it cannot prove the fetch
+  upstream synchronized. A failed push or post-push tracking refresh preserves
+  the local commit, creates one stable attention state, and returns a non-zero
+  command exit.
 - Semantic conflict resolution, merge commits, rebase, reset, force push,
   browser apply, broad path scans, telemetry, and hidden upload are absent.
 
 ## Repository completeness
 
-`atelier sync status` emits an `atelier-repository-observation@v1` document.
-It cannot report `complete: true` when any of these are unresolved:
+`atelier sync status` emits a supervisor envelope whose `state.observation`
+contains the current `atelier-repository-observation@v1` document. That
+observation cannot report `complete: true` when any of these are unresolved:
 
 - lexically identifiable provider-managed, UNC/network, WSL-cross-boundary, or
   unclassified external filesystem roots (mapped-drive classification remains
   an operating-system integration concern for the signed beta);
 - an unsupported Git engine or bare repository;
-- sparse checkout or partial clone state;
+- sparse checkout, partial clone, or shallow repository state;
+- tracked paths carrying `assume-unchanged` or `skip-worktree` index flags;
 - missing or unhealthy submodules;
 - required Git LFS content without a working LFS integration, including LFS
   semantics declared by tracked or untracked worktree attributes, repository

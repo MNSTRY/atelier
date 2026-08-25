@@ -217,9 +217,16 @@ test('user-confirmed commit stages only reviewed files and can publish through t
   assert.equal(fs.existsSync(planFile(root, plan.operationId)), false)
   assert.equal(runGit(git, root, ['status', '--porcelain']).stdout.trim(), '?? leave-local.md')
   assert.equal(runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim(), result.commit)
+  assert.equal(runGit(git, root, ['rev-parse', 'refs/remotes/origin/main']).stdout.trim(), result.commit)
+  const afterPublish = runtimeStatus({ repoPath: root })
+  assert.equal(afterPublish.ok, true)
+  assert.notEqual(afterPublish.state.code, 'local-commits-unpublished')
+  fs.writeFileSync(path.join(root, 'second-publish.md'), 'publish again\n')
+  const { plan: nextPlan } = planUserConfirmedCommit({ repoPath: root, paths: ['second-publish.md'], message: 'docs: allow subsequent publish', publish: true })
+  assert.equal(nextPlan.publish.remote, 'origin')
   assert.equal(runGit(git, null, ['--git-dir', remote, 'for-each-ref', '--format=%(refname)', 'refs/tags']).stdout, '')
   const trace = readOperationTrace(runtimePaths(root).trace)
-  assert.deepEqual(trace.map((item) => item.operation), ['enroll', 'commit-plan-created', 'commit-created', 'commit-publish'])
+  assert.deepEqual(trace.map((item) => item.operation), ['enroll', 'commit-plan-created', 'commit-created', 'commit-publish', 'commit-plan-created'])
 })
 
 test('publish uses the reviewed push URL rather than the fetch remote', (t) => {
@@ -232,7 +239,10 @@ test('publish uses the reviewed push URL rather than the fetch remote', (t) => {
   const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: bind push destination', publish: true })
   assert.equal(plan.publish.url, redirected)
   const result = executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId })
-  assert.equal(result.ok, true)
+  assert.equal(result.ok, false)
+  assert.equal(result.committed, true)
+  assert.equal(result.publish.ok, true)
+  assert.equal(result.state.code, 'published-to-distinct-push-target')
   assert.equal(runGit(git, null, ['--git-dir', redirected, 'rev-parse', 'refs/heads/main']).stdout.trim(), result.commit)
   assert.notEqual(runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim(), result.commit)
 })
@@ -772,6 +782,25 @@ test('commit plans expire, are consumed, and refuse an unbounded resident plan s
     () => planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: bounded plans' }),
     /resident ceiling/,
   )
+})
+
+test('expired and malformed retained plans are pruned before resident ceilings are enforced', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const plans = runtimePaths(root).plans
+  for (let index = 0; index < 256; index += 1) {
+    fs.writeFileSync(path.join(plans, `expired-${index}.json`), `${JSON.stringify({ createdAt: '2026-01-01T00:00:00.000Z' })}\n`)
+  }
+  fs.writeFileSync(path.join(plans, 'oversized.json'), 'x'.repeat((4 * 1024 * 1024) + 1))
+  const { plan } = planUserConfirmedCommit({
+    repoPath: root,
+    paths: ['reviewed.md'],
+    message: 'docs: recover bounded plans',
+    clock: () => '2026-01-03T00:00:00.000Z',
+  })
+  assert.equal(fs.existsSync(planFile(root, plan.operationId)), true)
+  assert.deepEqual(fs.readdirSync(plans), [`${plan.operationId}.json`])
 })
 
 test('post-fast-forward completeness blockers produce attention, not healthy state', (t) => {

@@ -107,6 +107,29 @@ test('observation fails closed on sparse and partial workspace state', (t) => {
   assert.deepEqual(report.blockers.map((item) => item.code).sort(), ['partial-clone-unsupported', 'sparse-checkout-unsupported'])
 })
 
+test('observation fails closed on shallow history and index visibility flags', (t) => {
+  const { base, remote, root } = repository(t)
+  const hidden = path.join(root, 'hidden.md')
+  fs.writeFileSync(hidden, 'tracked\n')
+  runGit(git, root, ['add', 'hidden.md'])
+  runGit(git, root, ['commit', '-m', 'add hidden fixture'])
+  runGit(git, root, ['push', 'origin', 'main'])
+  runGit(git, root, ['update-index', '--assume-unchanged', 'README.md'])
+  runGit(git, root, ['update-index', '--skip-worktree', 'hidden.md'])
+  const flagged = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(flagged.complete, false)
+  assert.equal(flagged.features.indexFlags.assumeUnchanged, 1)
+  assert.equal(flagged.features.indexFlags.skipWorktree, 1)
+  assert.equal(flagged.blockers.some((item) => item.code === 'index-visibility-flags-unsupported'), true)
+
+  const shallow = path.join(base, 'shallow')
+  runGit(git, null, ['clone', '--depth', '1', `file://${remote}`, shallow])
+  const shallowReport = observeRepository({ repoRoot: shallow, gitExecutable: git })
+  assert.equal(shallowReport.features.shallowRepository, true)
+  assert.equal(shallowReport.complete, false)
+  assert.equal(shallowReport.blockers.some((item) => item.code === 'shallow-repository-unsupported'), true)
+})
+
 test('observation binds the resolved push destination and refuses ambiguous or rewritten targets', (t) => {
   const { base, remote, root } = repository(t)
   const redirected = path.join(base, 'redirected.git')

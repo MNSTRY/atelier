@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { validateJsonSchema } from '../export/atelier-export-contract.mjs'
+import { readRegularTextNoFollow } from '../project/private-state.mjs'
 import {
   classifyRemoteAuthentication,
   gitText,
@@ -227,7 +228,12 @@ function lfsState(gitExecutable, root, config, gitDir, statusEntries, failures) 
       failures.push(blocker('observation-evidence-unavailable', 'Git attributes evidence is redirected or not a regular file', { path: label }))
       return false
     }
-    return /filter\s*=\s*lfs|filter=lfs/i.test(fs.readFileSync(absolute, 'utf8'))
+    try {
+      return /filter\s*=\s*lfs|filter=lfs/i.test(readRegularTextNoFollow(absolute))
+    } catch {
+      failures.push(blocker('observation-evidence-unavailable', 'Git attributes evidence changed or could not be read safely', { path: label }))
+      return false
+    }
   })
   const version = runGit(gitExecutable, root, ['lfs', 'version'], { allowFailure: true })
   const labels = uniqueAttributeFiles.map((item) => item.label)
@@ -256,12 +262,28 @@ function repositoryFeatures(gitExecutable, root, config, failures) {
   const partialClone = configValues(config, /^(?:extensions\.partialclone|remote\..*\.promisor)$/i)
   const urlRewrites = configValues(config, /^url\..*\.(?:insteadof|pushinsteadof)$/i)
   const sparse = boolConfig(config, 'core.sparsecheckout') || Boolean(gitDir && fs.existsSync(path.join(gitDir, 'info', 'sparse-checkout')))
+  const shallowRaw = optionalText(gitExecutable, root, ['rev-parse', '--is-shallow-repository'], { failures, label: 'shallow repository state' })
+  if (shallowRaw != null && !/^(?:true|false)$/.test(shallowRaw)) {
+    failures.push(blocker('observation-evidence-invalid', 'required Git evidence is malformed: shallow repository state', { probe: 'shallow repository state' }))
+  }
+  const indexFlagsResult = runGit(gitExecutable, root, ['ls-files', '-v', '-z'], { allowFailure: true })
+  if (!indexFlagsResult.ok) failures.push(blocker('observation-evidence-unavailable', 'required Git index visibility evidence is unavailable', { probe: 'index visibility flags' }))
+  const indexFlags = indexFlagsResult.ok
+    ? indexFlagsResult.stdout.split('\0').filter(Boolean).reduce((counts, record) => {
+      const tag = record[0]
+      if (tag === 'S' || tag === 's') counts.skipWorktree += 1
+      if (/^[a-z]$/.test(tag)) counts.assumeUnchanged += 1
+      return counts
+    }, { assumeUnchanged: 0, skipWorktree: 0 })
+    : { assumeUnchanged: 0, skipWorktree: 0 }
   return {
     gitDir,
     commonDir,
     linkedWorktree: Boolean(gitDir && commonDir && path.resolve(gitDir) !== path.resolve(commonDir)),
     worktrees,
     sparseCheckout: sparse,
+    shallowRepository: shallowRaw === 'true',
+    indexFlags,
     partialClone,
     urlRewrites,
     filters,
@@ -369,6 +391,8 @@ function completenessFor({ filesystem, engine, bare, remotes, features, submodul
   if (!engine.supported) blockers.push(blocker('git-version-unsupported', `Git ${engine.version} is older than ${engine.minimum}`))
   if (bare) blockers.push(blocker('bare-repository-unsupported', 'a working tree is required'))
   if (features.sparseCheckout) blockers.push(blocker('sparse-checkout-unsupported', 'sparse workspaces are not complete observations'))
+  if (features.shallowRepository) blockers.push(blocker('shallow-repository-unsupported', 'shallow history is not a complete repository observation'))
+  if (features.indexFlags.assumeUnchanged || features.indexFlags.skipWorktree) blockers.push(blocker('index-visibility-flags-unsupported', 'assume-unchanged and skip-worktree index flags can hide authored changes from status', features.indexFlags))
   if (features.partialClone.length) blockers.push(blocker('partial-clone-unsupported', 'partial clones may omit required Git objects', { config: features.partialClone }))
   if (features.urlRewrites.length) blockers.push(blocker('url-rewrite-unclassified', 'Git URL rewrite rules make the execution destination ambiguous and must be removed before synchronization', { config: features.urlRewrites.map((entry) => entry.key) }))
   if (features.hooksPathConfigured) blockers.push(blocker('custom-hooks-path-unclassified', 'core.hooksPath changes executable Git behavior and must be removed or classified before synchronization'))

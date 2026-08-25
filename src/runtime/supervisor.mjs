@@ -469,17 +469,23 @@ function pruneAndBoundPlans(paths, currentAt) {
   const now = Date.parse(currentAt)
   if (!Number.isFinite(now)) throw new Error('commit plan timestamp is invalid')
   let inventory = runtimePlanInventory(paths.plans)
-  if (inventory.files.length >= ATELIER_RUNTIME_PLAN_MAX_FILES || inventory.bytes >= ATELIER_RUNTIME_PLAN_MAX_BYTES) {
-    throw new Error('runtime commit plan storage reached its resident ceiling; remove or consume existing plans')
-  }
   for (const item of inventory.files) {
     let createdAt = item.mtimeMs
+    if (now - createdAt > ATELIER_RUNTIME_PLAN_MAX_AGE_MS) {
+      removeRuntimeLeaf(item.file)
+      continue
+    }
     try {
       const stored = readJsonIfPresent(item.file)
       const parsed = Date.parse(stored?.createdAt)
       if (Number.isFinite(parsed)) createdAt = parsed
-    } catch {
-      // Corrupt or redirected plan state fails closed below; it is never pruned as authority.
+    } catch (error) {
+      if (/redirected|regular file|escapes workspace/.test(error.message)) throw error
+      // Malformed or oversized retained state cannot carry confirmation
+      // authority. Removing it under the repository lock is fail-closed and
+      // lets valid planning recover without a manual filesystem repair.
+      removeRuntimeLeaf(item.file)
+      continue
     }
     if (now - createdAt > ATELIER_RUNTIME_PLAN_MAX_AGE_MS) removeRuntimeLeaf(item.file)
   }
@@ -701,6 +707,45 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
       if (!pushed.ok) {
         const observationAfterCommit = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
         const state = attentionState('publish-failed', 'commit was created locally but Git push failed', observationAfterCommit, publish)
+        persistState(paths, state, clock)
+        return { ok: false, committed: true, commit, publish, state }
+      }
+      const reviewedRemote = beforePublish.observation.remotes.find((item) => item.name === plan.publish.remote)
+      const sameFetchAndPushIdentity = reviewedRemote?.identityDigest === plan.publish.identityDigest
+      if (!sameFetchAndPushIdentity) {
+        const observationAfterPublish = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
+        const state = attentionState(
+          'published-to-distinct-push-target',
+          'commit was published, but the configured fetch upstream is a distinct destination and cannot be marked synchronized',
+          observationAfterPublish,
+          { operationId, commit, remote: plan.publish.remote, branch: plan.publish.branch },
+        )
+        persistState(paths, state, clock)
+        return { ok: false, committed: true, commit, publish, state }
+      }
+      const trackingRef = `refs/remotes/${plan.publish.remote}/${plan.publish.branch}`
+      const refreshed = runGit(
+        enrollment.git.executable,
+        enrollment.repoRoot,
+        [
+          'fetch',
+          '--no-tags',
+          '--no-write-fetch-head',
+          '--recurse-submodules=no',
+          '--',
+          pushDestination,
+          `refs/heads/${plan.publish.branch}:${trackingRef}`,
+        ],
+        { allowFailure: true, allowPrompt: true, timeout: 120_000 },
+      )
+      if (!refreshed.ok) {
+        const observationAfterPublish = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
+        const state = attentionState(
+          'publish-tracking-refresh-failed',
+          'commit was published, but the local remote-tracking ref could not be refreshed',
+          observationAfterPublish,
+          { operationId, commit, remote: plan.publish.remote, branch: plan.publish.branch, error: gitFailure(refreshed) },
+        )
         persistState(paths, state, clock)
         return { ok: false, committed: true, commit, publish, state }
       }
