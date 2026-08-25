@@ -102,11 +102,14 @@ jobs:
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
           EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           COMMIT_SCAN: ${{ vars.ATELIER_COMMIT_SCAN }}
         run: |
           case "$COMMIT_SCAN" in none|all) ;; *) COMMIT_SCAN=none ;; esac
-          if [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            node scripts/check-repo-disclosure.mjs --commits range --base "$PR_BASE_SHA"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
             node scripts/check-repo-disclosure.mjs --commits range --base "$PUSH_BEFORE"
           else
             node scripts/check-repo-disclosure.mjs --commits "$COMMIT_SCAN"

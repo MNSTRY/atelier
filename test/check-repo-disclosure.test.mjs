@@ -18,11 +18,11 @@ const SENTINEL = 'SENTINELXYZ'
 const SENTINEL_DENYLIST = JSON.stringify({ patterns: [{ pattern: SENTINEL, label: 'test-sentinel' }] })
 
 function git(dir, args, env = {}) {
-  execFileSync('git', ['-C', dir, ...args], {
+  return execFileSync('git', ['-C', dir, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, ...env },
-  })
+  }).trim()
 }
 
 function makeRepo(t) {
@@ -196,6 +196,27 @@ test('a clean range with allowed identities passes --commits range', (t) => {
   writeAndCommit(dir, 'docs/more.md', 'still nothing\n', 'second commit')
   const { status, output } = runChecker(dir, ['--commits', 'range', '--base', 'HEAD~1'])
   assert.equal(status, 0, output)
+})
+
+test('commit range scans content added and deleted before HEAD', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'private/temporary.txt', `historical ${SENTINEL} marker\n`, 'temporary addition')
+  fs.unlinkSync(path.join(dir, 'private', 'temporary.txt'))
+  git(dir, ['add', '-u'])
+  git(dir, ['commit', '--quiet', '-m', 'remove temporary file'])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40}:private\/temporary\.txt:1/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: historical matched text must never be printed')
+})
+
+test('both structural and private CI sweeps inspect pull-request commit ranges', () => {
+  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci.yml'), 'utf8')
+  const rangeCommands = workflow.match(/check-repo-disclosure\.mjs(?: --structural-only)? --commits range --base "\$PR_BASE_SHA"/g) ?? []
+  assert.equal(rangeCommands.length, 2)
 })
 
 test('--staged catches a plant that is staged but not committed', (t) => {

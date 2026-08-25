@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // Repo-wide disclosure checker. Scans tracked file content (or staged changes)
-// and optionally commit identities and messages for structural leaks and for
-// the maintainer-held denylist patterns.
+// and optionally newly reachable commit trees, identities, and messages for
+// structural leaks and for the maintainer-held denylist patterns.
 //
 // Usage:
 //   node scripts/check-repo-disclosure.mjs [--root <dir>] [--staged]
@@ -28,6 +28,10 @@ import { fileURLToPath } from 'node:url'
 import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+const MAX_HISTORY_COMMITS = 10_000
+const MAX_HISTORY_BLOBS = 100_000
+const MAX_HISTORY_BLOB_BYTES = 16 * 1024 * 1024
+const MAX_HISTORY_TOTAL_BYTES = 256 * 1024 * 1024
 
 // Duplicated from scripts/check-release-tarball.mjs (that audit scans only the
 // published tarball; this script scans the whole tracked tree). Drift risk:
@@ -162,24 +166,24 @@ function report(label, location) {
   findings += 1
 }
 
-function scanLine(line, relPath, lineNumber) {
+function scanLine(line, relPath, lineNumber, displayPath = relPath) {
   if (!STRUCTURAL_SELF_EXCLUDED.includes(relPath)) {
     for (const { pattern, label } of structuralForbiddenContent) {
-      if (pattern.test(line)) report(label, `${relPath}:${lineNumber}`)
+      if (pattern.test(line)) report(label, `${displayPath}:${lineNumber}`)
     }
   }
   for (const { pattern, label } of denylist) {
-    if (pattern.test(line)) report(label, `${relPath}:${lineNumber}`)
+    if (pattern.test(line)) report(label, `${displayPath}:${lineNumber}`)
   }
 }
 
 let scannedFiles = 0
 
-function scanBuffer(buffer, relPath) {
+function scanBuffer(buffer, relPath, displayPath = relPath, countFile = true) {
   if (buffer.subarray(0, 8192).includes(0)) return // binary
-  scannedFiles += 1
+  if (countFile) scannedFiles += 1
   const lines = buffer.toString('utf8').split('\n')
-  for (let i = 0; i < lines.length; i += 1) scanLine(lines[i], relPath, i + 1)
+  for (let i = 0; i < lines.length; i += 1) scanLine(lines[i], relPath, i + 1, displayPath)
 }
 
 function scanTrackedFiles() {
@@ -215,9 +219,12 @@ function scanStagedChanges() {
   }
 }
 
-function scanCommits() {
+function commitSelector() {
+  return commitsMode === 'all' ? ['--all'] : [`${base}..HEAD`]
+}
+
+function scanCommits(selector) {
   const format = '%H%x01%P%x01%an%x01%ae%x01%cn%x01%ce%x01%B%x02'
-  const selector = commitsMode === 'all' ? ['--all'] : [`${base}..HEAD`]
   let out
   try {
     out = git(['log', `--format=${format}`, ...selector])
@@ -257,11 +264,102 @@ function scanCommits() {
   return records.length
 }
 
+function scanCommitTrees(selector) {
+  let shas
+  try {
+    shas = git(['rev-list', ...selector]).split('\n').filter(Boolean)
+  } catch {
+    report('commit-tree-read-incomplete', 'history')
+    return 0
+  }
+  if (shas.length > MAX_HISTORY_COMMITS) {
+    report('commit-count-limit', 'history')
+    return 0
+  }
+
+  const scanned = new Set()
+  let totalBytes = 0
+  let scannedBlobs = 0
+  for (const sha of shas) {
+    let changedPaths
+    try {
+      changedPaths = new Set(
+        git([
+          'diff-tree', '--root', '-r', '-m', '--no-commit-id', '--name-only',
+          '--diff-filter=ACMR', '-z', sha,
+        ]).split('\0').filter(Boolean),
+      )
+    } catch {
+      report('commit-tree-read-incomplete', `commit ${sha}`)
+      continue
+    }
+    if (changedPaths.size === 0) continue
+    let entries
+    try {
+      entries = git(['ls-tree', '-r', '-z', '--full-tree', sha]).split('\0').filter(Boolean)
+    } catch {
+      report('commit-tree-read-incomplete', `commit ${sha}`)
+      continue
+    }
+    for (const entry of entries) {
+      const tab = entry.indexOf('\t')
+      if (tab < 0) {
+        report('commit-tree-entry-invalid', `commit ${sha}`)
+        continue
+      }
+      const [mode, type, objectId] = entry.slice(0, tab).split(' ')
+      const relPath = entry.slice(tab + 1)
+      if (!changedPaths.has(relPath) || type !== 'blob' || mode === '160000') continue
+      const scanKey = `${objectId}\0${relPath}`
+      if (scanned.has(scanKey)) continue
+      scanned.add(scanKey)
+      if (scanned.size > MAX_HISTORY_BLOBS) {
+        report('commit-blob-count-limit', 'history')
+        return scannedBlobs
+      }
+      let size
+      try {
+        size = Number(git(['cat-file', '-s', objectId]).trim())
+      } catch {
+        report('commit-blob-read-incomplete', `commit ${sha}:${relPath}`)
+        continue
+      }
+      if (!Number.isSafeInteger(size) || size < 0 || size > MAX_HISTORY_BLOB_BYTES) {
+        report('commit-blob-size-limit', `commit ${sha}:${relPath}`)
+        continue
+      }
+      if (totalBytes + size > MAX_HISTORY_TOTAL_BYTES) {
+        report('commit-history-byte-limit', 'history')
+        return scannedBlobs
+      }
+      let blob
+      try {
+        blob = execFileSync('git', ['-C', root, 'cat-file', 'blob', objectId], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          maxBuffer: MAX_HISTORY_BLOB_BYTES + 1024,
+        })
+      } catch {
+        report('commit-blob-read-incomplete', `commit ${sha}:${relPath}`)
+        continue
+      }
+      totalBytes += blob.length
+      scannedBlobs += 1
+      scanBuffer(blob, relPath, `commit ${sha}:${relPath}`, false)
+    }
+  }
+  return scannedBlobs
+}
+
 if (staged) scanStagedChanges()
 else scanTrackedFiles()
 
 let scannedCommits = 0
-if (commitsMode !== 'none') scannedCommits = scanCommits()
+let scannedHistoryBlobs = 0
+if (commitsMode !== 'none') {
+  const selector = commitSelector()
+  scannedCommits = scanCommits(selector)
+  scannedHistoryBlobs = scanCommitTrees(selector)
+}
 
 if (findings > 0) {
   // Even the count is a 1-bit-per-dispatch oracle on an attacker-controlled
@@ -272,5 +370,5 @@ if (findings > 0) {
 }
 
 const contentNote = staged ? `${scannedFiles} staged file(s)` : `${scannedFiles} tracked file(s)`
-const commitNote = commitsMode === 'none' ? '' : `, ${scannedCommits} commit(s) [${commitsMode}]`
+const commitNote = commitsMode === 'none' ? '' : `, ${scannedCommits} commit(s) and ${scannedHistoryBlobs} historical blob(s) [${commitsMode}]`
 console.log(`[repo:check] clean: ${contentNote}${commitNote}`)

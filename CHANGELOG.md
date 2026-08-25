@@ -43,7 +43,9 @@
   drift, and binding modified source to an already-tagged package version.
 - Add a portable `atelier disclosure check` command that scans tracked or
   staged consumer content, requires private denylist coverage by default, and
-  refuses tracked repository-local denylist files.
+  refuses tracked repository-local denylist files. Repository release sweeps
+  also inspect every bounded blob introduced by the commit range, so content
+  added and deleted before the final tree cannot become public history unseen.
 - Add public agent instructions and mirrored skills for extracting reusable
   mechanisms from private implementations without carrying tenant material
   into Atelier, plus a managed local-service contract for durable loopback
