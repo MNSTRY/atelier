@@ -145,6 +145,19 @@ test('explicit enrollment writes ignored local state and reports healthy status'
   assert.equal(runGit(git, root, ['status', '--porcelain']).stdout, '')
 })
 
+test('credential-bearing config labels stay out of persisted state and status stdout', (t) => {
+  const { root } = fixture(t)
+  const material = ['sentinel', '-persisted-config'].join('')
+  runGit(git, root, ['config', `url.https://user:${material}@example.test/.insteadOf`, 'https://example.test/'])
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const paths = runtimePaths(root)
+  assert.equal(fs.readFileSync(paths.state, 'utf8').includes(material), false)
+  const syncCommand = path.resolve('src/commands/sync.mjs')
+  const status = spawnSync(process.execPath, [syncCommand, 'status', '--repo', root], { encoding: 'utf8' })
+  assert.equal(status.status, 1)
+  assert.equal(status.stdout.includes(material), false)
+})
+
 test('commit plan requires an exact confirmation and re-observes before staging', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -166,6 +179,24 @@ test('commit plan requires an exact confirmation and re-observes before staging'
   )
   assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
   assert.equal(head(root), before)
+})
+
+test('core.fileMode false can commit reviewed content without mode drift', (t) => {
+  const { root } = fixture(t)
+  const script = path.join(root, 'script.sh')
+  fs.writeFileSync(script, '#!/bin/sh\nexit 0\n')
+  fs.chmodSync(script, 0o755)
+  runGit(git, root, ['add', 'script.sh'])
+  runGit(git, root, ['commit', '-m', 'add executable'])
+  runGit(git, root, ['push', 'origin', 'main'])
+  runGit(git, root, ['config', 'core.fileMode', 'false'])
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.chmodSync(script, 0o644)
+  fs.appendFileSync(script, '# reviewed change\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['script.sh'], message: 'fix: preserve tracked mode' })
+  const result = executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId })
+  assert.equal(result.ok, true)
+  assert.equal(runGit(git, root, ['ls-tree', 'HEAD', 'script.sh']).stdout.startsWith('100755 '), true)
 })
 
 test('user-confirmed commit stages only reviewed files and can publish through the declared upstream', (t) => {
@@ -341,6 +372,12 @@ test('paused status and failed publish commits use non-zero process exits', (t) 
   const paused = spawnSync(process.execPath, [syncCommand, 'status', '--repo', root], { encoding: 'utf8' })
   assert.equal(paused.status, 1)
   assert.equal(JSON.parse(paused.stdout).state.status, 'paused')
+  const pausedReconcile = spawnSync(process.execPath, [syncCommand, 'reconcile', '--repo', root], { encoding: 'utf8' })
+  assert.equal(pausedReconcile.status, 1)
+  assert.equal(JSON.parse(pausedReconcile.stdout).state.status, 'paused')
+  const pausedRun = spawnSync(process.execPath, [syncCommand, 'run', '--once', '--repo', root], { encoding: 'utf8' })
+  assert.equal(pausedRun.status, 1)
+  assert.equal(JSON.parse(pausedRun.stdout).state.status, 'paused')
   setRepositoryPaused({ repoPath: root, paused: false })
 
   fs.writeFileSync(path.join(root, 'publish.md'), 'reviewed\n')
@@ -642,6 +679,19 @@ test('Sync treats declared private-domain actor uncertainty as blocking in legac
   )
 })
 
+test('Sync never treats repository history as current private-domain actor identity', (t) => {
+  const { root } = fixture(t)
+  writePrivateBoundaryProject(root, { actorEmail: 'atelier@example.invalid' })
+  runGit(git, root, ['config', 'user.email', 'current-operator@example.invalid'])
+  enrollRepository({ repoPath: root, projectConfig: 'atelier.project.json', gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: history is not identity' })
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /boundary validation refused.*could not verify local actor/,
+  )
+})
+
 test('a hook-created parent cannot authorize a commit and the reviewed plan is consumed', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -749,12 +799,38 @@ test('persisted runtime state omits unbounded path evidence and hard-compacts ov
   runtimeStatus({ repoPath: root })
   const paths = runtimePaths(root)
   const persisted = JSON.parse(fs.readFileSync(paths.state, 'utf8'))
+  assert.equal(Object.hasOwn(persisted.observation, 'schema'), false)
+  assert.equal(persisted.observation.sourceSchema, 'atelier-repository-observation@v1')
   assert.equal(Object.hasOwn(persisted.observation.status, 'entries'), false)
   assert.equal(Object.hasOwn(persisted.observation.status, 'fingerprints'), false)
   writeRuntimeState(paths, { status: 'healthy', code: 'oversized', message: 'x'.repeat(600_000), details: {} })
   const compacted = JSON.parse(fs.readFileSync(paths.state, 'utf8'))
   assert.equal(compacted.code, 'runtime-state-resident-ceiling')
   assert.equal(fs.statSync(paths.state).size < 512 * 1024, true)
+})
+
+test('reconciliation converts transient observation failures into attention state', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const index = path.join(root, '.git', 'index')
+  const indexBytes = fs.readFileSync(index)
+  let clockCalls = 0
+  const clock = () => {
+    clockCalls += 1
+    if (clockCalls === 2) {
+      fs.unlinkSync(index)
+      fs.mkdirSync(index)
+    }
+    return new Date().toISOString()
+  }
+  try {
+    const result = reconcileRepository({ repoPath: root, fetchAttempts: 1, clock })
+    assert.equal(result.ok, false)
+    assert.equal(result.state.code, 'observation-failed')
+  } finally {
+    fs.rmdirSync(index)
+    fs.writeFileSync(index, indexBytes)
+  }
 })
 
 test('resident operation trace checkpoints before crossing its byte ceiling', (t) => {

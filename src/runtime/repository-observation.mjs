@@ -47,8 +47,16 @@ function boolConfig(config, key) {
   return /^(?:true|yes|on|1)$/i.test(item?.value || '')
 }
 
+function safeConfigKey(key) {
+  const segments = String(key || '').split('.')
+  if (segments.length < 3) return String(key || '').toLowerCase()
+  const section = segments.shift().toLowerCase()
+  const variable = segments.pop().toLowerCase()
+  return `${section}.[subsection].${variable}`
+}
+
 function configValues(config, pattern, { includeValue = false } = {}) {
-  return config.filter((entry) => pattern.test(entry.key)).map((entry) => includeValue ? { key: entry.key, value: entry.value } : { key: entry.key })
+  return config.filter((entry) => pattern.test(entry.key)).map((entry) => includeValue ? { key: safeConfigKey(entry.key), value: entry.value } : { key: safeConfigKey(entry.key) })
 }
 
 export function classifyFilesystemRoot(candidate, { platform = process.platform } = {}) {
@@ -160,7 +168,24 @@ function remoteState(gitExecutable, root, failures) {
 }
 
 function submoduleState(gitExecutable, root) {
-  if (!fs.existsSync(path.join(root, '.gitmodules'))) return { declared: false, entries: [], complete: true }
+  if (!fs.existsSync(path.join(root, '.gitmodules'))) {
+    const staged = runGit(gitExecutable, root, ['ls-files', '--stage', '-z'], { allowFailure: true })
+    const gitlinks = staged.ok
+      ? staged.stdout.split('\0').filter(Boolean).flatMap((record) => {
+        const match = record.match(/^160000 [0-9a-f]+ \d+\t(.+)$/u)
+        return match ? [{ marker: '?', value: match[1] }] : []
+      })
+      : []
+    if (gitlinks.length) {
+      return {
+        declared: true,
+        entries: gitlinks,
+        complete: false,
+        error: 'gitlink entries exist without .gitmodules',
+      }
+    }
+    return { declared: false, entries: [], complete: staged.ok, error: staged.ok ? null : 'gitlink inventory failed' }
+  }
   const result = runGit(gitExecutable, root, ['submodule', 'status', '--recursive'], { allowFailure: true })
   const entries = result.stdout.split(/\r?\n/).filter(Boolean).map((line) => ({
     marker: line[0],
@@ -242,6 +267,8 @@ function repositoryFeatures(gitExecutable, root, config, failures) {
     filters,
     customFilters,
     hooksPathConfigured: config.some((entry) => entry.key.toLowerCase() === 'core.hookspath'),
+    fileModeTrusted: boolConfig(config, 'core.filemode'),
+    symlinksTrusted: !config.some((entry) => entry.key.toLowerCase() === 'core.symlinks' && /^(?:false|no|off|0)$/i.test(entry.value || '')),
     signing: {
       required: boolConfig(config, 'commit.gpgsign'),
       keyConfigured: config.some((entry) => entry.key.toLowerCase() === 'user.signingkey'),
@@ -251,9 +278,12 @@ function repositoryFeatures(gitExecutable, root, config, failures) {
   }
 }
 
-function gitMode(stat) {
+function gitMode(stat, index, { fileModeTrusted, symlinksTrusted }) {
   if (stat.isSymbolicLink()) return '120000'
   if (!stat.isFile()) return null
+  const indexMode = index?.length === 1 && index[0].stage === 0 ? index[0].mode : null
+  if (!symlinksTrusted && indexMode === '120000') return '120000'
+  if (!fileModeTrusted && /^100(?:644|755)$/.test(indexMode || '')) return indexMode
   return (stat.mode & 0o111) === 0 ? '100644' : '100755'
 }
 
@@ -277,7 +307,7 @@ function indexEntry(gitExecutable, root, itemPath, failures) {
   return parsed
 }
 
-function worktreeEntry(gitExecutable, root, itemPath, failures) {
+function worktreeEntry(gitExecutable, root, itemPath, index, features, failures) {
   const absolute = path.join(root, itemPath)
   let stat
   try {
@@ -287,7 +317,7 @@ function worktreeEntry(gitExecutable, root, itemPath, failures) {
     failures.push(blocker('observation-evidence-unavailable', 'required worktree evidence is unavailable', { path: itemPath }))
     return null
   }
-  const mode = gitMode(stat)
+  const mode = gitMode(stat, index, features)
   if (!mode) {
     failures.push(blocker('observation-evidence-invalid', 'changed worktree path is not a regular file or symlink', { path: itemPath }))
     return null
@@ -312,10 +342,10 @@ function worktreeEntry(gitExecutable, root, itemPath, failures) {
   return { mode, blob, indexBlob }
 }
 
-function statusFingerprints(gitExecutable, root, entries, failures) {
+function statusFingerprints(gitExecutable, root, entries, features, failures) {
   return entries.map((entry) => {
-    const worktree = worktreeEntry(gitExecutable, root, entry.path, failures)
     const index = indexEntry(gitExecutable, root, entry.path, failures)
+    const worktree = worktreeEntry(gitExecutable, root, entry.path, index, features, failures)
     const originalIndex = entry.originalPath ? indexEntry(gitExecutable, root, entry.originalPath, failures) : null
     return {
       code: entry.code,
@@ -341,6 +371,7 @@ function completenessFor({ filesystem, engine, bare, remotes, features, submodul
   if (features.sparseCheckout) blockers.push(blocker('sparse-checkout-unsupported', 'sparse workspaces are not complete observations'))
   if (features.partialClone.length) blockers.push(blocker('partial-clone-unsupported', 'partial clones may omit required Git objects', { config: features.partialClone }))
   if (features.urlRewrites.length) blockers.push(blocker('url-rewrite-unclassified', 'Git URL rewrite rules make the execution destination ambiguous and must be removed before synchronization', { config: features.urlRewrites.map((entry) => entry.key) }))
+  if (features.hooksPathConfigured) blockers.push(blocker('custom-hooks-path-unclassified', 'core.hooksPath changes executable Git behavior and must be removed or classified before synchronization'))
   if (!submodules.complete) blockers.push(blocker('submodules-incomplete', 'all declared submodules must be initialized and clean', { entries: submodules.entries }))
   if (!lfs.complete) blockers.push(blocker('lfs-incomplete', lfs.error || 'Git LFS content is not complete'))
   if (features.customFilters.length) blockers.push(blocker('custom-filter-unclassified', 'custom Git filters must be classified before synchronization', { filters: features.customFilters.map((entry) => entry.key) }))
@@ -393,7 +424,7 @@ export function observeRepository({ repoRoot, gitExecutable, observedAt = new Da
   const conflicts = allEntries.filter((entry) => entry.code.includes('U') || ['AA', 'DD'].includes(entry.code))
   const staged = allEntries.filter((entry) => entry.code[0] && entry.code[0] !== '?' && entry.code[0] !== ' ')
   const unstaged = allEntries.filter((entry) => entry.code[1] && entry.code[1] !== ' ')
-  const fingerprints = entryCeilingExceeded ? [] : statusFingerprints(gitExecutable, root, entries, acquisitionFailures)
+  const fingerprints = entryCeilingExceeded ? [] : statusFingerprints(gitExecutable, root, entries, features, acquisitionFailures)
   const completeness = completenessFor({ filesystem: resolved.filesystem, engine, bare, remotes, features, submodules, lfs, acquisitionFailures })
   const statusDigest = sha256(JSON.stringify({ head: branch.head, branch: branch.branch, rawStatusDigest: sha256(statusResult.stdout), fingerprints }))
   return {

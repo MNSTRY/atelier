@@ -50,6 +50,17 @@ test('full observation proves a normal local clone complete', (t) => {
   assert.deepEqual(validateRepositoryObservation(report), [])
 })
 
+test('gitlinks without .gitmodules fail repository completeness closed', (t) => {
+  const { root } = repository(t)
+  const gitlink = runGit(git, root, ['rev-parse', 'HEAD']).stdout.trim()
+  runGit(git, root, ['update-index', '--add', '--cacheinfo', `160000,${gitlink},vendor/missing`])
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.submodules.declared, true)
+  assert.equal(report.submodules.complete, false)
+  assert.equal(report.submodules.error, 'gitlink entries exist without .gitmodules')
+  assert.equal(report.blockers.some((item) => item.code === 'submodules-incomplete'), true)
+})
+
 test('remote identity binds the credential-free target without creating a secret digest oracle', (t) => {
   const { root } = repository(t)
   const firstMaterial = ['sentinel', '-remote-one'].join('')
@@ -150,8 +161,42 @@ test('configuration evidence is label-only and secrets never enter the observati
   const encoded = JSON.stringify(report)
   assert.equal(encoded.includes(material), false)
   assert.deepEqual(report.features.proxy, [{ key: 'http.proxy' }])
-  assert.deepEqual(report.features.customFilters, [{ key: 'filter.private.process' }])
+  assert.equal(report.features.customFilters[0].key, 'filter.[subsection].process')
   assert.equal(report.complete, false)
+})
+
+test('credential-bearing Git config subsections never enter observation evidence', (t) => {
+  const { root } = repository(t)
+  const material = ['sentinel', '-config-subsection'].join('')
+  runGit(git, root, ['config', `url.https://user:${material}@example.test/.insteadOf`, 'https://example.test/'])
+  runGit(git, root, ['config', `http.https://user:${material}@proxy.example.test/.proxy`, 'https://proxy.example.test/'])
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, false)
+  assert.equal(JSON.stringify(report).includes(material), false)
+  assert.equal(report.features.urlRewrites[0].key, 'url.[subsection].insteadof')
+  assert.equal(report.features.proxy[0].key, 'http.[subsection].proxy')
+})
+
+test('custom hooksPath is a repository completeness blocker', (t) => {
+  const { root } = repository(t)
+  runGit(git, root, ['config', 'core.hooksPath', '.githooks'])
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, false)
+  assert.equal(report.blockers.some((item) => item.code === 'custom-hooks-path-unclassified'), true)
+})
+
+test('core.fileMode false preserves the tracked index mode in reviewed fingerprints', (t) => {
+  const { root } = repository(t)
+  const script = path.join(root, 'script.sh')
+  fs.writeFileSync(script, '#!/bin/sh\nexit 0\n')
+  fs.chmodSync(script, 0o755)
+  runGit(git, root, ['add', 'script.sh'])
+  runGit(git, root, ['commit', '-m', 'add executable'])
+  runGit(git, root, ['config', 'core.fileMode', 'false'])
+  fs.chmodSync(script, 0o644)
+  fs.appendFileSync(script, '# changed\n')
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.status.fingerprints.find((item) => item.path === 'script.sh').worktree.mode, '100755')
 })
 
 test('an over-budget required Git evidence read makes the observation incomplete', (t) => {

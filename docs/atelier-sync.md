@@ -43,7 +43,8 @@ runtime object.
   declares private-domain ownership, actor verification is blocking even in
   legacy-warning mode. The Sync path disables the boundary command's optional
   network `gh api user` fallback and fails closed when local actor evidence is
-  insufficient. Policies without a declared private-domain owner do not invent
+  insufficient. Commit history is provenance, not current-user identity, and
+  is not accepted as actor evidence on this path. Policies without a declared private-domain owner do not invent
   an actor requirement. Ordinary Git hooks still run; the resulting commit tree,
   single parent, and message must equal the reviewed authority or the local
   commit is rolled back and publication is refused.
@@ -71,8 +72,10 @@ It cannot report `complete: true` when any of these are unresolved:
 - required Git LFS content without a working LFS integration, including LFS
   semantics declared by tracked or untracked worktree attributes, repository
   info attributes, and default global or system attributes;
-- an unclassified custom clean, smudge, or process filter; or
-- a remote URL whose authentication shape cannot be classified.
+- an unclassified custom clean, smudge, or process filter;
+- a configured `core.hooksPath` whose executable behavior is outside the
+  reviewed repository contract;
+- a remote URL whose authentication shape cannot be classified;
 - multiple push destinations or any configured Git URL rewrite rule;
 - any required Git evidence read that fails, times out, exceeds its budget, or
   cannot be parsed.

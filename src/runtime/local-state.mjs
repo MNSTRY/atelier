@@ -55,7 +55,9 @@ export function atomicWriteJson(file, value) {
 
 export function readJsonIfPresent(file) {
   const secured = secureRuntimeLeaf(file)
-  if (!lstatIfPresent(secured)) return null
+  const stat = lstatIfPresent(secured)
+  if (!stat) return null
+  if (stat.size > ATELIER_RUNTIME_PLAN_MAX_BYTES) throw new Error('runtime JSON exceeds the resident byte ceiling')
   return JSON.parse(readRegularTextNoFollow(secured))
 }
 
@@ -411,7 +413,7 @@ export function writeRuntimeState(paths, state) {
       incidentId: state.incidentId ?? null,
       updatedAt: state.updatedAt ?? new Date().toISOString(),
       observation: state.observation ? {
-        schema: state.observation.schema,
+        sourceSchema: state.observation.sourceSchema ?? state.observation.schema,
         observedAt: state.observation.observedAt,
         complete: false,
         root: state.observation.root,

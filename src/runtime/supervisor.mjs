@@ -112,9 +112,11 @@ function pausedState(control, observation = null) {
 function persistState(paths, state, clock = nowIso) {
   let observation = state.observation
   if (observation?.status) {
+    const { schema: sourceSchema, ...observationFields } = observation
     const { entries = [], fingerprints = [], ...status } = observation.status
     observation = {
-      ...observation,
+      ...observationFields,
+      sourceSchema,
       status: { ...status, entryCount: entries.length, fingerprintCount: fingerprints.length },
     }
   }
@@ -279,7 +281,7 @@ export function reconcileRepository({ repoPath = process.cwd(), fetchAttempts = 
     if (control.paused) {
       const state = pausedState(control)
       persistState(paths, state, clock)
-      return { ok: true, state }
+      return { ok: false, state }
     }
     const before = fullStateOrAttention(enrollment, clock)
     if (before.attention) {
@@ -321,6 +323,11 @@ export function reconcileRepository({ repoPath = process.cwd(), fetchAttempts = 
     persistState(paths, state, clock)
     trace(paths, { operation: 'reconcile', outcome: state.status, details: { action, code: state.code, fetchAttempts: fetched.attempts } }, clock)
     return { ok: state.status !== 'attention', state }
+  } catch (error) {
+    const state = attentionState('observation-failed', 'repository observation failed during reconciliation', null, { error: redactGitDiagnostic(error.message) })
+    persistState(paths, state, clock)
+    trace(paths, { operation: 'reconcile', outcome: 'attention', details: { code: state.code } }, clock)
+    return { ok: false, state }
   } finally {
     lock.release()
   }
@@ -462,6 +469,9 @@ function pruneAndBoundPlans(paths, currentAt) {
   const now = Date.parse(currentAt)
   if (!Number.isFinite(now)) throw new Error('commit plan timestamp is invalid')
   let inventory = runtimePlanInventory(paths.plans)
+  if (inventory.files.length >= ATELIER_RUNTIME_PLAN_MAX_FILES || inventory.bytes >= ATELIER_RUNTIME_PLAN_MAX_BYTES) {
+    throw new Error('runtime commit plan storage reached its resident ceiling; remove or consume existing plans')
+  }
   for (const item of inventory.files) {
     let createdAt = item.mtimeMs
     try {
@@ -569,6 +579,7 @@ function projectBoundaryCheck(enrollment) {
     stagedOnly: true,
     gitExecutable: enrollment.git.executable,
     allowNetworkActorResolution: false,
+    allowHistoryActorResolution: false,
     forceActorErrors: true,
   })
   return { ok: report.ok, configured: true, scannedRepoRoots, report }

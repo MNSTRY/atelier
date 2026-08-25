@@ -207,11 +207,11 @@ export function validateBoundaryPolicy(policy, project = null) {
   return errors
 }
 
-export function resolveCurrentActor({ policy, project, actor = null, env = process.env, gitExecutable = 'git', allowNetworkActorResolution = true } = {}) {
+export function resolveCurrentActor({ policy, project, actor = null, env = process.env, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true } = {}) {
   const actors = policy?.actors ?? {}
   const explicit = actor || env.MNSTRY_ATELIER_ACTOR || env.GITHUB_ACTOR
   if (explicit && actors[explicit]) return { actorId: explicit, source: 'explicit' }
-  const gitEmails = gitEmailsForProject(project, { gitExecutable, env })
+  const gitEmails = gitEmailsForProject(project, { gitExecutable, env, allowHistoryActorResolution })
   for (const [actorId, info] of Object.entries(actors)) {
     const actorEmails = new Set(asArray(info.gitEmails).map((email) => email.toLowerCase()))
     if (gitEmails.some((email) => actorEmails.has(email.toLowerCase()))) return { actorId, source: 'git-email', gitEmails }
@@ -225,15 +225,14 @@ export function resolveCurrentActor({ policy, project, actor = null, env = proce
   return { actorId: null, source: 'unverified', gitEmails, githubLogin: login || null }
 }
 
-function gitEmailsForProject(project, { gitExecutable = 'git', env = process.env } = {}) {
+function gitEmailsForProject(project, { gitExecutable = 'git', env = process.env, allowHistoryActorResolution = true } = {}) {
   const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...managedRepos(project).map((repo) => repo.path)])
   const emails = []
   for (const root of roots) {
     if (!root || !fs.existsSync(root)) continue
-    for (const args of [
-      ['config', 'user.email'],
-      ['log', '-1', '--format=%ae'],
-    ]) {
+    const probes = [['config', 'user.email']]
+    if (allowHistoryActorResolution) probes.push(['log', '-1', '--format=%ae'])
+    for (const args of probes) {
       const result = spawnSync(gitExecutable, ['-C', root, ...args], { encoding: 'utf8', env: sanitizedGitEnvironment(env) })
       if (result.status === 0 && result.stdout.trim()) emails.push(result.stdout.trim())
     }
@@ -281,9 +280,9 @@ function nodePlacementFindings({ node, policy }) {
   return findings
 }
 
-function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, forceActorErrors }) {
+function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }) {
   const findings = []
-  const current = resolveCurrentActor({ policy, project, actor, gitExecutable, allowNetworkActorResolution })
+  const current = resolveCurrentActor({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution })
   const severity = forceActorErrors ? 'error' : severityFor(policy)
   for (const [repoName, repo] of Object.entries(policy.repos ?? {})) {
     if (repo.kind !== 'private_domain') continue
@@ -604,7 +603,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, forceActorErrors = false } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true, forceActorErrors = false } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
@@ -614,7 +613,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
     findings.push(...promotionFindings({ policy, project, graph }))
   }
-  findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, forceActorErrors }))
+  findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }))
   if (staged) {
     const stagedPaths = stagedPathsForProject(project, { gitExecutable })
     findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
