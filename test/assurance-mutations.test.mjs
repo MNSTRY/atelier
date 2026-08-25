@@ -55,7 +55,10 @@ test('assurance mutation: malformed graph classification is refused by the graph
   assert.match(errors.join('\n'), /kg\.id is required/)
   const sample = makeSampleProject(t)
   const readme = path.join(sample.dir, 'content', 'README.md')
-  fs.writeFileSync(readme, fs.readFileSync(readme, 'utf8').replace('  id: "sample-workspace:readme"\n', ''))
+  const source = fs.readFileSync(readme, 'utf8')
+  const mutated = source.replace(/  id: "sample-workspace:readme"\r?\n/, '')
+  assert.notEqual(mutated, source, 'fixture mutation must remove the graph id on every line-ending style')
+  fs.writeFileSync(readme, mutated)
   const result = runAtelier(['graph', `--project=${sample.config}`], sample.dir)
   assert.notEqual(result.status, 0)
   assert.match(`${result.stdout}\n${result.stderr}`, /kg\.id is required/)
@@ -117,7 +120,7 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
       encoding: 'utf8',
     })
     assert.equal(result.status, 1)
-    assert.match(result.stderr, /packed egress finding src\/test\/packed\.test\.mjs/)
+    assert.match(result.stderr, /packed egress finding src[\\/]test[\\/]packed\.test\.mjs/)
     assert.match(result.stderr, /test-fixture egress suppression marker/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

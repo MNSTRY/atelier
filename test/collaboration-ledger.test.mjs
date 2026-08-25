@@ -278,14 +278,14 @@ test('redirected collaboration directories are refused before outside creation o
     /redirected or non-directory component/,
   )
   assert.equal(fs.existsSync(path.join(outside, 'nested')), false)
-  assert.equal(fs.statSync(outside).mode & 0o777, 0o755)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(outside).mode & 0o777, 0o755)
 
   fs.symlinkSync(outside, path.join(root, '.atelier-proposals'), 'dir')
   assert.throws(
     () => createProposalStore({ workspaceRoot: root }),
     /redirected or non-directory component/,
   )
-  assert.equal(fs.statSync(outside).mode & 0o777, 0o755)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(outside).mode & 0o777, 0o755)
 })
 
 test('compatibility snapshot failures stay diagnostic after authoritative events commit', (t) => {

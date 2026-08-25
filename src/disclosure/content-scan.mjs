@@ -89,19 +89,21 @@ export function isPathTracked(root, candidatePath) {
   const resolvedRoot = path.resolve(root)
   const relative = path.relative(resolvedRoot, path.resolve(candidatePath))
   if (relative.startsWith('..') || path.isAbsolute(relative)) return false
-  const result = execFileSync('git', ['-C', resolvedRoot, 'ls-files', '-z', '--', relative], {
+  const gitRelative = relative.split(path.sep).join('/')
+  const result = execFileSync('git', ['-C', resolvedRoot, 'ls-files', '-z', '--', gitRelative], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  return result.split('\0').filter(Boolean).includes(relative)
+  return result.split('\0').filter(Boolean).includes(gitRelative)
 }
 
 export function isPathIgnored(root, candidatePath) {
   const resolvedRoot = path.resolve(root)
   const relative = path.relative(resolvedRoot, path.resolve(candidatePath))
   if (relative.startsWith('..') || path.isAbsolute(relative)) return false
+  const gitRelative = relative.split(path.sep).join('/')
   try {
-    execFileSync('git', ['-C', resolvedRoot, 'check-ignore', '--quiet', '--', relative], {
+    execFileSync('git', ['-C', resolvedRoot, 'check-ignore', '--quiet', '--', gitRelative], {
       stdio: ['ignore', 'ignore', 'ignore'],
     })
     return true
