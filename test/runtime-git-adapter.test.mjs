@@ -92,7 +92,8 @@ test('Git adapter strips inherited repository and config redirection', (t) => {
     GIT_CONFIG_KEY_0: 'core.bare',
     GIT_CONFIG_VALUE_0: 'true',
   }
-  assert.equal(runGit(git, root, ['rev-parse', '--show-toplevel'], { env: redirected }).stdout.trim(), fs.realpathSync(root))
+  const expectedRoot = runGit(git, root, ['rev-parse', '--show-toplevel']).stdout.trim()
+  assert.equal(runGit(git, root, ['rev-parse', '--show-toplevel'], { env: redirected }).stdout.trim(), expectedRoot)
   assert.equal(runGit(git, root, ['rev-parse', '--is-bare-repository'], { env: redirected }).stdout.trim(), 'false')
 })
 

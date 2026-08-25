@@ -187,6 +187,7 @@ test('core.fileMode false can commit reviewed content without mode drift', (t) =
   fs.writeFileSync(script, '#!/bin/sh\nexit 0\n')
   fs.chmodSync(script, 0o755)
   runGit(git, root, ['add', 'script.sh'])
+  runGit(git, root, ['update-index', '--chmod=+x', 'script.sh'])
   runGit(git, root, ['commit', '-m', 'add executable'])
   runGit(git, root, ['push', 'origin', 'main'])
   runGit(git, root, ['config', 'core.fileMode', 'false'])

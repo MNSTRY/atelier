@@ -149,7 +149,7 @@ test('observation binds the resolved push destination and refuses ambiguous or r
   assert.equal(report.complete, false)
   assert.equal(report.blockers.some((item) => item.code === 'remote-push-destination-ambiguous'), true)
 
-  runGit(git, root, ['remote', 'set-url', '--delete', '--push', 'origin', redirected])
+  runGit(git, root, ['config', '--unset-all', 'remote.origin.pushurl'])
   runGit(git, root, ['config', `url.${redirected}.pushInsteadOf`, remote])
   report = observeRepository({ repoRoot: root, gitExecutable: git })
   assert.equal(report.complete, false)
@@ -218,6 +218,7 @@ test('core.fileMode false preserves the tracked index mode in reviewed fingerpri
   fs.writeFileSync(script, '#!/bin/sh\nexit 0\n')
   fs.chmodSync(script, 0o755)
   runGit(git, root, ['add', 'script.sh'])
+  runGit(git, root, ['update-index', '--chmod=+x', 'script.sh'])
   runGit(git, root, ['commit', '-m', 'add executable'])
   runGit(git, root, ['config', 'core.fileMode', 'false'])
   fs.chmodSync(script, 0o644)
