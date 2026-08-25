@@ -87,14 +87,44 @@ function decodeText(buffer) {
 
 export function isPathTracked(root, candidatePath) {
   const resolvedRoot = path.resolve(root)
-  const relative = path.relative(resolvedRoot, path.resolve(candidatePath))
+  const resolvedCandidate = path.resolve(candidatePath)
+  const relative = path.relative(resolvedRoot, resolvedCandidate)
   if (relative.startsWith('..') || path.isAbsolute(relative)) return false
   const gitRelative = relative.split(path.sep).join('/')
   const result = execFileSync('git', ['-C', resolvedRoot, 'ls-files', '-z', '--', gitRelative], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  return result.split('\0').filter(Boolean).includes(gitRelative)
+  if (result.split('\0').filter(Boolean).includes(gitRelative)) return true
+
+  // Git pathspec matching is case-sensitive even when the checkout filesystem
+  // is not. Compare filesystem identities so alternate-cased callers cannot
+  // make a tracked file appear local and untracked.
+  return execFileSync('git', [
+    '-C',
+    resolvedRoot,
+    'ls-files',
+    '-z',
+    '--',
+    `:(icase,literal)${gitRelative}`,
+  ], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+    .split('\0')
+    .filter(Boolean)
+    .some((trackedPath) => sameExistingFile(resolvedCandidate, path.join(resolvedRoot, trackedPath)))
+}
+
+function sameExistingFile(left, right) {
+  try {
+    if (fs.realpathSync.native(left) === fs.realpathSync.native(right)) return true
+    const leftStat = fs.statSync(left)
+    const rightStat = fs.statSync(right)
+    return leftStat.ino !== 0 && leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino
+  } catch {
+    return false
+  }
 }
 
 export function isPathIgnored(root, candidatePath) {

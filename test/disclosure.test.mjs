@@ -92,6 +92,24 @@ test('a tracked repository-local denylist is refused even when gitignore covers 
   assert.match(result.output, /refusing a Git-tracked private denylist/)
 })
 
+test('an alternate-cased tracked denylist cannot masquerade as local on a case-insensitive filesystem', (t) => {
+  const repo = makeRepo(t)
+  fs.mkdirSync(path.join(repo, '.Atelier-Local'), { recursive: true })
+  const trackedPath = path.join(repo, '.Atelier-Local', 'disclosure-denylist.json')
+  fs.writeFileSync(trackedPath, denylist)
+  git(repo, ['add', '--force', '.Atelier-Local/disclosure-denylist.json'])
+
+  const defaultPath = path.join(repo, '.atelier-local', 'disclosure-denylist.json')
+  if (!fs.existsSync(defaultPath)) {
+    t.skip('filesystem is case-sensitive')
+    return
+  }
+
+  const result = run(repo, ['--staged'])
+  assert.equal(result.status, 2, result.output)
+  assert.match(result.output, /refusing a Git-tracked private denylist/)
+})
+
 test('staged mode scans the index blob rather than a later worktree edit', (t) => {
   const repo = makeRepo(t)
   fs.writeFileSync(path.join(repo, 'candidate.md'), `${sentinel} staged\n`)
