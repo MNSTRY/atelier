@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.5
 
 - Harden boundary enforcement so path globs use segment-aware matching, an
   explicitly empty or malformed content-rule policy is invalid, staged and
@@ -32,7 +32,8 @@
   that installs without publisher overrides, validates its dependency tree,
   and imports every declared package export. A candidate is packed once, bound
   by SHA-256, and passed unchanged through tarball audit, consumer, and branded
-  distribution gates.
+  distribution gates. The trusted-publishing workflow publishes that same
+  retained, audited tarball rather than repacking the source directory.
 - Pin every JavaScript subpath and named export from `v0.2.0-alpha.4` in a
   registry-verified compatibility baseline with immutable tag-commit and
   public-artifact provenance. Release tooling refuses removals, provenance

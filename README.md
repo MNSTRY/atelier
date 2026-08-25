@@ -48,7 +48,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -341,7 +341,7 @@ Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
 remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
 ```
 
 Then choose the path that matches what you are building:
@@ -358,7 +358,7 @@ Then choose the path that matches what you are building:
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.4`.
+Current package: `@mnstry/atelier@0.2.0-alpha.5`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.
