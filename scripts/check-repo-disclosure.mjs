@@ -232,26 +232,35 @@ function commitSelector() {
 }
 
 function scanCommits(selector) {
-  const format = '%H%x01%P%x01%an%x01%ae%x01%cn%x01%ce%x01%B%x02'
+  // NUL is forbidden in Git commit payloads, so it is the only safe framing
+  // delimiter for attacker-controlled names and messages. SOH/STX and other
+  // control bytes are legal commit-message content and must remain scannable.
+  const format = '%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%B'
   let out
   try {
-    out = git(['log', `--format=${format}`, ...selector])
+    out = git(['log', '-z', `--format=${format}`, ...selector])
   } catch {
     usageError(
       commitsMode === 'range' ? `unable to resolve commit range ${base}..HEAD` : 'unable to read commit history',
     )
   }
-  let records = out
-    .split('\x02')
-    .map((record) => record.replace(/^\n/, ''))
-    .filter((record) => record.length > 0)
+  const fields = out.split('\0')
+  if (fields.at(-1) === '') fields.pop()
+  if (fields.length % 7 !== 0) report('commit-metadata-framing-invalid', 'history')
+  let records = []
+  for (let index = 0; index + 6 < fields.length; index += 7) {
+    records.push(fields.slice(index, index + 7))
+  }
   if (records.length > MAX_HISTORY_COMMITS) {
     report('commit-count-limit', 'history')
     records = records.slice(0, MAX_HISTORY_COMMITS)
   }
   for (const record of records) {
-    const [sha, parents = '', authorName, authorEmail, committerName, committerEmail, message = ''] = record.split('\x01')
-    if (!sha) continue
+    const [sha, parents = '', authorName, authorEmail, committerName, committerEmail, message = ''] = record
+    if (!/^[0-9a-f]{40,64}$/.test(sha)) {
+      report('commit-metadata-framing-invalid', 'history')
+      continue
+    }
     // Merge commits (>1 parent) skip identity checks: on pull_request events
     // GitHub's synthetic merge ref commit is authored by
     // 'GitHub <noreply@github.com>', which would fail the author gate on
@@ -279,7 +288,10 @@ function scanCommits(selector) {
 function scanCommitTrees(selector) {
   let inventory
   try {
-    inventory = git(['rev-list', '--objects', '-z', ...selector]).split('\0').filter(Boolean)
+    inventory = git([
+      'log', '--raw', '--root', '-m', '--no-renames', '--no-abbrev', '-z',
+      '--format=tformat:', ...selector,
+    ]).split('\0').filter(Boolean)
   } catch {
     report('commit-tree-read-incomplete', 'history')
     return 0
@@ -290,20 +302,28 @@ function scanCommitTrees(selector) {
   }
 
   const objectPaths = new Map()
-  let lastObjectId = null
-  for (const entry of inventory) {
-    if (entry.startsWith('path=')) {
-      if (!lastObjectId) report('commit-object-path-invalid', 'history')
-      else objectPaths.set(lastObjectId, entry.slice('path='.length))
+  for (let index = 0; index < inventory.length; index += 2) {
+    const metadata = inventory[index]
+    const relPath = inventory[index + 1]
+    if (!metadata?.startsWith(':') || relPath === undefined) {
+      report('commit-object-inventory-invalid', 'history')
       continue
     }
-    if (!/^[0-9a-f]{40,64}$/.test(entry)) {
-      report('commit-object-id-invalid', 'history')
-      lastObjectId = null
+    const [oldMode, newMode, oldObjectId, newObjectId, status] = metadata.slice(1).split(' ')
+    if (
+      !/^[0-7]{6}$/.test(oldMode) || !/^[0-7]{6}$/.test(newMode) ||
+      !/^[0-9a-f]{40,64}$/.test(oldObjectId) || !/^[0-9a-f]{40,64}$/.test(newObjectId) ||
+      !/^[ACDMRTUXB]$/.test(status)
+    ) {
+      report('commit-object-inventory-invalid', 'history')
       continue
     }
-    lastObjectId = entry
-    objectPaths.set(entry, '')
+    // A deletion introduces no new reachable object. Gitlinks name commit
+    // objects in another repository, never content blobs in this repository.
+    if (/^0+$/.test(newObjectId) || newMode === '160000') continue
+    const paths = objectPaths.get(newObjectId) ?? new Set()
+    paths.add(relPath)
+    objectPaths.set(newObjectId, paths)
   }
   const objectIds = [...objectPaths.keys()]
   let checks
@@ -325,15 +345,22 @@ function scanCommitTrees(selector) {
 
   const blobs = []
   let totalBytes = 0
-  for (const check of checks) {
-    const [objectId, type, sizeText] = check.split(' ')
-    if (type !== 'blob') continue
+  if (checks.length !== objectIds.length) {
+    report('commit-object-inventory-incomplete', 'history')
+  }
+  for (let index = 0; index < objectIds.length; index += 1) {
+    const expectedObjectId = objectIds[index]
+    const [objectId, type, sizeText] = (checks[index] ?? '').split(' ')
+    if (objectId !== expectedObjectId || type !== 'blob' || sizeText === undefined) {
+      report('commit-object-inventory-incomplete', `historical object ${expectedObjectId}`)
+      continue
+    }
     if (blobs.length >= MAX_HISTORY_BLOBS) {
       report('commit-blob-count-limit', 'history')
       break
     }
     const size = Number(sizeText)
-    const relPath = objectPaths.get(objectId) || '<unknown>'
+    const relPath = [...objectPaths.get(objectId)][0]
     if (!Number.isSafeInteger(size) || size < 0 || size > MAX_HISTORY_BLOB_BYTES) {
       report('commit-blob-size-limit', `historical blob ${objectId}:${relPath}`)
       continue
@@ -342,7 +369,7 @@ function scanCommitTrees(selector) {
       report('commit-history-byte-limit', 'history')
       break
     }
-    blobs.push({ objectId, relPath, size })
+    blobs.push({ objectId, paths: [...objectPaths.get(objectId)], size })
     totalBytes += size
   }
 
@@ -379,7 +406,8 @@ function scanCommitTrees(selector) {
       break
     }
     const blob = batch.subarray(contentStart, contentEnd)
-    const displayPath = `historical blob ${objectId}:${expected.relPath}`
+    const primaryPath = expected.paths[0]
+    const displayPath = `historical blob ${objectId}:${primaryPath}`
     if (blob.includes(0)) {
       report('commit-binary-blob-uninspectable', displayPath)
     } else {
@@ -391,8 +419,11 @@ function scanCommitTrees(selector) {
       }
       if (text !== undefined) {
         const lines = text.split('\n')
-        for (let index = 0; index < lines.length; index += 1) {
-          scanLine(lines[index], expected.relPath, index + 1, displayPath)
+        for (const relPath of expected.paths) {
+          const pathDisplay = `historical blob ${objectId}:${relPath}`
+          for (let index = 0; index < lines.length; index += 1) {
+            scanLine(lines[index], relPath, index + 1, pathDisplay)
+          }
         }
         scannedBlobs += 1
       }

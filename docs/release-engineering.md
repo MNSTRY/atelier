@@ -189,13 +189,14 @@ the only safe block.
 
 To clear a fork pull request, a maintainer verifies the head SHA and dispatches
 the `fork-sweep` workflow with the pull-request number and that SHA. The
-workflow runs the trusted scanner from `main` against the fork checked out as
-data — it never installs or executes anything from the untrusted tree. It pins
-the PR base and head from GitHub, scans the complete bounded base-to-head object
-range while waiving only repository-specific commit identity, re-verifies that
-the head SHA has not moved, and posts a `secret-sweep` check run on the SHA. The
-newest check run with that name supersedes the earlier failure for branch
-protection.
+workflow pins the trusted scanner checkout to the protected default branch and
+runs it against the fork checked out as data — it never installs or executes
+anything from the untrusted tree. It requires an open PR whose base repository
+and branch are the protected default, pins the base and head SHAs from GitHub,
+scans the complete bounded base-to-head object range while waiving only
+repository-specific commit identity, re-verifies that the head SHA has not
+moved, and posts a `secret-sweep` check run on the SHA. The newest check run
+with that name supersedes the earlier failure for branch protection.
 
 `release:audit` never runs against untrusted code (`npm pack` executes
 lifecycle scripts); it re-runs on the push build of the merge commit. No

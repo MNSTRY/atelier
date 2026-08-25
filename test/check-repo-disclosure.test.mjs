@@ -190,6 +190,18 @@ test('commit messages in range are scanned against the denylist', (t) => {
   assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
 })
 
+test('control bytes in a commit message cannot truncate the scanned message', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/second.md', 'still clean\n', `prefix\x01middle\x02${SENTINEL}`)
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} message/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: matched commit message text must never be printed')
+})
+
 test('a clean range with allowed identities passes --commits range', (t) => {
   const dir = makeRepo(t)
   writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
@@ -229,6 +241,39 @@ test('commit range refuses an added-and-deleted binary blob it cannot inspect', 
   assert.match(output, /commit-binary-blob-uninspectable/)
 })
 
+test('commit range preserves every path when one blob is reused at excluded and included paths', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  const shared = '/Users/example/private-file\n'
+  fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'scripts/check-repo-disclosure.mjs'), shared)
+  fs.writeFileSync(path.join(dir, 'docs/copied.md'), shared)
+  git(dir, ['add', 'scripts/check-repo-disclosure.mjs', 'docs/copied.md'])
+  git(dir, ['commit', '--quiet', '-m', 'reuse one blob at two paths'])
+  fs.unlinkSync(path.join(dir, 'scripts/check-repo-disclosure.mjs'))
+  fs.unlinkSync(path.join(dir, 'docs/copied.md'))
+  git(dir, ['add', '-u'])
+  git(dir, ['commit', '--quiet', '-m', 'remove reused blob'])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /absolute user path: historical blob [0-9a-f]{40}:docs\/copied\.md:1/)
+})
+
+test('commit range fails closed when batch-check reports a missing historical object', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/missing.md', 'clean but deliberately unavailable\n')
+  const objectId = git(dir, ['rev-parse', 'HEAD:docs/missing.md'])
+  fs.unlinkSync(path.join(dir, '.git', 'objects', objectId.slice(0, 2), objectId.slice(2)))
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /commit-object-inventory-incomplete/)
+})
+
 test('external contributor ranges waive only identity while retaining content scans', (t) => {
   const dir = makeRepo(t)
   writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
@@ -258,6 +303,12 @@ test('both structural and private CI sweeps inspect pull-request commit ranges',
 
 test('fork sweep pins API base and head before scanning the untrusted contributor range', () => {
   const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'fork-sweep.yml'), 'utf8')
+  assert.match(workflow, /ref: refs\/heads\/\$\{\{ github\.event\.repository\.default_branch \}\}/)
+  assert.match(workflow, /\.state, \.base\.repo\.full_name, \.base\.ref, \.base\.sha, \.head\.sha/)
+  assert.match(workflow, /BASE_REPO/)
+  assert.match(workflow, /BASE_REF/)
+  assert.match(workflow, /TRUSTED_SHA/)
+  assert.match(workflow, /DEFAULT_SHA/)
   assert.match(workflow, /API_HEAD_SHA/)
   assert.match(workflow, /BASE_SHA/)
   assert.match(workflow, /--untrusted --commits range --base "\$BASE_SHA" --external-contributor-range/)

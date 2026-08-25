@@ -12,6 +12,7 @@ export const ATELIER_PROPOSAL_SCHEMA = 'atelier-proposal@v1'
 export const ATELIER_PROPOSALS_SCHEMA = 'atelier-proposals@v1'
 export const PROPOSAL_REVIEW_STATUSES = new Set(['reviewed', 'accepted', 'rejected', 'superseded'])
 export const COPY_ONLY_PROPOSAL_CAPABILITY = 'proposal.copy-only'
+const PROPOSAL_ID_PATTERN = /^proposal-[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 function nowIso() {
   return new Date().toISOString()
@@ -134,8 +135,8 @@ export function createProposalStore({
   })
 
   function proposalPath(id) {
-    const clean = String(id || '').replace(/[^a-z0-9-]/gi, '')
-    if (!clean) throw new Error('proposal id is required')
+    const clean = String(id || '')
+    if (clean.length > 200 || !PROPOSAL_ID_PATTERN.test(clean)) throw new Error('proposal id is invalid')
     const file = path.join(proposalsDir, `${clean}.json`)
     const candidateDir = fs.realpathSync(proposalsDir)
     if (!pathContainedBy(workspaceRootReal, candidateDir)) {
@@ -187,7 +188,9 @@ export function createProposalStore({
       if (!pathContainedBy(fs.realpathSync(proposalsDir), resolved)) {
         throw new Error('proposal snapshot escapes workspace')
       }
-      return { ok: true, status: 200, record: readRegularJson(file), source: 'compatibility-snapshot' }
+      const record = readRegularJson(file)
+      if (record?.proposal?.id !== id) throw new Error('proposal snapshot id does not match its filename')
+      return { ok: true, status: 200, record, source: 'compatibility-snapshot' }
     } catch (error) {
       return { ok: false, status: 422, error: `proposal snapshot cannot be read: ${error.message}`, record: null }
     }
@@ -197,8 +200,16 @@ export function createProposalStore({
   // are both "no such proposal", never a throw. New records materialize from
   // the append-only ledger. Per-proposal JSON remains a compatibility snapshot.
   function readProposal(id) {
+    if (String(id || '').length > 200 || !PROPOSAL_ID_PATTERN.test(String(id || ''))) {
+      return { ok: false, status: 404, error: 'proposal not found', record: null }
+    }
     const materialized = materializedProposal(id)
-    if (materialized.ok) return materialized
+    if (materialized.ok) {
+      if (materialized.record?.proposal?.id !== id) {
+        return { ok: false, status: 422, error: 'proposal ledger identity mismatch', record: null }
+      }
+      return materialized
+    }
     if (materialized.status !== 404) return materialized
     return readCompatibilitySnapshot(id)
   }
@@ -209,6 +220,9 @@ export function createProposalStore({
     if (!ledger.ok) return { ...ledger, proposals: [] }
     const ledgerRecords = new Map()
     for (const event of ledger.events) {
+      if (!PROPOSAL_ID_PATTERN.test(event.aggregateId)) {
+        return { ok: false, status: 422, error: 'proposal ledger contains an invalid identity', proposals: [] }
+      }
       ledgerRecords.set(
         event.aggregateId,
         reduceProposal(ledgerRecords.get(event.aggregateId) ?? null, event),
@@ -222,15 +236,17 @@ export function createProposalStore({
       return { ok: false, status: 422, error: 'proposal snapshot cannot be read: state leaf is not a regular file', proposals: [] }
     }
     const snapshotIds = snapshotEntries.map((entry) => entry.name.slice(0, -'.json'.length))
-    const reads = [...new Set([...ledgerIds, ...snapshotIds])]
-      .sort(stableCompare)
-      .map((id) => {
-        const record = ledgerRecords.get(id)
-        if (record) return { ok: true, status: 200, record, source: 'event-ledger' }
-        return readCompatibilitySnapshot(id)
-      })
+    const readIds = [...new Set([...ledgerIds, ...snapshotIds])].sort(stableCompare)
+    const reads = readIds.map((id) => {
+      const record = ledgerRecords.get(id)
+      if (record) return { ok: true, status: 200, record, source: 'event-ledger' }
+      return readCompatibilitySnapshot(id)
+    })
     const failed = reads.find((result) => !result.ok)
     if (failed) return { ...failed, proposals: [] }
+    if (reads.some((result, index) => result.record?.proposal?.id !== readIds[index])) {
+      return { ok: false, status: 422, error: 'proposal identity does not match its state key', proposals: [] }
+    }
     const proposals = reads
       .map((result) => result.record)
       .sort((left, right) => stableCompare(right.proposal?.updatedAt || '', left.proposal?.updatedAt || ''))

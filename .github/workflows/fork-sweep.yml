@@ -33,14 +33,30 @@ jobs:
       # Trusted tools from main
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/heads/${{ github.event.repository.default_branch }}
           path: trusted
       - name: pin trusted PR base and head metadata
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_REPO: ${{ github.repository }}
+          EXPECTED_BASE_REF: ${{ github.event.repository.default_branch }}
         run: |
-          metadata="$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '[.base.sha, .head.sha] | @tsv')"
-          BASE_SHA="$(printf '%s' "$metadata" | cut -f1)"
-          API_HEAD_SHA="$(printf '%s' "$metadata" | cut -f2)"
+          TRUSTED_SHA="$(git -C trusted rev-parse HEAD)"
+          DEFAULT_SHA="$(gh api "repos/${{ github.repository }}/commits/$EXPECTED_BASE_REF" --jq '.sha')"
+          if [ "$TRUSTED_SHA" != "$DEFAULT_SHA" ]; then
+            echo 'trusted scanner checkout no longer matches the protected default branch tip'
+            exit 1
+          fi
+          metadata="$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '[.state, .base.repo.full_name, .base.ref, .base.sha, .head.sha] | @tsv')"
+          PR_STATE="$(printf '%s' "$metadata" | cut -f1)"
+          BASE_REPO="$(printf '%s' "$metadata" | cut -f2)"
+          BASE_REF="$(printf '%s' "$metadata" | cut -f3)"
+          BASE_SHA="$(printf '%s' "$metadata" | cut -f4)"
+          API_HEAD_SHA="$(printf '%s' "$metadata" | cut -f5)"
+          if [ "$PR_STATE" != 'open' ] || [ "$BASE_REPO" != "$EXPECTED_REPO" ] || [ "$BASE_REF" != "$EXPECTED_BASE_REF" ]; then
+            echo 'PR must be open against this repository protected default branch'
+            exit 1
+          fi
           if ! printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
             echo 'GitHub returned an invalid PR base SHA'
             exit 1

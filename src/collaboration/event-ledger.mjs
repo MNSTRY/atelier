@@ -300,7 +300,13 @@ export function createCollaborationEventLedger({
           : [unique[0], ...unique.slice(-(perAggregate - 1))]
         kept.push(...selected)
       }
-      kept.sort((left, right) => Date.parse(left.at) - Date.parse(right.at) || left.id.localeCompare(right.id))
+      // `at` is contributor-controlled metadata and may regress. The physical
+      // ledger must retain each aggregate's causal version order after rewrite.
+      kept.sort((left, right) => (
+        left.aggregateId.localeCompare(right.aggregateId) ||
+        left.version - right.version ||
+        left.id.localeCompare(right.id)
+      ))
       const text = kept.length ? `${kept.map((event) => JSON.stringify(event)).join('\n')}\n` : ''
       if (Buffer.byteLength(text) > limits.maxBytes) {
         return { ok: false, status: 413, error: 'compacted collaboration ledger still exceeds the byte hard ceiling' }

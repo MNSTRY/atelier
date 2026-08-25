@@ -156,6 +156,27 @@ test('explicit compaction retains bounded aggregate history and its latest versi
   assert.equal(next.event.version, 61)
 })
 
+test('compaction preserves aggregate version order when timestamps regress', (t) => {
+  const root = makeRoot(t)
+  const ledger = createCollaborationEventLedger({ workspaceRoot: root })
+  assert.equal(ledger.append(eventInput(0, { at: '2030-01-01T00:00:00Z' })).ok, true)
+  assert.equal(ledger.append(eventInput(1, { at: '2020-01-01T00:00:00Z' })).ok, true)
+  assert.equal(ledger.append(eventInput(0, {
+    aggregateId: 'proposal-synthetic-two',
+    at: '2025-01-01T00:00:00Z',
+  })).ok, true)
+
+  const compacted = ledger.compact({ now: '2031-01-01T00:00:00Z' })
+  assert.equal(compacted.ok, true, compacted.error)
+  const reread = ledger.readAll()
+  assert.equal(reread.ok, true, reread.error)
+  assert.deepEqual(
+    reread.events.filter((event) => event.aggregateId === 'proposal-synthetic-one').map((event) => event.version),
+    [1, 2],
+  )
+  assert.equal(ledger.append(eventInput(2, { at: '2010-01-01T00:00:00Z' })).ok, true)
+})
+
 test('ten-thousand-event synthetic ledger reads within the target budget', (t) => {
   const root = makeRoot(t)
   const ledger = createCollaborationEventLedger({ workspaceRoot: root })
@@ -285,4 +306,27 @@ test('compatibility snapshot failures stay diagnostic after authoritative events
   assert.equal(reviewed.ok, true)
   assert.equal(reviewed.diagnostics[0].code, 'proposal-snapshot-write-failed')
   assert.equal(store.eventLedger.eventsFor(created.record.proposal.id).events.length, 2)
+})
+
+test('proposal lookup refuses identifier aliases and mismatched compatibility snapshots', (t) => {
+  const root = makeRoot(t)
+  const proposalsDir = path.join(root, '.atelier-proposals')
+  const store = createProposalStore({ workspaceRoot: root, proposalsDir })
+  const created = store.createProposal({ path: 'index.html' })
+  assert.equal(created.ok, true)
+  const id = created.record.proposal.id
+  const before = store.eventLedger.eventsFor(id).events.length
+
+  assert.equal(store.readProposal(`${id}!`).status, 404)
+  assert.equal(store.reviewProposal(`${id}!`, { status: 'reviewed' }).status, 404)
+  assert.equal(store.eventLedger.eventsFor(id).events.length, before)
+
+  fs.writeFileSync(path.join(proposalsDir, 'proposal-legacy.json'), JSON.stringify({
+    schema: 'atelier-proposal@v1',
+    proposal: { id: 'proposal-different', status: 'proposed' },
+  }), { mode: 0o600 })
+  const mismatched = store.readProposal('proposal-legacy')
+  assert.equal(mismatched.ok, false)
+  assert.equal(mismatched.status, 422)
+  assert.match(mismatched.error, /does not match/)
 })
