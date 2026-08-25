@@ -8,6 +8,7 @@ import {
   COLLABORATION_LEDGER_LIMITS,
   createCollaborationEventLedger,
 } from '../src/collaboration/event-ledger.mjs'
+import { createProposalStore } from '../src/collaboration/proposals.mjs'
 
 function makeRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-ledger-'))
@@ -176,4 +177,37 @@ test('ten-thousand-event synthetic ledger reads within the target budget', (t) =
   assert.equal(result.ok, true, result.error)
   assert.equal(result.events.length, COLLABORATION_LEDGER_LIMITS.maxEvents)
   assert.ok(result.stats.durationMs < 500, `read took ${result.stats.durationMs.toFixed(1)}ms`)
+})
+
+test('proposal listing materializes the ten-thousand-event ceiling from one ledger read', (t) => {
+  const root = makeRoot(t)
+  const proposalsDir = path.join(root, '.atelier-proposals')
+  const store = createProposalStore({ workspaceRoot: root, proposalsDir })
+  const lines = []
+  for (let index = 0; index < COLLABORATION_LEDGER_LIMITS.maxEvents; index += 1) {
+    const id = `proposal-${index.toString(16).padStart(32, '0')}`
+    lines.push(JSON.stringify({
+      schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
+      id: `event-${index.toString(16).padStart(32, '0')}`,
+      aggregateId: id,
+      version: 1,
+      type: 'proposal-created',
+      actor: 'synthetic-reader',
+      at: '2026-08-25T00:00:00Z',
+      payload: {
+        record: {
+          schema: 'atelier-proposal@v1',
+          proposal: { id, status: 'proposed', updatedAt: '2026-08-25T00:00:00Z' },
+        },
+      },
+    }))
+  }
+  fs.writeFileSync(path.join(proposalsDir, 'events.ndjson'), `${lines.join('\n')}\n`, { mode: 0o600 })
+
+  const startedAt = performance.now()
+  const listed = store.listProposals()
+  const durationMs = performance.now() - startedAt
+  assert.equal(listed.ok, true, listed.error)
+  assert.equal(listed.proposals.length, COLLABORATION_LEDGER_LIMITS.maxEvents)
+  assert.ok(durationMs < 1500, `proposal listing took ${durationMs.toFixed(1)}ms`)
 })

@@ -168,20 +168,14 @@ export function createProposalStore({
       : { ...result, ok: false, status: 404, error: 'proposal not found', record: null }
   }
 
-  // Read is a lookup, not an assertion: an unusable id and an unreadable file
-  // are both "no such proposal", never a throw. New records materialize from
-  // the append-only ledger. Per-proposal JSON remains a compatibility snapshot.
-  function readProposal(id) {
+  function readCompatibilitySnapshot(id) {
     let file
     try {
       file = proposalPath(id)
     } catch {
       return { ok: false, status: 404, error: 'proposal not found', record: null }
     }
-    const materialized = materializedProposal(id)
-    if (materialized.ok) return materialized
-    if (materialized.status !== 404) return materialized
-    if (!fs.existsSync(file)) return materialized
+    if (!fs.existsSync(file)) return { ok: false, status: 404, error: 'proposal not found', record: null }
     try {
       return { ok: true, status: 200, record: JSON.parse(fs.readFileSync(file, 'utf8')), source: 'compatibility-snapshot' }
     } catch (error) {
@@ -189,17 +183,38 @@ export function createProposalStore({
     }
   }
 
+  // Read is a lookup, not an assertion: an unusable id and an unreadable file
+  // are both "no such proposal", never a throw. New records materialize from
+  // the append-only ledger. Per-proposal JSON remains a compatibility snapshot.
+  function readProposal(id) {
+    const materialized = materializedProposal(id)
+    if (materialized.ok) return materialized
+    if (materialized.status !== 404) return materialized
+    return readCompatibilitySnapshot(id)
+  }
+
   function listProposals() {
     if (!fs.existsSync(proposalsDir)) return { ok: true, status: 200, proposals: [] }
     const ledger = eventLedger.readAll()
     if (!ledger.ok) return { ...ledger, proposals: [] }
-    const ledgerIds = ledger.events.map((event) => event.aggregateId)
+    const ledgerRecords = new Map()
+    for (const event of ledger.events) {
+      ledgerRecords.set(
+        event.aggregateId,
+        reduceProposal(ledgerRecords.get(event.aggregateId) ?? null, event),
+      )
+    }
+    const ledgerIds = [...ledgerRecords.keys()]
     const snapshotIds = fs.readdirSync(proposalsDir)
       .filter((name) => name.endsWith('.json'))
       .map((name) => name.slice(0, -'.json'.length))
     const reads = [...new Set([...ledgerIds, ...snapshotIds])]
       .sort(stableCompare)
-      .map(readProposal)
+      .map((id) => {
+        const record = ledgerRecords.get(id)
+        if (record) return { ok: true, status: 200, record, source: 'event-ledger' }
+        return readCompatibilitySnapshot(id)
+      })
     const failed = reads.find((result) => !result.ok)
     if (failed) return { ...failed, proposals: [] }
     const proposals = reads
