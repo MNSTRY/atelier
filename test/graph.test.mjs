@@ -39,6 +39,18 @@ test('knowledge graph accepts Windows CRLF front matter without dropping the Mar
   assert.ok(graph.nodes.some((node) => node.id === 'sample-workspace:readme'))
 })
 
+test('graph compatibility output retains unclassified Markdown as private', (t) => {
+  const sample = makeSampleProject(t)
+  fs.writeFileSync(path.join(sample.dir, 'content/unclassified.md'), '# Unclassified\n\nStill part of the census.\n')
+  const project = resolveProjectConfig({ argv: [`--project=${sample.config}`], cwd: sample.dir })
+  const graph = buildGraph(project)
+  const node = graph.nodes.find((item) => item.path === 'unclassified.md')
+
+  assert.equal(node?.audience, 'private')
+  assert.equal(node?.classification, 'unclassified')
+  assert.ok(graph.diagnostics.some((item) => item.code === 'unclassified-content' && item.node === node.id))
+})
+
 test('graph validation fails closed for missing id, legacy visibility, missing sidecar, and orphan sidecar', (t) => {
   const sample = makeSampleProject(t)
   const readme = path.join(sample.dir, 'content/README.md')

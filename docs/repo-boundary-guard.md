@@ -170,11 +170,21 @@ machine for weeks.
 - `pre-push` runs `atelier boundary push-check` — git writes the ref updates to
   the hook's stdin, and only that range is judged. A brand-new branch is diffed
   against the empty tree, so nothing slips through unscanned.
-- `atelier boundary audit` scans the whole tree and **reports without blocking**,
-  listing both matches and declared exceptions with their reasons.
+- `atelier boundary audit` scans the current working tree by default and
+  **reports without blocking**, listing matches, incomplete-read diagnostics,
+  and declared exceptions with their reasons. Use `--head` for a committed
+  snapshot. The output names its source so a dirty tree cannot be mistaken for
+  `HEAD` evidence.
 
 If the guard cannot work out which repo it is running in, it fails closed. A
 guard that silently judges nothing is worse than one that stops you.
+
+Path scopes are segment-aware globs: `*` does not cross `/`, `**` does, and
+patterns are matched against normalized repository-relative paths. Explicitly
+declaring `contentRules: []` is invalid; omit the field to receive defaults.
+Git diff output and binary reads have per-file and aggregate budgets. A failed,
+truncated, oversized, or unparsable evidence read produces a blocking
+completeness diagnostic rather than a partial clean verdict.
 
 ### Declaring an exception
 

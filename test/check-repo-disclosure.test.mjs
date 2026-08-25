@@ -18,11 +18,19 @@ const SENTINEL = 'SENTINELXYZ'
 const SENTINEL_DENYLIST = JSON.stringify({ patterns: [{ pattern: SENTINEL, label: 'test-sentinel' }] })
 
 function git(dir, args, env = {}) {
-  execFileSync('git', ['-C', dir, ...args], {
+  return execFileSync('git', ['-C', dir, ...args], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, ...env },
-  })
+  }).trim()
+}
+
+function gitWithInput(dir, args, input) {
+  return execFileSync('git', ['-C', dir, ...args], {
+    input,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }).trim()
 }
 
 function makeRepo(t) {
@@ -64,6 +72,34 @@ test('a clean repo passes the content scan', (t) => {
   const { status, output } = runChecker(dir)
   assert.equal(status, 0, output)
   assert.match(output, /\[repo:check\] clean/)
+})
+
+test('tracked binary and invalid UTF-8 files fail closed instead of disappearing from the count', (t) => {
+  for (const [name, bytes, label] of [
+    ['opaque.bin', Buffer.from([0, 1, 2, 3]), 'binary-uninspectable'],
+    ['invalid.txt', Buffer.from([0xc3, 0x28]), 'text-encoding-invalid'],
+  ]) {
+    const dir = makeRepo(t)
+    writeAndCommit(dir, name, bytes)
+    const { status, output } = runChecker(dir, ['--structural-only'])
+    assert.equal(status, 1, output)
+    assert.match(output, new RegExp(label))
+  }
+})
+
+test('the one reviewed binary fixture is bound to its exact path and digest', (t) => {
+  const dir = makeRepo(t)
+  const fixturePath = 'fixtures/projects/source-formats-workspace/content/logo.png'
+  writeAndCommit(dir, fixturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+  const accepted = runChecker(dir, ['--structural-only'])
+  assert.equal(accepted.status, 0, accepted.output)
+  assert.match(accepted.output, /1 reviewed binary fixture/)
+
+  fs.writeFileSync(path.join(dir, fixturePath), Buffer.from([0x89, 0x50, 0x4e, 0x48]))
+  git(dir, ['add', fixturePath])
+  const changed = runChecker(dir, ['--structural-only', '--staged'])
+  assert.equal(changed.status, 1, changed.output)
+  assert.match(changed.output, /text-encoding-invalid/)
 })
 
 test('a planted denylist match reports label and location but never the matched text', (t) => {
@@ -186,8 +222,73 @@ test('commit messages in range are scanned against the denylist', (t) => {
   git(dir, ['commit', '--quiet', '--allow-empty', '-m', `mention ${SENTINEL} in a message`])
   const { status, output } = runChecker(dir, ['--commits', 'range', '--base', 'HEAD~1'])
   assert.equal(status, 1, output)
-  assert.match(output, /test-sentinel: commit [0-9a-f]{40} message/)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
   assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
+})
+
+test('control bytes in a commit message cannot truncate the scanned message', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/second.md', 'still clean\n', `prefix\x01middle\x02${SENTINEL}`)
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: matched commit message text must never be printed')
+})
+
+test('raw commit objects containing NUL fail closed instead of realigning metadata fields', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const parent = git(dir, ['rev-parse', 'HEAD'])
+  const tree = git(dir, ['rev-parse', 'HEAD^{tree}'])
+  const raw = Buffer.concat([
+    Buffer.from([
+      `tree ${tree}`,
+      `parent ${parent}`,
+      `author ${AUTHOR_NAME} <${AUTHOR_EMAIL}> 1756080000 +0000`,
+      `committer ${AUTHOR_NAME} <${AUTHOR_EMAIL}> 1756080000 +0000`,
+      '',
+      'aligned',
+    ].join('\n')),
+    Buffer.from([0, 0, 0, 0, 0, 0, 0]),
+    Buffer.from(`${SENTINEL}\n`),
+  ])
+  const commit = gitWithInput(dir, ['hash-object', '--literally', '-t', 'commit', '-w', '--stdin'], raw)
+  git(dir, ['update-ref', 'HEAD', commit])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', parent])
+  assert.equal(status, 1, output)
+  assert.match(output, /commit-object-binary-uninspectable/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: raw malformed commit content must never be printed')
+})
+
+test('external contributor ranges disclosure-scan waived identity headers', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/external-header.md', 'clean contribution\n', 'clean message', {
+    GIT_AUTHOR_NAME: `${SENTINEL} Contributor`,
+    GIT_AUTHOR_EMAIL: 'external@example.invalid',
+    GIT_COMMITTER_NAME: 'External Contributor',
+    GIT_COMMITTER_EMAIL: 'external@example.invalid',
+  })
+
+  const { status, output } = runChecker(dir, [
+    '--commits', 'range', '--base', base, '--external-contributor-range',
+  ])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
+})
+
+test('a clean empty-commit range has no historical batch request', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  git(dir, ['commit', '--quiet', '--allow-empty', '-m', 'clean empty commit'])
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 0, output)
 })
 
 test('a clean range with allowed identities passes --commits range', (t) => {
@@ -196,6 +297,110 @@ test('a clean range with allowed identities passes --commits range', (t) => {
   writeAndCommit(dir, 'docs/more.md', 'still nothing\n', 'second commit')
   const { status, output } = runChecker(dir, ['--commits', 'range', '--base', 'HEAD~1'])
   assert.equal(status, 0, output)
+})
+
+test('commit range scans content added and deleted before HEAD', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'private/temporary.txt', `historical ${SENTINEL} marker\n`, 'temporary addition')
+  fs.unlinkSync(path.join(dir, 'private', 'temporary.txt'))
+  git(dir, ['add', '-u'])
+  git(dir, ['commit', '--quiet', '-m', 'remove temporary file'])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel: historical blob [0-9a-f]{40}:private\/temporary\.txt:1/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: historical matched text must never be printed')
+})
+
+test('commit range refuses an added-and-deleted binary blob it cannot inspect', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  fs.writeFileSync(path.join(dir, 'temporary.bin'), Buffer.from([0x00, 0x01, 0x02, 0x03]))
+  git(dir, ['add', 'temporary.bin'])
+  git(dir, ['commit', '--quiet', '-m', 'temporary binary'])
+  fs.unlinkSync(path.join(dir, 'temporary.bin'))
+  git(dir, ['add', '-u'])
+  git(dir, ['commit', '--quiet', '-m', 'remove temporary binary'])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /commit-binary-blob-uninspectable/)
+})
+
+test('commit range preserves every path when one blob is reused at excluded and included paths', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  const shared = '/Users/example/private-file\n'
+  fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'scripts/check-repo-disclosure.mjs'), shared)
+  fs.writeFileSync(path.join(dir, 'docs/copied.md'), shared)
+  git(dir, ['add', 'scripts/check-repo-disclosure.mjs', 'docs/copied.md'])
+  git(dir, ['commit', '--quiet', '-m', 'reuse one blob at two paths'])
+  fs.unlinkSync(path.join(dir, 'scripts/check-repo-disclosure.mjs'))
+  fs.unlinkSync(path.join(dir, 'docs/copied.md'))
+  git(dir, ['add', '-u'])
+  git(dir, ['commit', '--quiet', '-m', 'remove reused blob'])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /absolute user path: historical blob [0-9a-f]{40}:docs\/copied\.md:1/)
+})
+
+test('commit range fails closed when batch-check reports a missing historical object', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/missing.md', 'clean but deliberately unavailable\n')
+  const objectId = git(dir, ['rev-parse', 'HEAD:docs/missing.md'])
+  fs.unlinkSync(path.join(dir, '.git', 'objects', objectId.slice(0, 2), objectId.slice(2)))
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /commit-object-inventory-incomplete/)
+})
+
+test('external contributor ranges waive only identity while retaining content scans', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/external.md', 'clean contribution\n', 'external contribution', {
+    GIT_AUTHOR_NAME: 'External Contributor',
+    GIT_AUTHOR_EMAIL: 'external@example.invalid',
+    GIT_COMMITTER_NAME: 'External Contributor',
+    GIT_COMMITTER_EMAIL: 'external@example.invalid',
+  })
+  assert.equal(
+    runChecker(dir, ['--commits', 'range', '--base', base, '--external-contributor-range']).status,
+    0,
+  )
+  writeAndCommit(dir, 'docs/leak.md', `${SENTINEL} in contribution\n`, 'external content')
+  assert.equal(
+    runChecker(dir, ['--commits', 'range', '--base', base, '--external-contributor-range']).status,
+    1,
+  )
+})
+
+test('both structural and private CI sweeps inspect pull-request commit ranges', () => {
+  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci.yml'), 'utf8')
+  const rangeCommands = workflow.match(/check-repo-disclosure\.mjs(?: --structural-only)? --commits range --base "\$PR_BASE_SHA"/g) ?? []
+  assert.equal(rangeCommands.length, 2)
+})
+
+test('fork sweep pins API base and head before scanning the untrusted contributor range', () => {
+  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'fork-sweep.yml'), 'utf8')
+  assert.match(workflow, /ref: refs\/heads\/\$\{\{ github\.event\.repository\.default_branch \}\}/)
+  assert.match(workflow, /\.state, \.base\.repo\.full_name, \.base\.ref, \.base\.sha, \.head\.sha/)
+  assert.match(workflow, /BASE_REPO/)
+  assert.match(workflow, /BASE_REF/)
+  assert.match(workflow, /TRUSTED_SHA/)
+  assert.match(workflow, /DEFAULT_SHA/)
+  assert.match(workflow, /API_HEAD_SHA/)
+  assert.match(workflow, /BASE_SHA/)
+  assert.match(workflow, /--untrusted --commits range --base "\$BASE_SHA" --external-contributor-range/)
 })
 
 test('--staged catches a plant that is staged but not committed', (t) => {
@@ -322,7 +527,7 @@ test('merge commits skip identity checks (synthetic PR merge refs) but keep mess
   git(dir, ['merge', '--quiet', '--no-ff', '-m', `merge mentioning ${SENTINEL}`, 'feature-two'], githubIdentity)
   const { status, output } = runChecker(dir, ['--commits', 'all'])
   assert.equal(status, 1, output)
-  assert.match(output, /test-sentinel: commit [0-9a-f]{40} message/)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
   assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
 })
 

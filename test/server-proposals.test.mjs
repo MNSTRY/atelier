@@ -9,6 +9,7 @@ import { createAtelierSidecarServer } from '../src/server/local-sidecar.mjs'
 function makeWorkspace() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-proposals-'))
   fs.writeFileSync(path.join(root, 'index.html'), '<!doctype html><title>Atelier</title>\n')
+  fs.writeFileSync(path.join(root, 'atelier.manifest.json'), '{"schema":"mnstry.atelier-manifest@v1","entry":"index.html"}\n')
   return root
 }
 
@@ -70,6 +71,7 @@ test('proposal lifecycle is nonce-protected, local, and copy-only', async (t) =>
     viewId: 'proposal-view',
     path: 'index.html',
     action: 'apply.patch',
+    authority: { directWrite: true },
   }, base, nonce)
   assert.equal(directWrite.response.status, 409)
   assert.match(directWrite.body.error, /direct-write/i)
@@ -86,7 +88,11 @@ test('proposal lifecycle is nonce-protected, local, and copy-only', async (t) =>
     sessionId: 'proposal-session',
     viewId: 'proposal-view',
     path: 'index.html',
-    action: 'metadata.status',
+    // Display verbs are not authority. The explicit capability fields are.
+    action: 'apply.patch',
+    capability: 'proposal.copy-only',
+    directWrite: false,
+    applyEndpoint: null,
     diff,
     proposal: {
       reason: 'review-only handoff',
@@ -143,7 +149,9 @@ test('proposal lifecycle is nonce-protected, local, and copy-only', async (t) =>
   assert.equal(events.at(-1).version, 3)
   if (process.platform !== 'win32') assert.equal(fs.statSync(ledgerPath).mode & 0o777, 0o600)
 
-  const page = await fetch(`${base}/proposals/${id}`)
+  const page = await fetch(`${base}/proposals/${id}`, {
+    headers: { Origin: base, 'Sec-Fetch-Site': 'same-origin' },
+  })
   const pageText = await page.text()
   assert.equal(page.status, 200)
   assert.match(pageText, /Copy Handoff/)

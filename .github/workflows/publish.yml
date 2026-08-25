@@ -9,9 +9,10 @@ name: publish
 #
 # Publishing is effectively irreversible (npm unpublish is restricted to a
 # 72-hour window with no dependents), so every gate runs before the upload:
-# `prepublishOnly` is the full chain (release:audit, repo:check,
-# migrations:check, contract:compat, syntax:check, 509 tests, consumer:smoke,
-# distribution:smoke) and npm aborts the publish if any step fails.
+# `prepublishOnly` is the full chain (repo:check, migrations:check,
+# contract:compat, syntax:check, the complete test suite, then the retained
+# candidate's release:audit, consumer:smoke, and distribution:smoke) and npm
+# aborts the publish if any step fails.
 on:
   push:
     tags: ['v*']
@@ -83,6 +84,7 @@ jobs:
         # release:audit and repo:check need it; nothing else in this job does.
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+          TAG_REF: ${{ github.ref_name }}
         run: |
           if [ -z "$ATELIER_DENYLIST_JSON" ]; then
             echo "denylist secret unavailable — refusing to publish unscanned"
@@ -102,5 +104,28 @@ jobs:
               ;;
             *) NPM_TAG=latest ;;
           esac
-          echo "publishing $VERSION under dist-tag $NPM_TAG"
-          npm publish --tag "$NPM_TAG"
+          CANDIDATE_DIR="$RUNNER_TEMP/atelier-release-candidate"
+          ATELIER_RELEASE_OUTPUT_DIR="$CANDIDATE_DIR" npm run prepublishOnly
+          RECEIPT="$CANDIDATE_DIR/release-candidate.json"
+          CANDIDATE_TARBALL="$(node -e 'const fs = require("node:fs"); const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(receipt.tarballPath)' "$RECEIPT")"
+          EXPECTED_SHA="$(node -e 'const fs = require("node:fs"); const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(receipt.tarballSha256)' "$RECEIPT")"
+          RECEIPT_SHA="$(node -e 'const fs = require("node:fs"); const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(receipt.candidateSha)' "$RECEIPT")"
+          RECEIPT_VERSION="$(node -e 'const fs = require("node:fs"); const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(receipt.version)' "$RECEIPT")"
+          if [ "$RECEIPT_SHA" != "$GITHUB_SHA" ]; then
+            echo "release receipt SHA mismatch: expected $GITHUB_SHA, got $RECEIPT_SHA"
+            exit 1
+          fi
+          if [ "v$RECEIPT_VERSION" != "$TAG_REF" ]; then
+            echo "release receipt version mismatch: expected $TAG_REF, got v$RECEIPT_VERSION"
+            exit 1
+          fi
+          ACTUAL_SHA="$(sha256sum "$CANDIDATE_TARBALL" | cut -d' ' -f1)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "retained candidate digest mismatch: expected $EXPECTED_SHA, got $ACTUAL_SHA"
+            exit 1
+          fi
+          echo "publishing exact audited candidate $ACTUAL_SHA under dist-tag $NPM_TAG"
+          # Publishing a tarball does not run the source checkout's lifecycle
+          # scripts. prepublishOnly ran explicitly above and retained the exact
+          # audited bytes that this command sends to the registry.
+          npm publish "$CANDIDATE_TARBALL" --tag "$NPM_TAG"

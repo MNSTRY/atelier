@@ -17,6 +17,16 @@ export const LOCAL_OVERLAY_FILES = ['atelier.local.json', 'atelier.workspace.loc
 // a way to silence checks on a repo you do manage.
 export const EXTERNAL_REPO_KIND = 'external'
 
+export class AtelierDiagnosticError extends Error {
+  constructor(code, message, { hint = null, exitCode = 2, cause = null } = {}) {
+    super(message, cause ? { cause } : undefined)
+    this.name = 'AtelierDiagnosticError'
+    this.code = code
+    this.hint = hint
+    this.exitCode = exitCode
+  }
+}
+
 export const isExternalRepo = (repo) => firstString(repo?.kind) === EXTERNAL_REPO_KIND
 
 // Kept here rather than imported from repo-identity.mjs so config validation stays
@@ -59,10 +69,19 @@ export function resolvePathValue(value, baseDir) {
 }
 
 export function readJson(file) {
+  if (!fs.existsSync(file)) {
+    const graphArtifact = path.basename(file) === 'knowledge.graph.json'
+    throw new AtelierDiagnosticError('artifact-missing', `required JSON artifact not found: ${file}`, {
+      hint: graphArtifact ? 'Run atelier graph with this project config, then retry.' : 'Create or regenerate the named artifact, then retry.',
+    })
+  }
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'))
   } catch (error) {
-    throw new Error(`invalid JSON at ${file}: ${error.message}`)
+    throw new AtelierDiagnosticError('json-invalid', `JSON is malformed at ${file}: ${error.message}`, {
+      hint: 'Repair or regenerate the named JSON file, then retry.',
+      cause: error,
+    })
   }
 }
 
@@ -90,9 +109,30 @@ export function stripProjectConfigArgs(argv = [], prefix = PROJECT_CONFIG_ARG_PR
 }
 
 export function readProjectConfig(configPath) {
-  const doc = readJson(configPath)
+  let doc
+  try {
+    doc = readJson(configPath)
+  } catch (error) {
+    if (error instanceof AtelierDiagnosticError) {
+      throw new AtelierDiagnosticError(
+        error.code === 'artifact-missing' ? 'project-config-missing' : 'project-config-json-invalid',
+        error.code === 'artifact-missing'
+          ? `atelier project config not found: ${configPath}`
+          : `atelier project config is malformed: ${configPath}`,
+        {
+          hint: error.code === 'artifact-missing'
+            ? 'Pass --project PATH to a tracked atelier.project.json file.'
+            : 'Repair the JSON syntax, then run atelier config check with the same --project path.',
+          cause: error,
+        },
+      )
+    }
+    throw error
+  }
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
-    throw new Error(`atelier project config must be a JSON object: ${configPath}`)
+    throw new AtelierDiagnosticError('project-config-shape-invalid', `Atelier project config must be a JSON object: ${configPath}`, {
+      hint: 'Repair the document shape, then run atelier config check with the same --project path.',
+    })
   }
   return doc
 }
@@ -253,7 +293,9 @@ export function resolveProjectConfig({
       missingConfigPath = configPath
       configPath = null
     } else {
-      throw new Error(`atelier project config not found: ${configPath || requestedPath}`)
+      throw new AtelierDiagnosticError('project-config-missing', `atelier project config not found: ${configPath || requestedPath}`, {
+        hint: 'Pass --project PATH to a tracked atelier.project.json file.',
+      })
     }
   }
 
@@ -355,7 +397,9 @@ export function commandProject({ argv = process.argv.slice(2), env = process.env
   if (project.configPath != null) {
     const configErrors = validateProjectConfigDoc(project.config)
     if (configErrors.length) {
-      throw new Error(`invalid atelier project config at ${project.configPath}:\n${configErrors.join('\n')}`)
+      throw new AtelierDiagnosticError('project-config-contract-invalid', `invalid atelier project config at ${project.configPath}:\n${configErrors.join('\n')}`, {
+        hint: 'Fix the listed fields, then run atelier config check with the same --project path.',
+      })
     }
   }
   if (project.schema !== PROJECT_CONFIG_SCHEMA) {

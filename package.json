@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.4",
+  "version": "0.2.0-alpha.5",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry, service, or account.",
   "keywords": [
@@ -35,6 +35,7 @@
     "./collaboration": "./src/collaboration/index.mjs",
     "./support": "./src/support/support-bundle.mjs",
     "./egress": "./src/egress/forbidden-egress.mjs",
+    "./disclosure": "./src/disclosure/content-scan.mjs",
     "./boundary": "./src/boundary/policy.mjs",
     "./upgrade": "./src/upgrade/upgrade.mjs",
     "./attestation": "./src/attestation/sign.mjs",
@@ -58,16 +59,19 @@
     "egress:check": "node bin/atelier.mjs egress check",
     "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs test/readiness-protocol-contract.test.mjs test/readiness-protocols.test.mjs test/readiness-protocol-runtime.test.mjs",
     "harness:test": "node --test test/harness.test.mjs test/harness-context.test.mjs",
-    "collaboration:test": "node --test test/collaboration-ledger.test.mjs test/collaboration-provider.test.mjs test/server-proposals.test.mjs",
-    "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-guard.test.mjs",
+    "collaboration:test": "node --test test/collaboration-ledger.test.mjs test/server-proposals.test.mjs",
+    "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-content-rules.test.mjs test/boundary-guard.test.mjs",
     "upgrade:test": "node --test test/upgrade-contract.test.mjs test/upgrade.test.mjs",
     "release:audit": "node scripts/check-release-tarball.mjs",
+    "release:candidate": "node scripts/release-candidate.mjs",
     "repo:check": "node scripts/check-repo-disclosure.mjs",
     "migrations:check": "node scripts/check-breaking-migrations.mjs",
     "contract:compat": "node scripts/check-contract-compat.mjs",
+    "public-api:compat": "node scripts/check-public-api-compat.mjs",
+    "assurance:mutation-smoke": "node --test test/assurance-mutations.test.mjs",
     "consumer:smoke": "node scripts/consumer-smoke.mjs",
     "distribution:smoke": "node scripts/distribution-smoke.mjs",
-    "prepublishOnly": "npm run release:audit && npm run repo:check && npm run migrations:check && npm run contract:compat && npm run syntax:check && npm test && npm run consumer:smoke && npm run distribution:smoke"
+    "prepublishOnly": "npm run repo:check && npm run migrations:check && npm run contract:compat && npm run public-api:compat && npm run syntax:check && npm test && npm run assurance:mutation-smoke && npm run release:candidate"
   },
   "dependencies": {
     "ajv": "8.20.0",

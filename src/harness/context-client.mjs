@@ -39,7 +39,13 @@ export async function jsonGet(baseUrl, route, params = null, headers = {}) {
   const url = new URL(route, `${base.href}/`)
   if (params) appendParams(url, params)
   // @atelier-egress-local-computed
-  const response = await fetch(url, { headers })
+  const response = await fetch(url, {
+    headers: {
+      Origin: base.origin,
+      'Sec-Fetch-Site': 'same-origin',
+      ...headers,
+    },
+  })
   return readJsonResponse(response, route)
 }
 
@@ -51,6 +57,8 @@ export async function jsonPost(baseUrl, route, body = {}, headers = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      Origin: base.origin,
+      'Sec-Fetch-Site': 'same-origin',
       ...headers,
     },
     body: JSON.stringify(body),

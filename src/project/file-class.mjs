@@ -111,3 +111,17 @@ export function generatedProjectionBasenames(fileClasses = KIT_FILE_CLASSES) {
   }
   return names
 }
+
+// Directory basenames whose complete subtree is generated. Graph walkers can
+// prune these without restating output-root names beside the declaration.
+export function generatedProjectionDirectoryBasenames(fileClasses = KIT_FILE_CLASSES) {
+  const names = new Set()
+  for (const entry of fileClasses) {
+    if (entry.class !== GENERATED_PROJECTION) continue
+    const normalized = normalizeRelPath(entry.pattern)
+    if (!normalized.endsWith('/**')) continue
+    const parent = normalized.slice(0, -3).split('/').at(-1)
+    if (parent && !parent.includes('*')) names.add(parent)
+  }
+  return names
+}

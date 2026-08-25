@@ -48,7 +48,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -146,6 +146,20 @@ best-effort publication.
 Because the checks are local and versioned with the work, the repository can
 prove its state in CI, on a laptop, or inside a larger toolchain.
 
+Repositories that may contribute to a public or shared surface can add a
+private, ignored disclosure denylist and scan either the tracked tree or the
+exact staged index:
+
+```bash
+npx mnstry-atelier disclosure check --staged
+```
+
+The built-in structural pass catches machine-local paths, key material, and
+secret-shaped assignments. A client-aware verdict additionally requires the
+private denylist; the command fails closed when it is absent unless
+`--structural-only` is chosen explicitly. Denylist patterns and matched text
+never belong in the shared repository.
+
 ### 3. Collaboration becomes governed disclosure
 
 Collaboration is not equivalent to giving every participant every file. The
@@ -162,6 +176,11 @@ boundary; it does not silently make access decisions on your behalf.
 `atelier dev` exposes a loopback-only review surface backed by the compiled
 graph. The library exposes the same project, graph, validation, and projection
 primitives to code.
+
+Consumer-owned authoring or review services that need a separate durable
+lifecycle follow [the managed local-service contract](./docs/local-services.md).
+That contract standardizes process ownership, private local state, and browser
+recovery without putting a tenant's service details into Atelier.
 
 The shipped agent model is intentionally bounded: the Atelier can assemble
 session context, capability envelopes, and proposed changes, but it does not
@@ -234,16 +253,22 @@ one names the command that proves it.
 
 **Nothing leaves your machine, with one exception you can see.** There is no
 telemetry, no update check, no crash reporting, and no send path anywhere in
-the package. The exception: when no actor is configured, `boundary check` and
-`doctor` fall back to the `gh` CLI to resolve your GitHub login, which is an
-authenticated request to GitHub made with your own credentials. Set
-`MNSTRY_ATELIER_ACTOR` and that path is never taken. The only network client
+the package. The exceptions are explicit: `boundary check` may invoke `gh api
+user` after no declared actor matches an explicit `--actor`,
+`MNSTRY_ATELIER_ACTOR`, `GITHUB_ACTOR`, or a configured Git email; repository
+identity checks may invoke `gh api repos/...` to resolve a canonical GitHub
+identity. Those authenticated requests use your own `gh` credentials. A
+recognized explicit actor prevents the boundary actor fallback; recorded
+repository identities let identity checks keep working when the provider is
+unavailable. The only network client
 refuses non-loopback URLs, the served pages carry a policy that authorizes no
-external origin, and a fail-closed gate scans the executable and markup files
-under `src/`, `bin/`, `scripts/`, and `examples/` for egress primitives. Two
-limits worth stating plainly: the gate does not read the `.json` and `.md`
-files under `templates/` and `skills/`, and it does not model
-`child_process`, which is why the `gh` fallback above does not trip it:
+external origin, and release audit scans every executable or markup file in
+the exact `npm pack` inventory for egress primitives. The standalone gate also
+scans executable and markup files under `src/`, `bin/`, `scripts/`,
+`templates/`, `examples/`, and `skills/`. Two limits worth stating plainly:
+the egress control does not interpret data-only `.json` or `.md` files, and it
+does not model `child_process`; the two reviewed `gh` paths above are therefore
+documented exceptions rather than scanner detections:
 
 ```bash
 npm run egress:check
@@ -316,7 +341,7 @@ Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
 remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
 ```
 
 Then choose the path that matches what you are building:
@@ -328,11 +353,12 @@ Then choose the path that matches what you are building:
 - [Distribution contracts](./docs/distributions.md)
 - [Conformance and attestation](./docs/attestation.md)
 - [Continuity commitments](./docs/continuity.md)
+- [Assurance controls and evidence map](./docs/assurance-controls.md)
 - [Upgrade notes](./docs/upgrade.md)
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.4`.
+Current package: `@mnstry/atelier@0.2.0-alpha.5`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.

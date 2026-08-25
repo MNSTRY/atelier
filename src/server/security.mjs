@@ -37,6 +37,9 @@ export const LOOPBACK_HOSTS = new Set([
   '[::1]',
 ])
 
+export const ATELIER_MANIFEST_SCHEMA = 'mnstry.atelier-manifest@v1'
+export const PUBLISHED_STATIC_EXTENSIONS = new Set(['.html', '.js', '.mjs', '.css', '.svg', '.png', '.jpg', '.jpeg', '.webp'])
+
 export function parseHostHeader(value) {
   const raw = String(value || '').trim().toLowerCase()
   if (!raw) return ''
@@ -66,7 +69,7 @@ export function expectedOriginForRequest(headers, fallbackPort = null) {
 }
 
 export function sameOrigin(origin, expectedOrigin) {
-  if (!origin) return true
+  if (!origin) return false
   if (!expectedOrigin) return false
   try {
     return new URL(origin).origin === new URL(expectedOrigin).origin
@@ -77,7 +80,7 @@ export function sameOrigin(origin, expectedOrigin) {
 
 export function trustedFetchSite(headers) {
   const value = requestHeader(headers, 'sec-fetch-site').toLowerCase()
-  return value === '' || value === 'none' || value === 'same-origin' || value === 'same-site'
+  return value === 'none' || value === 'same-origin'
 }
 
 export function trustedHost(headers) {
@@ -85,11 +88,92 @@ export function trustedHost(headers) {
 }
 
 export function trustedReadRequest(headers, { expectedOrigin = expectedOriginForRequest(headers) } = {}) {
-  return trustedHost(headers) && sameOrigin(requestHeader(headers, 'origin'), expectedOrigin)
+  const origin = requestHeader(headers, 'origin')
+  return trustedHost(headers) && trustedFetchSite(headers) && (!origin || sameOrigin(origin, expectedOrigin))
 }
 
 export function trustedMutationRequest(headers, { expectedOrigin = expectedOriginForRequest(headers) } = {}) {
-  return trustedReadRequest(headers, { expectedOrigin }) && trustedFetchSite(headers)
+  const origin = requestHeader(headers, 'origin')
+  return Boolean(origin) && trustedReadRequest(headers, { expectedOrigin }) && sameOrigin(origin, expectedOrigin)
+}
+
+function manifestPathValue(value) {
+  if (typeof value === 'string') return value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  return value.path || value.output || value.href || ''
+}
+
+function secretShapedPath(value) {
+  return /(?:^|[._-])(?:secret|credential|token|password|nonce|private[._-]?key)(?:$|[._-])/i.test(value)
+    || /(?:^|\/)\.env(?:\.|$)/i.test(value)
+}
+
+function addManifestPath(paths, value, label) {
+  const candidate = manifestPathValue(value)
+  const normalized = normalizeWorkspacePath(candidate, { defaultFile: '' })
+  if (!candidate || !normalized.ok || /^[a-z][a-z0-9+.-]*:/i.test(candidate)) {
+    throw new Error(`atelier.manifest.json ${label} must be a workspace-relative path`)
+  }
+  if (deniedStaticStatePath(normalized.path) || normalized.path.split('/').some((segment) => segment.startsWith('.')) || secretShapedPath(normalized.path)) {
+    throw new Error(`atelier.manifest.json ${label} enrolls a hidden, state, or secret-shaped path`)
+  }
+  if (!PUBLISHED_STATIC_EXTENSIONS.has(path.extname(normalized.path).toLowerCase())) {
+    throw new Error(`atelier.manifest.json ${label} enrolls an unsupported static file type`)
+  }
+  paths.add(normalized.path)
+}
+
+export function loadPublishedWorkspaceManifest(workspaceRoot) {
+  const root = path.resolve(workspaceRoot)
+  const rootReal = fs.realpathSync(root)
+  const manifestPath = path.join(root, 'atelier.manifest.json')
+  if (!fs.existsSync(manifestPath)) throw new Error('served workspace must contain generated atelier.manifest.json')
+  const manifestReal = fs.realpathSync(manifestPath)
+  if (!pathContainedBy(rootReal, manifestReal)) throw new Error('atelier.manifest.json realpath escapes served workspace')
+  let manifest
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestReal, 'utf8'))
+  } catch (error) {
+    throw new Error(`atelier.manifest.json must be valid JSON: ${error.message}`)
+  }
+  if (manifest?.schema !== ATELIER_MANIFEST_SCHEMA) {
+    throw new Error(`atelier.manifest.json schema must be ${ATELIER_MANIFEST_SCHEMA}`)
+  }
+  const paths = new Set()
+  if (typeof manifest.entry !== 'string') throw new Error('atelier.manifest.json entry must be a workspace-relative HTML path')
+  addManifestPath(paths, manifest.entry, 'entry')
+  if (path.extname(manifest.entry).toLowerCase() !== '.html') throw new Error('atelier.manifest.json entry must be an HTML file')
+  for (const key of ['files', 'assets']) {
+    if (manifest[key] == null) continue
+    if (!Array.isArray(manifest[key])) throw new Error(`atelier.manifest.json ${key} must be an array`)
+    for (const [index, value] of manifest[key].entries()) addManifestPath(paths, value, `${key}[${index}]`)
+  }
+  for (const rel of paths) {
+    const resolved = resolveWorkspacePath({ workspaceRoot: root, workspaceRootReal: rootReal, rel, requireFile: true })
+    if (!resolved.ok) throw new Error(`atelier.manifest.json enrolled path is unavailable: ${rel}`)
+    const realRel = path.relative(rootReal, resolved.real).replaceAll('\\', '/')
+    if (realRel !== rel) throw new Error(`atelier.manifest.json enrolled path must not be a symlink: ${rel}`)
+  }
+  return Object.freeze({ manifest, manifestPath: manifestReal, paths })
+}
+
+export function publishedStaticPathVerdict({ resolved, publication } = {}) {
+  if (!resolved?.ok) return resolved
+  const realRel = path.relative(resolved.workspaceRootReal, resolved.real).replaceAll('\\', '/')
+  const segments = realRel.split('/')
+  if (segments.some((segment) => segment.startsWith('.')) || deniedStaticStatePath(realRel)) {
+    return { ok: false, status: 403, error: 'hidden or local state path is not published', path: resolved.path }
+  }
+  if (realRel === 'atelier.manifest.json' || secretShapedPath(realRel)) {
+    return { ok: false, status: 403, error: 'secret-shaped path is not published', path: resolved.path }
+  }
+  if (!PUBLISHED_STATIC_EXTENSIONS.has(path.extname(realRel).toLowerCase())) {
+    return { ok: false, status: 403, error: 'static file type is not published', path: resolved.path }
+  }
+  if (!publication?.paths?.has(realRel)) {
+    return { ok: false, status: 404, error: 'path is not enrolled by atelier.manifest.json', path: resolved.path }
+  }
+  return resolved
 }
 
 export function pathContainedBy(root, candidate) {
@@ -191,6 +275,7 @@ export function resolveWorkspacePath({
     real,
     stat,
     workspaceContained: true,
+    workspaceRootReal,
   }
 }
 

@@ -12,6 +12,7 @@ import {
   classifyPath,
   createPathClassifier,
   generatedProjectionBasenames,
+  generatedProjectionDirectoryBasenames,
   validateFileClasses,
 } from '../src/project/file-class.mjs'
 import { matchesPathPattern } from '../src/project/path-match.mjs'
@@ -94,11 +95,22 @@ test('the kit keeps no second copy of the classification', () => {
   for (const name of ['atelier.manifest.json', 'atelier-ledger.html', 'atelier-shell.js', 'knowledge.graph.json']) {
     assert.ok(derived.has(name), `${name} must be reachable from the declaration, not a shadow list`)
   }
+  assert.deepEqual([...generatedProjectionDirectoryBasenames()].sort(), ['atelier-output', 'atelier-readers'])
 
   // The glob dialect lives in one place too.
   const policySource = fs.readFileSync(path.join(ROOT, 'src/boundary/policy.mjs'), 'utf8')
   assert.doesNotMatch(policySource, /function patternMatches\(/, 'boundary policy must consume the shared matcher')
   assert.ok(matchesPathPattern('atelier-output/**', 'atelier-output/index.html'))
+})
+
+test('the shared matcher is segment-aware, case-stable, and portable', () => {
+  assert.equal(matchesPathPattern('private/*.md', 'private/note.md'), true)
+  assert.equal(matchesPathPattern('private/*.md', 'private/nested/note.md'), false, '`*` must not cross a segment')
+  assert.equal(matchesPathPattern('private/**/*.md', 'private/nested/note.md'), true)
+  assert.equal(matchesPathPattern('private/**/*.md', 'private/note.md'), true, '`**/` may match zero segments')
+  assert.equal(matchesPathPattern('*.md', 'deeply/nested/note.md'), true, 'slashless patterns retain match-base behavior')
+  assert.equal(matchesPathPattern('ATELIER-OUTPUT/**', 'atelier-output/index.html'), true, 'case behavior must not vary by filesystem')
+  assert.equal(matchesPathPattern('private/**', 'PRIVATE\\nested\\note.md'), true, 'Windows separators use the same dialect')
 })
 
 test('kit manifest fixtures agree with the file-class contract', () => {

@@ -5,13 +5,12 @@ import { buildGraph } from '../graph/graph.mjs'
 import { commandProject, firstString, parseArgs, readJson, resolvePathValue, writeJson } from '../project/config.mjs'
 import { matchesPathPattern } from '../project/path-match.mjs'
 import {
-  diffForPushRange,
-  parseAddedContent,
-  parsePushRefUpdates,
+  CHECK_AGGREGATE_MAX_BYTES,
+  parsePushRefInput,
   resolveContentRules,
-  scanAddedContent,
+  scanPushUpdate,
+  scanStagedRepository,
   scanTree,
-  stagedDiff,
   validateContentRuleExceptions,
   validateContentRules,
 } from './content-rules.mjs'
@@ -313,7 +312,7 @@ export function stagedPathsForProject(project) {
 function forbiddenPathFindings({ policy, stagedPaths }) {
   const patterns = [...DEFAULT_FORBIDDEN_PATHS, ...asArray(policy.forbiddenPaths)]
   const findings = []
-  const severity = severityFor(policy)
+  const severity = 'error'
   for (const item of stagedPaths) {
     const matched = patterns.find((pattern) => matchesPathPattern(pattern, item.path))
     if (matched) {
@@ -397,11 +396,18 @@ export function semanticChangesInFile(file) {
 
 function semanticDiffFindings({ policy, project }) {
   const findings = []
-  const severity = severityFor(policy)
+  const severity = 'error'
   for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+      findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
+      continue
+    }
     const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
-    if (result.status !== 0 || !result.stdout.trim()) continue
+    if (result.status !== 0) {
+      findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
+      continue
+    }
+    if (!result.stdout.trim()) continue
     for (const file of diffFileSections(result.stdout)) {
       const changes = semanticChangesInFile(file)
       if (!changes.length) continue
@@ -424,25 +430,30 @@ function semanticDiffFindings({ policy, project }) {
   return findings
 }
 
-function contentRuleFindings({ policy, project, files }) {
+function stagedContentFindings({ policy, project }) {
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
   const findings = []
-  for (const entry of files) {
-    for (const item of scanAddedContent({ files: entry.files, rules, exceptions, repo: entry.repo })) {
-      // The rule id and line stay on the finding: they are what a person needs to
-      // either fix the line or write the exception.
-      findings.push({ ...finding({ ...item, details: { rule: item.rule, line: item.line } }), rule: item.rule, line: item.line })
+  let totalBytes = 0
+  for (const repo of managedRepos(project)) {
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+      findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
+      continue
+    }
+    const result = scanStagedRepository({ repoRoot: repo.path, rules, exceptions, repo: repo.name })
+    findings.push(...result.findings, ...result.diagnostics)
+    totalBytes += result.bytes
+    if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
+      findings.push(finding({
+        severity: 'error',
+        code: 'content-scan-incomplete',
+        repo: repo.name,
+        message: `staged evidence exceeds the ${CHECK_AGGREGATE_MAX_BYTES}-byte aggregate limit`,
+      }))
+      break
     }
   }
   return findings
-}
-
-function stagedContentFindings({ policy, project }) {
-  const files = managedRepos(project)
-    .filter((repo) => repo.path && fs.existsSync(path.join(repo.path, '.git')))
-    .map((repo) => ({ repo: repo.name, files: parseAddedContent(stagedDiff(repo.path)) }))
-  return contentRuleFindings({ policy, project, files })
 }
 
 function realPath(value) {
@@ -472,7 +483,7 @@ function repoForCwd(project, cwd) {
  * which reports without blocking, so an accepted usage elsewhere in the repo can
  * never strand unrelated work on the machine.
  */
-export function checkPushContent({ project, policy, repo, updates, cwd = process.cwd() } = {}) {
+export function checkPushContent({ project, policy, repo, updates, cwd = process.cwd(), gitRunner = spawnSync } = {}) {
   const target = repo ?? repoForCwd(project, cwd)
   if (!target) {
     // Fail closed. This hook is only installed into managed repos, so failing to
@@ -485,20 +496,41 @@ export function checkPushContent({ project, policy, repo, updates, cwd = process
     })
     return { ok: false, repo: null, findings: [unresolved], errors: [unresolved], warnings: [] }
   }
-  const files = []
-  for (const update of updates) files.push(...parseAddedContent(diffForPushRange(target.path, update)))
-  const findings = contentRuleFindings({ policy, project, files: [{ repo: target.name, files }] })
+  const rules = resolveContentRules(policy)
+  const exceptions = asArray(policy?.contentRuleExceptions)
+  const findings = []
+  let totalBytes = 0
+  for (const update of updates) {
+    const result = scanPushUpdate({ repoRoot: target.path, update, rules, exceptions, repo: target.name, gitRunner })
+    findings.push(...result.findings, ...result.diagnostics)
+    totalBytes += result.bytes
+    if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
+      findings.push(finding({
+        severity: 'error',
+        code: 'content-scan-incomplete',
+        repo: target.name,
+        message: `push evidence exceeds the ${CHECK_AGGREGATE_MAX_BYTES}-byte aggregate limit`,
+      }))
+      break
+    }
+  }
   const errors = findings.filter((item) => item.severity === 'error')
   return { ok: errors.length === 0, repo: target.name, updates, findings, errors, warnings: findings.filter((item) => item.severity !== 'error') }
 }
 
-export function auditContentRules({ project, policy } = {}) {
+export function auditContentRules({ project, policy, source = 'working-tree' } = {}) {
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
   const findings = []
+  const diagnostics = []
   for (const repo of managedRepos(project)) {
-    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
-    findings.push(...scanTree(repo.path, { rules, exceptions, repo: repo.name }))
+    if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) {
+      diagnostics.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
+      continue
+    }
+    const result = scanTree(repo.path, { rules, exceptions, repo: repo.name, source })
+    findings.push(...result.findings)
+    diagnostics.push(...result.diagnostics)
   }
   const accepted = []
   for (const repo of managedRepos(project)) {
@@ -507,7 +539,16 @@ export function auditContentRules({ project, policy } = {}) {
       accepted.push({ repo: repo.name, rule: exception.rule, paths: exception.paths, reason: exception.reason })
     }
   }
-  return { schema: BOUNDARY_POLICY_SCHEMA, findings, accepted }
+  return { schema: BOUNDARY_POLICY_SCHEMA, source, findings, diagnostics, accepted }
+}
+
+function unscannableRepoFinding(repo, reason) {
+  return finding({
+    severity: 'error',
+    code: 'repo-unscannable',
+    repo: repo?.name ?? null,
+    message: `${repo?.name ?? '(unnamed repo)'} cannot be scanned: ${reason}`,
+  })
 }
 
 function promotionRecords(project, policy) {
@@ -565,21 +606,19 @@ function promotionFindings({ policy, project, graph }) {
 export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
-  const findings = validationErrors.map((message) => finding({ severity: severityFor(policy), code: 'boundary-policy-invalid', message }))
-  if (validationErrors.length === 0) {
-    if (!stagedOnly) {
-      graph = buildGraph(project)
-      findings.push(...graph.errors.map((message) => finding({ severity: severityFor(policy), code: 'knowledge-graph-invalid', message })))
-      for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
-      findings.push(...promotionFindings({ policy, project, graph }))
-    }
-    findings.push(...actorFindings({ policy, project, actor }))
-    if (staged) {
-      const stagedPaths = stagedPathsForProject(project)
-      findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
-      findings.push(...semanticDiffFindings({ policy, project }))
-      findings.push(...stagedContentFindings({ policy, project }))
-    }
+  const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
+  if (!stagedOnly) {
+    graph = buildGraph(project)
+    findings.push(...graph.errors.map((message) => finding({ severity: 'error', code: 'knowledge-graph-invalid', message })))
+    for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
+    findings.push(...promotionFindings({ policy, project, graph }))
+  }
+  findings.push(...actorFindings({ policy, project, actor }))
+  if (staged) {
+    const stagedPaths = stagedPathsForProject(project)
+    findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
+    findings.push(...semanticDiffFindings({ policy, project }))
+    findings.push(...stagedContentFindings({ policy, project }))
   }
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')
@@ -621,12 +660,12 @@ export function installBoundaryHooks({ project, force = false } = {}) {
   const skipped = []
   for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
-    const hooksDir = path.join(repo.path, '.git', 'hooks')
+    const hooksDir = gitHooksDir(repo.path)
     fs.mkdirSync(hooksDir, { recursive: true })
     for (const hookName of ['pre-commit', 'pre-push']) {
       const hookPath = path.join(hooksDir, hookName)
       const existing = fs.existsSync(hookPath) ? fs.readFileSync(hookPath, 'utf8') : ''
-      const script = hookScript(project.configPath, hookName, repo.path)
+      const script = boundaryHookScript(project.configPath, hookName, repo.path)
       if (existing && !existing.includes('MNSTRY_ATELIER_BOUNDARY_GUARD') && !force) {
         const sidecar = `${hookPath}.mnstry-atelier-boundary`
         fs.writeFileSync(sidecar, script)
@@ -642,17 +681,31 @@ export function installBoundaryHooks({ project, force = false } = {}) {
   return { installed, skipped }
 }
 
-function hookScript(projectConfigPath, hookName, repoPath) {
+function gitHooksDir(repoPath) {
+  const result = spawnSync('git', ['-C', repoPath, 'rev-parse', '--git-path', 'hooks'], { encoding: 'utf8' })
+  if (result.status !== 0 || !result.stdout.trim()) throw new Error(`cannot resolve Git hooks directory for ${repoPath}`)
+  const value = result.stdout.trim()
+  return path.isAbsolute(value) ? value : path.resolve(repoPath, value)
+}
+
+function shellSingleQuote(value) {
+  const text = String(value ?? '')
+  if (!text || /[\0\r\n]/.test(text)) throw new Error('project config path contains unsupported control characters')
+  return `'${text.replaceAll("'", `'"'"'`)}'`
+}
+
+export function boundaryHookScript(projectConfigPath, hookName, repoPath) {
   const relativeConfigPath = projectConfigPath && repoPath ? path.relative(repoPath, projectConfigPath) : null
   const configLivesInRepo = relativeConfigPath && relativeConfigPath !== '..' && !relativeConfigPath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeConfigPath)
+  const portableRelativeConfig = configLivesInRepo ? relativeConfigPath.replaceAll(path.sep, '/') : null
   const configSetup = configLivesInRepo
     ? `ATELIER_HOOK_REPO_ROOT="$(git rev-parse --show-toplevel)"
-ATELIER_HOOK_PROJECT_CONFIG="$ATELIER_HOOK_REPO_ROOT/${relativeConfigPath.replaceAll('"', '\\"')}"`
+ATELIER_HOOK_PROJECT_CONFIG="$ATELIER_HOOK_REPO_ROOT"/${shellSingleQuote(portableRelativeConfig)}`
     : ''
   const config = configLivesInRepo
     ? '--project-config="$ATELIER_HOOK_PROJECT_CONFIG"'
     : projectConfigPath
-      ? `--project-config=${projectConfigPath.replaceAll('"', '\\"')}`
+      ? `--project-config=${shellSingleQuote(projectConfigPath)}`
       : ''
   // pre-push reads the ref updates git writes to stdin and judges only that range;
   // pre-commit judges the staged diff. Neither scans the whole tree — that view is
@@ -679,7 +732,7 @@ fi
 `
 }
 
-export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdin = readStdin() } = {}) {
+export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdin = readBoundaryPushInput() } = {}) {
   const args = parseArgs(argv)
   const project = commandProject({ argv })
   const loaded = loadBoundaryPolicy(project)
@@ -687,12 +740,23 @@ export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdi
     console.error(loaded.errors.join('\n'))
     process.exit(1)
   }
-  const updates = parsePushRefUpdates(stdin)
-  if (!updates.length) {
+  const input = stdin && typeof stdin === 'object' && Object.hasOwn(stdin, 'ok')
+    ? stdin
+    : { ok: true, text: String(stdin ?? '') }
+  if (!input.ok) {
+    console.error('[boundary:push-check] could not read pre-push ref updates')
+    process.exit(1)
+  }
+  const parsed = parsePushRefInput(input.text)
+  if (!parsed.ok) {
+    console.error(`[boundary:push-check] invalid pre-push input: ${parsed.issues.join('; ')}`)
+    process.exit(1)
+  }
+  if (parsed.kind === 'empty') {
     console.log('[boundary:push-check] no ref updates on stdin · nothing to judge')
     process.exit(0)
   }
-  const report = checkPushContent({ project, policy: loaded.policy, updates, cwd: process.cwd() })
+  const report = checkPushContent({ project, policy: loaded.policy, updates: parsed.updates, cwd: process.cwd() })
   if (args.json) {
     console.log(JSON.stringify(report, null, 2))
   } else {
@@ -707,6 +771,10 @@ export function runBoundaryPushCheckCommand(argv = process.argv.slice(2), { stdi
   process.exit(report.ok ? 0 : 1)
 }
 
+export function resolveBoundaryAuditSource(args = {}) {
+  return args.head ? 'head' : firstString(args.source) || 'working-tree'
+}
+
 export function runBoundaryAuditCommand(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
   const project = commandProject({ argv })
@@ -715,23 +783,29 @@ export function runBoundaryAuditCommand(argv = process.argv.slice(2)) {
     console.error(loaded.errors.join('\n'))
     process.exit(1)
   }
-  const report = auditContentRules({ project, policy: loaded.policy })
+  const source = resolveBoundaryAuditSource(args)
+  if (!['working-tree', 'head'].includes(source)) {
+    console.error('boundary audit --source must be working-tree or head')
+    process.exit(1)
+  }
+  const report = auditContentRules({ project, policy: loaded.policy, source })
   if (args.json) {
     console.log(JSON.stringify(report, null, 2))
   } else {
-    console.log(`[boundary:audit] ${report.findings.length} content-rule matches across the tree · ${report.accepted.length} declared exceptions`)
+    console.log(`[boundary:audit] ${report.findings.length} content-rule matches · ${report.diagnostics.length} incomplete reads · ${report.accepted.length} declared exceptions · source ${report.source}`)
     for (const item of report.findings.slice(0, 100)) console.log(`${item.severity} ${item.rule}: ${item.message}`)
+    for (const item of report.diagnostics.slice(0, 100)) console.log(`${item.severity} ${item.code}: ${item.message}`)
     for (const item of report.accepted) console.log(`accepted ${item.rule} in ${item.repo} (${item.paths.join(', ')}): ${item.reason}`)
   }
   // Reporting only. A pre-existing accepted usage must never block unrelated work.
   process.exit(0)
 }
 
-function readStdin() {
+export function readBoundaryPushInput(reader = () => fs.readFileSync(0, 'utf8')) {
   try {
-    return fs.readFileSync(0, 'utf8')
+    return { ok: true, text: reader() }
   } catch {
-    return ''
+    return { ok: false, text: '', error: 'stdin-read-failed' }
   }
 }
 

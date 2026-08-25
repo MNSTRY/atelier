@@ -7,16 +7,20 @@ projection readiness.
 
 ## Source Rules
 
-- Markdown documents use front matter.
+- Markdown documents may use front matter. A document with no `kg` block is
+  represented as `unclassified`, assigned the fail-closed `private` audience,
+  and reported diagnostically rather than silently treated as governed.
 - Non-Markdown sources use adjacent `.kg.json` sidecars.
-- `kg.id` is required and stable.
-- `kg.audience` is required.
+- Once a Markdown `kg` block exists, `kg.id` and `kg.audience` are required;
+  empty, partial, and malformed declarations are blocking errors.
 - `kg.visibility` is invalid in local source metadata.
 - Declared relations emit semantic edges.
 
 ## Source formats
 
-The graph is sidecar-first: Markdown front matter is the only inline metadata
+The graph has one canonical classification engine in
+`src/graph/knowledge-graph.mjs`; the older `graph.mjs` surface is a compatibility
+adapter over it, not a second classifier. Markdown front matter is the only inline metadata
 format the kit reads, and every other file becomes a first-class node through
 an adjacent `<file>.kg.json` sidecar
 (`contracts/knowledge-source-sidecar.v1.schema.json`). This is how any format

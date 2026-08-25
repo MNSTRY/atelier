@@ -32,3 +32,18 @@ The default package posture is no telemetry, no external network egress, no
 runtime mutation, no browser apply endpoint, and no model-assisted analysis execution.
 Provider analysis output may only enter as proposed `atelier-claim@v1` records
 until explicitly reviewed by the project owner.
+
+`atelier dev` is narrower than a general static server. It refuses non-loopback
+bind hosts, requires a generated `atelier.manifest.json`, and publishes only
+manifest-enrolled HTML, script, style, and image files that remain inside the
+workspace after realpath resolution. Hidden paths, local state, secret-shaped
+names, symlinks, unknown file types, and unenrolled files are unavailable.
+Reads validate the loopback host and fetch metadata; mutations additionally
+require an allowed method, exact same origin, and the session nonce.
+
+Collaboration endpoints are copy-only: they create or review proposal records;
+they do not apply source changes. Authority is derived from declared
+capabilities and apply endpoints, never inferred from action-like prose. A
+partially corrupt ledger returns typed incomplete evidence and blocks a clean
+claim. Ledger reads and records are bounded, appends are locked, and retention
+changes happen only through explicit compaction.

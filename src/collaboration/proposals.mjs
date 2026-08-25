@@ -2,12 +2,17 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createCollaborationEventLedger } from './event-ledger.mjs'
+import {
+  atomicReplacePrivateText,
+  ensureContainedPrivateDirectory,
+  readRegularTextNoFollow,
+} from '../project/private-state.mjs'
 
 export const ATELIER_PROPOSAL_SCHEMA = 'atelier-proposal@v1'
 export const ATELIER_PROPOSALS_SCHEMA = 'atelier-proposals@v1'
 export const PROPOSAL_REVIEW_STATUSES = new Set(['reviewed', 'accepted', 'rejected', 'superseded'])
-
-const DIRECT_WRITE_ACTION_RE = /(?:^|[._:-])(apply|write|commit|persist|mutate|db|database)(?:$|[._:-])/i
+export const COPY_ONLY_PROPOSAL_CAPABILITY = 'proposal.copy-only'
+const PROPOSAL_ID_PATTERN = /^proposal-[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 function nowIso() {
   return new Date().toISOString()
@@ -21,6 +26,10 @@ function stableCompare(left, right) {
   return String(left).localeCompare(String(right), 'en')
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 function safeJsonText(value, max = 50000) {
   if (value == null) return ''
   if (typeof value === 'string') return value.slice(0, max)
@@ -31,24 +40,20 @@ function safeJsonText(value, max = 50000) {
   }
 }
 
-function ensurePrivateDir(dir) {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  try {
-    fs.chmodSync(dir, 0o700)
-  } catch {
-    // Best effort on filesystems that do not support chmod.
-  }
+function secureWriteJson(file, payload) {
+  atomicReplacePrivateText(file, `${JSON.stringify(payload, null, 2)}\n`)
 }
 
-function secureWriteJson(file, payload) {
-  ensurePrivateDir(path.dirname(file))
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 })
-  fs.renameSync(tmp, file)
+function readRegularJson(file) {
+  return JSON.parse(readRegularTextNoFollow(file))
+}
+
+function writeSnapshotProjectionWith(writer, file, payload) {
   try {
-    fs.chmodSync(file, 0o600)
-  } catch {
-    // Best effort on filesystems that do not support chmod.
+    writer(file, payload)
+    return []
+  } catch (error) {
+    return [{ code: 'proposal-snapshot-write-failed', message: `compatibility snapshot was not updated: ${error.message}` }]
   }
 }
 
@@ -62,15 +67,25 @@ function proposalId(seed = crypto.randomBytes(16).toString('hex')) {
   return `proposal-${crypto.createHash('sha256').update(seed).digest('hex').slice(0, 32)}`
 }
 
-export function actionIsCopyOnly(action) {
-  const value = String(action || '')
-  return Boolean(value) && !DIRECT_WRITE_ACTION_RE.test(value)
+export function validateCopyOnlyProposalAuthority(input = {}) {
+  const authority = input.authority && typeof input.authority === 'object' ? input.authority : {}
+  const capability = input.capability ?? authority.capability
+  const directWrite = input.directWrite ?? authority.directWrite
+  const applyEndpoint = input.applyEndpoint ?? authority.applyEndpoint
+  const issues = []
+  if (capability != null && capability !== COPY_ONLY_PROPOSAL_CAPABILITY) {
+    issues.push(`capability must be ${COPY_ONLY_PROPOSAL_CAPABILITY}`)
+  }
+  if (directWrite != null && directWrite !== false) issues.push('direct-write capability must be false')
+  if (applyEndpoint != null) issues.push('applyEndpoint must be null')
+  return issues.length ? { ok: false, status: 409, issues } : { ok: true, status: 200 }
 }
 
 export function copyOnlyActionSummary(action) {
   return {
     action: String(action || ''),
-    copyOnly: actionIsCopyOnly(action),
+    capability: COPY_ONLY_PROPOSAL_CAPABILITY,
+    copyOnly: true,
     directWrite: false,
     applyEndpoint: null,
   }
@@ -108,19 +123,24 @@ export function acceptedProposalCopy(record) {
 
 export function createProposalStore({
   workspaceRoot = process.cwd(),
-  proposalsDir = path.join(workspaceRoot, '.atelier-proposals'),
+  proposalsDir: requestedProposalsDir = path.join(workspaceRoot, '.atelier-proposals'),
   workspaceId = null,
+  snapshotWriter = secureWriteJson,
 } = {}) {
   const workspaceRootReal = fs.realpathSync(workspaceRoot)
-  ensurePrivateDir(proposalsDir)
+  const proposalsDir = ensureContainedPrivateDirectory({
+    workspaceRoot,
+    directory: requestedProposalsDir,
+    label: 'proposal state directory',
+  })
   const eventLedger = createCollaborationEventLedger({
     workspaceRoot,
     ledgerPath: path.join(proposalsDir, 'events.ndjson'),
   })
 
   function proposalPath(id) {
-    const clean = String(id || '').replace(/[^a-z0-9-]/gi, '')
-    if (!clean) throw new Error('proposal id is required')
+    const clean = String(id || '')
+    if (clean.length > 200 || !PROPOSAL_ID_PATTERN.test(clean)) throw new Error('proposal id is invalid')
     const file = path.join(proposalsDir, `${clean}.json`)
     const candidateDir = fs.realpathSync(proposalsDir)
     if (!pathContainedBy(workspaceRootReal, candidateDir)) {
@@ -134,6 +154,7 @@ export function createProposalStore({
       return event.payload.record
     }
     if (event.type === 'proposal-reviewed' && state) {
+      if (event.payload.record) return event.payload.record
       const next = {
         ...state,
         proposal: {
@@ -151,48 +172,143 @@ export function createProposalStore({
     return state
   }
 
+  function reduceProposalEvents(id, events) {
+    if (events.length === 0) {
+      return { ok: false, status: 404, error: 'proposal not found', record: null }
+    }
+    let state = null
+    let previousVersion = 0
+    for (const event of events) {
+      if (state === null) {
+        if (event.version !== 1 || !['proposal-created', 'proposal-imported'].includes(event.type)) {
+          return { ok: false, status: 422, error: 'proposal ledger does not begin with a canonical record', record: null }
+        }
+        const record = event.payload?.record
+        if (
+          !isRecord(record) || record.schema !== ATELIER_PROPOSAL_SCHEMA ||
+          !isRecord(record.proposal) || record.proposal.id !== id ||
+          !['proposed', ...PROPOSAL_REVIEW_STATUSES].includes(record.proposal.status)
+        ) {
+          return { ok: false, status: 422, error: 'proposal ledger record is invalid', record: null }
+        }
+      } else {
+        const checkpoint = event.payload?.record
+        const checkpointValid = (
+          isRecord(checkpoint) && checkpoint.schema === ATELIER_PROPOSAL_SCHEMA &&
+          isRecord(checkpoint.proposal) && checkpoint.proposal.id === id &&
+          checkpoint.proposal.status === event.payload?.status &&
+          checkpoint.proposal.eventVersion === event.version
+        )
+        const hasCompactionGap = event.version > previousVersion + 1
+        if (
+          event.type !== 'proposal-reviewed' || !PROPOSAL_REVIEW_STATUSES.has(event.payload?.status) ||
+          !isRecord(event.payload?.review) ||
+          (checkpoint !== undefined && !checkpointValid) ||
+          (hasCompactionGap && !checkpointValid) ||
+          (!hasCompactionGap && !canTransitionProposal(state.proposal.status, event.payload.status))
+        ) {
+          return { ok: false, status: 422, error: 'proposal ledger review sequence is invalid', record: null }
+        }
+      }
+      state = reduceProposal(state, event)
+      previousVersion = event.version
+    }
+    return { ok: true, status: 200, record: state }
+  }
+
   function materializedProposal(id) {
-    const events = eventLedger.eventsFor(id)
-    if (events.length === 0) return null
-    return events.reduce(reduceProposal, null)
+    const result = eventLedger.eventsFor(id)
+    if (!result.ok) return { ...result, record: null }
+    return { ...result, ...reduceProposalEvents(id, result.events) }
+  }
+
+  function readCompatibilitySnapshot(id) {
+    let file
+    try {
+      file = proposalPath(id)
+    } catch {
+      return { ok: false, status: 404, error: 'proposal not found', record: null }
+    }
+    if (!fs.existsSync(file)) return { ok: false, status: 404, error: 'proposal not found', record: null }
+    try {
+      const resolved = fs.realpathSync(file)
+      if (!pathContainedBy(fs.realpathSync(proposalsDir), resolved)) {
+        throw new Error('proposal snapshot escapes workspace')
+      }
+      const record = readRegularJson(file)
+      if (record?.proposal?.id !== id) throw new Error('proposal snapshot id does not match its filename')
+      return { ok: true, status: 200, record, source: 'compatibility-snapshot' }
+    } catch (error) {
+      return { ok: false, status: 422, error: `proposal snapshot cannot be read: ${error.message}`, record: null }
+    }
   }
 
   // Read is a lookup, not an assertion: an unusable id and an unreadable file
   // are both "no such proposal", never a throw. New records materialize from
   // the append-only ledger. Per-proposal JSON remains a compatibility snapshot.
   function readProposal(id) {
-    let file
-    try {
-      file = proposalPath(id)
-    } catch {
-      return null
+    if (String(id || '').length > 200 || !PROPOSAL_ID_PATTERN.test(String(id || ''))) {
+      return { ok: false, status: 404, error: 'proposal not found', record: null }
     }
     const materialized = materializedProposal(id)
-    if (materialized) return materialized
-    if (!fs.existsSync(file)) return null
-    try {
-      return JSON.parse(fs.readFileSync(file, 'utf8'))
-    } catch {
-      return null
+    if (materialized.ok) {
+      if (materialized.record?.proposal?.id !== id) {
+        return { ok: false, status: 422, error: 'proposal ledger identity mismatch', record: null }
+      }
+      return materialized
     }
+    if (materialized.status !== 404) return materialized
+    return readCompatibilitySnapshot(id)
   }
 
   function listProposals() {
-    if (!fs.existsSync(proposalsDir)) return []
-    const ledgerIds = eventLedger.readAll().map((event) => event.aggregateId)
-    const snapshotIds = fs.readdirSync(proposalsDir)
-      .filter((name) => name.endsWith('.json'))
-      .map((name) => name.slice(0, -'.json'.length))
-    return [...new Set([...ledgerIds, ...snapshotIds])]
-      .sort(stableCompare)
-      .map(readProposal)
-      .filter(Boolean)
+    if (!fs.existsSync(proposalsDir)) return { ok: true, status: 200, proposals: [] }
+    const ledger = eventLedger.readAll()
+    if (!ledger.ok) return { ...ledger, proposals: [] }
+    const ledgerEvents = new Map()
+    for (const event of ledger.events) {
+      if (!PROPOSAL_ID_PATTERN.test(event.aggregateId)) {
+        return { ok: false, status: 422, error: 'proposal ledger contains an invalid identity', proposals: [] }
+      }
+      const events = ledgerEvents.get(event.aggregateId) ?? []
+      events.push(event)
+      ledgerEvents.set(event.aggregateId, events)
+    }
+    const ledgerRecords = new Map()
+    for (const [id, events] of ledgerEvents) {
+      const reduced = reduceProposalEvents(id, events)
+      if (!reduced.ok) return { ...reduced, proposals: [] }
+      ledgerRecords.set(id, reduced.record)
+    }
+    const ledgerIds = [...ledgerRecords.keys()]
+    const snapshotEntries = fs.readdirSync(proposalsDir, { withFileTypes: true })
+      .filter((entry) => entry.name.endsWith('.json'))
+    const unsafeSnapshot = snapshotEntries.find((entry) => !entry.isFile())
+    if (unsafeSnapshot) {
+      return { ok: false, status: 422, error: 'proposal snapshot cannot be read: state leaf is not a regular file', proposals: [] }
+    }
+    const snapshotIds = snapshotEntries.map((entry) => entry.name.slice(0, -'.json'.length))
+    const readIds = [...new Set([...ledgerIds, ...snapshotIds])].sort(stableCompare)
+    const reads = readIds.map((id) => {
+      const record = ledgerRecords.get(id)
+      if (record) return { ok: true, status: 200, record, source: 'event-ledger' }
+      return readCompatibilitySnapshot(id)
+    })
+    const failed = reads.find((result) => !result.ok)
+    if (failed) return { ...failed, proposals: [] }
+    if (reads.some((result, index) => result.record?.proposal?.id !== readIds[index])) {
+      return { ok: false, status: 422, error: 'proposal identity does not match its state key', proposals: [] }
+    }
+    const proposals = reads
+      .map((result) => result.record)
       .sort((left, right) => stableCompare(right.proposal?.updatedAt || '', left.proposal?.updatedAt || ''))
+    return { ok: true, status: 200, proposals, diagnostics: ledger.diagnostics, stats: ledger.stats }
   }
 
   function ensureLedgerSeed(id, record) {
     const existing = eventLedger.eventsFor(id)
-    if (existing.length > 0) return existing.length
+    if (!existing.ok) return existing
+    if (existing.events.length > 0) return { ok: true, version: existing.currentVersion }
     const seeded = eventLedger.append({
       aggregateId: id,
       expectedVersion: 0,
@@ -201,17 +317,21 @@ export function createProposalStore({
       at: record.proposal?.createdAt || nowIso(),
       payload: { record },
     })
-    if (!seeded.ok) throw new Error(seeded.error)
-    return 1
+    if (!seeded.ok) return seeded
+    return { ok: true, version: seeded.event.version }
   }
 
   function createProposal(body = {}) {
     const action = cleanIdentity(body.action || body.proposal?.action || 'copy.repoPath', 120)
-    if (!actionIsCopyOnly(action)) {
+    const authority = validateCopyOnlyProposalAuthority({
+      ...(body.proposal && typeof body.proposal === 'object' ? body.proposal : {}),
+      ...body,
+    })
+    if (!authority.ok) {
       return {
         ok: false,
-        status: 409,
-        error: 'direct-write proposal action refused',
+        status: authority.status,
+        error: `proposal authority refused: ${authority.issues.join('; ')}`,
       }
     }
 
@@ -259,15 +379,14 @@ export function createProposalStore({
     if (!appended.ok) {
       return { ok: false, status: appended.status, error: appended.error }
     }
-    secureWriteJson(proposalPath(id), record)
-    return { ok: true, status: 200, record }
+    const diagnostics = writeSnapshotProjectionWith(snapshotWriter, proposalPath(id), record)
+    return { ok: true, status: 200, record, diagnostics }
   }
 
   function reviewProposal(id, body = {}) {
-    const record = readProposal(id)
-    if (!record) {
-      return { ok: false, status: 404, error: 'proposal not found' }
-    }
+    const read = readProposal(id)
+    if (!read.ok) return read
+    const record = read.record
     if (body.proposalId && body.proposalId !== id) {
       return { ok: false, status: 409, error: 'ambiguous proposal review refused' }
     }
@@ -308,25 +427,27 @@ export function createProposalStore({
     } else {
       delete nextRecord.copyable
     }
-    const expectedVersion = ensureLedgerSeed(id, record)
+    const seeded = ensureLedgerSeed(id, record)
+    if (!seeded.ok) return seeded
+    nextRecord.proposal.eventVersion = seeded.version + 1
     const appended = eventLedger.append({
       aggregateId: id,
-      expectedVersion,
+      expectedVersion: seeded.version,
       type: 'proposal-reviewed',
       actor: review.reviewer,
       at: updatedAt,
       payload: {
         status: nextStatus,
         review,
+        record: nextRecord,
         ...(nextRecord.copyable ? { copyable: nextRecord.copyable } : {}),
       },
     })
     if (!appended.ok) {
       return { ok: false, status: appended.status, error: appended.error }
     }
-    nextRecord.proposal.eventVersion = appended.event.version
-    secureWriteJson(proposalPath(id), nextRecord)
-    return { ok: true, status: 200, record: nextRecord }
+    const diagnostics = writeSnapshotProjectionWith(snapshotWriter, proposalPath(id), nextRecord)
+    return { ok: true, status: 200, record: nextRecord, diagnostics }
   }
 
   return {

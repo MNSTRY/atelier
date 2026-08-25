@@ -30,19 +30,19 @@ The registry is the distribution channel of record, as `docs/continuity.md`
 commits:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
 ```
 
 Installing from the matching Git tag resolves to the same reviewed commit:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.4"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.5"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.4"
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.5"
 ```
 
 Keep the `@mnstry/` scope — see the command-form note above for why the
@@ -121,7 +121,11 @@ atelier init --template shared-project --target ./project-alpha --actor tenant-u
 
 `--actor` rewrites the copied boundary policy actor entry and binds it to the
 local Git email when available. Use `--github-login` or `--git-email` to set
-those values explicitly during onboarding.
+those values explicitly during onboarding. At check time, a declared actor is
+resolved in this order: recognized `--actor`/`MNSTRY_ATELIER_ACTOR`/
+`GITHUB_ACTOR`, configured Git email, then a reviewed `gh api user` fallback.
+An explicit value that is not declared in the policy does not authenticate an
+actor and therefore does not suppress later resolution attempts.
 
 Then update:
 

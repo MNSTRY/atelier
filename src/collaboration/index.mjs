@@ -7,17 +7,11 @@ export {
 export {
   ATELIER_PROPOSAL_SCHEMA,
   ATELIER_PROPOSALS_SCHEMA,
+  COPY_ONLY_PROPOSAL_CAPABILITY,
   PROPOSAL_REVIEW_STATUSES,
   acceptedProposalCopy,
-  actionIsCopyOnly,
   canTransitionProposal,
   copyOnlyActionSummary,
   createProposalStore,
+  validateCopyOnlyProposalAuthority,
 } from './proposals.mjs'
-
-export {
-  ATELIER_AUTHORING_PROVIDER_SCHEMA,
-  createAuthoringProvider,
-  renderAuthoringProviderHarnessContext,
-  validateAuthoringProviderDescriptor,
-} from './provider.mjs'

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { VALID_AUDIENCES } from '../projection/policy.mjs'
-import { generatedProjectionBasenames } from '../project/file-class.mjs'
+import { generatedProjectionBasenames, generatedProjectionDirectoryBasenames } from '../project/file-class.mjs'
 import { gitIgnoreFilter } from '../project/git-ignore.mjs'
 
 export const KNOWLEDGE_GRAPH_SCHEMA = 'mnstry.knowledge-graph@v1'
@@ -14,7 +14,7 @@ export const VALID_STATUSES = new Set(['active', 'draft', 'archived', 'template'
 export const VALID_KG_TYPES = new Set(['document', 'artifact', 'evidence', 'source', 'index', 'contract', 'guide', 'runbook', 'policy', 'report', 'prototype', 'research', 'decision', 'map', 'manifest', 'html', 'pdf', 'docx'])
 export const VALID_SIDECAR_KG_TYPES = new Set(['html', 'pdf', 'docx', 'artifact', 'evidence', 'source', 'prototype', 'research', 'report', 'manifest'])
 
-const SKIP_DIRS = new Set(['.git', '.agents', '.claude', '.github', 'node_modules', 'output', 'uploads', 'scripts', 'lib'])
+const SKIP_DIRS = new Set(['.git', '.agents', '.claude', '.github', 'node_modules', 'output', 'uploads', 'scripts', 'lib', ...generatedProjectionDirectoryBasenames()])
 // Derived from the kit's file-class declaration, never restated here.
 const GENERATED_FILES = generatedProjectionBasenames()
 const PRIVATE_AUDIENCES = new Set(['private', 'sensitive'])
@@ -100,7 +100,7 @@ function uniqueStringArrayErrors(value, label) {
 }
 
 export function splitFrontmatter(raw) {
-  const normalized = raw.replace(/\r\n/g, '\n')
+  const normalized = String(raw).replace(/\r\n?/g, '\n')
   if (!normalized.startsWith('---\n')) return null
   const rest = normalized.slice(4)
   const match = rest.match(/\n---\s*\n/)
@@ -188,11 +188,50 @@ export function markdownMetadata(raw) {
   return fm ? parseYamlSubset(fm.yaml) : {}
 }
 
+function markdownFrontmatterState(raw) {
+  const fm = splitFrontmatter(raw)
+  if (!fm) return { kind: 'absent', metadata: {} }
+  if (!fm.yaml.trim()) return { kind: 'empty', metadata: {} }
+
+  const metadata = parseYamlSubset(fm.yaml)
+  const lines = fm.yaml.replace(/\t/g, '  ').replace(/\r\n/g, '\n').split('\n')
+  let malformed = false
+  const containerIndents = [-1]
+  const containerKinds = ['object']
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index]
+    const trimmed = rawLine.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const indent = rawLine.match(/^\s*/)[0].length
+    while (containerIndents.length > 1 && indent <= containerIndents.at(-1)) {
+      containerIndents.pop()
+      containerKinds.pop()
+    }
+    if (trimmed.startsWith('- ')) {
+      if (containerKinds.at(-1) !== 'array' || !trimmed.slice(2).trim()) malformed = true
+      continue
+    }
+    const match = trimmed.match(/^([^:]+):(.*)$/)
+    if (!match || !match[1].trim()) {
+      malformed = true
+      continue
+    }
+    if (!match[2].trim()) {
+      const next = nextYamlValue(lines, index, indent)
+      containerIndents.push(indent)
+      containerKinds.push(Array.isArray(next) ? 'array' : 'object')
+    }
+  }
+  return { kind: malformed ? 'malformed' : 'valid', metadata }
+}
+
 function relationMap(value) {
   if (!isPlainObject(value)) return {}
   const relations = {}
   for (const [key, items] of Object.entries(value)) {
-    relations[key] = Array.isArray(items) ? asStringArray(items) : items
+    // Preserve the original graph command's shorthand while emitting one
+    // canonical shape: a scalar Markdown relation is a one-target list.
+    relations[key] = Array.isArray(items) ? asStringArray(items) : typeof items === 'string' ? asStringArray([items]) : items
   }
   return relations
 }
@@ -315,7 +354,6 @@ export function walkDocuments(dir, root, acc = [], isIgnored = gitIgnoreFilter(r
       // sidecar itself is metadata, never a source asset.
       if (ent.name.endsWith('.kg.json')) continue
       if (GENERATED_FILES.has(ent.name)) continue
-      if (rel === 'index.html') continue
       const ext = path.extname(ent.name).toLowerCase()
       // Opt-in requires a VISIBLE sidecar. A git-ignored one is machine-local:
       // it would enrol a node that exists in no tracked file, and hand it an
@@ -556,13 +594,21 @@ export function nodeForFile(repoName, repoRoot, coverage, file, repoAccessConfig
   let title = titleCase(path.basename(file.rel))
   let summary = ''
   let metadata = {}
+  let classification = 'classified'
+  let classificationReason = null
   let sidecar = null
   let hasSidecar = false
   let atelier = { section: coverage.sections.get(file.rel) || null, status: null, kind: null }
 
   if (file.ext === '.md') {
     const raw = fs.readFileSync(file.abs, 'utf8')
-    metadata = markdownMetadata(raw)
+    const frontmatter = markdownFrontmatterState(raw)
+    metadata = frontmatter.metadata
+    if (frontmatter.kind !== 'valid' || !isPlainObject(metadata.kg)) {
+      classification = 'unclassified'
+      classificationReason = frontmatter.kind === 'valid' ? 'missing-kg-block' : `${frontmatter.kind}-frontmatter`
+      metadata = {}
+    }
     title = asString(metadata.title, extractMarkdownTitle(raw, file.rel))
     summary = asString(metadata.summary, extractMarkdownSummary(raw))
   } else if (file.ext === '.html') {
@@ -594,7 +640,7 @@ export function nodeForFile(repoName, repoRoot, coverage, file, repoAccessConfig
   const domain = asString(kg.domain, inferredDomain)
   const lifecycle = asString(kg.lifecycle, inferredLifecycle)
   const status = asString(kg.status, inferredStatus)
-  const audience = asString(kg.audience, '')
+  const audience = classification === 'unclassified' ? 'private' : asString(kg.audience, '')
   const frontmatterHasLegacyVisibility = Object.hasOwn(kg, 'visibility')
   const type = asString(kg.type, file.ext === '.md' ? 'document' : file.ext.slice(1))
   const id = asString(kg.id, fallbackId(repoName, file.rel, file.ext))
@@ -615,6 +661,8 @@ export function nodeForFile(repoName, repoRoot, coverage, file, repoAccessConfig
     lifecycle,
     status,
     audience,
+    classification,
+    ...(classificationReason ? { classificationReason } : {}),
     ...(frontmatterHasLegacyVisibility ? { frontmatterHasLegacyVisibility: true } : {}),
     ...(file.ext === '.md' ? { markdownHasKgBlock: hasKgBlock, markdownHasKgId: hasExplicitKgId } : {}),
     ...(file.ext !== '.md'
@@ -694,6 +742,20 @@ export function uniqueEdges(edges) {
 export function graphDiagnostics(nodes) {
   const diagnostics = []
   for (const node of nodes) {
+    if (node.classification === 'unclassified') {
+      diagnostics.push({
+        severity: 'warning',
+        type: 'unclassified-content',
+        code: 'unclassified-content',
+        node: node.id,
+        repo: node.repo,
+        path: node.path,
+        audience: node.audience,
+        repoAccess: node.repoAccess,
+        reason: node.classificationReason,
+        message: `${node.repo}/${node.path}: Markdown classification metadata is ${node.classificationReason}; enrolled as private unclassified content`,
+      })
+    }
     const audienceRank = AUDIENCE_READ_RANK[node.audience]
     const readBoundary = node.repoAccess?.readBoundary
     const readBoundaryRank = AUDIENCE_READ_RANK[readBoundary]
@@ -730,14 +792,16 @@ export function activeOrphanSidecars(repoName, repoRoot, files, isIgnored = gitI
   return orphans
 }
 
-export function validateKnowledgeGraph(nodes, edges, orphanSidecars = []) {
+export function validateKnowledgeGraph(nodes, edges, orphanSidecars = [], { externalRelationPrefixes = [], externalRelationIds = [] } = {}) {
   const errors = []
   const seenIds = new Map()
+  const allowedExternalPrefixes = new Set(externalRelationPrefixes)
+  const allowedExternalIds = new Set(externalRelationIds)
 
   for (const node of nodes) {
     if (!node.id) errors.push(`${node.repo}/${node.path}: missing kg.id`)
-    if (node.extension === 'md' && node.markdownHasKgBlock && !node.markdownHasKgId) {
-      errors.push(`${node.repo}/${node.path}: Markdown kg block must declare kg.id`)
+    if (node.extension === 'md' && node.classification !== 'unclassified' && node.markdownHasKgBlock && !node.markdownHasKgId) {
+      errors.push(`${node.repo}/${node.path}: kg.id is required in a Markdown kg block`)
     }
     if (node.extension !== 'md' && !node.hasSidecar) {
       errors.push(`${node.repo}/${node.path}: missing non-Markdown sidecar ${node.sidecar || `${node.path}.kg.json`}`)
@@ -753,7 +817,7 @@ export function validateKnowledgeGraph(nodes, edges, orphanSidecars = []) {
       seenIds.set(node.id, `${node.repo}/${node.path}`)
     }
     if (node.frontmatterHasLegacyVisibility) {
-      errors.push(`${node.repo}/${node.path}: legacy kg.visibility is reserved for runtime export; use kg.audience`)
+      errors.push(`${node.repo}/${node.path}: kg.visibility is invalid for graph classification; use kg.audience`)
     }
     if (!VALID_AUDIENCES.has(node.audience)) {
       errors.push(`${node.repo}/${node.path}: invalid or missing kg.audience "${node.audience ?? ''}"`)
@@ -776,7 +840,8 @@ export function validateKnowledgeGraph(nodes, edges, orphanSidecars = []) {
 
   for (const edge of edges) {
     if (!edge.declared) continue
-    if (!seenIds.has(edge.target)) {
+    const externalPrefix = String(edge.target).split(':')[0]
+    if (!seenIds.has(edge.target) && !allowedExternalIds.has(edge.target) && !allowedExternalPrefixes.has(externalPrefix)) {
       const sourcePath = seenIds.get(edge.source) || edge.source
       errors.push(`${sourcePath}: declared ${edge.type} target "${edge.target}" was not found`)
     }
@@ -793,17 +858,24 @@ export function buildKnowledgeGraph({
   workspaceRoot,
   repoAccessConfig,
   repoRoots = null,
+  repoEntries = null,
   repoAccessConfigPath = 'repo-access config',
   externalRepos = [],
+  externalRelationPrefixes = [],
+  externalRelationIds = [],
 } = {}) {
   if (!workspaceRoot) throw new Error('workspaceRoot is required')
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
   const external = new Set(externalRepos)
-  const discovered = repoRoots ? repoRoots.map((repoRoot) => path.resolve(repoRoot)).sort() : listRepos(resolvedWorkspaceRoot)
+  const discoveredEntries = repoEntries
+    ? repoEntries.map((entry) => ({ name: entry.name, path: path.resolve(entry.path) })).sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    : (repoRoots ? repoRoots.map((repoRoot) => path.resolve(repoRoot)) : listRepos(resolvedWorkspaceRoot))
+        .sort()
+        .map((repoRoot) => ({ name: path.basename(repoRoot), path: repoRoot }))
   // External repos are acknowledged but never walked: no document census, no
   // sidecar demands, no projection.
-  const roots = discovered.filter((repoRoot) => !external.has(path.basename(repoRoot)))
-  const repoNames = roots.map((repoRoot) => path.basename(repoRoot))
+  const roots = discoveredEntries.filter((entry) => !external.has(entry.name))
+  const repoNames = roots.map((entry) => entry.name)
   const accessConfig = repoAccessConfig ?? {
     schema: REPO_ACCESS_SCHEMA,
     defaultReadBoundary: 'team',
@@ -825,8 +897,9 @@ export function buildKnowledgeGraph({
   const workspaceIgnoredSidecars = []
   const repoGraphs = []
 
-  for (const repoRoot of roots) {
-    const repoName = path.basename(repoRoot)
+  for (const entry of roots) {
+    const repoRoot = entry.path
+    const repoName = entry.name
     // One batched ignore lookup per repo, shared by every walk below.
     const isIgnored = gitIgnoreFilter(repoRoot)
     const files = walkDocuments(repoRoot, repoRoot, [], isIgnored)
@@ -858,7 +931,10 @@ export function buildKnowledgeGraph({
     workspaceEdges.push(...graph.edges)
   }
 
-  const validationErrors = validateKnowledgeGraph(workspaceNodes, workspaceEdges, workspaceOrphanSidecars)
+  const validationErrors = validateKnowledgeGraph(workspaceNodes, workspaceEdges, workspaceOrphanSidecars, {
+    externalRelationPrefixes,
+    externalRelationIds,
+  })
   const workspaceGraph = {
     schema: KNOWLEDGE_GRAPH_SCHEMA,
     workspace: path.basename(resolvedWorkspaceRoot),

@@ -5,6 +5,29 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.5
+
+This release hardens public/private boundary enforcement, local serving,
+collaboration-ledger integrity, disclosure review, and release provenance.
+Documents valid against `0.2.0-alpha.0` remain contract-compatible, but some
+previously tolerated unsafe or ambiguous states now fail closed.
+
+- Projects using `atelier dev` must provide a generated
+  `atelier.manifest.json`; only enrolled, safe, realpath-validated static files
+  are served, and the sidecar accepts loopback traffic only.
+- Empty or malformed content-rule policies, incomplete Git reads, corrupt or
+  oversized collaboration ledgers, and unsafe manifest entries are now
+  blocking errors with typed CLI diagnostics.
+- Run `atelier disclosure check` before sharing tracked or staged content. A
+  private denylist is required by default and must remain outside the public
+  repository.
+- Release candidates are packed once, SHA-256-bound, and the exact audited
+  tarball is the artifact sent through npm trusted publishing.
+
+Re-run the boundary, disclosure, graph, readiness, and lock checks below after
+updating. If `atelier dev` previously served files without a manifest, generate
+and review the manifest before restarting it.
+
 ## Upgrading to 0.2.0-alpha.4
 
 This is a presentation release. There are no contract changes and no runtime
@@ -94,7 +117,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.4
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -102,7 +125,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.4"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.5"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 

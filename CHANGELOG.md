@@ -1,7 +1,60 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.5
 
+- Harden boundary enforcement so path globs use segment-aware matching, an
+  explicitly empty or malformed content-rule policy is invalid, staged and
+  pushed binary evidence is scanned within bounded budgets, incomplete Git
+  reads fail closed, linked worktrees install hooks in the correct Git common
+  directory, and `boundary audit` defaults to the current working tree with an
+  explicit `--head` snapshot mode.
+- Consolidate graph classification in one canonical engine. Markdown without a
+  `kg` block is now represented as `unclassified` with a private audience and
+  diagnostics; empty, partial, or malformed declarations remain blocking.
+  Generated projection directories remain derived from the file-class manifest
+  so graph validation and generated-only upgrade recovery cannot drift apart.
+- Bind release egress verification to the exact `npm pack` inventory, including
+  test-shaped paths that are actually published, and make the legacy egress
+  checker a thin delegate to the canonical scanner. Packed fixture-suppression
+  markers are refused and reviewed local-computed suppressions are counted.
+- Harden `atelier dev` so it binds only to loopback, requires a generated
+  `atelier.manifest.json`, serves only enrolled safe static files after
+  realpath validation, and applies host, fetch-site, origin, method, and nonce
+  checks to the relevant read and mutation routes.
+- Make collaboration records fail closed with typed corrupt-record results,
+  bounded ledger reads, POSIX no-follow and cross-platform state-leaf identity
+  validation, content-bound event identifiers, write locking, explicit
+  compaction, and one-pass proposal-list materialization. Compatibility
+  snapshots are best-effort projections of committed events rather than a
+  second authority. Proposal authority now follows declared capabilities and
+  apply endpoints rather than action-like words, and the never-released
+  provider-analysis experiment was removed before it became part of a
+  published API.
+- Render expected project and JSON failures as typed, actionable CLI messages
+  without stacks by default; set `ATELIER_DEBUG=1` to include diagnostic stacks.
+- Strengthen release proof with negative-control mutations and a bare consumer
+  that installs without publisher overrides, validates its dependency tree,
+  and imports every declared package export. A candidate is packed once, bound
+  by SHA-256, and passed unchanged through tarball audit, consumer, and branded
+  distribution gates. The trusted-publishing workflow publishes that same
+  retained, audited tarball rather than repacking the source directory.
+- Pin every JavaScript subpath and named export from `v0.2.0-alpha.4` in a
+  registry-verified compatibility baseline with immutable tag-commit and
+  public-artifact provenance. Release tooling refuses removals, provenance
+  drift, and binding modified source to an already-tagged package version.
+- Add a portable `atelier disclosure check` command that scans tracked or
+  staged consumer content, requires private denylist coverage by default, and
+  refuses tracked repository-local denylist files. Portable and repository
+  sweeps now detect the full bounded family of private-key headers and refuse
+  binary or invalid-UTF-8 evidence instead of omitting it. Fork sweeps require
+  the trusted denylist secret and cannot fall back to the untrusted checkout.
+  Repository release sweeps also inspect every bounded blob introduced by the
+  commit range, so content added and deleted before the final tree cannot
+  become public history unseen.
+- Add public agent instructions and mirrored skills for extracting reusable
+  mechanisms from private implementations without carrying tenant material
+  into Atelier, plus a managed local-service contract for durable loopback
+  authoring and review tools.
 - Document the client-zero adapter rule that exact package identity, installed
   dependency resolution, CLI version, and `atelier.lock.json` must agree. This
   prevents a stale sibling checkout from satisfying a current adapter proof.

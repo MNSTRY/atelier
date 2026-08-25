@@ -57,6 +57,7 @@ Core commands:
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
   distribution check              Check a distribution for MNSTRY attribution.
+  disclosure check                Scan tracked or staged content for disclosure risks.
 
 Attestation commands:
   attestation hash FILE           Print the canonical payload hash of a payload.
@@ -64,8 +65,10 @@ Attestation commands:
   attestation verify FILE         Verify an attestation against a public key file.
   attestation keygen --key-id ID  Generate a signing key pair.
 
-Every project-aware command accepts --project-config=PATH or
-MNSTRY_ATELIER_PROJECT_CONFIG=PATH. Machine-local repo paths belong in
+Commands whose usage names --project accept --project=PATH or --project PATH.
+The project resolver also accepts --project-config=PATH and
+MNSTRY_ATELIER_PROJECT_CONFIG=PATH; each command's own help is authoritative.
+Machine-local repo paths belong in
 .atelier-local/, atelier.local.json, or atelier.workspace.local.json.`
 
 const LOOMWORKS = Object.freeze({ command: 'loomworks', displayName: 'Loomworks Studio', version: '1.4.0' })
@@ -81,7 +84,7 @@ test('default-brand version text is the bare package version', () => {
 test('command map exposes the dispatch table for introspection', () => {
   assert.equal(commandMap instanceof Map, true)
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
-  assert.equal(commandMap.size, 50)
+  assert.equal(commandMap.size, 52)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {
@@ -90,6 +93,8 @@ test('command map dispatches the white-label commands to their own modules', () 
   assert.deepEqual(commandMap.get('extension-pack:list'), ['src/commands/extension-pack.mjs', 'list'])
   assert.deepEqual(commandMap.get('distribution'), ['src/commands/distribution.mjs'])
   assert.deepEqual(commandMap.get('distribution:check'), ['src/commands/distribution.mjs', 'check'])
+  assert.deepEqual(commandMap.get('disclosure'), ['src/commands/disclosure.mjs'])
+  assert.deepEqual(commandMap.get('disclosure:check'), ['src/commands/disclosure.mjs', 'check'])
   assert.deepEqual(commandMap.get('attestation'), ['src/commands/attestation.mjs'])
   // manifest keeps its historical config.mjs target.
   assert.deepEqual(commandMap.get('manifest'), ['src/commands/config.mjs'])
@@ -194,9 +199,33 @@ test('runCli reports unknown commands with the wrapper display name', async () =
 const BIN = path.join(ROOT, 'bin', 'atelier.mjs')
 const PACK_FIXTURES = path.join(ROOT, 'fixtures', 'atelier-extension-pack')
 
-function runBin(args, { cwd = ROOT } = {}) {
-  return spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' })
+function runBin(args, { cwd = ROOT, env = process.env } = {}) {
+  return spawnSync(process.execPath, [BIN, ...args], { cwd, env, encoding: 'utf8' })
 }
+
+test('expected project failures are typed, actionable, and stack-free by default', (t) => {
+  const sample = makeSampleProject(t)
+  const missingArtifact = runBin(['project', '--project', sample.config], { cwd: sample.dir })
+  assert.equal(missingArtifact.status, 2)
+  assert.match(missingArtifact.stderr, /^\[artifact-missing\]/m)
+  assert.match(missingArtifact.stderr, /Next: Run atelier graph/)
+  assert.doesNotMatch(missingArtifact.stderr, /\n\s+at /)
+
+  fs.writeFileSync(sample.config, '{ malformed\n')
+  const malformed = runBin(['graph', '--project', sample.config], { cwd: sample.dir })
+  assert.equal(malformed.status, 2)
+  assert.match(malformed.stderr, /^\[project-config-json-invalid\]/m)
+  assert.match(malformed.stderr, /Next: Repair the JSON syntax/)
+  assert.doesNotMatch(malformed.stderr, /\n\s+at /)
+
+  const debug = runBin(['graph', '--project', sample.config], {
+    cwd: sample.dir,
+    env: { ...process.env, ATELIER_DEBUG: '1' },
+  })
+  assert.equal(debug.status, 2)
+  assert.match(debug.stderr, /AtelierDiagnosticError/)
+  assert.match(debug.stderr, /\n\s+at /)
+})
 
 test('extension-pack validate dispatches to the extension-pack module', (t) => {
   const sample = makeSampleProject(t)
@@ -247,6 +276,7 @@ test('the default help lists the white-label commands and the attestation stanza
   assert.match(help, /^ {2}extension-pack validate {9}Validate declared extension packs\.$/m)
   assert.match(help, /^ {2}extension-pack list {13}List declared extension packs\.$/m)
   assert.match(help, /^ {2}distribution check {14}Check a distribution for MNSTRY attribution\.$/m)
+  assert.match(help, /^ {2}disclosure check {16}Scan tracked or staged content for disclosure risks\.$/m)
   assert.match(help, /^Attestation commands:$/m)
   assert.match(help, /^ {2}attestation keygen --key-id ID {2}Generate a signing key pair\.$/m)
 })

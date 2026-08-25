@@ -76,6 +76,11 @@ both ways for contributors:
 - **No absolute home paths** in code, fixtures, or commit messages; the
   full-history sweep refuses them. Build test paths at runtime.
 
+When a contribution is informed by a private implementation, use the shipped
+`atelier-public-boundary` skill to re-derive the invariant against an invented
+fixture. Use `atelier-local-service` for a durable consumer-owned loopback
+service; its ports, paths, schema, content, and copy stay in the consumer repo.
+
 ## What is welcome
 
 - Bug reports and fixes — a fix lands with the failing case as a permanent
@@ -115,6 +120,7 @@ npm run syntax:check
 ATELIER_ALLOW_MISSING_DENYLIST=1 npm test
 npm run contract && npm run contract:compat
 npm run egress:check && npm run repo:check && npm run migrations:check
+node --test test/disclosure.test.mjs
 ```
 
 A note on the test suite from a fresh clone: plain `npm test` includes one

@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 
 // Repo-wide disclosure checker. Scans tracked file content (or staged changes)
-// and optionally commit identities and messages for structural leaks and for
-// the maintainer-held denylist patterns.
+// and optionally newly reachable commit trees, identities, and messages for
+// structural leaks and for the maintainer-held denylist patterns.
 //
 // Usage:
 //   node scripts/check-repo-disclosure.mjs [--root <dir>] [--staged]
 //     [--structural-only] [--commits none|range|all] [--base <ref>] [--untrusted]
+//     [--external-contributor-range]
 //
-// Denylist source precedence: ATELIER_DENYLIST_JSON env -> the scanned root's
-// release-denylist.local.json -> fail closed (exit 2) unless --structural-only
+// Denylist source precedence: ATELIER_DENYLIST_JSON env -> this trusted
+// package's release-denylist.local.json -> fail closed (exit 2) unless --structural-only
 // or ATELIER_ALLOW_MISSING_DENYLIST=1 acknowledges a structural-only run.
 //
 // Log-safety contract: findings print label + file:line (or commit SHA) only —
@@ -22,16 +23,30 @@
 // Exit codes: 0 clean, 1 findings, 2 config or usage error.
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compileDisclosurePatterns } from '../src/disclosure/content-scan.mjs'
 import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+const MAX_HISTORY_COMMITS = 10_000
+const MAX_HISTORY_COMMIT_BYTES = 4 * 1024 * 1024
+const MAX_HISTORY_COMMIT_TOTAL_BYTES = 64 * 1024 * 1024
+const MAX_HISTORY_OBJECTS = 300_000
+const MAX_HISTORY_BLOBS = 100_000
+const MAX_HISTORY_BLOB_BYTES = 16 * 1024 * 1024
+const MAX_HISTORY_TOTAL_BYTES = 256 * 1024 * 1024
+const REVIEWED_TRACKED_BINARY_SHA256 = new Map([
+  // Four-byte synthetic PNG signature used only to prove graph-sidecar
+  // handling. It is excluded from the published package; any byte change
+  // invalidates this narrow allowance and blocks the sweep.
+  ['fixtures/projects/source-formats-workspace/content/logo.png', '0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543'],
+])
 
-// Duplicated from scripts/check-release-tarball.mjs (that audit scans only the
-// published tarball; this script scans the whole tracked tree). Drift risk:
-// keep the two lists identical when either changes.
+// Shared with the release tarball audit; this script scans the whole tracked
+// tree while the release audit scans only the packed artifact.
 const structuralForbiddenContent = STRUCTURAL_FORBIDDEN_CONTENT
 
 // These files carry structural pattern literals (or exercise this gate) and
@@ -75,6 +90,7 @@ let root = packageRoot
 let staged = false
 let structuralOnly = false
 let untrusted = false
+let externalContributorRange = false
 let commitsMode = 'none'
 let base = null
 for (let i = 0; i < args.length; i += 1) {
@@ -89,6 +105,8 @@ for (let i = 0; i < args.length; i += 1) {
     structuralOnly = true
   } else if (arg === '--untrusted') {
     untrusted = true
+  } else if (arg === '--external-contributor-range') {
+    externalContributorRange = true
   } else if (arg === '--commits') {
     i += 1
     if (!['none', 'range', 'all'].includes(args[i])) usageError('--commits must be none, range, or all')
@@ -102,6 +120,9 @@ for (let i = 0; i < args.length; i += 1) {
   }
 }
 if (commitsMode === 'range' && !base) usageError('--commits range requires --base <ref>')
+if (externalContributorRange && commitsMode !== 'range') {
+  usageError('--external-contributor-range requires --commits range')
+}
 
 function git(gitArgs) {
   return execFileSync('git', ['-C', root, ...gitArgs], {
@@ -119,20 +140,16 @@ try {
 
 function compileDenylist(doc) {
   if (!doc || !Array.isArray(doc.patterns)) usageError('denylist document must be {"patterns": [...]}')
-  return doc.patterns.map(({ pattern, flags = '', label }) => {
-    try {
-      // g/y flags would make .test stateful across lines — strip them.
-      return { pattern: new RegExp(pattern, flags.replace(/[gy]/g, '')), label }
-    } catch {
-      // Log-safety: a broken pattern is never echoed back.
-      return usageError(`denylist pattern failed to compile: ${label}`)
-    }
-  })
+  try {
+    return compileDisclosurePatterns(doc.patterns)
+  } catch (error) {
+    usageError(error instanceof Error ? error.message : 'denylist pattern failed to compile')
+  }
 }
 
 let denylist = []
 if (!structuralOnly) {
-  const denylistPath = join(root, 'release-denylist.local.json')
+  const denylistPath = join(packageRoot, 'release-denylist.local.json')
   if (process.env.ATELIER_DENYLIST_JSON) {
     let doc
     try {
@@ -141,8 +158,16 @@ if (!structuralOnly) {
       usageError('ATELIER_DENYLIST_JSON is not valid JSON')
     }
     denylist = compileDenylist(doc)
-  } else if (existsSync(denylistPath)) {
-    denylist = compileDenylist(JSON.parse(readFileSync(denylistPath, 'utf8')))
+  } else if (untrusted) {
+    usageError('ATELIER_DENYLIST_JSON is required when scanning an untrusted checkout')
+  } else if (resolve(root) === resolve(packageRoot) && existsSync(denylistPath)) {
+    let doc
+    try {
+      doc = JSON.parse(readFileSync(denylistPath, 'utf8'))
+    } catch {
+      usageError('release-denylist.local.json is not valid JSON')
+    }
+    denylist = compileDenylist(doc)
   } else if (process.env.ATELIER_ALLOW_MISSING_DENYLIST === '1') {
     console.warn('[repo:check] denylist unavailable — ATELIER_ALLOW_MISSING_DENYLIST=1 acknowledged; structural patterns only')
   } else {
@@ -162,24 +187,52 @@ function report(label, location) {
   findings += 1
 }
 
-function scanLine(line, relPath, lineNumber) {
+function scanLine(line, relPath, lineNumber, displayPath = relPath) {
   if (!STRUCTURAL_SELF_EXCLUDED.includes(relPath)) {
     for (const { pattern, label } of structuralForbiddenContent) {
-      if (pattern.test(line)) report(label, `${relPath}:${lineNumber}`)
+      if (pattern.test(line)) report(label, `${displayPath}:${lineNumber}`)
     }
   }
   for (const { pattern, label } of denylist) {
-    if (pattern.test(line)) report(label, `${relPath}:${lineNumber}`)
+    if (pattern.test(line)) report(label, `${displayPath}:${lineNumber}`)
   }
 }
 
 let scannedFiles = 0
+let uninspectableFiles = 0
+let reviewedBinaryFiles = 0
 
-function scanBuffer(buffer, relPath) {
-  if (buffer.subarray(0, 8192).includes(0)) return // binary
-  scannedFiles += 1
-  const lines = buffer.toString('utf8').split('\n')
-  for (let i = 0; i < lines.length; i += 1) scanLine(lines[i], relPath, i + 1)
+function isReviewedTrackedBinary(buffer, relPath) {
+  const expected = REVIEWED_TRACKED_BINARY_SHA256.get(relPath)
+  if (!expected) return false
+  return createHash('sha256').update(buffer).digest('hex') === expected
+}
+
+function scanBuffer(buffer, relPath, displayPath = relPath, countFile = true) {
+  let text
+  if (buffer.includes(0)) {
+    if (isReviewedTrackedBinary(buffer, relPath)) {
+      reviewedBinaryFiles += 1
+      return
+    }
+    report('binary-uninspectable', displayPath)
+    uninspectableFiles += 1
+    return
+  }
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+  } catch {
+    if (isReviewedTrackedBinary(buffer, relPath)) {
+      reviewedBinaryFiles += 1
+      return
+    }
+    report('text-encoding-invalid', displayPath)
+    uninspectableFiles += 1
+    return
+  }
+  if (countFile) scannedFiles += 1
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i += 1) scanLine(lines[i], relPath, i + 1, displayPath)
 }
 
 function scanTrackedFiles() {
@@ -215,53 +268,314 @@ function scanStagedChanges() {
   }
 }
 
-function scanCommits() {
-  const format = '%H%x01%P%x01%an%x01%ae%x01%cn%x01%ce%x01%B%x02'
-  const selector = commitsMode === 'all' ? ['--all'] : [`${base}..HEAD`]
-  let out
+function commitSelector() {
+  return commitsMode === 'all' ? ['--all'] : [`${base}..HEAD`]
+}
+
+function scanCommits(selector) {
+  let shas
   try {
-    out = git(['log', `--format=${format}`, ...selector])
+    shas = git(['rev-list', ...selector]).split('\n').filter(Boolean)
   } catch {
     usageError(
       commitsMode === 'range' ? `unable to resolve commit range ${base}..HEAD` : 'unable to read commit history',
     )
   }
-  const records = out
-    .split('\x02')
-    .map((record) => record.replace(/^\n/, ''))
-    .filter((record) => record.length > 0)
-  for (const record of records) {
-    const [sha, parents = '', authorName, authorEmail, committerName, committerEmail, message = ''] = record.split('\x01')
-    if (!sha) continue
-    // Merge commits (>1 parent) skip identity checks: on pull_request events
-    // GitHub's synthetic merge ref commit is authored by
-    // 'GitHub <noreply@github.com>', which would fail the author gate on
-    // every PR. Their messages are still scanned below.
-    const isMergeCommit = parents.trim().split(/\s+/).filter(Boolean).length > 1
-    if (!isMergeCommit) {
-      if (!ALLOWED_AUTHORS.some((id) => id.name === authorName && id.email === authorEmail)) {
-        // Log-safety: the offending identity is not echoed, only the SHA.
+  if (shas.some((sha) => !/^[0-9a-f]{40,64}$/.test(sha))) {
+    report('commit-object-inventory-invalid', 'history')
+    return 0
+  }
+  if (shas.length > MAX_HISTORY_COMMITS) {
+    report('commit-count-limit', 'history')
+    shas = shas.slice(0, MAX_HISTORY_COMMITS)
+  }
+  if (shas.length === 0) {
+    if (commitsMode === 'range') report('commit-range-empty', `${base}..HEAD`)
+    return 0
+  }
+
+  let checks
+  try {
+    checks = execFileSync(
+      'git',
+      ['-C', root, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+      {
+        input: `${shas.join('\n')}\n`,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    ).trim().split('\n').filter(Boolean)
+  } catch {
+    report('commit-object-inventory-incomplete', 'history')
+    return 0
+  }
+  if (checks.length !== shas.length) report('commit-object-inventory-incomplete', 'history')
+
+  const commits = []
+  let totalBytes = 0
+  for (let index = 0; index < shas.length; index += 1) {
+    const expectedSha = shas[index]
+    const [sha, type, sizeText] = (checks[index] ?? '').split(' ')
+    const size = Number(sizeText)
+    if (
+      sha !== expectedSha || type !== 'commit' || !Number.isSafeInteger(size) ||
+      size < 0 || size > MAX_HISTORY_COMMIT_BYTES
+    ) {
+      report('commit-object-inventory-incomplete', `commit ${expectedSha}`)
+      continue
+    }
+    if (totalBytes + size > MAX_HISTORY_COMMIT_TOTAL_BYTES) {
+      report('commit-history-byte-limit', 'commit history')
+      break
+    }
+    commits.push({ sha, size })
+    totalBytes += size
+  }
+  if (commits.length === 0) return shas.length
+
+  let batch
+  try {
+    batch = execFileSync('git', ['-C', root, 'cat-file', '--batch'], {
+      input: `${commits.map(({ sha }) => sha).join('\n')}\n`,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: totalBytes + commits.length * 128 + 1024,
+    })
+  } catch {
+    report('commit-object-read-incomplete', 'history')
+    return shas.length
+  }
+
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  let offset = 0
+  for (const expected of commits) {
+    const newline = batch.indexOf(0x0a, offset)
+    const header = newline < 0 ? [] : batch.subarray(offset, newline).toString('utf8').split(' ')
+    const [sha, type, sizeText] = header
+    const size = Number(sizeText)
+    const contentStart = newline + 1
+    const contentEnd = contentStart + size
+    if (
+      newline < 0 || sha !== expected.sha || type !== 'commit' || size !== expected.size ||
+      contentEnd >= batch.length || batch[contentEnd] !== 0x0a
+    ) {
+      report('commit-object-read-incomplete', `commit ${expected.sha}`)
+      break
+    }
+    const raw = batch.subarray(contentStart, contentEnd)
+    offset = contentEnd + 1
+    if (raw.includes(0)) {
+      report('commit-object-binary-uninspectable', `commit ${sha}`)
+      continue
+    }
+    let text
+    try {
+      text = decoder.decode(raw)
+    } catch {
+      report('commit-object-text-invalid', `commit ${sha}`)
+      continue
+    }
+    const separator = text.indexOf('\n\n')
+    const headerLines = separator < 0 ? [] : text.slice(0, separator).split('\n')
+    const treeLines = headerLines.filter((line) => line.startsWith('tree '))
+    const parentLines = headerLines.filter((line) => line.startsWith('parent '))
+    const authorLines = headerLines.filter((line) => line.startsWith('author '))
+    const committerLines = headerLines.filter((line) => line.startsWith('committer '))
+    const objectFormatValid = (
+      separator >= 0 && treeLines.length === 1 && authorLines.length === 1 && committerLines.length === 1 &&
+      /^tree [0-9a-f]{40,64}$/.test(treeLines[0]) &&
+      parentLines.every((line) => /^parent [0-9a-f]{40,64}$/.test(line))
+    )
+    const parseIdentity = (line, label) => {
+      const match = line.match(new RegExp(`^${label} (.*) <([^<>\\n]+)> -?\\d+ [+-]\\d{4}$`))
+      return match ? { name: match[1], email: match[2] } : null
+    }
+    const author = objectFormatValid ? parseIdentity(authorLines[0], 'author') : null
+    const committer = objectFormatValid ? parseIdentity(committerLines[0], 'committer') : null
+    if (!objectFormatValid || !author || !committer) {
+      report('commit-object-format-invalid', `commit ${sha}`)
+      continue
+    }
+    // Every byte of the raw public commit object is disclosure-scanned,
+    // including identity and extra headers, before repository identity policy.
+    for (const [index, line] of text.split('\n').entries()) {
+      scanLine(line, '__commit_object__', index + 1, `commit ${sha} object`)
+    }
+    // Merge commits skip repository identity checks because GitHub synthetic
+    // merge commits use GitHub identity. Raw content remains scanned above.
+    const isMergeCommit = parentLines.length > 1
+    if (!isMergeCommit && !externalContributorRange) {
+      if (!ALLOWED_AUTHORS.some((id) => id.name === author.name && id.email === author.email)) {
         report('commit-identity (author)', sha)
       }
-      if (!ALLOWED_COMMITTERS.some((id) => id.name === committerName && id.email === committerEmail)) {
+      if (!ALLOWED_COMMITTERS.some((id) => id.name === committer.name && id.email === committer.email)) {
         report('commit-identity (committer)', sha)
       }
     }
-    for (const { pattern, label } of structuralForbiddenContent) {
-      if (pattern.test(message)) report(label, `commit ${sha} message`)
-    }
-    for (const { pattern, label } of denylist) {
-      if (pattern.test(message)) report(label, `commit ${sha} message`)
-    }
   }
-  return records.length
+  return shas.length
+}
+
+function scanCommitTrees(selector) {
+  let inventory
+  try {
+    inventory = git([
+      'log', '--raw', '--root', '-m', '--no-renames', '--no-abbrev', '-z',
+      '--format=tformat:', ...selector,
+    ]).split('\0').filter(Boolean)
+  } catch {
+    report('commit-tree-read-incomplete', 'history')
+    return 0
+  }
+  if (inventory.length > MAX_HISTORY_OBJECTS) {
+    report('commit-object-count-limit', 'history')
+    return 0
+  }
+
+  const objectPaths = new Map()
+  for (let index = 0; index < inventory.length; index += 2) {
+    const metadata = inventory[index]
+    const relPath = inventory[index + 1]
+    if (!metadata?.startsWith(':') || relPath === undefined) {
+      report('commit-object-inventory-invalid', 'history')
+      continue
+    }
+    const [oldMode, newMode, oldObjectId, newObjectId, status] = metadata.slice(1).split(' ')
+    if (
+      !/^[0-7]{6}$/.test(oldMode) || !/^[0-7]{6}$/.test(newMode) ||
+      !/^[0-9a-f]{40,64}$/.test(oldObjectId) || !/^[0-9a-f]{40,64}$/.test(newObjectId) ||
+      !/^[ACDMRTUXB]$/.test(status)
+    ) {
+      report('commit-object-inventory-invalid', 'history')
+      continue
+    }
+    // A deletion introduces no new reachable object. Gitlinks name commit
+    // objects in another repository, never content blobs in this repository.
+    if (/^0+$/.test(newObjectId) || newMode === '160000') continue
+    const paths = objectPaths.get(newObjectId) ?? new Set()
+    paths.add(relPath)
+    objectPaths.set(newObjectId, paths)
+  }
+  const objectIds = [...objectPaths.keys()]
+  if (objectIds.length === 0) return 0
+  let checks
+  try {
+    checks = execFileSync(
+      'git',
+      ['-C', root, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+      {
+        input: `${objectIds.join('\n')}\n`,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    ).trim().split('\n').filter(Boolean)
+  } catch {
+    report('commit-object-inventory-incomplete', 'history')
+    return 0
+  }
+
+  const blobs = []
+  let totalBytes = 0
+  if (checks.length !== objectIds.length) {
+    report('commit-object-inventory-incomplete', 'history')
+  }
+  for (let index = 0; index < objectIds.length; index += 1) {
+    const expectedObjectId = objectIds[index]
+    const [objectId, type, sizeText] = (checks[index] ?? '').split(' ')
+    if (objectId !== expectedObjectId || type !== 'blob' || sizeText === undefined) {
+      report('commit-object-inventory-incomplete', `historical object ${expectedObjectId}`)
+      continue
+    }
+    if (blobs.length >= MAX_HISTORY_BLOBS) {
+      report('commit-blob-count-limit', 'history')
+      break
+    }
+    const size = Number(sizeText)
+    const relPath = [...objectPaths.get(objectId)][0]
+    if (!Number.isSafeInteger(size) || size < 0 || size > MAX_HISTORY_BLOB_BYTES) {
+      report('commit-blob-size-limit', `historical blob ${objectId}:${relPath}`)
+      continue
+    }
+    if (totalBytes + size > MAX_HISTORY_TOTAL_BYTES) {
+      report('commit-history-byte-limit', 'history')
+      break
+    }
+    blobs.push({ objectId, paths: [...objectPaths.get(objectId)], size })
+    totalBytes += size
+  }
+
+  if (blobs.length === 0) return 0
+  let batch
+  try {
+    batch = execFileSync('git', ['-C', root, 'cat-file', '--batch'], {
+      input: `${blobs.map(({ objectId }) => objectId).join('\n')}\n`,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: totalBytes + blobs.length * 128 + 1024,
+    })
+  } catch {
+    report('commit-blob-read-incomplete', 'history')
+    return 0
+  }
+
+  let offset = 0
+  let scannedBlobs = 0
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  for (const expected of blobs) {
+    const newline = batch.indexOf(0x0a, offset)
+    if (newline < 0) {
+      report('commit-blob-read-incomplete', 'history')
+      break
+    }
+    const [objectId, type, sizeText] = batch.subarray(offset, newline).toString('utf8').split(' ')
+    const size = Number(sizeText)
+    const contentStart = newline + 1
+    const contentEnd = contentStart + size
+    if (
+      objectId !== expected.objectId || type !== 'blob' || size !== expected.size ||
+      contentEnd >= batch.length || batch[contentEnd] !== 0x0a
+    ) {
+      report('commit-blob-read-incomplete', `historical blob ${expected.objectId}`)
+      break
+    }
+    const blob = batch.subarray(contentStart, contentEnd)
+    const primaryPath = expected.paths[0]
+    const displayPath = `historical blob ${objectId}:${primaryPath}`
+    if (blob.includes(0)) {
+      report('commit-binary-blob-uninspectable', displayPath)
+    } else {
+      let text
+      try {
+        text = decoder.decode(blob)
+      } catch {
+        report('commit-text-encoding-invalid', displayPath)
+      }
+      if (text !== undefined) {
+        const lines = text.split('\n')
+        for (const relPath of expected.paths) {
+          const pathDisplay = `historical blob ${objectId}:${relPath}`
+          for (let index = 0; index < lines.length; index += 1) {
+            scanLine(lines[index], relPath, index + 1, pathDisplay)
+          }
+        }
+        scannedBlobs += 1
+      }
+    }
+    offset = contentEnd + 1
+  }
+  return scannedBlobs
 }
 
 if (staged) scanStagedChanges()
 else scanTrackedFiles()
 
 let scannedCommits = 0
-if (commitsMode !== 'none') scannedCommits = scanCommits()
+let scannedHistoryBlobs = 0
+if (commitsMode !== 'none') {
+  const selector = commitSelector()
+  scannedCommits = scanCommits(selector)
+  scannedHistoryBlobs = scanCommitTrees(selector)
+}
 
 if (findings > 0) {
   // Even the count is a 1-bit-per-dispatch oracle on an attacker-controlled
@@ -272,5 +586,5 @@ if (findings > 0) {
 }
 
 const contentNote = staged ? `${scannedFiles} staged file(s)` : `${scannedFiles} tracked file(s)`
-const commitNote = commitsMode === 'none' ? '' : `, ${scannedCommits} commit(s) [${commitsMode}]`
-console.log(`[repo:check] clean: ${contentNote}${commitNote}`)
+const commitNote = commitsMode === 'none' ? '' : `, ${scannedCommits} commit(s) and ${scannedHistoryBlobs} historical blob(s) [${commitsMode}]`
+console.log(`[repo:check] clean: ${contentNote}, ${reviewedBinaryFiles} reviewed binary fixture(s), ${uninspectableFiles} uninspectable file(s)${commitNote}`)

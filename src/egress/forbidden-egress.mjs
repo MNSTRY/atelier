@@ -22,20 +22,21 @@ export const DEFAULT_EGRESS_SCAN_PATHS = [
 const SCRIPT_EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.sh'])
 const MARKUP_EXTS = new Set(['.html', '.htm', '.svg'])
 const SKIP_DIRS = new Set(['node_modules', '.git'])
-const INTERNAL_SCANNER_FILES = new Set(['forbidden-egress.mjs'])
+const INTERNAL_SCANNER_PATH = 'src/egress/forbidden-egress.mjs'
 
 function isTestFile(file) {
   return /(?:^|[/.])test(?:s)?[/.]/.test(file) || /\.(?:test|spec)\.[cm]?[jt]s$/.test(file)
 }
 
-function isMarkedTestFixture(file, text) {
-  return isTestFile(file) && text.includes(TEST_FIXTURE_ALLOW_MARKER)
+function isMarkedTestFixture(file, text, allowTestFixtures) {
+  return allowTestFixtures && isTestFile(file) && text.includes(TEST_FIXTURE_ALLOW_MARKER)
 }
 
-function shouldScanFile(file, { includeTests = false } = {}) {
+function shouldScanFile(file, { includeTests = true, root = packageRoot } = {}) {
   const ext = path.extname(file)
   if (!SCRIPT_EXTS.has(ext) && !MARKUP_EXTS.has(ext)) return false
-  if (INTERNAL_SCANNER_FILES.has(path.basename(file))) return false
+  const relative = path.relative(path.resolve(root), path.resolve(file)).split(path.sep).join('/')
+  if (relative === INTERNAL_SCANNER_PATH) return false
   if (!includeTests && isTestFile(file)) return false
   return true
 }
@@ -61,17 +62,28 @@ function uniqueFiles(files) {
 export function discoverForbiddenEgressScanFiles({
   root = packageRoot,
   scanPaths = DEFAULT_EGRESS_SCAN_PATHS,
-  includeTests = false,
+  includeTests = true,
+  files = null,
 } = {}) {
-  const files = []
+  if (Array.isArray(files)) {
+    const resolvedRoot = path.resolve(root)
+    return uniqueFiles(
+      files
+        .map((file) => path.resolve(resolvedRoot, file))
+        .filter((file) => file === resolvedRoot || file.startsWith(`${resolvedRoot}${path.sep}`))
+        .filter((file) => fs.existsSync(file) && fs.statSync(file).isFile())
+        .filter((file) => shouldScanFile(file, { includeTests, root: resolvedRoot })),
+    )
+  }
+  const discovered = []
   for (const rel of scanPaths) {
     const abs = path.resolve(root, rel)
     if (!fs.existsSync(abs)) continue
     const stat = fs.statSync(abs)
-    if (stat.isDirectory()) files.push(...walk(abs, { includeTests }))
-    else if (shouldScanFile(abs, { includeTests })) files.push(abs)
+    if (stat.isDirectory()) discovered.push(...walk(abs, { includeTests, root }))
+    else if (shouldScanFile(abs, { includeTests, root })) discovered.push(abs)
   }
-  return uniqueFiles(files)
+  return uniqueFiles(discovered)
 }
 
 function hostnameFromNetworkUrl(value) {
@@ -135,8 +147,8 @@ function callBlock(lines, index) {
   return lines.slice(index, Math.min(lines.length, index + 5)).join('\n')
 }
 
-function isFixtureAllowed(lines, index, file) {
-  return isTestFile(file) && callBlock(lines, Math.max(0, index - 2)).includes(TEST_FIXTURE_ALLOW_MARKER)
+function isFixtureAllowed(lines, index, file, allowTestFixtures) {
+  return allowTestFixtures && isTestFile(file) && callBlock(lines, Math.max(0, index - 2)).includes(TEST_FIXTURE_ALLOW_MARKER)
 }
 
 function isLocalComputedAllowed(lines, index) {
@@ -256,14 +268,14 @@ function markupFindingsForLine(line, { findings, file, lineNumber }) {
   }
 }
 
-export function forbiddenEgressFindingsForText(text, { file = 'input' } = {}) {
-  if (isMarkedTestFixture(file, text)) return []
+export function forbiddenEgressFindingsForText(text, { file = 'input', allowTestFixtures = true } = {}) {
+  if (isMarkedTestFixture(file, text, allowTestFixtures)) return []
   const findings = []
   const lines = String(text || '').split(/\r?\n/)
   const isMarkup = MARKUP_EXTS.has(path.extname(file))
 
   for (let index = 0; index < lines.length; index += 1) {
-    if (isFixtureAllowed(lines, index, file)) continue
+    if (isFixtureAllowed(lines, index, file, allowTestFixtures)) continue
     const lineCode = trimmedCodeLine(lines[index])
     const hasJsPrimitive = /\b(?:fetch|https?\.(?:request|get)|http2\.connect|navigator\.sendBeacon|new\s+EventSource|new\s+WebSocket|net\.connect|net\.createConnection|dns\.(?:resolve|lookup|promises\.resolve|promises\.lookup)|import)\s*\(/.test(lineCode)
       || /\bnew\s+(?:XMLHttpRequest|Image)\b/.test(lineCode)
@@ -295,12 +307,14 @@ export function forbiddenEgressFindingsForText(text, { file = 'input' } = {}) {
 export function checkForbiddenEgress({
   root = packageRoot,
   scanPaths = DEFAULT_EGRESS_SCAN_PATHS,
-  includeTests = false,
+  includeTests = true,
+  files = null,
+  allowTestFixtures = true,
 } = {}) {
   const findings = []
-  for (const file of discoverForbiddenEgressScanFiles({ root, scanPaths, includeTests })) {
+  for (const file of discoverForbiddenEgressScanFiles({ root, scanPaths, includeTests, files })) {
     const rel = path.relative(root, file)
-    findings.push(...forbiddenEgressFindingsForText(fs.readFileSync(file, 'utf8'), { file: rel }))
+    findings.push(...forbiddenEgressFindingsForText(fs.readFileSync(file, 'utf8'), { file: rel, allowTestFixtures }))
   }
   return findings
 }

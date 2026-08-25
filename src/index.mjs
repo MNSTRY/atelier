@@ -53,12 +53,8 @@ export {
 } from './harness/context.mjs'
 
 export {
-  ATELIER_AUTHORING_PROVIDER_SCHEMA,
   ATELIER_COLLABORATION_EVENT_SCHEMA,
-  createAuthoringProvider,
   createCollaborationEventLedger,
-  renderAuthoringProviderHarnessContext,
-  validateAuthoringProviderDescriptor,
   validateCollaborationEvent,
 } from './collaboration/index.mjs'
 
@@ -70,6 +66,12 @@ export {
 export {
   checkForbiddenEgress,
 } from './egress/forbidden-egress.mjs'
+
+export {
+  STRUCTURAL_DISCLOSURE_PATTERNS,
+  compileDisclosurePatterns,
+  scanDisclosureContent,
+} from './disclosure/content-scan.mjs'
 
 export {
   BOUNDARY_POLICY_SCHEMA,
