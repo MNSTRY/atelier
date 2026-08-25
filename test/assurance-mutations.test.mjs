@@ -70,7 +70,12 @@ test('assurance mutation: a non-loopback fetch is rejected by the egress scanner
 test('assurance mutation: a packed test-shaped egress fixture fails release audit', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-release-egress-mutation-'))
   try {
-    for (const rel of ['scripts/check-release-tarball.mjs', 'scripts/structural-patterns.mjs', 'src/egress/forbidden-egress.mjs']) {
+    for (const rel of [
+      'scripts/check-release-tarball.mjs',
+      'scripts/npm-cli.mjs',
+      'scripts/structural-patterns.mjs',
+      'src/egress/forbidden-egress.mjs',
+    ]) {
       const target = path.join(root, rel)
       fs.mkdirSync(path.dirname(target), { recursive: true })
       fs.copyFileSync(path.join(packageRoot, rel), target)
