@@ -246,6 +246,23 @@ test('local state leaf symlinks block startup without touching outside targets',
   assert.equal(fs.readFileSync(target, 'utf8'), 'outside nonce sentinel\n')
 })
 
+test('redirected sidecar state directories are refused before outside creation', (t) => {
+  const workspaceRoot = makeWorkspace()
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-state-dir-outside-'))
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.symlinkSync(outside, path.join(workspaceRoot, 'state-link'), 'dir')
+
+  assert.throws(
+    () => createAtelierSidecarServer({
+      workspaceRoot,
+      stateDir: path.join(workspaceRoot, 'state-link', 'nested'),
+    }),
+    /redirected or non-directory component/,
+  )
+  assert.equal(fs.existsSync(path.join(outside, 'nested')), false)
+})
+
 test('publication manifests refuse malformed, hidden, unavailable, and symlink-enrolled paths', (t) => {
   function fixture(manifest, files = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mnstry-atelier-manifest-invalid-'))

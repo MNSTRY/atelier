@@ -1,6 +1,11 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  atomicReplacePrivateText,
+  ensureContainedPrivateDirectory,
+  openRegularFileNoFollow,
+} from '../project/private-state.mjs'
 
 export const ATELIER_COLLABORATION_EVENT_SCHEMA = 'atelier-collaboration-event@v1'
 export const COLLABORATION_LEDGER_LIMITS = Object.freeze({
@@ -19,33 +24,8 @@ function validTimestamp(value) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value))
 }
 
-function ensurePrivateDir(dir) {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  try {
-    fs.chmodSync(dir, 0o700)
-  } catch {
-    // Best effort for filesystems without POSIX modes.
-  }
-}
-
-function noFollowFlag() {
-  return fs.constants.O_NOFOLLOW ?? 0
-}
-
-function openRegularFile(file, flags, mode) {
-  const descriptor = fs.openSync(file, flags | noFollowFlag(), mode)
-  try {
-    if (!fs.fstatSync(descriptor).isFile()) throw new Error('state leaf is not a regular file')
-    return descriptor
-  } catch (error) {
-    fs.closeSync(descriptor)
-    throw error
-  }
-}
-
 function secureAppendLine(file, line) {
-  ensurePrivateDir(path.dirname(file))
-  const descriptor = openRegularFile(
+  const descriptor = openRegularFileNoFollow(
     file,
     fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT,
     0o600,
@@ -53,31 +33,9 @@ function secureAppendLine(file, line) {
   try {
     fs.writeFileSync(descriptor, line)
     fs.fsyncSync(descriptor)
+    fs.fchmodSync(descriptor, 0o600)
   } finally {
     fs.closeSync(descriptor)
-  }
-  try {
-    fs.chmodSync(file, 0o600)
-  } catch {
-    // Best effort for filesystems without POSIX modes.
-  }
-}
-
-function secureReplace(file, text) {
-  ensurePrivateDir(path.dirname(file))
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  const descriptor = fs.openSync(tmp, 'wx', 0o600)
-  try {
-    fs.writeFileSync(descriptor, text)
-    fs.fsyncSync(descriptor)
-  } finally {
-    fs.closeSync(descriptor)
-  }
-  fs.renameSync(tmp, file)
-  try {
-    fs.chmodSync(file, 0o600)
-  } catch {
-    // Best effort for filesystems without POSIX modes.
   }
 }
 
@@ -118,8 +76,11 @@ export function createCollaborationEventLedger({
 } = {}) {
   const root = fs.realpathSync(workspaceRoot)
   const resolvedLedger = path.resolve(ledgerPath)
-  ensurePrivateDir(path.dirname(resolvedLedger))
-  const ledgerDirReal = fs.realpathSync(path.dirname(resolvedLedger))
+  const ledgerDirReal = ensureContainedPrivateDirectory({
+    workspaceRoot,
+    directory: path.dirname(resolvedLedger),
+    label: 'collaboration ledger directory',
+  })
   const ledgerReal = path.join(ledgerDirReal, path.basename(resolvedLedger))
   const relative = path.relative(root, ledgerReal)
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -146,7 +107,7 @@ export function createCollaborationEventLedger({
     let descriptor
     let bytes
     try {
-      descriptor = openRegularFile(ledgerReal, fs.constants.O_RDONLY)
+      descriptor = openRegularFileNoFollow(ledgerReal, fs.constants.O_RDONLY)
       bytes = fs.fstatSync(descriptor).size
     } catch (error) {
       return failure(500, `collaboration ledger cannot be inspected: ${error.message}`)
@@ -344,7 +305,7 @@ export function createCollaborationEventLedger({
       if (Buffer.byteLength(text) > limits.maxBytes) {
         return { ok: false, status: 413, error: 'compacted collaboration ledger still exceeds the byte hard ceiling' }
       }
-      secureReplace(ledgerReal, text)
+      atomicReplacePrivateText(ledgerReal, text)
       return {
         ok: true,
         status: 200,

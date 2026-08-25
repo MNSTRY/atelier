@@ -242,6 +242,31 @@ test('ledger and proposal snapshot leaf symlinks fail closed without outside rea
   assert.doesNotMatch(listed.error, /outside snapshot sentinel/)
 })
 
+test('redirected collaboration directories are refused before outside creation or chmod', (t) => {
+  const root = makeRoot(t)
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-state-dir-outside-'))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.chmodSync(outside, 0o755)
+  fs.symlinkSync(outside, path.join(root, 'redirected'), 'dir')
+
+  assert.throws(
+    () => createCollaborationEventLedger({
+      workspaceRoot: root,
+      ledgerPath: path.join(root, 'redirected', 'nested', 'events.ndjson'),
+    }),
+    /redirected or non-directory component/,
+  )
+  assert.equal(fs.existsSync(path.join(outside, 'nested')), false)
+  assert.equal(fs.statSync(outside).mode & 0o777, 0o755)
+
+  fs.symlinkSync(outside, path.join(root, '.atelier-proposals'), 'dir')
+  assert.throws(
+    () => createProposalStore({ workspaceRoot: root }),
+    /redirected or non-directory component/,
+  )
+  assert.equal(fs.statSync(outside).mode & 0o777, 0o755)
+})
+
 test('compatibility snapshot failures stay diagnostic after authoritative events commit', (t) => {
   const root = makeRoot(t)
   const store = createProposalStore({

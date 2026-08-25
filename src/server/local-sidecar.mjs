@@ -6,6 +6,11 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  atomicReplacePrivateText,
+  ensureContainedPrivateDirectory,
+  readRegularTextNoFollow,
+} from '../project/private-state.mjs'
+import {
   expectedOriginForRequest,
   htmlDocumentHeaders,
   isLoopbackHost,
@@ -45,38 +50,15 @@ function nowMs() {
 }
 
 function readJsonFile(file, fallback) {
-  let descriptor
   try {
-    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
-    if (!fs.fstatSync(descriptor).isFile()) return fallback
-    return JSON.parse(fs.readFileSync(descriptor, 'utf8'))
+    return JSON.parse(readRegularTextNoFollow(file))
   } catch {
     return fallback
-  } finally {
-    if (descriptor != null) fs.closeSync(descriptor)
   }
 }
 
 function secureWriteJson(file, payload, mode = 0o600) {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  try {
-    if (fs.existsSync(file) && !fs.lstatSync(file).isFile()) throw new Error('state leaf is not a regular file')
-    fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode, flag: 'wx' })
-    fs.renameSync(tmp, file)
-  } catch (error) {
-    try {
-      fs.unlinkSync(tmp)
-    } catch {
-      // The temporary file may not have been created.
-    }
-    throw error
-  }
-  try {
-    fs.chmodSync(file, mode)
-  } catch {
-    // Best effort on filesystems that do not support chmod.
-  }
+  atomicReplacePrivateText(file, `${JSON.stringify(payload, null, 2)}\n`, mode)
 }
 
 function readOrCreateNonce(noncePath) {
@@ -84,34 +66,12 @@ function readOrCreateNonce(noncePath) {
   if (fs.existsSync(noncePath)) {
     const stat = fs.lstatSync(noncePath)
     if (!stat.isFile()) throw new Error('nonce state leaf is not a regular file')
-    const descriptor = fs.openSync(noncePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
-    try {
-      if (!fs.fstatSync(descriptor).isFile()) throw new Error('nonce state leaf is not a regular file')
-      existing = fs.readFileSync(descriptor, 'utf8').trim()
-    } finally {
-      fs.closeSync(descriptor)
-    }
+    existing = readRegularTextNoFollow(noncePath).trim()
   }
   if (/^[a-f0-9]{64}$/.test(existing)) return existing
   const nonce = crypto.randomBytes(32).toString('hex')
-  const tmp = `${noncePath}.${process.pid}.${Date.now()}.tmp`
-  try {
-    fs.writeFileSync(tmp, `${nonce}\n`, { mode: 0o600, flag: 'wx' })
-    fs.renameSync(tmp, noncePath)
-  } catch (error) {
-    try {
-      fs.unlinkSync(tmp)
-    } catch {
-      // The temporary file may not have been created.
-    }
-    throw error
-  }
+  atomicReplacePrivateText(noncePath, `${nonce}\n`)
   return nonce
-}
-
-function pathContainedBy(root, candidate) {
-  const relative = path.relative(root, candidate)
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 function json(res, code, obj, headers = {}) {
@@ -251,9 +211,11 @@ export function createAtelierSidecarServer({
 } = {}) {
   const root = path.resolve(workspaceRoot)
   const rootReal = fs.realpathSync(root)
-  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-  const stateDirReal = fs.realpathSync(stateDir)
-  if (!pathContainedBy(rootReal, stateDirReal)) throw new Error('Atelier state directory escapes workspace')
+  const stateDirReal = ensureContainedPrivateDirectory({
+    workspaceRoot: root,
+    directory: stateDir,
+    label: 'Atelier state directory',
+  })
   const publication = loadPublishedWorkspaceManifest(root)
   const workspaceId = workspaceIdForRoot(root)
   const noncePath = path.join(stateDirReal, '.atelier-nonce')

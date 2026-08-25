@@ -2,6 +2,11 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createCollaborationEventLedger } from './event-ledger.mjs'
+import {
+  atomicReplacePrivateText,
+  ensureContainedPrivateDirectory,
+  readRegularTextNoFollow,
+} from '../project/private-state.mjs'
 
 export const ATELIER_PROPOSAL_SCHEMA = 'atelier-proposal@v1'
 export const ATELIER_PROPOSALS_SCHEMA = 'atelier-proposals@v1'
@@ -30,47 +35,12 @@ function safeJsonText(value, max = 50000) {
   }
 }
 
-function ensurePrivateDir(dir) {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  try {
-    fs.chmodSync(dir, 0o700)
-  } catch {
-    // Best effort on filesystems that do not support chmod.
-  }
-}
-
 function secureWriteJson(file, payload) {
-  ensurePrivateDir(path.dirname(file))
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  try {
-    if (fs.existsSync(file) && !fs.lstatSync(file).isFile()) {
-      throw new Error('proposal snapshot leaf is not a regular file')
-    }
-    fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600, flag: 'wx' })
-    fs.renameSync(tmp, file)
-  } catch (error) {
-    try {
-      fs.unlinkSync(tmp)
-    } catch {
-      // The temporary file may not have been created.
-    }
-    throw error
-  }
-  try {
-    fs.chmodSync(file, 0o600)
-  } catch {
-    // Best effort on filesystems that do not support chmod.
-  }
+  atomicReplacePrivateText(file, `${JSON.stringify(payload, null, 2)}\n`)
 }
 
 function readRegularJson(file) {
-  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
-  try {
-    if (!fs.fstatSync(descriptor).isFile()) throw new Error('proposal snapshot leaf is not a regular file')
-    return JSON.parse(fs.readFileSync(descriptor, 'utf8'))
-  } finally {
-    fs.closeSync(descriptor)
-  }
+  return JSON.parse(readRegularTextNoFollow(file))
 }
 
 function writeSnapshotProjectionWith(writer, file, payload) {
@@ -148,12 +118,16 @@ export function acceptedProposalCopy(record) {
 
 export function createProposalStore({
   workspaceRoot = process.cwd(),
-  proposalsDir = path.join(workspaceRoot, '.atelier-proposals'),
+  proposalsDir: requestedProposalsDir = path.join(workspaceRoot, '.atelier-proposals'),
   workspaceId = null,
   snapshotWriter = secureWriteJson,
 } = {}) {
   const workspaceRootReal = fs.realpathSync(workspaceRoot)
-  ensurePrivateDir(proposalsDir)
+  const proposalsDir = ensureContainedPrivateDirectory({
+    workspaceRoot,
+    directory: requestedProposalsDir,
+    label: 'proposal state directory',
+  })
   const eventLedger = createCollaborationEventLedger({
     workspaceRoot,
     ledgerPath: path.join(proposalsDir, 'events.ndjson'),
