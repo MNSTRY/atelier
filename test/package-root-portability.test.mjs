@@ -51,3 +51,14 @@ test('npm smoke helpers resolve npm-cli.js as a real file without a shell shim',
   assert.equal(path.basename(npmCli), 'npm-cli.js')
   assert.equal(fs.statSync(npmCli).isFile(), true)
 })
+
+test('programmatic npm invocations use the cross-platform npm CLI helper', () => {
+  const directInvocation = /\b(?:execFileSync|spawnSync|execSync|run|output)\(\s*['"]npm['"]/
+  const offenders = [path.join(ROOT, 'scripts'), path.join(ROOT, 'test')]
+    .flatMap((directory) => modulesUnder(directory))
+    .filter((file) => path.relative(ROOT, file) !== 'scripts/npm-cli.mjs')
+    .filter((file) => directInvocation.test(fs.readFileSync(file, 'utf8')))
+    .map((file) => path.relative(ROOT, file))
+
+  assert.deepEqual(offenders, [])
+})

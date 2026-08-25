@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execNpmSync } from './npm-cli.mjs'
 import { persistReleaseCandidate } from './release-candidate-output.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -27,6 +28,22 @@ function run(command, args, env) {
   })
 }
 
+function outputNpm(args) {
+  return execNpmSync(args, {
+    cwd: packageRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+}
+
+function runNpm(args, env) {
+  execNpmSync(args, {
+    cwd: packageRoot,
+    env,
+    stdio: 'inherit',
+  })
+}
+
 try {
   const dirty = output('git', ['status', '--porcelain', '--untracked-files=all'])
   if (dirty) throw new Error('release candidate requires a clean Git working tree')
@@ -42,7 +59,7 @@ try {
   if (existingVersionCommit && existingVersionCommit !== candidateSha) {
     throw new Error(`version ${packageJson.version} is already bound to ${versionTag} at ${existingVersionCommit}; current candidate ${candidateSha} must use a new version`)
   }
-  const packResult = JSON.parse(output('npm', ['pack', '--json', '--pack-destination', tempRoot]))
+  const packResult = JSON.parse(outputNpm(['pack', '--json', '--pack-destination', tempRoot]))
   const pack = packResult[0]
   const tarballPath = join(tempRoot, pack.filename)
   const packJsonPath = join(tempRoot, 'npm-pack.json')
@@ -55,9 +72,9 @@ try {
     ATELIER_EXPECTED_TARBALL_SHA256: tarballSha256,
   }
 
-  run('npm', ['run', 'release:audit'], candidateEnv)
-  run('npm', ['run', 'consumer:smoke'], candidateEnv)
-  run('npm', ['run', 'distribution:smoke'], candidateEnv)
+  runNpm(['run', 'release:audit'], candidateEnv)
+  runNpm(['run', 'consumer:smoke'], candidateEnv)
+  runNpm(['run', 'distribution:smoke'], candidateEnv)
 
   let retained = null
   if (process.env.ATELIER_RELEASE_OUTPUT_DIR) {

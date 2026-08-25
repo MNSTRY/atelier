@@ -80,7 +80,7 @@ try {
 
   const consumerPackage = JSON.parse(readFileSync(join(tempRoot, 'package.json'), 'utf8'))
   if ('overrides' in consumerPackage) throw new Error('bare consumer must not inherit publisher overrides')
-  const installedTree = JSON.parse(run('npm', ['ls', '--all', '--json'], { cwd: tempRoot }))
+  const installedTree = JSON.parse(runNpm(['ls', '--all', '--json'], { cwd: tempRoot }))
   if (installedTree.problems?.length) {
     throw new Error(`bare consumer dependency closure is invalid: ${installedTree.problems.join('; ')}`)
   }

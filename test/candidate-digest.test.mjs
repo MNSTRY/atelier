@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { execNpmSync } from '../scripts/npm-cli.mjs'
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
 test('every artifact consumer refuses an unexpected candidate digest', (t) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-candidate-digest-'))
   t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }))
-  const pack = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', tempRoot], {
+  const pack = JSON.parse(execNpmSync(['pack', '--json', '--pack-destination', tempRoot], {
     cwd: packageRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
