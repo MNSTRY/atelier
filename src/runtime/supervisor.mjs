@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { checkBoundaryPolicy, loadBoundaryPolicy } from '../boundary/policy.mjs'
 import { commandProject } from '../project/config.mjs'
-import { inspectGitEngine, redactGitDiagnostic, resolveGitExecutable, runGit } from './git-adapter.mjs'
+import { classifyRemoteAuthentication, inspectGitEngine, redactGitDiagnostic, resolveGitExecutable, runGit, sanitizeRemoteUrl } from './git-adapter.mjs'
 import {
   ATELIER_RUNTIME_ENROLLMENT_SCHEMA,
   ATELIER_RUNTIME_PLAN_MAX_AGE_MS,
@@ -200,6 +200,12 @@ export function loadEnrollment(repoPath = process.cwd(), { env = process.env } =
     root = fs.realpathSync(root)
   }
   const paths = runtimePaths(root)
+  try {
+    fs.lstatSync(paths.enrollment)
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`repository is not enrolled: ${root}`)
+    throw error
+  }
   const enrollment = readJsonIfPresent(paths.enrollment)
   if (!enrollment) throw new Error(`repository is not enrolled: ${root}`)
   requireClosedObject(enrollment, ENROLLMENT_KEYS, 'runtime enrollment')
@@ -237,14 +243,14 @@ export function runtimeStatus({ repoPath = process.cwd(), clock = nowIso } = {})
   else if (observation.branch.behind && !observation.status.clean) state = attentionState('update-blocked-by-local-changes', 'upstream changes cannot fast-forward over local work', observation)
   else if (observation.branch.ahead) state = attentionState('local-commits-unpublished', 'local commits are waiting for a user-driven publish action', observation)
   else state = healthyState('observed', 'repository observation is healthy', observation)
-  let operations
+  let operations = null
+  let traceError = null
   try {
     operations = readOperationTrace(paths.trace)
   } catch (error) {
-    appendOperationTrace(paths.trace, { at: clock(), operation: 'trace-recovery', outcome: 'recovered', details: { reason: redactGitDiagnostic(error.message) } })
-    operations = readOperationTrace(paths.trace)
+    traceError = redactGitDiagnostic(error.message)
   }
-  return { ok: state.status !== 'attention', enrollment, control, state, traceLength: operations.length }
+  return { ok: state.status === 'healthy', enrollment, control, state, traceLength: operations?.length ?? null, traceError }
 }
 
 function fetchWithRetries({ enrollment, attempts = 3 }) {
@@ -329,10 +335,18 @@ function publishTarget(observation) {
   return {
     remote: remote.name,
     branch: upstream.slice(remote.name.length + 1),
-    url: remote.url,
-    identityDigest: remote.identityDigest,
-    authentication: remote.authentication,
+    url: remote.pushUrl,
+    identityDigest: remote.pushIdentityDigest,
+    authentication: remote.pushAuthentication,
   }
+}
+
+function currentPushDestination(enrollment, remoteName) {
+  const result = runGit(enrollment.git.executable, enrollment.repoRoot, ['remote', 'get-url', '--push', '--all', remoteName], { allowFailure: true })
+  if (!result.ok) throw new Error('publish destination could not be resolved; commit remains local and was not published')
+  const urls = result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
+  if (urls.length !== 1) throw new Error('publish destination is ambiguous; commit remains local and was not published')
+  return urls[0]
 }
 
 function diffSummary(gitExecutable, root, selected) {
@@ -555,6 +569,7 @@ function projectBoundaryCheck(enrollment) {
     stagedOnly: true,
     gitExecutable: enrollment.git.executable,
     allowNetworkActorResolution: false,
+    forceActorErrors: true,
   })
   return { ok: report.ok, configured: true, scannedRepoRoots, report }
 }
@@ -659,7 +674,17 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
       if (beforePublish.attention) throw new Error(`repository became incomplete before publish: ${beforePublish.attention.message}`)
       if (stableJson(publishTarget(beforePublish.observation)) !== stableJson(plan.publish)) throw new Error('publish target changed after review; commit remains local and was not published')
       if (beforePublish.observation.branch.head !== commit) throw new Error('repository HEAD changed after the reviewed commit; commit remains local and was not published')
-      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', '--no-follow-tags', '--recurse-submodules=no', '--', plan.publish.remote, `${commit}:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
+      const pushDestination = currentPushDestination(enrollment, plan.publish.remote)
+      const sanitizedPushDestination = sanitizeRemoteUrl(pushDestination)
+      const executionTarget = {
+        remote: plan.publish.remote,
+        branch: plan.publish.branch,
+        url: sanitizedPushDestination,
+        identityDigest: crypto.createHash('sha256').update(sanitizedPushDestination).digest('hex'),
+        authentication: classifyRemoteAuthentication(pushDestination),
+      }
+      if (stableJson(executionTarget) !== stableJson(plan.publish)) throw new Error('publish target changed at execution; commit remains local and was not published')
+      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', '--no-follow-tags', '--recurse-submodules=no', '--', pushDestination, `${commit}:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
       publish = { ok: pushed.ok, remote: plan.publish.remote, branch: plan.publish.branch, error: pushed.ok ? null : gitFailure(pushed) }
       trace(paths, { operation: 'commit-publish', operationId, outcome: pushed.ok ? 'published' : 'attention', mode: 'user-confirmed', details: { commit, ...publish } }, clock)
       if (!pushed.ok) {
@@ -703,10 +728,5 @@ export function setRepositoryPaused({ repoPath = process.cwd(), paused, reason =
 
 export function operationTrace({ repoPath = process.cwd() } = {}) {
   const { paths } = loadEnrollment(repoPath)
-  try {
-    return readOperationTrace(paths.trace)
-  } catch (error) {
-    appendOperationTrace(paths.trace, { at: nowIso(), operation: 'trace-recovery', outcome: 'recovered', details: { reason: redactGitDiagnostic(error.message) } })
-    return readOperationTrace(paths.trace)
-  }
+  return readOperationTrace(paths.trace)
 }

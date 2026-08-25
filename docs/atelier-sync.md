@@ -14,18 +14,22 @@ runtime object.
 
 - Enrollment names exactly one repository. Atelier never scans a home folder.
 - One resolved absolute system Git executable, version, and executable digest
-  owns Git semantics for the enrollment. Repository- and config-retargeting
-  `GIT_*` environment variables are stripped from every supervised Git call.
-  Git `2.39.0` or newer is required.
+  owns Git semantics for the enrollment. Every inherited `GIT_*` variable is
+  stripped from supervised Git calls before Atelier adds its small fixed
+  safety environment. Custom SSH transport belongs in the user's SSH config;
+  credentials continue through ordinary Git credential helpers. Git `2.40.0`
+  or newer is required so global and system attribute provenance is observable.
 - Every cycle observes the full repository. There is no watcher correctness
   dependency in Deliverable Zero.
 - Fetch and fast-forward-only reconciliation are mechanical operations.
 - Commit creation is a two-phase, user-confirmed operation. Planning records
   the head, branch, complete status digest, exact file paths, commit message,
-  reviewed blob/mode manifest, diff summary, and exact optional upstream
-  identity. The remote identity digest covers the normalized credential-free
-  target; persisted display evidence likewise strips authentication material,
-  query strings, and fragments. Every authoritative field is bound into the operation id.
+  reviewed blob/mode manifest, diff summary, and exact optional upstream push
+  identity. The push identity digest covers the single resolved, normalized,
+  credential-free execution destination; persisted display evidence likewise
+  strips authentication material, query strings, and fragments. Multiple push
+  URLs and `url.*.insteadOf`/`pushInsteadOf` rewrites are refused as ambiguous.
+  Every authoritative field is bound into the operation id.
   Execution requires that exact id and refuses if the plan, repository,
   staged bytes/modes, written tree, commit parent/message, or publish target
   changed. A publish plan is refused while any earlier local commit remains
@@ -35,17 +39,21 @@ runtime object.
 - A commit plan cannot absorb pre-existing staged work. It stages only literal,
   explicitly reviewed paths.
 - Configured Atelier boundary policy is checked against the staged change set
-  before commit creation using the enrolled Git executable, including actor
-  email resolution. The Sync path disables the boundary command's optional
+  before commit creation using the enrolled Git executable. When that policy
+  declares private-domain ownership, actor verification is blocking even in
+  legacy-warning mode. The Sync path disables the boundary command's optional
   network `gh api user` fallback and fails closed when local actor evidence is
-  insufficient. Ordinary Git hooks still run; the resulting commit tree,
+  insufficient. Policies without a declared private-domain owner do not invent
+  an actor requirement. Ordinary Git hooks still run; the resulting commit tree,
   single parent, and message must equal the reviewed authority or the local
   commit is rolled back and publication is refused.
 - Push is present only when the reviewed plan requested it, the branch had no
   prior unpublished commits, and HEAD still names the exact verified commit.
-  Push is never forced, never follows tags, and never recursively publishes
-  submodule refs. A failed push preserves the local commit and creates one
-  stable attention state.
+  Atelier re-resolves the single push URL immediately before publication and
+  pushes the exact commit object directly to that reviewed destination. Push is
+  never forced, never follows tags, and never recursively publishes submodule
+  refs. A failed push preserves the local commit, creates one stable attention
+  state, and returns a non-zero command exit.
 - Semantic conflict resolution, merge commits, rebase, reset, force push,
   browser apply, broad path scans, telemetry, and hidden upload are absent.
 
@@ -65,6 +73,7 @@ It cannot report `complete: true` when any of these are unresolved:
   info attributes, and default global or system attributes;
 - an unclassified custom clean, smudge, or process filter; or
 - a remote URL whose authentication shape cannot be classified.
+- multiple push destinations or any configured Git URL rewrite rule;
 - any required Git evidence read that fails, times out, exceeds its budget, or
   cannot be parsed.
 - a change set above the 4,096-entry resident observation ceiling; or
@@ -123,9 +132,10 @@ atelier sync commit \
   --confirm operation-...
 ```
 
-`status`, `audit`, `reconcile`, and `run --once` return a non-zero process exit
-when their result is not healthy, so automation cannot treat an attention state
-as success merely because JSON was emitted.
+`status`, `audit`, `reconcile`, `run --once`, and `commit` return a non-zero
+process exit when their result is not healthy, so automation cannot treat a
+paused state, attention state, or failed publication as success merely because
+JSON was emitted.
 
 The future native shell may label the final two commands **Commit & sync**.
 It must not bypass either phase.
@@ -137,7 +147,12 @@ or stale execution, not a hostile process with the user's filesystem access.
 
 ## Evidence boundary
 
-Deliverable Zero proves the headless supervisor contract on Linux, macOS, and
-Windows CI. It does not prove signed installation, background launch at user
-login, Windows Home/Pro device behavior, macOS notarization, or a
-nontechnical-user workflow. Those belong to the signed collaborator beta.
+Deliverable Zero proves the headless supervisor contract on Linux and macOS,
+with Windows CI covering the portable observation, state, and direct-process
+contract. POSIX executable-wrapper substitution is explicitly skipped on
+Windows; native Windows wrapper-injection proof, signed installation,
+background launch at user login, Windows Home/Pro device behavior, macOS
+notarization, and a nontechnical-user workflow belong to the signed
+collaborator beta. Repositories without an initial commit are not supported by
+this deliverable. A Git executable upgrade changes enrolled identity and
+requires re-enrollment.

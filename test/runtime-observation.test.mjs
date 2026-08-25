@@ -35,7 +35,7 @@ function repository(t) {
 }
 
 test('full observation proves a normal local clone complete', (t) => {
-  const { root } = repository(t)
+  const { remote, root } = repository(t)
   const report = observeRepository({ repoRoot: root, gitExecutable: git })
   assert.equal(report.schema, ATELIER_REPOSITORY_OBSERVATION_SCHEMA)
   assert.equal(report.complete, true)
@@ -44,6 +44,9 @@ test('full observation proves a normal local clone complete', (t) => {
   assert.equal(report.branch.upstream, 'origin/main')
   assert.equal(report.remotes[0].authentication, 'local')
   assert.match(report.remotes[0].identityDigest, /^[0-9a-f]{64}$/)
+  assert.equal(report.remotes[0].pushUrl, remote)
+  assert.equal(report.remotes[0].pushTargetCount, 1)
+  assert.match(report.remotes[0].pushIdentityDigest, /^[0-9a-f]{64}$/)
   assert.deepEqual(validateRepositoryObservation(report), [])
 })
 
@@ -91,6 +94,28 @@ test('observation fails closed on sparse and partial workspace state', (t) => {
   const report = observeRepository({ repoRoot: root, gitExecutable: git })
   assert.equal(report.complete, false)
   assert.deepEqual(report.blockers.map((item) => item.code).sort(), ['partial-clone-unsupported', 'sparse-checkout-unsupported'])
+})
+
+test('observation binds the resolved push destination and refuses ambiguous or rewritten targets', (t) => {
+  const { base, remote, root } = repository(t)
+  const redirected = path.join(base, 'redirected.git')
+  runGit(git, null, ['init', '--bare', redirected])
+  runGit(git, root, ['remote', 'set-url', '--push', 'origin', redirected])
+  let report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, true)
+  assert.equal(report.remotes[0].url, remote)
+  assert.equal(report.remotes[0].pushUrl, redirected)
+
+  runGit(git, root, ['remote', 'set-url', '--add', '--push', 'origin', remote])
+  report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, false)
+  assert.equal(report.blockers.some((item) => item.code === 'remote-push-destination-ambiguous'), true)
+
+  runGit(git, root, ['remote', 'set-url', '--delete', '--push', 'origin', redirected])
+  runGit(git, root, ['config', `url.${redirected}.pushInsteadOf`, remote])
+  report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, false)
+  assert.equal(report.blockers.some((item) => item.code === 'url-rewrite-unclassified'), true)
 })
 
 test('filesystem classifier refuses provider-managed, UNC, and WSL boundary roots before enrollment', () => {

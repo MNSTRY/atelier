@@ -9,9 +9,9 @@
   },
   "git": {
     "executable": "/usr/bin/git",
-    "version": "2.39.0",
+    "version": "2.40.0",
     "supported": true,
-    "minimum": "2.39.0"
+    "minimum": "2.40.0"
   },
   "bare": false,
   "branch": {

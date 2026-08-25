@@ -6,10 +6,12 @@ import test from 'node:test'
 import {
   classifyRemoteAuthentication,
   inspectGitEngine,
+  isSupportedGitVersion,
   parseGitVersion,
   redactGitDiagnostic,
   resolveGitExecutable,
   runGit,
+  sanitizedGitEnvironment,
   sanitizeRemoteUrl,
 } from '../src/runtime/git-adapter.mjs'
 
@@ -32,6 +34,8 @@ test('Git resolver rejects a relative configured executable', () => {
 
 test('Git version and provider-native authentication shapes stay explicit', () => {
   assert.deepEqual(parseGitVersion('git version 2.50.1.windows.1'), { major: 2, minor: 50, patch: 1, text: 'git version 2.50.1' })
+  assert.equal(isSupportedGitVersion(parseGitVersion('git version 2.39.5')), false)
+  assert.equal(isSupportedGitVersion(parseGitVersion('git version 2.40.0')), true)
   assert.equal(classifyRemoteAuthentication('https://github.com/example/project.git'), 'https')
   assert.equal(classifyRemoteAuthentication('git@github.com:example/project.git'), 'ssh')
   assert.equal(classifyRemoteAuthentication('ssh://git@github.com/example/project.git'), 'ssh')
@@ -90,4 +94,22 @@ test('Git adapter strips inherited repository and config redirection', (t) => {
   }
   assert.equal(runGit(git, root, ['rev-parse', '--show-toplevel'], { env: redirected }).stdout.trim(), fs.realpathSync(root))
   assert.equal(runGit(git, root, ['rev-parse', '--is-bare-repository'], { env: redirected }).stdout.trim(), 'false')
+})
+
+test('Git adapter removes every inherited Git control variable case-insensitively', () => {
+  const clean = sanitizedGitEnvironment({
+    PATH: process.env.PATH,
+    GIT_EXEC_PATH: '/untrusted/helpers',
+    GIT_SSH_COMMAND: 'untrusted-ssh',
+    GIT_PROXY_COMMAND: 'untrusted-proxy',
+    GIT_LITERAL_PATHSPECS: '1',
+    GIT_NOGLOB_PATHSPECS: '1',
+    GIT_ICASE_PATHSPECS: '1',
+    git_dir: '/redirected',
+  })
+  assert.deepEqual(
+    Object.keys(clean).filter((key) => key.toUpperCase().startsWith('GIT_')).sort(),
+    ['GIT_NO_REPLACE_OBJECTS', 'GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT'],
+  )
+  assert.equal(clean.GIT_TERMINAL_PROMPT, '0')
 })

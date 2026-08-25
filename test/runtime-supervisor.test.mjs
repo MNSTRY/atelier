@@ -16,6 +16,7 @@ import {
 import {
   enrollRepository,
   executeUserConfirmedCommit,
+  operationTrace,
   planUserConfirmedCommit,
   reconcileRepository,
   runtimeStatus,
@@ -48,7 +49,7 @@ function fixture(t) {
   return { base, remote, root }
 }
 
-function writePrivateBoundaryProject(root, { actorEmail }) {
+function writePrivateBoundaryProject(root, { actorEmail, mode = 'strict' }) {
   fs.writeFileSync(path.join(root, 'atelier.project.json'), `${JSON.stringify({
     schema: 'mnstry.atelier-project-config@v1',
     name: 'workspace',
@@ -65,7 +66,7 @@ function writePrivateBoundaryProject(root, { actorEmail }) {
   }, null, 2)}\n`)
   fs.writeFileSync(path.join(root, 'boundary-policy.v1.json'), `${JSON.stringify({
     schema: 'mnstry.atelier-boundary-policy@v1',
-    mode: 'strict',
+    mode,
     actors: { owner: { githubLogin: 'owner-login', gitEmails: [actorEmail], privateDomainRepo: 'workspace' } },
     repos: {
       workspace: {
@@ -188,6 +189,21 @@ test('user-confirmed commit stages only reviewed files and can publish through t
   assert.equal(runGit(git, null, ['--git-dir', remote, 'for-each-ref', '--format=%(refname)', 'refs/tags']).stdout, '')
   const trace = readOperationTrace(runtimePaths(root).trace)
   assert.deepEqual(trace.map((item) => item.operation), ['enroll', 'commit-plan-created', 'commit-created', 'commit-publish'])
+})
+
+test('publish uses the reviewed push URL rather than the fetch remote', (t) => {
+  const { base, remote, root } = fixture(t)
+  const redirected = path.join(base, 'redirected.git')
+  runGit(git, null, ['init', '--bare', redirected])
+  runGit(git, root, ['remote', 'set-url', '--push', 'origin', redirected])
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'publish.md'), 'reviewed push destination\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: bind push destination', publish: true })
+  assert.equal(plan.publish.url, redirected)
+  const result = executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId })
+  assert.equal(result.ok, true)
+  assert.equal(runGit(git, null, ['--git-dir', redirected, 'rev-parse', 'refs/heads/main']).stdout.trim(), result.commit)
+  assert.notEqual(runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim(), result.commit)
 })
 
 test('reconciliation ignores watcher history and performs only a clean fast-forward', (t) => {
@@ -315,6 +331,36 @@ test('status and reconcile use non-zero process exits for attention and failure'
   const reconcile = spawnSync(process.execPath, [syncCommand, 'reconcile', '--repo', root, '--retries', '1'], { encoding: 'utf8' })
   assert.equal(reconcile.status, 1)
   assert.equal(JSON.parse(reconcile.stdout).state.code, 'fetch-unavailable')
+})
+
+test('paused status and failed publish commits use non-zero process exits', (t) => {
+  const { remote, root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const syncCommand = path.resolve('src/commands/sync.mjs')
+  setRepositoryPaused({ repoPath: root, paused: true, reason: 'maintenance' })
+  const paused = spawnSync(process.execPath, [syncCommand, 'status', '--repo', root], { encoding: 'utf8' })
+  assert.equal(paused.status, 1)
+  assert.equal(JSON.parse(paused.stdout).state.status, 'paused')
+  setRepositoryPaused({ repoPath: root, paused: false })
+
+  fs.writeFileSync(path.join(root, 'publish.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: publish failure exit', publish: true })
+  fs.rmSync(remote, { recursive: true, force: true })
+  const committed = spawnSync(process.execPath, [syncCommand, 'commit', '--repo', root, '--operation', plan.operationId, '--confirm', plan.operationId], { encoding: 'utf8' })
+  assert.equal(committed.status, 1)
+  assert.equal(JSON.parse(committed.stdout).committed, true)
+  assert.equal(JSON.parse(committed.stdout).publish.ok, false)
+})
+
+test('read-only commands do not create runtime state in an unenrolled repository', (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-unenrolled-'))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  runGit(git, base, ['init', '--initial-branch=main'])
+  const local = path.join(base, '.atelier-local')
+  assert.throws(() => runtimeStatus({ repoPath: base }), /not enrolled/)
+  assert.throws(() => operationTrace({ repoPath: base }), /not enrolled/)
+  assert.throws(() => setRepositoryPaused({ repoPath: base, paused: true }), /not enrolled/)
+  assert.equal(fs.existsSync(local), false)
 })
 
 test('runtime state refuses redirected ancestors and leaves outside targets untouched', (t) => {
@@ -458,6 +504,21 @@ test('publish target drift after review is refused before commit or push', (t) =
   assert.equal(runGit(git, root, ['log', '-1', '--format=%s']).stdout.trim(), 'initial')
 })
 
+test('push URL drift after review is refused before commit', (t) => {
+  const { base, root } = fixture(t)
+  const redirected = path.join(base, 'redirected.git')
+  runGit(git, null, ['init', '--bare', redirected])
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'publish.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: reviewed push target', publish: true })
+  runGit(git, root, ['remote', 'set-url', '--push', 'origin', redirected])
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /publish target changed/,
+  )
+  assert.equal(runGit(git, root, ['log', '-1', '--format=%s']).stdout.trim(), 'initial')
+})
+
 test('a hook that enlarges the index cannot create or publish an unreviewed commit', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -477,6 +538,7 @@ test('a hook that enlarges the index cannot create or publish an unreviewed comm
 })
 
 test('a partially successful Git add is always compensated back to a clean index', (t) => {
+  if (process.platform === 'win32') return t.skip('native Windows exact-process substitution belongs to signed beta evidence')
   const { base, root } = fixture(t)
   const wrapper = path.join(base, 'partial-add-git')
   fs.writeFileSync(wrapper, `#!/bin/sh\nif [ "$4" = "add" ]; then\n  ${JSON.stringify(git)} "$1" "$2" "$3" "$4" "$5" "$6"\n  exit 1\nfi\nexec ${JSON.stringify(git)} "$@"\n`)
@@ -536,6 +598,7 @@ test('configured boundary policy must actually include the enrolled repository',
 })
 
 test('confirmed commit boundary evidence uses only the enrolled Git and strips repository redirection', (t) => {
+  if (process.platform === 'win32') return t.skip('native Windows exact-process substitution belongs to signed beta evidence')
   const { base, root } = fixture(t)
   writePrivateBoundaryProject(root, { actorEmail: 'atelier@example.invalid' })
   const pinned = pinWrapperEnvironment(t, { base, root })
@@ -551,6 +614,7 @@ test('confirmed commit boundary evidence uses only the enrolled Git and strips r
 })
 
 test('confirmed commit suppresses the boundary network actor fallback', (t) => {
+  if (process.platform === 'win32') return t.skip('native Windows exact-process substitution belongs to signed beta evidence')
   const { base, root } = fixture(t)
   writePrivateBoundaryProject(root, { actorEmail: 'different@example.invalid' })
   const pinned = pinWrapperEnvironment(t, { base, root })
@@ -564,6 +628,18 @@ test('confirmed commit suppresses the boundary network actor fallback', (t) => {
   assert.equal(fs.existsSync(pinned.ambientGitMarker), false)
   assert.equal(fs.existsSync(pinned.ghMarker), false)
   assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
+})
+
+test('Sync treats declared private-domain actor uncertainty as blocking in legacy-warning mode', (t) => {
+  const { root } = fixture(t)
+  writePrivateBoundaryProject(root, { actorEmail: 'different@example.invalid', mode: 'legacy-warning' })
+  enrollRepository({ repoPath: root, projectConfig: 'atelier.project.json', gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: actor must be known' })
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /boundary validation refused.*could not verify local actor/,
+  )
 })
 
 test('a hook-created parent cannot authorize a commit and the reviewed plan is consumed', (t) => {
@@ -601,13 +677,15 @@ test('a commit-msg hook cannot substitute the reviewed message', (t) => {
 })
 
 test('a late post-commit HEAD change can never replace the exact reviewed object on the remote', async (t) => {
+  if (process.platform === 'win32') return t.skip('native Windows asynchronous hook proof belongs to signed beta evidence')
   const { root, remote } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
   fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
   const remoteBefore = runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim()
   const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: exact publish object', publish: true })
   const hook = path.join(root, '.git', 'hooks', 'post-commit')
-  fs.writeFileSync(hook, `#!/bin/sh\nnohup sh -c 'sleep 0.1; cd ${JSON.stringify(root)}; ${JSON.stringify(git)} commit --allow-empty --no-verify -m late-head' >/dev/null 2>&1 &\n`)
+  const completed = path.join(root, '.git', 'late-head-complete')
+  fs.writeFileSync(hook, `#!/bin/sh\nnohup sh -c 'sleep 0.1; rm -f ${JSON.stringify(hook)}; cd ${JSON.stringify(root)}; ${JSON.stringify(git)} commit --allow-empty --no-verify -m late-head; touch ${JSON.stringify(completed)}' >/dev/null 2>&1 &\n`)
   fs.chmodSync(hook, 0o755)
   let result = null
   let failure = null
@@ -616,7 +694,9 @@ test('a late post-commit HEAD change can never replace the exact reviewed object
   } catch (error) {
     failure = error
   }
-  await new Promise((resolve) => setTimeout(resolve, 400))
+  const deadline = Date.now() + 5_000
+  while (!fs.existsSync(completed) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(fs.existsSync(completed), true)
   const remoteAfter = runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim()
   if (result) assert.equal(remoteAfter, result.commit)
   else {
@@ -706,17 +786,25 @@ test('an externally oversized trace recovers to a bounded checkpoint on the next
   assert.equal(fs.statSync(trace).size < 2 * 1024 * 1024, true)
 })
 
-test('a corrupt trace is checkpointed and status remains available', (t) => {
+test('read-only status reports a corrupt trace without rewriting it; the next locked mutation recovers it', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
   const trace = runtimePaths(root).trace
   fs.appendFileSync(trace, '{"torn":')
+  const corrupt = fs.readFileSync(trace)
   const status = runtimeStatus({ repoPath: root })
   assert.equal(status.state.status, 'healthy')
+  assert.equal(status.traceLength, null)
+  assert.match(status.traceError, /invalid runtime trace/)
+  assert.deepEqual(fs.readFileSync(trace), corrupt)
+  assert.throws(() => operationTrace({ repoPath: root }), /invalid runtime trace/)
+  assert.deepEqual(fs.readFileSync(trace), corrupt)
+
+  setRepositoryPaused({ repoPath: root, paused: true, reason: 'recover under lock' })
   const records = readOperationTrace(trace)
   assert.equal(records[0].operation, 'trace-checkpoint')
   assert.equal(records[0].outcome, 'recovered')
-  assert.equal(records.at(-1).operation, 'trace-recovery')
+  assert.equal(records.at(-1).operation, 'pause')
 })
 
 test('an existing stale-recovery claim blocks deletion of the observed lock', (t) => {

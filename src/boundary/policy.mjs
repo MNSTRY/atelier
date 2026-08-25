@@ -281,10 +281,10 @@ function nodePlacementFindings({ node, policy }) {
   return findings
 }
 
-function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution }) {
+function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, forceActorErrors }) {
   const findings = []
   const current = resolveCurrentActor({ policy, project, actor, gitExecutable, allowNetworkActorResolution })
-  const severity = severityFor(policy)
+  const severity = forceActorErrors ? 'error' : severityFor(policy)
   for (const [repoName, repo] of Object.entries(policy.repos ?? {})) {
     if (repo.kind !== 'private_domain') continue
     if (!repo.ownerActor) continue
@@ -604,7 +604,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, forceActorErrors = false } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
@@ -614,7 +614,7 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
     findings.push(...promotionFindings({ policy, project, graph }))
   }
-  findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution }))
+  findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, forceActorErrors }))
   if (staged) {
     const stagedPaths = stagedPathsForProject(project, { gitExecutable })
     findings.push(...forbiddenPathFindings({ policy, stagedPaths }))

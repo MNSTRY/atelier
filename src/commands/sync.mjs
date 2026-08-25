@@ -78,11 +78,13 @@ try {
       fetchAttempts: integer(args.retries, 3),
     }))
   } else if (subcommand === 'commit') {
-    print(executeUserConfirmedCommit({
+    const result = executeUserConfirmedCommit({
       repoPath,
       operationId: firstString(args.operation),
       confirmation: firstString(args.confirm),
-    }))
+    })
+    print(result)
+    process.exitCode = result.ok ? 0 : 1
   } else if (subcommand === 'pause' || subcommand === 'freeze') {
     print(setRepositoryPaused({ repoPath, paused: true, reason: firstString(args.reason) || (subcommand === 'freeze' ? 'frozen by user' : 'paused by user') }))
   } else if (subcommand === 'resume') {

@@ -142,11 +142,19 @@ function remoteState(gitExecutable, root, failures) {
   const names = (optionalText(gitExecutable, root, ['remote'], { failures, label: 'remote names' }) || '').split(/\r?\n/).filter(Boolean).sort()
   return names.map((name) => {
     const url = optionalText(gitExecutable, root, ['remote', 'get-url', name], { failures, label: `remote URL for ${name}` })
+    const pushResult = runGit(gitExecutable, root, ['remote', 'get-url', '--push', '--all', name], { allowFailure: true })
+    if (!pushResult.ok) failures.push(blocker('observation-evidence-unavailable', `required Git evidence is unavailable: push destinations for ${name}`, { probe: `push destinations for ${name}` }))
+    const pushUrls = pushResult.ok ? pushResult.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) : []
+    const pushUrl = pushUrls.length === 1 ? pushUrls[0] : null
     return {
       name,
       url: sanitizeRemoteUrl(url),
       identityDigest: sha256(sanitizeRemoteUrl(url)),
       authentication: classifyRemoteAuthentication(url),
+      pushUrl: pushUrl == null ? null : sanitizeRemoteUrl(pushUrl),
+      pushIdentityDigest: pushUrl == null ? null : sha256(sanitizeRemoteUrl(pushUrl)),
+      pushAuthentication: pushUrl == null ? 'unknown' : classifyRemoteAuthentication(pushUrl),
+      pushTargetCount: pushUrls.length,
     }
   })
 }
@@ -221,6 +229,7 @@ function repositoryFeatures(gitExecutable, root, config, failures) {
   const filters = configValues(config, /^filter\./i)
   const customFilters = filters.filter((entry) => !/^filter\.lfs\./i.test(entry.key))
   const partialClone = configValues(config, /^(?:extensions\.partialclone|remote\..*\.promisor)$/i)
+  const urlRewrites = configValues(config, /^url\..*\.(?:insteadof|pushinsteadof)$/i)
   const sparse = boolConfig(config, 'core.sparsecheckout') || Boolean(gitDir && fs.existsSync(path.join(gitDir, 'info', 'sparse-checkout')))
   return {
     gitDir,
@@ -229,6 +238,7 @@ function repositoryFeatures(gitExecutable, root, config, failures) {
     worktrees,
     sparseCheckout: sparse,
     partialClone,
+    urlRewrites,
     filters,
     customFilters,
     hooksPathConfigured: config.some((entry) => entry.key.toLowerCase() === 'core.hookspath'),
@@ -330,11 +340,14 @@ function completenessFor({ filesystem, engine, bare, remotes, features, submodul
   if (bare) blockers.push(blocker('bare-repository-unsupported', 'a working tree is required'))
   if (features.sparseCheckout) blockers.push(blocker('sparse-checkout-unsupported', 'sparse workspaces are not complete observations'))
   if (features.partialClone.length) blockers.push(blocker('partial-clone-unsupported', 'partial clones may omit required Git objects', { config: features.partialClone }))
+  if (features.urlRewrites.length) blockers.push(blocker('url-rewrite-unclassified', 'Git URL rewrite rules make the execution destination ambiguous and must be removed before synchronization', { config: features.urlRewrites.map((entry) => entry.key) }))
   if (!submodules.complete) blockers.push(blocker('submodules-incomplete', 'all declared submodules must be initialized and clean', { entries: submodules.entries }))
   if (!lfs.complete) blockers.push(blocker('lfs-incomplete', lfs.error || 'Git LFS content is not complete'))
   if (features.customFilters.length) blockers.push(blocker('custom-filter-unclassified', 'custom Git filters must be classified before synchronization', { filters: features.customFilters.map((entry) => entry.key) }))
   for (const remote of remotes) {
     if (remote.authentication === 'unknown') blockers.push(blocker('remote-authentication-unknown', `${remote.name} uses an unsupported remote URL shape`))
+    if (remote.pushTargetCount !== 1) blockers.push(blocker('remote-push-destination-ambiguous', `${remote.name} must resolve to exactly one push destination`, { count: remote.pushTargetCount }))
+    else if (remote.pushAuthentication === 'unknown') blockers.push(blocker('remote-push-authentication-unknown', `${remote.name} uses an unsupported push URL shape`))
   }
   if (!remotes.length) warnings.push(blocker('remote-missing', 'repository has no remotes; local commits are possible but synchronization is not'))
   if (features.linkedWorktree) warnings.push(blocker('linked-worktree', 'repository is a linked worktree; the common Git directory is shared'))

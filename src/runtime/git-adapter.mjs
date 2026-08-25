@@ -57,26 +57,10 @@ export function resolveGitExecutable({ env = process.env, platform = process.pla
   throw new Error('compatible system Git was not found on PATH')
 }
 
-const REPOSITORY_REDIRECT_ENV = new Set([
-  'GIT_DIR',
-  'GIT_WORK_TREE',
-  'GIT_COMMON_DIR',
-  'GIT_INDEX_FILE',
-  'GIT_OBJECT_DIRECTORY',
-  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-  'GIT_QUARANTINE_PATH',
-  'GIT_NAMESPACE',
-  'GIT_SHALLOW_FILE',
-  'GIT_GRAFT_FILE',
-  'GIT_CEILING_DIRECTORIES',
-  'GIT_DISCOVERY_ACROSS_FILESYSTEM',
-  'GIT_ATTR_NOSYSTEM',
-])
-
 export function sanitizedGitEnvironment(env = process.env, allowPrompt = false) {
   const next = { ...env }
   for (const key of Object.keys(next)) {
-    if (REPOSITORY_REDIRECT_ENV.has(key) || key === 'GIT_CONFIG_NOSYSTEM' || key.startsWith('GIT_CONFIG_')) delete next[key]
+    if (key.toUpperCase().startsWith('GIT_')) delete next[key]
   }
   if (!allowPrompt) next.GIT_TERMINAL_PROMPT = '0'
   next.GIT_OPTIONAL_LOCKS = next.GIT_OPTIONAL_LOCKS || '1'
@@ -147,6 +131,10 @@ export function parseGitVersion(text) {
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), text: match[0] }
 }
 
+export function isSupportedGitVersion(version) {
+  return Boolean(version && (version.major > 2 || (version.major === 2 && version.minor >= 40)))
+}
+
 export function inspectGitEngine(gitExecutable, { env = process.env } = {}) {
   const result = runGit(gitExecutable, null, ['--version'], { env })
   const version = parseGitVersion(result.stdout)
@@ -154,8 +142,8 @@ export function inspectGitEngine(gitExecutable, { env = process.env } = {}) {
   return {
     executable: gitExecutable,
     version: `${version.major}.${version.minor}.${version.patch}`,
-    supported: version.major > 2 || (version.major === 2 && version.minor >= 39),
-    minimum: '2.39.0',
+    supported: isSupportedGitVersion(version),
+    minimum: '2.40.0',
   }
 }
 

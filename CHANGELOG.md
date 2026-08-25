@@ -9,6 +9,11 @@
   two-phase user-confirmed commit-and-publish path. No desktop shell, watcher
   dependency, semantic conflict resolution, force operation, browser apply
   endpoint, telemetry, or hidden upload is introduced.
+- Raise the Sync Git floor to 2.40 so default global and system attributes can
+  be observed, bind publication to the single resolved push URL, refuse URL
+  rewrite ambiguity, strip every inherited `GIT_*` process control, keep
+  read-only commands mutation-free, and return non-zero exits for paused status
+  and failed publication.
 
 ## 0.2.0-alpha.5
 
