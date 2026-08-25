@@ -91,7 +91,44 @@
         "required": ["complete"]
       },
       "then": {
+        "required": ["git", "bare", "branch", "remotes", "features", "submodules", "lfs", "status"],
         "properties": {
+          "filesystem": {
+            "required": ["supported"],
+            "properties": {
+              "supported": { "const": true }
+            }
+          },
+          "git": {
+            "required": ["executable", "version", "supported", "minimum"],
+            "properties": {
+              "supported": { "const": true }
+            }
+          },
+          "bare": { "const": false },
+          "features": {
+            "required": ["sparseCheckout", "partialClone", "customFilters"],
+            "properties": {
+              "sparseCheckout": { "const": false },
+              "partialClone": { "type": "array", "maxItems": 0 },
+              "customFilters": { "type": "array", "maxItems": 0 }
+            }
+          },
+          "submodules": {
+            "required": ["complete"],
+            "properties": {
+              "complete": { "const": true }
+            }
+          },
+          "lfs": {
+            "required": ["complete"],
+            "properties": {
+              "complete": { "const": true }
+            }
+          },
+          "status": {
+            "required": ["clean", "digest", "entries", "fingerprints", "stagedCount", "unstagedCount", "conflictCount"]
+          },
           "blockers": {
             "maxItems": 0
           }

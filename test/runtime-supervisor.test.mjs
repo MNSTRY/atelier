@@ -10,6 +10,7 @@ import {
   atomicWriteJson,
   readOperationTrace,
   runtimePaths,
+  writeRuntimeState,
 } from '../src/runtime/local-state.mjs'
 import {
   enrollRepository,
@@ -161,6 +162,25 @@ test('bounded fetch failures become attention and prevent publish-plan creation'
   assert.deepEqual(fs.readdirSync(runtimePaths(root).plans), [])
 })
 
+test('publish planning refuses incomplete evidence before fetch and prior unpublished commits before disclosure', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'publish.md'), 'reviewed\n')
+  runGit(git, root, ['config', 'core.sparseCheckout', 'true'])
+  assert.throws(
+    () => planUserConfirmedCommit({ repoPath: root, paths: ['publish.md'], message: 'docs: incomplete must not fetch', publish: true, fetchAttempts: 1 }),
+    /completeness blockers|incomplete|sparse/i,
+  )
+  runGit(git, root, ['config', 'core.sparseCheckout', 'false'])
+  runGit(git, root, ['add', 'publish.md'])
+  runGit(git, root, ['commit', '-m', 'local unpublished commit'])
+  fs.writeFileSync(path.join(root, 'next.md'), 'next\n')
+  assert.throws(
+    () => planUserConfirmedCommit({ repoPath: root, paths: ['next.md'], message: 'docs: bounded payload', publish: true }),
+    /prior local commits are unpublished/,
+  )
+})
+
 test('pause, resume, busy locks, and stale-lock recovery remain machine-local', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -247,6 +267,27 @@ test('enrollment remains closed, ignored, untracked, and bound to the inspected 
   assert.throws(() => runtimeStatus({ repoPath: root }), /trusted Git selection|outside the enrolled repository/)
 })
 
+test('enrollment refuses a repository-owned Git executable before executing it', (t) => {
+  const { root } = fixture(t)
+  const marker = path.join(root, 'repo-git-executed')
+  const repoGit = path.join(root, 'repo-owned-git')
+  fs.writeFileSync(repoGit, `#!/bin/sh\nprintf executed > ${JSON.stringify(marker)}\nexit 1\n`)
+  fs.chmodSync(repoGit, 0o755)
+  assert.throws(() => enrollRepository({ repoPath: root, gitExecutable: repoGit }), /must live outside the repository before it can be inspected/)
+  assert.equal(fs.existsSync(marker), false)
+})
+
+test('re-enrollment respects the repository lock and preserves a readable trace', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const paths = runtimePaths(root)
+  const held = acquireRepositoryLock(paths, { operation: 'held-during-reenroll' })
+  assert.equal(held.ok, true)
+  assert.throws(() => enrollRepository({ repoPath: root, gitExecutable: git }), /repository is busy/)
+  held.release()
+  assert.doesNotThrow(() => readOperationTrace(paths.trace))
+})
+
 test('a redirected operation lock is refused without writing through its target', (t) => {
   const { base, root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -327,6 +368,65 @@ test('a hook that enlarges the index cannot create or publish an unreviewed comm
   assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
 })
 
+test('a partially successful Git add is always compensated back to a clean index', (t) => {
+  const { base, root } = fixture(t)
+  const wrapper = path.join(base, 'partial-add-git')
+  fs.writeFileSync(wrapper, `#!/bin/sh\nif [ "$4" = "add" ]; then\n  ${JSON.stringify(git)} "$1" "$2" "$3" "$4" "$5" "$6"\n  exit 1\nfi\nexec ${JSON.stringify(git)} "$@"\n`)
+  fs.chmodSync(wrapper, 0o755)
+  const previous = process.env.ATELIER_GIT_PATH
+  process.env.ATELIER_GIT_PATH = wrapper
+  t.after(() => {
+    if (previous == null) delete process.env.ATELIER_GIT_PATH
+    else process.env.ATELIER_GIT_PATH = previous
+  })
+  enrollRepository({ repoPath: root, gitExecutable: wrapper })
+  fs.writeFileSync(path.join(root, 'first.md'), 'first\n')
+  fs.writeFileSync(path.join(root, 'second.md'), 'second\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['first.md', 'second.md'], message: 'docs: partial add rollback' })
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /Git --literal-pathspecs failed/,
+  )
+  assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
+})
+
+test('configured boundary policy must actually include the enrolled repository', (t) => {
+  const { base, root } = fixture(t)
+  const other = path.join(base, 'other')
+  fs.mkdirSync(other)
+  runGit(git, other, ['init', '--initial-branch=main'])
+  configure(other)
+  fs.writeFileSync(path.join(other, 'README.md'), '# Other\n')
+  runGit(git, other, ['add', 'README.md'])
+  runGit(git, other, ['commit', '-m', 'other initial'])
+  fs.writeFileSync(path.join(root, 'atelier.project.json'), `${JSON.stringify({
+    schema: 'mnstry.atelier-project-config@v1',
+    name: 'scope-mismatch',
+    roots: { workspace: '.', repoOps: '.' },
+    graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' },
+    projection: { outputRoot: 'atelier-output', readinessPath: 'atelier-output/atelier-readiness.json' },
+    boundaries: { policyPath: 'boundary-policy.v1.json', governanceLedgerPath: 'governance/repo-boundary-ledger.md', strictNewRepos: true },
+    repos: [{ name: 'other', path: '../other', readBoundary: 'team' }],
+  }, null, 2)}\n`)
+  fs.writeFileSync(path.join(root, 'repo-access.v1.json'), `${JSON.stringify({ schema: 'mnstry.repo-access@v1', defaultReadBoundary: 'team', repos: { other: { readBoundary: 'team' } } }, null, 2)}\n`)
+  fs.writeFileSync(path.join(root, 'boundary-policy.v1.json'), `${JSON.stringify({
+    schema: 'mnstry.atelier-boundary-policy@v1',
+    mode: 'strict',
+    actors: {},
+    repos: { other: { kind: 'shared', readBoundary: 'team', allowedAudiences: ['team', 'operator', 'staff', 'public'], forbiddenAudiences: ['private', 'sensitive'], autoCommit: 'guarded' } },
+    promotion: { requiresGitPromote: true, recordsPath: 'governance/git-promote-events.jsonl' },
+    governanceLedgerPath: 'governance/repo-boundary-ledger.md',
+  }, null, 2)}\n`)
+  enrollRepository({ repoPath: root, projectConfig: 'atelier.project.json', gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: boundary scope' })
+  assert.throws(
+    () => executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId }),
+    /boundary validation refused.*does not include the enrolled repository/,
+  )
+  assert.equal(runGit(git, root, ['diff', '--cached', '--name-only']).stdout, '')
+})
+
 test('a hook-created parent cannot authorize a commit and the reviewed plan is consumed', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -359,6 +459,31 @@ test('a commit-msg hook cannot substitute the reviewed message', (t) => {
   )
   assert.equal(head(root), before)
   assert.equal(fs.existsSync(planFile(root, plan.operationId)), false)
+})
+
+test('a late post-commit HEAD change can never replace the exact reviewed object on the remote', async (t) => {
+  const { root, remote } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed\n')
+  const remoteBefore = runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim()
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: exact publish object', publish: true })
+  const hook = path.join(root, '.git', 'hooks', 'post-commit')
+  fs.writeFileSync(hook, `#!/bin/sh\nnohup sh -c 'sleep 0.1; cd ${JSON.stringify(root)}; ${JSON.stringify(git)} commit --allow-empty --no-verify -m late-head' >/dev/null 2>&1 &\n`)
+  fs.chmodSync(hook, 0o755)
+  let result = null
+  let failure = null
+  try {
+    result = executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId })
+  } catch (error) {
+    failure = error
+  }
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  const remoteAfter = runGit(git, null, ['--git-dir', remote, 'rev-parse', 'refs/heads/main']).stdout.trim()
+  if (result) assert.equal(remoteAfter, result.commit)
+  else {
+    assert.match(failure.message, /reviewed commit|HEAD changed|rolled back/)
+    assert.equal(remoteAfter, remoteBefore)
+  }
 })
 
 test('commit plans expire, are consumed, and refuse an unbounded resident plan set', (t) => {
@@ -398,6 +523,21 @@ test('post-fast-forward completeness blockers produce attention, not healthy sta
   assert.equal(result.state.observation.blockers.some((item) => item.code === 'submodules-incomplete'), true)
 })
 
+test('persisted runtime state omits unbounded path evidence and hard-compacts oversized details', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  fs.writeFileSync(path.join(root, 'dirty.md'), 'dirty\n')
+  runtimeStatus({ repoPath: root })
+  const paths = runtimePaths(root)
+  const persisted = JSON.parse(fs.readFileSync(paths.state, 'utf8'))
+  assert.equal(Object.hasOwn(persisted.observation.status, 'entries'), false)
+  assert.equal(Object.hasOwn(persisted.observation.status, 'fingerprints'), false)
+  writeRuntimeState(paths, { status: 'healthy', code: 'oversized', message: 'x'.repeat(600_000), details: {} })
+  const compacted = JSON.parse(fs.readFileSync(paths.state, 'utf8'))
+  assert.equal(compacted.code, 'runtime-state-resident-ceiling')
+  assert.equal(fs.statSync(paths.state).size < 512 * 1024, true)
+})
+
 test('resident operation trace checkpoints before crossing its byte ceiling', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -427,6 +567,19 @@ test('an externally oversized trace recovers to a bounded checkpoint on the next
   assert.equal(fs.statSync(trace).size < 2 * 1024 * 1024, true)
 })
 
+test('a corrupt trace is checkpointed and status remains available', (t) => {
+  const { root } = fixture(t)
+  enrollRepository({ repoPath: root, gitExecutable: git })
+  const trace = runtimePaths(root).trace
+  fs.appendFileSync(trace, '{"torn":')
+  const status = runtimeStatus({ repoPath: root })
+  assert.equal(status.state.status, 'healthy')
+  const records = readOperationTrace(trace)
+  assert.equal(records[0].operation, 'trace-checkpoint')
+  assert.equal(records[0].outcome, 'recovered')
+  assert.equal(records.at(-1).operation, 'trace-recovery')
+})
+
 test('an existing stale-recovery claim blocks deletion of the observed lock', (t) => {
   const { root } = fixture(t)
   enrollRepository({ repoPath: root, gitExecutable: git })
@@ -439,4 +592,10 @@ test('an existing stale-recovery claim blocks deletion of the observed lock', (t
   assert.equal(contender.code, 'repository-busy')
   assert.equal(fs.existsSync(paths.lock), true)
   assert.equal(JSON.parse(fs.readFileSync(path.join(paths.lock, 'owner.json'), 'utf8')).lockNonce, 'stale')
+
+  const old = new Date(Date.now() - 60_000)
+  fs.utimesSync(path.join(paths.lock, 'recovery.claim'), old, old)
+  const recovered = acquireRepositoryLock(paths, { operation: 'recover-abandoned-claim' })
+  assert.equal(recovered.ok, true)
+  recovered.release()
 })

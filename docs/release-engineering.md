@@ -121,7 +121,9 @@ undocumented runtime egress; this gate is one mechanical check behind that
 claim. It does not interpret data-only Markdown/JSON and does not model
 `child_process`, so the reviewed `gh` identity-resolution subprocesses and the
 explicitly enrolled Atelier Sync Git fetch/non-force-push subprocesses are
-documented exceptions backed by dedicated refusal tests.
+documented exceptions backed by dedicated refusal tests. Sync refuses fetch on
+an incomplete observation, refuses publish while prior local commits are
+unpublished, and pushes the exact post-hook-verified commit object.
 
 ### consumer:smoke
 

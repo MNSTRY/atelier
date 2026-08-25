@@ -26,7 +26,9 @@ runtime object.
   query strings, and fragments. Every authoritative field is bound into the operation id.
   Execution requires that exact id and refuses if the plan, repository,
   staged bytes/modes, written tree, commit parent/message, or publish target
-  changed. Plans expire after 24 hours, are consumed by a definitive execution
+  changed. A publish plan is refused while any earlier local commit remains
+  unpublished, and publication names the exact verified commit object rather
+  than a movable `HEAD` ref. Plans expire after 24 hours, are consumed by a definitive execution
   attempt, and are held under resident file/count ceilings.
 - A commit plan cannot absorb pre-existing staged work. It stages only literal,
   explicitly reviewed paths.
@@ -35,9 +37,10 @@ runtime object.
   still run; the resulting commit tree, single parent, and message must equal
   the reviewed authority or the local commit is rolled back and publication is
   refused.
-- Push is present only when the reviewed plan requested it. Push is never
-  forced, and a failed push preserves the local commit and creates one stable
-  attention state.
+- Push is present only when the reviewed plan requested it, the branch had no
+  prior unpublished commits, and HEAD still names the exact verified commit.
+  Push is never forced, and a failed push preserves the local commit and
+  creates one stable attention state.
 - Semantic conflict resolution, merge commits, rebase, reset, force push,
   browser apply, broad path scans, telemetry, and hidden upload are absent.
 
@@ -57,6 +60,9 @@ It cannot report `complete: true` when any of these are unresolved:
 - a remote URL whose authentication shape cannot be classified.
 - any required Git evidence read that fails, times out, exceeds its budget, or
   cannot be parsed.
+- a change set above the 4,096-entry resident observation ceiling; or
+- a `core.attributesFile` outside the repository-owned/tracked attributes
+  boundary whose filter semantics have not been classified.
 
 HTTPS through Git Credential Manager, SSH through the user's existing SSH
 configuration, and local test remotes are classified explicitly. Atelier does
@@ -67,18 +73,21 @@ not collect or store provider credentials.
 Ignored `.atelier-local/runtime/` contains:
 
 - `enrollment.json` — exact repository and Git engine;
-- `state.json` — healthy, attention, or paused state;
+- `state.json` — a bounded projection of healthy, attention, or paused state;
 - `control.json` — user pause/freeze state;
 - `plans/` — expiring, consumed reviewed commit plans under count/byte ceilings;
 - `operations.ndjson` — sequence- and hash-chained resident trace with explicit
-  hash-bound checkpoints before its byte or record ceiling; and
+  hash-bound checkpoints before its byte or record ceiling, with a fresh
+  digest-linked generation after a torn or corrupt chain; and
 - an atomic per-repository operation lock.
 
 Every directory component is containment-checked and every state leaf is
 opened without following redirects where the platform supports it, with leaf
 type and identity checks on every platform. Stale-lock recovery uses an
-exclusive recovery claim and quarantines only the claimed stale directory; it
-never recursively deletes a newly acquired lock.
+exclusive recovery claim, ages out an abandoned recovery claim after the owner
+grace interval, and quarantines only the claimed stale directory; it never
+recursively deletes a newly acquired lock. Enrollment takes the same lock as
+every other authoritative state mutation.
 
 Deleting this directory removes convenience and diagnostics. It cannot change
 repository meaning. Git plus readable files remain authoritative.

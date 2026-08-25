@@ -12,6 +12,7 @@ import {
 } from './git-adapter.mjs'
 
 export const ATELIER_REPOSITORY_OBSERVATION_SCHEMA = 'atelier-repository-observation@v1'
+export const ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES = 4096
 const OBSERVATION_CONTRACT = JSON.parse(fs.readFileSync(new URL('../../contracts/atelier-repository-observation.v1.schema.json', import.meta.url), 'utf8'))
 
 const CLOUD_PATH_PATTERNS = [
@@ -161,29 +162,35 @@ function submoduleState(gitExecutable, root) {
   return { declared: true, entries, complete, error: result.ok ? null : firstLine(result.stderr) || 'submodule status failed' }
 }
 
-function lfsState(gitExecutable, root, failures) {
+function lfsState(gitExecutable, root, config, gitDir, failures) {
   const trackedAttributes = (optionalText(gitExecutable, root, ['ls-files', '--', '**/.gitattributes', '.gitattributes'], { failures, label: 'tracked attributes' }) || '')
     .split(/\r?\n/)
     .filter(Boolean)
-  const attributeFiles = trackedAttributes.filter((file) => fs.existsSync(path.join(root, file)))
-  const required = attributeFiles.some((file) => {
-    const absolute = path.join(root, file)
+  const attributeFiles = trackedAttributes.filter((file) => fs.existsSync(path.join(root, file))).map((file) => ({ label: file, absolute: path.join(root, file) }))
+  const infoAttributes = gitDir ? path.join(gitDir, 'info', 'attributes') : null
+  if (infoAttributes && fs.existsSync(infoAttributes)) attributeFiles.push({ label: '.git/info/attributes', absolute: infoAttributes })
+  const externalAttributes = config.find((entry) => entry.key.toLowerCase() === 'core.attributesfile')
+  if (externalAttributes) {
+    failures.push(blocker('external-attributes-file-unclassified', 'core.attributesFile can change Git filter semantics and must be removed or classified', { key: externalAttributes.key }))
+  }
+  const required = attributeFiles.some(({ label, absolute }) => {
     const stat = fs.lstatSync(absolute)
     if (stat.isSymbolicLink() || !stat.isFile()) {
-      failures.push(blocker('observation-evidence-unavailable', 'tracked attributes evidence is redirected or not a regular file', { path: file }))
+      failures.push(blocker('observation-evidence-unavailable', 'Git attributes evidence is redirected or not a regular file', { path: label }))
       return false
     }
     return /filter\s*=\s*lfs|filter=lfs/i.test(fs.readFileSync(absolute, 'utf8'))
   })
   const version = runGit(gitExecutable, root, ['lfs', 'version'], { allowFailure: true })
-  if (!required) return { required: false, available: version.ok, complete: true, attributeFiles }
-  if (!version.ok) return { required: true, available: false, complete: false, attributeFiles, error: 'Git LFS is required but unavailable' }
+  const labels = attributeFiles.map((item) => item.label)
+  if (!required) return { required: false, available: version.ok, complete: !externalAttributes, attributeFiles: labels, error: externalAttributes ? 'external Git attributes are unclassified' : null }
+  if (!version.ok) return { required: true, available: false, complete: false, attributeFiles: labels, error: 'Git LFS is required but unavailable' }
   const status = runGit(gitExecutable, root, ['lfs', 'fsck'], { allowFailure: true, timeout: 120_000 })
   return {
     required: true,
     available: true,
     complete: status.ok,
-    attributeFiles,
+    attributeFiles: labels,
     error: status.ok ? null : firstLine(status.stderr) || 'Git LFS object verification failed',
   }
 }
@@ -215,7 +222,7 @@ function repositoryFeatures(gitExecutable, root, config, failures) {
       keyConfigured: config.some((entry) => entry.key.toLowerCase() === 'user.signingkey'),
       formatConfigured: config.some((entry) => entry.key.toLowerCase() === 'gpg.format'),
     },
-    proxy: configValues(config, /^(?:http|https)\.proxy$/i),
+    proxy: configValues(config, /^https?\..*proxy$/i),
   }
 }
 
@@ -342,17 +349,25 @@ export function observeRepository({ repoRoot, gitExecutable, observedAt = new Da
   if (!configResult.ok) acquisitionFailures.push(blocker('observation-evidence-unavailable', 'required Git evidence is unavailable: configuration inventory', { probe: 'configuration inventory' }))
   const branch = branchState(gitExecutable, root, acquisitionFailures)
   const statusResult = runGit(gitExecutable, root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
-  const entries = parsePorcelainStatus(statusResult.stdout)
+  const allEntries = parsePorcelainStatus(statusResult.stdout)
+  const entryCeilingExceeded = allEntries.length > ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES
+  const entries = allEntries.slice(0, ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES)
+  if (entryCeilingExceeded) {
+    acquisitionFailures.push(blocker('observation-change-set-oversized', 'repository change set exceeds the bounded observation entry ceiling', {
+      limitEntries: ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES,
+      observedEntries: allEntries.length,
+    }))
+  }
   const remotes = remoteState(gitExecutable, root, acquisitionFailures)
   const features = repositoryFeatures(gitExecutable, root, config, acquisitionFailures)
   const submodules = submoduleState(gitExecutable, root)
-  const lfs = lfsState(gitExecutable, root, acquisitionFailures)
-  const conflicts = entries.filter((entry) => entry.code.includes('U') || ['AA', 'DD'].includes(entry.code))
-  const staged = entries.filter((entry) => entry.code[0] && entry.code[0] !== '?' && entry.code[0] !== ' ')
-  const unstaged = entries.filter((entry) => entry.code[1] && entry.code[1] !== ' ')
-  const fingerprints = statusFingerprints(gitExecutable, root, entries, acquisitionFailures)
+  const lfs = lfsState(gitExecutable, root, config, features.gitDir, acquisitionFailures)
+  const conflicts = allEntries.filter((entry) => entry.code.includes('U') || ['AA', 'DD'].includes(entry.code))
+  const staged = allEntries.filter((entry) => entry.code[0] && entry.code[0] !== '?' && entry.code[0] !== ' ')
+  const unstaged = allEntries.filter((entry) => entry.code[1] && entry.code[1] !== ' ')
+  const fingerprints = entryCeilingExceeded ? [] : statusFingerprints(gitExecutable, root, entries, acquisitionFailures)
   const completeness = completenessFor({ filesystem: resolved.filesystem, engine, bare, remotes, features, submodules, lfs, acquisitionFailures })
-  const statusDigest = sha256(JSON.stringify({ head: branch.head, branch: branch.branch, fingerprints }))
+  const statusDigest = sha256(JSON.stringify({ head: branch.head, branch: branch.branch, rawStatusDigest: sha256(statusResult.stdout), fingerprints }))
   return {
     schema: ATELIER_REPOSITORY_OBSERVATION_SCHEMA,
     observedAt,
@@ -367,13 +382,15 @@ export function observeRepository({ repoRoot, gitExecutable, observedAt = new Da
     submodules,
     lfs,
     status: {
-      clean: entries.length === 0,
+      clean: allEntries.length === 0,
       digest: statusDigest,
       entries,
       fingerprints,
       stagedCount: staged.length,
       unstagedCount: unstaged.length,
       conflictCount: conflicts.length,
+      observedEntryCount: allEntries.length,
+      entriesTruncated: entryCeilingExceeded,
     },
     blockers: completeness.blockers,
     warnings: completeness.warnings,

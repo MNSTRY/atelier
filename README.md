@@ -268,7 +268,8 @@ recognized explicit actor prevents the boundary actor fallback; recorded
 repository identities let identity checks keep working when the provider is
 unavailable. Explicitly enrolled Atelier Sync may also run bounded Git fetches
 for observation/reconciliation and one non-force push only when the exact
-reviewed commit plan requested and confirmed it. The package's HTTP client
+reviewed commit plan requested and confirmed it, no earlier local commit is
+waiting to be published, and HEAD still names the verified commit object. The package's HTTP client
 refuses non-loopback URLs, the served pages authorize no external origin, and
 release audit scans every executable or markup file in the exact `npm pack`
 inventory for egress primitives. The standalone gate also scans executable and
@@ -318,7 +319,9 @@ receive.
 - Conformance remains offline. Network access is limited to the documented
   `gh` actor-resolution fallback and explicitly enrolled Atelier Sync Git
   operations: bounded fetch for observation/reconciliation, and non-force push
-  only when the exact reviewed commit plan requested and confirmed it.
+  only when the exact reviewed commit plan requested and confirmed it, no
+  earlier local commit remains unpublished, and HEAD still names the verified
+  commit object.
 - It does not execute model-assisted analysis or any model provider.
 - It does not include client project content.
 

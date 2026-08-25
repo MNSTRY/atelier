@@ -110,7 +110,15 @@ function pausedState(control, observation = null) {
 }
 
 function persistState(paths, state, clock = nowIso) {
-  return writeRuntimeState(paths, { ...state, updatedAt: clock() })
+  let observation = state.observation
+  if (observation?.status) {
+    const { entries = [], fingerprints = [], ...status } = observation.status
+    observation = {
+      ...observation,
+      status: { ...status, entryCount: entries.length, fingerprintCount: fingerprints.length },
+    }
+  }
+  return writeRuntimeState(paths, { ...state, observation, updatedAt: clock() })
 }
 
 function trace(paths, event, clock = nowIso) {
@@ -130,28 +138,47 @@ function enrollmentProjectConfig(repoRoot, value) {
 export function enrollRepository({ repoPath = process.cwd(), projectConfig = null, gitExecutable = null, clock = nowIso } = {}) {
   const selectedGit = gitExecutable || resolveGitExecutable()
   const git = fs.realpathSync.native ? fs.realpathSync.native(selectedGit) : fs.realpathSync(selectedGit)
+  const lexicalRepo = fs.realpathSync.native ? fs.realpathSync.native(repoPath) : fs.realpathSync(repoPath)
+  let candidateBoundary = lexicalRepo
+  let repositoryBoundary = null
+  while (true) {
+    if (fs.existsSync(path.join(candidateBoundary, '.git'))) {
+      repositoryBoundary = candidateBoundary
+      break
+    }
+    if (path.dirname(candidateBoundary) === candidateBoundary) break
+    candidateBoundary = path.dirname(candidateBoundary)
+  }
+  if (repositoryBoundary && isContainedPath(repositoryBoundary, git)) throw new Error('enrollment Git executable must live outside the repository before it can be inspected')
   const resolved = resolveRepositoryRoot(repoPath, git)
   if (!resolved.ok) throw new Error(resolved.error || `unsupported repository root: ${resolved.filesystem?.code || 'unknown'}`)
+  if (isContainedPath(resolved.root, git)) throw new Error('enrollment Git executable must live outside the repository')
   const paths = ensureRuntimeStateRoot(resolved.root, git)
-  const observation = observeRepository({ repoRoot: resolved.root, gitExecutable: git, observedAt: clock() })
-  if (observation.bare) throw new Error('bare repositories cannot be enrolled')
-  const engine = { ...inspectGitEngine(git), executableSha256: fileSha256(git) }
-  if (!engine.supported) throw new Error(`Git ${engine.version} is unsupported; Atelier requires ${engine.minimum} or newer`)
-  const enrollment = {
-    schema: ATELIER_RUNTIME_ENROLLMENT_SCHEMA,
-    enrolledAt: clock(),
-    repoRoot: resolved.root,
-    projectConfig: enrollmentProjectConfig(resolved.root, projectConfig),
-    git: engine,
-    mode: 'explicit-single-repository',
+  const lock = acquireRepositoryLock(paths, { operation: 'enroll', clock })
+  if (!lock.ok) throw new Error('repository is busy with another Atelier operation')
+  try {
+    const observation = observeRepository({ repoRoot: resolved.root, gitExecutable: git, observedAt: clock() })
+    if (observation.bare) throw new Error('bare repositories cannot be enrolled')
+    const engine = { ...inspectGitEngine(git), executableSha256: fileSha256(git) }
+    if (!engine.supported) throw new Error(`Git ${engine.version} is unsupported; Atelier requires ${engine.minimum} or newer`)
+    const enrollment = {
+      schema: ATELIER_RUNTIME_ENROLLMENT_SCHEMA,
+      enrolledAt: clock(),
+      repoRoot: resolved.root,
+      projectConfig: enrollmentProjectConfig(resolved.root, projectConfig),
+      git: engine,
+      mode: 'explicit-single-repository',
+    }
+    atomicWriteJson(paths.enrollment, enrollment)
+    const state = observation.complete
+      ? healthyState('enrolled', 'repository enrolled and fully observed', observation)
+      : attentionState('repository-incomplete', 'repository enrolled but completeness blockers require review', observation, { blockers: observation.blockers })
+    persistState(paths, state, clock)
+    trace(paths, { operation: 'enroll', outcome: observation.complete ? 'healthy' : 'attention', details: { root: resolved.root, blockers: observation.blockers.map((item) => item.code) } }, clock)
+    return { ok: true, enrollment, state }
+  } finally {
+    lock.release()
   }
-  atomicWriteJson(paths.enrollment, enrollment)
-  const state = observation.complete
-    ? healthyState('enrolled', 'repository enrolled and fully observed', observation)
-    : attentionState('repository-incomplete', 'repository enrolled but completeness blockers require review', observation, { blockers: observation.blockers })
-  persistState(paths, state, clock)
-  trace(paths, { operation: 'enroll', outcome: observation.complete ? 'healthy' : 'attention', details: { root: resolved.root, blockers: observation.blockers.map((item) => item.code) } }, clock)
-  return { ok: true, enrollment, state }
 }
 
 function isContainedPath(root, candidate) {
@@ -210,7 +237,14 @@ export function runtimeStatus({ repoPath = process.cwd(), clock = nowIso } = {})
   else if (observation.branch.behind && !observation.status.clean) state = attentionState('update-blocked-by-local-changes', 'upstream changes cannot fast-forward over local work', observation)
   else if (observation.branch.ahead) state = attentionState('local-commits-unpublished', 'local commits are waiting for a user-driven publish action', observation)
   else state = healthyState('observed', 'repository observation is healthy', observation)
-  return { ok: state.status !== 'attention', enrollment, control, state, traceLength: readOperationTrace(paths.trace).length }
+  let operations
+  try {
+    operations = readOperationTrace(paths.trace)
+  } catch (error) {
+    appendOperationTrace(paths.trace, { at: clock(), operation: 'trace-recovery', outcome: 'recovered', details: { reason: redactGitDiagnostic(error.message) } })
+    operations = readOperationTrace(paths.trace)
+  }
+  return { ok: state.status !== 'attention', enrollment, control, state, traceLength: operations.length }
 }
 
 function fetchWithRetries({ enrollment, attempts = 3 }) {
@@ -445,16 +479,20 @@ export function planUserConfirmedCommit({
   try {
     const control = readRuntimeControl(paths)
     if (control.paused) throw new Error(`repository is paused: ${control.reason || 'paused by user'}`)
+    let observed = fullStateOrAttention(enrollment, clock)
+    if (observed.attention) throw new Error(observed.attention.message)
     if (publish) {
+      if (observed.observation.branch.ahead > 0) throw new Error('cannot prepare a publish plan while prior local commits are unpublished')
       const fetched = fetchWithRetries({ enrollment, attempts: fetchAttempts })
       if (!fetched.ok) throw new Error(`cannot prepare a publish plan because fetch failed: ${gitFailure(fetched.result)}`)
+      observed = fullStateOrAttention(enrollment, clock)
+      if (observed.attention) throw new Error(observed.attention.message)
     }
-    const observed = fullStateOrAttention(enrollment, clock)
-    if (observed.attention) throw new Error(observed.attention.message)
     const observation = observed.observation
     if (observation.status.conflictCount) throw new Error('cannot plan a commit while conflicts exist')
-    if (observation.branch.behind) throw new Error('cannot plan a commit while the branch is behind its upstream')
     if (observation.branch.ahead && observation.branch.behind) throw new Error('cannot plan a commit on a diverged branch')
+    if (observation.branch.behind) throw new Error('cannot plan a commit while the branch is behind its upstream')
+    if (publish && observation.branch.ahead > 0) throw new Error('cannot prepare a publish plan while prior local commits are unpublished')
     if (observation.status.stagedCount) throw new Error('pre-existing staged changes must be committed or unstaged before Atelier can prepare a bounded change set')
     const selected = validateSelectedPaths(selectedPaths, observation)
     const target = publishTarget(observation)
@@ -500,10 +538,18 @@ export function planUserConfirmedCommit({
 function projectBoundaryCheck(enrollment) {
   if (!enrollment.projectConfig) return { ok: true, configured: false, report: null }
   const project = commandProject({ argv: ['--project', enrollment.projectConfig], cwd: enrollment.repoRoot })
+  const scannedRepoRoots = (project.repos || [])
+    .filter((repo) => !repo.external && repo.path)
+    .map((repo) => {
+      try { return fs.realpathSync.native ? fs.realpathSync.native(repo.path) : fs.realpathSync(repo.path) } catch { return path.resolve(repo.path) }
+    })
+  if (!scannedRepoRoots.includes(enrollment.repoRoot)) {
+    return { ok: false, configured: true, scannedRepoRoots, report: { errors: [{ code: 'boundary-scope-mismatch', message: 'configured boundary policy does not include the enrolled repository' }] } }
+  }
   const loaded = loadBoundaryPolicy(project)
-  if (!loaded.ok) return { ok: false, configured: true, report: { errors: loaded.errors.map((message) => ({ code: 'boundary-policy-missing', message })) } }
+  if (!loaded.ok) return { ok: false, configured: true, scannedRepoRoots, report: { errors: loaded.errors.map((message) => ({ code: 'boundary-policy-missing', message })) } }
   const report = checkBoundaryPolicy({ project, policy: loaded.policy, staged: true, stagedOnly: true, gitExecutable: enrollment.git.executable })
-  return { ok: report.ok, configured: true, report }
+  return { ok: report.ok, configured: true, scannedRepoRoots, report }
 }
 
 function restoreIndex(gitExecutable, root) {
@@ -543,8 +589,8 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
     if (observation.status.stagedCount) throw new Error('repository gained staged changes after review; create a new commit plan')
     validateSelectedPaths(plan.paths, observation)
     if (plan.publish && stableJson(publishTarget(observation)) !== stableJson(plan.publish)) throw new Error('publish target changed after review; create a new commit plan')
-    runGit(enrollment.git.executable, enrollment.repoRoot, ['--literal-pathspecs', 'add', '--', ...plan.paths])
     staged = true
+    runGit(enrollment.git.executable, enrollment.repoRoot, ['--literal-pathspecs', 'add', '--', ...plan.paths])
     const stagedObservation = observeRepository({ repoRoot: enrollment.repoRoot, gitExecutable: enrollment.git.executable, observedAt: clock() })
     const actualStaged = stagedPaths(stagedObservation)
     const expectedStaged = unique(plan.paths).sort((a, b) => a.localeCompare(b, 'en'))
@@ -599,13 +645,14 @@ export function executeUserConfirmedCommit({ repoPath = process.cwd(), operation
       throw new Error(`Git hook or concurrent change altered the reviewed commit ${postCommitFailures.join(', ')}; commit was rolled back`)
     }
     staged = false
-    trace(paths, { operation: 'commit-created', operationId, outcome: 'committed', mode: 'user-confirmed', details: { commit, paths: plan.paths, boundaryConfigured: boundary.configured } }, clock)
+    trace(paths, { operation: 'commit-created', operationId, outcome: 'committed', mode: 'user-confirmed', details: { commit, paths: plan.paths, boundaryConfigured: boundary.configured, boundaryRepoRoots: boundary.scannedRepoRoots || [] } }, clock)
     let publish = null
     if (plan.publish) {
       const beforePublish = fullStateOrAttention(enrollment, clock)
       if (beforePublish.attention) throw new Error(`repository became incomplete before publish: ${beforePublish.attention.message}`)
       if (stableJson(publishTarget(beforePublish.observation)) !== stableJson(plan.publish)) throw new Error('publish target changed after review; commit remains local and was not published')
-      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', '--', plan.publish.remote, `HEAD:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
+      if (beforePublish.observation.branch.head !== commit) throw new Error('repository HEAD changed after the reviewed commit; commit remains local and was not published')
+      const pushed = runGit(enrollment.git.executable, enrollment.repoRoot, ['push', '--', plan.publish.remote, `${commit}:refs/heads/${plan.publish.branch}`], { allowFailure: true, allowPrompt: true, timeout: 120_000 })
       publish = { ok: pushed.ok, remote: plan.publish.remote, branch: plan.publish.branch, error: pushed.ok ? null : gitFailure(pushed) }
       trace(paths, { operation: 'commit-publish', operationId, outcome: pushed.ok ? 'published' : 'attention', mode: 'user-confirmed', details: { commit, ...publish } }, clock)
       if (!pushed.ok) {
@@ -649,5 +696,10 @@ export function setRepositoryPaused({ repoPath = process.cwd(), paused, reason =
 
 export function operationTrace({ repoPath = process.cwd() } = {}) {
   const { paths } = loadEnrollment(repoPath)
-  return readOperationTrace(paths.trace)
+  try {
+    return readOperationTrace(paths.trace)
+  } catch (error) {
+    appendOperationTrace(paths.trace, { at: nowIso(), operation: 'trace-recovery', outcome: 'recovered', details: { reason: redactGitDiagnostic(error.message) } })
+    return readOperationTrace(paths.trace)
+  }
 }

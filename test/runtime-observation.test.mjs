@@ -6,6 +6,7 @@ import test from 'node:test'
 import { resolveGitExecutable, runGit } from '../src/runtime/git-adapter.mjs'
 import {
   ATELIER_REPOSITORY_OBSERVATION_SCHEMA,
+  ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES,
   classifyFilesystemRoot,
   observeRepository,
   parsePorcelainStatus,
@@ -134,4 +135,29 @@ test('an over-budget required Git evidence read makes the observation incomplete
   const report = observeRepository({ repoRoot: root, gitExecutable: git })
   assert.equal(report.complete, false)
   assert.equal(report.blockers.some((item) => item.code === 'observation-evidence-unavailable'), true)
+})
+
+test('an oversized change set fails closed before per-entry fingerprint subprocesses grow without bound', (t) => {
+  const { root } = repository(t)
+  for (let index = 0; index <= ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES; index += 1) {
+    fs.writeFileSync(path.join(root, `untracked-${String(index).padStart(4, '0')}.txt`), 'x\n')
+  }
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, false)
+  assert.equal(report.status.entries.length, ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES)
+  assert.equal(report.status.fingerprints.length, 0)
+  assert.equal(report.status.entriesTruncated, true)
+  assert.equal(report.status.observedEntryCount, ATELIER_REPOSITORY_OBSERVATION_MAX_ENTRIES + 1)
+  assert.equal(report.blockers.some((item) => item.code === 'observation-change-set-oversized'), true)
+})
+
+test('external Git attributes configuration is a completeness blocker', (t) => {
+  const { base, root } = repository(t)
+  const attributes = path.join(base, 'external-attributes')
+  fs.writeFileSync(attributes, '*.bin filter=lfs\n')
+  runGit(git, root, ['config', 'core.attributesFile', attributes])
+  const report = observeRepository({ repoRoot: root, gitExecutable: git })
+  assert.equal(report.complete, false)
+  assert.equal(report.blockers.some((item) => item.code === 'external-attributes-file-unclassified'), true)
+  assert.equal(JSON.stringify(report).includes(attributes), false)
 })

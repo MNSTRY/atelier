@@ -18,6 +18,7 @@ export const ATELIER_RUNTIME_TRACE_MAX_EVENT_BYTES = 256 * 1024
 export const ATELIER_RUNTIME_PLAN_MAX_AGE_MS = 24 * 60 * 60 * 1000
 export const ATELIER_RUNTIME_PLAN_MAX_FILES = 256
 export const ATELIER_RUNTIME_PLAN_MAX_BYTES = 4 * 1024 * 1024
+export const ATELIER_RUNTIME_STATE_MAX_BYTES = 512 * 1024
 
 function lstatIfPresent(file) {
   try {
@@ -171,6 +172,13 @@ function boundedTraceEvent(event) {
 
 function traceRecoveryCheckpoint(secured, event, reason) {
   const stat = lstatIfPresent(secured)
+  let priorSha256 = null
+  try {
+    priorSha256 = crypto.createHash('sha256').update(readRegularTextNoFollow(secured)).digest('hex')
+  } catch {
+    // The recovery checkpoint still records the size and reason if the old
+    // regular file cannot be read completely.
+  }
   const checkpointUnsigned = {
     schema: ATELIER_RUNTIME_TRACE_SCHEMA,
     sequence: 1,
@@ -178,7 +186,7 @@ function traceRecoveryCheckpoint(secured, event, reason) {
     at: event.at,
     operation: 'trace-checkpoint',
     outcome: 'recovered',
-    details: { reason, priorBytes: stat?.size ?? 0 },
+    details: { reason, priorBytes: stat?.size ?? 0, priorSha256 },
   }
   const checkpoint = { ...checkpointUnsigned, hash: digest(checkpointUnsigned) }
   atomicReplacePrivateText(secured, `${JSON.stringify(checkpoint)}\n`)
@@ -192,7 +200,6 @@ export function appendOperationTrace(tracePath, event) {
   try {
     records = readOperationTrace(secured)
   } catch (error) {
-    if (!/resident (?:byte|record) ceiling/.test(error.message)) throw error
     records = [traceRecoveryCheckpoint(secured, boundedEvent, error.message)]
   }
   let previousHash = records.at(-1)?.hash ?? null
@@ -301,10 +308,40 @@ export function acquireRepositoryLock(paths, { operation, clock = () => new Date
       fs.writeFileSync(claimDescriptor, lockNonce)
       fs.fsyncSync(claimDescriptor)
     } catch (claimError) {
-      if (claimError?.code === 'EEXIST' || claimError?.code === 'ENOENT') {
+      if (claimError?.code === 'EEXIST') {
+        const claimStat = lstatIfPresent(claimPath)
+        if (!claimStat || claimStat.isSymbolicLink() || !claimStat.isFile()) throw new Error('runtime recovery claim is redirected or not a regular file')
+        const claimAgeMs = Date.now() - claimStat.mtimeMs
+        if (claimAgeMs < ownerWriteGraceMs) {
+          return { ok: false, code: 'repository-busy', owner: owner || { operation: 'stale-lock-recovery', ageMs: claimAgeMs } }
+        }
+        const staleClaim = `${claimPath}.stale-${lockNonce}`
+        try {
+          fs.renameSync(claimPath, staleClaim)
+          const movedClaimStat = lstatIfPresent(staleClaim)
+          if (!movedClaimStat || movedClaimStat.dev !== claimStat.dev || movedClaimStat.ino !== claimStat.ino) {
+            if (movedClaimStat && !lstatIfPresent(claimPath)) fs.renameSync(staleClaim, claimPath)
+            return { ok: false, code: 'repository-busy', owner: owner || { operation: 'stale-lock-recovery-identity-changed' } }
+          }
+          fs.unlinkSync(staleClaim)
+          claimDescriptor = openRegularFileNoFollow(
+            claimPath,
+            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+            0o600,
+          )
+          fs.writeFileSync(claimDescriptor, lockNonce)
+          fs.fsyncSync(claimDescriptor)
+        } catch (retryError) {
+          if (retryError?.code === 'EEXIST' || retryError?.code === 'ENOENT') {
+            return { ok: false, code: 'repository-busy', owner: owner || { operation: 'stale-lock-recovery-lost' } }
+          }
+          throw retryError
+        }
+      } else if (claimError?.code === 'ENOENT') {
         return { ok: false, code: 'repository-busy', owner: owner || { operation: 'stale-lock-recovery' } }
+      } else {
+        throw claimError
       }
-      throw claimError
     } finally {
       if (claimDescriptor != null) fs.closeSync(claimDescriptor)
     }
@@ -349,7 +386,28 @@ export function acquireRepositoryLock(paths, { operation, clock = () => new Date
 }
 
 export function writeRuntimeState(paths, state) {
-  const value = { schema: ATELIER_RUNTIME_STATE_SCHEMA, ...state }
+  let value = { schema: ATELIER_RUNTIME_STATE_SCHEMA, ...state }
+  const encodedBytes = Buffer.byteLength(`${JSON.stringify(value, null, 2)}\n`)
+  if (encodedBytes > ATELIER_RUNTIME_STATE_MAX_BYTES) {
+    value = {
+      schema: ATELIER_RUNTIME_STATE_SCHEMA,
+      status: 'attention',
+      code: 'runtime-state-resident-ceiling',
+      message: 'runtime state exceeded its resident byte ceiling and was compacted',
+      incidentId: state.incidentId ?? null,
+      updatedAt: state.updatedAt ?? new Date().toISOString(),
+      observation: state.observation ? {
+        schema: state.observation.schema,
+        observedAt: state.observation.observedAt,
+        complete: false,
+        root: state.observation.root,
+        branch: state.observation.branch ? { branch: state.observation.branch.branch, head: state.observation.branch.head } : null,
+        status: state.observation.status ? { clean: state.observation.status.clean, digest: state.observation.status.digest } : null,
+        blockers: [{ code: 'runtime-state-resident-ceiling', message: 'full resident state was too large to retain', details: { limitBytes: ATELIER_RUNTIME_STATE_MAX_BYTES, observedBytes: encodedBytes } }],
+      } : null,
+      details: { limitBytes: ATELIER_RUNTIME_STATE_MAX_BYTES, observedBytes: encodedBytes },
+    }
+  }
   atomicWriteJson(paths.state, value)
   return value
 }
