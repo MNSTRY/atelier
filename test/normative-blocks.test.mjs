@@ -60,3 +60,14 @@ test('every block marker in the README names a real block', () => {
     )
   }
 })
+
+test('canonical egress claims name every documented subprocess network class', () => {
+  const claims = fs.readFileSync(path.join(blocksDir, 'claims.md'), 'utf8')
+  const limits = fs.readFileSync(path.join(blocksDir, 'will-not-do.md'), 'utf8')
+  for (const expected of ['gh api user', 'gh api repos/', 'bounded Git fetches', 'non-force push']) {
+    assert.match(claims, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `claims must disclose ${expected}`)
+  }
+  for (const expected of ['gh', 'bounded fetch', 'non-force push']) {
+    assert.match(limits, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `will-not-do must disclose ${expected}`)
+  }
+})

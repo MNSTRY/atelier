@@ -5,6 +5,21 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.6
+
+This release adds Atelier Sync Deliverable Zero: a headless, local repository
+supervisor with explicit enrollment, complete repository observations,
+fast-forward-only reconciliation, pause/resume control, hash-chained local
+operation traces, and two-phase user-confirmed commit and publication. It does
+not add a desktop shell, semantic conflict resolution, force operations,
+telemetry, or unattended semantic writes.
+
+Consumers that adopt the new runtime should enroll one repository explicitly,
+treat watchers as hints rather than truth, require a fresh complete observation
+before each confirmed mutation, and keep commit and publication as separate
+user decisions. Existing consumers that do not import the runtime subpaths are
+contract-compatible and need only update their pinned dependency.
+
 ## Upgrading to 0.2.0-alpha.5
 
 This release hardens public/private boundary enforcement, local serving,
@@ -117,7 +132,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -125,7 +140,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.5"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.6"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
