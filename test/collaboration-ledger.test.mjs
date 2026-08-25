@@ -375,3 +375,33 @@ test('proposal materialization rejects invalid authoritative event sequences wit
     },
   })
 })
+
+test('proposal materialization accepts the compactor canonical origin plus bounded version tail', (t) => {
+  const root = makeRoot(t)
+  const store = createProposalStore({ workspaceRoot: root })
+  const created = store.createProposal({ path: 'index.html' })
+  assert.equal(created.ok, true)
+  const id = created.record.proposal.id
+  for (let version = 1; version <= 60; version += 1) {
+    const appended = store.eventLedger.append({
+      aggregateId: id,
+      expectedVersion: version,
+      type: 'proposal-reviewed',
+      actor: 'synthetic compaction reviewer',
+      at: `2026-08-25T00:${String(version % 60).padStart(2, '0')}:00Z`,
+      payload: {
+        status: 'reviewed',
+        review: { reviewer: 'synthetic compaction reviewer' },
+      },
+    })
+    assert.equal(appended.ok, true, appended.error)
+  }
+  const compacted = store.eventLedger.compact({ now: '2026-08-25T01:00:00Z' })
+  assert.equal(compacted.ok, true, compacted.error)
+  assert.ok(compacted.removed > 0)
+  const retainedVersions = store.eventLedger.eventsFor(id).events.map((event) => event.version)
+  assert.equal(retainedVersions[0], 1)
+  assert.ok(retainedVersions[1] > 2)
+  assert.equal(store.readProposal(id).ok, true)
+  assert.equal(store.listProposals().ok, true)
+})

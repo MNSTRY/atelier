@@ -176,13 +176,9 @@ export function createProposalStore({
       return { ok: false, status: 404, error: 'proposal not found', record: null }
     }
     let state = null
-    let expectedVersion = 1
     for (const event of events) {
-      if (event.version !== expectedVersion) {
-        return { ok: false, status: 422, error: 'proposal ledger version sequence is invalid', record: null }
-      }
       if (state === null) {
-        if (!['proposal-created', 'proposal-imported'].includes(event.type)) {
+        if (event.version !== 1 || !['proposal-created', 'proposal-imported'].includes(event.type)) {
           return { ok: false, status: 422, error: 'proposal ledger does not begin with a canonical record', record: null }
         }
         const record = event.payload?.record
@@ -202,7 +198,6 @@ export function createProposalStore({
         }
       }
       state = reduceProposal(state, event)
-      expectedVersion += 1
     }
     return { ok: true, status: 200, record: state }
   }
