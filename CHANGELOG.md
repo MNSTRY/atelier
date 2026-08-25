@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.6
 
 - Add Deliverable Zero for Atelier Sync: explicit single-repository
   enrollment, a pinned direct-process Git adapter, executable repository
