@@ -34,12 +34,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: trusted
+      - name: pin trusted PR base and head metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          metadata="$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '[.base.sha, .head.sha] | @tsv')"
+          BASE_SHA="$(printf '%s' "$metadata" | cut -f1)"
+          API_HEAD_SHA="$(printf '%s' "$metadata" | cut -f2)"
+          if ! printf '%s' "$BASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo 'GitHub returned an invalid PR base SHA'
+            exit 1
+          fi
+          if [ "$API_HEAD_SHA" != "$HEAD_SHA" ]; then
+            echo 'PR head no longer matches the maintainer-pinned SHA'
+            exit 1
+          fi
+          echo "BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
       # Untrusted content, DATA ONLY — never install or execute anything in target/
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           path: target
           persist-credentials: false
+          fetch-depth: 0
       - name: TOCTOU pin
         run: |
           actual="$(git -C target rev-parse HEAD)"
@@ -47,19 +64,19 @@ jobs:
             echo "PR head moved to $actual — re-review"
             exit 1
           fi
+          git -C target cat-file -e "$BASE_SHA^{commit}"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
-      # Content sweep only, no --commits: outside-author commits would fail the
-      # identity gate forever, so a dispatched fork sweep could never succeed;
-      # merged commits' messages are covered by the push-range sweep on main
-      # after merge. --untrusted suppresses all per-finding detail — on an
+      # The external-contributor flag waives only the repository-specific
+      # identity gate. Commit messages and every newly reachable bounded blob
+      # remain in scope. --untrusted suppresses all per-finding detail — on an
       # attacker-controlled tree the public log's label + file:line output is a
       # confirmation oracle against a committed guess dictionary.
       - name: trusted sweep of untrusted tree
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
-        run: node trusted/scripts/check-repo-disclosure.mjs --root target --untrusted
+        run: node trusted/scripts/check-repo-disclosure.mjs --root target --untrusted --commits range --base "$BASE_SHA" --external-contributor-range
       - name: report check-run "secret-sweep" on the SHA
         if: always()
         env:

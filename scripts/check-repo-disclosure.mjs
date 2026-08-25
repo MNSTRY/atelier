@@ -7,6 +7,7 @@
 // Usage:
 //   node scripts/check-repo-disclosure.mjs [--root <dir>] [--staged]
 //     [--structural-only] [--commits none|range|all] [--base <ref>] [--untrusted]
+//     [--external-contributor-range]
 //
 // Denylist source precedence: ATELIER_DENYLIST_JSON env -> the scanned root's
 // release-denylist.local.json -> fail closed (exit 2) unless --structural-only
@@ -29,6 +30,7 @@ import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const MAX_HISTORY_COMMITS = 10_000
+const MAX_HISTORY_OBJECTS = 300_000
 const MAX_HISTORY_BLOBS = 100_000
 const MAX_HISTORY_BLOB_BYTES = 16 * 1024 * 1024
 const MAX_HISTORY_TOTAL_BYTES = 256 * 1024 * 1024
@@ -79,6 +81,7 @@ let root = packageRoot
 let staged = false
 let structuralOnly = false
 let untrusted = false
+let externalContributorRange = false
 let commitsMode = 'none'
 let base = null
 for (let i = 0; i < args.length; i += 1) {
@@ -93,6 +96,8 @@ for (let i = 0; i < args.length; i += 1) {
     structuralOnly = true
   } else if (arg === '--untrusted') {
     untrusted = true
+  } else if (arg === '--external-contributor-range') {
+    externalContributorRange = true
   } else if (arg === '--commits') {
     i += 1
     if (!['none', 'range', 'all'].includes(args[i])) usageError('--commits must be none, range, or all')
@@ -106,6 +111,9 @@ for (let i = 0; i < args.length; i += 1) {
   }
 }
 if (commitsMode === 'range' && !base) usageError('--commits range requires --base <ref>')
+if (externalContributorRange && commitsMode !== 'range') {
+  usageError('--external-contributor-range requires --commits range')
+}
 
 function git(gitArgs) {
   return execFileSync('git', ['-C', root, ...gitArgs], {
@@ -233,10 +241,14 @@ function scanCommits(selector) {
       commitsMode === 'range' ? `unable to resolve commit range ${base}..HEAD` : 'unable to read commit history',
     )
   }
-  const records = out
+  let records = out
     .split('\x02')
     .map((record) => record.replace(/^\n/, ''))
     .filter((record) => record.length > 0)
+  if (records.length > MAX_HISTORY_COMMITS) {
+    report('commit-count-limit', 'history')
+    records = records.slice(0, MAX_HISTORY_COMMITS)
+  }
   for (const record of records) {
     const [sha, parents = '', authorName, authorEmail, committerName, committerEmail, message = ''] = record.split('\x01')
     if (!sha) continue
@@ -245,7 +257,7 @@ function scanCommits(selector) {
     // 'GitHub <noreply@github.com>', which would fail the author gate on
     // every PR. Their messages are still scanned below.
     const isMergeCommit = parents.trim().split(/\s+/).filter(Boolean).length > 1
-    if (!isMergeCommit) {
+    if (!isMergeCommit && !externalContributorRange) {
       if (!ALLOWED_AUTHORS.some((id) => id.name === authorName && id.email === authorEmail)) {
         // Log-safety: the offending identity is not echoed, only the SHA.
         report('commit-identity (author)', sha)
@@ -265,87 +277,127 @@ function scanCommits(selector) {
 }
 
 function scanCommitTrees(selector) {
-  let shas
+  let inventory
   try {
-    shas = git(['rev-list', ...selector]).split('\n').filter(Boolean)
+    inventory = git(['rev-list', '--objects', '-z', ...selector]).split('\0').filter(Boolean)
   } catch {
     report('commit-tree-read-incomplete', 'history')
     return 0
   }
-  if (shas.length > MAX_HISTORY_COMMITS) {
-    report('commit-count-limit', 'history')
+  if (inventory.length > MAX_HISTORY_OBJECTS) {
+    report('commit-object-count-limit', 'history')
     return 0
   }
 
-  const scanned = new Set()
+  const objectPaths = new Map()
+  let lastObjectId = null
+  for (const entry of inventory) {
+    if (entry.startsWith('path=')) {
+      if (!lastObjectId) report('commit-object-path-invalid', 'history')
+      else objectPaths.set(lastObjectId, entry.slice('path='.length))
+      continue
+    }
+    if (!/^[0-9a-f]{40,64}$/.test(entry)) {
+      report('commit-object-id-invalid', 'history')
+      lastObjectId = null
+      continue
+    }
+    lastObjectId = entry
+    objectPaths.set(entry, '')
+  }
+  const objectIds = [...objectPaths.keys()]
+  let checks
+  try {
+    checks = execFileSync(
+      'git',
+      ['-C', root, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+      {
+        input: `${objectIds.join('\n')}\n`,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    ).trim().split('\n').filter(Boolean)
+  } catch {
+    report('commit-object-inventory-incomplete', 'history')
+    return 0
+  }
+
+  const blobs = []
   let totalBytes = 0
+  for (const check of checks) {
+    const [objectId, type, sizeText] = check.split(' ')
+    if (type !== 'blob') continue
+    if (blobs.length >= MAX_HISTORY_BLOBS) {
+      report('commit-blob-count-limit', 'history')
+      break
+    }
+    const size = Number(sizeText)
+    const relPath = objectPaths.get(objectId) || '<unknown>'
+    if (!Number.isSafeInteger(size) || size < 0 || size > MAX_HISTORY_BLOB_BYTES) {
+      report('commit-blob-size-limit', `historical blob ${objectId}:${relPath}`)
+      continue
+    }
+    if (totalBytes + size > MAX_HISTORY_TOTAL_BYTES) {
+      report('commit-history-byte-limit', 'history')
+      break
+    }
+    blobs.push({ objectId, relPath, size })
+    totalBytes += size
+  }
+
+  let batch
+  try {
+    batch = execFileSync('git', ['-C', root, 'cat-file', '--batch'], {
+      input: `${blobs.map(({ objectId }) => objectId).join('\n')}\n`,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: totalBytes + blobs.length * 128 + 1024,
+    })
+  } catch {
+    report('commit-blob-read-incomplete', 'history')
+    return 0
+  }
+
+  let offset = 0
   let scannedBlobs = 0
-  for (const sha of shas) {
-    let changedPaths
-    try {
-      changedPaths = new Set(
-        git([
-          'diff-tree', '--root', '-r', '-m', '--no-commit-id', '--name-only',
-          '--diff-filter=ACMR', '-z', sha,
-        ]).split('\0').filter(Boolean),
-      )
-    } catch {
-      report('commit-tree-read-incomplete', `commit ${sha}`)
-      continue
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  for (const expected of blobs) {
+    const newline = batch.indexOf(0x0a, offset)
+    if (newline < 0) {
+      report('commit-blob-read-incomplete', 'history')
+      break
     }
-    if (changedPaths.size === 0) continue
-    let entries
-    try {
-      entries = git(['ls-tree', '-r', '-z', '--full-tree', sha]).split('\0').filter(Boolean)
-    } catch {
-      report('commit-tree-read-incomplete', `commit ${sha}`)
-      continue
+    const [objectId, type, sizeText] = batch.subarray(offset, newline).toString('utf8').split(' ')
+    const size = Number(sizeText)
+    const contentStart = newline + 1
+    const contentEnd = contentStart + size
+    if (
+      objectId !== expected.objectId || type !== 'blob' || size !== expected.size ||
+      contentEnd >= batch.length || batch[contentEnd] !== 0x0a
+    ) {
+      report('commit-blob-read-incomplete', `historical blob ${expected.objectId}`)
+      break
     }
-    for (const entry of entries) {
-      const tab = entry.indexOf('\t')
-      if (tab < 0) {
-        report('commit-tree-entry-invalid', `commit ${sha}`)
-        continue
-      }
-      const [mode, type, objectId] = entry.slice(0, tab).split(' ')
-      const relPath = entry.slice(tab + 1)
-      if (!changedPaths.has(relPath) || type !== 'blob' || mode === '160000') continue
-      const scanKey = `${objectId}\0${relPath}`
-      if (scanned.has(scanKey)) continue
-      scanned.add(scanKey)
-      if (scanned.size > MAX_HISTORY_BLOBS) {
-        report('commit-blob-count-limit', 'history')
-        return scannedBlobs
-      }
-      let size
+    const blob = batch.subarray(contentStart, contentEnd)
+    const displayPath = `historical blob ${objectId}:${expected.relPath}`
+    if (blob.includes(0)) {
+      report('commit-binary-blob-uninspectable', displayPath)
+    } else {
+      let text
       try {
-        size = Number(git(['cat-file', '-s', objectId]).trim())
+        text = decoder.decode(blob)
       } catch {
-        report('commit-blob-read-incomplete', `commit ${sha}:${relPath}`)
-        continue
+        report('commit-text-encoding-invalid', displayPath)
       }
-      if (!Number.isSafeInteger(size) || size < 0 || size > MAX_HISTORY_BLOB_BYTES) {
-        report('commit-blob-size-limit', `commit ${sha}:${relPath}`)
-        continue
+      if (text !== undefined) {
+        const lines = text.split('\n')
+        for (let index = 0; index < lines.length; index += 1) {
+          scanLine(lines[index], expected.relPath, index + 1, displayPath)
+        }
+        scannedBlobs += 1
       }
-      if (totalBytes + size > MAX_HISTORY_TOTAL_BYTES) {
-        report('commit-history-byte-limit', 'history')
-        return scannedBlobs
-      }
-      let blob
-      try {
-        blob = execFileSync('git', ['-C', root, 'cat-file', 'blob', objectId], {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          maxBuffer: MAX_HISTORY_BLOB_BYTES + 1024,
-        })
-      } catch {
-        report('commit-blob-read-incomplete', `commit ${sha}:${relPath}`)
-        continue
-      }
-      totalBytes += blob.length
-      scannedBlobs += 1
-      scanBuffer(blob, relPath, `commit ${sha}:${relPath}`, false)
     }
+    offset = contentEnd + 1
   }
   return scannedBlobs
 }

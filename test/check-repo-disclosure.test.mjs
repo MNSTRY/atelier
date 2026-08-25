@@ -209,14 +209,58 @@ test('commit range scans content added and deleted before HEAD', (t) => {
 
   const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
   assert.equal(status, 1, output)
-  assert.match(output, /test-sentinel: commit [0-9a-f]{40}:private\/temporary\.txt:1/)
+  assert.match(output, /test-sentinel: historical blob [0-9a-f]{40}:private\/temporary\.txt:1/)
   assert.ok(!output.includes(SENTINEL), 'log-safety: historical matched text must never be printed')
+})
+
+test('commit range refuses an added-and-deleted binary blob it cannot inspect', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  fs.writeFileSync(path.join(dir, 'temporary.bin'), Buffer.from([0x00, 0x01, 0x02, 0x03]))
+  git(dir, ['add', 'temporary.bin'])
+  git(dir, ['commit', '--quiet', '-m', 'temporary binary'])
+  fs.unlinkSync(path.join(dir, 'temporary.bin'))
+  git(dir, ['add', '-u'])
+  git(dir, ['commit', '--quiet', '-m', 'remove temporary binary'])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 1, output)
+  assert.match(output, /commit-binary-blob-uninspectable/)
+})
+
+test('external contributor ranges waive only identity while retaining content scans', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/external.md', 'clean contribution\n', 'external contribution', {
+    GIT_AUTHOR_NAME: 'External Contributor',
+    GIT_AUTHOR_EMAIL: 'external@example.invalid',
+    GIT_COMMITTER_NAME: 'External Contributor',
+    GIT_COMMITTER_EMAIL: 'external@example.invalid',
+  })
+  assert.equal(
+    runChecker(dir, ['--commits', 'range', '--base', base, '--external-contributor-range']).status,
+    0,
+  )
+  writeAndCommit(dir, 'docs/leak.md', `${SENTINEL} in contribution\n`, 'external content')
+  assert.equal(
+    runChecker(dir, ['--commits', 'range', '--base', base, '--external-contributor-range']).status,
+    1,
+  )
 })
 
 test('both structural and private CI sweeps inspect pull-request commit ranges', () => {
   const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci.yml'), 'utf8')
   const rangeCommands = workflow.match(/check-repo-disclosure\.mjs(?: --structural-only)? --commits range --base "\$PR_BASE_SHA"/g) ?? []
   assert.equal(rangeCommands.length, 2)
+})
+
+test('fork sweep pins API base and head before scanning the untrusted contributor range', () => {
+  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'fork-sweep.yml'), 'utf8')
+  assert.match(workflow, /API_HEAD_SHA/)
+  assert.match(workflow, /BASE_SHA/)
+  assert.match(workflow, /--untrusted --commits range --base "\$BASE_SHA" --external-contributor-range/)
 })
 
 test('--staged catches a plant that is staged but not committed', (t) => {
