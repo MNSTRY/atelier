@@ -26,6 +26,10 @@ function stableCompare(left, right) {
   return String(left).localeCompare(String(right), 'en')
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 function safeJsonText(value, max = 50000) {
   if (value == null) return ''
   if (typeof value === 'string') return value.slice(0, max)
@@ -167,12 +171,46 @@ export function createProposalStore({
     return state
   }
 
+  function reduceProposalEvents(id, events) {
+    if (events.length === 0) {
+      return { ok: false, status: 404, error: 'proposal not found', record: null }
+    }
+    let state = null
+    let expectedVersion = 1
+    for (const event of events) {
+      if (event.version !== expectedVersion) {
+        return { ok: false, status: 422, error: 'proposal ledger version sequence is invalid', record: null }
+      }
+      if (state === null) {
+        if (!['proposal-created', 'proposal-imported'].includes(event.type)) {
+          return { ok: false, status: 422, error: 'proposal ledger does not begin with a canonical record', record: null }
+        }
+        const record = event.payload?.record
+        if (
+          !isRecord(record) || record.schema !== ATELIER_PROPOSAL_SCHEMA ||
+          !isRecord(record.proposal) || record.proposal.id !== id ||
+          !['proposed', ...PROPOSAL_REVIEW_STATUSES].includes(record.proposal.status)
+        ) {
+          return { ok: false, status: 422, error: 'proposal ledger record is invalid', record: null }
+        }
+      } else {
+        if (
+          event.type !== 'proposal-reviewed' || !PROPOSAL_REVIEW_STATUSES.has(event.payload?.status) ||
+          !isRecord(event.payload?.review) || !canTransitionProposal(state.proposal.status, event.payload.status)
+        ) {
+          return { ok: false, status: 422, error: 'proposal ledger review sequence is invalid', record: null }
+        }
+      }
+      state = reduceProposal(state, event)
+      expectedVersion += 1
+    }
+    return { ok: true, status: 200, record: state }
+  }
+
   function materializedProposal(id) {
-    const result = eventLedger.materialize(id, reduceProposal, null)
+    const result = eventLedger.eventsFor(id)
     if (!result.ok) return { ...result, record: null }
-    return result.value
-      ? { ...result, record: result.value }
-      : { ...result, ok: false, status: 404, error: 'proposal not found', record: null }
+    return { ...result, ...reduceProposalEvents(id, result.events) }
   }
 
   function readCompatibilitySnapshot(id) {
@@ -218,15 +256,20 @@ export function createProposalStore({
     if (!fs.existsSync(proposalsDir)) return { ok: true, status: 200, proposals: [] }
     const ledger = eventLedger.readAll()
     if (!ledger.ok) return { ...ledger, proposals: [] }
-    const ledgerRecords = new Map()
+    const ledgerEvents = new Map()
     for (const event of ledger.events) {
       if (!PROPOSAL_ID_PATTERN.test(event.aggregateId)) {
         return { ok: false, status: 422, error: 'proposal ledger contains an invalid identity', proposals: [] }
       }
-      ledgerRecords.set(
-        event.aggregateId,
-        reduceProposal(ledgerRecords.get(event.aggregateId) ?? null, event),
-      )
+      const events = ledgerEvents.get(event.aggregateId) ?? []
+      events.push(event)
+      ledgerEvents.set(event.aggregateId, events)
+    }
+    const ledgerRecords = new Map()
+    for (const [id, events] of ledgerEvents) {
+      const reduced = reduceProposalEvents(id, events)
+      if (!reduced.ok) return { ...reduced, proposals: [] }
+      ledgerRecords.set(id, reduced.record)
     }
     const ledgerIds = [...ledgerRecords.keys()]
     const snapshotEntries = fs.readdirSync(proposalsDir, { withFileTypes: true })

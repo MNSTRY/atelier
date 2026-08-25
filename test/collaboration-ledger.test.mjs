@@ -330,3 +330,48 @@ test('proposal lookup refuses identifier aliases and mismatched compatibility sn
   assert.equal(mismatched.status, 422)
   assert.match(mismatched.error, /does not match/)
 })
+
+test('proposal materialization rejects invalid authoritative event sequences without snapshot fallback', (t) => {
+  const root = makeRoot(t)
+
+  function scenario(name, id, event) {
+    const scenarioRoot = path.join(root, name)
+    fs.mkdirSync(scenarioRoot)
+    const proposalsDir = path.join(scenarioRoot, '.atelier-proposals')
+    const store = createProposalStore({ workspaceRoot: scenarioRoot, proposalsDir })
+    const appended = store.eventLedger.append({
+      aggregateId: id,
+      expectedVersion: 0,
+      actor: 'synthetic sequence test',
+      at: '2026-08-25T00:00:00Z',
+      ...event,
+    })
+    assert.equal(appended.ok, true, appended.error)
+    fs.writeFileSync(path.join(proposalsDir, `${id}.json`), JSON.stringify({
+      schema: 'atelier-proposal@v1',
+      proposal: { id, status: 'proposed', createdAt: '2026-08-25T00:00:00Z' },
+    }), { mode: 0o600 })
+    const read = store.readProposal(id)
+    assert.equal(read.ok, false)
+    assert.equal(read.status, 422)
+    assert.equal(store.listProposals().status, 422)
+  }
+
+  scenario('review-first', 'proposal-review-first', {
+    type: 'proposal-reviewed',
+    payload: { status: 'reviewed', review: { reviewer: 'synthetic' } },
+  })
+  scenario('unknown-event', 'proposal-unknown-event', {
+    type: 'proposal-unknown',
+    payload: {},
+  })
+  scenario('identity-mismatch', 'proposal-identity-mismatch', {
+    type: 'proposal-imported',
+    payload: {
+      record: {
+        schema: 'atelier-proposal@v1',
+        proposal: { id: 'proposal-different', status: 'proposed' },
+      },
+    },
+  })
+})

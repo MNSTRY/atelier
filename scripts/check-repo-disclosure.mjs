@@ -30,6 +30,8 @@ import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const MAX_HISTORY_COMMITS = 10_000
+const MAX_HISTORY_COMMIT_BYTES = 4 * 1024 * 1024
+const MAX_HISTORY_COMMIT_TOTAL_BYTES = 64 * 1024 * 1024
 const MAX_HISTORY_OBJECTS = 300_000
 const MAX_HISTORY_BLOBS = 100_000
 const MAX_HISTORY_BLOB_BYTES = 16 * 1024 * 1024
@@ -232,57 +234,144 @@ function commitSelector() {
 }
 
 function scanCommits(selector) {
-  // NUL is forbidden in Git commit payloads, so it is the only safe framing
-  // delimiter for attacker-controlled names and messages. SOH/STX and other
-  // control bytes are legal commit-message content and must remain scannable.
-  const format = '%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%B'
-  let out
+  let shas
   try {
-    out = git(['log', '-z', `--format=${format}`, ...selector])
+    shas = git(['rev-list', ...selector]).split('\n').filter(Boolean)
   } catch {
     usageError(
       commitsMode === 'range' ? `unable to resolve commit range ${base}..HEAD` : 'unable to read commit history',
     )
   }
-  const fields = out.split('\0')
-  if (fields.at(-1) === '') fields.pop()
-  if (fields.length % 7 !== 0) report('commit-metadata-framing-invalid', 'history')
-  let records = []
-  for (let index = 0; index + 6 < fields.length; index += 7) {
-    records.push(fields.slice(index, index + 7))
+  if (shas.some((sha) => !/^[0-9a-f]{40,64}$/.test(sha))) {
+    report('commit-object-inventory-invalid', 'history')
+    return 0
   }
-  if (records.length > MAX_HISTORY_COMMITS) {
+  if (shas.length > MAX_HISTORY_COMMITS) {
     report('commit-count-limit', 'history')
-    records = records.slice(0, MAX_HISTORY_COMMITS)
+    shas = shas.slice(0, MAX_HISTORY_COMMITS)
   }
-  for (const record of records) {
-    const [sha, parents = '', authorName, authorEmail, committerName, committerEmail, message = ''] = record
-    if (!/^[0-9a-f]{40,64}$/.test(sha)) {
-      report('commit-metadata-framing-invalid', 'history')
+  if (shas.length === 0) return 0
+
+  let checks
+  try {
+    checks = execFileSync(
+      'git',
+      ['-C', root, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+      {
+        input: `${shas.join('\n')}\n`,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    ).trim().split('\n').filter(Boolean)
+  } catch {
+    report('commit-object-inventory-incomplete', 'history')
+    return 0
+  }
+  if (checks.length !== shas.length) report('commit-object-inventory-incomplete', 'history')
+
+  const commits = []
+  let totalBytes = 0
+  for (let index = 0; index < shas.length; index += 1) {
+    const expectedSha = shas[index]
+    const [sha, type, sizeText] = (checks[index] ?? '').split(' ')
+    const size = Number(sizeText)
+    if (
+      sha !== expectedSha || type !== 'commit' || !Number.isSafeInteger(size) ||
+      size < 0 || size > MAX_HISTORY_COMMIT_BYTES
+    ) {
+      report('commit-object-inventory-incomplete', `commit ${expectedSha}`)
       continue
     }
-    // Merge commits (>1 parent) skip identity checks: on pull_request events
-    // GitHub's synthetic merge ref commit is authored by
-    // 'GitHub <noreply@github.com>', which would fail the author gate on
-    // every PR. Their messages are still scanned below.
-    const isMergeCommit = parents.trim().split(/\s+/).filter(Boolean).length > 1
+    if (totalBytes + size > MAX_HISTORY_COMMIT_TOTAL_BYTES) {
+      report('commit-history-byte-limit', 'commit history')
+      break
+    }
+    commits.push({ sha, size })
+    totalBytes += size
+  }
+  if (commits.length === 0) return shas.length
+
+  let batch
+  try {
+    batch = execFileSync('git', ['-C', root, 'cat-file', '--batch'], {
+      input: `${commits.map(({ sha }) => sha).join('\n')}\n`,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      maxBuffer: totalBytes + commits.length * 128 + 1024,
+    })
+  } catch {
+    report('commit-object-read-incomplete', 'history')
+    return shas.length
+  }
+
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  let offset = 0
+  for (const expected of commits) {
+    const newline = batch.indexOf(0x0a, offset)
+    const header = newline < 0 ? [] : batch.subarray(offset, newline).toString('utf8').split(' ')
+    const [sha, type, sizeText] = header
+    const size = Number(sizeText)
+    const contentStart = newline + 1
+    const contentEnd = contentStart + size
+    if (
+      newline < 0 || sha !== expected.sha || type !== 'commit' || size !== expected.size ||
+      contentEnd >= batch.length || batch[contentEnd] !== 0x0a
+    ) {
+      report('commit-object-read-incomplete', `commit ${expected.sha}`)
+      break
+    }
+    const raw = batch.subarray(contentStart, contentEnd)
+    offset = contentEnd + 1
+    if (raw.includes(0)) {
+      report('commit-object-binary-uninspectable', `commit ${sha}`)
+      continue
+    }
+    let text
+    try {
+      text = decoder.decode(raw)
+    } catch {
+      report('commit-object-text-invalid', `commit ${sha}`)
+      continue
+    }
+    const separator = text.indexOf('\n\n')
+    const headerLines = separator < 0 ? [] : text.slice(0, separator).split('\n')
+    const treeLines = headerLines.filter((line) => line.startsWith('tree '))
+    const parentLines = headerLines.filter((line) => line.startsWith('parent '))
+    const authorLines = headerLines.filter((line) => line.startsWith('author '))
+    const committerLines = headerLines.filter((line) => line.startsWith('committer '))
+    const objectFormatValid = (
+      separator >= 0 && treeLines.length === 1 && authorLines.length === 1 && committerLines.length === 1 &&
+      /^tree [0-9a-f]{40,64}$/.test(treeLines[0]) &&
+      parentLines.every((line) => /^parent [0-9a-f]{40,64}$/.test(line))
+    )
+    const parseIdentity = (line, label) => {
+      const match = line.match(new RegExp(`^${label} (.*) <([^<>\\n]+)> -?\\d+ [+-]\\d{4}$`))
+      return match ? { name: match[1], email: match[2] } : null
+    }
+    const author = objectFormatValid ? parseIdentity(authorLines[0], 'author') : null
+    const committer = objectFormatValid ? parseIdentity(committerLines[0], 'committer') : null
+    if (!objectFormatValid || !author || !committer) {
+      report('commit-object-format-invalid', `commit ${sha}`)
+      continue
+    }
+    // Every byte of the raw public commit object is disclosure-scanned,
+    // including identity and extra headers, before repository identity policy.
+    for (const [index, line] of text.split('\n').entries()) {
+      scanLine(line, '__commit_object__', index + 1, `commit ${sha} object`)
+    }
+    // Merge commits skip repository identity checks because GitHub synthetic
+    // merge commits use GitHub identity. Raw content remains scanned above.
+    const isMergeCommit = parentLines.length > 1
     if (!isMergeCommit && !externalContributorRange) {
-      if (!ALLOWED_AUTHORS.some((id) => id.name === authorName && id.email === authorEmail)) {
-        // Log-safety: the offending identity is not echoed, only the SHA.
+      if (!ALLOWED_AUTHORS.some((id) => id.name === author.name && id.email === author.email)) {
         report('commit-identity (author)', sha)
       }
-      if (!ALLOWED_COMMITTERS.some((id) => id.name === committerName && id.email === committerEmail)) {
+      if (!ALLOWED_COMMITTERS.some((id) => id.name === committer.name && id.email === committer.email)) {
         report('commit-identity (committer)', sha)
       }
     }
-    for (const { pattern, label } of structuralForbiddenContent) {
-      if (pattern.test(message)) report(label, `commit ${sha} message`)
-    }
-    for (const { pattern, label } of denylist) {
-      if (pattern.test(message)) report(label, `commit ${sha} message`)
-    }
   }
-  return records.length
+  return shas.length
 }
 
 function scanCommitTrees(selector) {
@@ -326,6 +415,7 @@ function scanCommitTrees(selector) {
     objectPaths.set(newObjectId, paths)
   }
   const objectIds = [...objectPaths.keys()]
+  if (objectIds.length === 0) return 0
   let checks
   try {
     checks = execFileSync(
@@ -373,6 +463,7 @@ function scanCommitTrees(selector) {
     totalBytes += size
   }
 
+  if (blobs.length === 0) return 0
   let batch
   try {
     batch = execFileSync('git', ['-C', root, 'cat-file', '--batch'], {

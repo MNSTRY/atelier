@@ -25,6 +25,14 @@ function git(dir, args, env = {}) {
   }).trim()
 }
 
+function gitWithInput(dir, args, input) {
+  return execFileSync('git', ['-C', dir, ...args], {
+    input,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }).trim()
+}
+
 function makeRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-disclosure-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
@@ -186,7 +194,7 @@ test('commit messages in range are scanned against the denylist', (t) => {
   git(dir, ['commit', '--quiet', '--allow-empty', '-m', `mention ${SENTINEL} in a message`])
   const { status, output } = runChecker(dir, ['--commits', 'range', '--base', 'HEAD~1'])
   assert.equal(status, 1, output)
-  assert.match(output, /test-sentinel: commit [0-9a-f]{40} message/)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
   assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
 })
 
@@ -198,8 +206,61 @@ test('control bytes in a commit message cannot truncate the scanned message', (t
 
   const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
   assert.equal(status, 1, output)
-  assert.match(output, /test-sentinel: commit [0-9a-f]{40} message/)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
   assert.ok(!output.includes(SENTINEL), 'log-safety: matched commit message text must never be printed')
+})
+
+test('raw commit objects containing NUL fail closed instead of realigning metadata fields', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const parent = git(dir, ['rev-parse', 'HEAD'])
+  const tree = git(dir, ['rev-parse', 'HEAD^{tree}'])
+  const raw = Buffer.concat([
+    Buffer.from([
+      `tree ${tree}`,
+      `parent ${parent}`,
+      `author ${AUTHOR_NAME} <${AUTHOR_EMAIL}> 1756080000 +0000`,
+      `committer ${AUTHOR_NAME} <${AUTHOR_EMAIL}> 1756080000 +0000`,
+      '',
+      'aligned',
+    ].join('\n')),
+    Buffer.from([0, 0, 0, 0, 0, 0, 0]),
+    Buffer.from(`${SENTINEL}\n`),
+  ])
+  const commit = gitWithInput(dir, ['hash-object', '--literally', '-t', 'commit', '-w', '--stdin'], raw)
+  git(dir, ['update-ref', 'HEAD', commit])
+
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', parent])
+  assert.equal(status, 1, output)
+  assert.match(output, /commit-object-binary-uninspectable/)
+  assert.ok(!output.includes(SENTINEL), 'log-safety: raw malformed commit content must never be printed')
+})
+
+test('external contributor ranges disclosure-scan waived identity headers', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  writeAndCommit(dir, 'docs/external-header.md', 'clean contribution\n', 'clean message', {
+    GIT_AUTHOR_NAME: `${SENTINEL} Contributor`,
+    GIT_AUTHOR_EMAIL: 'external@example.invalid',
+    GIT_COMMITTER_NAME: 'External Contributor',
+    GIT_COMMITTER_EMAIL: 'external@example.invalid',
+  })
+
+  const { status, output } = runChecker(dir, [
+    '--commits', 'range', '--base', base, '--external-contributor-range',
+  ])
+  assert.equal(status, 1, output)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
+})
+
+test('a clean empty-commit range has no historical batch request', (t) => {
+  const dir = makeRepo(t)
+  writeAndCommit(dir, 'docs/note.md', 'nothing to see\n')
+  const base = git(dir, ['rev-parse', 'HEAD'])
+  git(dir, ['commit', '--quiet', '--allow-empty', '-m', 'clean empty commit'])
+  const { status, output } = runChecker(dir, ['--commits', 'range', '--base', base])
+  assert.equal(status, 0, output)
 })
 
 test('a clean range with allowed identities passes --commits range', (t) => {
@@ -438,7 +499,7 @@ test('merge commits skip identity checks (synthetic PR merge refs) but keep mess
   git(dir, ['merge', '--quiet', '--no-ff', '-m', `merge mentioning ${SENTINEL}`, 'feature-two'], githubIdentity)
   const { status, output } = runChecker(dir, ['--commits', 'all'])
   assert.equal(status, 1, output)
-  assert.match(output, /test-sentinel: commit [0-9a-f]{40} message/)
+  assert.match(output, /test-sentinel: commit [0-9a-f]{40} object:/)
   assert.ok(!output.includes(SENTINEL), 'log-safety: matched text must never be printed')
 })
 
