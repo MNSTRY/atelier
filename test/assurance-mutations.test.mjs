@@ -77,6 +77,7 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
       'scripts/check-release-tarball.mjs',
       'scripts/npm-cli.mjs',
       'scripts/structural-patterns.mjs',
+      'src/disclosure/content-scan.mjs',
       'src/egress/forbidden-egress.mjs',
     ]) {
       const target = path.join(root, rel)
@@ -150,4 +151,24 @@ test('assurance mutation: a distribution without attribution fails closed', () =
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('assurance mutation: malformed private denylist patterns stay label-safe in release logs', () => {
+  const privatePattern = 'PRIVATE_SENTINEL_[unterminated'
+  const result = spawnSync(process.execPath, [path.join(packageRoot, 'scripts', 'check-release-tarball.mjs')], {
+    cwd: packageRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ATELIER_DENYLIST_JSON: JSON.stringify({
+        patterns: [{ label: 'synthetic malformed private pattern', pattern: privatePattern }],
+      }),
+      ATELIER_ALLOW_MISSING_DENYLIST: '',
+    },
+  })
+  const output = `${result.stdout}\n${result.stderr}`
+  assert.equal(result.status, 2, output)
+  assert.match(output, /synthetic malformed private pattern/)
+  assert.equal(output.includes(privatePattern), false)
+  assert.doesNotMatch(output, /at file:|check-release-tarball\.mjs:\d+/)
 })

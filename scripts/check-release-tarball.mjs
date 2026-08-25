@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execNpmSync } from './npm-cli.mjs'
-import { compileScanPatterns, STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
+import { STRUCTURAL_FORBIDDEN_CONTENT } from './structural-patterns.mjs'
+import { compileDisclosurePatterns } from '../src/disclosure/content-scan.mjs'
 import {
   LOCAL_COMPUTED_ALLOW_MARKER,
   TEST_FIXTURE_ALLOW_MARKER,
@@ -50,13 +51,28 @@ const structuralForbiddenContent = STRUCTURAL_FORBIDDEN_CONTENT
 const localDenylistPath = join(packageRoot, 'release-denylist.local.json')
 let denylistDoc = null
 if (process.env.ATELIER_DENYLIST_JSON) {
-  denylistDoc = JSON.parse(process.env.ATELIER_DENYLIST_JSON)
+  try {
+    denylistDoc = JSON.parse(process.env.ATELIER_DENYLIST_JSON)
+  } catch {
+    console.error('[release:audit] ATELIER_DENYLIST_JSON is not valid JSON')
+    process.exit(2)
+  }
 } else if (existsSync(localDenylistPath)) {
-  denylistDoc = JSON.parse(readFileSync(localDenylistPath, 'utf8'))
+  try {
+    denylistDoc = JSON.parse(readFileSync(localDenylistPath, 'utf8'))
+  } catch {
+    console.error('[release:audit] release-denylist.local.json is not valid JSON')
+    process.exit(2)
+  }
 }
 let localDenylist = []
 if (denylistDoc) {
-  localDenylist = compileScanPatterns(denylistDoc.patterns)
+  try {
+    localDenylist = compileDisclosurePatterns(denylistDoc.patterns)
+  } catch (error) {
+    console.error(`[release:audit] ${error instanceof Error ? error.message : 'denylist failed to compile'}`)
+    process.exit(2)
+  }
 } else if (process.env.ATELIER_ALLOW_MISSING_DENYLIST === '1') {
   console.warn('[release:audit] WARNING: denylist unavailable and ATELIER_ALLOW_MISSING_DENYLIST=1 acknowledged — private-name scrub skipped; structural checks still apply')
 } else {

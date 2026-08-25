@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { canonicalize } from '../attestation/jcs.mjs'
 import {
   atomicReplacePrivateText,
   ensureContainedPrivateDirectory,
@@ -39,10 +40,19 @@ function secureAppendLine(file, line) {
   }
 }
 
-function eventId(aggregateId, version, at) {
+function eventId(event) {
+  const authoritative = {
+    schema: event.schema,
+    aggregateId: event.aggregateId,
+    version: event.version,
+    type: event.type,
+    actor: event.actor,
+    at: event.at,
+    payload: event.payload,
+  }
   const digest = crypto
     .createHash('sha256')
-    .update([aggregateId, version, at].join('\0'))
+    .update(canonicalize(authoritative))
     .digest('hex')
     .slice(0, 32)
   return `event-${digest}`
@@ -67,10 +77,15 @@ export function validateCollaborationEvent(event) {
     typeof event.id === 'string' && /^event-[a-f0-9]{32}$/.test(event.id) &&
     typeof event.aggregateId === 'string' && event.aggregateId &&
     Number.isInteger(event.version) && event.version > 0 &&
-    validTimestamp(event.at) &&
-    event.id !== eventId(event.aggregateId, event.version, event.at)
+    typeof event.type === 'string' && /^[a-z][a-z0-9.-]*$/.test(event.type) &&
+    typeof event.actor === 'string' && event.actor.trim() &&
+    validTimestamp(event.at) && isRecord(event.payload)
   ) {
-    issues.push('event id does not match aggregate, version, and timestamp')
+    try {
+      if (event.id !== eventId(event)) issues.push('event id does not match authoritative event content')
+    } catch {
+      issues.push('authoritative event content cannot be canonicalized')
+    }
   }
   return issues.length === 0 ? { ok: true, value: event } : { ok: false, issues }
 }
@@ -240,13 +255,17 @@ export function createCollaborationEventLedger({
       const version = current.currentVersion + 1
       const event = {
         schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
-        id: eventId(aggregateId, version, at),
         aggregateId,
         version,
         type,
         actor: String(actor || '').trim(),
         at,
         payload,
+      }
+      try {
+        event.id = eventId(event)
+      } catch {
+        return { ok: false, status: 400, error: 'authoritative event content cannot be canonicalized' }
       }
       const validation = validateCollaborationEvent(event)
       if (!validation.ok) return { ok: false, status: 400, error: validation.issues.join('; ') }

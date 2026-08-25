@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { canonicalize } from '../src/attestation/jcs.mjs'
 import {
   ATELIER_COLLABORATION_EVENT_SCHEMA,
   COLLABORATION_LEDGER_LIMITS,
@@ -29,8 +30,17 @@ function eventInput(expectedVersion, overrides = {}) {
   }
 }
 
-function syntheticEventId(aggregateId, version, at) {
-  const digest = crypto.createHash('sha256').update([aggregateId, version, at].join('\0')).digest('hex').slice(0, 32)
+function syntheticEventId(event) {
+  const authoritative = {
+    schema: event.schema,
+    aggregateId: event.aggregateId,
+    version: event.version,
+    type: event.type,
+    actor: event.actor,
+    at: event.at,
+    payload: event.payload,
+  }
+  const digest = crypto.createHash('sha256').update(canonicalize(authoritative)).digest('hex').slice(0, 32)
   return `event-${digest}`
 }
 
@@ -139,9 +149,15 @@ test('read-side ceilings, duplicate ids, and non-advancing versions block mutati
   }
 
   assertCorruptSequence('ledger-event-invalid', (events) => { events[1].id = events[0].id })
+  for (const mutate of [
+    (events) => { events[1].type = 'proposal-imported' },
+    (events) => { events[1].actor = 'actor:synthetic:tampered' },
+    (events) => { events[1].payload.value = 'Tampered proposal' },
+  ]) assertCorruptSequence('ledger-event-invalid', mutate)
+
   assertCorruptSequence('ledger-version-order', (events) => {
     events[1].version = events[0].version
-    events[1].id = syntheticEventId(events[1].aggregateId, events[1].version, events[1].at)
+    events[1].id = syntheticEventId(events[1])
   })
 })
 
@@ -195,7 +211,15 @@ test('ten-thousand-event synthetic ledger reads within the target budget', (t) =
     const at = '2026-08-25T00:00:00Z'
     lines.push(JSON.stringify({
       schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
-      id: syntheticEventId(aggregateId, 1, at),
+      id: syntheticEventId({
+        schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
+        aggregateId,
+        version: 1,
+        type: 'proposal-created',
+        actor: 'synthetic-reader',
+        at,
+        payload: {},
+      }),
       aggregateId,
       version: 1,
       type: 'proposal-created',
@@ -221,7 +245,20 @@ test('proposal listing materializes the ten-thousand-event ceiling from one ledg
     const at = '2026-08-25T00:00:00Z'
     lines.push(JSON.stringify({
       schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
-      id: syntheticEventId(id, 1, at),
+      id: syntheticEventId({
+        schema: ATELIER_COLLABORATION_EVENT_SCHEMA,
+        aggregateId: id,
+        version: 1,
+        type: 'proposal-created',
+        actor: 'synthetic-reader',
+        at,
+        payload: {
+          record: {
+            schema: 'atelier-proposal@v1',
+            proposal: { id, status: 'proposed', updatedAt: at },
+          },
+        },
+      }),
       aggregateId: id,
       version: 1,
       type: 'proposal-created',
