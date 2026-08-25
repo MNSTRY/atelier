@@ -20,7 +20,7 @@ function repository(t) {
   const remote = path.join(base, 'remote.git')
   const root = path.join(base, 'workspace')
   t.after(() => fs.rmSync(base, { recursive: true, force: true }))
-  runGit(git, null, ['init', '--bare', remote])
+  runGit(git, null, ['init', '--bare', '--initial-branch=main', remote])
   fs.mkdirSync(root)
   runGit(git, root, ['init', '--initial-branch=main'])
   runGit(git, root, ['config', 'user.name', 'Atelier Test'])
