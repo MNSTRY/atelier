@@ -108,8 +108,10 @@ a pull request cannot see:
 - **Anything touching the guards** — the egress gate, disclosure scanners,
   boundary guard, or release audit. Changes here need an adversarial review,
   not just a green suite.
-- **New network behavior of any kind.** The correct amount is none; the
-  egress gate enforces it.
+- **New network behavior of any kind.** The package has only the documented
+  `gh` identity-resolution and explicitly enrolled Atelier Sync Git paths. Any
+  addition or widening requires a public claim update, defensive review, and a
+  corresponding refusal test; the egress gate checks the paths it can model.
 
 ## The quality bar
 

@@ -58,6 +58,7 @@ export const commandMap = new Map([
   ['feedback:check', ['src/commands/feedback.mjs', 'check']],
   ['announcements', ['src/commands/announcements.mjs']],
   ['announcements:list', ['src/commands/announcements.mjs', 'list']],
+  ['sync', ['src/commands/sync.mjs']],
 ])
 
 function isDefaultBrand(brand) {
@@ -115,6 +116,12 @@ Core commands:
   support bundle --dry-run        Preview a no-send support bundle.
   feedback --message TEXT         Write a local, never-sent feedback report.
   announcements list              List and verify MNSTRY announcements.
+  sync enroll                     Explicitly enroll one repository for supervision.
+  sync status                     Fully observe the enrolled repository.
+  sync reconcile                  Fetch and perform only proven fast-forwards.
+  sync plan                       Prepare one bounded, reviewable commit plan.
+  sync commit                     Execute an exactly confirmed commit plan.
+  sync run --once                 Run one full-state supervisor cycle.
   egress check                    Check extracted Atelier paths for forbidden egress.
   boundary check                  Enforce private/shared repo placement rules.
   boundary audit                  Report content-rule matches tree-wide without blocking.
@@ -198,6 +205,17 @@ Assembles a local feedback report under ignored .atelier-local/feedback/ (mode 0
     announcements: `Usage: ${c} announcements list [--dir DIR] [--public-key FILE] | verify <file> [--public-key FILE] [--json] | show <file> [--public-key FILE]
 
 MNSTRY announcements are a pull-only channel: signed JSON documents under announcements/ in the repository. The trust anchor is always the committed MNSTRY key, or one you pass explicitly with --public-key; --dir changes only where documents are read from and never which key verifies them. Every run names the key and keyId it used. The kit never fetches anything — receiving announcements is the git pull you chose to run, and show refuses to print a body whose signature does not verify.`,
+    sync: `Usage:
+  ${c} sync enroll --repo DIR [--project atelier.project.json] [--git ABSOLUTE_PATH]
+  ${c} sync status --repo DIR
+  ${c} sync reconcile --repo DIR [--retries 3]
+  ${c} sync run --repo DIR [--once] [--interval 30]
+  ${c} sync plan --repo DIR --path FILE [--path FILE] --message TEXT [--publish]
+  ${c} sync commit --repo DIR --operation ID --confirm ID
+  ${c} sync pause|freeze|resume --repo DIR
+  ${c} sync trace --repo DIR
+
+Enrolls exactly one repository and keeps Git plus readable files authoritative. Reconciliation observes the complete repository every cycle and performs only fast-forward updates. Commit creation is a two-phase user-confirmed operation: plan shows one bounded change set, and commit refuses unless the repository is unchanged and --confirm exactly repeats the operation id. No semantic conflict resolution, force operation, browser apply endpoint, telemetry, or desktop shell is present.`,
   }
   return help[command] || `Usage: ${c} ${command} [args]\n\nRun ${c} --help for the command list.`
 }

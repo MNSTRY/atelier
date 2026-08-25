@@ -145,10 +145,10 @@ test('keygen refuses a dangling symlink at the out path and never writes through
 })
 
 // Module reachability (N6): a consumer resolving the package's export map
-// must reach the attestation and extension-pack entry points, and the
+// must reach the attestation, extension-pack, and runtime entry points, and the
 // "./attestation" entry must expose canonicalize alongside payloadHashOf so
 // one entry suffices.
-test('package exports resolve ./attestation and ./extension-packs for a consumer', async () => {
+test('package exports resolve attestation, extension packs, and runtime for a consumer', async () => {
   const consumerDir = tmpdir('atelier-exports-consumer-')
   fs.mkdirSync(path.join(consumerDir, 'node_modules', '@mnstry'), { recursive: true })
   fs.symlinkSync(ROOT, path.join(consumerDir, 'node_modules', '@mnstry', 'atelier'), 'dir')
@@ -158,6 +158,10 @@ test('package exports resolve ./attestation and ./extension-packs for a consumer
   assert.equal(fs.realpathSync(attestationEntry), fs.realpathSync(path.join(ROOT, 'src', 'attestation', 'sign.mjs')))
   const packsEntry = consumerRequire.resolve('@mnstry/atelier/extension-packs')
   assert.equal(fs.realpathSync(packsEntry), fs.realpathSync(path.join(ROOT, 'src', 'extension-packs', 'loader.mjs')))
+  const runtimeEntry = consumerRequire.resolve('@mnstry/atelier/runtime')
+  assert.equal(fs.realpathSync(runtimeEntry), fs.realpathSync(path.join(ROOT, 'src', 'runtime', 'supervisor.mjs')))
+  const observationEntry = consumerRequire.resolve('@mnstry/atelier/runtime/observation')
+  assert.equal(fs.realpathSync(observationEntry), fs.realpathSync(path.join(ROOT, 'src', 'runtime', 'repository-observation.mjs')))
 
   const attestation = await import(pathToFileURL(fs.realpathSync(attestationEntry)).href)
   assert.equal(typeof attestation.canonicalize, 'function')
@@ -167,6 +171,13 @@ test('package exports resolve ./attestation and ./extension-packs for a consumer
   const loader = await import(pathToFileURL(fs.realpathSync(packsEntry)).href)
   assert.equal(typeof loader.loadExtensionPacks, 'function')
   assert.equal(typeof loader.createProtocolRegistry, 'function')
+  const runtime = await import(pathToFileURL(fs.realpathSync(runtimeEntry)).href)
+  assert.equal(typeof runtime.enrollRepository, 'function')
+  assert.equal(typeof runtime.planUserConfirmedCommit, 'function')
+  assert.equal(typeof runtime.runtimeStatus, 'function')
+  const observation = await import(pathToFileURL(fs.realpathSync(observationEntry)).href)
+  assert.equal(typeof observation.observeRepository, 'function')
+  assert.equal(typeof observation.validateRepositoryObservation, 'function')
 })
 
 test('sign with no key available fails closed with the precedence message', () => {

@@ -27,6 +27,12 @@ import { fileURLToPath } from 'node:url'
 
 export const CONTRACT_CORPUS = [
   {
+    name: 'atelier-repository-observation',
+    contractFile: 'contracts/atelier-repository-observation.v1.schema.json',
+    fixtureRoot: 'fixtures/atelier-repository-observation',
+    registry: true,
+  },
+  {
     name: 'atelier-lock',
     contractFile: 'contracts/atelier-lock.v1.schema.json',
     fixtureRoot: 'fixtures/atelier-lock',

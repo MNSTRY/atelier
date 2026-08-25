@@ -4,6 +4,7 @@ import path from 'node:path'
 import { buildGraph } from '../graph/graph.mjs'
 import { commandProject, firstString, parseArgs, readJson, resolvePathValue, writeJson } from '../project/config.mjs'
 import { matchesPathPattern } from '../project/path-match.mjs'
+import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 import {
   CHECK_AGGREGATE_MAX_BYTES,
   parsePushRefInput,
@@ -206,16 +207,16 @@ export function validateBoundaryPolicy(policy, project = null) {
   return errors
 }
 
-export function resolveCurrentActor({ policy, project, actor = null, env = process.env } = {}) {
+export function resolveCurrentActor({ policy, project, actor = null, env = process.env, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true } = {}) {
   const actors = policy?.actors ?? {}
   const explicit = actor || env.MNSTRY_ATELIER_ACTOR || env.GITHUB_ACTOR
   if (explicit && actors[explicit]) return { actorId: explicit, source: 'explicit' }
-  const gitEmails = gitEmailsForProject(project)
+  const gitEmails = gitEmailsForProject(project, { gitExecutable, env, allowHistoryActorResolution })
   for (const [actorId, info] of Object.entries(actors)) {
     const actorEmails = new Set(asArray(info.gitEmails).map((email) => email.toLowerCase()))
     if (gitEmails.some((email) => actorEmails.has(email.toLowerCase()))) return { actorId, source: 'git-email', gitEmails }
   }
-  const login = env.GITHUB_ACTOR || ghLogin()
+  const login = env.GITHUB_ACTOR || (allowNetworkActorResolution ? ghLogin() : null)
   if (login) {
     for (const [actorId, info] of Object.entries(actors)) {
       if (String(info.githubLogin || '').toLowerCase() === String(login).toLowerCase()) return { actorId, source: 'github-login', githubLogin: login }
@@ -224,16 +225,15 @@ export function resolveCurrentActor({ policy, project, actor = null, env = proce
   return { actorId: null, source: 'unverified', gitEmails, githubLogin: login || null }
 }
 
-function gitEmailsForProject(project) {
+function gitEmailsForProject(project, { gitExecutable = 'git', env = process.env, allowHistoryActorResolution = true } = {}) {
   const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...managedRepos(project).map((repo) => repo.path)])
   const emails = []
   for (const root of roots) {
     if (!root || !fs.existsSync(root)) continue
-    for (const args of [
-      ['config', 'user.email'],
-      ['log', '-1', '--format=%ae'],
-    ]) {
-      const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+    const probes = [['config', 'user.email']]
+    if (allowHistoryActorResolution) probes.push(['log', '-1', '--format=%ae'])
+    for (const args of probes) {
+      const result = spawnSync(gitExecutable, ['-C', root, ...args], { encoding: 'utf8', env: sanitizedGitEnvironment(env) })
       if (result.status === 0 && result.stdout.trim()) emails.push(result.stdout.trim())
     }
   }
@@ -280,10 +280,10 @@ function nodePlacementFindings({ node, policy }) {
   return findings
 }
 
-function actorFindings({ policy, project, actor }) {
+function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }) {
   const findings = []
-  const current = resolveCurrentActor({ policy, project, actor })
-  const severity = severityFor(policy)
+  const current = resolveCurrentActor({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution })
+  const severity = forceActorErrors ? 'error' : severityFor(policy)
   for (const [repoName, repo] of Object.entries(policy.repos ?? {})) {
     if (repo.kind !== 'private_domain') continue
     if (!repo.ownerActor) continue
@@ -296,11 +296,11 @@ function actorFindings({ policy, project, actor }) {
   return findings
 }
 
-export function stagedPathsForProject(project) {
+export function stagedPathsForProject(project, { gitExecutable = 'git' } = {}) {
   const paths = []
   for (const repo of managedRepos(project)) {
     if (!repo.path || !fs.existsSync(path.join(repo.path, '.git'))) continue
-    const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf8' })
+    const result = spawnSync(gitExecutable, ['-C', repo.path, 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
     if (result.status !== 0) continue
     for (const rel of result.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
       paths.push({ repo: repo.name, repoRoot: repo.path, path: normalize(rel) })
@@ -394,7 +394,7 @@ export function semanticChangesInFile(file) {
   return changes
 }
 
-function semanticDiffFindings({ policy, project }) {
+function semanticDiffFindings({ policy, project, gitExecutable = 'git' }) {
   const findings = []
   const severity = 'error'
   for (const repo of managedRepos(project)) {
@@ -402,7 +402,7 @@ function semanticDiffFindings({ policy, project }) {
       findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
       continue
     }
-    const result = spawnSync('git', ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8' })
+    const result = spawnSync(gitExecutable, ['-C', repo.path, 'diff', '--cached', '--unified=0', '--', '*.md', '*.kg.json'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
     if (result.status !== 0) {
       findings.push(unscannableRepoFinding(repo, 'git diff --cached failed'))
       continue
@@ -430,7 +430,7 @@ function semanticDiffFindings({ policy, project }) {
   return findings
 }
 
-function stagedContentFindings({ policy, project }) {
+function stagedContentFindings({ policy, project, gitExecutable = 'git' }) {
   const rules = resolveContentRules(policy)
   const exceptions = asArray(policy?.contentRuleExceptions)
   const findings = []
@@ -440,7 +440,7 @@ function stagedContentFindings({ policy, project }) {
       findings.push(unscannableRepoFinding(repo, 'configured path is absent or is not a Git checkout'))
       continue
     }
-    const result = scanStagedRepository({ repoRoot: repo.path, rules, exceptions, repo: repo.name })
+    const result = scanStagedRepository({ repoRoot: repo.path, rules, exceptions, repo: repo.name, gitExecutable })
     findings.push(...result.findings, ...result.diagnostics)
     totalBytes += result.bytes
     if (totalBytes > CHECK_AGGREGATE_MAX_BYTES) {
@@ -603,7 +603,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true, forceActorErrors = false } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
@@ -613,12 +613,12 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
     findings.push(...promotionFindings({ policy, project, graph }))
   }
-  findings.push(...actorFindings({ policy, project, actor }))
+  findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }))
   if (staged) {
-    const stagedPaths = stagedPathsForProject(project)
+    const stagedPaths = stagedPathsForProject(project, { gitExecutable })
     findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
-    findings.push(...semanticDiffFindings({ policy, project }))
-    findings.push(...stagedContentFindings({ policy, project }))
+    findings.push(...semanticDiffFindings({ policy, project, gitExecutable }))
+    findings.push(...stagedContentFindings({ policy, project, gitExecutable }))
   }
   const errors = findings.filter((item) => item.severity === 'error')
   const warnings = findings.filter((item) => item.severity !== 'error')

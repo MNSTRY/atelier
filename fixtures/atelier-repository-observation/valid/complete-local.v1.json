@@ -1,0 +1,48 @@
+{
+  "schema": "atelier-repository-observation@v1",
+  "observedAt": "2026-08-25T00:00:00.000Z",
+  "complete": true,
+  "root": "/workspace/project",
+  "filesystem": {
+    "supported": true,
+    "code": "local-filesystem"
+  },
+  "git": {
+    "executable": "/usr/bin/git",
+    "version": "2.40.0",
+    "supported": true,
+    "minimum": "2.40.0"
+  },
+  "bare": false,
+  "branch": {
+    "branch": "main",
+    "detached": false,
+    "head": "1111111111111111111111111111111111111111",
+    "upstream": "origin/main",
+    "ahead": 0,
+    "behind": 0
+  },
+  "remotes": [],
+  "features": {
+    "sparseCheckout": false,
+    "partialClone": [],
+    "customFilters": []
+  },
+  "submodules": {
+    "complete": true
+  },
+  "lfs": {
+    "complete": true
+  },
+  "status": {
+    "clean": true,
+    "digest": "2222222222222222222222222222222222222222222222222222222222222222",
+    "entries": [],
+    "fingerprints": [],
+    "stagedCount": 0,
+    "unstagedCount": 0,
+    "conflictCount": 0
+  },
+  "blockers": [],
+  "warnings": []
+}

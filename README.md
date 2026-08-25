@@ -48,7 +48,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -187,6 +187,12 @@ session context, capability envelopes, and proposed changes, but it does not
 apply those proposals or grant direct write access. It is a local context and
 control layer that another interface can build on, not an autonomous editor.
 
+The separate headless repository supervisor can observe one explicitly
+enrolled Git repository, fetch and fast-forward it, and prepare a bounded
+commit plan. A commit still requires an exact user confirmation and an
+unchanged re-observation; the loopback browser receives no apply endpoint.
+See [Atelier Sync: Deliverable Zero](docs/atelier-sync.md).
+
 ### 5. The repository can power another product
 
 The CLI is one interface. The package is also a library, and its contracts are
@@ -251,24 +257,29 @@ trust boundary.
 This package makes three promises. None of them asks for your trust — each
 one names the command that proves it.
 
-**Nothing leaves your machine, with one exception you can see.** There is no
-telemetry, no update check, no crash reporting, and no send path anywhere in
-the package. The exceptions are explicit: `boundary check` may invoke `gh api
-user` after no declared actor matches an explicit `--actor`,
+**There is no silent egress; every network path is named.** There is no
+telemetry, update check, crash reporting, managed-runtime upload, or model
+provider path in the package. The exceptions are explicit: `boundary check`
+may invoke `gh api user` after no declared actor matches an explicit `--actor`,
 `MNSTRY_ATELIER_ACTOR`, `GITHUB_ACTOR`, or a configured Git email; repository
 identity checks may invoke `gh api repos/...` to resolve a canonical GitHub
 identity. Those authenticated requests use your own `gh` credentials. A
 recognized explicit actor prevents the boundary actor fallback; recorded
 repository identities let identity checks keep working when the provider is
-unavailable. The only network client
-refuses non-loopback URLs, the served pages carry a policy that authorizes no
-external origin, and release audit scans every executable or markup file in
-the exact `npm pack` inventory for egress primitives. The standalone gate also
-scans executable and markup files under `src/`, `bin/`, `scripts/`,
-`templates/`, `examples/`, and `skills/`. Two limits worth stating plainly:
-the egress control does not interpret data-only `.json` or `.md` files, and it
-does not model `child_process`; the two reviewed `gh` paths above are therefore
-documented exceptions rather than scanner detections:
+unavailable. Explicitly enrolled Atelier Sync may also run bounded Git fetches
+for observation/reconciliation and one non-force push only when the exact
+reviewed commit plan requested and confirmed it, no earlier local commit is
+waiting to be published, and HEAD still names the verified commit object. Sync
+never uses the network actor fallback, follows tags, or recursively publishes
+submodule refs. The package's HTTP client
+refuses non-loopback URLs, the served pages authorize no external origin, and
+release audit scans every executable or markup file in the exact `npm pack`
+inventory for egress primitives. The standalone gate also scans executable and
+markup files under `src/`, `bin/`, `scripts/`, `templates/`, `examples/`, and
+`skills/`. Two limits worth stating plainly: the egress control does not
+interpret data-only `.json` or `.md` files, and it does not model
+`child_process`; the reviewed `gh` and enrolled Git paths above are documented
+subprocess exceptions rather than scanner detections:
 
 ```bash
 npm run egress:check
@@ -305,9 +316,15 @@ receive.
 
 <!-- atelier:block:will-not-do:start -->
 - It does not write to a MNSTRY runtime database.
-- It does not import, provision, publish, or send anything.
-- Except for the documented `gh` actor-resolution fallback, it initiates no
-  external network requests.
+- It does not import, provision, publish, or send project content to a MNSTRY
+  managed runtime.
+- Conformance remains offline. Network access is limited to the documented
+  `gh` actor-resolution fallback and explicitly enrolled Atelier Sync Git
+  operations: bounded fetch for observation/reconciliation, and non-force push
+  only when the exact reviewed commit plan requested and confirmed it, no
+  earlier local commit remains unpublished, and HEAD still names the verified
+  commit object; Sync does not use network actor fallback, follow tags, or
+  recursively publish submodule refs.
 - It does not execute model-assisted analysis or any model provider.
 - It does not include client project content.
 
@@ -341,7 +358,7 @@ Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
 remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.5
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
 ```
 
 Then choose the path that matches what you are building:
@@ -358,7 +375,7 @@ Then choose the path that matches what you are building:
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.5`.
+Current package: `@mnstry/atelier@0.2.0-alpha.6`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.
