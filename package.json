@@ -80,7 +80,7 @@
   "dependencies": {
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "fast-uri": "3.1.5"
+    "fast-uri": "4.1.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
@@ -118,6 +118,6 @@
     "access": "public"
   },
   "overrides": {
-    "fast-uri": "3.1.5"
+    "fast-uri": "4.1.3"
   }
 }
