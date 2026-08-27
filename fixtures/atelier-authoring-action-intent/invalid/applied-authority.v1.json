@@ -1,0 +1,16 @@
+{
+  "schema": "atelier-authoring-action-intent@v1",
+  "id": "sample:intent:annotation-001",
+  "projectionId": "sample:projection:review",
+  "tenantRef": "sample-studio",
+  "subjectRef": "sample:document:field-notes",
+  "kind": "review.record-annotation",
+  "status": "applied",
+  "requestedAt": "2026-01-15T12:00:00Z",
+  "authority": {
+    "decision": "consumer-adapter",
+    "publicationMutation": false,
+    "editorialGateMutation": false,
+    "runtimeMutation": false
+  }
+}

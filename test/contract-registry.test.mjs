@@ -13,6 +13,15 @@ const INVALID_EXPECTATIONS = new Map([
   ['atelier-repository-observation', new Map([
     ['complete-with-blocker.v1.json', /\/blockers.*must NOT have more than 0 items/],
   ])],
+  ['atelier-tenant-extension-binding', new Map([
+    ['publication-authority.v1.json', /\/authority\/publicationMutation.*must be equal to constant/],
+  ])],
+  ['atelier-authoring-projection', new Map([
+    ['implementation-path.v1.json', /must NOT have additional properties/],
+  ])],
+  ['atelier-authoring-action-intent', new Map([
+    ['applied-authority.v1.json', /\/status.*must be equal to constant/],
+  ])],
   ['atelier-claim', new Map([
     ['unknown-provider.v1.json', /\/provider.*must be equal to one of the allowed values/],
     ['wrong-schema-const.v1.json', /\/schema.*must be equal to constant/],

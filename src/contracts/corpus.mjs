@@ -69,6 +69,24 @@ export const CONTRACT_CORPUS = [
     registry: false,
   },
   {
+    name: 'atelier-tenant-extension-binding',
+    contractFile: 'contracts/atelier-tenant-extension-binding.v1.schema.json',
+    fixtureRoot: 'fixtures/atelier-tenant-extension-binding',
+    registry: true,
+  },
+  {
+    name: 'atelier-authoring-projection',
+    contractFile: 'contracts/atelier-authoring-projection.v1.schema.json',
+    fixtureRoot: 'fixtures/atelier-authoring-projection',
+    registry: true,
+  },
+  {
+    name: 'atelier-authoring-action-intent',
+    contractFile: 'contracts/atelier-authoring-action-intent.v1.schema.json',
+    fixtureRoot: 'fixtures/atelier-authoring-action-intent',
+    registry: true,
+  },
+  {
     name: 'atelier-readiness-protocol',
     contractFile: 'contracts/atelier-readiness-protocol.v1.schema.json',
     fixtureRoot: 'fixtures/readiness-protocols/protocol',

@@ -368,6 +368,7 @@ Then choose the path that matches what you are building:
 - [Knowledge graph and source model](./docs/knowledge-graph.md)
 - [Local runtime and agent boundary](./docs/atelier-runtime.md)
 - [Distribution contracts](./docs/distributions.md)
+- [Tenant authoring extensions](./docs/tenant-authoring-extensions.md)
 - [Conformance and attestation](./docs/attestation.md)
 - [Continuity commitments](./docs/continuity.md)
 - [Assurance controls and evidence map](./docs/assurance-controls.md)
