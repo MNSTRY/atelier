@@ -152,6 +152,15 @@ test('strict boundary permits private material in the owner private domain repo'
   assert.equal(report.ok, true, report.errors.map((item) => item.message).join('\n'))
 })
 
+test('unclassified Markdown stays graph-visible without inventing a boundary declaration', () => {
+  const { project: cfg, policy, sharedRepo } = makeWorkspace()
+  fs.writeFileSync(path.join(sharedRepo, 'README.md'), '# Ordinary repository documentation\n')
+  const report = checkBoundaryPolicy({ project: cfg, policy, actor: 'author' })
+  assert.equal(report.ok, true, report.errors.map((item) => item.message).join('\n'))
+  assert.equal(report.graphCounts.nodes, 1)
+  assert.equal(report.findings.some((item) => item.code === 'private-audience-in-shared-repo'), false)
+})
+
 test('legacy-warning mode reports placement problems without failing', () => {
   const { project: cfg, policy, sharedRepo } = makeWorkspace()
   policy.mode = 'legacy-warning'

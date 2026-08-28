@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0-alpha.8
+
+- Add a tenant-neutral HTML control system at `@mnstry/atelier/ui`. The shared
+  geometry, variants, focus treatment, motion, action-group layouts, and safe
+  renderers are used by Atelier's generated project UI and are available to
+  downstream publication kits without importing publication semantics into
+  Atelier.
+- Preserve the graph command's open Markdown ontology during canonical-engine
+  consolidation: core `kg.type` values remain portable recommendations while
+  adopter-defined lowercase kebab-case types remain valid.
+- Keep unclassified Markdown graph-visible and fail-closed without treating
+  its synthetic private projection audience as an authored boundary-placement
+  declaration.
+
 ## 0.2.0-alpha.6
 
 - Add Deliverable Zero for Atelier Sync: explicit single-repository

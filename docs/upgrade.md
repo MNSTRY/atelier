@@ -5,6 +5,14 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.8
+
+This additive release introduces `@mnstry/atelier/ui`, a tenant-neutral control
+grammar for local Atelier tooling and compatible downstream interfaces. Existing
+consumers do not need to change. Consumers that adopt it should map the
+`--system-control-*` custom properties to their own semantic theme rather than
+forking the geometry or interaction CSS.
+
 ## Upgrading to 0.2.0-alpha.6
 
 This release adds Atelier Sync Deliverable Zero: a headless, local repository
@@ -132,7 +140,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.8
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -140,7 +148,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.6"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.8"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 

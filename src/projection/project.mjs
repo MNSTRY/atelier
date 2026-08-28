@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { commandProject, readJson, writeJson } from '../project/config.mjs'
 import { summarizeReadinessJourney } from '../readiness-protocols/runtime.mjs'
+import { atelierControlStyles } from '../ui/control-system.mjs'
 
 const esc = (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 
@@ -52,7 +53,7 @@ export function buildProjectProjection(project) {
     <h3>${esc(item.title)}</h3>
     <p><strong>${esc(item.status)}</strong> · ${esc(item.score)} / 100</p>
     <p>${esc(item.blockers[0] || 'review-ready')}</p>
-    <button type="button" data-copy="${esc(item.agentPrompt)}">Copy protocol prompt</button>
+    <button type="button" class="system-control" data-variant="secondary" data-size="compact" data-copy="${esc(item.agentPrompt)}">Copy protocol prompt</button>
   </article>`).join('\n')
   const cards = graph.nodes.map((node) => `<article class="card" data-node="${esc(node.id)}">
     <p class="eyebrow">${esc(node.repo)} · ${esc(node.type)} · ${esc(node.audience)}</p>
@@ -79,9 +80,9 @@ h1{font-size:clamp(2rem,4vw,4rem);margin:.2em 0}
 .readiness-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:16px}
 .readiness-card{border:1px solid #342b26;border-radius:8px;padding:14px;background:#171312}
 .readiness-card h3{font-size:1.05rem;margin:.2rem 0}
-.readiness-card button{min-height:44px;border:1px solid #755f43;border-radius:6px;background:#241d18;color:var(--atelier-text);padding:8px 10px;cursor:pointer}
 .eyebrow{color:var(--atelier-eyebrow);text-transform:uppercase;letter-spacing:.08em;font-size:.8rem}
 a{color:var(--atelier-accent)}
+${atelierControlStyles}
 ${branding.themeCss}</style>
 </head>
 <body><main>

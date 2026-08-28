@@ -11,8 +11,12 @@ export const SOURCE_SIDECAR_SCHEMA = 'mnstry.source-sidecar@v1'
 export const DOC_EXTENSIONS = new Set(['.md', '.html', '.pdf', '.docx'])
 export const VALID_RELATION_TYPES = new Set(['related', 'supports', 'supersedes', 'implements', 'depends_on', 'evidences', 'contradicts', 'belongs_to'])
 export const VALID_STATUSES = new Set(['active', 'draft', 'archived', 'template'])
+// Core types are portable recommendations, not a closed ontology. Adopters may
+// extend the Markdown vocabulary with a stable lowercase token; non-Markdown
+// sidecars remain closed because their schema is the binary trust boundary.
 export const VALID_KG_TYPES = new Set(['document', 'artifact', 'evidence', 'source', 'index', 'contract', 'guide', 'runbook', 'policy', 'report', 'prototype', 'research', 'decision', 'map', 'manifest', 'html', 'pdf', 'docx'])
 export const VALID_SIDECAR_KG_TYPES = new Set(['html', 'pdf', 'docx', 'artifact', 'evidence', 'source', 'prototype', 'research', 'report', 'manifest'])
+export const KG_TYPE_TOKEN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 
 const SKIP_DIRS = new Set(['.git', '.agents', '.claude', '.github', 'node_modules', 'output', 'uploads', 'scripts', 'lib', ...generatedProjectionDirectoryBasenames()])
 // Derived from the kit's file-class declaration, never restated here.
@@ -823,7 +827,7 @@ export function validateKnowledgeGraph(nodes, edges, orphanSidecars = [], { exte
       errors.push(`${node.repo}/${node.path}: invalid or missing kg.audience "${node.audience ?? ''}"`)
     }
     if (!VALID_STATUSES.has(node.status)) errors.push(`${node.repo}/${node.path}: invalid kg.status "${node.status}"`)
-    if (!VALID_KG_TYPES.has(node.kgType)) errors.push(`${node.repo}/${node.path}: invalid kg.type "${node.kgType}"`)
+    if (!KG_TYPE_TOKEN.test(node.kgType)) errors.push(`${node.repo}/${node.path}: invalid kg.type "${node.kgType}"`)
     for (const [type, targets] of Object.entries(node.relations ?? {})) {
       if (!VALID_RELATION_TYPES.has(type)) errors.push(`${node.repo}/${node.path}: invalid kg.relations type "${type}"`)
       if (!Array.isArray(targets)) {

@@ -358,6 +358,19 @@ test('staged binary credentials block and oversized binary evidence cannot pass 
   assert.ok(report.errors.some((item) => item.code === 'content-scan-incomplete' && item.path === 'large.bin'))
 })
 
+test('staged binary deletion removes exposure without requiring a nonexistent index blob', (t) => {
+  const { site, policy, project } = makeWorkspace(t)
+  fs.writeFileSync(path.join(site, 'retired.tgz'), Buffer.from([0, 1, 2, 3]))
+  git(site, ['add', 'retired.tgz'])
+  git(site, ['commit', '--quiet', '-m', 'add binary artifact'])
+  fs.rmSync(path.join(site, 'retired.tgz'))
+  git(site, ['add', '-u', 'retired.tgz'])
+
+  const report = checkBoundaryPolicy({ project, policy, actor: 'author', staged: true, stagedOnly: true })
+  assert.equal(report.ok, true)
+  assert.equal(report.errors.some((item) => item.code === 'content-scan-incomplete'), false)
+})
+
 test('generated hooks single-quote config paths and reject control characters', () => {
   const config = '/tmp/project $(touch marker).json'
   const script = boundaryHookScript(config, 'pre-push', '/tmp/elsewhere')

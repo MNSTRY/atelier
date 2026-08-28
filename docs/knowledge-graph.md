@@ -14,6 +14,11 @@ projection readiness.
 - Once a Markdown `kg` block exists, `kg.id` and `kg.audience` are required;
   empty, partial, and malformed declarations are blocking errors.
 - `kg.visibility` is invalid in local source metadata.
+- Markdown `kg.type` is an open, portable vocabulary. Core types are
+  recommended for interoperability, while adopter types such as
+  `editorial-essay` are valid lowercase kebab-case tokens. Non-Markdown
+  sidecars remain schema-closed because the sidecar is the binary trust
+  boundary.
 - Declared relations emit semantic edges.
 
 ## Source formats
