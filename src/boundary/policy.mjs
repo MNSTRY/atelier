@@ -610,7 +610,14 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
   if (!stagedOnly) {
     graph = buildGraph(project)
     findings.push(...graph.errors.map((message) => finding({ severity: 'error', code: 'knowledge-graph-invalid', message })))
-    for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
+    // Unclassified Markdown is enrolled privately so the graph can report and
+    // project it fail-closed. That synthetic audience is not an authorial
+    // placement declaration and must not turn every ordinary repository file
+    // into a private-material boundary violation.
+    for (const node of graph.nodes ?? []) {
+      if (node.classification === 'unclassified') continue
+      findings.push(...nodePlacementFindings({ node, policy }))
+    }
     findings.push(...promotionFindings({ policy, project, graph }))
   }
   findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }))

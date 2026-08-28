@@ -48,7 +48,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.8
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -230,6 +230,23 @@ if (graph.errors.length > 0) throw new Error(graph.errors.join('\n'))
 console.log(graph.nodes)
 ```
 
+Interfaces that need the same control grammar as Atelier's generated tooling
+can import the additive UI subpath. The stylesheet contains no brand copy or
+publication semantics; map its `--system-control-*` properties to the
+consumer's own theme:
+
+```js
+import {
+  atelierControlStyles,
+  renderActionGroup,
+} from '@mnstry/atelier/ui'
+
+const navigation = renderActionGroup([
+  { label: 'Library', href: '/library/' },
+  { label: 'Concepts', href: '/concepts/' },
+], { label: 'Browse the workspace' })
+```
+
 The package exports change over the alpha series, so pin the exact prerelease
 version and treat the package export map and shipped source modules as the
 executable API reference. [Distribution contracts](./docs/distributions.md) explain
@@ -358,7 +375,7 @@ Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
 remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.8
 ```
 
 Then choose the path that matches what you are building:
@@ -375,7 +392,7 @@ Then choose the path that matches what you are building:
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.6`.
+Current package: `@mnstry/atelier@0.2.0-alpha.8`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.

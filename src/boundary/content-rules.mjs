@@ -320,6 +320,18 @@ function binaryPathsFromDiff(diff) {
       current = header ? normalizeRelPath(header[2]) : null
       continue
     }
+    // A deletion has no candidate blob to disclose. `git show :path` correctly
+    // fails for it, so treating that absence as incomplete evidence would make
+    // removal of an opaque artifact impossible. Added and replaced binary blobs
+    // remain scanned from the index below.
+    if (line === '+++ /dev/null') {
+      current = null
+      continue
+    }
+    if (line.startsWith('deleted file mode ')) {
+      current = null
+      continue
+    }
     if (current && (line.startsWith('Binary files ') || line === 'GIT binary patch')) paths.add(current)
   }
   return [...paths]

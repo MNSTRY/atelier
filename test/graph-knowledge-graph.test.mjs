@@ -76,6 +76,32 @@ kg:
   assert.equal(node.path, 'moved/original.md')
 })
 
+test('Markdown kg.type is an extensible portable vocabulary', () => {
+  const { root, repo } = makeWorkspace()
+  writeDoc(
+    repo,
+    'essay.md',
+    `
+title: "Essay"
+kg:
+  id: "project-app:essay"
+  type: "editorial-essay"
+  status: "active"
+  audience: "team"
+`,
+  )
+
+  let result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: repoAccess() })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.equal(result.workspaceGraph.nodes[0].kgType, 'editorial-essay')
+
+  const source = fs.readFileSync(path.join(repo, 'essay.md'), 'utf8')
+  fs.writeFileSync(path.join(repo, 'essay.md'), source.replace('editorial-essay', 'Editorial Essay'))
+  result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: repoAccess() })
+  assert.equal(result.ok, false)
+  assert.match(result.errors.join('\n'), /invalid kg\.type "Editorial Essay"/)
+})
+
 test('non-Markdown sidecar kg.id survives html rename while edges remain stable', () => {
   const { root, repo } = makeWorkspace()
   writeDoc(
