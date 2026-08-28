@@ -99,7 +99,7 @@ export const atelierControlStyles = `
   }
 
   .system-control[data-variant="quiet"]:hover {
-    background: var(--system-control-quiet-hover-background, rgba(255, 255, 255, 0.04));
+    background: var(--system-control-quiet-hover-background, rgba(255, 255, 255, 0.02));
     color: var(--system-control-quiet-hover-foreground, #f4eee5);
   }
 }

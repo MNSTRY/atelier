@@ -10,6 +10,10 @@ import {
 test('control system exports one tenant-neutral geometry and interaction grammar', () => {
   assert.match(atelierControlStyles, /--system-control-height, 44px/)
   assert.match(atelierControlStyles, /\.system-control\[data-variant="secondary"\]:hover/)
+  assert.match(
+    atelierControlStyles,
+    /--system-control-quiet-hover-background, rgba\(255, 255, 255, 0\.02\)/,
+  )
   assert.match(atelierControlStyles, /\.system-action-group\[data-layout="grid"\]/)
   assert.match(atelierControlStyles, /prefers-reduced-motion: reduce/)
 })
