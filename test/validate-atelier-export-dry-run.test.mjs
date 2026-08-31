@@ -6,6 +6,7 @@ import { join, relative } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { validateAtelierExportDryRun } from '../src/validate-atelier-export-dry-run.mjs'
+import { discoverTests } from '../scripts/run-tests.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PACKAGE_JSON = join(ROOT, 'package.json')
@@ -149,7 +150,8 @@ test('package scripts wire the atelier export dry-run validator and focused test
     packageJson.scripts['dry-run'],
     `node ${VALIDATOR} ${relative(ROOT, SAMPLE_FIXTURE).split('\\').join('/')}`
   )
-  assert.match(packageJson.scripts.test, /node --test test\/\*\.test\.mjs/)
+  assert.equal(packageJson.scripts.test, 'node scripts/run-tests.mjs')
+  assert.ok(discoverTests(join(ROOT, 'test')).includes(join(ROOT, VALIDATOR_TEST)))
   assert.match(packageJson.scripts.contract, /check-atelier-export-contract/)
   assert.ok(readFileSync(join(ROOT, VALIDATOR_TEST), 'utf8').includes('rejects mutation or apply intent'))
 })
