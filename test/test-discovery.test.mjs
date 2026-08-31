@@ -91,3 +91,20 @@ test('discovery never follows a linked directory outside the test tree', (t) => 
   fs.symlinkSync(path.join(root, 'outside'), path.join(root, 'test', 'linked'), 'junction')
   assert.deepEqual(discoverTests(path.join(root, 'test')), [local])
 })
+
+test('invoking the runner through a directory link cannot silently skip failing tests', (t) => {
+  const { root, write } = fixture(t)
+  write('test/nested/failure.test.mjs',
+    "import test from 'node:test'; test('linked-entry-failure', () => { throw new Error('expected failure'); });\n")
+  const linkedScripts = path.join(root, 'linked-scripts')
+  fs.symlinkSync(path.join(root, 'scripts'), linkedScripts, 'junction')
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  for (const flags of [[], ['--preserve-symlinks-main']]) {
+    const result = spawnSync(process.execPath, [...flags, path.join(linkedScripts, 'run-tests.mjs'), '--test-reporter=tap'], {
+      cwd: root, env, encoding: 'utf8', timeout: 30_000, windowsHide: true,
+    })
+    assert.equal(result.status, 1, `flags=${flags.join(' ')}\n${result.stdout}\n${result.stderr}`)
+    assert.match(result.stdout, /not ok \d+ - linked-entry-failure/)
+  }
+})

@@ -16,9 +16,17 @@ export function discoverTests(directory) {
   return files.sort()
 }
 
-const entrypoint = fileURLToPath(import.meta.url)
-if (process.argv[1] && path.resolve(process.argv[1]) === entrypoint) {
-  const packageRoot = fileURLToPath(new URL('..', import.meta.url))
+const entrypoint = fs.realpathSync(fileURLToPath(import.meta.url))
+function invokedDirectly() {
+  try {
+    return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === entrypoint
+  } catch {
+    return false
+  }
+}
+
+if (invokedDirectly()) {
+  const packageRoot = path.dirname(path.dirname(entrypoint))
   try {
     const files = discoverTests(path.join(packageRoot, 'test'))
     if (files.length === 0) throw new Error('No .test.mjs files found under test/')
