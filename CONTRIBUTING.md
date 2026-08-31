@@ -134,6 +134,12 @@ sets `ATELIER_ALLOW_MISSING_DENYLIST=1`: it acknowledges the missing file
 and turns the failure into a recorded skip, and every other test runs
 normally either way.
 
+`npm test` recursively discovers regular `*.test.mjs` files under `test/`,
+including nested test folders. It does not follow symlinks or run other module
+names. Put executable helpers and target-machine programs under `scripts/`;
+keep automatically discovered tests hermetic and physical-device-free. Node
+test-runner options can be passed after `npm test --`.
+
 All gates green is the entry condition, not the goal — tests that prove the
 change is the goal.
 
