@@ -193,18 +193,26 @@ required status checks:
 
 `.github/workflows/ci-depot-atelier.yml` is a manual-only, fail-closed contract
 for a future brokered Depot route. It does not replace or disable the automatic
-workflows above, and its presence does not authorize dispatch. The route stays
-closed until repository protection, the broker policy, the exact candidate
-ref, and the private denylist path are admitted together.
+workflows above, and policy does not authorize its presence as dispatch
+authority. The YAML remains technically dispatchable by a repository writer
+whenever Actions is enabled and its file exists on the selected ref. The route
+therefore stays closed through the repository-wide disabled-Actions baseline
+and restricted runner group until repository protection, broker policy, exact
+candidate ref, live run monitoring, and the private denylist path are admitted
+together.
 
 The workflow exposes exactly the five protected status names: `sign-off`,
 `structural-sweep`, `test`, `consumer-smoke`, and `secret-sweep`. The jobs form
-one `needs` chain, so only one Depot job can execute at a time. Every job checks
-out the exact broker-supplied candidate SHA without persisted credentials,
-proves the admitted base is an ancestor, and refuses a dirty checkout. The
-private denylist is available only to `secret-sweep`; install and public checks
-never receive it. No job publishes a package or uses a GitHub-hosted or
-Blacksmith runner.
+one `needs` chain, so only one Depot job in a single run can execute at a time;
+the broker's global lease, not the YAML, serializes separate runs. Same-lineage
+runs queue rather than cancel one another. Every job refuses unless the GitHub
+check-run SHA equals the broker-supplied candidate SHA, checks out that exact
+commit without persisted credentials, proves the admitted base is an ancestor,
+and refuses a dirty checkout. This equality matters because the protected names
+are also emitted by the automatic workflows and GitHub attaches a manual run's
+checks to `github.sha`, not an arbitrary checkout input. The private denylist is
+available only to `secret-sweep`; install and public checks never receive it.
+No job publishes a package or uses a GitHub-hosted or Blacksmith runner.
 
 ## Fork policy
 

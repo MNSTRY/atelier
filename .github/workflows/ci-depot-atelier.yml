@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   group: ci-depot-atelier-${{ inputs.lineage_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # The five serial jobs intentionally match the protected main-branch contexts.
 # The broker separately permits only one active Depot job across admitted work.
@@ -38,12 +38,14 @@ jobs:
     steps:
       - name: Refuse malformed commit inputs before checkout
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
       - name: Check out exact candidate without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,12 +56,14 @@ jobs:
       - name: Refuse candidate, base, or checkout drift
         working-directory: candidate
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
-          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_RUN_SHA"
           test -z "$(git status --porcelain)"
       - name: Every non-merge commit carries a DCO sign-off
         working-directory: candidate
@@ -86,12 +90,14 @@ jobs:
     steps:
       - name: Refuse malformed commit inputs before checkout
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
       - name: Check out exact candidate without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,12 +108,14 @@ jobs:
       - name: Refuse candidate, base, or checkout drift
         working-directory: candidate
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
-          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_RUN_SHA"
           test -z "$(git status --porcelain)"
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -129,12 +137,14 @@ jobs:
     steps:
       - name: Refuse malformed commit inputs before checkout
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
       - name: Check out exact candidate without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -145,12 +155,14 @@ jobs:
       - name: Refuse candidate, base, or checkout drift
         working-directory: candidate
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
-          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_RUN_SHA"
           test -z "$(git status --porcelain)"
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -179,12 +191,14 @@ jobs:
     steps:
       - name: Refuse malformed commit inputs before checkout
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
       - name: Check out exact candidate without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -195,12 +209,14 @@ jobs:
       - name: Refuse candidate, base, or checkout drift
         working-directory: candidate
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
-          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_RUN_SHA"
           test -z "$(git status --porcelain)"
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -223,12 +239,14 @@ jobs:
     steps:
       - name: Refuse malformed commit inputs before checkout
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
       - name: Refuse to pass without the protected release denylist
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
@@ -247,12 +265,14 @@ jobs:
       - name: Refuse candidate, base, or checkout drift
         working-directory: candidate
         env:
+          EXPECTED_RUN_SHA: ${{ github.sha }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
-          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$EXPECTED_CANDIDATE_SHA"
+          test "$EXPECTED_RUN_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_RUN_SHA"
           test -z "$(git status --porcelain)"
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
