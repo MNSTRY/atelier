@@ -1,5 +1,5 @@
 name: Brokered Atelier CI
-run-name: Atelier required checks · ${{ inputs.request_id }}
+run-name: Atelier protected checks · ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -28,9 +28,11 @@ concurrency:
   group: ci-depot-atelier-${{ inputs.lineage_id }}
   cancel-in-progress: true
 
+# The five serial jobs intentionally match the protected main-branch contexts.
+# The broker separately permits only one active Depot job across admitted work.
 jobs:
-  atelier-required:
-    name: Atelier required checks
+  sign-off:
+    name: sign-off
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -43,7 +45,55 @@ jobs:
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
       - name: Check out exact candidate without persisted credentials
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse candidate, base, or checkout drift
+        working-directory: candidate
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Every non-merge commit carries a DCO sign-off
+        working-directory: candidate
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for sha in $(git rev-list --no-merges "$EXPECTED_BASE_SHA..$EXPECTED_CANDIDATE_SHA"); do
+            if ! git log -1 --format=%B "$sha" \
+              | grep -qiE '^Signed-off-by: .+ <[^<>]+@[^<>]+>[[:space:]]*$'; then
+              echo "missing DCO sign-off: $sha"
+              missing=$((missing + 1))
+            fi
+          done
+          test "$missing" -eq 0
+
+  structural-sweep:
+    name: structural-sweep
+    needs: sign-off
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Refuse malformed commit inputs before checkout
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Check out exact candidate without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.candidate_sha }}
           path: candidate
@@ -60,7 +110,50 @@ jobs:
           git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
           test -z "$(git status --porcelain)"
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.18.0'
+      - name: Structural and commit-identity sweep
+        working-directory: candidate
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+        run: node scripts/check-repo-disclosure.mjs --structural-only --commits range --base "$EXPECTED_BASE_SHA"
+
+  test:
+    name: test
+    needs: structural-sweep
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ATELIER_ALLOW_MISSING_DENYLIST: '1'
+    steps:
+      - name: Refuse malformed commit inputs before checkout
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Check out exact candidate without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse candidate, base, or checkout drift
+        working-directory: candidate
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.18.0'
           cache: npm
@@ -68,19 +161,75 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         working-directory: candidate
         run: npm ci --ignore-scripts
-      - name: Check executable syntax
+      - name: Run public required checks
         working-directory: candidate
-        run: npm run syntax:check
-      - name: Run the public synthetic test suite
-        working-directory: candidate
-        # The protected lane below repeats the denylist-dependent assertions
-        # with the repository secret. This suite remains safe to reproduce
-        # locally and visibly reports the one structural-only skip.
+        run: |
+          npm run syntax:check
+          npm test
+          npm run contract
+          npm run egress:check
+          npm run migrations:check
+          npm run contract:compat
+
+  consumer-smoke:
+    name: consumer-smoke
+    needs: test
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Refuse malformed commit inputs before checkout
         env:
-          ATELIER_ALLOW_MISSING_DENYLIST: '1'
-        run: npm test
-      - name: Refuse to pass without the protected release denylist
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Check out exact candidate without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse candidate, base, or checkout drift
         working-directory: candidate
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: candidate/package-lock.json
+      - name: Install dependencies without lifecycle scripts
+        working-directory: candidate
+        run: npm ci --ignore-scripts
+      - name: Run the offline consumer smoke
+        working-directory: candidate
+        run: npm run consumer:smoke
+
+  secret-sweep:
+    name: secret-sweep
+    needs: consumer-smoke
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Refuse malformed commit inputs before checkout
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Refuse to pass without the protected release denylist
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
         run: |
@@ -88,10 +237,34 @@ jobs:
             echo "protected release denylist unavailable"
             exit 1
           fi
+      - name: Check out exact candidate without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse candidate, base, or checkout drift
+        working-directory: candidate
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: candidate/package-lock.json
+      - name: Install dependencies without lifecycle scripts
+        working-directory: candidate
+        run: npm ci --ignore-scripts
       - name: Run the protected disclosure floor
         working-directory: candidate
-        # Scope the private denylist to the commands that require it. Install
-        # and the broad public suite above never receive the secret.
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
           EXPECTED_BASE_SHA: ${{ inputs.base_sha }}

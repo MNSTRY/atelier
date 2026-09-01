@@ -189,6 +189,23 @@ required status checks:
 - `secret-sweep`: the only lane with access to the denylist. It runs the full
   `repo:check` (with the configured commit scan) and `release:audit`.
 
+### Dormant brokered Depot parity contract
+
+`.github/workflows/ci-depot-atelier.yml` is a manual-only, fail-closed contract
+for a future brokered Depot route. It does not replace or disable the automatic
+workflows above, and its presence does not authorize dispatch. The route stays
+closed until repository protection, the broker policy, the exact candidate
+ref, and the private denylist path are admitted together.
+
+The workflow exposes exactly the five protected status names: `sign-off`,
+`structural-sweep`, `test`, `consumer-smoke`, and `secret-sweep`. The jobs form
+one `needs` chain, so only one Depot job can execute at a time. Every job checks
+out the exact broker-supplied candidate SHA without persisted credentials,
+proves the admitted base is an ancestor, and refuses a dirty checkout. The
+private denylist is available only to `secret-sweep`; install and public checks
+never receive it. No job publishes a package or uses a GitHub-hosted or
+Blacksmith runner.
+
 ## Fork policy
 
 Fork pull requests never receive repository secrets, so `secret-sweep` cannot

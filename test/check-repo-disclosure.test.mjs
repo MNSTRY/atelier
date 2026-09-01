@@ -390,31 +390,62 @@ test('both structural and private CI sweeps inspect pull-request commit ranges',
   assert.equal(rangeCommands.length, 2)
 })
 
-test('brokered Atelier CI is a pinned manual Depot disclosure boundary', () => {
+test('brokered Atelier CI mirrors the five protected contexts on serial Depot jobs', () => {
   const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci-depot-atelier.yml'), 'utf8')
 
   assert.match(workflow, /^on:\n  workflow_dispatch:/m)
   assert.doesNotMatch(workflow, /^  (?:push|pull_request|schedule):/m)
   assert.match(workflow, /^permissions:\n  contents: read$/m)
   assert.doesNotMatch(workflow, /id-token:\s*write/)
-  assert.equal((workflow.match(/^  [a-z][a-z0-9-]*:\n    name:/gm) ?? []).length, 1)
-  assert.match(workflow, /runs-on: depot-ubuntu-24\.04/)
+  const jobNames = [...workflow.matchAll(/^  [a-z][a-z0-9-]*:\n    name: ([^\n]+)/gm)].map(
+    (match) => match[1],
+  )
+  assert.deepEqual(jobNames, [
+    'sign-off',
+    'structural-sweep',
+    'test',
+    'consumer-smoke',
+    'secret-sweep',
+  ])
+  assert.equal((workflow.match(/runs-on: depot-ubuntu-24\.04/g) ?? []).length, 5)
   assert.doesNotMatch(workflow, /runs-on:\s*(?:ubuntu|windows|macos)-latest/)
   assert.doesNotMatch(workflow, /blacksmith/i)
-  assert.match(workflow, /timeout-minutes: 20/)
+  assert.equal((workflow.match(/timeout-minutes: 20/g) ?? []).length, 5)
+  assert.match(workflow, /structural-sweep:\n    name: structural-sweep\n    needs: sign-off/)
+  assert.match(workflow, /test:\n    name: test\n    needs: structural-sweep/)
+  assert.match(workflow, /consumer-smoke:\n    name: consumer-smoke\n    needs: test/)
+  assert.match(workflow, /secret-sweep:\n    name: secret-sweep\n    needs: consumer-smoke/)
   assert.ok(
     workflow.indexOf('Refuse malformed commit inputs before checkout') <
       workflow.indexOf('Check out exact candidate without persisted credentials'),
     'commit inputs must be format-checked before checkout materializes them',
   )
-  assert.match(workflow, /\[\[ "\$EXPECTED_BASE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/)
-  assert.match(workflow, /\[\[ "\$EXPECTED_CANDIDATE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/)
-  assert.match(workflow, /persist-credentials: false/)
-  assert.match(workflow, /git merge-base --is-ancestor "\$EXPECTED_BASE_SHA" "\$EXPECTED_CANDIDATE_SHA"/)
-  assert.match(workflow, /ATELIER_DENYLIST_JSON: \$\{\{ secrets\.ATELIER_RELEASE_DENYLIST \}\}/)
+  assert.equal(
+    (workflow.match(/\[\[ "\$EXPECTED_BASE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/g) ?? [])
+      .length,
+    5,
+  )
+  assert.equal(
+    (workflow.match(/\[\[ "\$EXPECTED_CANDIDATE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/g) ?? [])
+      .length,
+    5,
+  )
+  assert.equal((workflow.match(/persist-credentials: false/g) ?? []).length, 5)
+  assert.equal(
+    (workflow.match(/git merge-base --is-ancestor "\$EXPECTED_BASE_SHA" "\$EXPECTED_CANDIDATE_SHA"/g) ?? [])
+      .length,
+    5,
+  )
+  const secretJob = workflow.indexOf('\n  secret-sweep:')
+  assert.notEqual(secretJob, -1)
+  assert.doesNotMatch(workflow.slice(0, secretJob), /secrets\.ATELIER_RELEASE_DENYLIST/)
+  assert.match(workflow.slice(secretJob), /ATELIER_DENYLIST_JSON: \$\{\{ secrets\.ATELIER_RELEASE_DENYLIST \}\}/)
   assert.doesNotMatch(workflow, /ATELIER_DENYLIST_JSON[^\n]*run:/)
-  assert.match(workflow, /EXPECTED_BASE_SHA: \$\{\{ inputs\.base_sha \}\}/)
+  assert.equal((workflow.match(/EXPECTED_BASE_SHA: \$\{\{ inputs\.base_sha \}\}/g) ?? []).length, 13)
   assert.match(workflow, /node scripts\/check-repo-disclosure\.mjs --commits range --base "\$EXPECTED_BASE_SHA"/)
+  assert.match(workflow, /node scripts\/check-repo-disclosure\.mjs --structural-only --commits range --base "\$EXPECTED_BASE_SHA"/)
+  assert.match(workflow, /git rev-list --no-merges "\$EXPECTED_BASE_SHA\.\.\$EXPECTED_CANDIDATE_SHA"/)
+  assert.match(workflow, /npm run consumer:smoke/)
   assert.doesNotMatch(workflow, /npm\s+(?:publish|run\s+publish)/)
 })
 
