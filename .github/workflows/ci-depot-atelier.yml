@@ -1,0 +1,70 @@
+name: Brokered Atelier CI
+run-name: Atelier required checks · ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact 40-character candidate commit
+        required: true
+        type: string
+      base_sha:
+        description: Exact 40-character admitted base commit
+        required: true
+        type: string
+      request_id:
+        description: Signed broker request identifier
+        required: true
+        type: string
+      lineage_id:
+        description: Stable pull-request lineage
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-depot-atelier-${{ inputs.lineage_id }}
+  cancel-in-progress: true
+
+jobs:
+  atelier-required:
+    name: Atelier required checks
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact candidate without persisted credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Refuse candidate, base, or checkout drift
+        working-directory: candidate
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: candidate/package-lock.json
+      - name: Install dependencies without lifecycle scripts
+        working-directory: candidate
+        run: npm ci --ignore-scripts
+      - name: Check executable syntax
+        working-directory: candidate
+        run: npm run syntax:check
+      - name: Run the public synthetic test suite
+        working-directory: candidate
+        run: npm test
