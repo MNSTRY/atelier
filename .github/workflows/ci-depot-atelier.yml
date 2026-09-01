@@ -67,4 +67,28 @@ jobs:
         run: npm run syntax:check
       - name: Run the public synthetic test suite
         working-directory: candidate
+        # The protected lane below repeats the denylist-dependent assertions
+        # with the repository secret. This suite remains safe to reproduce
+        # locally and visibly reports the one structural-only skip.
+        env:
+          ATELIER_ALLOW_MISSING_DENYLIST: '1'
         run: npm test
+      - name: Refuse to pass without the protected release denylist
+        working-directory: candidate
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+        run: |
+          if [ -z "$ATELIER_DENYLIST_JSON" ]; then
+            echo "protected release denylist unavailable"
+            exit 1
+          fi
+      - name: Run the protected disclosure floor
+        working-directory: candidate
+        # Scope the private denylist to the commands that require it. Install
+        # and the broad public suite above never receive the secret.
+        env:
+          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+        run: |
+          npm run repo:check
+          node --test test/readiness-protocols.test.mjs
+          npm run release:audit
