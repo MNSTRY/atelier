@@ -201,6 +201,14 @@ and restricted runner group until repository protection, broker policy, exact
 candidate ref, live run monitoring, and the private denylist path are admitted
 together.
 
+As observed on 2026-09-02, repository Actions is currently enabled for Atelier;
+that is not the required closed baseline. A branch containing this workflow
+must remain local-only until the governed repository-owner controller disables
+Actions and proves the restricted Depot lease boundary. Recheck that live state
+immediately before any later push. The workflow source must then land and run
+only through the same exact-ref, exact-SHA broker lane; this document does not
+authorize a direct dispatch or settings mutation.
+
 The workflow exposes exactly the five protected status names: `sign-off`,
 `structural-sweep`, `test`, `consumer-smoke`, and `secret-sweep`. The jobs form
 one `needs` chain, so only one Depot job in a single run can execute at a time;

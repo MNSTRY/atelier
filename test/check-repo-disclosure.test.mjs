@@ -404,6 +404,8 @@ test('brokered Atelier CI mirrors the five protected contexts on serial Depot jo
   )
   assert.equal(permissionsBlock, 'permissions:\n  contents: read\n')
   assert.doesNotMatch(workflow, /id-token:\s*write/)
+  assert.doesNotMatch(workflow, /^  +permissions:/m)
+  assert.doesNotMatch(workflow, /^\s+if:/m)
   const jobsBlock = workflow.slice(workflow.indexOf('jobs:\n') + 'jobs:\n'.length)
   const jobIds = [...jobsBlock.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map(
     (match) => match[1],
@@ -421,6 +423,22 @@ test('brokered Atelier CI mirrors the five protected contexts on serial Depot jo
   ])
   const runnerLabels = [...jobsBlock.matchAll(/^    runs-on: ([^\n]+)$/gm)].map((match) => match[1])
   assert.deepEqual(runnerLabels, Array(5).fill('depot-ubuntu-24.04'))
+  const checkoutPin = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+  const setupNodePin = 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020'
+  assert.deepEqual(
+    [...workflow.matchAll(/^        uses: ([^\s#]+)(?:\s+#.*)?$/gm)].map((match) => match[1]),
+    [
+      checkoutPin,
+      checkoutPin,
+      setupNodePin,
+      checkoutPin,
+      setupNodePin,
+      checkoutPin,
+      setupNodePin,
+      checkoutPin,
+      setupNodePin,
+    ],
+  )
   assert.doesNotMatch(workflow, /blacksmith/i)
   assert.equal((workflow.match(/timeout-minutes: 20/g) ?? []).length, 5)
   assert.match(workflow, /cancel-in-progress: false/)
