@@ -390,6 +390,34 @@ test('both structural and private CI sweeps inspect pull-request commit ranges',
   assert.equal(rangeCommands.length, 2)
 })
 
+test('brokered Atelier CI is a pinned manual Depot disclosure boundary', () => {
+  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci-depot-atelier.yml'), 'utf8')
+
+  assert.match(workflow, /^on:\n  workflow_dispatch:/m)
+  assert.doesNotMatch(workflow, /^  (?:push|pull_request|schedule):/m)
+  assert.match(workflow, /^permissions:\n  contents: read$/m)
+  assert.doesNotMatch(workflow, /id-token:\s*write/)
+  assert.equal((workflow.match(/^  [a-z][a-z0-9-]*:\n    name:/gm) ?? []).length, 1)
+  assert.match(workflow, /runs-on: depot-ubuntu-24\.04/)
+  assert.doesNotMatch(workflow, /runs-on:\s*(?:ubuntu|windows|macos)-latest/)
+  assert.doesNotMatch(workflow, /blacksmith/i)
+  assert.match(workflow, /timeout-minutes: 20/)
+  assert.ok(
+    workflow.indexOf('Refuse malformed commit inputs before checkout') <
+      workflow.indexOf('Check out exact candidate without persisted credentials'),
+    'commit inputs must be format-checked before checkout materializes them',
+  )
+  assert.match(workflow, /\[\[ "\$EXPECTED_BASE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/)
+  assert.match(workflow, /\[\[ "\$EXPECTED_CANDIDATE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/)
+  assert.match(workflow, /persist-credentials: false/)
+  assert.match(workflow, /git merge-base --is-ancestor "\$EXPECTED_BASE_SHA" "\$EXPECTED_CANDIDATE_SHA"/)
+  assert.match(workflow, /ATELIER_DENYLIST_JSON: \$\{\{ secrets\.ATELIER_RELEASE_DENYLIST \}\}/)
+  assert.doesNotMatch(workflow, /ATELIER_DENYLIST_JSON[^\n]*run:/)
+  assert.match(workflow, /EXPECTED_BASE_SHA: \$\{\{ inputs\.base_sha \}\}/)
+  assert.match(workflow, /node scripts\/check-repo-disclosure\.mjs --commits range --base "\$EXPECTED_BASE_SHA"/)
+  assert.doesNotMatch(workflow, /npm\s+(?:publish|run\s+publish)/)
+})
+
 test('fork sweep pins API base and head before scanning the untrusted contributor range', () => {
   const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'fork-sweep.yml'), 'utf8')
   assert.match(workflow, /ref: refs\/heads\/\$\{\{ github\.event\.repository\.default_branch \}\}/)

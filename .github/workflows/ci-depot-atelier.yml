@@ -34,6 +34,14 @@ jobs:
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Refuse malformed commit inputs before checkout
+        env:
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
       - name: Check out exact candidate without persisted credentials
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -48,8 +56,6 @@ jobs:
           EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$EXPECTED_CANDIDATE_SHA" = "$(git rev-parse HEAD)"
           git merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$EXPECTED_CANDIDATE_SHA"
           test -z "$(git status --porcelain)"
@@ -88,7 +94,8 @@ jobs:
         # and the broad public suite above never receive the secret.
         env:
           ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}
+          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}
         run: |
-          npm run repo:check
+          node scripts/check-repo-disclosure.mjs --commits range --base "$EXPECTED_BASE_SHA"
           node --test test/readiness-protocols.test.mjs
           npm run release:audit
