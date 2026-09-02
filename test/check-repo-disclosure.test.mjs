@@ -390,9 +390,7 @@ test('both structural and private CI sweeps inspect pull-request commit ranges',
   assert.equal(rangeCommands.length, 2)
 })
 
-test('brokered Atelier CI mirrors the five protected contexts on serial Depot jobs', () => {
-  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci-depot-atelier.yml'), 'utf8')
-
+function assertBrokeredAtelierWorkflowShape(workflow) {
   const triggerBlock = workflow.slice(workflow.indexOf('on:\n'), workflow.indexOf('\npermissions:\n'))
   assert.deepEqual(
     [...triggerBlock.matchAll(/^  ([a-z][a-z0-9_-]*):/gm)].map((match) => match[1]),
@@ -406,12 +404,14 @@ test('brokered Atelier CI mirrors the five protected contexts on serial Depot jo
   assert.doesNotMatch(workflow, /id-token:\s*write/)
   assert.doesNotMatch(workflow, /^  +permissions:/m)
   assert.doesNotMatch(workflow, /^\s+if:/m)
+  assert.doesNotMatch(workflow, /^\s+continue-on-error:/m)
   const jobsBlock = workflow.slice(workflow.indexOf('jobs:\n') + 'jobs:\n'.length)
-  const jobIds = [...jobsBlock.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map(
+  const jobMatches = [...jobsBlock.matchAll(/^  ([A-Za-z_][A-Za-z0-9_-]*):$/gm)]
+  const jobIds = jobMatches.map(
     (match) => match[1],
   )
   assert.deepEqual(jobIds, ['sign-off', 'structural-sweep', 'test', 'consumer-smoke', 'secret-sweep'])
-  const jobNames = [...jobsBlock.matchAll(/^  [a-z][a-z0-9-]*:\n    name: ([^\n]+)/gm)].map(
+  const jobNames = [...jobsBlock.matchAll(/^  [A-Za-z_][A-Za-z0-9_-]*:\n    name: ([^\n]+)/gm)].map(
     (match) => match[1],
   )
   assert.deepEqual(jobNames, [
@@ -426,7 +426,9 @@ test('brokered Atelier CI mirrors the five protected contexts on serial Depot jo
   const checkoutPin = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
   const setupNodePin = 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020'
   assert.deepEqual(
-    [...workflow.matchAll(/^        uses: ([^\s#]+)(?:\s+#.*)?$/gm)].map((match) => match[1]),
+    [...workflow.matchAll(/^\s*(?:-\s*)?uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)].map(
+      (match) => match[1],
+    ),
     [
       checkoutPin,
       checkoutPin,
@@ -446,6 +448,54 @@ test('brokered Atelier CI mirrors the five protected contexts on serial Depot jo
   assert.match(workflow, /test:\n    name: test\n    needs: structural-sweep/)
   assert.match(workflow, /consumer-smoke:\n    name: consumer-smoke\n    needs: test/)
   assert.match(workflow, /secret-sweep:\n    name: secret-sweep\n    needs: consumer-smoke/)
+  const expectedStepNames = {
+    'sign-off': [
+      'Refuse malformed commit inputs before checkout',
+      'Check out exact candidate without persisted credentials',
+      'Refuse candidate, base, or checkout drift',
+      'Every non-merge commit carries a DCO sign-off',
+    ],
+    'structural-sweep': [
+      'Refuse malformed commit inputs before checkout',
+      'Check out exact candidate without persisted credentials',
+      'Refuse candidate, base, or checkout drift',
+      'Set up Node.js',
+      'Structural and commit-identity sweep',
+    ],
+    test: [
+      'Refuse malformed commit inputs before checkout',
+      'Check out exact candidate without persisted credentials',
+      'Refuse candidate, base, or checkout drift',
+      'Set up Node.js',
+      'Install dependencies without lifecycle scripts',
+      'Run public required checks',
+    ],
+    'consumer-smoke': [
+      'Refuse malformed commit inputs before checkout',
+      'Check out exact candidate without persisted credentials',
+      'Refuse candidate, base, or checkout drift',
+      'Set up Node.js',
+      'Install dependencies without lifecycle scripts',
+      'Run the offline consumer smoke',
+    ],
+    'secret-sweep': [
+      'Refuse malformed commit inputs before checkout',
+      'Refuse to pass without the protected release denylist',
+      'Check out exact candidate without persisted credentials',
+      'Refuse candidate, base, or checkout drift',
+      'Set up Node.js',
+      'Install dependencies without lifecycle scripts',
+      'Run the protected disclosure floor',
+    ],
+  }
+  for (const [index, match] of jobMatches.entries()) {
+    const next = jobMatches[index + 1]
+    const block = jobsBlock.slice(match.index, next?.index ?? jobsBlock.length)
+    const stepNames = [...block.matchAll(/^      - name: ([^\n]+)$/gm)].map(
+      (stepMatch) => stepMatch[1],
+    )
+    assert.deepEqual(stepNames, expectedStepNames[match[1]], `${match[1]} step order drifted`)
+  }
   assert.ok(
     workflow.indexOf('Refuse malformed commit inputs before checkout') <
       workflow.indexOf('Check out exact candidate without persisted credentials'),
@@ -484,6 +534,7 @@ test('brokered Atelier CI mirrors the five protected contexts on serial Depot jo
   const secretJobBlock = workflow.slice(secretJob)
   assert.match(secretJobBlock, /ATELIER_DENYLIST_JSON: \$\{\{ secrets\.ATELIER_RELEASE_DENYLIST \}\}/)
   assert.doesNotMatch(secretJobBlock, /ATELIER_ALLOW_MISSING_DENYLIST/)
+  assert.doesNotMatch(secretJobBlock, /--structural-only/)
   const secretInstallStep = secretJobBlock.slice(
     secretJobBlock.indexOf('- name: Install dependencies without lifecycle scripts'),
     secretJobBlock.indexOf('- name: Run the protected disclosure floor'),
@@ -496,6 +547,69 @@ test('brokered Atelier CI mirrors the five protected contexts on serial Depot jo
   assert.match(workflow, /git rev-list --no-merges "\$EXPECTED_BASE_SHA\.\.\$EXPECTED_CANDIDATE_SHA"/)
   assert.match(workflow, /npm run consumer:smoke/)
   assert.doesNotMatch(workflow, /npm\s+(?:publish|run\s+publish)/)
+  const protectedFloorStart = secretJobBlock.indexOf('      - name: Run the protected disclosure floor')
+  assert.notEqual(protectedFloorStart, -1)
+  assert.equal(
+    secretJobBlock.slice(protectedFloorStart).trimEnd(),
+    [
+      '      - name: Run the protected disclosure floor',
+      '        working-directory: candidate',
+      '        env:',
+      '          ATELIER_DENYLIST_JSON: ${{ secrets.ATELIER_RELEASE_DENYLIST }}',
+      '          EXPECTED_BASE_SHA: ${{ inputs.base_sha }}',
+      '        run: |',
+      '          node scripts/check-repo-disclosure.mjs --commits range --base "$EXPECTED_BASE_SHA"',
+      '          node --test test/readiness-protocols.test.mjs',
+      '          npm run release:audit',
+    ].join('\n'),
+  )
+}
+
+test('brokered Atelier CI mirrors the five protected contexts on serial Depot jobs', () => {
+  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci-depot-atelier.yml'), 'utf8')
+  assertBrokeredAtelierWorkflowShape(workflow)
+})
+
+test('brokered Atelier CI shape fails closed on alternate action, job, disclosure, and step forms', () => {
+  const workflow = fs.readFileSync(path.join(packageRoot, '.github', 'workflows', 'ci-depot-atelier.yml'), 'utf8')
+  const mutations = [
+    [
+      'compact step action',
+      workflow.replace(
+        '      - name: Every non-merge commit carries a DCO sign-off',
+        '      - uses: actions/cache@0000000000000000000000000000000000000000\n      - name: Every non-merge commit carries a DCO sign-off',
+      ),
+    ],
+    [
+      'job-level reusable workflow',
+      workflow.replace(
+        '  secret-sweep:\n',
+        '  hidden_job:\n    name: hidden\n    uses: owner/repo/.github/workflows/hidden.yml@0000000000000000000000000000000000000000\n\n  secret-sweep:\n',
+      ),
+    ],
+    [
+      'underscore job without action',
+      workflow.replace(
+        '  secret-sweep:\n',
+        '  hidden_job:\n    name: hidden\n    runs-on: depot-ubuntu-24.04\n    steps: []\n\n  secret-sweep:\n',
+      ),
+    ],
+    [
+      'protected structural fallback',
+      workflow.replace(
+        'node scripts/check-repo-disclosure.mjs --commits range --base "$EXPECTED_BASE_SHA"',
+        'node scripts/check-repo-disclosure.mjs --commits range --base "$EXPECTED_BASE_SHA" --structural-only',
+      ),
+    ],
+    [
+      'continue on error',
+      workflow.replace('    timeout-minutes: 20', '    continue-on-error: true\n    timeout-minutes: 20'),
+    ],
+  ]
+
+  for (const [name, mutated] of mutations) {
+    assert.throws(() => assertBrokeredAtelierWorkflowShape(mutated), undefined, name)
+  }
 })
 
 test('fork sweep pins API base and head before scanning the untrusted contributor range', () => {
