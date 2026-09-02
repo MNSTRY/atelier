@@ -491,8 +491,8 @@ function assertBrokeredAtelierWorkflowShape(workflow) {
   for (const [index, match] of jobMatches.entries()) {
     const next = jobMatches[index + 1]
     const block = jobsBlock.slice(match.index, next?.index ?? jobsBlock.length)
-    const stepEntries = [...block.matchAll(/^      -(?: ([^\n]+))?$/gm)].map(
-      (stepMatch) => stepMatch[1] ?? '',
+    const stepEntries = [...block.matchAll(/^      -[ \t]*(.*)$/gm)].map(
+      (stepMatch) => stepMatch[1],
     )
     assert.deepEqual(
       stepEntries,
@@ -637,6 +637,16 @@ test('brokered Atelier CI shape fails closed on alternate action, job, disclosur
     () => assertBrokeredAtelierWorkflowShape(bareUnnamedRun),
     /sign-off steps must be named and ordered/,
     'bare-dash unnamed run step',
+  )
+
+  const spacedBareUnnamedRun = workflow.replace(
+    '      - name: Every non-merge commit carries a DCO sign-off',
+    '      - \n        run: echo extra\n      - name: Every non-merge commit carries a DCO sign-off',
+  )
+  assert.throws(
+    () => assertBrokeredAtelierWorkflowShape(spacedBareUnnamedRun),
+    /sign-off steps must be named and ordered/,
+    'dash-plus-space unnamed run step',
   )
 
   const bracketDenylistBeforeSecretSweep = workflow.replace(
