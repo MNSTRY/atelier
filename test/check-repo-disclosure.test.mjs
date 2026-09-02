@@ -491,10 +491,14 @@ function assertBrokeredAtelierWorkflowShape(workflow) {
   for (const [index, match] of jobMatches.entries()) {
     const next = jobMatches[index + 1]
     const block = jobsBlock.slice(match.index, next?.index ?? jobsBlock.length)
-    const stepNames = [...block.matchAll(/^      - name: ([^\n]+)$/gm)].map(
+    const stepEntries = [...block.matchAll(/^      - ([^\n]+)$/gm)].map(
       (stepMatch) => stepMatch[1],
     )
-    assert.deepEqual(stepNames, expectedStepNames[match[1]], `${match[1]} step order drifted`)
+    assert.deepEqual(
+      stepEntries,
+      expectedStepNames[match[1]].map((name) => `name: ${name}`),
+      `${match[1]} steps must be named and ordered`,
+    )
   }
   assert.ok(
     workflow.indexOf('Refuse malformed commit inputs before checkout') <
@@ -610,6 +614,36 @@ test('brokered Atelier CI shape fails closed on alternate action, job, disclosur
   for (const [name, mutated] of mutations) {
     assert.throws(() => assertBrokeredAtelierWorkflowShape(mutated), undefined, name)
   }
+
+  const unnamedRun = workflow.replace(
+    '      - name: Every non-merge commit carries a DCO sign-off',
+    '      - run: npm publish\n      - name: Every non-merge commit carries a DCO sign-off',
+  )
+  assert.throws(
+    () => assertBrokeredAtelierWorkflowShape(unnamedRun),
+    /sign-off steps must be named and ordered/,
+    'compact unnamed run step',
+  )
+
+  const testJobStart = workflow.indexOf('\n  test:\n')
+  const testJobEnd = workflow.indexOf('\n  consumer-smoke:\n')
+  const testJob = workflow
+    .slice(testJobStart, testJobEnd)
+    .replace('      - name: Set up Node.js\n', '      - name: TEMPORARY SWAP MARKER\n')
+    .replace(
+      '      - name: Install dependencies without lifecycle scripts\n',
+      '      - name: Set up Node.js\n',
+    )
+    .replace(
+      '      - name: TEMPORARY SWAP MARKER\n',
+      '      - name: Install dependencies without lifecycle scripts\n',
+    )
+  const swappedSteps = workflow.slice(0, testJobStart) + testJob + workflow.slice(testJobEnd)
+  assert.throws(
+    () => assertBrokeredAtelierWorkflowShape(swappedSteps),
+    /test steps must be named and ordered/,
+    'named step order swap',
+  )
 })
 
 test('fork sweep pins API base and head before scanning the untrusted contributor range', () => {
