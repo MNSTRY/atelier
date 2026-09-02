@@ -491,8 +491,8 @@ function assertBrokeredAtelierWorkflowShape(workflow) {
   for (const [index, match] of jobMatches.entries()) {
     const next = jobMatches[index + 1]
     const block = jobsBlock.slice(match.index, next?.index ?? jobsBlock.length)
-    const stepEntries = [...block.matchAll(/^      - ([^\n]+)$/gm)].map(
-      (stepMatch) => stepMatch[1],
+    const stepEntries = [...block.matchAll(/^      -(?: ([^\n]+))?$/gm)].map(
+      (stepMatch) => stepMatch[1] ?? '',
     )
     assert.deepEqual(
       stepEntries,
@@ -534,7 +534,11 @@ function assertBrokeredAtelierWorkflowShape(workflow) {
   assert.equal((workflow.match(/test -z "\$\(git status --porcelain\)"/g) ?? []).length, 5)
   const secretJob = workflow.indexOf('\n  secret-sweep:')
   assert.notEqual(secretJob, -1)
-  assert.doesNotMatch(workflow.slice(0, secretJob), /secrets\.ATELIER_RELEASE_DENYLIST/)
+  assert.doesNotMatch(
+    workflow.slice(0, secretJob),
+    /\bsecrets\b|ATELIER_RELEASE_DENYLIST/,
+    'jobs before secret-sweep must not receive or enumerate repository secrets',
+  )
   const secretJobBlock = workflow.slice(secretJob)
   assert.match(secretJobBlock, /ATELIER_DENYLIST_JSON: \$\{\{ secrets\.ATELIER_RELEASE_DENYLIST \}\}/)
   assert.doesNotMatch(secretJobBlock, /ATELIER_ALLOW_MISSING_DENYLIST/)
@@ -623,6 +627,36 @@ test('brokered Atelier CI shape fails closed on alternate action, job, disclosur
     () => assertBrokeredAtelierWorkflowShape(unnamedRun),
     /sign-off steps must be named and ordered/,
     'compact unnamed run step',
+  )
+
+  const bareUnnamedRun = workflow.replace(
+    '      - name: Every non-merge commit carries a DCO sign-off',
+    '      -\n        run: npm publish\n      - name: Every non-merge commit carries a DCO sign-off',
+  )
+  assert.throws(
+    () => assertBrokeredAtelierWorkflowShape(bareUnnamedRun),
+    /sign-off steps must be named and ordered/,
+    'bare-dash unnamed run step',
+  )
+
+  const bracketDenylistBeforeSecretSweep = workflow.replace(
+    '          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}',
+    "          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}\n          ATELIER_DENYLIST_JSON: ${{ secrets['ATELIER_RELEASE_DENYLIST'] }}",
+  )
+  assert.throws(
+    () => assertBrokeredAtelierWorkflowShape(bracketDenylistBeforeSecretSweep),
+    /jobs before secret-sweep must not receive or enumerate repository secrets/,
+    'bracket-notation denylist before secret-sweep',
+  )
+
+  const enumeratedSecretsBeforeSecretSweep = workflow.replace(
+    '          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}',
+    '          EXPECTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}\n          ALL_SECRETS: ${{ toJSON(secrets) }}',
+  )
+  assert.throws(
+    () => assertBrokeredAtelierWorkflowShape(enumeratedSecretsBeforeSecretSweep),
+    /jobs before secret-sweep must not receive or enumerate repository secrets/,
+    'secret enumeration before secret-sweep',
   )
 
   const testJobStart = workflow.indexOf('\n  test:\n')
