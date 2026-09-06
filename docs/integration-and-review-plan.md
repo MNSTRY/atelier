@@ -4,7 +4,7 @@ Status: proposed implementation contract; no feature, release, or human acceptan
 Baseline: `58895eafbd980ae131d8c5f2d1882ac34f5c08b9`, tree `72f06c2aa8183f93dc2b49066a5c4e55d1c2f336`.
 
 <!-- mnstry-review-request: atelier-integration-plan-r1 gate: plan-readiness -->
-<!-- mnstry-review-workflow: atelier-integration-plan-fable-low-r1 gate: plan-readiness stage: planning -->
+<!-- mnstry-review-workflow: atelier-integration-plan-fable-low-r2 gate: plan-readiness stage: planning -->
 
 ## Outcome and authority
 
@@ -165,6 +165,9 @@ human judgment and runtime readiness. Preserve the legacy score as documented
 input completeness; do not silently change the meaning of old results. New
 claims omit unsupported confidence or explicitly identify the method and its
 limits. No calibrated confidence claim without a defined evaluation dataset.
+Apply these distinctions to rendered labels, examples and screenshots as well
+as stored fields. A completed answer form must never appear to establish
+evidence strength, human acceptance or runtime readiness.
 
 Bind each new run to exact relevant source revisions/content digests, bounded
 reference set, answers digest, protocol digest/version, pack digest/version,
@@ -193,6 +196,11 @@ operate per claim with reviewer attribution, rationale and an exact expected
 revision. Required optimistic concurrency checks must apply at the mutation
 boundary, not just the UI. Explicitly describe local asserted identity versus
 authenticated reviewer identity; typed names alone do not prove human approval.
+
+The rendered acceptance check must let a reader identify the proposed change,
+its rationale, supporting evidence, uncertainty or conflicts, intended effect
+of acceptance, and the person or source workflow authorized to apply it.
+An identifier or an accept button alone does not satisfy this check.
 
 Revision creates a linked successor rather than overwriting the original claim.
 Decisions are separate append-only records with verifiable links to claim and
@@ -228,6 +236,17 @@ Do not convert packet responses into semantic claims automatically. Verify
 keyboard operation, visible focus, save failure/retry and two-view conflicts.
 Use the established loopback local-service contract for browser proof. No
 physical device, remote collaborator access or onboarding is implied.
+
+Qualify save/resume as one required sequence: contribute a response, observe
+durable save acknowledgement, close, reopen, and recover both original wording
+and reading position. Exercise failed save/retry and changed document revision
+in that sequence; a pending or failed write must never display as saved.
+
+Evaluate first use with an unfamiliar reader and an invented document: can
+they make one useful question or correction without prior installation,
+ontology or agent-skill instruction? Record the assistance required and any
+point where they cannot proceed. Technical setup completion is a separate
+result; actual adopter usefulness still needs its own human acceptance record.
 
 ### W7 — Extension-pack lifecycle
 
