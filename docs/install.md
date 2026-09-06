@@ -17,6 +17,10 @@ Git repository access is the hard read boundary for source files. Local
 `kg.audience` labels guide projection and review, but they do not hide files
 from anyone who can read the repository.
 
+For adapters whose source repositories live elsewhere, see
+[project options](project-options.md) for shared CLI overrides, precedence and
+resolution diagnostics. Moving a repository does not change its read authority.
+
 Two command forms ship, and each has a place. Inside an installed
 workspace, use `atelier` — it resolves from `node_modules/.bin`, so npm
 scripts and workspace shells get the real binary. From outside a

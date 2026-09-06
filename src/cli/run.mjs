@@ -145,6 +145,9 @@ Attestation commands:
 Commands whose usage names --project accept --project=PATH or --project PATH.
 The project resolver also accepts --project-config=PATH and
 MNSTRY_ATELIER_PROJECT_CONFIG=PATH; each command's own help is authoritative.
+Project-aware commands accept repeated --repo-path NAME=PATH or
+--repo-path=NAME=PATH. Overrides change location, never declared read authority.
+Run config check --explain for path-free resolution sources.
 Machine-local repo paths belong in
 .atelier-local/, atelier.local.json, or atelier.workspace.local.json.`
 }
@@ -183,7 +186,7 @@ Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet dr
   ${c} extension-pack validate [--json] [--project ./atelier.project.json]
   ${c} extension-pack list [--json] [--project ./atelier.project.json]
 
-Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks in the tracked project config and reports one line per pack. Packs load additively alongside the bundled MNSTRY protocols and can never replace them. list is the default subcommand.`,
+Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks in the tracked project config and reports one line per pack. Packs load additively alongside the bundled MNSTRY protocols and can never replace them. list is the default subcommand. Shared --project-config and repeated --repo-path NAME=PATH options are supported in both space and equals forms.`,
     distribution: `Usage: ${c} distribution check [--target DIR] [--pack DIR]
 
 Checks a distribution package for the required MNSTRY attribution markers. Blocking: the distribution README.md byte check, and a CLI probe that EXECUTES the target's declared bin with --version (spawned with the current Node, cwd set to the target — only run this against distributions you trust) and requires the attribution in its output; a target that looks like a distribution but declares no probe-able bin, or ships a malformed package.json, is also blocking. The extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/attestation.md and docs/distributions.md.`,

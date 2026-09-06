@@ -2,6 +2,11 @@
 
 ## 0.2.0-alpha.6
 
+- Share project-location parsing with extension-pack commands, including
+  repeated `--repo-path NAME=PATH` overrides and both argument forms. Malformed
+  shared options now fail before local-state creation. Add path-free resolution
+  diagnostics with `config check --explain`; read boundaries remain declared
+  by the project.
 - Add Deliverable Zero for Atelier Sync: explicit single-repository
   enrollment, a pinned direct-process Git adapter, executable repository
   completeness observations, fast-forward-only reconciliation, per-repository

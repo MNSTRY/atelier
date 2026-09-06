@@ -74,6 +74,9 @@ Attestation commands:
 Commands whose usage names --project accept --project=PATH or --project PATH.
 The project resolver also accepts --project-config=PATH and
 MNSTRY_ATELIER_PROJECT_CONFIG=PATH; each command's own help is authoritative.
+Project-aware commands accept repeated --repo-path NAME=PATH or
+--repo-path=NAME=PATH. Overrides change location, never declared read authority.
+Run config check --explain for path-free resolution sources.
 Machine-local repo paths belong in
 .atelier-local/, atelier.local.json, or atelier.workspace.local.json.`
 
