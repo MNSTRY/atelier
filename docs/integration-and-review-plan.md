@@ -4,7 +4,7 @@ Status: proposed implementation contract; no feature, release, or human acceptan
 Baseline: `58895eafbd980ae131d8c5f2d1882ac34f5c08b9`, tree `72f06c2aa8183f93dc2b49066a5c4e55d1c2f336`.
 
 <!-- mnstry-review-request: atelier-integration-plan-r1 gate: plan-readiness -->
-<!-- mnstry-review-workflow: atelier-integration-plan-fable-low-r2 gate: plan-readiness stage: planning -->
+<!-- mnstry-review-workflow: atelier-integration-plan-fable-low-r3 gate: plan-readiness stage: planning -->
 
 ## Outcome and authority
 
@@ -92,6 +92,15 @@ with a bounded reason. Blocking design findings precede dependent implementation
 Prepare a contract compatibility decision for each new schema and public API.
 Do not silently widen existing v1 contracts or rewrite historical runs.
 
+For every proposed artifact, record reuse, compatible extension, or a separate
+versioned contract with its reason. Inventory existing JCS, attestation,
+support-preview/disclosure, export and migration facilities before adding new
+machinery. Shared hashing or validation does not imply shared artifact semantics.
+Resolve claim-decision aggregate identity, required concurrency version,
+idempotency and full-history retention before implementing the review endpoint.
+Legacy proposal readers must never encounter new event types in their proposal
+aggregates; prove compatibility against the actual pre-change reader.
+
 ### W1 — Shared project options and transparent resolution
 
 Files: `src/project/config.mjs`, `src/cli/`, all project-aware command entry
@@ -126,6 +135,15 @@ borrow the consumer repo HEAD or trust a URL/ref as an immutable commit.
 Registry/tarball installs record available integrity/provenance without inventing
 a Git SHA. Define metadata precedence and refuse conflicting provenance.
 
+Distinguish a declared install origin, observed installed-byte identity, and
+verified source binding. Lock metadata alone is a declaration. An installed-tree
+digest can detect change against a trusted earlier inventory, but cannot prove
+that the declared commit produced those bytes. Define the inventory, links,
+excluded generated files and trust anchor before claiming exact source. A clean
+checkout establishes its tracked commit only; separately account for untracked,
+ignored or generated files that may affect execution. An exact-source check
+must refuse an unverified binding even when a locally recorded digest matches.
+
 Keep historical locks readable. Report legacy/unresolved provenance explicitly;
 an exact-source-required check must fail for unresolved or dirty source. A
 missing Git SHA must not imply private Git origin. Never write credential-bearing
@@ -134,6 +152,8 @@ metadata stripped, tagged/branch inputs, registry-shaped and tarball fixtures,
 multiple package instances, symlinks, dirty checkout and contradictory metadata.
 Use local synthetic repositories and package archives; no registry/network test
 is required to prove these cases.
+Include a declared Git revision with modified installed bytes, and verify that
+neither the declaration nor a newly computed digest reports verified origin.
 
 ### W3 — Official external-project starter and audience guidance
 
@@ -147,9 +167,10 @@ protocol/answers, local-state exclusions, and documented validation commands.
 No proprietary domain shape may be used as the fixture scaffold. Configuration
 must state which repository owns facts, proposed changes, run state and outputs.
 
-Include a CI recipe for graph, pack, boundary, readiness and lock checks using
-the repository's current execution policy; adding the recipe does not dispatch
-CI. Setup refuses overwrite and unsafe destination paths. Inspect and test
+Reference and compose existing CI, consumer-smoke and distribution-smoke paths
+for graph, pack, boundary, readiness and lock proof; add only missing coverage
+under the current execution policy. Documentation does not dispatch CI.
+Setup refuses overwrite and unsafe destination paths. Inspect and test
 reference traversal, symlinks and path escape using existing defensive controls.
 Make source audience, review acceptance, publication eligibility and runtime
 visibility separate in the starter and review copy. A public source is not a
@@ -168,11 +189,14 @@ limits. No calibrated confidence claim without a defined evaluation dataset.
 Apply these distinctions to rendered labels, examples and screenshots as well
 as stored fields. A completed answer form must never appear to establish
 evidence strength, human acceptance or runtime readiness.
+Inventory the run, journey, packet and summary surfaces together. Preserve
+legacy field/status meanings where contracts require them, and explain them in
+the view rather than silently changing existing status literals.
 
 Bind each new run to exact relevant source revisions/content digests, bounded
 reference set, answers digest, protocol digest/version, pack digest/version,
-evaluator identity and applicable policy digest. Define canonical serialization
-and hashing before implementation. Evidence digests must identify the content
+evaluator identity and applicable policy digest. Reuse `src/attestation/jcs.mjs`
+for canonical JSON and specify the byte/hash envelope. Evidence digests must identify the content
 actually read; a clean repository HEAD alone is insufficient for dirty sources.
 Do not create a timing gap between inspected bytes and recorded identity.
 
@@ -183,6 +207,11 @@ source/protocol/policy changes invalidate current eligibility for affected revie
 without changing old records. Test changed source, dirty source, changed pack,
 policy change, absent evidence, migration and deterministic replay under pinned
 inputs; timestamps/run IDs need not match for semantic replay.
+The current run ID hashes project name, protocol ID, normalized answers and
+time; it does not bind protocol content, source bytes, pack or policy. It may
+identify a historical run but cannot replace evidence binding or justify moving
+current decision eligibility ahead of this prerequisite. Revalidate the bound
+evidence inside the decision mutation, not solely when rendering its form.
 
 ### W5 — Structured claim decisions and owner handoff
 
@@ -196,6 +225,9 @@ operate per claim with reviewer attribution, rationale and an exact expected
 revision. Required optimistic concurrency checks must apply at the mutation
 boundary, not just the UI. Explicitly describe local asserted identity versus
 authenticated reviewer identity; typed names alone do not prove human approval.
+Record and render an explicit local-asserted identity kind. Require a client
+decision ID and expected aggregate version; an identical retry returns the
+existing decision, while reuse of the ID with different content fails.
 
 The rendered acceptance check must let a reader identify the proposed change,
 its rationale, supporting evidence, uncertainty or conflicts, intended effect
@@ -207,11 +239,21 @@ Decisions are separate append-only records with verifiable links to claim and
 evidence identity. Retries are idempotent. A change during review refuses stale
 acceptance. Crash recovery reconstructs views from the ledger without silently
 losing or duplicating decisions. Bulk review is not part of the first slice.
+New decisions use distinct aggregates and a versioned contract, sharing proven
+persistence primitives without inserting unsupported events into legacy proposal
+aggregates. Define retention that preserves every decision: current generic
+compaction keeps only selected events, so a latest-state checkpoint alone is
+not a complete decision audit history. Test compaction beyond count/time limits,
+replay, and the old proposal reader against the resulting store.
 
 An accepted decision creates a reviewable owner handoff showing intended source
 edits, affected IDs and required source revision. It grants no canonical write,
 publication or runtime capability. Promotion status is shown only from a
 separate source-owner receipt; absent receipt means not established.
+Evaluate `git-promote-event@v1` for actual cross-repository disclosure events.
+It does not by itself prove that an accepted semantic edit was applied; any
+owner-application receipt must bind the decision, intended edit and resulting
+source revision, with authority appropriate to that workflow.
 
 Tests: claim-level mixed decisions, stale views, concurrent requests, retries,
 crash/restart, missing evidence, source movement, hostile display text, unauthorized
@@ -241,6 +283,8 @@ Qualify save/resume as one required sequence: contribute a response, observe
 durable save acknowledgement, close, reopen, and recover both original wording
 and reading position. Exercise failed save/retry and changed document revision
 in that sequence; a pending or failed write must never display as saved.
+Include the existing ledger's 423 lock-contention response and retry path.
+Presence/seen records with no responses must still render as unanswered.
 
 Evaluate first use with an unfamiliar reader and an invented document: can
 they make one useful question or correction without prior installation,
@@ -260,6 +304,9 @@ source/run records; never silently reinterpret them with the newest pack.
 Migration is dry-run first with a report and explicit owner application. Do not
 execute arbitrary extension code or install dependencies as part of loading.
 Historical inspection uses pinned content or marks missing historic dependencies.
+Reuse existing pack digest/lock validation and the upgrade migration registry.
+A required compatibility range cannot be added silently to the closed v1 pack
+contract; record a compatible representation or explicit new-version migration.
 
 Specify the legacy-pack policy: readable and inspectable does not automatically
 mean admitted for new exact-reproducibility execution. Include a compatibility
@@ -273,8 +320,15 @@ answers, runs and decisions; regenerable views/caches; ephemeral sessions/nonces
 secrets/grants that are never transferable. Git checkout portability is distinct
 from active review portability. Backups are explicit owner-managed actions.
 
-Define a new bundle manifest with selected members, sizes/digests, format version,
-source/pack identities, disclosure classification and verification result.
+Specify the inspection-bundle manifest after the W0 reuse decision, including
+selected members, sizes/digests, format version, source/pack identities, disclosure
+classification and verification result. Evaluate existing export and support-preview contracts. Reuse their
+primitives where suitable; a runtime export and a private historical inspection
+bundle have different authority and must not be forced into one schema merely
+because both carry provenance. Reuse the existing disclosure scanner and preview
+controls, and the attestation verification path where an applicable trusted
+signature exists. A valid signature still requires signer authorization and
+does not import current approval. Signing is not encryption.
 Export only selected bounded artifacts after an inspectable disclosure preview
 and required disclosure check. Fail closed when the check is unavailable; do not
 label an unchecked export safe. Omit auth/session/grant material and absolute
