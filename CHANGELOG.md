@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0-alpha.7
+
+- Add an external-project adapter starter with declared source boundaries,
+  namespaced synthetic protocols, local-state exclusions and compatibility policy.
+- Add evidence-bound local review runs, per-claim decisions, source-owner
+  handoffs, passage responses and reading-position recovery. Current decisions
+  refuse changed evidence and stale versions; local typed names remain asserted
+  identities and no source edits are applied automatically.
+- Report installed provenance as declared origin, observed bytes or verified
+  checkout binding. Compare working bytes with commit objects, including Git
+  index hints, sanitize remote metadata, and fail exact-source checks when the
+  binding is unresolved. Piped provenance output is no longer truncated.
+- Remove unsupported numeric claim confidence and explain legacy readiness
+  scores as input completeness. Supply the required run import-safety field.
+- Add pack lifecycle qualification and dry-run migration guidance plus explicit,
+  disclosure-checked historical inspection bundles that never transfer approval.
+- Extend the existing installed consumer gate across moved source layouts,
+  durable contributions, stale refusal and inspection-only portability.
+
 ## 0.2.0-alpha.6
 
 - Share project-location parsing with extension-pack commands, including

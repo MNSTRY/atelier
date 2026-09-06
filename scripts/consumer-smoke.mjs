@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyInstalledReview } from './review-consumer-smoke.mjs'
 import { execNpmSync } from './npm-cli.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -180,6 +181,8 @@ assert.equal(typeof validateRepositoryObservation, 'function')
   if (!disclosureOutput.includes('[disclosure:check] clean')) {
     throw new Error('packed disclosure command did not scan the staged consumer fixture')
   }
+
+  await verifyInstalledReview({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
 
   console.log(`[consumer:smoke] SHA-256 ${tarballSha256}; packed tarball installs without publisher overrides and imports ${Object.keys(packageJson.exports).length} declared exports`)
 } finally {

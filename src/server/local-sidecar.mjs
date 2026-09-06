@@ -30,6 +30,10 @@ import {
   renderProposalListPageHtml,
 } from '../ui/html-primitives.mjs'
 
+import { createReviewStore } from '../collaboration/review-store.mjs'
+import { loadBoundRun, currentRunEligibility } from '../readiness-protocols/evidence.mjs'
+import { renderReviewPage } from '../ui/review-page.mjs'
+
 export const ATELIER_CONTEXT_SCHEMA = 'atelier-context@v1'
 export const ATELIER_PRESENCE_SCHEMA = 'atelier-presence@v1'
 export const ATELIER_RESOLVE_SCHEMA = 'atelier-resolve@v1'
@@ -206,6 +210,7 @@ function doctorEnvelope() {
 export function createAtelierSidecarServer({
   workspaceRoot = process.cwd(),
   stateDir = workspaceRoot,
+  reviewProject = null,
   port = 0,
   presenceTtlMs = Number(process.env.ATELIER_PRESENCE_TTL_MS || 5 * 60 * 1000),
 } = {}) {
@@ -217,6 +222,7 @@ export function createAtelierSidecarServer({
     label: 'Atelier state directory',
   })
   const publication = loadPublishedWorkspaceManifest(root)
+  const review = reviewProject ? createReviewStore(reviewProject) : null
   const workspaceId = workspaceIdForRoot(root)
   const noncePath = path.join(stateDirReal, '.atelier-nonce')
   const presencePath = path.join(stateDirReal, '.atelier-presence.json')
@@ -366,9 +372,28 @@ export function createAtelierSidecarServer({
       json(res, 400, { ok: false, error: error.message })
       return
     }
+    // Browsers send Origin on POST; same-origin GET normally omits it. Keep
+    // the strict origin gate for nonce disclosure instead of relaxing the
+    // existing session-auth GET contract or accepting unclassified reads.
+    if (review && url.pathname === '/api/review/session') {
+      if (!trustedMutationRequest(req.headers) || !body || Array.isArray(body) || Object.keys(body).length) {
+        json(res, 403, { ok: false, error: 'review session requires a same-origin empty request' })
+        return
+      }
+      const published = resolvePublishedPath({ rel: 'index.html', requireHtml: true })
+      if (!published.ok) { json(res, 404, { ok: false, error: 'published workspace unavailable' }); return }
+      json(res, 200, { ok: true, schema: ATELIER_SESSION_AUTH_SCHEMA, workspaceId, mutationNonce })
+      return
+    }
     const auth = requireMutationAuth(req, body, mutationNonce)
     if (!auth.ok) {
       json(res, auth.status, { ok: false, error: auth.error })
+      return
+    }
+
+    if (review && url.pathname === '/api/review/contributions') {
+      const result = review.contribute(body)
+      json(res, result.status, result)
       return
     }
 
@@ -480,6 +505,25 @@ export function createAtelierSidecarServer({
 
     if (req.method === 'POST') {
       await handlePost(req, res, url)
+      return
+    }
+
+    if (review && url.pathname === '/review') {
+      const body = renderReviewPage()
+      res.writeHead(200, htmlDocumentHeaders(Buffer.byteLength(body)))
+      res.end(body)
+      return
+    }
+    if (review && url.pathname.startsWith('/api/review/')) {
+      let result
+      if (url.pathname === '/api/review/records') result = review.records()
+      else if (url.pathname === '/api/review/document') result = review.document(url.searchParams.get('repo'), url.searchParams.get('path'))
+      else if (url.pathname === '/api/review/run') {
+        const bound = loadBoundRun(reviewProject, url.searchParams.get('id'))
+        result = bound.ok ? {...bound, current:currentRunEligibility(reviewProject,bound)} : bound
+      } else if (url.pathname === '/api/review/handoff') result = review.handoff(url.searchParams.get('id'))
+      else result = {ok:false,status:404,error:'unknown review action'}
+      json(res, result.status, result)
       return
     }
 

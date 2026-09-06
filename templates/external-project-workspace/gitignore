@@ -1,0 +1,7 @@
+node_modules/
+.atelier-local/
+atelier-output/
+atelier.local.json
+atelier.workspace.local.json
+source/
+.claude/

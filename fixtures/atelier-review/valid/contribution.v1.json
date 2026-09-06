@@ -1,0 +1,22 @@
+{
+  "schema": "atelier-contribution@v1",
+  "input": {
+    "requestId": "example-decision",
+    "kind": "decision",
+    "targetId": "claim:readiness-run-2061e72d2051ed20fc51b9ef:scope-supports-review",
+    "expectedVersion": 0,
+    "reviewer": "Example Reader",
+    "rationale": "Read the mapped source.",
+    "runId": "readiness-run-2061e72d2051ed20fc51b9ef",
+    "evidenceDigest": "sha256:4ada62e30889014598a5f57af253789424dd668dfbe36b38f51f176a49db2633",
+    "decision": "accepted"
+  },
+  "inputDigest": "sha256:b86ef8ee5d46d01b3e1ea438284f72558c81b37667d618c260198d675aad20c5",
+  "key": "sha256:4a166ed7e3de11fbde448638c30d1e1e5dfe52e1ecdf36ad4b25e5e49d54fe8e",
+  "version": 1,
+  "identity": {
+    "kind": "local-asserted",
+    "name": "Example Reader"
+  },
+  "recordedAt": "2026-09-06T14:24:30.169Z"
+}

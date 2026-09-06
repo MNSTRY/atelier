@@ -50,7 +50,7 @@ export function buildProjectProjection(project) {
   const dimensionCards = readinessJourney.dimensions.map((item) => `<article class="readiness-card" data-protocol="${esc(item.protocolId)}">
     <p class="eyebrow">${esc(item.label)}</p>
     <h3>${esc(item.title)}</h3>
-    <p><strong>${esc(item.status)}</strong> · ${esc(item.score)} / 100</p>
+    <p><strong>${esc(item.status)}</strong> · ${esc(item.score)} / 100 answers complete</p>
     <p>${esc(item.blockers[0] || 'review-ready')}</p>
     <button type="button" data-copy="${esc(item.agentPrompt)}">Copy protocol prompt</button>
   </article>`).join('\n')
@@ -93,6 +93,7 @@ ${branding.themeCss}</style>
     <div>
       <p class="eyebrow">MNSTRY Tenant Readiness</p>
       <h2 id="tenant-readiness-title">Readiness Journey</h2>
+      <p>Scores measure answer completeness, not evidence confidence, approval or runtime readiness.</p>
       <p>${esc(readinessJourney.dimensions.length)} dimensions · next protocol: ${esc(readinessJourney.nextProtocol || 'none')}</p>
     </div>
     <div class="readiness-score">${esc(readinessJourney.score)}%</div>

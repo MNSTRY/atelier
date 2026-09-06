@@ -227,10 +227,11 @@ test('advisory pack protocols report through the packet but never block export',
   assert.equal(contribution.status, 'missing')
 })
 
-test('tenant packet without a registry keeps an empty ext contribution', (t) => {
+test('tenant packet without a registry explains its legacy score', (t) => {
   const { project } = sampleProject(t)
   const packet = buildTenantPacket(project)
-  assert.deepEqual(packet.ext, { 'mnstry.atelier': { extensionPacks: [] } })
+  assert.deepEqual(packet.ext['mnstry.atelier'].extensionPacks, [])
+  assert.match(packet.ext['mnstry.atelier'].scoreMeaning, /not evidence confidence/)
 })
 
 test('readiness export dry-run carries pack blockers when built with a registry', (t) => {

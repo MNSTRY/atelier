@@ -59,6 +59,7 @@ export const commandMap = new Map([
   ['announcements', ['src/commands/announcements.mjs']],
   ['announcements:list', ['src/commands/announcements.mjs', 'list']],
   ['sync', ['src/commands/sync.mjs']],
+  ['review', ['src/commands/review.mjs']],
 ])
 
 function isDefaultBrand(brand) {
@@ -130,6 +131,9 @@ Core commands:
   upgrade --dry-run               Plan a safe package/template upgrade.
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.
+  lock provenance                Inspect actual installed package identity.
+  review run|history|handoff       Evidence-bound local human review.
+  review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -155,7 +159,7 @@ Machine-local repo paths belong in
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
   const help = {
-    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution] [--target DIR] [--actor ID]
+    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project] [--target DIR] [--actor ID]
 
 Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,
     adopt: `Usage: ${c} adopt [--profile single-repo|private-domain|shared-project|multi-repo|monorepo|control-workspace] [--target DIR] [--yes]

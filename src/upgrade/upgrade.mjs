@@ -23,6 +23,7 @@ import {
 } from '../boundary/policy.mjs'
 import { bundledMnstryReadinessPackV1 } from '../readiness-protocols/bundled-pack.mjs'
 import { loadExtensionPacks } from '../extension-packs/loader.mjs'
+import { inspectPackageProvenance, legacyPackageSource } from './provenance.mjs'
 
 export const ATELIER_LOCK_SCHEMA = 'mnstry.atelier-lock@v1'
 export const ATELIER_MIGRATION_SCHEMA = 'mnstry.atelier-migration@v1'
@@ -77,18 +78,7 @@ function packageGitSha() {
 }
 
 function packageSource() {
-  const gitSha = packageGitSha()
-  const repository = packageGitRoot()
-    ? git(packageRoot, ['config', '--get', 'remote.origin.url']) || packageJson.repository?.url || null
-    : packageJson.repository?.url || null
-  if (repository && gitSha) return { type: 'git', repository, gitSha }
-  if (repository) return { type: 'private_github', repository, gitSha: null }
-  return {
-    type: 'local_path',
-    path: '.',
-    gitSha,
-    repository,
-  }
+  return legacyPackageSource(inspectPackageProvenance(packageRoot, { includeInventory: false }))
 }
 
 export function lockPathForProject(project) {
@@ -656,19 +646,31 @@ export function checkAtelierLock(project) {
 export function runLockCommand(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
   const subcommand = args._[0] || 'check'
+  if (subcommand === 'provenance') {
+    const report = inspectPackageProvenance(packageRoot)
+    console.log(JSON.stringify(report, null, 2))
+    process.exitCode = args['exact-source-required'] && !report.sourceVerified ? 1 : 0
+    return
+  }
   const project = commandProject({ argv })
   if (subcommand === 'write') {
     const lock = writeAtelierLock({ project, templateId: firstString(args.template, args['template-id'], project.config?.template?.id) || 'existing-workspace' })
     console.log(JSON.stringify({ ok: true, path: lockPathForProject(project), lock }, null, 2))
-    process.exit(0)
+    process.exitCode = 0
+    return
   }
   if (subcommand === 'check') {
     const report = checkAtelierLock(project)
+    if (args['exact-source-required']) {
+      report.provenance = inspectPackageProvenance(packageRoot)
+      if (!report.provenance.sourceVerified) { report.ok = false; report.errors.push('installed package source is unverified') }
+    }
     console.log(JSON.stringify(report, null, 2))
-    process.exit(report.ok ? 0 : 1)
+    process.exitCode = report.ok ? 0 : 1
+    return
   }
   console.error(`Unknown lock command: ${subcommand}`)
-  process.exit(1)
+  process.exitCode = 1
 }
 
 export function runUpgradeCommand(argv = process.argv.slice(2)) {

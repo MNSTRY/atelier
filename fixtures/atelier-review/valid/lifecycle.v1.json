@@ -1,0 +1,14 @@
+{
+  "schema": "atelier-pack-lifecycle@v1",
+  "packs": [
+    {
+      "id": "sample.readiness",
+      "version": "v1",
+      "digest": "sha256:0eff795765e0bbd4c2510acda2e492201c23bc870df6c354eef623484643ab11",
+      "compatibleRootVersions": [
+        "0.2.0-alpha.6"
+      ],
+      "status": "active"
+    }
+  ]
+}

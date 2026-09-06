@@ -1,0 +1,229 @@
+{
+  "schema": "atelier-bound-run@v1",
+  "run": {
+    "schema": "atelier-readiness-run@v1",
+    "runId": "readiness-run-2061e72d2051ed20fc51b9ef",
+    "protocolId": "sample.readiness:contract-gate",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "project": "sample-adapter",
+    "answers": {
+      "scope.name": "Sample observation",
+      "scope.sourceRef": "sample-source:observation"
+    },
+    "status": "review-needed",
+    "score": 100,
+    "blockers": [],
+    "warnings": [],
+    "claims": [
+      {
+        "schema": "atelier-claim@v1",
+        "claimId": "claim:readiness-run-2061e72d2051ed20fc51b9ef:scope-supports-review",
+        "subject": "readiness:sample-adapter:contract-gate",
+        "predicate": "supports",
+        "object": "readiness:contract-gate:scope-supports-review",
+        "provider": "atelier-readiness",
+        "status": "proposed",
+        "promoted": false,
+        "evidence": [
+          "readiness-run:readiness-run-2061e72d2051ed20fc51b9ef"
+        ],
+        "notes": [
+          "Proposed sample.readiness:contract-gate.scope-supports-review from Sample contract gate.",
+          "Answer presence is not evidence confidence; human judgment is required."
+        ],
+        "createdAt": "2026-01-01T00:00:00.000Z"
+      }
+    ],
+    "safety": {
+      "runtimeMutation": false,
+      "runtimeImport": false,
+      "canonicalWrites": false,
+      "claimOnly": true,
+      "storage": "ignored-local"
+    }
+  },
+  "runDigest": "sha256:f8df3d130264a55d6b246f8265f192da5ce6044d16d98be06a146cd41ac233e6",
+  "snapshot": {
+    "schema": "atelier-review-evidence@v1",
+    "protocolId": "sample.readiness:contract-gate",
+    "protocol": {
+      "schema": "atelier-readiness-protocol@v1",
+      "id": "sample.readiness:contract-gate",
+      "slug": "contract-gate",
+      "version": "v1",
+      "stage": "formation",
+      "title": "Sample contract gate",
+      "purpose": "Verify neutral protocol inputs before a readiness run is accepted.",
+      "questions": [
+        {
+          "id": "scope",
+          "prompt": "What neutral scope is being prepared?",
+          "inputFields": [
+            "scope.name",
+            "scope.sourceRef"
+          ],
+          "required": true
+        }
+      ],
+      "inputFields": [
+        {
+          "id": "scope.name",
+          "type": "string",
+          "required": true,
+          "description": "Neutral scope name."
+        },
+        {
+          "id": "scope.sourceRef",
+          "type": "string",
+          "required": true,
+          "description": "Evidence reference for the scope."
+        }
+      ],
+      "outputHints": [
+        {
+          "id": "contract-gate.summary",
+          "text": "Render scope and evidence before review."
+        }
+      ],
+      "outputs": {
+        "runSchema": "atelier-readiness-run@v1",
+        "artifacts": [
+          {
+            "id": "sample.readiness:contract-gate.summary",
+            "kind": "draft",
+            "schema": "atelier-readiness-run@v1",
+            "description": "Draft readiness summary."
+          }
+        ]
+      },
+      "claimMappings": [
+        {
+          "id": "sample.readiness:contract-gate.scope-supports-review",
+          "claimPredicate": "supports",
+          "sourceFields": [
+            "scope.name"
+          ],
+          "target": "atelier-claim@v1",
+          "evidence": "scope.sourceRef"
+        }
+      ],
+      "readinessRules": [
+        {
+          "id": "sample.readiness:contract-gate.scope-present",
+          "severity": "blocker",
+          "condition": "Scope name and evidence are present.",
+          "remediation": "Add scope.name and scope.sourceRef.",
+          "failClosed": true
+        }
+      ],
+      "graphLenses": [
+        {
+          "id": "sample.readiness:contract-gate.lens",
+          "title": "Sample contract gate lens",
+          "query": {
+            "protocolId": "sample.readiness:contract-gate"
+          }
+        }
+      ],
+      "exportMappings": [
+        {
+          "id": "sample.readiness:contract-gate.export",
+          "sourceField": "scope",
+          "sourceTerm": "sample.readiness:contract-gate.scope",
+          "target": "core.artifact",
+          "runtimeOwner": "audit",
+          "targetCollection": "staffPrep"
+        }
+      ],
+      "ui": {
+        "section": "readiness-journey",
+        "title": "Sample contract gate",
+        "description": "Neutral protocol fixture.",
+        "agentPrompt": "Run atelier readiness run sample.readiness:contract-gate --project ./atelier.project.json."
+      },
+      "safety": {
+        "runtimeMutation": false,
+        "runtimeImport": false,
+        "canonicalWrites": false,
+        "claimOnly": true,
+        "telemetry": false,
+        "egress": false,
+        "sendPath": false,
+        "browserApply": false,
+        "dryRunOnly": true
+      },
+      "safetyPosture": {
+        "runtimeMutation": false,
+        "externalEgress": false,
+        "defaultVisibility": "private",
+        "authority": "proposal-only",
+        "reviewMode": "static-inspection",
+        "failClosedOnMissingEvidence": true,
+        "refuses": [
+          "runtime writes"
+        ]
+      }
+    },
+    "protocolDigest": "sha256:9acc7315916332fca63495fd256739403a5a46833094dd056343c5776e5bbbbd",
+    "answers": {
+      "scope.name": "Sample observation",
+      "scope.sourceRef": "sample-source:observation"
+    },
+    "answersDigest": "sha256:e2fc229e8deaf4c6e004f011aa2abe466572425c6d7bdd677b893375980f67e8",
+    "configDigest": "sha256:1a4f8d12aad9bf457521e2ec4675a3cf372ad1be552817d7fb08a85f625c2145",
+    "lifecycleDigest": "sha256:bb744765b3b8825285a1168d6ec7ac4abb3a7e97459d1e828d1317a0d841d5f9",
+    "policyDigest": "sha256:93d58dd57620ba26497459dedc0744a4909ad2204112186fd0d9e49532c9e64b",
+    "packs": [
+      {
+        "id": "sample.readiness",
+        "version": "v1",
+        "digest": "sha256:0eff795765e0bbd4c2510acda2e492201c23bc870df6c354eef623484643ab11"
+      }
+    ],
+    "evaluator": {
+      "id": "answer-completeness/v1",
+      "digest": "sha256:223fcaf96e973c2798803e177893d4eb749e52237a5767c082446c2c60c79159"
+    },
+    "sources": [
+      {
+        "id": "sample-source:observation",
+        "repo": "source",
+        "path": "README.md",
+        "audience": "private",
+        "digest": "sha256:5e4159e37577f4fe466b69646b9d1a5067eaa85cf2d4f9a6e65bd7de157d9b6b",
+        "metadata": null
+      }
+    ],
+    "claimEvidence": [
+      {
+        "mappingId": "sample.readiness:contract-gate.scope-supports-review",
+        "sourceFields": [
+          "scope.name"
+        ],
+        "answers": {
+          "scope.name": "Sample observation"
+        },
+        "evidenceField": "scope.sourceRef",
+        "references": [
+          "sample-source:observation"
+        ],
+        "resolved": [
+          {
+            "id": "sample-source:observation",
+            "repo": "source",
+            "path": "README.md",
+            "digest": "sha256:5e4159e37577f4fe466b69646b9d1a5067eaa85cf2d4f9a6e65bd7de157d9b6b",
+            "excerpt": "---\ntitle: Sample observation\nkg:\n  id: \"sample-source:observation\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"private\"\n---\n# Sample observation\n\nThe sample observation needs an owner to confirm its interpretation.\n"
+          }
+        ],
+        "unresolved": [],
+        "status": "linked-source"
+      }
+    ],
+    "limitations": [
+      "Answers are operator assertions; source presence does not substantiate each claim.",
+      "No calibrated evidence confidence or runtime acceptance is established."
+    ],
+    "digest": "sha256:4ada62e30889014598a5f57af253789424dd668dfbe36b38f51f176a49db2633"
+  }
+}

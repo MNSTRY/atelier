@@ -5,6 +5,15 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.7
+
+This release adds optional evidence-bound local review and the external-project
+starter. Existing v1 locks and readers remain compatible. To use bound review,
+explicitly qualify each pack for the new root version, regenerate the graph and
+projection, and create a fresh run. Historical runs retain their original
+snapshot and never acquire renewed approval from an upgrade. See
+[local review](local-review.md) for the complete workflow.
+
 ## Upgrading to 0.2.0-alpha.6
 
 This release adds Atelier Sync Deliverable Zero: a headless, local repository
@@ -132,7 +141,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.7
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -140,7 +149,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.6"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.7"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -192,3 +201,21 @@ older workspaces and should not be used in new docs or package scripts.
 When unsure, fail closed: keep source in the private-domain workspace and move
 only a reviewed summary into the shared-project workspace through ordinary Git
 review.
+
+## Exact installed source and review history
+
+`atelier lock provenance --exact-source-required` and
+`atelier lock check --exact-source-required` refuse unverified bindings.
+Supported npm lock metadata is a declaration matched to the exact installation
+slot, including nested instances; a SHA in that declaration is not proof of the
+installed bytes. Linked/unsupported stores remain unresolved when no trustworthy
+instance evidence is available. Tarball/registry integrity is reported when
+available, without inventing a Git origin. Dirty, ignored or untracked executable
+inputs prevent verified checkout qualification. Inventory excludes Git metadata
+and dependency trees; two observed byte inventories must agree and match the commit tree, including when Git index hints conceal changes. A verified clean
+checkout does not authenticate an upstream publisher.
+
+Review snapshots and decisions are separate from historical v1 locks. See
+[pack lifecycle](extension-pack-lifecycle.md) and
+[inspection portability](review-portability.md) before replacing packs or moving
+state. Updating a package or a digest never silently renews old approval.

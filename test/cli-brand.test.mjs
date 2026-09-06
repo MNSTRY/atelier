@@ -59,6 +59,9 @@ Core commands:
   upgrade --dry-run               Plan a safe package/template upgrade.
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.
+  lock provenance                Inspect actual installed package identity.
+  review run|history|handoff       Evidence-bound local human review.
+  review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -94,7 +97,7 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.equal(commandMap instanceof Map, true)
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
-  assert.equal(commandMap.size, 53)
+  assert.equal(commandMap.size, 54)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {

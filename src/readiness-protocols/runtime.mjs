@@ -73,7 +73,7 @@ function nestedAnswer(value, parts) {
   return nestedAnswer(value[head], rest)
 }
 
-function answerForField(answers, fieldId) {
+export function answerForField(answers, fieldId) {
   for (const key of pathVariants(fieldId)) {
     if (Object.hasOwn(answers, key)) return answers[key]
   }
@@ -119,9 +119,8 @@ export function claimsForProtocolRun({ protocol, answers, projectName, runId, cr
     provider: 'atelier-readiness',
     status: 'proposed',
     promoted: false,
-    confidence: Object.values(answers).some(answerPresent) ? 0.7 : 0.2,
     evidence: [`readiness-run:${runId}`],
-    notes: [`Proposed ${mapping.id} from ${protocol.title}.`],
+    notes: [`Proposed ${mapping.id} from ${protocol.title}.`, 'Answer presence is not evidence confidence; human judgment is required.'],
     createdAt,
     }
   })
@@ -147,6 +146,7 @@ export function buildReadinessRun({ project, protocol, answers = {}, createdAt =
     claims: claimsForProtocolRun({ protocol, answers: normalizedAnswers, projectName, runId, createdAt }),
     safety: {
       runtimeMutation: false,
+      runtimeImport: false,
       canonicalWrites: false,
       claimOnly: true,
       storage: 'ignored-local',
@@ -367,6 +367,7 @@ export function buildTenantPacket(project, { runs = listProtocolRuns(project), r
     ext: {
       'mnstry.atelier': {
         extensionPacks: packContribution,
+        scoreMeaning: 'Legacy readinessScore measures completed input dimensions; it is not evidence confidence or runtime admission.',
       },
     },
   }
