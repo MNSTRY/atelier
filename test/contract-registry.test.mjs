@@ -10,6 +10,9 @@ import { validateProjectConfigDoc } from '../src/project/config.mjs'
 // Expected-failure matchers per corpus entry; every invalid fixture must fail
 // for its registered reason, not merely fail.
 const INVALID_EXPECTATIONS = new Map([
+  ['atelier-coauthor', new Map([
+    ['authority.v1.json', /must NOT have additional properties/],
+  ])],
   ['atelier-repository-observation', new Map([
     ['complete-with-blocker.v1.json', /\/blockers.*must NOT have more than 0 items/],
   ])],

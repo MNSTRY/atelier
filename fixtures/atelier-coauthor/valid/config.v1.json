@@ -1,0 +1,12 @@
+{
+  "id": "sample-session",
+  "fields": [
+    {
+      "id": "sample-field",
+      "source": {
+        "ref": "packet.md",
+        "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  ]
+}

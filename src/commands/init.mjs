@@ -62,7 +62,15 @@ const args = parseArgs(process.argv.slice(2))
 const target = path.resolve(args.target || process.cwd())
 const template = args.template || args.fixture
 let templateId = template || 'default'
-if (template === 'sample-workspace') {
+if (template === 'external-project') {
+  for (let parent = path.dirname(target);; parent = path.dirname(parent)) {
+    if (fs.existsSync(parent) && fs.lstatSync(parent).isSymbolicLink()) throw new Error('external-project destination has a redirected ancestor')
+    if (path.dirname(parent) === parent) break
+  }
+  if (fs.existsSync(target)) throw new Error('external-project target must not exist; refusing overwrite or redirected destination')
+  copyDir(path.join(packageRoot, 'templates/external-project-workspace'), target)
+  console.log(`created external-project adapter at ${target}`)
+} else if (template === 'sample-workspace') {
   copyDir(path.join(packageRoot, 'fixtures/projects/sample-workspace'), target)
   console.log(`created sample Atelier workspace at ${target}`)
 } else if (template === 'private-domain') {
@@ -92,7 +100,7 @@ if (template === 'sample-workspace') {
 } else if (template) {
   // Unknown template names fail closed: a typo must not silently produce a
   // blank scaffold that lacks the boundary policy the caller asked for.
-  console.error(`Unknown template: ${template}. Valid templates: private-domain, shared-project, sample-workspace, distribution.`)
+  console.error(`Unknown template: ${template}. Valid templates: private-domain, shared-project, sample-workspace, distribution, external-project.`)
   process.exit(1)
 } else {
   fs.mkdirSync(target, { recursive: true })

@@ -1,7 +1,11 @@
 # Experimental portable coauthor session
 
-Tracked by issue #33. This source-only adapter seam is not yet a published
-package export or an installed authoring experience.
+Tracked by issue #33. The experimental reducer is exported at
+`@mnstry/atelier/coauthor`; the private draft adapter at `@mnstry/atelier/coauthor/store`.
+The `atelier coauthor start|read|event|recover` CLI consumes one JSON request on
+stdin. Run it from the intended Git workspace; `.atelier-local/` must be ignored
+and untracked. The shipped `atelier-guided-coauthor` skill guides harness use.
+This local candidate has not been published or accepted by a real author.
 
 The harness supplies a session id and an ordered list of consumer-owned field
 ids, each bound to an immutable source reference and SHA-256 digest. The pure
@@ -37,6 +41,17 @@ implemented: consumers must not advertise it or delete history to simulate it.
 - Persist the accepted receipt event before showing saved state. This module
   grants no canonical publication, release, remote execution or guide access.
 
-Integration must reuse the existing review/ledger owner. Shared package exports,
-CLI wiring, schema-corpus admission, release versioning and installed-consumer
-proof remain separate work. No live authoring adapter is included here.
+The supplied store reuses the collaboration ledger implementation, in a separate
+coauthor stream that is never mixed into legacy proposal aggregates. It verifies
+contiguous versions and previous-event identity; compaction that drops history
+is refused. It writes immutable private draft values, then replays a readback-bound
+receipt before showing saved state. It never edits selected source files.
+Workspace-local Git checks are the only subprocess use; no network is added.
+Operation locks serialize this adapter's writers. A leftover lock requires
+operator inspection, never automatic removal of an unknown writer's lock.
+
+`start` takes `{config: {id, fields}}`; `read` and `recover` take `{sessionId}`;
+`event` takes `{sessionId, event}`. A receipt or failure event submitted through
+the CLI is refused. Source changes block new writes, not reading old history.
+Configuration and saved drafts have the additive `atelier-coauthor.v1` schema;
+source path containment and duplicate fields are checked by the adapter as well.

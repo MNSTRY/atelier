@@ -59,6 +59,8 @@ export const commandMap = new Map([
   ['announcements', ['src/commands/announcements.mjs']],
   ['announcements:list', ['src/commands/announcements.mjs', 'list']],
   ['sync', ['src/commands/sync.mjs']],
+  ['review', ['src/commands/review.mjs']],
+  ['coauthor', ['src/commands/coauthor.mjs']],
 ])
 
 function isDefaultBrand(brand) {
@@ -130,6 +132,10 @@ Core commands:
   upgrade --dry-run               Plan a safe package/template upgrade.
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.
+  lock provenance                Inspect actual installed package identity.
+  review run|history|handoff       Evidence-bound local human review.
+  review export|inspect|packs      Preview inspection bundles and pack lifecycle.
+  coauthor start|read|event|recover Save and resume private authoring drafts.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -145,6 +151,9 @@ Attestation commands:
 Commands whose usage names --project accept --project=PATH or --project PATH.
 The project resolver also accepts --project-config=PATH and
 MNSTRY_ATELIER_PROJECT_CONFIG=PATH; each command's own help is authoritative.
+Project-aware commands accept repeated --repo-path NAME=PATH or
+--repo-path=NAME=PATH. Overrides change location, never declared read authority.
+Run config check --explain for path-free resolution sources.
 Machine-local repo paths belong in
 .atelier-local/, atelier.local.json, or atelier.workspace.local.json.`
 }
@@ -152,7 +161,10 @@ Machine-local repo paths belong in
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
   const help = {
-    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution] [--target DIR] [--actor ID]
+    coauthor: `Usage: ${c} coauthor start|read|event|recover
+
+Read one JSON request from stdin (maximum 1 MiB). Start takes {"config":{"id":"SESSION","fields":[{"id":"FIELD","source":{"ref":"packet.md","digest":"SHA256"}}]}}. Read/recover take {"sessionId":"SESSION"}. Event takes {"sessionId":"SESSION","event":{"id":"UNIQUE","expectedRevision":0,"type":"answer","text":"ANSWER"}}. Run from the intended Git workspace with ignored .atelier-local/. Saves are private drafts, never canonical source edits.`,
+    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project] [--target DIR] [--actor ID]
 
 Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,
     adopt: `Usage: ${c} adopt [--profile single-repo|private-domain|shared-project|multi-repo|monorepo|control-workspace] [--target DIR] [--yes]
@@ -183,7 +195,7 @@ Runs the bundled MNSTRY readiness pack claim-first. Protocol state and packet dr
   ${c} extension-pack validate [--json] [--project ./atelier.project.json]
   ${c} extension-pack list [--json] [--project ./atelier.project.json]
 
-Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks in the tracked project config and reports one line per pack. Packs load additively alongside the bundled MNSTRY protocols and can never replace them. list is the default subcommand.`,
+Loads every extension pack declared under ext["mnstry.atelier"].extensionPacks in the tracked project config and reports one line per pack. Packs load additively alongside the bundled MNSTRY protocols and can never replace them. list is the default subcommand. Shared --project-config and repeated --repo-path NAME=PATH options are supported in both space and equals forms.`,
     distribution: `Usage: ${c} distribution check [--target DIR] [--pack DIR]
 
 Checks a distribution package for the required MNSTRY attribution markers. Blocking: the distribution README.md byte check, and a CLI probe that EXECUTES the target's declared bin with --version (spawned with the current Node, cwd set to the target — only run this against distributions you trust) and requires the attribution in its output; a target that looks like a distribution but declares no probe-able bin, or ships a malformed package.json, is also blocking. The extension-pack manifest attribution key is advisory and reported only. The normative wording lives in TRADEMARKS.md under "Required attribution"; see also docs/attestation.md and docs/distributions.md.`,

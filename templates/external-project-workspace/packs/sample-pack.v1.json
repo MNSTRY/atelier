@@ -1,0 +1,48 @@
+{
+  "schema": "mnstry-atelier-extension-pack@v1",
+  "id": "sample.readiness",
+  "namespace": "sample",
+  "version": "v1",
+  "terms": [
+    {
+      "id": "sample.readiness:scope",
+      "label": "Sample scope",
+      "kind": "concept"
+    }
+  ],
+  "migrations": [],
+  "fixtures": [],
+  "protocols": [
+    {
+      "id": "sample.readiness:contract-gate",
+      "schema": "atelier-readiness-protocol@v1",
+      "path": "protocols/contract-gate.v1.json",
+      "gate": "required",
+      "title": "Sample contract gate"
+    }
+  ],
+  "lenses": [
+    {
+      "id": "sample.readiness:contract-gate-lens",
+      "title": "Sample contract gate lens",
+      "query": {
+        "protocolId": "sample.readiness:contract-gate"
+      }
+    }
+  ],
+  "readinessRules": [
+    {
+      "id": "sample.readiness:scope-present",
+      "severity": "blocker",
+      "condition": "Scope name and evidence are present."
+    }
+  ],
+  "actionRules": [],
+  "exportMappings": [
+    {
+      "id": "sample.readiness:scope-export",
+      "sourceTerm": "sample.readiness:scope",
+      "target": "core.artifact"
+    }
+  ]
+}

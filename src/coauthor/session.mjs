@@ -5,6 +5,7 @@ import { canonicalize } from '../attestation/jcs.mjs';
 export const COAUTHOR_SESSION_VERSION = 'atelier-coauthor-session/experimental-v1';
 export function contentDigest(text) {
   if (typeof text !== 'string') throw new TypeError('text required');
+  if (Buffer.from(text, 'utf8').toString('utf8') !== text) throw new TypeError('text must be lossless UTF-8');
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 const digestPattern = /^[a-f0-9]{64}$/;

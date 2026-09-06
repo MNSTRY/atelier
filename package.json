@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.6",
+  "version": "0.2.0-alpha.7",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry, service, or account.",
   "keywords": [
@@ -23,6 +23,9 @@
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
   "exports": {
+    "./coauthor": "./src/coauthor/session.mjs",
+    "./coauthor/store": "./src/coauthor/store.mjs",
+    "./contracts/atelier-coauthor.v1.schema.json": "./contracts/atelier-coauthor.v1.schema.json",
     ".": "./src/index.mjs",
     "./cli": "./src/cli/run.mjs",
     "./project": "./src/project/config.mjs",

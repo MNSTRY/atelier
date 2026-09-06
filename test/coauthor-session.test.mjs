@@ -73,3 +73,6 @@ test('configuration refuses duplicates and invalid source binding', () => {
   const c = config(); c.fields.push(c.fields[0]); assert.throws(() => createSession(c), /duplicate/);
   const d = config(); d.fields[0].source.digest = 'unknown'; assert.throws(() => createSession(d), /digest/);
 });
+test('content digest refuses lossy surrogate input', () => {
+  assert.throws(() => contentDigest(String.fromCharCode(0xd800)), /lossless/);
+});

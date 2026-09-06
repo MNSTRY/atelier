@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
+import { parseProjectOptions } from '../cli/project-options.mjs'
 
 export const PROJECT_CONFIG_ARG_PREFIX = '--project-config='
 export const PROJECT_CONFIG_ENV = 'MNSTRY_ATELIER_PROJECT_CONFIG'
@@ -95,14 +96,7 @@ export function writeJson(file, value) {
 }
 
 export function projectConfigArg(argv = process.argv.slice(2), prefix = PROJECT_CONFIG_ARG_PREFIX) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]
-    if (typeof arg !== 'string') continue
-    if (arg.startsWith(prefix)) return arg.slice(prefix.length).trim() || null
-    if ((arg === '--project-config' || arg === '--project') && argv[index + 1]) return String(argv[index + 1]).trim() || null
-    if (arg.startsWith('--project=')) return arg.slice('--project='.length).trim() || null
-  }
-  return null
+  return parseProjectOptions(argv, prefix).project
 }
 
 export function stripProjectConfigArgs(argv = [], prefix = PROJECT_CONFIG_ARG_PREFIX) {
@@ -171,22 +165,7 @@ export function readLocalOverlay({ configDir, env = process.env, cwd = process.c
 }
 
 export function parseRepoPathOverrides(argv = process.argv.slice(2), cwd = process.cwd()) {
-  const out = new Map()
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]
-    let value = null
-    if (arg === '--repo-path' && argv[index + 1]) {
-      value = argv[index + 1]
-      index += 1
-    } else if (typeof arg === 'string' && arg.startsWith('--repo-path=')) {
-      value = arg.slice('--repo-path='.length)
-    }
-    if (!value || !value.includes('=')) continue
-    const [name, ...rest] = value.split('=')
-    const repoPath = rest.join('=')
-    if (firstString(name) && firstString(repoPath)) out.set(name.trim(), resolvePathValue(repoPath, cwd))
-  }
-  return out
+  return new Map([...parseProjectOptions(argv).repoPaths].map(([name, value]) => [name, resolvePathValue(value, cwd)]))
 }
 
 function overlayRepoPath(overlay, repoName) {

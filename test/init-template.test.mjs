@@ -31,7 +31,7 @@ test('init rejects an unknown template with exit 1 and creates nothing', () => {
     }
     assert.ok(error, 'init must fail for an unknown template')
     assert.equal(error.status, 1, 'unknown template must exit 1')
-    assert.match(String(error.stderr), /Unknown template: bogus-template\. Valid templates: private-domain, shared-project, sample-workspace, distribution\./)
+    assert.match(String(error.stderr), /Unknown template: bogus-template\. Valid templates: private-domain, shared-project, sample-workspace, distribution, external-project\./)
     assert.equal(fs.existsSync(target), false, 'unknown template must not create the target directory')
   } finally {
     fs.rmSync(workspaces, { recursive: true, force: true })
