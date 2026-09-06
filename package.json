@@ -24,6 +24,12 @@
   },
   "exports": {
     "./coauthor": "./src/coauthor/session.mjs",
+    "./skills": "./src/skills/steward.mjs",
+    "./intake": "./src/intake/store.mjs",
+    "./contracts/atelier-intake.v1.schema.json": "./contracts/atelier-intake.v1.schema.json",
+    "./guides": "./src/guides/contracts.mjs",
+    "./contracts/atelier-guide.v1.schema.json": "./contracts/atelier-guide.v1.schema.json",
+    "./contracts/atelier-skill-steward.v1.schema.json": "./contracts/atelier-skill-steward.v1.schema.json",
     "./coauthor/store": "./src/coauthor/store.mjs",
     "./contracts/atelier-coauthor.v1.schema.json": "./contracts/atelier-coauthor.v1.schema.json",
     ".": "./src/index.mjs",

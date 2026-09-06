@@ -61,6 +61,7 @@ export const commandMap = new Map([
   ['sync', ['src/commands/sync.mjs']],
   ['review', ['src/commands/review.mjs']],
   ['coauthor', ['src/commands/coauthor.mjs']],
+  ['skills', ['src/commands/skills.mjs']],
 ])
 
 function isDefaultBrand(brand) {
@@ -136,6 +137,7 @@ Core commands:
   review run|history|handoff       Evidence-bound local human review.
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
+  skills audit|observe|candidates|sync Audit and manage local skill projections.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -161,6 +163,10 @@ Machine-local repo paths belong in
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
   const help = {
+    skills: `Usage: ${c} skills audit|observe|candidates|sync
+Audit bundled skills or --root DIR [--peer DIR].
+Sync previews by default; applying requires --apply --confirm PLAN_DIGEST.
+Observations are local metadata, never automatic telemetry.`,
     coauthor: `Usage: ${c} coauthor start|read|event|recover
 
 Read one JSON request from stdin (maximum 1 MiB). Start takes {"config":{"id":"SESSION","fields":[{"id":"FIELD","source":{"ref":"packet.md","digest":"SHA256"}}]}}. Read/recover take {"sessionId":"SESSION"}. Event takes {"sessionId":"SESSION","event":{"id":"UNIQUE","expectedRevision":0,"type":"answer","text":"ANSWER"}}. Run from the intended Git workspace with ignored .atelier-local/. Saves are private drafts, never canonical source edits.`,

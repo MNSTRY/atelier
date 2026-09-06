@@ -1,0 +1,7 @@
+{
+  "schema": "mnstry.atelier-intake-source@v1",
+  "sourceRef": "sample.txt",
+  "blobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "bytes": 12,
+  "originalMutation": false
+}

@@ -2,6 +2,14 @@
 
 ## 0.2.0-alpha.7
 
+- Add evidence-thresholded skill stewardship and exact-plan local projections;
+  refuse unmanaged collisions, managed drift and cross-workspace confirmations.
+- Add bounded immutable source copies and extraction attempt receipts, retaining
+  originals and separating byte integrity from semantic acceptance.
+- Add inert guide offers, revocable engagement and exact-payload consent contracts.
+  No remote execution, commercial authority or proprietary implementation ships.
+  See issues #33 and #34 and the skill stewardship and intake/guide documentation.
+
 - Add experimental source-bound coauthor sessions, a private draft store, JSON
   stdin CLI and portable guided-coauthor skill. Preserve original answers,
   confirmation, durable receipts, bounded recovery and source-change refusal;

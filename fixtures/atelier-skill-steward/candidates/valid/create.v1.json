@@ -1,0 +1,37 @@
+{
+  "schema": "mnstry.atelier-skill-candidates@v1",
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "ok": true,
+  "candidates": [
+    {
+      "workflowKey": "sample.weekly-brief",
+      "kind": "create",
+      "status": "eligible",
+      "skill": null,
+      "evidenceCount": 3,
+      "signals": {
+        "repeated-task": 3,
+        "missing-workflow": 0,
+        "user-correction": 0,
+        "trigger-miss": 0,
+        "trigger-collision": 0,
+        "tool-failure": 0,
+        "stale-guidance": 0,
+        "successful-run": 0,
+        "unused-skill": 0,
+        "superseded-skill": 0
+      },
+      "lastObservedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "observationCount": 3,
+  "diagnostics": [],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "promptCapture": false,
+    "sourceMutation": false,
+    "runtimeMutation": false,
+    "applyEndpoint": null
+  }
+}

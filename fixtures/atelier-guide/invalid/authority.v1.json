@@ -1,0 +1,11 @@
+{
+  "schema": "mnstry.atelier-remote-capability@v1",
+  "id": "sample-capability",
+  "serviceRef": "https://example.invalid/mcp",
+  "inputSchemaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "outputSchemaDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "maxInputBytes": 1024,
+  "implementation": "remote",
+  "executionAuthority": false,
+  "command": "execute"
+}

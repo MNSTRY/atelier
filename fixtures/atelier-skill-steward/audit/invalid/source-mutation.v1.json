@@ -1,0 +1,26 @@
+{
+  "schema": "mnstry.atelier-skill-audit@v1",
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "ok": true,
+  "surfaces": [
+    {
+      "name": "sample",
+      "path": "skills/sample"
+    }
+  ],
+  "summary": {
+    "skills": 0,
+    "errors": 0,
+    "warnings": 0
+  },
+  "entries": [],
+  "findings": [],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "promptCapture": false,
+    "sourceMutation": true,
+    "runtimeMutation": false,
+    "applyEndpoint": null
+  }
+}

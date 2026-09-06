@@ -1,0 +1,10 @@
+{
+  "schema": "mnstry.atelier-guide-offer@v1",
+  "id": "sample-offer",
+  "guideId": "sample-guide",
+  "capabilityIds": [
+    "sample-capability"
+  ],
+  "deliverableReview": "required",
+  "commercialAuthority": false
+}

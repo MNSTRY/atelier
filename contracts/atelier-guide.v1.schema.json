@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "contract revision 1.0.0; local integrity and inert declarations only.",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-guide.v1.schema.json",
+  "title": "Atelier guide and remote capability contracts",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/offer"
+    },
+    {
+      "$ref": "#/$defs/capability"
+    },
+    {
+      "$ref": "#/$defs/consent"
+    },
+    {
+      "$ref": "#/$defs/engagement"
+    }
+  ],
+  "$defs": {
+    "offer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "guideId",
+        "capabilityIds",
+        "deliverableReview",
+        "commercialAuthority"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-guide-offer@v1"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "guideId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "capabilityIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "deliverableReview": {
+          "const": "required"
+        },
+        "commercialAuthority": {
+          "const": false
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "serviceRef",
+        "inputSchemaDigest",
+        "outputSchemaDigest",
+        "maxInputBytes",
+        "implementation",
+        "executionAuthority"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-remote-capability@v1"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "serviceRef": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "inputSchemaDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "outputSchemaDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "maxInputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "implementation": {
+          "const": "remote"
+        },
+        "executionAuthority": {
+          "const": false
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "offerDigest",
+        "capabilityDigest",
+        "payloadDigest",
+        "engagementRevision",
+        "status",
+        "validFrom",
+        "expiresAt",
+        "authority"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-guide-consent@v1"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "offerDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capabilityDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "payloadDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "engagementRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "approved",
+            "revoked"
+          ]
+        },
+        "validFrom": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "authority": {
+          "const": "local-assertion-only"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "engagement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "offerDigest",
+        "revision",
+        "status",
+        "authority"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-guide-engagement@v1"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "offerDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "accepted",
+            "paused",
+            "revoked"
+          ]
+        },
+        "authority": {
+          "const": "local-assertion-only"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

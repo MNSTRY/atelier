@@ -184,7 +184,7 @@ assert.equal(typeof validateRepositoryObservation, 'function')
   }
 
   await verifyInstalledReview({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
-  verifyInstalledCoauthor({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
+  await verifyInstalledCoauthor({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
 
   console.log(`[consumer:smoke] SHA-256 ${tarballSha256}; packed tarball installs without publisher overrides and imports ${Object.keys(packageJson.exports).length} declared exports`)
 } finally {

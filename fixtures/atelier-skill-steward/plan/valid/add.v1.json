@@ -1,0 +1,33 @@
+{
+  "schema": "mnstry.atelier-skill-sync-plan@v1",
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "planDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "applyAllowed": true,
+  "source": {
+    "packageName": "@mnstry/atelier",
+    "packageVersion": "0.1.0",
+    "catalogDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "target": {
+    "path": ".agents/skills",
+    "lockPath": ".agents/skills/.atelier-skill-lock.json"
+  },
+  "actions": [
+    {
+      "type": "add",
+      "name": "sample-review",
+      "expectedDigest": null,
+      "currentDigest": null,
+      "nextDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "quarantinePath": null
+    }
+  ],
+  "blockers": [],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "sourceMutation": false,
+    "targetMutation": "content-bound-confirmed",
+    "destructiveDelete": false
+  }
+}

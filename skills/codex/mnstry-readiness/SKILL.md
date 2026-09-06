@@ -1,3 +1,8 @@
+---
+name: mnstry-readiness
+description: Prepare or review Atelier readiness outputs for a project workspace using its readiness protocols.
+---
+
 # MNSTRY Readiness
 
 Use this skill when preparing or reviewing MNSTRY Atelier readiness outputs for
