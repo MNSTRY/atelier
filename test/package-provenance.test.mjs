@@ -34,6 +34,7 @@ function git(root, args) {
 }
 function init(root) {
   git(root, ['init'])
+  git(root, ['config', 'core.autocrlf', 'false'])
   git(root, ['config', 'user.name', 'Sample Author'])
   git(root, ['config', 'user.email', 'sample@example.invalid'])
   git(root, ['add', '.'])
@@ -44,7 +45,7 @@ test('own clean checkout binds tracked source; modified or ignored files refuse 
   pkg(root)
   init(root)
   const clean = inspectPackageProvenance(root)
-  assert.equal(clean.sourceVerified, true)
+  assert.equal(clean.sourceVerified, true, JSON.stringify(clean))
   assert.equal(clean.trackedGitSha, git(root, ['rev-parse', 'HEAD']))
   fs.appendFileSync(path.join(root, 'index.mjs'), '// edit\n')
   const modified = inspectPackageProvenance(root)
@@ -166,4 +167,13 @@ test('nested instance metadata and symlink slots never borrow another installati
   fs.symlinkSync(first, linked)
   assert.equal(inspectPackageProvenance(linked).sourceVerified, false)
   assert.equal(inspectPackageProvenance(linked).level, 'unresolved')
+})
+
+test('checkout line-ending conversion is refused as an exact-byte match', (t) => {
+  const root = fixture(t)
+  pkg(root)
+  init(root)
+  fs.writeFileSync(path.join(root, 'index.mjs'), 'export const value = 1\r\n')
+  git(root, ['config', 'core.autocrlf', 'true'])
+  assert.equal(inspectPackageProvenance(root).sourceVerified, false)
 })

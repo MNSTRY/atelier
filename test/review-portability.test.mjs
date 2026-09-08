@@ -279,3 +279,25 @@ test('pack replacement uses the existing lock migration and rollback preserves h
     fs.writeFileSync(path.join(adapter, file), bytes)
   assert.equal(currentRunEligibility(project, bound), true)
 })
+
+test('pinned starter pack bytes survive autocrlf checkout conversion', (t) => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-pack-eol-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.copyFileSync(path.join(root, '.gitattributes'), path.join(dir, '.gitattributes'))
+  const relative = 'templates/external-project-workspace/packs'
+  fs.cpSync(path.join(root, relative), path.join(dir, relative), { recursive: true })
+  const git = (args) => {
+    const result = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+  }
+  git(['init'])
+  git(['config', 'core.autocrlf', 'true'])
+  git(['add', '.'])
+  git(['-c', 'user.name=Sample Author', '-c', 'user.email=sample@example.invalid', 'commit', '-m', 'synthetic pack'])
+  for (const name of ['sample-pack.v1.json', 'protocols/contract-gate.v1.json']) {
+    const file = path.join(dir, relative, name), before = fs.readFileSync(file)
+    fs.unlinkSync(file)
+    git(['checkout', '--', `${relative}/${name}`])
+    assert.deepEqual(fs.readFileSync(file), before)
+  }
+})
