@@ -213,7 +213,14 @@ export function inspectPackageProvenance(
     fs.readFileSync(path.join(realRoot, 'package.json'), 'utf8'),
   )
   const top = git(realRoot, ['rev-parse', '--show-toplevel'])
-  const own = top !== null && fs.realpathSync(top) === realRoot
+  // Git may return a different spelling of the same Windows directory (for
+  // example a short-name alias). Compare directory identities, not path text;
+  // never lowercase paths, since Windows can also host case-sensitive trees.
+  const rootStat = fs.statSync(realRoot, { bigint: true })
+  const topStat = top === null ? null : fs.statSync(top, { bigint: true })
+  const own = topStat !== null && topStat.isDirectory() &&
+    (fs.realpathSync(top) === realRoot ||
+      (rootStat.ino !== 0n && rootStat.dev === topStat.dev && rootStat.ino === topStat.ino))
   const head = own ? git(realRoot, ['rev-parse', 'HEAD']) : null
   const status = own
     ? git(realRoot, [
