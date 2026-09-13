@@ -4,6 +4,7 @@ const LIMIT = 4 * 1024 * 1024
 const encoder = new TextEncoder()
 const validId = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,62}$/.test(value)
 const validPath = value => typeof value === 'string' && value.length <= 512 && value.split('/').every(p => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(p) && p !== '.' && p !== '..')
+const validExt = value => value === undefined || (value !== null && typeof value === 'object' && !Array.isArray(value))
 const sameOwner = (a, b) => a && b && typeof a.issuer === 'string' && a.issuer.length > 0 && typeof a.subject === 'string' && a.subject.length > 0 && a.issuer === b.issuer && a.subject === b.subject
 const headers = {
   'Cache-Control': 'private, no-store',
@@ -36,13 +37,13 @@ async function boundedBody(request) {
   return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
 }
 export async function preparePublication(input) {
-  if (!input || input.schema !== 'atelier-vault-publication/v1' || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 || input.expectedRevision >= Number.MAX_SAFE_INTEGER || Object.keys(input).some(key => !['schema', 'expectedRevision', 'files'].includes(key)) || !Array.isArray(input.files) || !input.files.length || input.files.length > 100) throw new Error('invalid')
+  if (!input || input.schema !== 'atelier-vault-publication/v1' || (input.contractVersion !== undefined && (typeof input.contractVersion !== 'string' || !/^1\.[0-9]+\.[0-9]+$/.test(input.contractVersion))) || !validExt(input.ext) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 || input.expectedRevision >= Number.MAX_SAFE_INTEGER || Object.keys(input).some(key => !['schema', 'contractVersion', 'expectedRevision', 'files', 'ext'].includes(key)) || !Array.isArray(input.files) || !input.files.length || input.files.length > 100) throw new Error('invalid')
   if (encoder.encode(JSON.stringify(input)).length > LIMIT) throw new Error('too-large')
   const seen = new Set()
   const files = []
   let total = 0
   for (const file of input.files) {
-    if (!file || Object.keys(file).some(key => !['path', 'base64'].includes(key)) || !validPath(file.path) || seen.has(file.path) || typeof file.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.base64)) throw new Error('invalid')
+    if (!file || !validExt(file.ext) || Object.keys(file).some(key => !['path', 'base64', 'ext'].includes(key)) || !validPath(file.path) || seen.has(file.path) || typeof file.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.base64)) throw new Error('invalid')
     const type = TYPES[file.path.split('.').at(-1)]
     if (typeof type !== 'string') throw new Error('invalid')
     seen.add(file.path)

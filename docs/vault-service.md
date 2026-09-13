@@ -13,7 +13,8 @@ Uploading a derived artifact does not satisfy an editorial publication gate.
   require exact owner issuer + subject equality. Every asset uses this route.
 - `POST /_publish/<vault>` requires a separate vault-scoped machine credential.
   Browser cookies and Origin headers are refused on this endpoint. The JSON
-  body has schema `atelier-vault-publication/v1`, `expectedRevision` (initially
+  body has schema `atelier-vault-publication/v1`, `contractVersion: "1.0.0"`,
+  `expectedRevision` (initially
   zero), and `files: [{path, base64}]`. No URL retrieval or directory discovery
   occurs. The caller explicitly selects all uploaded files and is responsible
   for source selection, disclosure checks and any editorial approval.
@@ -33,6 +34,9 @@ All output, including errors, is private/no-store. Content bytes are checked
 against the committed manifest before delivery. No public object URLs or
 presigned download redirects are returned. Revocation blocks subsequent
 checks; it cannot recall a response already authorized or a downloaded file.
+
+The optional `contractVersion` and inert `ext` containers follow the kit schema
+epoch. Extension data never grants authority and is not copied into artifacts.
 
 ## Host interfaces
 

@@ -6,7 +6,7 @@ import { createVaultService, preparePublication, r2PrivateStorage, vercelPrivate
 import { digest } from '../src/vault/service.mjs'
 
 const owner = { issuer: 'https://identity.example', subject: 'author-one' }
-const publication = (expectedRevision = 0, text = '<h1>Example</h1>') => ({ schema: 'atelier-vault-publication/v1', expectedRevision, files: [{ path: 'report.html', base64: Buffer.from(text).toString('base64') }, { path: 'assets/style.css', base64: Buffer.from('body { color: green }').toString('base64') }] })
+const publication = (expectedRevision = 0, text = '<h1>Example</h1>') => ({ schema: 'atelier-vault-publication/v1', contractVersion: '1.0.0', expectedRevision, files: [{ path: 'report.html', base64: Buffer.from(text).toString('base64') }, { path: 'assets/style.css', base64: Buffer.from('body { color: green }').toString('base64') }] })
 async function fixture(provider) {
   const sql = new DatabaseSync(':memory:')
   sql.exec(VAULT_TABLE_SQL)
