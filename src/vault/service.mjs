@@ -97,7 +97,7 @@ export function createVaultService({ identity, metadata, storage, privacy }) {
         try { input = await boundedBody(request); prepared = await preparePublication(input) }
         catch (error) { return reply(error.message === 'too-large' ? 413 : 400) }
         if (input.expectedRevision !== record.revision) return reply(409)
-        const context = { vault, publication: prepared.publication, manifest: prepared.manifest }
+        const context = { vault, owner: record.owner, publication: prepared.publication, manifest: prepared.manifest }
         const before = await verifyVaultPrivacy(privacy, { ...context, phase: 'before-upload' })
         if (before.status !== 'verified') return reply(503, before.reason)
         for (const file of prepared.files) await storage.put(`${vault}/${file.sha256}`, file.bytes)
@@ -115,7 +115,7 @@ export function createVaultService({ identity, metadata, storage, privacy }) {
       if (!principal) return reply(401)
       const record = await metadata.get(vault)
       if (!sameOwner(principal, record?.owner)) return reply(404)
-      const protection = await verifyVaultPrivacy(privacy, { vault, publication: record.publication ?? null, manifest: record.manifest, phase: 'read' })
+      const protection = await verifyVaultPrivacy(privacy, { vault, owner: record.owner, publication: record.publication ?? null, manifest: record.manifest, phase: 'read' })
       if (home) return new Response(request.method === 'HEAD' ? null : renderVaultHome({ vault, revision: record.revision, manifest: record.manifest, privacy: protection, query: url.searchParams.get('q') || '' }), { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': vaultHomePolicy } })
       if (protection.status !== 'verified') return reply(503, protection.reason)
       const path = parts.slice(1).join('/')

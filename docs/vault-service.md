@@ -168,3 +168,37 @@ HTML remains a separate document under sandbox CSP with scripts disabled; the
 trusted shell never injects generated content. This is a minimal reference
 interface, not full authoring/review functionality or browser-qualified parity
 with other Atelier interfaces.
+
+### Reusable probe collector
+
+`createVaultPrivacyProbe({inspect, request})` collects evidence with a bounded
+whole-operation deadline. The trusted provider inspector supplies configuration,
+policy revision, complete target inventory (kind, URL, expected SHA-256) and
+exact credential-free login redirect URLs. The transport receives explicit
+owner/anonymous/otherUser identity, manual redirect mode and an AbortSignal.
+It must honor these controls and never forward credentials across redirects.
+No transport is selected automatically and no network call occurs on import.
+
+The collector checks content bytes even on error responses, treats unexpected
+HTML/redirects/errors as unknown, and re-inspects configuration after all probes.
+A changed inventory or policy refuses verification. Evidence is also bound to
+owner issuer/subject and operation phase, preventing pre-upload evidence from
+being reused as activation or read evidence. Provider configuration collection
+and credential custody remain outside the kit; this collector does not invent
+or replace either. Real provider SDK/network qualification remains required.
+
+### Source layouts
+
+The Node-only `@mnstry/atelier/vault/source` entrypoint exports
+`prepareVaultSource({root, paths, expectedRevision})`. Pass an absolute local
+artifact root and explicit relative file paths. A root can be a folder inside
+the authoring repository or a separate artifact checkout; neither is scanned
+automatically. It returns the publication request, digest and manifest without
+uploading anything. Keep machine-specific roots in local host configuration.
+
+The reader refuses symlinks, hard-linked files, path escapes, directories,
+unsupported formats and oversized bundles. It checks file identity and metadata
+around the read and binds the resulting bytes to the manifest. Run against a
+quiescent source tree; portable filesystem checks are not a sandbox against a
+malicious process concurrently replacing ancestor directories. The publication
+bundle is an immutable byte snapshot, not a live directory handle.

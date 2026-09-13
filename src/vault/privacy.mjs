@@ -1,7 +1,8 @@
 /** Pure evaluator: evidence must come from a trusted host probe, never a publisher. */
-export function assessVaultPrivacy(evidence, { vault, publication, now = Date.now() }) {
+export function assessVaultPrivacy(evidence, { vault, publication, phase, owner, now = Date.now() }) {
   const unknown = reason => ({ status: 'unknown', reason })
   if (!evidence || evidence.vault !== vault || evidence.publication !== publication) return unknown('Protection evidence does not match this publication.')
+  if (evidence.phase !== phase || !['before-upload', 'before-activation', 'read'].includes(phase) || !owner || typeof owner.issuer !== 'string' || !owner.issuer || typeof owner.subject !== 'string' || !owner.subject || evidence.owner?.issuer !== owner.issuer || evidence.owner?.subject !== owner.subject) return unknown('Protection evidence does not match the owner and operation.')
   if (!Number.isFinite(evidence.checkedAt) || !Number.isFinite(evidence.validUntil) || evidence.checkedAt > now || evidence.validUntil <= now || evidence.validUntil - evidence.checkedAt > 300000) return unknown('Protection evidence is missing or expired.')
   if (typeof evidence.policyRevision !== 'string' || !evidence.policyRevision) return unknown('Provider policy identity is missing.')
   if (!Array.isArray(evidence.targets) || !evidence.targets.length) return unknown('Access checks are missing.')
