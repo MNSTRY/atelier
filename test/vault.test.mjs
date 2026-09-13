@@ -33,8 +33,9 @@ async function fixture(provider) {
   const identity = vaultIdentity({ verifySession: async () => session, lookupCredential: async candidate => candidate === hash ? credential : null })
   const handle = createVaultService({ identity, metadata, storage })
   const read = (path = 'sample-vault/report.html', method = 'GET') => handle(new Request(`https://artifacts.example/${path}`, { method }))
+  const status = () => handle(new Request('https://artifacts.example/_publish/sample-vault', { headers: { authorization: `Bearer ${machineCredential}` } }))
   const publish = (body = publication(), extraHeaders = {}) => handle(new Request('https://artifacts.example/_publish/sample-vault', { method: 'POST', headers: { authorization: `Bearer ${machineCredential}`, 'content-type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) }))
-  return { sql, objects, metadata, credential, read, publish, setSession(value) { session = value }, fail() { failPut = true } }
+  return { sql, objects, metadata, credential, read, publish, status, setSession(value) { session = value }, fail() { failPut = true } }
 }
 for (const provider of ['r2', 'vercel']) {
   test(`${provider}: owner reads stable HTML and assets; anonymous and different identities refused`, async t => {
@@ -54,6 +55,20 @@ for (const provider of ['r2', 'vercel']) {
     assert.equal((await f.read()).status, 404)
     f.setSession({ ...owner, issuer: 'https://other.example' })
     assert.equal((await f.read()).status, 404)
+  })
+  test(`${provider}: publication status resolves lost receipts without repeating writes`, async t => {
+    const f = await fixture(provider); t.after(() => f.sql.close())
+    assert.deepEqual(await (await f.status()).json(), { schema: 'atelier-vault-status/v1', vault: 'sample-vault', revision: 0, publication: null })
+    const receipt = await (await f.publish()).json()
+    const status = await f.status()
+    assert.equal(status.status, 200)
+    assert.equal(status.headers.get('cache-control'), 'private, no-store')
+    const current = await status.json()
+    assert.equal(current.revision, receipt.revision)
+    assert.equal(current.publication, receipt.publication)
+    assert.equal(Object.hasOwn(current, 'manifest'), false)
+    f.credential.revoked = true
+    assert.equal((await f.status()).status, 401)
   })
   test(`${provider}: invalid paths, unlisted files and executable formats refused`, async t => {
     const f = await fixture(provider); t.after(() => f.sql.close())

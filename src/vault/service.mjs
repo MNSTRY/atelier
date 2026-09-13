@@ -78,13 +78,16 @@ export function createVaultService({ identity, metadata, storage }) {
       const vault = publishing ? parts[1] : parts[0]
       if (!validId(vault)) return reply(404)
       if (publishing) {
-        if (parts.length !== 2 || request.method !== 'POST') return reply(405)
+        if (parts.length !== 2 || !['GET', 'POST'].includes(request.method)) return reply(405)
         // Browser-originated writes are not a machine publication channel.
         if (request.headers.has('origin') || request.headers.has('cookie')) return reply(403)
         const principal = await identity.publish(request, vault)
         if (!principal) return reply(401)
         const record = await metadata.get(vault)
         if (!sameOwner(principal, record?.owner)) return reply(404)
+        if (request.method === 'GET') {
+          return new Response(JSON.stringify({ schema: 'atelier-vault-status/v1', vault, revision: record.revision, publication: record.publication ?? null }), { headers: { ...headers, 'Content-Type': 'application/json' } })
+        }
         if (request.headers.get('content-type') !== 'application/json') return reply(415)
         let input, prepared
         try { input = await boundedBody(request); prepared = await preparePublication(input) }

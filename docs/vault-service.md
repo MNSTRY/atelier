@@ -20,8 +20,12 @@ Uploading a derived artifact does not satisfy an editorial publication gate.
   for source selection, disclosure checks and any editorial approval.
 - Successful publication returns 201 and a receipt containing vault, revision
   and the SHA-256 publication digest. Conflicts return 409. Retry after uncertain
-  delivery requires checking the current revision through an operator; there
-  is no automatic retry or idempotency promise yet.
+  delivery uses `GET /_publish/<vault>` with the same machine credential. It
+  returns only schema `atelier-vault-status/v1`, vault, revision and publication
+  digest (null before the first publication), never the file manifest. Compare
+  both revision and digest with the intended publication before declaring it
+  delivered. A differing digest or later revision requires reconciliation; do
+  not silently overwrite it. There is no automatic retry or idempotency promise.
 - Unauthenticated reads return 401; a host may route these to its established
   sign-in UI. Missing and non-owned vaults both return 404. Failures return 503
   without leaking adapter errors. No CORS grants or sharing bypass exist.

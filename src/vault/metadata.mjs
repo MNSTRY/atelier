@@ -8,7 +8,7 @@ export const VAULT_TABLE_SQL = `CREATE TABLE atelier_vaults (
   publication TEXT
 )`
 function record(row) {
-  return row ? { owner: { issuer: row.owner_issuer, subject: row.owner_subject }, revision: Number(row.revision), manifest: JSON.parse(row.manifest) } : null
+  return row ? { owner: { issuer: row.owner_issuer, subject: row.owner_subject }, revision: Number(row.revision), manifest: JSON.parse(row.manifest), publication: row.publication } : null
 }
 export function d1VaultMetadata(db) {
   return {
