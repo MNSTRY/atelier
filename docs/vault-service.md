@@ -113,3 +113,58 @@ review. These are open gates. The implementation is not deployment-ready.
 The SDKs, production credential store, provisioning UI, CLI integration and
 hosted conformance runner remain consumer-host work for the next integration
 step. No existing deployment or protection setting is modified by this code.
+
+## Privacy gate and vault interface
+
+A trusted host must now provide `privacy.verify(context)`. Without it, uploads
+and artifact reads fail closed. The authenticated vault home at `/<vault>/`
+still renders a prominent unavailable/privacy-failure state. This optional
+reference server is not a requirement to use Atelier with provider-managed
+hosting: other publishing adapters should enforce the same gate semantics.
+
+The verifier receives vault, publication digest, manifest and phase:
+`before-upload`, `before-activation`, or `read`. Before-upload verification uses
+synthetic canaries; do not upload private bytes to discover whether a destination
+is public. Before activation, verify the actual privately staged bytes. Host
+probes must use a dedicated internal inspection path which cannot recursively
+call the public read handler and cannot be accessed by ordinary readers.
+
+Evidence contains matching vault/publication, `checkedAt`, `validUntil` (epoch
+milliseconds, at most five minutes apart), nonempty `policyRevision`, and
+`configuration: {ownerOnly, privateStorage, completeInventory}`. All configuration
+values must be true. `targets` inventories HTTPS URLs of kinds `artifact`,
+`asset`, `alias`, `origin`, `storage`. Each reports `owner`, `anonymous`, and
+`otherUser` as `content`, `denied`, or another value for an inconclusive result.
+All five surface kinds are required, with unique credential-free URLs. Storage
+URLs must deny every browser identity; the other surfaces must return exact
+expected content to the owner and deny both unauthorized identities.
+
+The host enumerates ALL actual aliases/routes/storage locations, not a convenient
+sample. It must compare expected bytes or a synthetic canary, verify the final
+redirect destination and distinguish authentication refusal from service errors.
+A redirect or 5xx alone is inconclusive. Configuration inspection must come from
+the actual provider and identify the relevant policy revision. Cache evidence
+only within its validity and invalidate it on policy/configuration changes.
+
+The evaluator is pure and does not independently authenticate adapter evidence.
+It MUST NOT accept evidence from a publication request, browser, repository file,
+or publisher-controlled callback. The synthetic test verifier is deliberately
+outside the package. Actual Vercel/Cloudflare policy inventory and network probe
+implementations remain a host integration requirement; no live protection claim
+follows from the local tests. Neither adapter currently ships those probes.
+
+An unauthorized content response produces `exposed`; missing, stale, failed or
+incomplete checks produce `unknown`. Both refuse upload/activation/read. Policy
+revision changes between upload and activation also refuse the switch. Existing
+private objects remain stored and the previous manifest remains current.
+Containment of a provider-side bypass requires provider controls: this handler
+cannot block a public storage URL outside its runtime. Automated provider
+containment and periodic revalidation are not implemented by this module.
+
+The server-rendered vault home contains privacy status, published revision,
+artifact navigation, search, empty and unavailable states, accessible labels,
+keyboard focus indicators and responsive layout. It uses no JavaScript. Generated
+HTML remains a separate document under sandbox CSP with scripts disabled; the
+trusted shell never injects generated content. This is a minimal reference
+interface, not full authoring/review functionality or browser-qualified parity
+with other Atelier interfaces.

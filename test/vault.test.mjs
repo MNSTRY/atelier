@@ -1,3 +1,4 @@
+import { protectionEvidence } from './vault-privacy-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
@@ -31,11 +32,12 @@ async function fixture(provider) {
   const credential = { vault: 'sample-vault', owner, revoked: false, expiresAt: Date.now() + 60000 }
   let session = owner
   const identity = vaultIdentity({ verifySession: async () => session, lookupCredential: async candidate => candidate === hash ? credential : null })
-  const handle = createVaultService({ identity, metadata, storage })
+  let verify = protectionEvidence
+  const handle = createVaultService({ identity, metadata, storage, privacy: { verify: context => verify(context) } })
   const read = (path = 'sample-vault/report.html', method = 'GET') => handle(new Request(`https://artifacts.example/${path}`, { method }))
   const status = () => handle(new Request('https://artifacts.example/_publish/sample-vault', { headers: { authorization: `Bearer ${machineCredential}` } }))
   const publish = (body = publication(), extraHeaders = {}) => handle(new Request('https://artifacts.example/_publish/sample-vault', { method: 'POST', headers: { authorization: `Bearer ${machineCredential}`, 'content-type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) }))
-  return { sql, objects, metadata, credential, read, publish, status, setSession(value) { session = value }, fail() { failPut = true } }
+  return { sql, objects, metadata, credential, read, publish, status, setVerifier(value) { verify = value }, setSession(value) { session = value }, fail() { failPut = true } }
 }
 for (const provider of ['r2', 'vercel']) {
   test(`${provider}: owner reads stable HTML and assets; anonymous and different identities refused`, async t => {
@@ -69,6 +71,30 @@ for (const provider of ['r2', 'vercel']) {
     assert.equal(Object.hasOwn(current, 'manifest'), false)
     f.credential.revoked = true
     assert.equal((await f.status()).status, 401)
+  })
+  test(`${provider}: privacy failure blocks uploads and reads; home explains failure`, async t => {
+    const f = await fixture(provider); t.after(() => f.sql.close())
+    f.setVerifier(() => null)
+    assert.equal((await f.publish()).status, 503)
+    assert.equal(f.objects.size, 0)
+    f.setVerifier(protectionEvidence)
+    assert.equal((await f.publish()).status, 201)
+    const home = await f.read('sample-vault/')
+    assert.equal(home.status, 200)
+    assert.match(await home.text(), /Private access verified/)
+    assert.match(await (await f.read('sample-vault/?q=missing')).text(), /No artifacts match/)
+    f.setVerifier(context => { const value = protectionEvidence(context); value.targets[0].anonymous = 'content'; return value })
+    assert.equal((await f.read()).status, 503)
+    const blocked = await (await f.read('sample-vault/')).text()
+    assert.match(blocked, /Privacy failure/)
+    assert.doesNotMatch(blocked, /href="\/sample-vault\/report.html/)
+  })
+  test(`${provider}: activation checks refuse policy changes after upload`, async t => {
+    const f = await fixture(provider); t.after(() => f.sql.close())
+    await f.publish()
+    f.setVerifier(context => { const value = protectionEvidence(context); if (context.phase === 'before-activation') value.policyRevision = 'changed'; return value })
+    assert.equal((await f.publish(publication(1, 'changed'))).status, 503)
+    assert.equal((await (await f.status()).json()).revision, 1)
   })
   test(`${provider}: invalid paths, unlisted files and executable formats refused`, async t => {
     const f = await fixture(provider); t.after(() => f.sql.close())
