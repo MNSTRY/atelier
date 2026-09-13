@@ -23,7 +23,7 @@ export async function prepareVaultSource({ root, paths, expectedRevision }) {
     try {
       const opened = fs.fstatSync(fd)
       const resolved = fs.realpathSync(file)
-      if (!resolved.startsWith(realRoot + path.sep) || opened.ino !== before.ino || opened.dev !== before.dev || !opened.isFile()) throw new Error('Artifact changed during selection')
+      if ((path.relative(realRoot, resolved).startsWith('..' + path.sep) || path.isAbsolute(path.relative(realRoot, resolved))) || opened.ino !== before.ino || opened.dev !== before.dev || !opened.isFile() || opened.nlink !== 1 || opened.size > LIMIT) throw new Error('Artifact changed during selection')
       const data = Buffer.alloc(opened.size)
       let offset = 0
       while (offset < data.length) {
@@ -33,7 +33,7 @@ export async function prepareVaultSource({ root, paths, expectedRevision }) {
       }
       const after = fs.fstatSync(fd)
       const current = fs.lstatSync(file)
-      if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs || current.ino !== opened.ino || current.dev !== opened.dev || fs.realpathSync(file) !== resolved) throw new Error('Artifact changed during read')
+      if (after.nlink !== 1 || current.nlink !== 1 || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs || current.ino !== opened.ino || current.dev !== opened.dev || fs.realpathSync(file) !== resolved) throw new Error('Artifact changed during read')
       total += data.length
       if (total > LIMIT) throw new Error('Artifact bundle too large')
       files.push({ path: name, base64: data.toString('base64') })

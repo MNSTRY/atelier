@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 // document, not a schema, and is deliberately absent.
 
 export const CONTRACT_CORPUS = [
+  { name: 'atelier-vault-publication', contractFile: 'contracts/atelier-vault-publication.v1.schema.json', fixtureRoot: 'fixtures/atelier-vault-publication', registry: true },
   ...['guide', 'intake'].map(kind => ({
     name: `atelier-${kind}`, contractFile: `contracts/atelier-${kind}.v1.schema.json`,
     fixtureRoot: `fixtures/atelier-${kind}`, registry: true,

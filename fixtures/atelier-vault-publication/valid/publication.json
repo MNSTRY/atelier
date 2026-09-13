@@ -1,0 +1,11 @@
+{
+  "schema": "atelier-vault-publication/v1",
+  "contractVersion": "1.0.0",
+  "expectedRevision": 0,
+  "files": [
+    {
+      "path": "report.html",
+      "base64": "SGVsbG8="
+    }
+  ]
+}

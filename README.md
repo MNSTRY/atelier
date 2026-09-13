@@ -12,7 +12,7 @@ The Atelier adds that missing layer without taking the work away from you. It
 turns a repository into an ontology-governed knowledge graph, gives rules the
 power to refuse invalid states, and produces bounded views for people, teams,
 agents, and tools. Git remains the source of record. Your files remain readable.
-The runtime remains local.
+The authoring runtime remains local; optional vault adapters run in an explicitly configured host.
 
 That makes the same repository useful at several levels:
 
@@ -329,13 +329,16 @@ receive.
 - It does not write to a MNSTRY runtime database.
 - It does not import, provision, publish, or send project content to a MNSTRY
   managed runtime.
-- Conformance remains offline. Network access is limited to the documented
+- Conformance remains offline. Local CLI network access is limited to the documented
   `gh` actor-resolution fallback and explicitly enrolled Atelier Sync Git
   operations: bounded fetch for observation/reconciliation, and non-force push
   only when the exact reviewed commit plan requested and confirmed it, no
   earlier local commit remains unpublished, and HEAD still names the verified
   commit object; Sync does not use network actor fallback, follow tags, or
   recursively publish submodule refs.
+- Optional vault adapters use explicitly injected host SDKs and transports. The
+  host owns their network access, authentication and infrastructure; importing
+  the kit does not create a service or make a network request.
 - It does not execute model-assisted analysis or any model provider.
 - It does not include client project content.
 
@@ -425,7 +428,7 @@ full command behavior is also covered by the package's executable tests.
 Contributions are welcome through [the contribution guide](./CONTRIBUTING.md).
 MNSTRY Atelier is released under [Apache-2.0](./LICENSE).
 
-### Experimental hosted vault contract
+## Experimental hosted vault contract
 
 An optional [private artifact vault service](docs/vault-service.md) supplies a
 provider-independent ownership boundary and explicit Vercel/Cloudflare storage

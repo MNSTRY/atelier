@@ -30,3 +30,14 @@ test('source selection refuses escape paths, directories, duplicates and symlink
   catch (error) { if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error.code)) { t.diagnostic('Symlink scenario unavailable without Windows symlink permission; remaining source checks ran.'); return } throw error }
   await assert.rejects(prepareVaultSource({ root, paths: ['linked.txt'], expectedRevision: 0 }), /symlink/)
 })
+test('source refuses hard links, oversized files and symlinked ancestors', async t => {
+  const root = fixture(t)
+  fs.linkSync(path.join(root, 'artifacts/report.html'), path.join(root, 'hard.html'))
+  await assert.rejects(prepareVaultSource({ root, paths: ['hard.html'], expectedRevision: 0 }))
+  fs.writeFileSync(path.join(root, 'large.txt'), Buffer.alloc(4 * 1024 * 1024 + 1))
+  await assert.rejects(prepareVaultSource({ root, paths: ['large.txt'], expectedRevision: 0 }))
+  try { fs.symlinkSync(path.join(root, 'artifacts'), path.join(root, 'linked'), 'junction') }
+  catch (e) { if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes(e.code)) { t.diagnostic('Directory symlink creation unavailable'); return } throw e }
+  await assert.rejects(prepareVaultSource({ root, paths: ['linked/report.html'], expectedRevision: 0 }), /symlink/)
+  await assert.rejects(prepareVaultSource({ root: path.join(root, 'linked'), paths: ['report.html'], expectedRevision: 0 }), /symlink/)
+})

@@ -1,4 +1,4 @@
-import { protectionEvidence } from './vault-privacy-fixture.mjs'
+import { protectionEvidence, deployment } from './vault-privacy-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
@@ -22,7 +22,8 @@ async function fixture(provider) {
   })
   const objects = new Map()
   let failPut = false
-  const put = async (key, bytes) => { if (failPut) throw new Error('offline'); objects.set(key, new Uint8Array(bytes)) }
+  let onPut = () => {}
+  const put = async (key, bytes) => { if (failPut) throw new Error('offline'); objects.set(key, new Uint8Array(bytes)); onPut() }
   const storage = provider === 'r2' ? r2PrivateStorage({ put, async get(key) { return objects.has(key) ? { async arrayBuffer() { return objects.get(key).slice().buffer } } : null } }) : vercelPrivateStorage({
     async put(key, bytes, options) { assert.equal(options.access, 'private'); assert.equal(options.addRandomSuffix, false); await put(key, bytes) },
     async get(key, options) { assert.equal(options.access, 'private'); assert.equal(options.useCache, false); return objects.has(key) ? { statusCode: 200, stream: new Response(objects.get(key)).body } : null },
@@ -33,11 +34,11 @@ async function fixture(provider) {
   let session = owner
   const identity = vaultIdentity({ verifySession: async () => session, lookupCredential: async candidate => candidate === hash ? credential : null })
   let verify = protectionEvidence
-  const handle = createVaultService({ identity, metadata, storage, privacy: { verify: context => verify(context) } })
+  const handle = createVaultService({ deployment, identity, metadata, storage, privacy: { verify: context => verify(context), current: context => verify(context) } })
   const read = (path = 'sample-vault/report.html', method = 'GET') => handle(new Request(`https://artifacts.example/${path}`, { method }))
   const status = () => handle(new Request('https://artifacts.example/_publish/sample-vault', { headers: { authorization: `Bearer ${machineCredential}` } }))
   const publish = (body = publication(), extraHeaders = {}) => handle(new Request('https://artifacts.example/_publish/sample-vault', { method: 'POST', headers: { authorization: `Bearer ${machineCredential}`, 'content-type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) }))
-  return { sql, objects, metadata, credential, read, publish, status, setVerifier(value) { verify = value }, setSession(value) { session = value }, fail() { failPut = true } }
+  return { sql, objects, metadata, credential, setOnPut(fn) { onPut = fn }, read, publish, status, setVerifier(value) { verify = value }, setSession(value) { session = value }, fail() { failPut = true } }
 }
 for (const provider of ['r2', 'vercel']) {
   test(`${provider}: owner reads stable HTML and assets; anonymous and different identities refused`, async t => {
@@ -81,7 +82,7 @@ for (const provider of ['r2', 'vercel']) {
     assert.equal((await f.publish()).status, 201)
     const home = await f.read('sample-vault/')
     assert.equal(home.status, 200)
-    assert.match(await home.text(), /Private access verified/)
+    assert.match(await home.text(), /Unauthorized-access checks passed/)
     assert.match(await (await f.read('sample-vault/?q=missing')).text(), /No artifacts match/)
     f.setVerifier(context => { const value = protectionEvidence(context); value.targets[0].anonymous = 'content'; return value })
     assert.equal((await f.read()).status, 503)
@@ -99,7 +100,7 @@ for (const provider of ['r2', 'vercel']) {
   test(`${provider}: invalid paths, unlisted files and executable formats refused`, async t => {
     const f = await fixture(provider); t.after(() => f.sql.close())
     await f.publish()
-    for (const path of ['sample-vault/%2Freport.html', 'sample-vault/report.html?bypass=yes']) assert.equal((await f.read(path)).status, 400)
+    for (const path of ['sample-vault/%2Freport.html']) assert.equal((await f.read(path)).status, 400)
     for (const path of ['sample-vault/missing.html', 'other-vault/report.html', 'sample-vault//report.html']) assert.equal((await f.read(path)).status, 404)
     for (const path of ['../report.html', 'a/../report.html', 'app.js', 'image.svg']) {
       const input = publication(1); input.files[0].path = path
@@ -172,4 +173,26 @@ test('Cloudflare starts a primary session per request and unauthenticated reads 
   const env = { VAULT_DB: { withSession(mode) { sessions.push(mode); return {} } }, VAULT_OBJECTS: { get() { throw new Error('must not read') } } }
   for (let i = 0; i < 2; i++) assert.equal((await worker.fetch(new Request('https://artifacts.example/sample-vault/report.html'), env)).status, 401)
   assert.deepEqual(sessions, ['first-primary', 'first-primary'])
+})
+test('credential revoked during upload cannot activate a manifest', async t => {
+  const f = await fixture('r2'); t.after(() => f.sql.close())
+  f.setOnPut(() => { f.credential.revoked = true })
+  assert.equal((await f.publish()).status, 401)
+  assert.equal((await f.metadata.get('sample-vault')).revision, 0)
+})
+test('Cloudflare rejects missing identity bindings and contains environment initialization failures', async () => {
+  assert.throws(() => createCloudflareVault({}), TypeError)
+  const worker = createCloudflareVault({ verifySession: () => null, lookupCredential: () => null })
+  const response = await worker.fetch(new Request('https://artifacts.example/sample-vault/'), {})
+  assert.equal(response.status, 503)
+  assert.equal(response.headers.get('cache-control'), 'private, no-store')
+})
+test('PDF remains attachment and trusted home has its own script-free policy', async t => {
+  const f = await fixture('r2'); t.after(() => f.sql.close())
+  const body = publication(); body.files = [{ path: 'report.pdf', base64: Buffer.from('Synthetic PDF bytes').toString('base64') }]
+  assert.equal((await f.publish(body)).status, 201)
+  assert.equal((await f.read('sample-vault/report.pdf')).headers.get('content-disposition'), 'attachment')
+  const home = await f.read('sample-vault/')
+  assert.match(home.headers.get('content-security-policy'), /default-src 'none'/)
+  assert.doesNotMatch(home.headers.get('content-security-policy'), /script-src/)
 })

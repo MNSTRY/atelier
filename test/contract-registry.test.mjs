@@ -10,6 +10,7 @@ import { validateProjectConfigDoc } from '../src/project/config.mjs'
 // Expected-failure matchers per corpus entry; every invalid fixture must fail
 // for its registered reason, not merely fail.
 const INVALID_EXPECTATIONS = new Map([
+  ['atelier-vault-publication', new Map([['publication.json', /expectedRevision.*must be >= 0/]])],
   ['atelier-guide', new Map([['authority.v1.json', /must NOT have additional properties/]])],
   ['atelier-intake', new Map([['authority.v1.json', /semanticAcceptance.*must be equal to constant/]])],
   ['atelier-skill-audit', new Map([['source-mutation.v1.json', /sourceMutation.*must be equal to constant/]])],

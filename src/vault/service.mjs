@@ -1,4 +1,4 @@
-import { verifyVaultPrivacy } from './privacy.mjs'
+import { verifyVaultPrivacy, vaultObjects } from './privacy.mjs'
 import { renderVaultHome, vaultHomePolicy } from './interface.mjs'
 /** Optional hosted artifact service. No default network, storage, or identity provider. */
 const TYPES = Object.freeze({ html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', txt: 'text/plain; charset=utf-8', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', pdf: 'application/pdf' })
@@ -18,7 +18,7 @@ const headers = {
 export async function digest(bytes) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('')
 }
-function reply(status, text = '') { return new Response(text, { status, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' } }) }
+function reply(status, text = '', extra = {}) { return new Response(text, { status, headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8', ...extra } }) }
 async function boundedBody(request) {
   if (!request.body) throw new Error('invalid')
   const reader = request.body.getReader()
@@ -67,7 +67,7 @@ export async function preparePublication(input) {
  * MUST atomically compare both owner and revision before replacing manifest.
  * storage.get/put accepts service-generated keys only and uses private storage.
  */
-export function createVaultService({ identity, metadata, storage, privacy }) {
+export function createVaultService({ identity, metadata, storage, privacy, deployment }) {
   for (const [object, methods] of [[identity, ['read', 'publish']], [metadata, ['get', 'commit']], [storage, ['get', 'put']]]) {
     if (!object || methods.some(method => typeof object[method] !== 'function')) throw new TypeError('Incomplete vault adapter')
   }
@@ -80,24 +80,24 @@ export function createVaultService({ identity, metadata, storage, privacy }) {
       const vault = publishing ? parts[1] : parts[0]
       if (!validId(vault)) return reply(404)
       const home = !publishing && (parts.length === 1 || (parts.length === 2 && parts[1] === ''))
-      if (url.search && (!home || [...url.searchParams.keys()].some(key => key !== 'q') || url.searchParams.getAll('q').length > 1 || (url.searchParams.get('q') || '').length > 200)) return reply(400)
+      if (url.search && (publishing || (home && ( [...url.searchParams.keys()].some(key => key !== 'q') || url.searchParams.getAll('q').length > 1 || (url.searchParams.get('q') || '').length > 200)))) return reply(400)
       if (publishing) {
-        if (parts.length !== 2 || !['GET', 'POST'].includes(request.method)) return reply(405)
+        if (parts.length !== 2 || !['GET', 'POST'].includes(request.method)) return reply(405, '', { Allow: 'GET, POST' })
         // Browser-originated writes are not a machine publication channel.
         if (request.headers.has('origin') || request.headers.has('cookie')) return reply(403)
         const principal = await identity.publish(request, vault)
-        if (!principal) return reply(401)
+        if (!principal) return reply(401, '', { 'WWW-Authenticate': 'Bearer realm="vault-publication"' })
         const record = await metadata.get(vault)
         if (!sameOwner(principal, record?.owner)) return reply(404)
         if (request.method === 'GET') {
           return new Response(JSON.stringify({ schema: 'atelier-vault-status/v1', vault, revision: record.revision, publication: record.publication ?? null }), { headers: { ...headers, 'Content-Type': 'application/json' } })
         }
-        if (request.headers.get('content-type') !== 'application/json') return reply(415)
+        if (request.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return reply(415)
         let input, prepared
         try { input = await boundedBody(request); prepared = await preparePublication(input) }
         catch (error) { return reply(error.message === 'too-large' ? 413 : 400) }
         if (input.expectedRevision !== record.revision) return reply(409)
-        const context = { vault, owner: record.owner, publication: prepared.publication, manifest: prepared.manifest }
+        const context = { vault, owner: record.owner, publication: prepared.publication, manifest: prepared.manifest, objects: vaultObjects(vault, prepared.manifest), deployment, request: { origin: url.origin, path: url.pathname } }
         const before = await verifyVaultPrivacy(privacy, { ...context, phase: 'before-upload' })
         if (before.status !== 'verified') return reply(503, before.reason)
         for (const file of prepared.files) await storage.put(`${vault}/${file.sha256}`, file.bytes)
@@ -110,12 +110,13 @@ export function createVaultService({ identity, metadata, storage, privacy }) {
         if (!committed) return reply(409)
         return new Response(JSON.stringify({ schema: 'atelier-vault-receipt/v1', vault, revision: input.expectedRevision + 1, publication: prepared.publication }), { status: 201, headers: { ...headers, 'Content-Type': 'application/json' } })
       }
-      if (!['GET', 'HEAD'].includes(request.method)) return reply(405)
+      if (!['GET', 'HEAD'].includes(request.method)) return reply(405, '', { Allow: 'GET, HEAD' })
       const principal = await identity.read(request)
       if (!principal) return reply(401)
       const record = await metadata.get(vault)
       if (!sameOwner(principal, record?.owner)) return reply(404)
-      const protection = await verifyVaultPrivacy(privacy, { vault, owner: record.owner, publication: record.publication ?? null, manifest: record.manifest, phase: 'read' })
+      if (!home && !record.manifest.some(file => file.path === parts.slice(1).join('/'))) return reply(404)
+      const protection = await verifyVaultPrivacy(privacy, { vault, owner: record.owner, publication: record.publication ?? null, manifest: record.manifest, objects: vaultObjects(vault, record.manifest), deployment, request: { origin: url.origin, path: url.pathname }, phase: 'read' })
       if (home) return new Response(request.method === 'HEAD' ? null : renderVaultHome({ vault, revision: record.revision, manifest: record.manifest, privacy: protection, query: url.searchParams.get('q') || '' }), { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': vaultHomePolicy } })
       if (protection.status !== 'verified') return reply(503, protection.reason)
       const path = parts.slice(1).join('/')
