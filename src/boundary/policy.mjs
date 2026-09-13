@@ -146,7 +146,7 @@ export function validateBoundaryPolicy(policy, project = null) {
     const declaredRepos = isObject(repos) ? repos : {}
     for (const [index, exception] of policy.contentRuleExceptions.entries()) {
       const name = firstString(exception?.repo)
-      if (name && Object.keys(declaredRepos).length && !declaredRepos[name]) {
+      if (name && Object.keys(declaredRepos).length && !Object.hasOwn(declaredRepos, name)) {
         errors.push(`contentRuleExceptions[${index}].repo ${name} is not declared in repos`)
       }
     }
@@ -163,7 +163,7 @@ export function validateBoundaryPolicy(policy, project = null) {
     }
     if (!firstString(actor.privateDomainRepo)) errors.push(`actors.${actorId}.privateDomainRepo is required`)
     if (firstString(actor.privateDomainRepo) && isObject(repos)) {
-      const privateRepo = repos[actor.privateDomainRepo]
+      const privateRepo = Object.hasOwn(repos, actor.privateDomainRepo) ? repos[actor.privateDomainRepo] : null
       if (!privateRepo) {
         errors.push(`actors.${actorId}.privateDomainRepo ${actor.privateDomainRepo} is not declared in repos`)
       } else if (privateRepo.kind !== 'private_domain') {
@@ -188,7 +188,7 @@ export function validateBoundaryPolicy(policy, project = null) {
     errors.push(...validAudienceList(repo.forbiddenAudiences, `repos.${repoName}.forbiddenAudiences`))
     if (repo.kind === 'private_domain') {
       if (!firstString(repo.ownerActor)) errors.push(`repos.${repoName}.ownerActor is required for private_domain repos`)
-      if (repo.ownerActor && isObject(actors) && !actors[repo.ownerActor]) errors.push(`repos.${repoName}.ownerActor ${repo.ownerActor} is not declared`)
+      if (repo.ownerActor && isObject(actors) && !Object.hasOwn(actors, repo.ownerActor)) errors.push(`repos.${repoName}.ownerActor ${repo.ownerActor} is not declared`)
     }
   }
 
@@ -197,35 +197,61 @@ export function validateBoundaryPolicy(policy, project = null) {
       if (repo.external) {
         // Declaring a boundary for a repo nobody manages is the confusion the
         // external kind exists to remove.
-        if (repos[repo.name]) errors.push(`policy repos.${repo.name} must not be declared; it is an external (unmanaged) repo`)
+        if (Object.hasOwn(repos, repo.name)) errors.push(`policy repos.${repo.name} must not be declared; it is an external (unmanaged) repo`)
         continue
       }
-      if (!repos[repo.name]) errors.push(`policy repos.${repo.name} must be declared`)
+      if (!Object.hasOwn(repos, repo.name)) errors.push(`policy repos.${repo.name} must be declared`)
     }
   }
 
   return errors
 }
 
-export function resolveCurrentActor({ policy, project, actor = null, env = process.env, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true } = {}) {
+function resolveExplicitActor({ policy, actor, env }) {
   const actors = policy?.actors ?? {}
-  const explicit = actor || env.MNSTRY_ATELIER_ACTOR || env.GITHUB_ACTOR
-  if (explicit && actors[explicit]) return { actorId: explicit, source: 'explicit' }
-  const gitEmails = gitEmailsForProject(project, { gitExecutable, env, allowHistoryActorResolution })
-  for (const [actorId, info] of Object.entries(actors)) {
-    const actorEmails = new Set(asArray(info.gitEmails).map((email) => email.toLowerCase()))
-    if (gitEmails.some((email) => actorEmails.has(email.toLowerCase()))) return { actorId, source: 'git-email', gitEmails }
+  const explicit = actor || env.MNSTRY_ATELIER_ACTOR
+  const unverified = (reason) => ({ actorId: null, source: 'unverified', reason })
+  if (actor && env.MNSTRY_ATELIER_ACTOR && actor !== env.MNSTRY_ATELIER_ACTOR) {
+    return unverified('conflicting-explicit-actors')
   }
-  const login = env.GITHUB_ACTOR || (allowNetworkActorResolution ? ghLogin() : null)
-  if (login) {
-    for (const [actorId, info] of Object.entries(actors)) {
-      if (String(info.githubLogin || '').toLowerCase() === String(login).toLowerCase()) return { actorId, source: 'github-login', githubLogin: login }
-    }
-  }
-  return { actorId: null, source: 'unverified', gitEmails, githubLogin: login || null }
+  if (explicit && !Object.hasOwn(actors, explicit)) return unverified('unknown-explicit-actor')
+  return explicit ? { actorId: explicit, source: 'explicit' } : null
 }
 
-function gitEmailsForProject(project, { gitExecutable = 'git', env = process.env, allowHistoryActorResolution = true } = {}) {
+export function resolveCurrentActor({ policy, project, actor = null, env = process.env, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false } = {}) {
+  const actors = policy?.actors ?? {}
+  const explicit = resolveExplicitActor({ policy, actor, env })
+  if (explicit) return explicit
+  const unverified = (reason) => ({ actorId: null, source: 'unverified', reason })
+  // Without an explicit local selector, a platform login precedes Git metadata.
+  // It is platform attribution only; this function cannot authenticate its env.
+  const platformLogin = env.GITHUB_ACTOR
+  if (platformLogin) {
+    const matches = Object.entries(actors).filter(([, info]) =>
+      !String(info.githubLogin || '').endsWith('_GITHUB_LOGIN_PLACEHOLDER') &&
+      String(info.githubLogin || '').toLowerCase() === String(platformLogin).toLowerCase())
+    if (matches.length !== 1) return unverified(matches.length ? 'ambiguous-platform-actor' : 'unknown-platform-actor')
+    return { actorId: matches[0][0], source: 'github-login', githubLogin: platformLogin }
+  }
+  // Keep the legacy option accepted by the API, but history is never evidence
+  // of the person currently operating a checkout.
+  const gitEmails = gitEmailsForProject(project, { gitExecutable, env, allowHistoryActorResolution: false })
+  const matches = Object.entries(actors).filter(([, info]) => {
+    const actorEmails = new Set(asArray(info.gitEmails).map((email) => email.toLowerCase()))
+    return gitEmails.some((email) => actorEmails.has(email.toLowerCase()))
+  })
+  if (matches.length > 1) return unverified('ambiguous-git-actor')
+  if (matches.length === 1) return { actorId: matches[0][0], source: 'git-email', gitEmails }
+  const login = allowNetworkActorResolution ? ghLogin() : null
+  if (login) {
+    const matches = Object.entries(actors).filter(([, info]) => !String(info.githubLogin || '').endsWith('_GITHUB_LOGIN_PLACEHOLDER') && String(info.githubLogin || '').toLowerCase() === String(login).toLowerCase())
+    if (matches.length !== 1) return unverified(matches.length ? 'ambiguous-platform-actor' : 'unknown-platform-actor')
+    return { actorId: matches[0][0], source: 'github-login', githubLogin: login }
+  }
+  return { actorId: null, source: 'unverified', gitEmails, githubLogin: null }
+}
+
+function gitEmailsForProject(project, { gitExecutable = 'git', env = process.env, allowHistoryActorResolution = false } = {}) {
   const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...managedRepos(project).map((repo) => repo.path)])
   const emails = []
   for (const root of roots) {
@@ -249,7 +275,7 @@ function ghLogin() {
 }
 
 function repoPolicy(policy, repoName) {
-  return policy?.repos?.[repoName] ?? null
+  return policy?.repos && Object.hasOwn(policy.repos, repoName) ? policy.repos[repoName] : null
 }
 
 function finding({ severity = 'error', code, message, repo = null, path: itemPath = null, node = null, details = {} }) {
@@ -282,13 +308,19 @@ function nodePlacementFindings({ node, policy }) {
 
 function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }) {
   const findings = []
-  const current = resolveCurrentActor({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution })
+  const operatedRepos = new Set(managedRepos(project).map((repo) => repo.name))
+  const ownedRepos = Object.entries(policy.repos ?? {}).filter(([name, repo]) =>
+    operatedRepos.has(name) && repo?.kind === 'private_domain' && repo.ownerActor)
+  const explicit = resolveExplicitActor({ policy, actor, env: process.env })
+  if (explicit?.reason) return [finding({ severity: 'error', code: 'actor-resolution-refused', message: explicit.reason })]
+  // Shared-only work needs no derived identity and must not invoke Git or gh.
+  if (!ownedRepos.length) return findings
+  const current = explicit || resolveCurrentActor({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution })
   const severity = forceActorErrors ? 'error' : severityFor(policy)
-  for (const [repoName, repo] of Object.entries(policy.repos ?? {})) {
-    if (repo.kind !== 'private_domain') continue
-    if (!repo.ownerActor) continue
+  for (const [repoName, repo] of ownedRepos) {
     if (!current.actorId) {
-      findings.push(finding({ severity, code: 'private-domain-actor-unverified', repo: repoName, message: `${repoName}: could not verify local actor for private domain repo owned by ${repo.ownerActor}` }))
+      findings.push(finding({ severity, code: 'private-domain-actor-unverified', repo: repoName,
+        message: `${repoName}: could not verify local actor for private domain repo owned by ${repo.ownerActor}${current.reason ? ` (${current.reason})` : ''}` }))
     } else if (current.actorId !== repo.ownerActor) {
       findings.push(finding({ severity, code: 'private-domain-actor-mismatch', repo: repoName, message: `${repoName}: private domain repo is owned by ${repo.ownerActor}, but current actor is ${current.actorId}` }))
     }
@@ -603,7 +635,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true, forceActorErrors = false } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))

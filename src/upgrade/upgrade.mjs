@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { buildGraph } from '../graph/graph.mjs'
-import { buildProjectProjection } from '../projection/project.mjs'
+import { buildProjectProjection, buildProjectManifest } from '../projection/project.mjs'
 import { buildReadiness } from '../readiness/readiness.mjs'
 import { validateJsonSchema } from '../export/atelier-export-contract.mjs'
 import {
@@ -509,13 +509,7 @@ function runGeneratedRefresh(project) {
   const projection = buildProjectProjection(project)
   fs.mkdirSync(path.dirname(projection.output), { recursive: true })
   fs.writeFileSync(projection.output, projection.html)
-  writeJson(path.join(project.outputRoot, 'atelier.manifest.json'), {
-    schema: 'mnstry.atelier-manifest@v1',
-    generatedAt: 'deterministic',
-    graphPath: project.graphPath,
-    entry: 'index.html',
-    nodes: projection.graph.nodes.map((node) => ({ id: node.id, title: node.title, audience: node.audience, path: node.path })),
-  })
+  writeJson(path.join(project.outputRoot, 'atelier.manifest.json'), buildProjectManifest(project, projection))
   writeJson(project.readinessPath, buildReadiness({ project, graph }))
 }
 
@@ -607,7 +601,7 @@ export function checkAtelierLock(project) {
   if (lock && lock.package?.version !== packageJson.version) errors.push(`lock package version ${lock.package?.version} does not match ${packageJson.version}`)
   if (lock && lock.contracts?.boundaryPolicy !== BOUNDARY_POLICY_SCHEMA) errors.push(`lock boundary policy contract must be ${BOUNDARY_POLICY_SCHEMA}`)
   const loadedPolicy = loadPolicyForLock(project)
-  if (lock?.boundaryPolicy?.digest && loadedPolicy.digest && lock.boundaryPolicy.digest !== loadedPolicy.digest) {
+  if (lock && (lock.boundaryPolicy?.digest ?? null) !== loadedPolicy.digest) {
     errors.push('boundary policy digest has changed; run upgrade --dry-run before applying')
   }
   if (lock) {

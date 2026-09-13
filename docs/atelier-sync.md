@@ -42,13 +42,14 @@ runtime object.
 - A commit plan cannot absorb pre-existing staged work. It stages only literal,
   explicitly reviewed paths.
 - Configured Atelier boundary policy is checked against the staged change set
-  before commit creation using the enrolled Git executable. When that policy
-  declares private-domain ownership, actor verification is blocking even in
+  before commit creation using the enrolled Git executable. When the enrolled project
+  operates a private-domain repository with a declared owner, actor verification is blocking even in
   legacy-warning mode. The Sync path disables the boundary command's optional
   network `gh api user` fallback and fails closed when local actor evidence is
   insufficient. Commit history is provenance, not current-user identity, and
-  is not accepted as actor evidence on this path. Policies without a declared private-domain owner do not invent
-  an actor requirement. Ordinary Git hooks still run; the resulting commit tree,
+  is not accepted as actor evidence on this path. Shared-only checks skip derived actor lookup, including ambient platform
+  identities. Invalid explicit selectors are still refused. Ownership is scoped
+  to configured repository names; it does not authenticate repository identity. Ordinary Git hooks still run; the resulting commit tree,
   single parent, and message must equal the reviewed authority or the local
   commit is rolled back and publication is refused.
 - Push is present only when the reviewed plan requested it, the branch had no

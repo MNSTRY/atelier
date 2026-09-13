@@ -3,8 +3,12 @@
   "configurations": [
     {
       "name": "atelier",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["atelier", "server"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--input-type=module",
+        "--eval",
+        "import { runCli } from '@mnstry/atelier/cli'; process.exit(await runCli({ argv: ['server', ...process.argv.slice(1)] }));"
+      ],
       "port": 8137,
       "autoPort": true
     }

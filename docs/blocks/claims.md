@@ -4,13 +4,16 @@ one names the command that proves it.
 **There is no silent egress; every network path is named.** There is no
 telemetry, update check, crash reporting, managed-runtime upload, or model
 provider path in the package. The exceptions are explicit: `boundary check`
-may invoke `gh api user` after no declared actor matches an explicit `--actor`,
-`MNSTRY_ATELIER_ACTOR`, `GITHUB_ACTOR`, or a configured Git email; repository
-identity checks may invoke `gh api repos/...` to resolve a canonical GitHub
-identity. Those authenticated requests use your own `gh` credentials. A
-recognized explicit actor prevents the boundary actor fallback; recorded
-repository identities let identity checks keep working when the provider is
-unavailable. Explicitly enrolled Atelier Sync may also run bounded Git fetches
+may invoke `gh api user` only when an operated private-domain repository needs
+owner attribution, no explicit selector or `GITHUB_ACTOR` was supplied, and no
+configured Git email maps to an actor. Shared-only boundary checks skip derived
+identity lookup. Invalid explicit selectors are refused without fallback;
+platform logins must uniquely match declared login mappings. Repository identity
+checks may invoke `gh api repos/...` to resolve a canonical GitHub identity.
+Those authenticated requests use your own `gh` credentials. Recorded repository
+identities let identity checks keep working when the provider is unavailable.
+See `docs/install.md` for the full attribution precedence and mode semantics.
+Explicitly enrolled Atelier Sync may also run bounded Git fetches
 for observation/reconciliation and one non-force push only when the exact
 reviewed commit plan requested and confirmed it, no earlier local commit is
 waiting to be published, and HEAD still names the verified commit object. Sync

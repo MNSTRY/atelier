@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { commandProject, readJson, writeJson } from '../project/config.mjs'
 import { summarizeReadinessJourney } from '../readiness-protocols/runtime.mjs'
@@ -118,36 +119,43 @@ document.addEventListener('click', async (event) => {
   return { output, html, graph, readinessJourney }
 }
 
+export function buildProjectManifest(project, projection) {
+  return {
+    schema: 'mnstry.atelier-manifest@v1',
+    generatedAt: 'deterministic',
+    graphPath: path.relative(project.outputRoot, project.graphPath).split(path.sep).join('/'),
+    entry: 'index.html',
+    tenantReadiness: {
+      score: projection.readinessJourney.score,
+      ready: projection.readinessJourney.ready,
+      dimensions: projection.readinessJourney.dimensions.map((item) => ({
+        key: item.key,
+        protocolId: item.protocolId,
+        status: item.status,
+        score: item.score,
+      })),
+    },
+    nodes: projection.graph.nodes.map((node) => ({ id: node.id, title: node.title, audience: node.audience, path: node.path })),
+  }
+}
+
 export function runProjectCommand(argv = process.argv.slice(2)) {
   const check = argv.includes('--check')
   const project = commandProject({ argv })
   const projection = buildProjectProjection(project)
   if (check) {
     const current = fs.existsSync(projection.output) ? fs.readFileSync(projection.output, 'utf8') : null
-    if (current !== projection.html) {
+    const manifestPath = path.join(project.outputRoot, 'atelier.manifest.json')
+    let manifest = null
+    try { manifest = readJson(manifestPath) } catch { /* Missing or invalid artifacts are stale. */ }
+    if (current !== projection.html || !isDeepStrictEqual(manifest, buildProjectManifest(project, projection))) {
       console.error(`project projection is stale: ${projection.output}`)
       process.exit(1)
     }
   } else {
     fs.mkdirSync(path.dirname(projection.output), { recursive: true })
     fs.writeFileSync(projection.output, projection.html)
-    writeJson(path.join(project.outputRoot, 'atelier.manifest.json'), {
-      schema: 'mnstry.atelier-manifest@v1',
-      generatedAt: 'deterministic',
-      graphPath: project.graphPath,
-      entry: 'index.html',
-      tenantReadiness: {
-        score: projection.readinessJourney.score,
-        ready: projection.readinessJourney.ready,
-        dimensions: projection.readinessJourney.dimensions.map((item) => ({
-          key: item.key,
-          protocolId: item.protocolId,
-          status: item.status,
-          score: item.score,
-        })),
-      },
-      nodes: projection.graph.nodes.map((node) => ({ id: node.id, title: node.title, audience: node.audience, path: node.path })),
-    })
+    writeJson(path.join(project.outputRoot, 'atelier.manifest.json'), buildProjectManifest(project, projection))
   }
   console.log(`project projection: ${projection.graph.counts.nodes} nodes -> ${projection.output}`)
 }

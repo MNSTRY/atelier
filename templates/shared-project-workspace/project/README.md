@@ -2,10 +2,10 @@
 title: "Shared Project Seed"
 kg:
   id: "project-alpha:seed"
-  type: "project-note"
+  type: "document"
   domain: "project"
   lifecycle: "draft"
-  status: "seed"
+  status: "draft"
   audience: "team"
   relations: []
 ---

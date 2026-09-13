@@ -2,6 +2,29 @@
 
 ## 0.2.0-alpha.7
 
+- Correct shared-only attribution so ambient platform identities cannot invent
+  an ownership requirement or trigger a network lookup. Preserve legacy-warning
+  semantics for derived identities; Sync remains strict. Match platform logins
+  only to declared logins, refuse prototype-name omissions and duplicate repos.
+- Share manifest generation between project and upgrade, store a relative graph
+  path, and compare parsed content independently of object-key order.
+- Resolve preview commands through the scoped package from root or parent installs;
+  qualify both layouts with installed health/page smoke tests. Existing preview
+  configs require an explicit user update.
+- Validate retained adoption policy/lock state before writing, refuse implicit
+  drift acceptance, detect null-digest policy drift, and refuse init collisions
+  so retries cannot overwrite authored files or reset the lock.
+
+- Repair starter document classifications, shared adoption policy validity and
+  initial adoption locks. Existing locks are retained so adoption cannot accept
+  managed-file drift implicitly.
+- Resolve template previews through the locally installed scoped package.
+- Refuse unknown or ambiguous actor declarations, prioritize platform login over
+  Git metadata, and never infer the current operator from commit history. Shared
+  policy declarations do not require ownership of private repos outside the
+  configured workspace. These checks remain attribution, not authentication.
+- Check the generated projection manifest as well as its HTML for staleness.
+
 - Add evidence-thresholded skill stewardship and exact-plan local projections;
   refuse unmanaged collisions, managed drift and cross-workspace confirmations.
 - Add bounded immutable source copies and extraction attempt receipts, retaining

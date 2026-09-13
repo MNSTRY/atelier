@@ -209,7 +209,7 @@ test('private domain actor mismatch fails closed in strict mode', () => {
   assert.ok(report.errors.some((item) => item.code === 'private-domain-actor-mismatch'))
 })
 
-test('immutable clones resolve the actor from the checked-out commit author', () => {
+test('immutable clone history does not identify the current actor', () => {
   const { project: cfg, policy, privateRepo, sharedRepo } = makeWorkspace()
   for (const repo of [privateRepo, sharedRepo]) {
     fs.writeFileSync(path.join(repo, 'README.md'), '# Boundary fixture\n')
@@ -219,10 +219,9 @@ test('immutable clones resolve the actor from the checked-out commit author', ()
     git(repo, ['config', '--unset', 'user.name'])
   }
 
-  const resolved = resolveCurrentActor({ policy, project: cfg, env: {} })
-  assert.equal(resolved.actorId, 'author')
-  assert.equal(resolved.source, 'git-email')
-  assert.ok(resolved.gitEmails.includes('author@example.invalid'))
+  const resolved = resolveCurrentActor({ policy, project: cfg, env: {}, allowNetworkActorResolution: false })
+  assert.equal(resolved.actorId, null)
+  assert.equal(resolved.source, 'unverified')
 })
 
 test('private-to-shared supersession requires a git.promote record and passes after one exists', () => {
@@ -450,4 +449,92 @@ test('semantic diff parsing reads sidecar JSON and ignores prose mentions', () =
   assert.equal(sidecar.path, 'asset.pdf.kg.json')
   assert.deepEqual(semanticChangesInFile(sidecar), ['audience changed from "team" to "public"'])
   assert.deepEqual(semanticChangesInFile(prose), [])
+})
+
+
+test('shared-only work does not require ownership of every declared private domain', () => {
+  const { project: cfg, policy } = makeWorkspace()
+  policy.actors.other = { githubLogin: 'other-login', gitEmails: ['other@example.invalid'], privateDomainRepo: 'other-private' }
+  policy.repos['other-private'] = { ...policy.repos['mnstry-private-author'], ownerActor: 'other' }
+  const shared = { ...cfg, repos: cfg.repos.filter((repo) => repo.name === 'mystery-example') }
+  for (const actor of ['author', 'other']) {
+    const report = checkBoundaryPolicy({ project: shared, policy, actor, allowNetworkActorResolution: false })
+    assert.equal(report.ok, true, JSON.stringify(report.errors))
+  }
+  const privateReport = checkBoundaryPolicy({ project: cfg, policy, actor: 'other', allowNetworkActorResolution: false })
+  assert.ok(privateReport.errors.some((item) => item.code === 'private-domain-actor-mismatch'))
+})
+
+test('platform attribution wins over previous commit metadata and refuses conflicting declarations', () => {
+  const { project: cfg, policy, privateRepo } = makeWorkspace()
+  policy.actors.other = { githubLogin: 'other-login', gitEmails: ['other@example.invalid'], privateDomainRepo: 'mnstry-private-author' }
+  git(privateRepo, ['commit', '--allow-empty', '-m', 'previous author'])
+  const resolve = (env, actor = null) => resolveCurrentActor({ policy, project: cfg, env, actor, allowNetworkActorResolution: false })
+  assert.equal(resolve({ GITHUB_ACTOR: 'other-login' }).actorId, 'other')
+  assert.equal(resolve({}, 'unknown').actorId, null)
+  assert.equal(resolve({ MNSTRY_ATELIER_ACTOR: 'other' }, 'author').reason, 'conflicting-explicit-actors')
+  assert.equal(resolve({ GITHUB_ACTOR: 'other-login' }, 'author').actorId, 'author')
+  assert.equal(resolve({ GITHUB_ACTOR: 'unknown-login' }).actorId, null)
+  policy.actors.author.githubLogin = 'author-login'
+  policy.actors.other.githubLogin = policy.actors.author.githubLogin
+  assert.equal(resolve({ GITHUB_ACTOR: policy.actors.author.githubLogin }).reason, 'ambiguous-platform-actor')
+  policy.actors.other.gitEmails = policy.actors.author.gitEmails
+  assert.equal(resolve({}).reason, 'ambiguous-git-actor')
+})
+
+test('shared-only checks ignore ambient identities but still reject invalid explicit selectors', (t) => {
+  const { project: cfg, policy } = makeWorkspace()
+  const shared = { ...cfg, repos: cfg.repos.filter((repo) => repo.name === 'mystery-example') }
+  const previous = process.env.GITHUB_ACTOR
+  process.env.GITHUB_ACTOR = 'undeclared-contributor'
+  t.after(() => { if (previous === undefined) delete process.env.GITHUB_ACTOR; else process.env.GITHUB_ACTOR = previous })
+  for (const stagedOnly of [false, true]) {
+    const result = checkBoundaryPolicy({ project: shared, policy, stagedOnly, forceActorErrors: true })
+    assert.equal(result.ok, true, JSON.stringify(result.errors))
+  }
+  assert.equal(checkBoundaryPolicy({ project: shared, policy, actor: 'unknown' }).ok, false)
+  policy.mode = 'legacy-warning'
+  const privateReport = checkBoundaryPolicy({ project: cfg, policy, allowNetworkActorResolution: false })
+  assert.equal(privateReport.ok, true)
+  assert.ok(privateReport.warnings.some((item) => item.code === 'private-domain-actor-unverified' && item.message.includes('unknown-platform-actor')))
+  assert.equal(checkBoundaryPolicy({ project: cfg, policy, forceActorErrors: true }).ok, false)
+})
+
+test('a declared GitHub login cannot be replaced by a matching local actor key', () => {
+  const { project: cfg, policy } = makeWorkspace()
+  policy.actors.author.githubLogin = 'actual-platform-login'
+  const result = resolveCurrentActor({ project: cfg, policy, env: { GITHUB_ACTOR: 'author' }, allowNetworkActorResolution: false })
+  assert.equal(result.actorId, null)
+  assert.equal(result.reason, 'unknown-platform-actor')
+})
+
+test('prototype properties do not count as declared repositories or owners', () => {
+  const { project: cfg, policy } = makeWorkspace()
+  for (const name of ['constructor', 'toString', '__proto__']) {
+    const project = { ...cfg, repos: [{ name, path: cfg.repos[0].path }] }
+    assert.ok(validateBoundaryPolicy(policy, project).some((message) => message.includes('must be declared')))
+    const invalidOwner = structuredClone(policy)
+    invalidOwner.repos['mnstry-private-author'].ownerActor = name
+    assert.ok(validateBoundaryPolicy(invalidOwner).some((message) => message.includes('is not declared')))
+  }
+})
+
+test('shared-only boundary check never invokes the optional gh fallback', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX executable marker; identity scoping has portable coverage')
+  const { root, project: cfg, policy } = makeWorkspace()
+  const bin = path.join(root, 'fake-bin')
+  const marker = path.join(root, 'gh-invoked')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\nprintf invoked > "$ATELIER_TEST_GH_MARKER"\nprintf outside-login\n')
+  fs.chmodSync(path.join(bin, 'gh'), 0o755)
+  const keys = ['PATH', 'GITHUB_ACTOR', 'MNSTRY_ATELIER_ACTOR', 'ATELIER_TEST_GH_MARKER']
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  t.after(() => { for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key] } })
+  process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+  process.env.ATELIER_TEST_GH_MARKER = marker
+  delete process.env.GITHUB_ACTOR
+  delete process.env.MNSTRY_ATELIER_ACTOR
+  const shared = { ...cfg, repos: cfg.repos.filter((repo) => repo.name === 'mystery-example') }
+  assert.equal(checkBoundaryPolicy({ project: shared, policy }).ok, true)
+  assert.equal(fs.existsSync(marker), false)
 })

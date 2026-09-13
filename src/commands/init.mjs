@@ -25,7 +25,29 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
 }
 
-function copyDir(source, target, { renameGitignore = true } = {}) {
+function existsWithoutFollowingLinks(file) {
+  try { fs.lstatSync(file); return true } catch (error) {
+    if (error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function assertNoTemplateCollisions(source, target, renameGitignore = true) {
+  if (fs.existsSync(target) && (!fs.lstatSync(target).isDirectory() || fs.lstatSync(target).isSymbolicLink())) {
+    throw new Error('init target must be a real directory')
+  }
+  for (const ent of fs.readdirSync(source, { withFileTypes: true })) {
+    const name = renameGitignore && ent.name === 'gitignore' && ent.isFile() ? '.gitignore' : ent.name
+    const to = path.join(target, name)
+    if (ent.isDirectory()) assertNoTemplateCollisions(path.join(source, ent.name), to, false)
+    else if (existsWithoutFollowingLinks(to)) {
+      throw new Error(`init refuses existing template file: ${name}; use adopt for an existing workspace`)
+    }
+  }
+}
+
+function copyDir(source, target, { renameGitignore = true, preflight = true } = {}) {
+  if (preflight) assertNoTemplateCollisions(source, target, renameGitignore)
   fs.mkdirSync(target, { recursive: true })
   for (const ent of fs.readdirSync(source, { withFileTypes: true })) {
     const from = path.join(source, ent.name)
@@ -33,7 +55,7 @@ function copyDir(source, target, { renameGitignore = true } = {}) {
     // `gitignore` at the template root; nested files keep their literal names.
     const rename = renameGitignore && ent.name === 'gitignore' && ent.isFile()
     const to = path.join(target, rename ? '.gitignore' : ent.name)
-    if (ent.isDirectory()) copyDir(from, to, { renameGitignore: false })
+    if (ent.isDirectory()) copyDir(from, to, { renameGitignore: false, preflight: false })
     else fs.copyFileSync(from, to)
   }
 }
@@ -44,7 +66,7 @@ function personalizeBoundaryPolicy(target, { actor, githubLogin, gitEmail } = {}
   const policy = readJson(policyPath)
   const actorId = slug(actor || 'owner')
   const privateDomainRepo = Object.entries(policy.repos || {}).find(([, repo]) => repo?.kind === 'private_domain')?.[0] || `mnstry-private-${actorId}`
-  const login = githubLogin || process.env.GITHUB_ACTOR || actorId
+  const login = githubLogin || `${actorId.toUpperCase()}_GITHUB_LOGIN_PLACEHOLDER`
   const email = gitEmail || gitConfig('user.email') || `${actorId}@example.invalid`
 
   policy.actors = {
@@ -60,6 +82,15 @@ function personalizeBoundaryPolicy(target, { actor, githubLogin, gitEmail } = {}
 
 const args = parseArgs(process.argv.slice(2))
 const target = path.resolve(args.target || process.cwd())
+for (const name of ['atelier.project.json', 'atelier.lock.json', 'repo-access.v1.json']) {
+  try {
+    fs.lstatSync(path.join(target, name))
+  } catch (error) {
+    if (error.code === 'ENOENT') continue
+    throw error
+  }
+  throw new Error(`init refuses existing ${name}; use adopt or upgrade for an existing workspace`)
+}
 const template = args.template || args.fixture
 let templateId = template || 'default'
 if (template === 'external-project') {
