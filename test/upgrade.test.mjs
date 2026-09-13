@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import {
@@ -20,6 +20,20 @@ import { computePackDigest, loadExtensionPacks } from '../src/extension-packs/lo
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 
 const PACK_FIXTURES = path.join(fileURLToPath(new URL('..', import.meta.url)), 'fixtures', 'atelier-extension-pack')
+
+// Upgrade fixtures have their own operator; do not inherit the CI trigger user.
+beforeEach((t) => {
+  const keys = ['GITHUB_ACTOR', 'MNSTRY_ATELIER_ACTOR']
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  process.env.GITHUB_ACTOR = 'author'
+  delete process.env.MNSTRY_ATELIER_ACTOR
+  t.after(() => {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key]
+      else process.env[key] = previous[key]
+    }
+  })
+})
 
 function git(cwd, args) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
@@ -447,4 +461,13 @@ test('migration authority cannot introduce deferred non-goals', () => {
   assert.match(errors.join('\n'), /telemetry/)
   assert.match(errors.join('\n'), /runtimeMutation/)
   assert.match(errors.join('\n'), /analysisExecution/)
+})
+
+test('upgrade refuses an unknown platform actor despite matching configured Git email', () => {
+  const { project } = fixture()
+  writeOldLock(project)
+  process.env.GITHUB_ACTOR = 'undeclared-operator'
+  const plan = planUpgrade({ project })
+  assert.equal(plan.ok, false)
+  assert.match(plan.blockers.join('\n'), /unknown-platform-actor/)
 })
