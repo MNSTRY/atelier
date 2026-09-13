@@ -207,25 +207,43 @@ export function validateBoundaryPolicy(policy, project = null) {
   return errors
 }
 
-export function resolveCurrentActor({ policy, project, actor = null, env = process.env, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true } = {}) {
+export function resolveCurrentActor({ policy, project, actor = null, env = process.env, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false } = {}) {
   const actors = policy?.actors ?? {}
-  const explicit = actor || env.MNSTRY_ATELIER_ACTOR || env.GITHUB_ACTOR
-  if (explicit && actors[explicit]) return { actorId: explicit, source: 'explicit' }
-  const gitEmails = gitEmailsForProject(project, { gitExecutable, env, allowHistoryActorResolution })
-  for (const [actorId, info] of Object.entries(actors)) {
+  const explicit = actor || env.MNSTRY_ATELIER_ACTOR
+  const unverified = (reason) => ({ actorId: null, source: 'unverified', reason })
+  if (actor && env.MNSTRY_ATELIER_ACTOR && actor !== env.MNSTRY_ATELIER_ACTOR) {
+    return unverified('conflicting-explicit-actors')
+  }
+  if (explicit && !Object.hasOwn(actors, explicit)) return unverified('unknown-explicit-actor')
+  if (explicit) return { actorId: explicit, source: 'explicit' }
+  // A platform login is evaluated before repository-controlled Git metadata.
+  // It is platform attribution only; this function cannot authenticate its env.
+  const platformLogin = env.GITHUB_ACTOR
+  if (platformLogin) {
+    const matches = Object.entries(actors).filter(([id, info]) =>
+      id === platformLogin || String(info.githubLogin || '').toLowerCase() === String(platformLogin).toLowerCase())
+    if (matches.length !== 1) return unverified(matches.length ? 'ambiguous-platform-actor' : 'unknown-platform-actor')
+    return { actorId: matches[0][0], source: 'github-login', githubLogin: platformLogin }
+  }
+  // Keep the legacy option accepted by the API, but history is never evidence
+  // of the person currently operating a checkout.
+  const gitEmails = gitEmailsForProject(project, { gitExecutable, env, allowHistoryActorResolution: false })
+  const matches = Object.entries(actors).filter(([, info]) => {
     const actorEmails = new Set(asArray(info.gitEmails).map((email) => email.toLowerCase()))
-    if (gitEmails.some((email) => actorEmails.has(email.toLowerCase()))) return { actorId, source: 'git-email', gitEmails }
-  }
-  const login = env.GITHUB_ACTOR || (allowNetworkActorResolution ? ghLogin() : null)
+    return gitEmails.some((email) => actorEmails.has(email.toLowerCase()))
+  })
+  if (matches.length > 1) return unverified('ambiguous-git-actor')
+  if (matches.length === 1) return { actorId: matches[0][0], source: 'git-email', gitEmails }
+  const login = allowNetworkActorResolution ? ghLogin() : null
   if (login) {
-    for (const [actorId, info] of Object.entries(actors)) {
-      if (String(info.githubLogin || '').toLowerCase() === String(login).toLowerCase()) return { actorId, source: 'github-login', githubLogin: login }
-    }
+    const matches = Object.entries(actors).filter(([, info]) => String(info.githubLogin || '').toLowerCase() === String(login).toLowerCase())
+    if (matches.length !== 1) return unverified(matches.length ? 'ambiguous-platform-actor' : 'unknown-platform-actor')
+    return { actorId: matches[0][0], source: 'github-login', githubLogin: login }
   }
-  return { actorId: null, source: 'unverified', gitEmails, githubLogin: login || null }
+  return { actorId: null, source: 'unverified', gitEmails, githubLogin: null }
 }
 
-function gitEmailsForProject(project, { gitExecutable = 'git', env = process.env, allowHistoryActorResolution = true } = {}) {
+function gitEmailsForProject(project, { gitExecutable = 'git', env = process.env, allowHistoryActorResolution = false } = {}) {
   const roots = unique([project?.repoOpsRoot, project?.workspaceRoot, ...managedRepos(project).map((repo) => repo.path)])
   const emails = []
   for (const root of roots) {
@@ -284,7 +302,10 @@ function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActo
   const findings = []
   const current = resolveCurrentActor({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution })
   const severity = forceActorErrors ? 'error' : severityFor(policy)
+  if (current.reason) findings.push(finding({ severity: 'error', code: 'actor-resolution-refused', message: current.reason }))
+  const operatedRepos = new Set(managedRepos(project).map((repo) => repo.name))
   for (const [repoName, repo] of Object.entries(policy.repos ?? {})) {
+    if (!operatedRepos.has(repoName)) continue
     if (repo.kind !== 'private_domain') continue
     if (!repo.ownerActor) continue
     if (!current.actorId) {
@@ -603,7 +624,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = true, forceActorErrors = false } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))

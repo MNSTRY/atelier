@@ -126,10 +126,14 @@ atelier init --template shared-project --target ./project-alpha --actor tenant-u
 `--actor` rewrites the copied boundary policy actor entry and binds it to the
 local Git email when available. Use `--github-login` or `--git-email` to set
 those values explicitly during onboarding. At check time, a declared actor is
-resolved in this order: recognized `--actor`/`MNSTRY_ATELIER_ACTOR`/
-`GITHUB_ACTOR`, configured Git email, then a reviewed `gh api user` fallback.
-An explicit value that is not declared in the policy does not authenticate an
-actor and therefore does not suppress later resolution attempts.
+resolved in this order: `--actor` or `MNSTRY_ATELIER_ACTOR`, then
+`GITHUB_ACTOR` mapped to a declared actor, configured Git email, then a reviewed
+`gh api user` fallback. Unknown explicit identities and ambiguous mappings are
+refused. Commit history never identifies the current operator. These are local
+attribution hints, not authenticated authorization; shared-host deployments must
+establish their own trusted identity boundary.
+An explicit value that is not declared in the policy fails closed instead of
+falling through to another identity. Conflicting explicit declarations also fail.
 
 Then update:
 

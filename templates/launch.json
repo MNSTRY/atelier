@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "atelier",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["atelier", "server"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["./node_modules/@mnstry/atelier/bin/atelier.mjs", "server"],
       "port": 8137,
       "autoPort": true
     }

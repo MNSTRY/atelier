@@ -11,6 +11,7 @@ import {
   resolveProjectConfig,
   writeJson,
 } from '../project/config.mjs'
+import { writeAtelierLock, loadAtelierLock } from '../upgrade/upgrade.mjs'
 import { auditRepoIdentities } from '../project/repo-identity.mjs'
 
 const PROFILE_SET = new Set(['single-repo', 'private-domain', 'shared-project', 'multi-repo', 'monorepo', 'control-workspace'])
@@ -121,8 +122,10 @@ function runSetup(argv) {
 }
 
 function baseBoundaryPolicy({ repoName, profile, actor }) {
-  const privateDomain = profile === 'shared-project' ? `${actor}-private` : repoName
   const shared = profile === 'shared-project'
+  const privateDomain = shared
+    ? (repoName === `${actor}-private` ? `${actor}-private-domain` : `${actor}-private`)
+    : repoName
   return {
     schema: 'mnstry.atelier-boundary-policy@v1',
     mode: 'strict',
@@ -134,6 +137,11 @@ function baseBoundaryPolicy({ repoName, profile, actor }) {
       },
     },
     repos: {
+      ...(shared ? { [privateDomain]: {
+        kind: 'private_domain', ownerActor: actor, readBoundary: 'private',
+        allowedAudiences: ['private', 'sensitive', 'team', 'operator', 'staff', 'public'],
+        forbiddenAudiences: [], autoCommit: 'guarded',
+      } } : {}),
       [repoName]: {
         kind: shared ? 'shared' : 'private_domain',
         ownerActor: shared ? undefined : actor,
@@ -208,6 +216,9 @@ function runAdopt(argv) {
   const project = resolveProjectConfig({ cwd: target, argv: ['--project', projectPath] })
   ensureLocalState(project, { write: true })
   writeLocalOverlay(project)
+  // Adoption creates the first lock, but never accepts drift in an existing one.
+  const { lockPath } = loadAtelierLock(project)
+  if (!fs.existsSync(lockPath)) writeAtelierLock({ project, templateId: `adopt:${profile}` })
   console.log(JSON.stringify({ ok: true, command: 'adopt', profile, target, projectPath }, null, 2))
 }
 

@@ -2,6 +2,16 @@
 
 ## 0.2.0-alpha.7
 
+- Repair starter document classifications, shared adoption policy validity and
+  initial adoption locks. Existing locks are retained so adoption cannot accept
+  managed-file drift implicitly.
+- Resolve template previews through the locally installed scoped package.
+- Refuse unknown or ambiguous actor declarations, prioritize platform login over
+  Git metadata, and never infer the current operator from commit history. Shared
+  policy declarations do not require ownership of private repos outside the
+  configured workspace. These checks remain attribution, not authentication.
+- Check the generated projection manifest as well as its HTML for staleness.
+
 - Add evidence-thresholded skill stewardship and exact-plan local projections;
   refuse unmanaged collisions, managed drift and cross-workspace confirmations.
 - Add bounded immutable source copies and extraction attempt receipts, retaining
