@@ -56,7 +56,9 @@
     "./export-contract": "./src/export/atelier-export-contract.mjs",
     "./dry-run": "./src/validate-atelier-export-dry-run.mjs",
     "./contracts/atelier-export.v1.schema.json": "./contracts/atelier-export.v1.schema.json",
-    "./fixtures/atelier-export/sample-studio-offer.v1.json": "./fixtures/atelier-export/sample-studio-offer.v1.json"
+    "./fixtures/atelier-export/sample-studio-offer.v1.json": "./fixtures/atelier-export/sample-studio-offer.v1.json",
+    "./vault": "./src/vault/index.mjs",
+    "./contracts/atelier-vault-publication.v1.schema.json": "./contracts/atelier-vault-publication.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

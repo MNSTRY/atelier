@@ -42,9 +42,14 @@ you have to sign.
 These are the claims the package makes. Defeating any of them is a
 vulnerability, and the more quietly it can be defeated, the more severe:
 
-- **Egress.** Any network send path in first-party code, or any way to make
+- **Egress.** Any undocumented network send path, any vault SDK invocation
+  without explicit host integration, or any way to make
   the local sidecar reachable off loopback or serve a policy that authorizes
   an external origin.
+- **Vault ownership.** Any hosted artifact or asset served without a verified
+  owner identity, cross-vault credential use, or publication that bypasses the
+  atomic owner/revision check. The experimental contract still requires hosted
+  qualification; local conformance tests are not a production safety claim.
 - **Boundary guard.** Any way to get private or sensitive source into a
   shared repo, to stage a protected local file, or to promote private-domain
   material without the required disclosure record — while the guard reports

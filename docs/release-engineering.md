@@ -128,6 +128,12 @@ pushes the exact post-hook-verified commit object without following tags or
 recursively publishing submodule refs. Its boundary check also suppresses the
 optional network actor fallback.
 
+The optional `vault` API is explicitly host-bound: provider storage, metadata
+and identity bindings can perform network I/O when invoked by a consuming host.
+The core does not install SDKs or start a listener. The lexical egress scanner
+does not model SDK method calls; vault behavior requires its own conformance
+suite and independent review. No egress suppression marker is added for it.
+
 ### consumer:smoke
 
 `npm run consumer:smoke` (`scripts/consumer-smoke.mjs`) packs the real tarball,
