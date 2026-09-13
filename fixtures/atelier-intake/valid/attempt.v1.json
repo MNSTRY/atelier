@@ -1,0 +1,8 @@
+{
+  "schema": "mnstry.atelier-intake-attempt@v1",
+  "attemptId": "sample",
+  "blobId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "extractorId": "plain-text",
+  "extractorVersion": "1",
+  "configurationDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

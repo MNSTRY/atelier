@@ -1,0 +1,9 @@
+{
+  "schema": "mnstry.atelier-intake-completion@v1",
+  "attemptId": "sample",
+  "attemptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "outputDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "bytes": 12,
+  "integrity": "verified",
+  "semanticAcceptance": "accepted"
+}

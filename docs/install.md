@@ -17,6 +17,10 @@ Git repository access is the hard read boundary for source files. Local
 `kg.audience` labels guide projection and review, but they do not hide files
 from anyone who can read the repository.
 
+For adapters whose source repositories live elsewhere, see
+[project options](project-options.md) for shared CLI overrides, precedence and
+resolution diagnostics. Moving a repository does not change its read authority.
+
 Two command forms ship, and each has a place. Inside an installed
 workspace, use `atelier` — it resolves from `node_modules/.bin`, so npm
 scripts and workspace shells get the real binary. From outside a
@@ -30,19 +34,19 @@ The registry is the distribution channel of record, as `docs/continuity.md`
 commits:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.7
 ```
 
 Installing from the matching Git tag resolves to the same reviewed commit:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.6"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.7"
 ```
 
 Or over SSH:
 
 ```bash
-npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.6"
+npm install --save-dev "git+ssh://git@github.com/MNSTRY/atelier.git#v0.2.0-alpha.7"
 ```
 
 Keep the `@mnstry/` scope — see the command-form note above for why the
@@ -165,3 +169,12 @@ smoke-test tools; they are not the default install path.
 
 See `docs/tenant-readiness.md` for the readiness review format and
 `docs/upgrade.md` for the full upgrade flow and boundary review checklist.
+
+## External source adapters and local review
+
+Use `atelier init --template external-project --target NEW_DIRECTORY` for the
+invented adapter/source starter. See [local review](local-review.md) for the
+complete installed workflow, source ownership, asserted identity and save/resume.
+`atelier lock provenance` distinguishes declared install origin, observed package
+bytes and verified clean-checkout binding. It never substitutes the consumer
+repository's HEAD for the installed package.

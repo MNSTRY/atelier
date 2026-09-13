@@ -35,6 +35,19 @@ export function compileDisclosurePatterns(patternDocs = []) {
   })
 }
 
+export function scanDisclosureText(text, { denylistPatterns = [] } = {}) {
+  if (typeof text !== 'string' || Buffer.byteLength(text) > 4 * 1024 * 1024) throw new Error('disclosure text unavailable or exceeds bounds')
+  const findings = []
+  const patterns = [...STRUCTURAL_DISCLOSURE_PATTERNS, ...denylistPatterns]
+  for (const [index,line] of text.split('\n').entries()) {
+    for (const {pattern,label} of patterns) {
+      pattern.lastIndex = 0
+      if (pattern.test(line)) findings.push({label,line:index+1})
+    }
+  }
+  return {ok:findings.length===0,findings}
+}
+
 export function scanDisclosureContent({
   root = process.cwd(),
   staged = false,

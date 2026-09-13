@@ -1,0 +1,11 @@
+{
+  "schema": "mnstry.atelier-guide-consent@v1",
+  "offerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "capabilityDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "engagementRevision": 1,
+  "status": "approved",
+  "validFrom": "2026-01-01T00:00:00Z",
+  "expiresAt": "2026-01-02T00:00:00Z",
+  "authority": "local-assertion-only"
+}

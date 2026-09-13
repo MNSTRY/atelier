@@ -238,7 +238,7 @@ export function createCollaborationEventLedger({
     }
   }
 
-  function append({ aggregateId, expectedVersion = 0, type, actor, at = clock(), payload = {} }) {
+  function append({ aggregateId, expectedVersion = 0, type, actor, at = clock(), payload = {}, precondition = null }) {
     return withWriteLock(() => {
       const current = eventsFor(aggregateId)
       if (!current.ok) return current
@@ -248,6 +248,11 @@ export function createCollaborationEventLedger({
           status: 409,
           error: `stale collaboration event refused: expected ${expectedVersion}, current ${current.currentVersion}`,
         }
+      }
+      if (precondition !== null) {
+        if (typeof precondition !== 'function') return { ok: false, status: 400, error: 'append precondition must be a function' }
+        const permitted = precondition()
+        if (!permitted?.ok) return { ok: false, status: permitted?.status ?? 409, error: permitted?.error ?? 'append precondition refused' }
       }
       if (current.stats.eventCount >= limits.maxEvents) {
         return { ok: false, status: 413, error: `collaboration ledger reached ${limits.maxEvents} event hard ceiling; compact it explicitly before appending` }

@@ -1,0 +1,2 @@
+# Pack qualification hashes committed bytes; prevent checkout conversion.
+templates/external-project-workspace/packs/** text eol=lf

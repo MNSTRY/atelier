@@ -59,6 +59,11 @@ Core commands:
   upgrade --dry-run               Plan a safe package/template upgrade.
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.
+  lock provenance                Inspect actual installed package identity.
+  review run|history|handoff       Evidence-bound local human review.
+  review export|inspect|packs      Preview inspection bundles and pack lifecycle.
+  coauthor start|read|event|recover Save and resume private authoring drafts.
+  skills audit|observe|candidates|sync Audit and manage local skill projections.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -74,6 +79,9 @@ Attestation commands:
 Commands whose usage names --project accept --project=PATH or --project PATH.
 The project resolver also accepts --project-config=PATH and
 MNSTRY_ATELIER_PROJECT_CONFIG=PATH; each command's own help is authoritative.
+Project-aware commands accept repeated --repo-path NAME=PATH or
+--repo-path=NAME=PATH. Overrides change location, never declared read authority.
+Run config check --explain for path-free resolution sources.
 Machine-local repo paths belong in
 .atelier-local/, atelier.local.json, or atelier.workspace.local.json.`
 
@@ -91,7 +99,8 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.equal(commandMap instanceof Map, true)
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
-  assert.equal(commandMap.size, 53)
+  assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
+  assert.equal(commandMap.size, 56)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {

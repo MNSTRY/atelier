@@ -1,0 +1,23 @@
+{
+  "schema": "mnstry.atelier-skill-sync-lock@v1",
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "source": {
+    "packageName": "@mnstry/atelier",
+    "packageVersion": "0.1.0",
+    "catalogDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "target": ".agents/skills",
+  "skills": [
+    {
+      "name": "sample-review",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "authority": {
+    "telemetry": false,
+    "egress": false,
+    "sourceMutation": false,
+    "targetMutation": "content-bound-confirmed",
+    "destructiveDelete": false
+  }
+}

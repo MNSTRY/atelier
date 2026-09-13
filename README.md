@@ -33,6 +33,12 @@ its definition or ceiling.
 
 ## From files to a working system
 
+For local-harness authoring, see [durable coauthor sessions](docs/coauthor-session.md)
+and [skill stewardship and managed installation](docs/skill-steward.md).
+[Immutable intake and guide contracts](docs/intake-and-guides.md) extend existing
+processing and hosted-tool adapters without adding remote execution or publication
+authority. These alpha capabilities require explicit consumer integration.
+
 ```text
 files you own
     ↓ declare identity, type, audience, and relationships
@@ -48,7 +54,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.7
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -358,7 +364,7 @@ Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
 remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.6
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.7
 ```
 
 Then choose the path that matches what you are building:
@@ -375,7 +381,7 @@ Then choose the path that matches what you are building:
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.6`.
+Current package: `@mnstry/atelier@0.2.0-alpha.7`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.

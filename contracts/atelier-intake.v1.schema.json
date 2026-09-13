@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "contract revision 1.0.0; local integrity and inert declarations only.",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-intake.v1.schema.json",
+  "title": "Atelier immutable intake records",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/source"
+    },
+    {
+      "$ref": "#/$defs/attempt"
+    },
+    {
+      "$ref": "#/$defs/completion"
+    }
+  ],
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sourceRef",
+        "blobId",
+        "bytes",
+        "originalMutation"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-intake-source@v1"
+        },
+        "sourceRef": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^./\\\\][^\\\\]*$"
+        },
+        "blobId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "originalMutation": {
+          "const": false
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "attemptId",
+        "blobId",
+        "extractorId",
+        "extractorVersion",
+        "configurationDigest"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-intake-attempt@v1"
+        },
+        "attemptId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "blobId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "extractorId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "extractorVersion": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{1,64}$"
+        },
+        "configurationDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "attemptId",
+        "attemptDigest",
+        "outputDigest",
+        "bytes",
+        "integrity",
+        "semanticAcceptance"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-intake-completion@v1"
+        },
+        "attemptId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "attemptDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "outputDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "integrity": {
+          "const": "verified"
+        },
+        "semanticAcceptance": {
+          "const": "pending"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

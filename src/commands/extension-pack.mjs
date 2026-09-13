@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // atelier extension-pack validate|list
 //
-// Self-contained subcommand parser (no shared CLI plumbing) so the module can
-// be invoked directly: node src/commands/extension-pack.mjs <subcommand> ...
+// Shared project options also work when this module is invoked directly.
 //
 // Exit codes: 0 every enabled pack loads clean (warnings do not fail),
 // 1 an enabled pack failed to load, 2 usage or project resolution error.
@@ -13,6 +12,7 @@
 import path from 'node:path'
 import { ATELIER_EXT_NAMESPACE, loadExtensionPacks } from '../extension-packs/loader.mjs'
 import { asObject, commandProject } from '../project/config.mjs'
+import { PROJECT_OPTION_SPEC, projectOptionAt } from '../cli/project-options.mjs'
 
 const REPORT_SCHEMA = 'mnstry.atelier-extension-pack-report@v1'
 const LIST_SCHEMA = 'mnstry.atelier-extension-pack-list@v1'
@@ -35,6 +35,10 @@ ext["${ATELIER_EXT_NAMESPACE}"].extensionPacks. Pack protocols are resolvable
 by full namespaced id only; the machine-local overlay can disable a declared
 pack but can never enable an undeclared one.
 
+Project options: --project PATH (alias --project-config PATH) and repeated
+--repo-path NAME=PATH also accept --flag=value. Repo overrides resolve from
+the current directory and do not declare new repos or widen read boundaries.
+
 Exit codes: 0 every enabled pack loads clean (warnings do not fail),
 1 an enabled pack failed to load, 2 usage or project resolution error.`
 
@@ -43,10 +47,10 @@ function fail(message) {
   process.exit(2)
 }
 
-// --project / --project-config (both --flag VALUE and --flag=VALUE forms) are
+// Shared project options (both --flag VALUE and --flag=VALUE forms) are
 // recognized here for the unknown-option check only; commandProject reads the
 // same process.argv itself, so the values need no forwarding.
-const OPTION_SPEC = { json: 'flag', project: 'value', 'project-config': 'value' }
+const OPTION_SPEC = { json: 'flag', ...PROJECT_OPTION_SPEC }
 
 function parseOptions(argv) {
   const options = { json: false }
@@ -60,12 +64,15 @@ function parseOptions(argv) {
       fail(`unexpected argument: ${arg}\n\n${USAGE}`)
     }
     const name = arg.slice(2).split('=')[0]
-    if (!(name in OPTION_SPEC)) fail(`unknown option --${name}\n\n${USAGE}`)
+    if (!Object.hasOwn(OPTION_SPEC, name)) fail(`unknown option --${name}\n\n${USAGE}`)
     if (OPTION_SPEC[name] === 'flag') {
       options[name] = true
-    } else if (!arg.includes('=')) {
-      i += 1
-      if (argv[i] === undefined) fail(`--${name} requires a value`)
+    } else {
+      try {
+        i = projectOptionAt(argv, i).nextIndex - 1
+      } catch (error) {
+        fail(error.message)
+      }
     }
   }
   return options

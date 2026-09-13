@@ -1,3 +1,8 @@
+---
+name: atelier-open
+description: Open the local Atelier preview in the current client when asked to show the portal or current page.
+---
+
 # Open the Atelier
 
 Use this skill when someone says "open the atelier", "pull up the atelier",
