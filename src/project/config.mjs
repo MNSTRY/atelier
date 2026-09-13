@@ -250,6 +250,7 @@ export function resolveProjectConfig({
   configArgPrefix = PROJECT_CONFIG_ARG_PREFIX,
   gitExecutable = 'git',
   configEnv = PROJECT_CONFIG_ENV,
+  writeLocalState = true,
   defaults = {},
 } = {}) {
   const argPath = projectConfigArg(argv, configArgPrefix)
@@ -366,7 +367,7 @@ export function resolveProjectConfig({
       }
     }),
   }
-  resolved.localState = ensureLocalState(resolved, { write: true, gitExecutable, env })
+  resolved.localState = ensureLocalState(resolved, { write: writeLocalState, gitExecutable, env })
   return resolved
 }
 

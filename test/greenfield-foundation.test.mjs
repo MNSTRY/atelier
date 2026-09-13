@@ -174,3 +174,57 @@ test('init does not bind an ambient CI login as the owner platform identity', (t
   const policy = JSON.parse(fs.readFileSync(project(dir).boundaryPolicyPath, 'utf8'))
   assert.equal(policy.actors.author.githubLogin, 'AUTHOR_GITHUB_LOGIN_PLACEHOLDER')
 })
+
+test('adopt validates the proposed repo against a retained policy before any writes', (t) => {
+  const seed = workspace(t)
+  assert.equal(run(seed, ['adopt', '--target', seed, '--name', 'declared', '--actor', 'author']).status, 0)
+  const dir = workspace(t)
+  const contents = fs.readFileSync(path.join(seed, 'boundary-policy.v1.json'))
+  fs.writeFileSync(path.join(dir, 'boundary-policy.v1.json'), contents)
+  assert.notEqual(run(dir, ['adopt', '--target', dir, '--name', 'different', '--actor', 'author']).status, 0)
+  assert.deepEqual(fs.readdirSync(dir), ['boundary-policy.v1.json'])
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'boundary-policy.v1.json')), contents)
+})
+
+test('adopt refuses duplicate retained repo names before creating any state', (t) => {
+  const seed = workspace(t)
+  assert.equal(run(seed, ['adopt', '--target', seed, '--name', 'shared', '--actor', 'author']).status, 0)
+  const dir = workspace(t)
+  const config = JSON.parse(fs.readFileSync(path.join(seed, 'atelier.project.json')))
+  config.repos.push({ ...config.repos[0], name: 'SHARED' })
+  fs.writeFileSync(path.join(dir, 'atelier.project.json'), JSON.stringify(config))
+  const policy = JSON.parse(fs.readFileSync(path.join(seed, 'boundary-policy.v1.json')))
+  policy.repos.SHARED = { ...policy.repos.shared }
+  fs.writeFileSync(path.join(dir, 'boundary-policy.v1.json'), JSON.stringify(policy))
+  const before = fs.readdirSync(dir)
+  assert.notEqual(run(dir, ['adopt', '--target', dir, '--actor', 'author']).status, 0)
+  assert.deepEqual(fs.readdirSync(dir), before)
+})
+
+test('project check compares serialized optional fields and still detects changed titles', (t) => {
+  const dir = workspace(t)
+  assert.equal(run(dir, ['init', '--template', 'sample-workspace', '--target', dir]).status, 0)
+  assert.equal(run(dir, ['graph']).status, 0)
+  const cfg = project(dir)
+  const graph = JSON.parse(fs.readFileSync(cfg.graphPath))
+  delete graph.nodes[0].title
+  fs.writeFileSync(cfg.graphPath, JSON.stringify(graph))
+  assert.equal(run(dir, ['project']).status, 0)
+  assert.equal(run(dir, ['project', '--check']).status, 0)
+  const manifestPath = path.join(cfg.outputRoot, 'atelier.manifest.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath))
+  fs.writeFileSync(manifestPath, JSON.stringify(Object.fromEntries(Object.entries(manifest).reverse())))
+  assert.equal(run(dir, ['project', '--check']).status, 0)
+  manifest.nodes[0].title = 'Changed title'
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest))
+  assert.equal(run(dir, ['project', '--check']).status, 1)
+})
+
+test('blank init refuses a retained invalid boundary policy without writing state', (t) => {
+  const dir = workspace(t)
+  const contents = JSON.stringify({ mode: 'off' })
+  fs.writeFileSync(path.join(dir, 'boundary-policy.v1.json'), contents)
+  assert.notEqual(run(dir, ['init', '--target', dir]).status, 0)
+  assert.deepEqual(fs.readdirSync(dir), ['boundary-policy.v1.json'])
+  assert.equal(fs.readFileSync(path.join(dir, 'boundary-policy.v1.json'), 'utf8'), contents)
+})

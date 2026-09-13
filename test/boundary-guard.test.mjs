@@ -522,6 +522,7 @@ test('prototype properties do not count as declared repositories or owners', () 
 test('shared-only boundary check never invokes the optional gh fallback', (t) => {
   if (process.platform === 'win32') return t.skip('POSIX executable marker; identity scoping has portable coverage')
   const { root, project: cfg, policy } = makeWorkspace()
+  policy.actors.author.gitEmails = ['unmapped@example.invalid']
   const bin = path.join(root, 'fake-bin')
   const marker = path.join(root, 'gh-invoked')
   fs.mkdirSync(bin)
@@ -537,4 +538,13 @@ test('shared-only boundary check never invokes the optional gh fallback', (t) =>
   const shared = { ...cfg, repos: cfg.repos.filter((repo) => repo.name === 'mystery-example') }
   assert.equal(checkBoundaryPolicy({ project: shared, policy }).ok, true)
   assert.equal(fs.existsSync(marker), false)
+})
+
+test('a hand-set platform actor cannot resolve a placeholder login', () => {
+  const { project: cfg, policy } = makeWorkspace()
+  policy.actors.author.githubLogin = 'AUTHOR_GITHUB_LOGIN_PLACEHOLDER'
+  const result = resolveCurrentActor({ project: cfg, policy,
+    env: { GITHUB_ACTOR: 'AUTHOR_GITHUB_LOGIN_PLACEHOLDER' }, allowNetworkActorResolution: false })
+  assert.equal(result.actorId, null)
+  assert.equal(result.reason, 'unknown-platform-actor')
 })

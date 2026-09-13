@@ -82,7 +82,7 @@ function personalizeBoundaryPolicy(target, { actor, githubLogin, gitEmail } = {}
 
 const args = parseArgs(process.argv.slice(2))
 const target = path.resolve(args.target || process.cwd())
-for (const name of ['atelier.project.json', 'atelier.lock.json', 'repo-access.v1.json']) {
+for (const name of ['atelier.project.json', 'atelier.lock.json', 'repo-access.v1.json', 'boundary-policy.v1.json']) {
   try {
     fs.lstatSync(path.join(target, name))
   } catch (error) {

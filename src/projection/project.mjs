@@ -148,7 +148,7 @@ export function runProjectCommand(argv = process.argv.slice(2)) {
     const manifestPath = path.join(project.outputRoot, 'atelier.manifest.json')
     let manifest = null
     try { manifest = readJson(manifestPath) } catch { /* Missing or invalid artifacts are stale. */ }
-    if (current !== projection.html || !isDeepStrictEqual(manifest, buildProjectManifest(project, projection))) {
+    if (current !== projection.html || !isDeepStrictEqual(manifest, JSON.parse(JSON.stringify(buildProjectManifest(project, projection))))) {
       console.error(`project projection is stale: ${projection.output}`)
       process.exit(1)
     }

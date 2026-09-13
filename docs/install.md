@@ -155,13 +155,24 @@ Shared-host deployment must establish its own trusted identity boundary.
 
 `init` refuses existing scaffold files or an existing project/lock; use `adopt`
 for existing content and `upgrade` for managed changes. Adoption validates the
-selected policy before creating a first lock, preserves existing locks, and
+proposed or retained project and its selected policy before writing any scaffold
+or local state, preserves existing locks, and
 refuses drift rather than reporting success. Choose and install the intended
 package before adoption. Preview configs resolve `@mnstry/atelier/cli` from the
 workspace through parent `node_modules` directories using Node, without registry
 fallback. This supports the documented subdirectory target and hoisted install.
 Generate `graph` and `project` output before starting the preview. Existing launch
-configs are not rewritten by these template changes.
+configs are not rewritten by these template changes. Append server arguments
+following a `--` separator after the configured Node arguments. The host process
+lifecycle still needs qualification before relying on preview restarts.
+
+Upgrade planning and application use the same optional `gh api user` fallback
+as ordinary boundary checks. Supply a valid explicit selector or mapped identity
+to avoid this lookup; Sync disables it.
+
+The generated manifest's `graphPath` is relative to its output directory. Readers
+of older manifests should continue accepting absolute paths; resolve relative
+values against the directory containing `atelier.manifest.json`.
 
 Then update:
 

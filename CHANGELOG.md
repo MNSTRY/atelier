@@ -2,6 +2,14 @@
 
 ## 0.2.0-alpha.7
 
+- Validate proposed and retained adoption configurations together with their
+  policy before writing; refuse an existing default policy during blank init.
+  Compare manifests using their serialized JSON representation so omitted
+  optional fields do not make freshly generated output stale.
+- Migration: unset or correct globally exported `MNSTRY_ATELIER_ACTOR` values
+  that are not declared in the current policy. Invalid explicit selectors now
+  refuse even shared-only and legacy-warning checks.
+
 - Correct shared-only attribution so ambient platform identities cannot invent
   an ownership requirement or trigger a network lookup. Preserve legacy-warning
   semantics for derived identities; Sync remains strict. Match platform logins

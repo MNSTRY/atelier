@@ -516,3 +516,24 @@ test('private upgrade planning can use configured Git email without a platform s
   const plan = planUpgrade({ project })
   assert.equal(plan.ok, true, plan.blockers.join('\n'))
 })
+
+test('upgrade planning uses the documented optional gh identity fallback', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX executable marker')
+  const { root, repo, project } = fixture()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  git(repo, ['config', 'user.email', 'unmapped@example.invalid'])
+  const bin = path.join(root, 'fake-bin')
+  const marker = path.join(root, 'gh-invoked')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\nprintf invoked > "$ATELIER_TEST_GH_MARKER"\nprintf author\n')
+  fs.chmodSync(path.join(bin, 'gh'), 0o755)
+  const keys = ['PATH', 'ATELIER_TEST_GH_MARKER']
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  t.after(() => { for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key] } })
+  process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+  process.env.ATELIER_TEST_GH_MARKER = marker
+  delete process.env.GITHUB_ACTOR
+  delete process.env.MNSTRY_ATELIER_ACTOR
+  planUpgrade({ project })
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'invoked')
+})
