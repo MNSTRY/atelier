@@ -77,10 +77,11 @@ test('template preview commands require the locally installed scoped kit', (t) =
     const config = JSON.parse(fs.readFileSync(path.join(root, 'templates', rel), 'utf8'))
     for (const preview of config.configurations) {
       assert.equal(preview.runtimeExecutable, 'node')
-      assert.deepEqual(preview.runtimeArgs, ['./node_modules/@mnstry/atelier/bin/atelier.mjs', 'server'])
+      assert.deepEqual(preview.runtimeArgs.slice(0, 2), ['--input-type=module', '--eval'])
+      assert.match(preview.runtimeArgs[2], /@mnstry\/atelier\/cli/)
       const missing = spawnSync(process.execPath, preview.runtimeArgs, { cwd: dir, encoding: 'utf8' })
       assert.equal(missing.status, 1)
-      assert.match(missing.stderr, /MODULE_NOT_FOUND/)
+      assert.match(missing.stderr, /ERR_MODULE_NOT_FOUND/)
     }
   }
 })
@@ -94,4 +95,82 @@ test('shared adoption keeps its policy-only private domain distinct from the man
   const policy = JSON.parse(fs.readFileSync(cfg.boundaryPolicyPath, 'utf8'))
   assert.deepEqual(validateBoundaryPolicy(policy, cfg), [])
   assert.notEqual(policy.actors.author.privateDomainRepo, cfg.repos[0].name)
+})
+
+test('adopt refuses invalid existing policy and malformed lock without scaffold writes', (t) => {
+  for (const [file, contents] of [['boundary-policy.v1.json', '{'], ['boundary-policy.v1.json', JSON.stringify({ mode: 'off' })], ['atelier.lock.json', '{'], ['atelier.lock.json', 'null']]) {
+    const dir = workspace(t)
+    fs.writeFileSync(path.join(dir, file), contents)
+    const result = run(dir, ['adopt', '--target', dir, '--actor', 'author'])
+    assert.notEqual(result.status, 0)
+    assert.deepEqual(fs.readdirSync(dir), [file])
+    assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), contents)
+  }
+})
+
+test('adopt refuses drift and missing alternate policy without accepting a new lock', (t) => {
+  const dir = workspace(t)
+  assert.equal(run(dir, ['adopt', '--target', dir, '--actor', 'author']).status, 0)
+  const lockPath = path.join(dir, 'atelier.lock.json')
+  const retained = fs.readFileSync(lockPath, 'utf8')
+  const cfg = project(dir)
+  const policy = JSON.parse(fs.readFileSync(cfg.boundaryPolicyPath, 'utf8'))
+  policy.mode = 'legacy-warning'
+  fs.writeFileSync(cfg.boundaryPolicyPath, JSON.stringify(policy))
+  assert.notEqual(run(dir, ['adopt', '--target', dir]).status, 0)
+  assert.equal(fs.readFileSync(lockPath, 'utf8'), retained)
+  fs.rmSync(lockPath)
+  const configPath = path.join(dir, 'atelier.project.json')
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+  config.boundaries.policyPath = 'missing-policy.json'
+  fs.writeFileSync(configPath, JSON.stringify(config))
+  assert.notEqual(run(dir, ['adopt', '--target', dir]).status, 0)
+  assert.equal(fs.existsSync(lockPath), false)
+})
+
+test('project manifest stays current through relocation and JSON key reordering', (t) => {
+  const parent = workspace(t)
+  const dir = path.join(parent, 'first')
+  assert.equal(run(parent, ['init', '--template', 'sample-workspace', '--target', dir]).status, 0)
+  assert.equal(run(dir, ['graph']).status, 0)
+  assert.equal(run(dir, ['project']).status, 0)
+  const manifestPath = path.join(project(dir).outputRoot, 'atelier.manifest.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  assert.equal(path.isAbsolute(manifest.graphPath), false)
+  fs.writeFileSync(manifestPath, JSON.stringify(Object.fromEntries(Object.entries(manifest).reverse())))
+  assert.equal(run(dir, ['project', '--check']).status, 0)
+  const moved = path.join(parent, 'second')
+  fs.renameSync(dir, moved)
+  assert.equal(run(moved, ['project', '--check']).status, 0)
+})
+
+test('repeated init preserves authored material, policy and lock byte-for-byte', (t) => {
+  const dir = workspace(t)
+  const args = ['init', '--template', 'private-domain', '--target', dir, '--actor', 'author']
+  assert.equal(run(dir, args).status, 0)
+  const files = ['domain/README.md', 'boundary-policy.v1.json', 'atelier.lock.json']
+  fs.appendFileSync(path.join(dir, files[0]), '\nAuthored paragraph retained.\n')
+  const before = files.map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))
+  assert.notEqual(run(dir, args).status, 0)
+  assert.deepEqual(files.map((name) => fs.readFileSync(path.join(dir, name), 'utf8')), before)
+})
+
+test('fresh shared adoption passes CLI boundary check with only an unrelated platform actor', (t) => {
+  const dir = workspace(t)
+  assert.equal(run(dir, ['adopt', '--profile', 'shared-project', '--target', dir, '--actor', 'author']).status, 0)
+  const env = { ...process.env, GITHUB_ACTOR: 'undeclared-contributor' }
+  delete env.MNSTRY_ATELIER_ACTOR
+  const checked = spawnSync(process.execPath, [path.join(root, 'bin/atelier.mjs'), 'boundary', 'check'], { cwd: dir, env, encoding: 'utf8' })
+  assert.equal(checked.status, 0, checked.stderr)
+})
+
+test('init does not bind an ambient CI login as the owner platform identity', (t) => {
+  const dir = workspace(t)
+  const initialized = spawnSync(process.execPath, [path.join(root, 'bin/atelier.mjs'), 'init',
+    '--template', 'private-domain', '--target', dir, '--actor', 'author'], {
+    cwd: dir, encoding: 'utf8', env: { ...process.env, GITHUB_ACTOR: 'unrelated-ci-trigger' },
+  })
+  assert.equal(initialized.status, 0, initialized.stderr)
+  const policy = JSON.parse(fs.readFileSync(project(dir).boundaryPolicyPath, 'utf8'))
+  assert.equal(policy.actors.author.githubLogin, 'AUTHOR_GITHUB_LOGIN_PLACEHOLDER')
 })

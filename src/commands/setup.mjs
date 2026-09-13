@@ -11,7 +11,8 @@ import {
   resolveProjectConfig,
   writeJson,
 } from '../project/config.mjs'
-import { writeAtelierLock, loadAtelierLock } from '../upgrade/upgrade.mjs'
+import { writeAtelierLock, loadAtelierLock, checkAtelierLock } from '../upgrade/upgrade.mjs'
+import { loadBoundaryPolicy, validateBoundaryPolicy } from '../boundary/policy.mjs'
 import { auditRepoIdentities } from '../project/repo-identity.mjs'
 
 const PROFILE_SET = new Set(['single-repo', 'private-domain', 'shared-project', 'multi-repo', 'monorepo', 'control-workspace'])
@@ -186,11 +187,27 @@ function runAdopt(argv) {
   if (profile === 'monorepo' && !firstString(args.include, args.includes)) {
     throw new Error('monorepo adopt requires --include so Atelier does not scan the whole repo by accident')
   }
+  const projectPath = path.join(target, 'atelier.project.json')
+  const existingProject = fs.existsSync(projectPath)
+    ? resolveProjectConfig({ cwd: target, argv: ['--project', projectPath] }) : null
+  // Parse and validate retained state before any scaffold or overlay writes.
+  const prior = loadAtelierLock(existingProject || { configDir: target })
+  if (fs.existsSync(prior.lockPath) && !prior.lock) throw new Error('existing lock must contain a valid lock object')
+  if (prior.lock && !existingProject) throw new Error('existing lock requires an existing project configuration')
+  const preflightProject = existingProject || { configDir: target, config: {} }
+  const priorPolicy = loadBoundaryPolicy(preflightProject)
+  if (existingProject || fs.existsSync(priorPolicy.policyPath)) {
+    const errors = priorPolicy.ok ? validateBoundaryPolicy(priorPolicy.policy, existingProject) : priorPolicy.errors
+    if (errors.length) throw new Error(`adopt requires a valid boundary policy: ${errors.join('; ')}`)
+  }
+  if (prior.lock) {
+    const report = checkAtelierLock(existingProject)
+    if (!report.ok) throw new Error(`adopt cannot accept existing lock drift: ${report.errors.join('; ')}`)
+  }
   fs.mkdirSync(target, { recursive: true })
   appendIgnoreLines(target)
   const repoName = slug(firstString(args.name) || path.basename(target))
   const actor = slug(firstString(args.actor) || process.env.USER || 'owner')
-  const projectPath = path.join(target, 'atelier.project.json')
   if (!fs.existsSync(projectPath)) {
     writeJson(projectPath, {
       schema: 'mnstry.atelier-project-config@v1',
@@ -214,11 +231,16 @@ function runAdopt(argv) {
     writeJson(path.join(target, 'boundary-policy.v1.json'), cleanUndefined(baseBoundaryPolicy({ repoName, profile, actor })))
   }
   const project = resolveProjectConfig({ cwd: target, argv: ['--project', projectPath] })
+  const loadedPolicy = loadBoundaryPolicy(project)
+  const policyErrors = loadedPolicy.ok ? validateBoundaryPolicy(loadedPolicy.policy, project) : loadedPolicy.errors
+  if (policyErrors.length) throw new Error(`adopt requires a valid boundary policy: ${policyErrors.join('; ')}`)
   ensureLocalState(project, { write: true })
   writeLocalOverlay(project)
   // Adoption creates the first lock, but never accepts drift in an existing one.
   const { lockPath } = loadAtelierLock(project)
   if (!fs.existsSync(lockPath)) writeAtelierLock({ project, templateId: `adopt:${profile}` })
+  const lockReport = checkAtelierLock(project)
+  if (!lockReport.ok) throw new Error(`adopt lock check failed: ${lockReport.errors.join('; ')}`)
   console.log(JSON.stringify({ ok: true, command: 'adopt', profile, target, projectPath }, null, 2))
 }
 

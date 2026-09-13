@@ -471,3 +471,48 @@ test('upgrade refuses an unknown platform actor despite matching configured Git 
   assert.equal(plan.ok, false)
   assert.match(plan.blockers.join('\n'), /unknown-platform-actor/)
 })
+
+test('successful upgrade output passes the declared projection post-check', () => {
+  const { project, root } = fixture()
+  writeOldLock(project)
+  const result = applyUpgrade({ project, branch: 'codex/test-post-check' })
+  assert.equal(result.ok, true)
+  const checked = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url)),
+    'project', '--check', '--project', path.join(root, 'atelier.project.json')], { encoding: 'utf8' })
+  assert.equal(checked.status, 0, checked.stderr)
+})
+
+test('a null policy digest cannot hide a subsequently loaded policy', () => {
+  const { project } = fixture()
+  const lock = writeAtelierLock({ project })
+  lock.boundaryPolicy.digest = null
+  lock.boundaryPolicy.snapshot = null
+  writeJson(path.join(project.configDir, 'atelier.lock.json'), lock)
+  assert.equal(checkAtelierLock(project).ok, false)
+})
+
+test('shared-only upgrade planning does not require the ambient platform actor', () => {
+  const { project, root } = fixture()
+  const policy = boundaryPolicy()
+  policy.actors = {}
+  policy.repos.content.kind = 'shared'
+  delete policy.repos.content.ownerActor
+  policy.repos.content.allowedAudiences = ['team', 'public']
+  const readme = path.join(root, 'content', 'README.md')
+  fs.writeFileSync(readme, fs.readFileSync(readme, 'utf8').replace('audience: "private"', 'audience: "team"'))
+  git(path.dirname(readme), ['add', '.'])
+  git(path.dirname(readme), ['commit', '-m', 'shared source'])
+  writeJson(path.join(root, 'boundary-policy.v1.json'), policy)
+  writeOldLock(project)
+  process.env.GITHUB_ACTOR = 'undeclared-contributor'
+  const plan = planUpgrade({ project })
+  assert.equal(plan.ok, true, plan.blockers.join('\n'))
+})
+
+test('private upgrade planning can use configured Git email without a platform selector', () => {
+  const { project } = fixture()
+  writeOldLock(project)
+  delete process.env.GITHUB_ACTOR
+  const plan = planUpgrade({ project })
+  assert.equal(plan.ok, true, plan.blockers.join('\n'))
+})

@@ -475,8 +475,66 @@ test('platform attribution wins over previous commit metadata and refuses confli
   assert.equal(resolve({ MNSTRY_ATELIER_ACTOR: 'other' }, 'author').reason, 'conflicting-explicit-actors')
   assert.equal(resolve({ GITHUB_ACTOR: 'other-login' }, 'author').actorId, 'author')
   assert.equal(resolve({ GITHUB_ACTOR: 'unknown-login' }).actorId, null)
+  policy.actors.author.githubLogin = 'author-login'
   policy.actors.other.githubLogin = policy.actors.author.githubLogin
   assert.equal(resolve({ GITHUB_ACTOR: policy.actors.author.githubLogin }).reason, 'ambiguous-platform-actor')
   policy.actors.other.gitEmails = policy.actors.author.gitEmails
   assert.equal(resolve({}).reason, 'ambiguous-git-actor')
+})
+
+test('shared-only checks ignore ambient identities but still reject invalid explicit selectors', (t) => {
+  const { project: cfg, policy } = makeWorkspace()
+  const shared = { ...cfg, repos: cfg.repos.filter((repo) => repo.name === 'mystery-example') }
+  const previous = process.env.GITHUB_ACTOR
+  process.env.GITHUB_ACTOR = 'undeclared-contributor'
+  t.after(() => { if (previous === undefined) delete process.env.GITHUB_ACTOR; else process.env.GITHUB_ACTOR = previous })
+  for (const stagedOnly of [false, true]) {
+    const result = checkBoundaryPolicy({ project: shared, policy, stagedOnly, forceActorErrors: true })
+    assert.equal(result.ok, true, JSON.stringify(result.errors))
+  }
+  assert.equal(checkBoundaryPolicy({ project: shared, policy, actor: 'unknown' }).ok, false)
+  policy.mode = 'legacy-warning'
+  const privateReport = checkBoundaryPolicy({ project: cfg, policy, allowNetworkActorResolution: false })
+  assert.equal(privateReport.ok, true)
+  assert.ok(privateReport.warnings.some((item) => item.code === 'private-domain-actor-unverified' && item.message.includes('unknown-platform-actor')))
+  assert.equal(checkBoundaryPolicy({ project: cfg, policy, forceActorErrors: true }).ok, false)
+})
+
+test('a declared GitHub login cannot be replaced by a matching local actor key', () => {
+  const { project: cfg, policy } = makeWorkspace()
+  policy.actors.author.githubLogin = 'actual-platform-login'
+  const result = resolveCurrentActor({ project: cfg, policy, env: { GITHUB_ACTOR: 'author' }, allowNetworkActorResolution: false })
+  assert.equal(result.actorId, null)
+  assert.equal(result.reason, 'unknown-platform-actor')
+})
+
+test('prototype properties do not count as declared repositories or owners', () => {
+  const { project: cfg, policy } = makeWorkspace()
+  for (const name of ['constructor', 'toString', '__proto__']) {
+    const project = { ...cfg, repos: [{ name, path: cfg.repos[0].path }] }
+    assert.ok(validateBoundaryPolicy(policy, project).some((message) => message.includes('must be declared')))
+    const invalidOwner = structuredClone(policy)
+    invalidOwner.repos['mnstry-private-author'].ownerActor = name
+    assert.ok(validateBoundaryPolicy(invalidOwner).some((message) => message.includes('is not declared')))
+  }
+})
+
+test('shared-only boundary check never invokes the optional gh fallback', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX executable marker; identity scoping has portable coverage')
+  const { root, project: cfg, policy } = makeWorkspace()
+  const bin = path.join(root, 'fake-bin')
+  const marker = path.join(root, 'gh-invoked')
+  fs.mkdirSync(bin)
+  fs.writeFileSync(path.join(bin, 'gh'), '#!/bin/sh\nprintf invoked > "$ATELIER_TEST_GH_MARKER"\nprintf outside-login\n')
+  fs.chmodSync(path.join(bin, 'gh'), 0o755)
+  const keys = ['PATH', 'GITHUB_ACTOR', 'MNSTRY_ATELIER_ACTOR', 'ATELIER_TEST_GH_MARKER']
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  t.after(() => { for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key] } })
+  process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+  process.env.ATELIER_TEST_GH_MARKER = marker
+  delete process.env.GITHUB_ACTOR
+  delete process.env.MNSTRY_ATELIER_ACTOR
+  const shared = { ...cfg, repos: cfg.repos.filter((repo) => repo.name === 'mystery-example') }
+  assert.equal(checkBoundaryPolicy({ project: shared, policy }).ok, true)
+  assert.equal(fs.existsSync(marker), false)
 })

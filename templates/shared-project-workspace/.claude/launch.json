@@ -4,7 +4,11 @@
     {
       "name": "atelier",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["./node_modules/@mnstry/atelier/bin/atelier.mjs", "server"],
+      "runtimeArgs": [
+        "--input-type=module",
+        "--eval",
+        "import { runCli } from '@mnstry/atelier/cli'; process.exit(await runCli({ argv: ['server', ...process.argv.slice(1)] }));"
+      ],
       "port": 8137,
       "autoPort": true
     }

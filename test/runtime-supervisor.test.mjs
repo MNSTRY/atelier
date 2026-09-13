@@ -933,3 +933,23 @@ test('an existing stale-recovery claim blocks deletion of the observed lock', (t
   assert.equal(recovered.ok, true)
   recovered.release()
 })
+
+test('shared-only Sync commits need no ambient platform identity or network actor lookup', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX helper marker; shared actor semantics also tested cross-platform')
+  const { base, root } = fixture(t)
+  writePrivateBoundaryProject(root, { actorEmail: 'different@example.invalid' })
+  const policyPath = path.join(root, 'boundary-policy.v1.json')
+  const policy = JSON.parse(fs.readFileSync(policyPath, 'utf8'))
+  policy.actors = {}
+  policy.repos.workspace.kind = 'shared'
+  delete policy.repos.workspace.ownerActor
+  fs.writeFileSync(policyPath, JSON.stringify(policy))
+  const pinned = pinWrapperEnvironment(t, { base, root })
+  process.env.GITHUB_ACTOR = 'undeclared-contributor'
+  enrollRepository({ repoPath: root, projectConfig: 'atelier.project.json', gitExecutable: pinned.wrapper })
+  fs.writeFileSync(path.join(root, 'reviewed.md'), 'reviewed synthetic text\n')
+  const { plan } = planUserConfirmedCommit({ repoPath: root, paths: ['reviewed.md'], message: 'docs: shared actor scope' })
+  const result = executeUserConfirmedCommit({ repoPath: root, operationId: plan.operationId, confirmation: plan.operationId })
+  assert.equal(result.ok, true)
+  assert.equal(fs.existsSync(pinned.ghMarker), false)
+})

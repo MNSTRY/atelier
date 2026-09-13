@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import { commandProject, readJson, writeJson } from '../project/config.mjs'
 import { summarizeReadinessJourney } from '../readiness-protocols/runtime.mjs'
@@ -122,7 +123,7 @@ export function buildProjectManifest(project, projection) {
   return {
     schema: 'mnstry.atelier-manifest@v1',
     generatedAt: 'deterministic',
-    graphPath: project.graphPath,
+    graphPath: path.relative(project.outputRoot, project.graphPath).split(path.sep).join('/'),
     entry: 'index.html',
     tenantReadiness: {
       score: projection.readinessJourney.score,
@@ -147,7 +148,7 @@ export function runProjectCommand(argv = process.argv.slice(2)) {
     const manifestPath = path.join(project.outputRoot, 'atelier.manifest.json')
     let manifest = null
     try { manifest = readJson(manifestPath) } catch { /* Missing or invalid artifacts are stale. */ }
-    if (current !== projection.html || JSON.stringify(manifest) !== JSON.stringify(buildProjectManifest(project, projection))) {
+    if (current !== projection.html || !isDeepStrictEqual(manifest, buildProjectManifest(project, projection))) {
       console.error(`project projection is stale: ${projection.output}`)
       process.exit(1)
     }
