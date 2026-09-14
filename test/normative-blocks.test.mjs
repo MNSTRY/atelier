@@ -71,3 +71,14 @@ test('canonical egress claims name every documented subprocess network class', (
     assert.match(limits, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `will-not-do must disclose ${expected}`)
   }
 })
+
+test('packed public claims distinguish the local CLI from optional hosted vault I/O', () => {
+  for (const relative of ['README.md', 'CONTRIBUTING.md', 'docs/blocks/will-not-do.md', 'docs/blocks/claims.md', 'SECURITY.md', 'docs/assurance-controls.md']) {
+    const text = fs.readFileSync(path.join(root, relative), 'utf8')
+    assert.doesNotMatch(text, /The package has only the documented|Conformance remains offline\. Network access is limited to|The runtime remains local\./)
+    assert.match(text, /vault/i)
+  }
+  const metadata = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+  assert.doesNotMatch(metadata.description, /No telemetry, service, or account/)
+  assert.match(metadata.description, /optional host-bound vault/)
+})

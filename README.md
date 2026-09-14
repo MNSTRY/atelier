@@ -12,7 +12,7 @@ The Atelier adds that missing layer without taking the work away from you. It
 turns a repository into an ontology-governed knowledge graph, gives rules the
 power to refuse invalid states, and produces bounded views for people, teams,
 agents, and tools. Git remains the source of record. Your files remain readable.
-The runtime remains local.
+The authoring runtime remains local; optional vault adapters run in an explicitly configured host.
 
 That makes the same repository useful at several levels:
 
@@ -264,8 +264,10 @@ This package makes three promises. None of them asks for your trust — each
 one names the command that proves it.
 
 **There is no silent egress; every network path is named.** There is no
-telemetry, update check, crash reporting, managed-runtime upload, or model
-provider path in the package. The exceptions are explicit: `boundary check` and
+telemetry, update check, crash reporting, or model provider path in the package.
+The optional vault API adds explicit host-bound artifact uploads and reads; it
+is never activated by local authoring commands. Its injected storage, database
+and identity SDKs may use the network and require separate hosted qualification. The exceptions are explicit: `boundary check` and
 `upgrade` (including `--dry-run` and `--apply`) may invoke `gh api user` only when
 an operated private-domain repository needs owner attribution, no explicit selector or `GITHUB_ACTOR` was supplied, and no
 configured Git email maps to an actor. Shared-only boundary checks skip derived
@@ -280,7 +282,7 @@ for observation/reconciliation and one non-force push only when the exact
 reviewed commit plan requested and confirmed it, no earlier local commit is
 waiting to be published, and HEAD still names the verified commit object. Sync
 never uses the network actor fallback, follows tags, or recursively publishes
-submodule refs. The package's HTTP client
+submodule refs. The local authoring HTTP client
 refuses non-loopback URLs, the served pages authorize no external origin, and
 release audit scans every executable or markup file in the exact `npm pack`
 inventory for egress primitives. The standalone gate also scans executable and
@@ -327,13 +329,16 @@ receive.
 - It does not write to a MNSTRY runtime database.
 - It does not import, provision, publish, or send project content to a MNSTRY
   managed runtime.
-- Conformance remains offline. Network access is limited to the documented
+- Conformance remains offline. Local CLI network access is limited to the documented
   `gh` actor-resolution fallback and explicitly enrolled Atelier Sync Git
   operations: bounded fetch for observation/reconciliation, and non-force push
   only when the exact reviewed commit plan requested and confirmed it, no
   earlier local commit remains unpublished, and HEAD still names the verified
   commit object; Sync does not use network actor fallback, follow tags, or
   recursively publish submodule refs.
+- Optional vault adapters use explicitly injected host SDKs and transports. The
+  host owns their network access, authentication and infrastructure; importing
+  the kit does not create a service or make a network request.
 - It does not execute model-assisted analysis or any model provider.
 - It does not include client project content.
 
@@ -422,3 +427,11 @@ full command behavior is also covered by the package's executable tests.
 
 Contributions are welcome through [the contribution guide](./CONTRIBUTING.md).
 MNSTRY Atelier is released under [Apache-2.0](./LICENSE).
+
+## Experimental hosted vault contract
+
+An optional [private artifact vault service](docs/vault-service.md) supplies a
+provider-independent ownership boundary and explicit Vercel/Cloudflare storage
+bindings. It is not enabled by local CLI commands. Hosting adapters can perform
+network I/O only when explicitly installed and invoked by a consuming host.
+Browser identity integration and hosted acceptance remain unqualified.

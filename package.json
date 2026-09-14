@@ -2,7 +2,7 @@
   "name": "@mnstry/atelier",
   "version": "0.2.0-alpha.7",
   "private": false,
-  "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry, service, or account.",
+  "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
     "knowledge-graph",
     "ontology",
@@ -56,7 +56,10 @@
     "./export-contract": "./src/export/atelier-export-contract.mjs",
     "./dry-run": "./src/validate-atelier-export-dry-run.mjs",
     "./contracts/atelier-export.v1.schema.json": "./contracts/atelier-export.v1.schema.json",
-    "./fixtures/atelier-export/sample-studio-offer.v1.json": "./fixtures/atelier-export/sample-studio-offer.v1.json"
+    "./fixtures/atelier-export/sample-studio-offer.v1.json": "./fixtures/atelier-export/sample-studio-offer.v1.json",
+    "./vault": "./src/vault/index.mjs",
+    "./contracts/atelier-vault-publication.v1.schema.json": "./contracts/atelier-vault-publication.v1.schema.json",
+    "./vault/source": "./src/vault/source.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

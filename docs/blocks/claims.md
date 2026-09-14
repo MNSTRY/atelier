@@ -2,8 +2,10 @@ This package makes three promises. None of them asks for your trust — each
 one names the command that proves it.
 
 **There is no silent egress; every network path is named.** There is no
-telemetry, update check, crash reporting, managed-runtime upload, or model
-provider path in the package. The exceptions are explicit: `boundary check` and
+telemetry, update check, crash reporting, or model provider path in the package.
+The optional vault API adds explicit host-bound artifact uploads and reads; it
+is never activated by local authoring commands. Its injected storage, database
+and identity SDKs may use the network and require separate hosted qualification. The exceptions are explicit: `boundary check` and
 `upgrade` (including `--dry-run` and `--apply`) may invoke `gh api user` only when
 an operated private-domain repository needs owner attribution, no explicit selector or `GITHUB_ACTOR` was supplied, and no
 configured Git email maps to an actor. Shared-only boundary checks skip derived
@@ -18,7 +20,7 @@ for observation/reconciliation and one non-force push only when the exact
 reviewed commit plan requested and confirmed it, no earlier local commit is
 waiting to be published, and HEAD still names the verified commit object. Sync
 never uses the network actor fallback, follows tags, or recursively publishes
-submodule refs. The package's HTTP client
+submodule refs. The local authoring HTTP client
 refuses non-loopback URLs, the served pages authorize no external origin, and
 release audit scans every executable or markup file in the exact `npm pack`
 inventory for egress primitives. The standalone gate also scans executable and
