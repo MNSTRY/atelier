@@ -20,8 +20,8 @@ subpath, not a second semantic interpretation or route-adoption authority.
 
 Source reservation: `src/ui/presentation/**`, the two presentation schemas,
 `fixtures/ui/presentation/**`, the presentation tests and proof/generation scripts,
-and this document. The package-export additions and contract-corpus entries are
-the only shared-file hunks. No runtime, server, command catalog, existing UI
+and this document. Package exports, pinned test-only dependencies, the local
+proof command, and contract-corpus entries are scoped shared-file hunks. No runtime, server, command catalog, existing UI
 helper, release guard, route, template or consumer source is changed.
 
 ## API and host connection
@@ -35,7 +35,10 @@ container.innerHTML = renderPresentation(model)
 const binding = bindPresentation(container.querySelector('[data-ap-root]'), model, {
   onRequest: request => host.receivePresentationRequest(request),
 })
-// Before replacing or unmounting this presentation:
+// Refresh the same presentation without losing drafts, focus or selection:
+binding.update(nextModel)
+// For a host-approved draft reset, use { discardDrafts: true } explicitly.
+// Before a genuine unmount or a change of presentation identity:
 binding.dispose()
 ```
 
@@ -51,7 +54,9 @@ Required model identity is `schema: "atelier.presentation/v1"` and
 epoch convention; it is metadata, not an alternative version-negotiation path.
 Optional `ext` containers are retained, bounded plain JSON and never interpreted,
 rendered or used to authorize an action. Unknown ordinary fields and unsupported
-versions refuse. Canonical serialization does not mean signing or acceptance.
+versions refuse. Validation, serialization and parsing share a 1 MiB UTF-8 limit
+on the canonical model; parsing also bounds the incoming bytes (including extra
+whitespace). Canonical serialization does not mean signing or acceptance.
 
 All callback requests carry `schema: "atelier.presentation-request/v1"`,
 `version: "1.0.0"`, `presentationId`, `status: "proposed"`, and
@@ -67,12 +72,30 @@ All callback requests carry `schema: "atelier.presentation-request/v1"`,
 | navigation | native `id`, `paneId`, or `itemId` and local `href` | Resolve host navigation and focus; never create a global shortcut bridge |
 
 Callback resolution confirms delivery only. Rejection reports delivery failure,
-not business refusal or rollback. Repeated pending actions are suppressed; edits
-coalesce to the latest value while delivery is pending. Unmount removes scoped
+not business refusal or rollback. Repeated pending actions are suppressed without
+disabling the focused web control. Every valid edit is delivered synchronously to
+the host callback, including during earlier async delivery; there is no hidden
+coalescing queue to lose at unmount. The host must capture drafts on callback
+entry and order acknowledgements through its existing concurrency mechanism.
+Out-of-order persistence responses must not replace a newer accepted host state.
+Unmount removes scoped
 listeners and pending visual flags but cannot cancel a callback already delivered
 to a host. Host operations therefore need their own concurrency, idempotency,
-authorization and outcome-recovery controls. Do not retain an old binding when
-replacing a model. The native component should be keyed to its model identity.
+authorization and outcome-recovery controls. Use `binding.update(nextModel)` for
+same-ID refreshes: it closes obsolete confirmations, preserves surviving control
+focus/selection, and retains each draft until the model acknowledges that value.
+Removed nodes lose their local drafts. A same-ID host reset must explicitly pass
+`discardDrafts: true`; a different document must use a new presentation identity.
+Updates during IME composition refuse before changing the DOM: defer them until
+`compositionend`. Token overrides must be supplied again on update if used.
+Dispose/re-render is an unmount, not the controlled-update path. The native
+component must be keyed to its model identity; its host resets use a React key
+change, and draft acknowledgement follows the same value-matching rule.
+
+The edit limit is 32,768 Unicode code points, matching the schema rather than
+UTF-16 code units. Over-limit or incomplete Unicode input remains visible locally
+with an error and is not sent; it is never silently shortened. Web composition
+is evaluated when composition ends. Local drafts are not durable persistence.
 
 The module installs no transport, storage, process, global keyboard handler,
 telemetry, hosted account, command registration or navigation service. Web links
@@ -90,7 +113,12 @@ densities. Compact density changes spacing, not target or type floors. A host's
 font metrics, zoom, transparency and surrounding surface still need verification.
 
 One primary pane is required. Context/utility panes remain linear and reachable
-at narrow widths; resizing is hidden when panes stack. Panes accept block IDs,
+at narrow container widths; resizing is hidden when panes stack. Width values are
+relative flex weights after gaps, not independent percentages plus gaps. Missing
+weights default to 50. A 60/40 pair shares one row; allocations below the minimum
+pane width wrap rather than crushing controls. The native host supplies its measured
+container width; the web projection uses the presentation root's content box.
+Panes accept block IDs,
 not executable routes, business schemas or workspace-allocation commands.
 
 Implemented reference families: text, collection, ordered sequence, graph node
@@ -149,17 +177,24 @@ technology acceptance.
 
 `createNativePresentation` accepts the consumer's existing `React`, `View`,
 `Text`, `Pressable`, `TextInput`, `ScrollView`, and `Image`; compatible wrappers
-can use existing Tamagui primitives. Atelier takes no framework dependency.
+can use existing Tamagui primitives. Atelier takes no runtime framework dependency;
+React and React DOM are pinned development-only proof dependencies.
 `Pressable` must support React Native's state-function style. The host supplies
 measured `containerWidth`, `resolveAsset` and a `confirm` port implementing cancel
 initial focus and focus restoration. Native uses step/move buttons instead of a
 browser range/drag API. Focus treatment and OS keyboard behavior remain native
-host obligations; injected-tree tests cannot prove them. Do not claim compatibility
+host obligations; injected-tree tests cannot prove them. The proof runner also
+mounts real React against deliberately minimal DOM bindings to exercise stale
+confirmation rejection and concurrent pending state; this is lifecycle proof,
+not React Native or Tamagui compatibility. Changes to the model or confirmation/
+request callback invalidate an outstanding native confirmation conservatively.
+Do not claim compatibility
 with a specific framework version until its mounted adapter has been tested.
 
 Document output has no edit, resize, confirmation or move controls. It preserves
 host status text but cannot create a receipt. Print neutralizes dark colors and
-hides navigation and action groups. This is HTML suitable for an existing export
+hides navigation and interactive buttons, retaining action explanations and
+unavailability reasons. This is HTML suitable for an existing export
 pipeline, not a new semantic document or PDF authority.
 
 ## Proof and visual-regression governance
@@ -176,19 +211,35 @@ npm run syntax:check
 npm test
 ```
 
-The browser runner uses an already installed `playwright` package. An absolute
-module path may be supplied through `ATELIER_PLAYWRIGHT_MODULE`; it is a local
-tooling choice, not a package dependency. No browser download or server startup
-is performed. All requests are intercepted to invented fixtures, with other
+The browser runner is also exposed as `npm run presentation:proof`. `npm ci`
+installs lockfile-pinned Playwright, React, React DOM and esbuild as development
+dependencies; no framework is added to the distributed runtime dependency set.
+Provision matching browser binaries separately with `npx playwright install
+chromium firefox webkit` (CI Linux images may also need `--with-deps`). The proof
+command itself performs no browser download or server startup. An optional
+`ATELIER_PLAYWRIGHT_MODULE` selects an explicitly provisioned runtime. All requests
+are intercepted to invented fixtures, with other
 origins refused. Default engines: Chromium, Firefox, WebKit. Optional
 `ATELIER_PROOF_BROWSERS` narrows coverage and must remain visible in the receipt.
 
 Outputs live in ignored `.artifacts/presentation-browser` (override with
 `ATELIER_PROOF_OUTPUT`). A receipt records exact source-module and fixture hashes,
-Git HEAD, browser versions, checks and screenshot hashes. During development HEAD
+Git HEAD, browser versions, named assertions and screenshot hashes. Each frame
+records viewport, theme, density, motion, locale, scale and font conditions. A
+separate runner digest binds the assertions, mounted React fixture and lockfile.
+Missing/null/unknown proof fields refuse comparison rather than yielding a green
+result. During development HEAD
 alone does not identify the working source; freeze a commit and rerun before
 using it for acceptance. Successful rendering explicitly does not accept a
 visual baseline, native device, or downstream adopter.
+
+This local gate now exercises controlled host refresh, pending focus, full
+Unicode input/refusal, composition boundaries, embedded container geometry,
+invalid-state styles, read-only print visibility and real React callback lifetime.
+Text-size proof measures all rendered text categories at twice the reference
+root font size; it remains synthetic CSS scaling, not platform zoom or WCAG
+certification. Remote CI wiring and accepted screenshot baselines remain explicit
+integration gates, not claims made by a successful local run.
 
 Baseline governance is deliberate: never auto-update expected images after a
 failure. Store a baseline's exact source/fixture/environment identity and its

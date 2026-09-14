@@ -154,6 +154,10 @@ export const presentationSchema = {
               "pattern": "^[a-z][a-z0-9-]{0,63}$"
             }
           },
+          "contractVersion": {
+            "type": "string",
+            "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+          },
           "ext": {
             "type": "object"
           }

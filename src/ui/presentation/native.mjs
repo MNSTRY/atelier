@@ -1,5 +1,6 @@
 import { assertPresentation } from './contract.mjs'
 import { resolveTokens } from './tokens.mjs'
+import { editValueError } from './state.mjs'
 
 // Inject the consumer's existing React/native (or Tamagui native) primitives.
 // The root imports no framework and installs no host/window/global driver.
@@ -11,33 +12,41 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
     assertPresentation(model)
     if (!Number.isFinite(containerWidth) || containerWidth <= 0) throw new TypeError('container width required')
     const tokens = resolveTokens(model.theme, tokenOverrides)
+    const totalWeight = model.panes.reduce((sum, pane) => sum + (pane.width?.value ?? 50), 0)
+    const paneSpace = containerWidth - tokens.spacing.large * (model.panes.length + 1)
     const [delivery, setDelivery] = React.useState('')
+    const [, refreshPending] = React.useState(0)
     const active = React.useRef(true)
-    const pending = React.useRef(new Set())
-    const queuedEdits = React.useRef(new Map())
+    const pending = React.useRef(new Map())
+    const drafts = React.useRef(new Map())
+    const current = React.useRef(null)
+    const generation = React.useRef(0)
+    const signature = JSON.stringify(model)
+    if (!current.current || current.current.signature !== signature || current.current.onRequest !== onRequest || current.current.confirm !== confirm) generation.current++
+    current.current = { signature, onRequest, confirm }
+    for (const [id, value] of drafts.current) if (!model.nodes.some(node => node.id === id && node.value !== value)) drafts.current.delete(id)
     const confirmations = React.useRef(new Set())
     React.useEffect(() => { active.current = true; return () => { active.current = false } }, [])
     const request = async event => {
       if (typeof onRequest !== 'function' || !active.current) return
-      if (pending.current.has(event.id)) {
-        if (event.kind === 'edit') queuedEdits.current.set(event.id, event)
-        return
-      }
-      pending.current.add(event.id)
+      if (pending.current.has(event.id) && event.kind !== 'edit') return
+      const requestGeneration = generation.current
+      pending.current.set(event.id, (pending.current.get(event.id) ?? 0) + 1)
+      refreshPending(value => value + 1)
       setDelivery('Sending request. Awaiting host state.')
       try {
         await onRequest(Object.freeze({ schema: 'atelier.presentation-request/v1', version: '1.0.0', presentationId: model.id, status: 'proposed', executionAuthority: false, ...event }))
-        if (active.current) setDelivery('Request delivered. Awaiting host state.')
+        if (active.current && generation.current === requestGeneration) setDelivery('Request delivered. Awaiting host state.')
       } catch {
-        if (active.current) setDelivery('Request delivery failed. Host state has not been confirmed.')
+        if (active.current && generation.current === requestGeneration) setDelivery('Request delivery failed. Host state has not been confirmed.')
       } finally {
-        pending.current.delete(event.id)
-        const latest = queuedEdits.current.get(event.id)
-        queuedEdits.current.delete(event.id)
-        if (latest && active.current) void request(latest)
+        const remaining = pending.current.get(event.id) - 1
+        if (remaining) pending.current.set(event.id, remaining)
+        else pending.current.delete(event.id)
+        if (active.current) refreshPending(value => value + 1)
       }
     }
-    const style = { color: tokens.color.text, fontSize: tokens.typography.body, lineHeight: tokens.typography.body * tokens.typography.lineHeight }
+    const style = { color: tokens.color.text, fontFamily: tokens.typography.family, fontSize: tokens.typography.body, lineHeight: tokens.typography.body * tokens.typography.lineHeight }
     const text = (value, props = {}) => h(Text, { ...props, allowFontScaling: true, style: [style, props.style] }, value)
     const button = (label, props = {}) => h(Pressable, {
       accessibilityRole: 'button', accessibilityLabel: label,
@@ -54,10 +63,11 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
         if (node.confirmation) {
           if (typeof confirm !== 'function') { setDelivery('Confirmation is unavailable in this host. No request sent.'); return }
           let accepted = false
+          const started = generation.current
           confirmations.current.add(node.id)
           try { accepted = await confirm(Object.freeze({ ...node.confirmation, initialFocus: 'cancel', restoreFocus: true })) === true } catch { accepted = false }
           finally { confirmations.current.delete(node.id) }
-          if (!accepted || !active.current) return
+          if (!accepted || !active.current || started !== generation.current) return
         }
         await request({ kind: 'action', id: node.id, actionRef: node.actionRef, ...(node.confirmation ? { presentationConfirmed: true } : {}) })
       },
@@ -67,14 +77,24 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
       if (node.type === 'action') return h(View, { key: node.id }, action(node), node.reason ? text(node.reason) : null)
       if (node.text !== undefined) body.push(text(node.text))
       if (node.type === 'field' || node.type === 'editor') {
-        body.push(h(TextInput, { accessibilityLabel: node.label, value: node.value, editable: !node.disabled && typeof onRequest === 'function',
+        const draft = drafts.current.get(node.id) ?? node.value
+        const draftError = editValueError(draft)
+        body.push(h(TextInput, { accessibilityLabel: node.label + (node.required ? ' (required)' : ''), value: draft, editable: !node.disabled && typeof onRequest === 'function',
           multiline: node.type === 'editor', allowFontScaling: true,
+          inputMode: node.input === 'email' ? 'email' : node.input === 'number' ? 'decimal' : 'text',
+          returnKeyType: node.input === 'search' ? 'search' : 'default',
           accessibilityState: { disabled: node.disabled || typeof onRequest !== 'function' },
-          style: { ...style, minHeight: tokens.density.target, padding: tokens.spacing.medium, borderWidth: 1, borderColor: node.error ? tokens.color.danger : tokens.color.border },
+          style: { ...style, minHeight: tokens.density.target, padding: tokens.spacing.medium, borderWidth: node.error || draftError ? 2 : 1, borderColor: node.error || draftError ? tokens.color.danger : tokens.color.border },
           onChangeText: value => {
             // Editing is host-controlled; never claim persistence from this callback.
-            if (!node.disabled) void request({ kind: 'edit', id: node.id, value: value.slice(0, 32768) })
+            if (node.disabled || typeof onRequest !== 'function') return
+            drafts.current.set(node.id, value)
+            refreshPending(version => version + 1)
+            const error = editValueError(value)
+            if (error) { setDelivery(error); return }
+            void request({ kind: 'edit', id: node.id, value })
           } }))
+        if (draftError) body.push(text(draftError, { accessibilityLiveRegion: 'polite' }))
         if (node.error) body.push(text(node.error, { accessibilityLiveRegion: 'polite' }))
       }
       if (node.type === 'diff') body.push(text(node.beforeLabel), text(node.before), text(node.afterLabel), text(node.after))
@@ -110,7 +130,7 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
       text(model.title, { accessibilityRole: 'header', style: { fontSize: tokens.typography.heading } }),
       h(View, { style: { flexDirection: 'row', flexWrap: 'wrap', gap: tokens.spacing.medium } }, ...model.navigation.map(item => button(item.label, { key: item.id, disabled: typeof onRequest !== 'function', onPress: () => request({ kind: 'navigation', id: item.id, paneId: item.target }) }))),
       h(View, { style: { flexDirection: containerWidth <= tokens.layout.narrow ? 'column' : 'row', flexWrap: 'wrap', gap: tokens.spacing.large } },
-        ...model.panes.map(pane => h(View, { key: pane.id, accessibilityLabel: pane.label, style: { flexGrow: 1, flexShrink: 1, flexBasis: containerWidth <= tokens.layout.narrow ? 'auto' : pane.width ? pane.width.value + '%' : tokens.layout.paneMin, minWidth: 0, maxWidth: '100%', padding: tokens.density[model.density], backgroundColor: tokens.color.panel, borderWidth: tokens.border.width, borderColor: tokens.color.border, borderRadius: tokens.border.radius } },
+        ...model.panes.map(pane => h(View, { key: pane.id, accessibilityLabel: pane.label, style: { flexGrow: containerWidth <= tokens.layout.narrow ? 0 : pane.width?.value ?? 50, flexShrink: 1, flexBasis: containerWidth <= tokens.layout.narrow ? 'auto' : Math.max(tokens.layout.paneMin, paneSpace * (pane.width?.value ?? 50) / totalWeight), minWidth: 0, maxWidth: '100%', padding: tokens.density[model.density], backgroundColor: tokens.color.panel, borderWidth: tokens.border.width, borderColor: tokens.color.border, borderRadius: tokens.border.radius } },
           text(pane.label, { accessibilityRole: 'header', style: { fontSize: tokens.typography.heading } }),
           pane.width && containerWidth > tokens.layout.narrow ? h(View, { style: { flexDirection: 'row', flexWrap: 'wrap', gap: tokens.spacing.medium } },
             button('Decrease width of ' + pane.label, { disabled: typeof onRequest !== 'function' || pane.width.value <= pane.width.min, onPress: () => request({ kind: 'resize', id: pane.id, value: Math.max(pane.width.min, pane.width.value - 1) }) }),

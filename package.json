@@ -75,6 +75,7 @@
     "project:test": "node --test test/project.test.mjs test/project-config.test.mjs test/projection-policy.test.mjs test/projection-alignment.test.mjs",
     "server:security:test": "node --test test/server.test.mjs test/server-security.test.mjs test/server-proposals.test.mjs",
     "browser:smoke": "node --test test/server.test.mjs",
+    "presentation:proof": "node scripts/prove-presentation-browser.mjs",
     "support-bundle:test": "node --test test/support-bundle.test.mjs test/support-egress-analysis.test.mjs",
     "egress:check": "node bin/atelier.mjs egress check",
     "readiness:test": "node --test test/readiness.test.mjs test/readiness-summary.test.mjs test/readiness-protocol-contract.test.mjs test/readiness-protocols.test.mjs test/readiness-protocol-runtime.test.mjs",
@@ -100,7 +101,11 @@
     "fast-uri": "3.1.5"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "esbuild": "0.25.12",
+    "playwright": "1.54.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
   },
   "license": "Apache-2.0",
   "repository": {

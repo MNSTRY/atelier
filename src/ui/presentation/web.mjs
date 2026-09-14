@@ -52,20 +52,23 @@ export function renderPresentation(model, { tokenOverrides = {}, interactive = t
       const field = node.type === 'editor' ? '<textarea' + attrs + '>' + escape(node.value) + '</textarea>'
         : '<input type="' + node.input + '"' + attrs + ' value="' + escape(node.value) + '">'
       return '<div class="ap-block" id="' + name + '"><label for="' + fieldId + '">' + escape(node.label) + (node.required ? ' (required)' : '') + '</label>' + field +
-        (node.error ? '<p class="ap-error" id="' + name + ':error">' + escape(node.error) + '</p>' : '') + '</div>'
+        (node.error ? '<p class="ap-error" id="' + name + ':error">' + escape(node.error) + '</p>' : '') +
+        '<p class="ap-error" data-ap-edit-error="' + node.id + '" id="' + fieldId + ':limit" aria-live="polite" hidden></p></div>'
     }
     return '<section class="ap-block" id="' + name + '" aria-labelledby="' + labelId + '">' + heading + body + '</section>'
   }
   const primary = model.panes.find(pane => pane.role === 'primary')
+  const totalWeight = model.panes.reduce((sum, pane) => sum + (pane.width?.value ?? 50), 0)
   const nav = model.navigation.map(item => '<a class="ap-link" href="#' + domId(model, 'pane', item.target) + '">' + escape(item.label) + '</a>').join('')
   const panes = model.panes.map(pane => {
+    const weight = pane.width?.value ?? 50, share = weight / totalWeight
     const name = domId(model, 'pane', pane.id), heading = name + ':label'
     const resize = interactive && pane.width ? '<div class="ap-resize"><label for="' + name + ':resize">Width of ' + escape(pane.label) + '</label><input id="' + name + ':resize" type="range" data-ap-resize="' + pane.id + '" min="' + pane.width.min + '" max="' + pane.width.max + '" value="' + pane.width.value + '" aria-controls="' + name + '"><button type="button" data-ap-step="' + pane.id + '" data-ap-delta="-1" aria-label="Decrease width of ' + escape(pane.label) + '">−</button><button type="button" data-ap-step="' + pane.id + '" data-ap-delta="1" aria-label="Increase width of ' + escape(pane.label) + '">+</button></div>' : ''
     return '<section class="ap-pane" id="' + name + '" tabindex="-1" aria-labelledby="' + heading + '" data-ap-pane="' + pane.id + '"' +
-      (pane.width ? ' style="--ap-pane-basis:' + pane.width.value + '%"' : '') + '><header class="ap-pane-header"><h2 id="' + heading + '">' + escape(pane.label) + '</h2>' + resize + '</header><div class="ap-pane-body">' +
+      ' style="--ap-pane-weight:' + weight + ';--ap-pane-basis:calc(' + (share * 100) + '% - var(--ap-spacing-large) * ' + ((model.panes.length - 1) * share) + ')"' + '><header class="ap-pane-header"><h2 id="' + heading + '">' + escape(pane.label) + '</h2>' + resize + '</header><div class="ap-pane-body">' +
       pane.blocks.map(ref => renderNode(nodes.get(ref))).join('') + '</div></section>'
   }).join('')
-  return '<style>' + presentationStyles(model.theme, tokenOverrides, model.id) + '</style><div data-ap-root="' + model.id + '" data-density="' + model.density + '" dir="' + model.direction + '" lang="' + model.lang + '">' +
+  return '<div data-ap-root="' + model.id + '" data-density="' + model.density + '" dir="' + model.direction + '" lang="' + model.lang + '"><style>' + presentationStyles(model.theme, tokenOverrides, model.id) + '</style>' +
     '<a class="ap-link" href="#' + domId(model, 'pane', primary.id) + '">Skip to ' + escape(primary.label) + '</a><header><h1>' + escape(model.title) + '</h1><nav class="ap-nav" aria-label="Workspace">' + nav + '</nav></header>' +
     '<main class="ap-workspace">' + panes + '</main><output data-ap-delivery aria-live="polite"></output>' +
     (interactive ? '<dialog data-ap-confirm aria-labelledby="' + model.id + ':confirm:title" aria-describedby="' + model.id + ':confirm:description"><h2 id="' + model.id + ':confirm:title" data-ap-confirm-title></h2><p id="' + model.id + ':confirm:description" data-ap-confirm-description></p><div class="ap-actions"><button type="button" data-ap-cancel autofocus>Cancel</button><button type="button" data-ap-confirm-action>Continue</button></div></dialog>' : '') + '</div>'

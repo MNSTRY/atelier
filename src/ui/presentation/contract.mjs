@@ -4,25 +4,37 @@ import { canonicalize } from '../../attestation/jcs.mjs'
 
 export const PRESENTATION_VERSION = '1.0.0'
 export const PRESENTATION_SCHEMA = 'atelier.presentation/v1'
+export const PRESENTATION_BYTE_LIMIT = 1048576
 const validateModel = value => matchesPresentationSchema(presentationSchema, value)
 const validatePaneSchema = value => matchesPresentationSchema(paneSchema, value)
 
 function jsonData(value) {
   const queue = [[value, 0]]
   let count = 0
+  let stringBytes = 0
+  const size = value => {
+    if (value.length > PRESENTATION_BYTE_LIMIT) return false
+    stringBytes += new TextEncoder().encode(JSON.stringify(value)).length
+    return stringBytes <= PRESENTATION_BYTE_LIMIT
+  }
   while (queue.length) {
     const [item, depth] = queue.pop()
     if (++count > 20000 || depth > 12) return false
-    if (item === null || ['string', 'boolean'].includes(typeof item)) continue
+    if (typeof item === 'string') { if (!size(item)) return false; continue }
+    if (item === null || typeof item === 'boolean') continue
     if (typeof item === 'number' && Number.isFinite(item)) continue
     if (typeof item !== 'object') return false
     if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null) return false
-    for (const d of Object.values(Object.getOwnPropertyDescriptors(item))) {
+    for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(item))) {
       if (!Object.hasOwn(d, 'value')) return false
+      if (!Array.isArray(item) && !size(key)) return false
       queue.push([d.value, depth + 1])
     }
   }
-  return true
+  // Count punctuation, escaping and numeric encodings using the same canonical
+  // representation emitted by serializePresentation. No getters remain here.
+  try { return new TextEncoder().encode(canonicalize(value)).length <= PRESENTATION_BYTE_LIMIT }
+  catch { return false }
 }
 
 export function safeReference(value, { asset = false } = {}) {
@@ -99,6 +111,6 @@ export function serializePresentation(value) {
 }
 
 export function parsePresentation(serialized) {
-  if (typeof serialized !== 'string' || new TextEncoder().encode(serialized).length > 1048576) throw new TypeError('presentation byte limit')
+  if (typeof serialized !== 'string' || new TextEncoder().encode(serialized).length > PRESENTATION_BYTE_LIMIT) throw new TypeError('presentation byte limit')
   return assertPresentation(JSON.parse(serialized))
 }

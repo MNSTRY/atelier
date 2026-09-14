@@ -8,7 +8,7 @@ import { presentationSchema } from '../src/ui/presentation/schema.generated.mjs'
 import { matchesPresentationSchema } from '../src/ui/presentation/schema-check.mjs'
 import { resolveTokens, contrastRatio, tokenVariables, tokenContract } from '../src/ui/presentation/tokens.mjs'
 import { presentationStyles } from '../src/ui/presentation/styles.mjs'
-import { presentationState, keyboardResize, resizeRequest } from '../src/ui/presentation/state.mjs'
+import { presentationState, keyboardResize, resizeRequest, editValueError } from '../src/ui/presentation/state.mjs'
 import { renderPresentationDocument, renderReadOnlyDocument } from '../src/ui/presentation/web.mjs'
 import { createNativePresentation } from '../src/ui/presentation/native.mjs'
 import { comparePresentationProofs } from '../src/ui/presentation/proof.mjs'
@@ -172,7 +172,10 @@ test('extension containers are inert metadata rather than interpreted authority'
   assert.deepEqual(parsePresentation(serializePresentation(model)).ext, model.ext)
 })
 test('visual comparison refuses missing, failed or drifted coverage and never accepts a baseline', () => {
-  const proof = { schema: 'atelier.presentation-browser-proof/v1', status: 'passed', sourceHead: 'a'.repeat(40), sourceDigest: 'a'.repeat(64), fixtureDigest: 'b'.repeat(64), environment: { font: 'pinned-font' }, runs: [{ browser: 'chromium', version: 'fixture-version', status: 'passed', checks: ['fixture-check'], screenshots: [{ file: 'frame.png', sha256: 'c'.repeat(64) }] }] }
+  const proof = { schema: 'atelier.presentation-browser-proof/v1', status: 'passed', sourceHead: 'a'.repeat(40), sourceDigest: 'a'.repeat(64), runnerDigest: 'e'.repeat(64), fixtureDigest: 'b'.repeat(64),
+    scope: 'synthetic-local-browser', nativeDeviceAccepted: false, adopterAccepted: false, visualBaselineAccepted: false,
+    environment: { platform: 'fixture', release: 'fixture', architecture: 'fixture', locale: 'en-US', timezone: 'UTC', scale: 1, font: 'pinned-font', motion: 'reduce', viewports: [390], themes: ['light'], densities: ['comfortable'] },
+    runs: [{ browser: 'chromium', version: 'fixture-version', status: 'passed', checks: ['fixture-check'], screenshots: [{ file: 'frame.png', sha256: 'c'.repeat(64), conditions: { width: 390, height: 960, theme: 'light', density: 'comfortable', font: 'pinned-font', motion: 'reduce', locale: 'en-US', scale: 1 } }] }] }
   assert.equal(comparePresentationProofs(null, proof).status, 'incomparable')
   assert.equal(comparePresentationProofs(proof, { ...proof, status: 'failed' }).status, 'incomparable')
   assert.equal(comparePresentationProofs(proof, { ...proof, environment: { font: 'other-font' } }).status, 'incomparable')
@@ -181,4 +184,36 @@ test('visual comparison refuses missing, failed or drifted coverage and never ac
   assert.deepEqual(comparePresentationProofs(proof, changed).changedFrames, ['chromium:frame.png'])
   const same = comparePresentationProofs(proof, proof)
   assert.equal(same.status, 'unchanged'); assert.equal(same.baselineApprovalVerified, false); assert.equal(same.executionAuthority, false)
+  for (const mutate of [p => { p.environment = {} }, p => { p.runs = [null] }, p => { p.runs[0].checks = [null] }, p => { p.runs[0].screenshots = [null] }, p => { delete p.runs[0].screenshots[0].conditions }, p => { p.extra = true }, p => { p.runs[0].screenshots[0].conditions.width = 1440 }]) {
+    const bad = structuredClone(proof); mutate(bad)
+    assert.equal(comparePresentationProofs(bad, bad).status, 'incomparable')
+  }
+  const changedRunner = structuredClone(proof); changedRunner.runnerDigest = 'f'.repeat(64)
+  assert.equal(comparePresentationProofs(proof, changedRunner).status, 'incomparable')
+  assert.equal(comparePresentationProofs({ get schema() { throw new Error('must not execute') } }, proof).status, 'incomparable')
+})
+test('edit limits count complete Unicode points without truncating', () => {
+  assert.equal(editValueError('a'.repeat(32767) + '😀'), null)
+  assert.equal(editValueError('😀'.repeat(32768)), null)
+  assert(editValueError('a'.repeat(32768) + '😀'))
+  assert(editValueError('\ud83d'))
+})
+test('accepted serialization always fits its own parser including extension bytes', () => {
+  for (const text of ['a'.repeat(1000000), '😀'.repeat(245000)]) {
+    const model = fresh(); model.ext = { text }
+    assert.deepEqual(validatePresentation(model), [])
+    assert.deepEqual(parsePresentation(serializePresentation(model)), model)
+  }
+  const large = fresh(); large.ext = { text: '😀'.repeat(262144) }
+  assert(validatePresentation(large).length)
+  assert.throws(() => serializePresentation(large))
+  const many = fresh()
+  for (let i = 0; i < 40; i++) { const id = 'large-' + i; many.nodes.push({ id, type: 'text', label: 'Text', text: 'a'.repeat(32768) }); many.panes[0].blocks.push(id) }
+  assert(validatePresentation(many).length)
+  assert.throws(() => serializePresentation(many))
+})
+test('standalone pane metadata embeds without shape conversion', () => {
+  const model = fresh(); model.panes[0].contractVersion = '1.0.0'
+  assert.deepEqual(validatePanePresentation(model.panes[0]), [])
+  assert.deepEqual(validatePresentation(model), [])
 })

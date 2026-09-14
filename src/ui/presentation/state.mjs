@@ -1,4 +1,16 @@
 export const stateAxes = Object.freeze(['hovered', 'focused', 'pressed', 'selected', 'disabled', 'pending', 'dragging', 'invalid'])
+export const EDIT_CODE_POINT_LIMIT = 32768
+// Match the schema's Unicode code-point limit; never truncate a host draft.
+export function editValueError(value) {
+  if (typeof value !== 'string') return 'Draft must be text.'
+  let count = 0
+  for (const point of value) {
+    const code = point.codePointAt(0)
+    if (code >= 0xd800 && code <= 0xdfff) return 'Draft contains an incomplete Unicode character.'
+    if (++count > EDIT_CODE_POINT_LIMIT) return 'Draft exceeds 32768 characters. It remains in the editor; no request was sent.'
+  }
+  return null
+}
 export function presentationState(input = {}) {
   if (!input || Object.getPrototypeOf(input) !== Object.prototype) throw new TypeError('invalid state')
   for (const key of Object.keys(input)) if (!stateAxes.includes(key) || typeof input[key] !== 'boolean') throw new TypeError('unknown state axis')
