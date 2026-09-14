@@ -20,8 +20,8 @@ That makes the same repository useful at several levels:
   proprietary database.
 - A **team** can collaborate through explicit roles, handoffs, and disclosure
   boundaries.
-- A **person or agent** can receive the right context and capabilities for the
-  task, without receiving the entire repository.
+- A **person or agent** can work with selected context from the repository
+  through tools that control access.
 - A **toolmaker** can build a specialized or commercial product on the graph,
   contracts, validators, and projections instead of inventing a new source of
   truth.
