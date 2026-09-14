@@ -5,6 +5,7 @@ export function evidenceStore() {
   return {
     values,
     failWrites() { fail = true },
+    recoverWrites() { fail = false },
     async load(key) { return structuredClone(values.get(key) ?? { version: 0, evidence: null }) },
     async compareAndSet(key, evidence, { expectedVersion }) {
       if (fail) throw new Error('Synthetic store unavailable')

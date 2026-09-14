@@ -1,4 +1,4 @@
-import { verifyVaultPrivacy, vaultObjects } from './privacy.mjs'
+import { verifyVaultPrivacy, createVaultContext } from './privacy.mjs'
 import { renderVaultHome, vaultHomePolicy } from './interface.mjs'
 /** Optional hosted artifact service. No default network, storage, or identity provider. */
 const TYPES = Object.freeze({ html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', txt: 'text/plain; charset=utf-8', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', pdf: 'application/pdf' })
@@ -97,7 +97,7 @@ export function createVaultService({ identity, metadata, storage, privacy, deplo
         try { input = await boundedBody(request); prepared = await preparePublication(input) }
         catch (error) { return reply(error.message === 'too-large' ? 413 : 400) }
         if (input.expectedRevision !== record.revision) return reply(409)
-        const context = { vault, owner: record.owner, publication: prepared.publication, revision: input.expectedRevision + 1, manifest: prepared.manifest, objects: vaultObjects(vault, prepared.manifest), deployment, request: { origin: url.origin, path: url.pathname } }
+        const context = createVaultContext({ vault, record: { owner: record.owner, publication: prepared.publication, revision: input.expectedRevision + 1, manifest: prepared.manifest }, deployment, request: { origin: url.origin, path: url.pathname } })
         const before = await verifyVaultPrivacy(privacy, { ...context, phase: 'before-upload' })
         if (before.status !== 'verified') return reply(503, before.reason)
         for (const file of prepared.files) await storage.put(`${vault}/${file.sha256}`, file.bytes)
@@ -116,7 +116,7 @@ export function createVaultService({ identity, metadata, storage, privacy, deplo
       const record = await metadata.get(vault)
       if (!sameOwner(principal, record?.owner)) return reply(404)
       if (!home && !record.manifest.some(file => file.path === parts.slice(1).join('/'))) return reply(404)
-      const protection = await verifyVaultPrivacy(privacy, { vault, owner: record.owner, publication: record.publication ?? null, revision: record.revision, manifest: record.manifest, objects: vaultObjects(vault, record.manifest), deployment, request: { origin: url.origin, path: url.pathname }, phase: 'read' })
+      const protection = await verifyVaultPrivacy(privacy, createVaultContext({ vault, record, deployment, request: { origin: url.origin, path: url.pathname } }))
       if (home) return new Response(request.method === 'HEAD' ? null : renderVaultHome({ vault, revision: record.revision, manifest: record.manifest, privacy: protection, query: url.searchParams.get('q') || '' }), { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': vaultHomePolicy } })
       if (protection.status !== 'verified') return reply(503, protection.reason)
       const path = parts.slice(1).join('/')

@@ -52,56 +52,96 @@ export async function verifyVaultPrivacy(privacy, context) {
   const method = context.phase === 'read' ? 'current' : 'verify'
   if (typeof privacy?.[method] !== 'function') return unknown('No provider privacy evidence is configured.')
   try { return assessVaultPrivacy(await privacy[method](context), context) }
-  catch { return unknown('Provider privacy verification is unavailable.') }
+  catch (error) {
+    if (error instanceof VaultAlarmPersistenceError) return { ...assessVaultPrivacy(error.evidence, context), persistence: 'unconfirmed' }
+    return unknown('Provider privacy verification is unavailable.')
+  }
+}
+
+/** The host must alert/retry this failure; the local read latch remains set. */
+export class VaultAlarmPersistenceError extends Error {
+  constructor(evidence, cause) {
+    super('Vault exposure is latched locally but durable persistence is unconfirmed.', { cause })
+    this.name = 'VaultAlarmPersistenceError'
+    this.code = 'VAULT_ALARM_NOT_PERSISTED'
+    this.evidence = evidence
+  }
+}
+
+/** Public builder keeps refresh contexts aligned with service storage keys. */
+export function createVaultContext({ vault, record, deployment, request, phase = 'read' }) {
+  if (!record || !Number.isSafeInteger(record.revision) || record.revision < 0 || !Array.isArray(record.manifest)) throw new TypeError('Authoritative revision and manifest required')
+  return { vault, owner: record.owner, publication: record.publication ?? null, revision: record.revision, manifest: record.manifest, objects: vaultObjects(vault, record.manifest), deployment, ...(request ? { request } : {}), phase }
 }
 
 /** Host-owned versioned evidence store. Refresh is explicit; reads never probe. */
 export function createVaultPrivacyState({ probe, load, compareAndSet }) {
   if (typeof probe?.verify !== 'function' || typeof load !== 'function' || typeof compareAndSet !== 'function') throw new TypeError('Probe and versioned evidence store required')
   const alarms = new Map()
-  const key = context => JSON.stringify([context.deployment?.id, context.vault])
+  const key = context => {
+    if (!Number.isSafeInteger(context?.revision) || context.revision < 0) throw new TypeError('Authoritative nonnegative metadata revision required')
+    return JSON.stringify([context.deployment?.id, context.vault])
+  }
   const exposed = (evidence, context) => assessVaultPrivacy(evidence, context).status === 'exposed'
   async function snapshot(id, context) {
     const record = await load(id)
     if (!record || !Number.isSafeInteger(record.version) || record.version < 0 || !Object.hasOwn(record, 'evidence')) throw new TypeError('Invalid evidence store snapshot')
-    if (exposed(record.evidence, context)) alarms.set(id, record.evidence)
+    if (exposed(record.evidence, context)) alarms.set(id, { evidence: record.evidence, persisted: true })
     return record
+  }
+  async function persistAlarm(id, context) {
+    // Alarm writes may replace newer green evidence regardless of revision.
+    // Reload on conflict, never reuse a stale version or retry green evidence.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (alarms.get(id).persisted) return alarms.get(id).evidence
+      try {
+        const record = await snapshot(id, context)
+        if (alarms.get(id).persisted) return alarms.get(id).evidence
+        const evidence = alarms.get(id).evidence
+        if (await compareAndSet(id, evidence, { expectedVersion: record.version }) === true) {
+          alarms.set(id, { evidence, persisted: true })
+          return evidence
+        }
+      } catch (cause) { throw new VaultAlarmPersistenceError(alarms.get(id).evidence, cause) }
+    }
+    throw new VaultAlarmPersistenceError(alarms.get(id).evidence, new Error('Alarm write conflict limit reached'))
   }
   async function collect(context) {
     const id = key(context)
-    if (alarms.has(id)) return alarms.get(id)
+    // Pending latches retry persistence without re-probing a possibly vanished
+    // or staged-only exposure. Confirmed durable alarms need no rewrite.
+    if (alarms.has(id)) return persistAlarm(id, context)
     const previous = await snapshot(id, context)
-    if (alarms.has(id)) return alarms.get(id)
-    // Metadata revision is authoritative. Never let a delayed old refresh
-    // replace evidence for a newer committed publication.
+    if (alarms.has(id)) return persistAlarm(id, context)
     if (previous.evidence?.revision > context.revision) return null
     const evidence = await probe.verify(context)
-    const alarm = exposed(evidence, context)
-    if (alarm) alarms.set(id, evidence)
-    else if (alarms.has(id)) return alarms.get(id)
-    if (context.phase !== 'read' && !alarm) return evidence
-    try {
-      const saved = await compareAndSet(id, evidence, { expectedVersion: previous.version })
-      if (saved !== true) {
-        // No blind retries. Another writer may have published a newer revision
-        // or latched an incident. A conflict refuses this collection's verdict.
-        await snapshot(id, context)
-        return alarms.get(id) ?? null
-      }
-    } catch (error) {
-      // A failed store must not keep this process serving its prior green
-      // record after detecting exposure. Other processes need durable alarms.
-      if (!alarm) throw error
+    if (exposed(evidence, context)) {
+      if (!alarms.has(id)) alarms.set(id, { evidence, persisted: false })
+      return persistAlarm(id, context)
     }
-    return alarms.get(id) ?? evidence
+    if (alarms.has(id)) return persistAlarm(id, context)
+    if (context.phase !== 'read') {
+      // Another instance may have latched an incident during the slow probe.
+      // This is still a check, not a transaction with metadata activation.
+      const latest = await snapshot(id, context)
+      if (alarms.has(id)) return persistAlarm(id, context)
+      return latest.evidence?.revision > context.revision ? null : evidence
+    }
+    // Green writes retain their original version. Conflicts and store failures
+    // must never be interpreted as a successful refresh.
+    if (await compareAndSet(id, evidence, { expectedVersion: previous.version }) !== true) {
+      await snapshot(id, context)
+      return alarms.has(id) ? persistAlarm(id, context) : null
+    }
+    return alarms.has(id) ? persistAlarm(id, context) : evidence
   }
   return {
     verify: collect,
     async current(context) {
       const id = key(context)
-      if (alarms.has(id)) return alarms.get(id)
+      if (alarms.has(id)) return alarms.get(id).evidence
       const record = await snapshot(id, context)
-      return alarms.get(id) ?? record.evidence
+      return alarms.get(id)?.evidence ?? record.evidence
     },
     async refresh(context) { return collect({ ...context, phase: 'read' }) },
   }

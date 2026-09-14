@@ -1,7 +1,7 @@
 import { evidenceStore } from './vault-store-fixture.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createVaultService, preparePublication, createVaultPrivacyProbe, createVaultPrivacyState } from '../src/vault/index.mjs'
+import { createVaultService, preparePublication, createVaultPrivacyProbe, createVaultPrivacyState, createVaultContext } from '../src/vault/index.mjs'
 import { assessVaultPrivacy, vaultObjects } from '../src/vault/privacy.mjs'
 import { protectionEvidence, deployment } from './vault-privacy-fixture.mjs'
 const owner = { issuer: 'https://identity.example', subject: 'synthetic-author' }
@@ -31,7 +31,7 @@ test('real service and denial collector publish zero-byte artifacts without alar
   // Activation evidence is not silently promoted to read evidence. The explicit
   // host refresher verifies committed routes before owner delivery is enabled.
   assert.equal((await read('report.html')).status, 503)
-  const context = { vault: 'sample-vault', owner, deployment, publication: record.publication, revision: record.revision, manifest: record.manifest, objects: vaultObjects('sample-vault', record.manifest) }
+  const context = createVaultContext({ vault: 'sample-vault', record, deployment })
   assert.equal(assessVaultPrivacy(await privacy.refresh(context), { ...context, phase: 'read' }).status, 'verified')
   const counts = [collections, inspections]
   assert.equal((await read('report.html')).status, 200)
@@ -71,4 +71,12 @@ test('missing privacy bindings refuse authorized publication and artifact delive
   assert.equal((await service(new Request('https://artifacts.example/_publish/sample-vault', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input(0)) }))).status, 503)
   assert.equal((await service(new Request('https://artifacts.example/sample-vault/report.html'))).status, 503)
   assert.equal(puts, 0)
+})
+test('public refresh context builder matches the actual service read context', async () => {
+  const prepared = await preparePublication(input(0))
+  const record = { ...prepared, owner, revision: 1 }; let observed
+  const handle = createVaultService({ deployment, identity: { read: () => owner, publish: () => owner }, metadata: { get: () => record, commit() {} }, storage: { get() {}, put() {} }, privacy: { current(ctx) { observed = ctx; return null } } })
+  await handle(new Request('https://artifacts.example/sample-vault/report.html'))
+  assert.deepEqual(observed, createVaultContext({ vault: 'sample-vault', record, deployment, request: { origin: 'https://artifacts.example', path: '/sample-vault/report.html' } }))
+  assert.equal(createVaultContext({ vault: 'sample-vault', record: { owner, revision: 0, manifest: [] }, deployment }).publication, null)
 })

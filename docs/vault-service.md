@@ -155,7 +155,11 @@ current evidence. They never collect probes. Missing, expired, wrong-owner,
 wrong-deployment, wrong-publication or incomplete evidence blocks delivery.
 `createVaultPrivacyState({probe, load, compareAndSet})` supplies an explicit refresher and
 host-owned evidence persistence. Call `refresh(context)` after commit and from
-the host scheduler with the current authoritative manifest and owner. Activation
+the host scheduler with the current authoritative manifest and owner. Use the public
+`createVaultContext({vault, record, deployment})` export to build that context
+from `metadata.get(vault)`; it includes storage keys, revision and null handling
+without copying internal formats. Refresh rejects a missing, negative or
+non-integer revision before reading the evidence store. Activation
 evidence is deliberately not promoted to read evidence; owner delivery remains
 unavailable until the first successful read-phase refresh. Refresh failure never
 extends a validity window. A policy change requires immediate host invalidation;
@@ -166,20 +170,42 @@ snapshot `{version, evidence}`; a missing record is `{version: 0, evidence: null
 `compareAndSet(key, evidence, {expectedVersion})` must atomically compare the
 version, increment it on success and return exactly `true`, or return `false`
 without writing. Its transaction must refuse replacement of any exposure alarm
-and refuse older metadata revisions. Separate atomic load/save calls are not
+and refuse older metadata revisions for green evidence. Exposure alarms must
+be allowed to replace newer green evidence regardless of the alarm revision: a
+staged-only exposure can concern objects outside the current manifest. Separate atomic load/save calls are not
 sufficient. Protect the store from publishers; no unconditional save adapter is
 accepted. Evidence and refresh contexts bind the authoritative metadata revision.
 
-On conflict, the wrapper reloads the stored record, preserves any alarm and
-otherwise refuses the collection. It never blindly retries or overwrites newer
-evidence. An in-process alarm latch immediately blocks subsequent reads, even
-when persistence fails or another collection is still running. The durable
-store is still needed across instances and restarts: failed persistence cannot
-protect other processes, and must be treated as an operator incident. This
-wrapper provides no alarm-clear API. Reconciliation is an explicit host operator
-procedure: contain the external exposure, verify restored controls, reconcile
-durable state, then replace affected handler instances. Restart alone does not
-clear a successfully persisted alarm and is not a recovery procedure.
+Green evidence retains the version loaded before collection. A conflict refuses
+that collection; it is never converted into an unconditional overwrite. Before
+returning non-read green evidence, the wrapper reloads the store to notice an
+alarm another instance persisted during probing. This check is not atomic with
+metadata activation; hosts must still own provider containment and transactions.
+
+Exposure alarms use a different path. The wrapper latches the original evidence
+in memory, then reloads and conditionally writes it, with at most three attempts
+per verify/refresh call. If a durable alarm already exists, no rewrite is needed.
+If writes conflict, each retry uses a fresh snapshot. If the store throws or the
+attempt bound is reached, verify/refresh rejects with the public
+`VaultAlarmPersistenceError` (`code: "VAULT_ALARM_NOT_PERSISTED"`, `evidence`).
+Hosts must alert on that error and retry the same wrapper after store recovery.
+Its next verify/refresh retries the original pending evidence without re-probing,
+so a vanished or staged-only exposure is not forgotten. Store calls themselves
+must have host-enforced deadlines; the attempt bound is not a network timeout.
+
+`current` performs no persistence retry or probe and immediately returns any
+local alarm, including an unpersisted one. The service's gate translates the
+typed error into an exposed/refused result with `persistence: "unconfirmed"`;
+the underlying wrapper API exposes the typed error to host refresh/verification
+callers. Other instances and restarts cannot see an unpersisted memory latch,
+so durable-store failure is an unresolved incident, never a success receipt.
+Best-effort notification alone does not settle it.
+
+No alarm-clear API is provided. Recovery is an explicit host operator procedure:
+contain the external exposure, verify restored controls, reconcile durable state,
+then replace affected handler instances. Restart alone is not recovery and does
+not clear a successfully persisted alarm. No provider containment is implemented
+by this module.
 
 ### Reusable denial probe collector
 
