@@ -186,6 +186,19 @@ assert.equal(typeof validateRepositoryObservation, 'function')
   await verifyInstalledReview({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
   await verifyInstalledCoauthor({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
 
+  // Exercise the actual launch config with root and parent-hoisted installs.
+  for (const target of [join(tempRoot, 'nested', 'workspace'), tempRoot]) {
+    run(process.execPath, [join(tempRoot, atelierCli), 'init', '--template', 'sample-workspace', '--target', target], { cwd: tempRoot })
+    for (const command of ['graph', 'project']) {
+      run(process.execPath, [join(tempRoot, atelierCli), command], { cwd: target })
+    }
+    const launch = JSON.parse(readFileSync(join(target, '.claude', 'launch.json'), 'utf8')).configurations[0]
+    if (launch.runtimeExecutable !== 'node') throw new Error('preview must use Node package resolution')
+    const smoke = run(process.execPath, [...launch.runtimeArgs, '--', '--smoke'], { cwd: target })
+    if (!smoke.includes('[atelier:browser:smoke]')) throw new Error('installed preview health/projection smoke failed')
+  }
+  console.log('[consumer:preview] root and nested workspace launch configs served health and projection')
+
   console.log(`[consumer:smoke] SHA-256 ${tarballSha256}; packed tarball installs without publisher overrides and imports ${Object.keys(packageJson.exports).length} declared exports`)
 } finally {
   if (tarballPath && ownsTarball) rmSync(tarballPath, { force: true })

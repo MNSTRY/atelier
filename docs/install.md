@@ -125,17 +125,60 @@ atelier init --template shared-project --target ./project-alpha --actor tenant-u
 
 `--actor` rewrites the copied boundary policy actor entry and binds it to the
 local Git email when available. Use `--github-login` or `--git-email` to set
-those values explicitly during onboarding. At check time, a declared actor is
-resolved in this order: recognized `--actor`/`MNSTRY_ATELIER_ACTOR`/
-`GITHUB_ACTOR`, configured Git email, then a reviewed `gh api user` fallback.
-An explicit value that is not declared in the policy does not authenticate an
-actor and therefore does not suppress later resolution attempts.
+those values explicitly during onboarding. Initialization does not infer a
+GitHub login from the environment or actor slug; without `--github-login` it
+retains an actor-specific placeholder. At check time, explicit selectors are validated even for shared-only work.
+Unknown `--actor`/`MNSTRY_ATELIER_ACTOR` values or conflicting explicit selectors
+are always errors. Boundary ownership is scoped to configured repository names;
+these names do not authenticate a checkout's identity. Duplicate configured names
+are refused case-insensitively.
+
+Derived attribution is needed only when the project operates a private-domain
+repository with a declared owner. Shared-only checks skip platform, Git-email and
+`gh` lookup entirely. When ownership requires attribution, precedence is:
+
+| Input | Result |
+| --- | --- |
+| `--actor` or `MNSTRY_ATELIER_ACTOR` | Must name one declared actor; wins over derived inputs. |
+| `GITHUB_ACTOR` | Must uniquely match a declared `githubLogin`, case-insensitively. Unmapped/ambiguous values do not fall through. Actor keys and login placeholders are not login mappings. |
+| Configured Git email | Used only without either input above; must map to one actor. Commit history is never used. |
+| Optional `gh api user` | Used only when the inputs above are absent or configured email has no match; must uniquely match a declared login. Sync disables this lookup. |
+
+Unresolved derived attribution and ownership mismatches are errors in strict
+mode and warnings in ordinary `legacy-warning` mode. Sync forces ownership errors
+in both modes. Reports retain the resolution reason and affected repository.
+`allowHistoryActorResolution` is a deprecated, accepted no-op: setting it to true
+never enables history-based attribution. These are attribution hints, not
+authenticated authorization. In particular `GITHUB_ACTOR` describes the supplied
+platform value, not an authenticated human operating a phone or a workflow rerun.
+Shared-host deployment must establish its own trusted identity boundary.
+
+`init` refuses existing scaffold files or an existing project/lock; use `adopt`
+for existing content and `upgrade` for managed changes. Adoption validates the
+proposed or retained project and its selected policy before writing any scaffold
+or local state, preserves existing locks, and
+refuses drift rather than reporting success. Choose and install the intended
+package before adoption. Preview configs resolve `@mnstry/atelier/cli` from the
+workspace through parent `node_modules` directories using Node, without registry
+fallback. This supports the documented subdirectory target and hoisted install.
+Generate `graph` and `project` output before starting the preview. Existing launch
+configs are not rewritten by these template changes. Append server arguments
+following a `--` separator after the configured Node arguments. The host process
+lifecycle still needs qualification before relying on preview restarts.
+
+Upgrade planning and application use the same optional `gh api user` fallback
+as ordinary boundary checks. Supply a valid explicit selector or mapped identity
+to avoid this lookup; Sync disables it.
+
+The generated manifest's `graphPath` is relative to its output directory. Readers
+of older manifests should continue accepting absolute paths; resolve relative
+values against the directory containing `atelier.manifest.json`.
 
 Then update:
 
 - `atelier.project.json` repo paths.
 - `repo-access.v1.json` read boundaries.
-- `atelier.lock.json` with `atelier lock write` after choosing the exact Atelier package source.
+- `atelier.lock.json`: inspect `atelier lock check`; use the reviewed upgrade path for a changed package or policy rather than silently rewriting the baseline.
 - README placeholders for project names and Git remotes.
 
 Keep project configuration tracked and local overlay state ignored. Track

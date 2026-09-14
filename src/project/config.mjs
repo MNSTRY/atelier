@@ -250,6 +250,7 @@ export function resolveProjectConfig({
   configArgPrefix = PROJECT_CONFIG_ARG_PREFIX,
   gitExecutable = 'git',
   configEnv = PROJECT_CONFIG_ENV,
+  writeLocalState = true,
   defaults = {},
 } = {}) {
   const argPath = projectConfigArg(argv, configArgPrefix)
@@ -366,7 +367,7 @@ export function resolveProjectConfig({
       }
     }),
   }
-  resolved.localState = ensureLocalState(resolved, { write: true, gitExecutable, env })
+  resolved.localState = ensureLocalState(resolved, { write: writeLocalState, gitExecutable, env })
   return resolved
 }
 
@@ -544,6 +545,7 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
   }
   if (alignment.appRepo != null && !firstString(alignment.appRepo)) errors.push('alignment.appRepo must be a non-empty string')
 
+  const repoNames = new Set()
   for (const [index, repo] of (Array.isArray(doc.repos) ? doc.repos : []).entries()) {
     if (!repo || typeof repo !== 'object' || Array.isArray(repo)) {
       errors.push(`repos[${index}] must be an object`)
@@ -552,6 +554,11 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
     errors.push(...unknownKeyErrors(repo, `repos[${index}]`, new Set(['name', 'path', 'readBoundary', 'role', 'kind', 'remote', 'identity', 'aliases', 'required', 'ext'])))
     errors.push(...extErrors(repo.ext, `repos[${index}].ext`))
     if (!firstString(repo.name)) errors.push(`repos[${index}].name is required`)
+    else {
+      const key = repo.name.toLowerCase()
+      if (repoNames.has(key)) errors.push(`repos[${index}].name duplicates another repository name`)
+      repoNames.add(key)
+    }
     if (repo.identity != null) {
       const identity = asObject(repo.identity)
       errors.push(...unknownKeyErrors(identity, `repos[${index}].identity`, new Set(['provider', 'id', 'ext'])))

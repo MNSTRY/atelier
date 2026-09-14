@@ -293,3 +293,9 @@ test('project config validation rejects tracked absolute repo paths', () => {
   })
   assert.match(errors.join('\n'), /machine-local absolute paths/)
 })
+
+test('project config refuses case-insensitive duplicate repository names', () => {
+  const errors = validateProjectConfigDoc({ schema: PROJECT_CONFIG_SCHEMA,
+    repos: [{ name: 'shared', path: 'one' }, { name: 'SHARED', path: 'two' }] })
+  assert.ok(errors.some((message) => message.includes('duplicates another repository name')))
+})

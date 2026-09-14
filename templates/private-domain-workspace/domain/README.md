@@ -2,10 +2,10 @@
 title: "Private Domain Seed"
 kg:
   id: "tenant-private-domain:seed"
-  type: "domain-note"
+  type: "document"
   domain: "example-domain"
   lifecycle: "draft"
-  status: "seed"
+  status: "draft"
   audience: "private"
   relations: []
 ---
