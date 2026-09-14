@@ -23,6 +23,11 @@
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
   "exports": {
+    "./presentation": "./src/ui/presentation/index.mjs",
+    "./presentation/browser": "./src/ui/presentation/browser.mjs",
+    "./presentation/native": "./src/ui/presentation/native.mjs",
+    "./contracts/atelier-presentation.v1.schema.json": "./contracts/atelier-presentation.v1.schema.json",
+    "./contracts/atelier-pane-presentation.v1.schema.json": "./contracts/atelier-pane-presentation.v1.schema.json",
     "./coauthor": "./src/coauthor/session.mjs",
     "./skills": "./src/skills/steward.mjs",
     "./intake": "./src/intake/store.mjs",

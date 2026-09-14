@@ -1,0 +1,293 @@
+{
+  "schema": "atelier.presentation/v1",
+  "version": "1.0.0",
+  "id": "reference-desk",
+  "title": "Reference desk",
+  "lang": "en",
+  "direction": "ltr",
+  "theme": "light",
+  "density": "comfortable",
+  "navigation": [
+    {
+      "id": "nav-work",
+      "label": "Working area",
+      "target": "work"
+    },
+    {
+      "id": "nav-context",
+      "label": "Context",
+      "target": "context"
+    }
+  ],
+  "panes": [
+    {
+      "id": "work",
+      "label": "Working area",
+      "role": "primary",
+      "width": {
+        "min": 30,
+        "max": 75,
+        "value": 60
+      },
+      "blocks": [
+        "intro",
+        "draft-title",
+        "draft-body",
+        "comparison",
+        "preview",
+        "paper-image"
+      ]
+    },
+    {
+      "id": "context",
+      "label": "Context",
+      "role": "context",
+      "width": {
+        "min": 25,
+        "max": 60,
+        "value": 35
+      },
+      "blocks": [
+        "items",
+        "steps",
+        "graph",
+        "status",
+        "refusal",
+        "decision",
+        "receipt",
+        "offer",
+        "review",
+        "publication"
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "paper-image",
+      "type": "media",
+      "label": "Paper illustration",
+      "src": "/paper.svg",
+      "alt": "A grey rectangular sheet on a plain background",
+      "caption": "Invented reference media; the host supplies the local asset."
+    },
+    {
+      "id": "intro",
+      "type": "text",
+      "label": "A small reference workspace",
+      "text": "Invented notes and objects exercise the presentation contract. Content, workflow and permissions belong to the host."
+    },
+    {
+      "id": "draft-title",
+      "type": "field",
+      "label": "Note title",
+      "value": "A study of paper shapes",
+      "input": "text",
+      "required": true,
+      "disabled": false
+    },
+    {
+      "id": "draft-body",
+      "type": "editor",
+      "label": "Draft text",
+      "value": "Arrange three paper shapes on the table.\nDescribe how their edges meet.",
+      "disabled": false
+    },
+    {
+      "id": "comparison",
+      "type": "diff",
+      "label": "Change preview",
+      "before": "Two paper shapes.",
+      "after": "Three paper shapes.",
+      "beforeLabel": "Earlier text",
+      "afterLabel": "Proposed text"
+    },
+    {
+      "id": "preview",
+      "type": "preview",
+      "label": "Read-only preview",
+      "text": "A study of paper shapes\n\nThree simple shapes share a table."
+    },
+    {
+      "id": "items",
+      "type": "collection",
+      "label": "Objects",
+      "items": [
+        {
+          "id": "circle",
+          "label": "Circle",
+          "detail": "Round edge",
+          "selected": true
+        },
+        {
+          "id": "square",
+          "label": "Square",
+          "detail": "Four equal edges",
+          "selected": false
+        }
+      ]
+    },
+    {
+      "id": "steps",
+      "type": "sequence",
+      "reorderable": true,
+      "label": "Reading order",
+      "items": [
+        {
+          "id": "observe",
+          "label": "Observe",
+          "selected": false
+        },
+        {
+          "id": "describe",
+          "label": "Describe",
+          "selected": false
+        }
+      ]
+    },
+    {
+      "id": "graph",
+      "type": "graph",
+      "label": "Connections",
+      "items": [
+        {
+          "id": "paper",
+          "label": "Paper"
+        },
+        {
+          "id": "shape",
+          "label": "Shape"
+        }
+      ],
+      "edges": [
+        {
+          "from": "paper",
+          "to": "shape",
+          "label": "folded into"
+        }
+      ]
+    },
+    {
+      "id": "status",
+      "type": "status",
+      "label": "Status",
+      "text": "Host-supplied status information.",
+      "tone": "neutral",
+      "details": [
+        {
+          "label": "Source",
+          "value": "Invented reference host"
+        }
+      ],
+      "actions": []
+    },
+    {
+      "id": "refusal",
+      "type": "refusal",
+      "label": "Refusal",
+      "text": "Host-supplied refusal information.",
+      "tone": "warning",
+      "details": [
+        {
+          "label": "Source",
+          "value": "Invented reference host"
+        }
+      ],
+      "actions": [
+        "disabled-action"
+      ]
+    },
+    {
+      "id": "decision",
+      "type": "decision",
+      "label": "Decision",
+      "text": "Host-supplied decision information.",
+      "tone": "neutral",
+      "details": [
+        {
+          "label": "Source",
+          "value": "Invented reference host"
+        }
+      ],
+      "actions": []
+    },
+    {
+      "id": "receipt",
+      "type": "receipt",
+      "label": "Receipt",
+      "text": "Host-supplied receipt information.",
+      "tone": "neutral",
+      "details": [
+        {
+          "label": "Source",
+          "value": "Invented reference host"
+        }
+      ],
+      "actions": []
+    },
+    {
+      "id": "offer",
+      "type": "offer",
+      "label": "Offer",
+      "text": "Host-supplied offer information.",
+      "tone": "neutral",
+      "details": [
+        {
+          "label": "Source",
+          "value": "Invented reference host"
+        }
+      ],
+      "actions": []
+    },
+    {
+      "id": "review",
+      "type": "review",
+      "label": "Review",
+      "text": "Host-supplied review information.",
+      "tone": "neutral",
+      "details": [
+        {
+          "label": "Source",
+          "value": "Invented reference host"
+        }
+      ],
+      "actions": []
+    },
+    {
+      "id": "publication",
+      "type": "publication",
+      "label": "Publication",
+      "text": "Host-supplied publication information.",
+      "tone": "neutral",
+      "details": [
+        {
+          "label": "Source",
+          "value": "Invented reference host"
+        }
+      ],
+      "actions": [
+        "confirm-action"
+      ]
+    },
+    {
+      "id": "confirm-action",
+      "type": "action",
+      "label": "Request publication",
+      "actionRef": "publish-request",
+      "disabled": false,
+      "confirmation": {
+        "title": "Request publication?",
+        "description": "This forwards a request to the host. It does not publish content or grant permission.",
+        "confirmLabel": "Send request",
+        "cancelLabel": "Keep editing"
+      }
+    },
+    {
+      "id": "disabled-action",
+      "type": "action",
+      "label": "Unavailable action",
+      "actionRef": "unavailable",
+      "disabled": true,
+      "reason": "The reference host has not supplied this capability."
+    }
+  ]
+}
