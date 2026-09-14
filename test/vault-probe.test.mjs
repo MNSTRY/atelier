@@ -5,7 +5,7 @@ import { createVaultPrivacyProbe } from '../src/vault/probe.mjs'
 import { assessVaultPrivacy, verifyVaultPrivacy } from '../src/vault/privacy.mjs'
 import { digest } from '../src/vault/service.mjs'
 const bytes = new TextEncoder().encode('Synthetic private canary')
-const context = { vault: 'sample-vault', publication: 'synthetic', phase: 'before-upload', deployment, manifest: [], objects: [], owner: { issuer: 'https://identity.example', subject: 'synthetic-owner' } }
+const context = { vault: 'sample-vault', publication: 'synthetic', phase: 'before-upload', revision: 1, deployment, manifest: [], objects: [], owner: { issuer: 'https://identity.example', subject: 'synthetic-owner' } }
 async function fixture(changeResponse) {
   const sha256 = await digest(bytes)
   const inventory = { ...protectionEvidence(context), loginEndpoints: [{ url: 'https://login.example/sign-in', queryKeys: ['redirect_url', 'state'] }] }
@@ -72,4 +72,15 @@ test('nonempty denial bodies are inconclusive and inventory object key order is 
   const good = await fixture(); let count = 0
   const probe = createVaultPrivacyProbe({ inspect: async () => ++count === 1 ? good.inventory : Object.fromEntries(Object.entries(good.inventory).reverse()), request: good.request })
   assert.equal((await verifyVaultPrivacy(probe, context)).status, 'verified')
+})
+test('empty denial bodies are not disclosed content even for an empty-file digest', async () => {
+  const f = await fixture()
+  for (const target of f.inventory.targets) target.sha256 = await digest(new Uint8Array())
+  assert.equal((await verifyVaultPrivacy(f.probe, context)).status, 'verified')
+})
+test('followed redirects still report observed bytes, but cannot establish denial', async () => {
+  for (const [body, status] of [[bytes, 'exposed'], [null, 'unknown']]) {
+    const f = await fixture(() => { const response = new Response(body, { status: 403 }); Object.defineProperty(response, 'redirected', { value: true }); return response })
+    assert.equal((await verifyVaultPrivacy(f.probe, context)).status, status)
+  }
 })

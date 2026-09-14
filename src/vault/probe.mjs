@@ -8,7 +8,6 @@ const cleanUrl = value => {
 }
 async function classify(response, target, loginUrls) {
   if (!(response instanceof Response)) return 'unknown'
-  if (response.redirected) return 'unknown'
   const reader = response.body?.getReader()
   const chunks = []; let length = 0
   try {
@@ -23,7 +22,8 @@ async function classify(response, target, loginUrls) {
   const bytes = new Uint8Array(length); let offset = 0
   for (const value of chunks) { bytes.set(value, offset); offset += value.length }
   // Content exposure wins over misleading error or redirect status codes.
-  if (await digest(bytes) === target.sha256 || (typeof target.canary === 'string' && target.canary.length >= 32 && new TextDecoder().decode(bytes).includes(target.canary))) return 'content'
+  if (length > 0 && (await digest(bytes) === target.sha256 || (typeof target.canary === 'string' && target.canary.length >= 32 && new TextDecoder().decode(bytes).includes(target.canary)))) return 'content'
+  if (response.redirected) return 'unknown'
   if ([401, 403, 404].includes(response.status)) return length === 0 ? 'denied' : 'unknown'
   if ([302, 303, 307, 308].includes(response.status)) {
     try {
@@ -60,7 +60,7 @@ export function createVaultPrivacyProbe({ inspect, request, now = () => Date.now
           if (!Array.isArray(item.queryKeys) || item.queryKeys.some(key => !['state', 'redirect_uri', 'redirect_url', 'returnTo', 'next', 'client_id', 'response_type', 'scope', 'nonce', 'code_challenge', 'code_challenge_method'].includes(key))) throw new Error('Unsafe login parameters')
           return { url: cleanUrl(item.url), queryKeys: item.queryKeys }
         })
-        const evidence = results => ({ vault: context.vault, publication: context.publication, phase: context.phase, owner: context.owner, deployment: context.deployment, checkedAt, validUntil: checkedAt + 60000, policyRevision: inventory.policyRevision, configuration: inventory.configuration, targets: results })
+        const evidence = results => ({ vault: context.vault, publication: context.publication, revision: context.revision, phase: context.phase, owner: context.owner, deployment: context.deployment, checkedAt, validUntil: checkedAt + 60000, policyRevision: inventory.policyRevision, configuration: inventory.configuration, targets: results })
         const results = []
         for (const target of targets) {
           const result = { url: target.url, kind: target.kind, sha256: target.sha256, key: target.key, size: target.size }

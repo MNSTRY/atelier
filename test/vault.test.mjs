@@ -196,3 +196,9 @@ test('PDF remains attachment and trusted home has its own script-free policy', a
   assert.match(home.headers.get('content-security-policy'), /default-src 'none'/)
   assert.doesNotMatch(home.headers.get('content-security-policy'), /script-src/)
 })
+test('credential revoked during activation verification cannot commit', async t => {
+  const f = await fixture('r2'); t.after(() => f.sql.close())
+  f.setVerifier(ctx => { if (ctx.phase === 'before-activation') f.credential.revoked = true; return protectionEvidence(ctx) })
+  assert.equal((await f.publish()).status, 401)
+  assert.equal((await f.metadata.get('sample-vault')).revision, 0)
+})

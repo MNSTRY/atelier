@@ -10,11 +10,12 @@ export function validDeployment(deployment) {
   })
 }
 export function assessVaultPrivacy(evidence, context) {
-  const { vault, publication, phase, owner, deployment, manifest = [], objects = [], request, now = Date.now() } = context
+  const { vault, publication, revision, phase, owner, deployment, manifest = [], objects = [], request, now = Date.now() } = context
   // Exposure is a sticky alarm, not authorization. Even stale/mismatched trusted
   // evidence must not turn a known exposure into an ordinary availability error.
   if (evidence?.targets?.some?.(t => t?.anonymous === 'content' || t?.otherUser === 'content')) return { status: 'exposed', reason: 'Unauthorized content observed. This handler refuses delivery; external routes may remain exposed.' }
   if (!evidence || evidence.vault !== vault || evidence.publication !== publication) return unknown('Protection evidence does not match this publication.')
+  if (!Number.isSafeInteger(revision) || revision < 0 || evidence.revision !== revision) return unknown('Protection evidence does not match the metadata revision.')
   if (evidence.phase !== phase || !['before-upload', 'before-activation', 'read'].includes(phase) || !owner?.issuer || !owner?.subject || evidence.owner?.issuer !== owner.issuer || evidence.owner?.subject !== owner.subject) return unknown('Protection evidence does not match the owner and operation.')
   if (!validDeployment(deployment) || evidence.deployment?.id !== deployment.id || JSON.stringify(evidence.deployment?.origins) !== JSON.stringify(deployment.origins)) return unknown('Protection evidence does not match this deployment.')
   if (request && (!deployment.origins.includes(request.origin) || (phase === 'read' && request.path !== `/${vault}` && request.path !== `/${vault}/` && !manifest.some(f => request.path === `/${vault}/${f.path}`)))) return unknown('Request is outside the verified inventory.')
@@ -54,25 +55,54 @@ export async function verifyVaultPrivacy(privacy, context) {
   catch { return unknown('Provider privacy verification is unavailable.') }
 }
 
-/** Host-owned durable evidence store. Refresh is explicit; reads never probe. */
-export function createVaultPrivacyState({ probe, load, save }) {
-  if (typeof probe?.verify !== 'function' || typeof load !== 'function' || typeof save !== 'function') throw new TypeError('Probe and durable evidence store required')
+/** Host-owned versioned evidence store. Refresh is explicit; reads never probe. */
+export function createVaultPrivacyState({ probe, load, compareAndSet }) {
+  if (typeof probe?.verify !== 'function' || typeof load !== 'function' || typeof compareAndSet !== 'function') throw new TypeError('Probe and versioned evidence store required')
+  const alarms = new Map()
   const key = context => JSON.stringify([context.deployment?.id, context.vault])
+  const exposed = (evidence, context) => assessVaultPrivacy(evidence, context).status === 'exposed'
+  async function snapshot(id, context) {
+    const record = await load(id)
+    if (!record || !Number.isSafeInteger(record.version) || record.version < 0 || !Object.hasOwn(record, 'evidence')) throw new TypeError('Invalid evidence store snapshot')
+    if (exposed(record.evidence, context)) alarms.set(id, record.evidence)
+    return record
+  }
   async function collect(context) {
-    const previous = await load(key(context))
-    if (assessVaultPrivacy(previous, context).status === 'exposed') return previous
+    const id = key(context)
+    if (alarms.has(id)) return alarms.get(id)
+    const previous = await snapshot(id, context)
+    if (alarms.has(id)) return alarms.get(id)
+    // Metadata revision is authoritative. Never let a delayed old refresh
+    // replace evidence for a newer committed publication.
+    if (previous.evidence?.revision > context.revision) return null
     const evidence = await probe.verify(context)
-    // Persist alarms before reporting them; failure still refuses access. A host
-    // must latch alarms durably until explicit operator reconciliation.
-    if (context.phase !== 'read' && assessVaultPrivacy(evidence, context).status !== 'exposed') return evidence
-    try { await save(key(context), evidence) } catch (error) {
-      if (assessVaultPrivacy(evidence, context).status !== 'exposed') throw error
+    const alarm = exposed(evidence, context)
+    if (alarm) alarms.set(id, evidence)
+    else if (alarms.has(id)) return alarms.get(id)
+    if (context.phase !== 'read' && !alarm) return evidence
+    try {
+      const saved = await compareAndSet(id, evidence, { expectedVersion: previous.version })
+      if (saved !== true) {
+        // No blind retries. Another writer may have published a newer revision
+        // or latched an incident. A conflict refuses this collection's verdict.
+        await snapshot(id, context)
+        return alarms.get(id) ?? null
+      }
+    } catch (error) {
+      // A failed store must not keep this process serving its prior green
+      // record after detecting exposure. Other processes need durable alarms.
+      if (!alarm) throw error
     }
-    return evidence
+    return alarms.get(id) ?? evidence
   }
   return {
     verify: collect,
-    current: context => load(key(context)),
+    async current(context) {
+      const id = key(context)
+      if (alarms.has(id)) return alarms.get(id)
+      const record = await snapshot(id, context)
+      return alarms.get(id) ?? record.evidence
+    },
     async refresh(context) { return collect({ ...context, phase: 'read' }) },
   }
 }

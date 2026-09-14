@@ -41,3 +41,16 @@ test('source refuses hard links, oversized files and symlinked ancestors', async
   await assert.rejects(prepareVaultSource({ root, paths: ['linked/report.html'], expectedRevision: 0 }), /symlink/)
   await assert.rejects(prepareVaultSource({ root: path.join(root, 'linked'), paths: ['report.html'], expectedRevision: 0 }), /symlink/)
 })
+test('hard-link changes at descriptor open and after reading are both refused', async t => {
+  const root = fixture(t)
+  for (const at of [1, 2]) {
+    const original = fs.fstatSync; let calls = 0
+    const mock = t.mock.method(fs, 'fstatSync', (...args) => {
+      const stat = original(...args)
+      if (++calls === at) Object.defineProperty(stat, 'nlink', { value: 2 })
+      return stat
+    })
+    try { await assert.rejects(prepareVaultSource({ root: path.join(root, 'artifacts'), paths: ['report.html'], expectedRevision: 0 }), /changed/) }
+    finally { mock.mock.restore() }
+  }
+})

@@ -123,7 +123,7 @@ to 16). The provider inspector must discover any additional bypass surfaces and
 refuse `completeInventory` if this binding is stale. Configuration evidence is
 trusted host input, never publisher/browser input or a repository assertion.
 
-The context carries vault, owner, publication digest, manifest, deployment,
+The context carries vault, owner, publication digest, metadata revision, manifest, deployment,
 request origin/path, phase, and `objects: [{key, sha256, size}]`. Object keys are
 explicit even before upload. The evaluator requires both vault home routes and
 every manifest path on every configured origin, plus every unique object key.
@@ -153,7 +153,7 @@ checks refuses activation, but cannot atomically lock external provider policy.
 Read requests call only `privacy.current(context)`, which must load stored
 current evidence. They never collect probes. Missing, expired, wrong-owner,
 wrong-deployment, wrong-publication or incomplete evidence blocks delivery.
-`createVaultPrivacyState({probe, load, save})` supplies an explicit refresher and
+`createVaultPrivacyState({probe, load, compareAndSet})` supplies an explicit refresher and
 host-owned evidence persistence. Call `refresh(context)` after commit and from
 the host scheduler with the current authoritative manifest and owner. Activation
 evidence is deliberately not promoted to read evidence; owner delivery remains
@@ -161,13 +161,25 @@ unavailable until the first successful read-phase refresh. Refresh failure never
 extends a validity window. A policy change requires immediate host invalidation;
 the kit cannot discover that change from an evidence-store read alone.
 
-The store key includes deployment ID and vault. `load`/`save` must use an
-atomic, serialized per-vault host store: exposure alarms must remain latched
-across concurrent writers until explicit operator reconciliation. The wrapper
-retains a previously loaded alarm, but cannot enforce cross-process atomicity.
-Protect this store from publishers. Do not run competing refresh/publication
-writers without the host's serialization. A save failure refuses normal
-verification and does not downgrade an observed exposure alarm.
+The store key includes deployment ID and vault. `load(key)` returns an immutable
+snapshot `{version, evidence}`; a missing record is `{version: 0, evidence: null}`.
+`compareAndSet(key, evidence, {expectedVersion})` must atomically compare the
+version, increment it on success and return exactly `true`, or return `false`
+without writing. Its transaction must refuse replacement of any exposure alarm
+and refuse older metadata revisions. Separate atomic load/save calls are not
+sufficient. Protect the store from publishers; no unconditional save adapter is
+accepted. Evidence and refresh contexts bind the authoritative metadata revision.
+
+On conflict, the wrapper reloads the stored record, preserves any alarm and
+otherwise refuses the collection. It never blindly retries or overwrites newer
+evidence. An in-process alarm latch immediately blocks subsequent reads, even
+when persistence fails or another collection is still running. The durable
+store is still needed across instances and restarts: failed persistence cannot
+protect other processes, and must be treated as an operator incident. This
+wrapper provides no alarm-clear API. Reconciliation is an explicit host operator
+procedure: contain the external exposure, verify restored controls, reconcile
+durable state, then replace affected handler instances. Restart alone does not
+clear a successfully persisted alarm and is not a recovery procedure.
 
 ### Reusable denial probe collector
 
@@ -184,11 +196,18 @@ The collector supports at most 2000 targets, sufficient for 100 files across
 the configurable whole-operation deadline (maximum/default 60 seconds) refuses
 verification; completeness is never replaced with sampling. The serial transport
 may not finish a large inventory in time. Qualify provider latency and choose a
-smaller deployment or a separately reviewed batched collector if needed.
+smaller deployment or a separately reviewed batched collector if needed. The
+current 60-second validity starts at collection start; refresher period plus
+worst-case collection time must be strictly less than 60 seconds. A minute
+schedule or a near-deadline collection cannot provide continuous availability.
+These defaults are an open product limitation, not a scheduling recommendation.
 
 Each target supplies an expected SHA-256, optionally a public synthetic `canary`
-marker of at least 32 characters. Whole-body digest or embedded canary matches
-are exposure even on error responses. Nonempty 401/403/404 bodies without a match
+marker of at least 32 characters. Nonempty whole-body digest or embedded canary matches
+are exposure even on error or already-followed responses. Zero-byte artifacts
+remain valid: an empty refusal discloses no bytes and never raises an exposure
+alarm. Home-route digests may use an inspector-defined placeholder; use an
+explicit public canary to detect actual listing disclosure. Nonempty 401/403/404 bodies without a match
 are inconclusive, because a body fragment is not proof of non-disclosure. Empty
 401/403/404 responses count as denial. Arbitrary HTML and 5xx are inconclusive.
 Login redirects may match trusted `loginEndpoints: [{url, queryKeys}]`; endpoints

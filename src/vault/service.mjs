@@ -97,15 +97,15 @@ export function createVaultService({ identity, metadata, storage, privacy, deplo
         try { input = await boundedBody(request); prepared = await preparePublication(input) }
         catch (error) { return reply(error.message === 'too-large' ? 413 : 400) }
         if (input.expectedRevision !== record.revision) return reply(409)
-        const context = { vault, owner: record.owner, publication: prepared.publication, manifest: prepared.manifest, objects: vaultObjects(vault, prepared.manifest), deployment, request: { origin: url.origin, path: url.pathname } }
+        const context = { vault, owner: record.owner, publication: prepared.publication, revision: input.expectedRevision + 1, manifest: prepared.manifest, objects: vaultObjects(vault, prepared.manifest), deployment, request: { origin: url.origin, path: url.pathname } }
         const before = await verifyVaultPrivacy(privacy, { ...context, phase: 'before-upload' })
         if (before.status !== 'verified') return reply(503, before.reason)
         for (const file of prepared.files) await storage.put(`${vault}/${file.sha256}`, file.bytes)
-        // Revalidate the credential after potentially slow uploads, before commit.
-        const current = await identity.publish(request, vault)
-        if (!sameOwner(principal, current)) return reply(401)
         const after = await verifyVaultPrivacy(privacy, { ...context, phase: 'before-activation' })
         if (after.status !== 'verified' || after.policyRevision !== before.policyRevision) return reply(503, 'Protection changed or could not be verified. Publication was not activated.')
+        // Revalidate the credential after uploads and activation checks, immediately before commit.
+        const current = await identity.publish(request, vault)
+        if (!sameOwner(principal, current)) return reply(401, '', { 'WWW-Authenticate': 'Bearer realm="vault-publication"' })
         const committed = await metadata.commit(vault, { owner: principal, expectedRevision: input.expectedRevision, manifest: prepared.manifest, publication: prepared.publication })
         if (!committed) return reply(409)
         return new Response(JSON.stringify({ schema: 'atelier-vault-receipt/v1', vault, revision: input.expectedRevision + 1, publication: prepared.publication }), { status: 201, headers: { ...headers, 'Content-Type': 'application/json' } })
@@ -116,7 +116,7 @@ export function createVaultService({ identity, metadata, storage, privacy, deplo
       const record = await metadata.get(vault)
       if (!sameOwner(principal, record?.owner)) return reply(404)
       if (!home && !record.manifest.some(file => file.path === parts.slice(1).join('/'))) return reply(404)
-      const protection = await verifyVaultPrivacy(privacy, { vault, owner: record.owner, publication: record.publication ?? null, manifest: record.manifest, objects: vaultObjects(vault, record.manifest), deployment, request: { origin: url.origin, path: url.pathname }, phase: 'read' })
+      const protection = await verifyVaultPrivacy(privacy, { vault, owner: record.owner, publication: record.publication ?? null, revision: record.revision, manifest: record.manifest, objects: vaultObjects(vault, record.manifest), deployment, request: { origin: url.origin, path: url.pathname }, phase: 'read' })
       if (home) return new Response(request.method === 'HEAD' ? null : renderVaultHome({ vault, revision: record.revision, manifest: record.manifest, privacy: protection, query: url.searchParams.get('q') || '' }), { headers: { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': vaultHomePolicy } })
       if (protection.status !== 'verified') return reply(503, protection.reason)
       const path = parts.slice(1).join('/')
