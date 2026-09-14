@@ -103,7 +103,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "0.25.12",
-    "playwright": "1.54.1",
+    "playwright": "1.55.1",
     "react": "19.1.0",
     "react-dom": "19.1.0"
   },
