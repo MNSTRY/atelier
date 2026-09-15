@@ -1,0 +1,75 @@
+---
+import text from '../content/placement.json?raw';
+import { digestBytes } from '../../../../src/composition/registry.mjs';
+import { parsePlacement } from '../../../../src/composition/wire.mjs';
+const placement = parsePlacement(text);
+const sourceDigest = digestBytes(text);
+---
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><title>Connected composition workshop</title></head>
+<body>
+  <a class="skip" href="#main">Skip to workshop</a>
+  <header><span>ATELIER / EXPERIMENTAL</span><p>One authored placement. An isolated, connected preview.</p></header>
+  <main id="main" tabindex="-1" data-source={sourceDigest} data-placement={placement.placementId}>
+    <h1>Connected composition workshop</h1>
+    <p class="intro">Static pages remain useful without an account. Dynamic content below is invented and runs only in the local proof harness.</p>
+    <div class="workspace">
+      <section aria-labelledby="controls-heading"><h2 id="controls-heading">Preview controls</h2>
+        <p>Switch adapter shapes or test a scoped agent. No real account is used.</p>
+        <label for="adapter">Fake auth adapter</label><div class="select"><select id="adapter" disabled><option value="session-map">Session map</option><option value="assertion-membership">Assertion + membership</option></select></div>
+        <label for="identity">Fixture identity</label><div class="select"><select id="identity" disabled><option value="human">Human reader</option><option value="agent">Read-only agent</option><option value="other-tenant">Different tenant</option><option value="signed-out">Signed out</option></select></div>
+        <label for="mode">Preview mode</label><div class="select"><select id="mode" disabled><option value="synthetic">Synthetic read</option><option value="connected-read-only">Connected read-only fixture</option><option value="sandbox-interactive">Reversible sandbox action</option></select></div>
+        <p id="status" role="status">Static page. Connect the synthetic proof harness to enable preview.</p>
+        <details><summary>What is isolated?</summary><p>The frame receives a placement proposal and filtered content. Identity, membership, service callbacks and audit records stay in the host.</p></details>
+      </section>
+      <section aria-labelledby="preview-heading"><h2 id="preview-heading">{placement.props.heading}</h2>
+        <p>Source-backed heading above; dynamic projection below.</p>
+        <div id="preview-slot"><p>Connected content requires the synthetic harness. This static page remains available.</p></div>
+      </section>
+    </div>
+    <aside><h2>Harness-led iteration</h2><p>Edit the authored placement, validate it, rebuild and refresh. No extra placement database or browser filesystem access is introduced.</p></aside>
+  </main>
+  <script>
+    import { mountPreview } from '../../../../src/preview/channel.mjs';
+    const host = window as typeof window & { fixtureControl?: (input: unknown) => Promise<{generation:number}>, fixtureInvoke?: (bytes:string) => Promise<unknown> };
+    const main = document.querySelector('main')! as HTMLElement;
+    const select = (id:string) => document.getElementById(id) as HTMLSelectElement;
+    const status = document.getElementById('status')!;
+    let mounted: ReturnType<typeof mountPreview> | undefined, serial = 0;
+    async function refresh() {
+      const round = ++serial; mounted?.dispose(); document.getElementById('preview-slot')!.replaceChildren();
+      status.textContent = 'Preparing isolated fixture.';
+      const binding = await host.fixtureControl!({ identity: select('identity').value, adapter: select('adapter').value });
+      if (round !== serial) return;
+      const frame = document.createElement('iframe');
+      frame.title = 'Synthetic collection preview'; frame.sandbox.add('allow-scripts', 'allow-same-origin');
+      frame.referrerPolicy = 'no-referrer'; frame.src = 'https://127.0.0.1:4181/preview/';
+      frame.addEventListener('load', () => {
+        if (round !== serial) return;
+        mounted = mountPreview({ frame, previewOrigin: 'https://127.0.0.1:4181', generation: binding.generation,
+          requestBytes: JSON.stringify({schema:'atelier-preview-request/proposal-v1',status:'proposed',requestId:crypto.randomUUID(),placementId:main.dataset.placement,sourceDigest:main.dataset.source,mode:select('mode').value}),
+          handle: bytes => host.fixtureInvoke!(bytes), onState: value => { status.textContent = value === 'connected' ? 'Isolated fixture connected.' : 'Preview invalidated.'; } });
+      }, {once:true});
+      document.getElementById('preview-slot')!.replaceChildren(frame);
+    }
+    if (host.fixtureControl && host.fixtureInvoke) {
+      for (const id of ['adapter','identity','mode']) { select(id).disabled = false; select(id).addEventListener('change', () => { refresh().catch(() => { status.textContent = 'Fixture unavailable.'; }); }); }
+      refresh().catch(() => { status.textContent = 'Fixture unavailable.'; });
+    }
+    window.addEventListener('pagehide', () => { serial++; mounted?.dispose(); });
+  </script>
+  <style is:global>
+    :root {font: 16px/1.55 system-ui,sans-serif; color:#192d30; background:#f5f4ef; color-scheme:light;}
+    * {box-sizing:border-box;} body {margin:0;overflow-wrap:anywhere;} header,main {max-width:76rem; margin:auto; padding:1.5rem;}
+    header {border-bottom:1px solid #aab5b1;} header span {font-weight:700; letter-spacing:.08em; font-size:.875rem;}
+    h1 {font-size:clamp(1.8rem,4vw,3.2rem); line-height:1.15; max-width:22ch;} h2 {font-size:1.3rem; line-height:1.3;}
+    p {max-width:65ch;} .intro {font-size:1.125rem;} .workspace {display:grid;grid-template-columns:minmax(15rem,1fr) minmax(0,2fr); gap:1.5rem; margin:2rem 0;}
+    section {background:#fff;border:1px solid #aab5b1; border-radius:.6rem; padding:1.25rem; min-width:0; overflow-wrap:anywhere;}
+    label {display:block;font-weight:600; margin-top:1rem;} select {appearance:none;font:inherit;max-width:100%;width:100%;height:2.75rem;margin:.35rem 0;padding:.4rem 1.7rem .4rem .4rem;border:1px solid #536865;border-radius:.3rem;background:white;color:inherit;}
+    .select {position:relative;} .select::after {content:'▾';position:absolute;right:.6rem;top:50%;transform:translateY(-50%);pointer-events:none;}
+    summary {cursor:pointer;min-height:2.75rem;padding:.5rem 0;} iframe {display:block;width:100%;height:27rem;border:1px solid #aab5b1;border-radius:.3rem;background:white;}
+    :focus-visible {outline:3px solid #245f8c;outline-offset:3px;} .skip {position:absolute;left:1rem;top:-8rem;background:white;padding:1rem;z-index:2;} .skip:focus {top:1rem;}
+    @media(max-width:48rem) {.workspace {grid-template-columns:minmax(0,1fr);} header,main {padding:1rem;}}
+    @media print {header, .workspace section:first-child,iframe,.skip {display:none;}.workspace{display:block;}}
+  </style>
+</body></html>

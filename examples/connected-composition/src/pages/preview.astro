@@ -1,0 +1,31 @@
+---
+---
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width"/><title>Synthetic collection preview</title></head>
+<body><main><h1>Isolated collection</h1><p id="state" role="status">Waiting for the authoring host.</p><div id="content" aria-live="polite"></div><button id="pin" type="button" disabled>Pin collection (reversible fixture)</button><p class="note">Invented content only. No publication or external effect.</p></main>
+  <script>
+    import { receivePreview } from '../../../../src/preview/channel.mjs';
+    const state = document.getElementById('state')!, content = document.getElementById('content')!, button = document.getElementById('pin') as HTMLButtonElement;
+    let model: {pinned:boolean,version:number} | null = null, mode = '';
+    function clear() { content.replaceChildren(); model = null; button.disabled = true; state.textContent = 'Preview changed. Reconnect to continue.'; }
+    const connection = receivePreview({shellOrigin:'https://127.0.0.1:4180', onInvalidate:clear,
+      onMount(request) { clear(); mode = request.mode; state.textContent = 'Checking fixture access.'; connection.request(); },
+      onResult(result) {
+        state.textContent = result.state.publicMessage; content.replaceChildren(); model = null; button.disabled = true;
+        if (result.state.state !== 'ready') return;
+        const data = result.projectedData;
+        // This renderer's closed content contract is intentionally tiny.
+        if (!data || Object.keys(data).sort().join(',') !== 'heading,items,pinned,version' || typeof data.heading !== 'string' || data.heading.length > 120 || !Array.isArray(data.items) || data.items.length > 5 || typeof data.pinned !== 'boolean' || !Number.isSafeInteger(data.version)) return;
+        const heading = document.createElement('h2'); heading.textContent = data.heading;
+        const list = document.createElement('ul');
+        for (const item of data.items) { if (Object.keys(item).join(',') !== 'title' || typeof item.title !== 'string' || item.title.length > 160) { clear(); return; } const li = document.createElement('li'); li.textContent = item.title; list.append(li); }
+        content.append(heading,list); model = {pinned:data.pinned,version:data.version}; button.disabled = mode !== 'sandbox-interactive';
+        button.textContent = data.pinned ? 'Unpin collection (reversible fixture)' : 'Pin collection (reversible fixture)';
+      } });
+    button.addEventListener('click', () => { if (!model) return; button.disabled = true; state.textContent = 'Checking action access.'; connection.request({ref:'sample.pin',payload:{pinned:!model.pinned,expectedVersion:model.version}}); });
+    window.addEventListener('pagehide', () => connection.dispose());
+  </script>
+  <style is:global>
+    :root {font:16px/1.5 system-ui,sans-serif;color:#192d30;background:#fff;}*{box-sizing:border-box;}body{margin:0;}main{padding:1rem;overflow-wrap:anywhere;}h1{font-size:1.25rem;}h2{font-size:1.1rem;}
+    li{padding:.35rem 0;}button{font:inherit;min-height:2.75rem;max-width:100%;padding:.5rem .8rem;background:#214f48;color:white;border:1px solid #214f48;border-radius:.3rem;cursor:pointer;}button:disabled{background:#e8ece9;color:#41514d;border-color:#aab5b1;cursor:default;}button:hover:not(:disabled){background:#163d36;}button:active:not(:disabled){background:#0c3029;}button:focus-visible{outline:3px solid #245f8c;outline-offset:3px;}.note{font-size:.875rem;}
+  </style>
+</body></html>
