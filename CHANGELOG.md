@@ -2,6 +2,12 @@
 
 ## 0.2.0-alpha.7
 
+- Add a source-only Astro reference consumer for build-time presentation tokens,
+  no-script reading/navigation, local-only form validation and cross-browser proof.
+  Keep public-page mechanics consumer-owned; add no Astro runtime dependency.
+- Patch the existing fast-uri dependency and override to 3.1.7. Clarify ordinary
+  web-link navigation versus native host navigation requests.
+
 - Validate proposed and retained adoption configurations together with their
   policy before writing; refuse an existing default policy during blank init.
   Compare manifests using their serialized JSON representation so omitted

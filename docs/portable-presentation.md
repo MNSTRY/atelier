@@ -99,7 +99,13 @@ is evaluated when composition ends. Local drafts are not durable persistence.
 
 The module installs no transport, storage, process, global keyboard handler,
 telemetry, hosted account, command registration or navigation service. Web links
-are local paths or fragments. Media resolves only local paths; hosts must prevent
+are local paths or fragments and use ordinary browser navigation: they do not
+emit `onRequest` navigation events. Native links require the host's navigation
+request port because native has no browser default. A web host with unsaved work
+must omit item hrefs until safe navigation is available through its existing
+route/draft authority; this module does not install an unsaved-work route guard.
+Do not infer identical web/native navigation interception from shared labels.
+Media resolves only local paths; hosts must prevent
 those routes from redirecting outside their intended boundary. The model is not
 a network-security boundary for a consumer's asset server.
 
