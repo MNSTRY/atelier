@@ -81,7 +81,7 @@ try {
           await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
         })
         const metrics = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          targets: [...document.querySelectorAll('button,input,textarea,.ap-link')].filter(e => e.getClientRects().length).map(e => ({ label: e.getAttribute('aria-label') || e.textContent, width: e.getBoundingClientRect().width, height: e.getBoundingClientRect().height })),
+          targets: [...document.querySelectorAll('button,input,textarea,.ap-link')].filter(e => e.getClientRects().length && !e.matches('.ap-skip:not(:focus)')).map(e => ({ label: e.getAttribute('aria-label') || e.textContent, width: e.getBoundingClientRect().width, height: e.getBoundingClientRect().height })),
           paneRows: [...document.querySelectorAll('[data-ap-pane]')].map(e => e.getBoundingClientRect().top),
           motion: getComputedStyle(document.querySelector('.ap-link')).transitionDuration }))
         assert(metrics.overflow <= 1, `${name}/${width}/${theme}/${density}: overflow ${metrics.overflow}`)
@@ -103,7 +103,20 @@ try {
         }
       }
       await page.setViewportSize({ width: 1440, height: 960 })
-      await page.evaluate(model => window.mount(model), fixture)
+      await page.evaluate(model => { model.nodes.find(n => n.type === 'status').tone = 'info'; window.mount(model) }, fixture)
+      const skip = page.locator('.ap-skip')
+      assert.equal(await skip.evaluate(e => getComputedStyle(e).clipPath), 'inset(50%)')
+      // macOS WebKit follows system full-keyboard-access preferences for links.
+      await page.keyboard.press(name === 'webkit' && os.platform() === 'darwin' ? 'Alt+Tab' : 'Tab')
+      assert(await skip.evaluate(e => document.activeElement === e && e.getBoundingClientRect().height >= 44 && getComputedStyle(e).clipPath === 'none'))
+      await page.keyboard.press('Enter')
+      assert(await page.locator('[data-ap-pane="work"]').evaluate(e => document.activeElement === e))
+      assert.equal(await page.locator('.ap-header').evaluate(e => e.getBoundingClientRect().left), await page.locator('.ap-workspace').evaluate(e => e.getBoundingClientRect().left))
+      assert.equal(await page.locator('[data-tone="warning"] .ap-tone').textContent(), 'Warning')
+      assert.equal(await page.locator('[data-tone="warning"]').evaluate(e => getComputedStyle(e).borderInlineStartStyle), 'dashed')
+      assert.equal(await page.locator('[data-tone="info"] .ap-tone').first().textContent(), 'Information')
+      assert.equal(await page.locator('.ap-nav a').first().evaluate(e => getComputedStyle(e).borderTopColor), 'rgba(0, 0, 0, 0)')
+      run.checks.push('focus-only-skip-link-aligned-header-distinct-navigation-and-non-color-tone-labels')
       const action = page.getByRole('button', { name: 'Request publication', exact: true })
       await action.click()
       assert(await page.locator('[data-ap-cancel]').evaluate(e => document.activeElement === e))
@@ -191,6 +204,7 @@ try {
       await page.emulateMedia({ media: 'print' })
       assert.equal(await page.locator('.ap-pane').first().evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(255, 255, 255)')
       assert.equal(await page.locator('.ap-resize').first().isVisible(), false)
+      assert.equal(await page.locator('.ap-skip').isVisible(), false)
       run.checks.push('readable-print-colors-and-no-resize-controls')
       await page.emulateMedia({ media: 'screen' })
       await page.setViewportSize({ width: 1440, height: 960 })
@@ -241,6 +255,64 @@ try {
       await editor.evaluate(e => e.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })))
       assert.equal(await page.evaluate(() => window.requests.at(-1).value), 'Composed')
       run.checks.push('controlled-refresh-preserves-latest-draft-focus-selection-and-unicode-ime-limits')
+      await page.evaluate(model => { window.requests = []; window.mount(model) }, fixture)
+      await editor.evaluate(e => { window.composingElement = e; e.focus(); e.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })); e.value = 'Composed latest'; e.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true })) })
+      await page.evaluate(() => {
+        window.binding.update({ ...window.model, title: 'Queued earlier' });
+        window.binding.update({ ...window.model, title: 'Queued latest' });
+        try { window.binding.update({ ...window.model, version: 'invalid' }) } catch { /* refusal must not poison the queued valid model */ }
+      })
+      assert.deepEqual(await page.evaluate(() => [window.binding.isComposing, window.binding.hasPendingUpdate, window.composingElement === document.querySelector('[data-ap-edit="draft-body"]')]), [true, true, true])
+      await page.evaluate(() => document.querySelector('[data-ap-select="items"]').click())
+      assert.equal(await page.evaluate(() => window.requests.length), 0)
+      await editor.evaluate(e => e.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })))
+      assert.equal(await page.locator('h1').textContent(), 'Queued latest')
+      assert.equal(await editor.inputValue(), 'Composed latest')
+      assert.deepEqual(await page.evaluate(() => [window.binding.isComposing, window.binding.hasPendingUpdate, window.requests.length]), [false, false, 1])
+      run.checks.push('ime-queues-latest-valid-update-without-dom-replacement-or-stale-action')
+      await page.evaluate(model => { window.requests = []; window.mount(model, { controlled: true }) }, fixture)
+      await editor.evaluate(e => { e.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })); e.value = 'Synchronous host draft' })
+      await page.evaluate(() => window.binding.update({ ...window.model, title: 'Stale queued title' }))
+      await editor.evaluate(e => e.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })))
+      assert.equal(await page.locator('h1').textContent(), fixture.title)
+      assert.equal(await editor.inputValue(), 'Synchronous host draft')
+      assert.equal(await page.evaluate(() => window.binding.hasPendingUpdate), false)
+      run.checks.push('ime-synchronous-host-update-wins-over-queued-model')
+      for (const change of ['disabled', 'removed', 'kind', 'reset', 'disposed']) {
+        await page.evaluate(model => { window.requests = []; window.mount(model) }, fixture)
+        await editor.evaluate(e => { e.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })); e.value = 'Do not dispatch' })
+        await page.evaluate(change => {
+          const model = structuredClone(window.model);
+          if (change === 'disabled') model.nodes.find(n => n.id === 'draft-body').disabled = true;
+          if (change === 'removed') { model.nodes = model.nodes.filter(n => n.id !== 'draft-body'); model.panes[0].blocks = model.panes[0].blocks.filter(id => id !== 'draft-body') }
+          if (change === 'kind') Object.assign(model.nodes.find(n => n.id === 'draft-body'), { type: 'field', input: 'text', required: false });
+          window.binding.update(model, { discardDrafts: change === 'reset' });
+          if (change === 'disposed') window.binding.dispose();
+        }, change)
+        await editor.evaluate(e => e.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })))
+        assert.equal(await page.evaluate(() => window.requests.length), 0)
+        assert.equal(await page.evaluate(() => window.binding.hasPendingUpdate), false)
+        if (change === 'disabled') assert(await editor.isDisabled())
+        if (change === 'removed') assert.equal(await editor.count(), 0)
+        if (change === 'kind') { assert.equal(await editor.getAttribute('type'), 'text'); assert.notEqual(await editor.inputValue(), 'Do not dispatch') }
+        if (change === 'reset') assert.equal(await editor.inputValue(), fixture.nodes.find(n => n.id === 'draft-body').value)
+        run.checks.push('ime-refuses-stale-draft-after-' + change)
+      }
+      for (const input of ['email', 'number']) {
+        await page.evaluate(({ model, input }) => {
+          Object.assign(model.nodes.find(n => n.id === 'draft-title'), { input, value: input === 'email' ? 'abcde@example.test' : '12345' });
+          window.mount(model, { controlled: true });
+        }, { model: fixture, input })
+        const field = page.locator('[data-ap-edit="draft-title"]')
+        await field.focus()
+        // Home is a scroll key in macOS WebKit, not the start of this field.
+        // ArrowLeft reaches the start without an unsupported selection API.
+        for (let index = 0; index < (await field.inputValue()).length; index++) await page.keyboard.press('ArrowLeft')
+        for (let index = 0; index < 3; index++) await page.keyboard.press('ArrowRight')
+        await page.keyboard.type(input === 'email' ? 'xy' : '67')
+        assert.equal(await field.inputValue(), input === 'email' ? 'abcxyde@example.test' : '1236745', input + ' caret must survive controlled refresh')
+        run.checks.push('controlled-' + input + '-caret-continuity')
+      }
       await page.evaluate(model => { window.binding.dispose(); document.body.innerHTML = window.readOnlyDocument(model) }, fixture)
       await page.emulateMedia({ media: 'print' })
       const explanation = page.locator('.ap-actions p').filter({ hasText: 'unavailable in document' }).first()

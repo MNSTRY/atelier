@@ -8,7 +8,7 @@ import { presentationSchema } from '../src/ui/presentation/schema.generated.mjs'
 import { matchesPresentationSchema } from '../src/ui/presentation/schema-check.mjs'
 import { resolveTokens, contrastRatio, tokenVariables, tokenContract } from '../src/ui/presentation/tokens.mjs'
 import { presentationStyles } from '../src/ui/presentation/styles.mjs'
-import { presentationState, keyboardResize, resizeRequest, editValueError, deliveryMessage } from '../src/ui/presentation/state.mjs'
+import { presentationState, keyboardResize, resizeRequest, editValueError, deliveryMessage, toneLabel } from '../src/ui/presentation/state.mjs'
 import { renderPresentationDocument, renderReadOnlyDocument } from '../src/ui/presentation/web.mjs'
 import { createNativePresentation } from '../src/ui/presentation/native.mjs'
 import { comparePresentationProofs } from '../src/ui/presentation/proof.mjs'
@@ -144,7 +144,8 @@ test('native adapter is framework-injected and consumes host state without web i
     useState: value => [value, next => state.push(next)], useRef: value => ({ current: value }), useEffect: fn => fn() }
   const bindings = { React, View: 'View', Text: 'Text', Pressable: 'Pressable', TextInput: 'TextInput', ScrollView: 'ScrollView', Image: 'Image' }
   const Component = createNativePresentation(bindings)
-  const tree = Component({ model: fixture, onRequest: r => requests.push(r), confirm: async () => true })
+  const model = fresh(); model.nodes.find(n => n.type === 'status').tone = 'info'
+  const tree = Component({ model, onRequest: r => requests.push(r), confirm: async () => true })
   const all = []
   const walk = node => { if (!node || typeof node !== 'object') return; all.push(node); for (const child of node.children ?? []) walk(child) }
   walk(tree)
@@ -154,6 +155,8 @@ test('native adapter is framework-injected and consumes host state without web i
   assert.equal(requests[0].status, 'proposed')
   assert.equal(requests[0].executionAuthority, false)
   assert.equal(requests[0].presentationConfirmed, true)
+  assert(all.some(n => n.type === 'Text' && n.children.includes('Warning')))
+  assert(all.some(n => n.type === 'Text' && n.children.includes('Information')))
   assert.equal(serializePresentation(fixture), serializePresentation(fresh()))
   assert.throws(() => createNativePresentation({}))
 })
@@ -173,6 +176,18 @@ test('native settlement describes the current delivery, not another request fail
   assert.equal(messages.at(-1), 'Request delivery failed. Host state has not been confirmed.')
   await all.find(n => n.props?.accessibilityLabel === 'Request publication').props.onPress()
   assert.equal(messages.at(-1), 'Request delivered. Awaiting host state.')
+})
+test('host tones retain non-color labels in web and document projections', () => {
+  assert.equal(toneLabel('neutral'), '')
+  assert.equal(toneLabel('warning'), 'Warning')
+  assert.equal(toneLabel('info'), 'Information')
+  assert.throws(() => toneLabel('granted'))
+  const model = fresh(); model.nodes.find(n => n.type === 'status').tone = 'info'
+  for (const render of [renderPresentationDocument, renderReadOnlyDocument]) {
+    const html = render(model)
+    assert.match(html, /class="ap-tone">Warning</)
+    assert.match(html, /class="ap-tone">Information</)
+  }
 })
 test('presentation imports do not install a transport or native dependency', () => {
   for (const file of ['contract.mjs', 'browser.mjs', 'native.mjs', 'state.mjs', 'tokens.mjs']) {

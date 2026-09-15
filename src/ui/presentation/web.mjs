@@ -1,6 +1,7 @@
 import { htmlEscape as escape } from '../html-primitives.mjs'
 import { assertPresentation } from './contract.mjs'
 import { presentationStyles } from './styles.mjs'
+import { toneLabel } from './state.mjs'
 
 const domId = (model, kind, id) => escape(model.id + ':' + kind + ':' + id)
 const noticeTypes = new Set(['status', 'refusal', 'decision', 'receipt', 'offer', 'review', 'publication'])
@@ -41,7 +42,7 @@ export function renderPresentation(model, { tokenOverrides = {}, interactive = t
           node.edges.map(edge => '<tr><td>' + escape(labels.get(edge.from)) + '</td><td>' + escape(edge.label) + '</td><td>' + escape(labels.get(edge.to)) + '</td></tr>').join('') + '</tbody></table>'
       }
     }
-    if (noticeTypes.has(node.type)) body = '<div class="ap-notice" data-tone="' + escape(node.tone) + '"><p' + (node.type === 'status' ? ' role="status"' : '') + '>' + escape(node.text) + '</p><dl>' +
+    if (noticeTypes.has(node.type)) body = '<div class="ap-notice" data-tone="' + escape(node.tone) + '">' + (toneLabel(node.tone) ? '<p class="ap-tone">' + toneLabel(node.tone) + '</p>' : '') + '<p' + (node.type === 'status' ? ' role="status"' : '') + '>' + escape(node.text) + '</p><dl>' +
       node.details.map(entry => '<dt>' + escape(entry.label) + '</dt><dd>' + escape(entry.value) + '</dd>').join('') + '</dl><div class="ap-actions">' + node.actions.map(ref => renderAction(nodes.get(ref))).join('') + '</div></div>'
     if (node.type === 'field' || node.type === 'editor') {
       if (!interactive) return '<section class="ap-block" id="' + name + '">' + heading + '<pre>' + escape(node.value) + '</pre>' + (node.error ? '<p>' + escape(node.error) + '</p>' : '') + '</section>'
@@ -69,7 +70,7 @@ export function renderPresentation(model, { tokenOverrides = {}, interactive = t
       pane.blocks.map(ref => renderNode(nodes.get(ref))).join('') + '</div></section>'
   }).join('')
   return '<div data-ap-root="' + escape(model.id) + '" data-density="' + escape(model.density) + '" dir="' + escape(model.direction) + '" lang="' + escape(model.lang) + '"><style>' + presentationStyles(model.theme, tokenOverrides, model.id) + '</style>' +
-    '<a class="ap-link" href="#' + domId(model, 'pane', primary.id) + '">Skip to ' + escape(primary.label) + '</a><header><h1>' + escape(model.title) + '</h1><nav class="ap-nav" aria-label="Workspace">' + nav + '</nav></header>' +
+    '<a class="ap-link ap-skip" href="#' + domId(model, 'pane', primary.id) + '">Skip to ' + escape(primary.label) + '</a><header class="ap-header"><h1>' + escape(model.title) + '</h1><nav class="ap-nav" aria-label="Workspace">' + nav + '</nav></header>' +
     '<main class="ap-workspace">' + panes + '</main><output data-ap-delivery aria-live="polite"></output>' +
     (interactive ? '<dialog data-ap-confirm aria-labelledby="' + escape(model.id) + ':confirm:title" aria-describedby="' + escape(model.id) + ':confirm:description"><h2 id="' + escape(model.id) + ':confirm:title" data-ap-confirm-title></h2><p id="' + escape(model.id) + ':confirm:description" data-ap-confirm-description></p><div class="ap-actions"><button type="button" data-ap-cancel autofocus>Cancel</button><button type="button" data-ap-confirm-action>Continue</button></div></dialog>' : '') + '</div>'
 }

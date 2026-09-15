@@ -1,6 +1,6 @@
 import { assertPresentation } from './contract.mjs'
 import { resolveTokens } from './tokens.mjs'
-import { editValueError, deliveryMessage } from './state.mjs'
+import { editValueError, deliveryMessage, toneLabel } from './state.mjs'
 
 // Inject the consumer's existing React/native (or Tamagui native) primitives.
 // The root imports no framework and installs no host/window/global driver.
@@ -86,6 +86,7 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
     const renderNode = node => {
       let body = []
       if (node.type === 'action') return h(View, { key: node.id }, action(node), node.reason ? text(node.reason) : null)
+      if (node.tone && toneLabel(node.tone)) body.push(text(toneLabel(node.tone), { style: { fontWeight: '600' } }))
       if (node.text !== undefined) body.push(text(node.text))
       if (node.type === 'field' || node.type === 'editor') {
         const draft = drafts.current.get(node.id) ?? node.value

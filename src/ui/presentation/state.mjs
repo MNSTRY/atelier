@@ -1,5 +1,10 @@
 export const stateAxes = Object.freeze(['hovered', 'focused', 'pressed', 'selected', 'disabled', 'pending', 'dragging', 'invalid'])
 export const EDIT_CODE_POINT_LIMIT = 32768
+const toneLabels = Object.freeze({ neutral: '', info: 'Information', warning: 'Warning', danger: 'Attention', success: 'Success' })
+export function toneLabel(tone) {
+  if (!Object.hasOwn(toneLabels, tone)) throw new TypeError('invalid presentation tone')
+  return toneLabels[tone]
+}
 // Delivery is not business success. Describe the settling request's outcome,
 // independently of unrelated failures, and do not hide concurrent deliveries.
 export function deliveryMessage(outcome, pendingCount = 0) {

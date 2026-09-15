@@ -89,10 +89,19 @@ to a host. Host operations therefore need their own concurrency, idempotency,
 authorization and outcome-recovery controls. Use `binding.update(nextModel)` for
 same-ID refreshes: it closes obsolete confirmations, preserves surviving control
 focus/selection, and retains each draft until the model acknowledges that value.
-Removed nodes lose their local drafts. A same-ID host reset must explicitly pass
+Removed nodes and changed input kinds lose their local drafts. A same-ID host reset must explicitly pass
 `discardDrafts: true`; a different document must use a new presentation identity.
-Updates during IME composition refuse before changing the DOM: defer them until
-`compositionend`. Token overrides must be supplied again on update if used.
+During IME composition, updates validate immediately and retain only the latest
+valid model without replacing the composing DOM. `isComposing` and
+`hasPendingUpdate` expose this lifecycle. On `compositionend`, the final draft
+is delivered before applying that model; a synchronous newer host update wins.
+Removal, disable, input-kind change or `discardDrafts` in the queued model
+suppresses the obsolete edit. Other widget requests wait without dispatch while
+an update is queued. Disposal clears the queue; it is not durable draft storage.
+Email/number fields retain the same focused input element on compatible refresh
+because those types expose no selection API. A host reset or input-kind change
+does not promise caret continuity. Token overrides must be supplied again on
+update if used.
 Dispose/re-render is an unmount, not the controlled-update path. The native
 component must be keyed to its model identity; its host resets use a React key
 change, and draft acknowledgement follows the same value-matching rule.

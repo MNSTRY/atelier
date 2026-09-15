@@ -19,6 +19,7 @@ export function bindPresentation(root, model, { onRequest } = {}) {
   const drafts = new Map()
   const listeners = []
   let disposed = false, confirmation = null, opener = null, drag = null, composing = false
+  let queuedUpdate = null, updateRevision = 0
   const listen = (target, event, handler, capture = false) => {
     if (!target) return
     target.addEventListener(event, handler, capture)
@@ -56,6 +57,7 @@ export function bindPresentation(root, model, { onRequest } = {}) {
   }
   const send = async (request, control) => {
     if (disposed || typeof onRequest !== 'function') return
+    if (queuedUpdate && request.kind !== 'edit') { say('Workspace update is waiting for text composition. No request sent.'); return }
     if (pending.has(request.id) && request.kind !== 'edit') { say(deliveryMessage('suppressed')); return }
     // Edits reach the host synchronously, including while earlier delivery is
     // pending. A re-render/unmount cannot erase an undelivered coalesced draft.
@@ -92,6 +94,7 @@ export function bindPresentation(root, model, { onRequest } = {}) {
   listen(root, 'click', event => {
     const control = event.target.closest?.('button')
     if (!control || !root.contains(control) || control.disabled) return
+    if (queuedUpdate) { say('Workspace update is waiting for text composition. No request sent.'); return }
     const actionId = control.dataset.apAction
     if (actionId) {
       const node = nodes.get(actionId)
@@ -159,6 +162,10 @@ export function bindPresentation(root, model, { onRequest } = {}) {
     if (node && ['field', 'editor'].includes(node.type) && !node.disabled) {
       drafts.set(node.id, control.value)
       if (event.isComposing || composing) return
+      // A newer host model may have removed/disabled this control or explicitly
+      // reset its draft while the old DOM was still composing. Do not send it.
+      const nextNode = queuedUpdate?.model.nodes.find(next => next.id === node.id)
+      if (queuedUpdate && (!nextNode || nextNode.disabled || nextNode.type !== node.type || nextNode.input !== node.input || queuedUpdate.options.discardDrafts)) return
       const error = validateDraft(control, node)
       if (error) { say(error); return }
       void send({ kind: 'edit', id: node.id, value: control.value })
@@ -166,7 +173,14 @@ export function bindPresentation(root, model, { onRequest } = {}) {
   }
   listen(root, 'input', edit)
   listen(root, 'compositionstart', () => { composing = true })
-  listen(root, 'compositionend', event => { composing = false; edit(event) })
+  listen(root, 'compositionend', event => {
+    composing = false
+    const queued = queuedUpdate, revision = updateRevision
+    edit(event)
+    // A synchronous host callback may already have supplied a newer model.
+    // Never overwrite it with the model queued before the final composed edit.
+    if (queued && !disposed && revision === updateRevision) update(queued.model, queued.options)
+  })
   listen(root, 'cancel', event => { if (event.target === dialog) { event.preventDefault(); close() } }, true)
   // This dialog contains exactly two controls. Keep Tab inside its local scope;
   // no command shortcuts or document-level focus bridge are registered.
@@ -190,6 +204,8 @@ export function bindPresentation(root, model, { onRequest } = {}) {
     if (disposed) return
     if (dialog?.open) close()
     disposed = true
+    queuedUpdate = null
+    composing = false
     endDrag()
     drafts.clear()
     syncBusy()
@@ -199,9 +215,17 @@ export function bindPresentation(root, model, { onRequest } = {}) {
   const update = (nextModel, { discardDrafts = false, tokenOverrides = {} } = {}) => {
     assertPresentation(nextModel)
     if (disposed || nextModel.id !== snapshot.id) throw new TypeError('update requires the same live presentation identity')
-    if (composing) throw new TypeError('defer presentation update until compositionend')
+    const rendered = renderPresentation(nextModel, { tokenOverrides })
+    updateRevision++
+    if (composing) {
+      queuedUpdate = { model: structuredClone(nextModel), options: { discardDrafts, tokenOverrides: structuredClone(tokenOverrides) } }
+      if (dialog?.open) close()
+      endDrag()
+      return api
+    }
+    queuedUpdate = null
     const template = root.ownerDocument.createElement('template')
-    template.innerHTML = renderPresentation(nextModel, { tokenOverrides })
+    template.innerHTML = rendered
     const next = template.content.querySelector('[data-ap-root]')
     if (dialog?.open) close()
     endDrag()
@@ -210,16 +234,30 @@ export function bindPresentation(root, model, { onRequest } = {}) {
     const identity = focused && root.contains(focused) ? keys.map(key => [key, focused.getAttribute(key)]) : null
     const selection = focused && 'selectionStart' in focused ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null
     if (discardDrafts) drafts.clear()
+    const previousNodes = nodes
     snapshot = structuredClone(nextModel)
     nodes = new Map(snapshot.nodes.map(node => [node.id, node]))
     panes = new Map(snapshot.panes.map(pane => [pane.id, pane]))
-    for (const [id, value] of drafts) if (!nodes.has(id) || nodes.get(id).value === value) drafts.delete(id)
+    for (const [id, value] of drafts) if (!nodes.has(id) || nodes.get(id).type !== previousNodes.get(id)?.type || nodes.get(id).input !== previousNodes.get(id)?.input || nodes.get(id).value === value) drafts.delete(id)
+    // Email/number inputs have no public selection API. Retain the focused
+    // control's internal caret when the host refreshes the same field; copy
+    // validated presentation attributes and avoid a redundant value write.
+    if (focused?.dataset.apEdit && root.contains(focused) && ['email', 'number'].includes(focused.type)) {
+      const replacement = next.querySelector('[data-ap-edit="' + focused.dataset.apEdit + '"]')
+      if (replacement?.tagName === focused.tagName && replacement.type === focused.type) {
+        const value = drafts.get(focused.dataset.apEdit) ?? replacement.value
+        for (const attr of [...focused.attributes]) if (!replacement.hasAttribute(attr.name)) focused.removeAttribute(attr.name)
+        for (const attr of replacement.attributes) if (focused.getAttribute(attr.name) !== attr.value) focused.setAttribute(attr.name, attr.value)
+        if (focused.value !== value) focused.value = value
+        replacement.replaceWith(focused)
+      }
+    }
     root.replaceChildren(...next.childNodes)
     for (const attr of next.attributes) root.setAttribute(attr.name, attr.value)
     output = root.querySelector('[data-ap-delivery]')
     dialog = root.querySelector('[data-ap-confirm]')
     for (const control of root.querySelectorAll('[data-ap-edit]')) {
-      if (drafts.has(control.dataset.apEdit)) control.value = drafts.get(control.dataset.apEdit)
+      if (drafts.has(control.dataset.apEdit) && control.value !== drafts.get(control.dataset.apEdit)) control.value = drafts.get(control.dataset.apEdit)
       const error = validateDraft(control, nodes.get(control.dataset.apEdit))
       if (error) say(error)
     }
@@ -235,6 +273,6 @@ export function bindPresentation(root, model, { onRequest } = {}) {
     return api
   }
   bindings.set(root, dispose)
-  const api = Object.freeze({ dispose, update })
+  const api = Object.freeze({ dispose, update, get isComposing() { return composing }, get hasPendingUpdate() { return queuedUpdate !== null } })
   return api
 }
