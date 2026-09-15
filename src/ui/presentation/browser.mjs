@@ -1,4 +1,4 @@
-import { resizeRequest, keyboardResize, editValueError } from './state.mjs'
+import { resizeRequest, keyboardResize, editValueError, deliveryMessage } from './state.mjs'
 import { assertPresentation } from './contract.mjs'
 import { renderPresentation } from './web.mjs'
 
@@ -56,23 +56,23 @@ export function bindPresentation(root, model, { onRequest } = {}) {
   }
   const send = async (request, control) => {
     if (disposed || typeof onRequest !== 'function') return
-    if (pending.has(request.id) && request.kind !== 'edit') return
+    if (pending.has(request.id) && request.kind !== 'edit') { say(deliveryMessage('suppressed')); return }
     // Edits reach the host synchronously, including while earlier delivery is
     // pending. A re-render/unmount cannot erase an undelivered coalesced draft.
     pending.set(request.id, (pending.get(request.id) ?? 0) + 1)
     syncBusy()
     // Native disabled would eject keyboard focus. Pending is guarded above.
-    say('Sending request. Awaiting host state.')
+    say(deliveryMessage('sending'))
+    let outcome = 'delivered'
     try {
       await onRequest(Object.freeze({ schema: 'atelier.presentation-request/v1', version: '1.0.0', presentationId: snapshot.id, status: 'proposed', executionAuthority: false, ...request }))
-      say('Request delivered. Awaiting host state.')
     } catch {
-      say('Request delivery failed. Host state has not been confirmed.')
+      outcome = 'failed'
     } finally {
       const remaining = pending.get(request.id) - 1
       if (remaining) pending.set(request.id, remaining)
       else pending.delete(request.id)
-      if (!disposed) syncBusy()
+      if (!disposed) { syncBusy(); say(deliveryMessage(outcome, [...pending.values()].reduce((sum, count) => sum + count, 0))) }
     }
   }
   const requestResize = (paneId, value, control) => {

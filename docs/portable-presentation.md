@@ -2,6 +2,8 @@
 
 Status: opt-in implementation candidate, not a published or adopted interface.
 Contract discussion: [issue 39](https://github.com/MNSTRY/atelier/issues/39).
+Current corrections and remaining adoption conditions:
+[review disposition](presentation-review-disposition.md).
 
 ## Placement and authority
 
@@ -72,7 +74,10 @@ All callback requests carry `schema: "atelier.presentation-request/v1"`,
 | navigation | native `id`, `paneId`, or `itemId` and local `href` | Resolve host navigation and focus; never create a global shortcut bridge |
 
 Callback resolution confirms delivery only. Rejection reports delivery failure,
-not business refusal or rollback. Repeated pending actions are suppressed without
+not business refusal or rollback. Both projections use one delivery-message
+function: each settlement describes its own outcome and identifies other pending
+requests; an unrelated earlier failure cannot relabel a later successful delivery.
+Repeated pending actions are suppressed without
 disabling the focused web control. Every valid edit is delivered synchronously to
 the host callback, including during earlier async delivery; there is no hidden
 coalescing queue to lose at unmount. The host must capture drafts on callback
@@ -197,7 +202,7 @@ an outstanding native confirmation conservatively, with a visible explanation.
 Equivalent-model rerenders with fresh callback identities do not revoke it;
 delivery uses the latest committed callback. Removing either host port refuses
 confirmation. Request settlement remains visible across model updates, with
-failures retained by request identity until another attempt for that identity.
+each settlement's own outcome reported independently of other request failures.
 Do not claim compatibility
 with a specific framework version until its mounted adapter has been tested.
 
@@ -209,12 +214,14 @@ pipeline, not a new semantic document or PDF authority.
 
 ## Proof and visual-regression governance
 
-Browser proof envelopes now use `atelier.presentation-browser-proof/v2`.
+Browser proof envelopes now use `atelier.presentation-browser-proof/v3`.
+The envelope records `sourceDirty`; comparison requires it to be explicitly false.
+Dirty-tree runs can provide development evidence but cannot compare as unchanged.
 The runner eagerly decodes fixture images and waits for fonts before measuring,
 then verifies stable document dimensions across capture against the PNG header.
 Each frame records pixel dimensions and document scroll dimensions separately
-from viewport conditions. Old v1 receipts remain historical evidence, but compare
-as incomparable: recapture under v2 rather than automatically accepting them.
+from viewport conditions. Old v1/v2 receipts remain historical evidence, but compare
+as incomparable: recapture under v3 rather than automatically accepting them.
 Dimension assertions and hashes do not establish image custody or owner approval.
 
 Run from a source checkout using Node 22.18.0:

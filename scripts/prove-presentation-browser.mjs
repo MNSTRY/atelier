@@ -22,7 +22,8 @@ const sourceDigest = createHash('sha256').update(sources.sort().map(file => file
 const runnerFiles = ['scripts/prove-presentation-browser.mjs', 'scripts/presentation-native-fixture.mjs', 'package-lock.json']
 const runnerDigest = createHash('sha256').update(runnerFiles.map(file => file + '\0' + fs.readFileSync(path.join(root, file))).join('\0')).digest('hex')
 const nativeBundle = await build({ entryPoints: [path.join(root, 'scripts/presentation-native-fixture.mjs')], bundle: true, format: 'iife', platform: 'browser', write: false, logLevel: 'silent' })
-const receipt = { schema: 'atelier.presentation-browser-proof/v2', sourceHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), sourceDigest, runnerDigest,
+const receipt = { schema: 'atelier.presentation-browser-proof/v3', sourceHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  sourceDirty: Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim()), sourceDigest, runnerDigest,
   fixtureDigest: createHash('sha256').update(JSON.stringify(fixture)).digest('hex'), environment: { platform: os.platform(), release: os.release(), architecture: os.arch(), locale: 'en-US', timezone: 'UTC', scale: 1, font: 'system sans-serif', motion: 'reduce', viewports: [320, 390, 768, 1024, 1440], themes: ['light', 'dark'], densities: ['comfortable', 'compact'] }, scope: 'synthetic-local-browser', nativeDeviceAccepted: false, adopterAccepted: false, visualBaselineAccepted: false, runs: [] }
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Presentation proof</title></head><body><script type="module">
 import {renderPresentation,renderReadOnlyDocument} from "/src/ui/presentation/web.mjs";
@@ -130,6 +131,11 @@ try {
       assert.equal(await page.evaluate(() => window.requests.filter(r => r.kind === 'resize').length), resizeCount + 1)
       await page.getByRole('button', { name: 'Decrease width of Working area' }).click()
       await page.waitForFunction(() => window.requests.some(r => r.kind === 'resize' && r.value === 59))
+      await page.evaluate(() => { window.hold = true; window.requests = [] })
+      await slider.focus(); await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowRight')
+      assert.equal(await page.evaluate(() => window.requests.length), 1)
+      assert.equal(await page.locator('[data-ap-delivery]').textContent(), 'Request already pending. No additional request sent.')
+      await page.evaluate(() => { window.hold = false; window.release() })
       run.checks.push('keyboard-and-single-pointer-resize-remains-host-controlled')
       await page.getByRole('button', { name: 'Move Observe later', exact: true }).click()
       await page.waitForFunction(() => window.requests.some(r => r.kind === 'move' && r.itemId === 'observe' && r.position === 1))
@@ -143,6 +149,8 @@ try {
       // Engines may emit an intermediate deletion while replacing text. Every
       // input must reach the host; do not mistake those real edits for loss.
       assert(await page.evaluate(() => window.requests.some(r => r.value === 'First edit') && window.requests.at(-1).value === 'Last edit'))
+      await page.evaluate(() => window.releases.shift()())
+      await page.waitForFunction(() => document.querySelector('[data-ap-delivery]').textContent === 'Request delivered. Awaiting host state. Other requests are still pending.')
       await page.evaluate(() => { window.hold = false; window.release() })
       assert.equal(await page.evaluate(() => window.requests.at(-1).value), 'Last edit')
       run.checks.push('selection-is-proposal-and-pending-edits-reach-host-immediately')
@@ -268,6 +276,8 @@ try {
         window.rejectNative(new Error('fixture delivery refusal'))
       }, fixture)
       await page.getByText('Request delivery failed. Host state has not been confirmed.', { exact: true }).waitFor()
+      await page.getByRole('button', { name: 'Circle', exact: true }).click()
+      await page.getByText('Request delivered. Awaiting host state.', { exact: true }).waitFor()
       await page.evaluate(() => window.nativeUnmount())
       run.checks.push('real-react-native-inline-callback-confirmation-and-post-update-delivery-failure')
       await page.evaluate(model => {
@@ -296,6 +306,7 @@ try {
       assert.equal(await nativeAction.getAttribute('data-busy'), 'true')
       assert.equal(await otherAction.getAttribute('data-busy'), 'true')
       await page.evaluate(() => window.nativeResolvers['disabled-action']())
+      await page.getByText('Request delivered. Awaiting host state. Other requests are still pending.', { exact: true }).waitFor()
       await page.waitForFunction(() => !document.querySelector('#native button[data-busy="false"][disabled]'))
       assert.equal(await nativeAction.getAttribute('data-busy'), 'true')
       await page.evaluate(() => window.nativeResolvers['confirm-action']())
@@ -326,7 +337,7 @@ try {
     } finally { await context.close(); await browser.close() }
   }
   receipt.status = 'passed'
-  assert.equal(comparePresentationProofs(receipt, receipt).status, 'unchanged')
+  assert.equal(comparePresentationProofs(receipt, receipt).status, receipt.sourceDirty ? 'incomparable' : 'unchanged')
 } catch (error) { receipt.status = 'failed'; receipt.error = error.stack; process.exitCode = 1 }
 fs.writeFileSync(path.join(output, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n')
 console.log(JSON.stringify({ status: receipt.status, checks: receipt.runs.reduce((n, r) => n + r.checks.length, 0), browsers: receipt.runs.map(r => ({ name: r.browser, status: r.status ?? 'failed' })), error: receipt.error ?? null, receipt: path.join(output, 'receipt.json') }, null, 2))

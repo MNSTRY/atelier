@@ -23,8 +23,9 @@ test('Astro reference consumes checked public tokens without a workspace rendere
 test('Astro form is explicitly local and unavailable before enhancement', () => {
   const source = read('examples/astro-presentation/src/components/ReadingPage.astro')
   assert.match(source, /type="button" data-demo-check disabled/)
-  assert.match(source, /addEventListener\('submit', event => event.preventDefault\(\)\)/)
-  assert(!/<form[^>]*action=/.test(source))
+  assert.match(source, /role="group" aria-labelledby="practice-title"/)
+  assert.match(source, /input.reportValidity\(\)/)
+  assert(!/<form\b/.test(source))
   assert(!/<input[^>]*name=/.test(source))
   assert(!/\bfetch\s*\(|localStorage|sessionStorage|sendBeacon/.test(source))
   assert(source.includes('Nothing was sent or saved.'))

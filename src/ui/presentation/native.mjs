@@ -1,6 +1,6 @@
 import { assertPresentation } from './contract.mjs'
 import { resolveTokens } from './tokens.mjs'
-import { editValueError } from './state.mjs'
+import { editValueError, deliveryMessage } from './state.mjs'
 
 // Inject the consumer's existing React/native (or Tamagui native) primitives.
 // The root imports no framework and installs no host/window/global driver.
@@ -18,8 +18,6 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
     const [, refreshPending] = React.useState(0)
     const active = React.useRef(true)
     const pending = React.useRef(new Map())
-    const failures = React.useRef(new Set())
-    const attempts = React.useRef(new Map())
     const drafts = React.useRef(new Map())
     const current = React.useRef({ model, onRequest, confirm })
     const generation = React.useRef(0)
@@ -37,26 +35,21 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
     const request = async event => {
       const host = current.current
       if (typeof host.onRequest !== 'function' || !active.current) return
-      if (pending.current.has(event.id) && event.kind !== 'edit') return
-      const attempt = (attempts.current.get(event.id) ?? 0) + 1
-      attempts.current.set(event.id, attempt)
-      failures.current.delete(event.id)
-      const reportDelivery = () => setDelivery(failures.current.size
-        ? 'Request delivery failed. Host state has not been confirmed.'
-        : pending.current.size ? 'Sending request. Awaiting host state.' : 'Request delivered. Awaiting host state.')
+      if (pending.current.has(event.id) && event.kind !== 'edit') { setDelivery(deliveryMessage('suppressed')); return }
       pending.current.set(event.id, (pending.current.get(event.id) ?? 0) + 1)
       refreshPending(value => value + 1)
-      reportDelivery()
+      setDelivery(deliveryMessage('sending'))
+      let outcome = 'delivered'
       try {
         await host.onRequest(Object.freeze({ schema: 'atelier.presentation-request/v1', version: '1.0.0', presentationId: host.model.id, status: 'proposed', executionAuthority: false, ...event }))
       } catch {
         // Settlement belongs to the request, not the confirmation/model generation.
-        if (active.current && attempts.current.get(event.id) === attempt) failures.current.add(event.id)
+        outcome = 'failed'
       } finally {
         const remaining = pending.current.get(event.id) - 1
         if (remaining) pending.current.set(event.id, remaining)
         else pending.current.delete(event.id)
-        if (active.current) { refreshPending(value => value + 1); reportDelivery() }
+        if (active.current) { refreshPending(value => value + 1); setDelivery(deliveryMessage(outcome, [...pending.current.values()].reduce((sum, count) => sum + count, 0))) }
       }
     }
     const style = { color: tokens.color.text, fontFamily: tokens.typography.family, fontSize: tokens.typography.body, lineHeight: tokens.typography.body * tokens.typography.lineHeight }

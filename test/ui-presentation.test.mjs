@@ -8,7 +8,7 @@ import { presentationSchema } from '../src/ui/presentation/schema.generated.mjs'
 import { matchesPresentationSchema } from '../src/ui/presentation/schema-check.mjs'
 import { resolveTokens, contrastRatio, tokenVariables, tokenContract } from '../src/ui/presentation/tokens.mjs'
 import { presentationStyles } from '../src/ui/presentation/styles.mjs'
-import { presentationState, keyboardResize, resizeRequest, editValueError } from '../src/ui/presentation/state.mjs'
+import { presentationState, keyboardResize, resizeRequest, editValueError, deliveryMessage } from '../src/ui/presentation/state.mjs'
 import { renderPresentationDocument, renderReadOnlyDocument } from '../src/ui/presentation/web.mjs'
 import { createNativePresentation } from '../src/ui/presentation/native.mjs'
 import { comparePresentationProofs } from '../src/ui/presentation/proof.mjs'
@@ -157,6 +157,23 @@ test('native adapter is framework-injected and consumes host state without web i
   assert.equal(serializePresentation(fixture), serializePresentation(fresh()))
   assert.throws(() => createNativePresentation({}))
 })
+test('native settlement describes the current delivery, not another request failure', async () => {
+  const messages = []
+  const React = { createElement: (type, props, ...children) => ({ type, props, children }),
+    useState: value => [value, next => { if (typeof next === 'string') messages.push(next) }], useRef: value => ({ current: value }), useEffect: fn => fn() }
+  const Component = createNativePresentation({ React, View: 'View', Text: 'Text', Pressable: 'Pressable', TextInput: 'TextInput', ScrollView: 'ScrollView', Image: 'Image' })
+  const model = fresh(); model.nodes.find(n => n.id === 'disabled-action').disabled = false
+  const tree = Component({ model, confirm: async () => true, onRequest: event => {
+    if (event.id === 'disabled-action') throw new Error('synthetic delivery failure')
+  } })
+  const all = []
+  const walk = node => { if (!node || typeof node !== 'object') return; all.push(node); for (const child of node.children ?? []) walk(child) }
+  walk(tree)
+  await all.find(n => n.props?.accessibilityLabel === model.nodes.find(n => n.id === 'disabled-action').label).props.onPress()
+  assert.equal(messages.at(-1), 'Request delivery failed. Host state has not been confirmed.')
+  await all.find(n => n.props?.accessibilityLabel === 'Request publication').props.onPress()
+  assert.equal(messages.at(-1), 'Request delivered. Awaiting host state.')
+})
 test('presentation imports do not install a transport or native dependency', () => {
   for (const file of ['contract.mjs', 'browser.mjs', 'native.mjs', 'state.mjs', 'tokens.mjs']) {
     const source = fs.readFileSync(new URL('../src/ui/presentation/' + file, import.meta.url), 'utf8')
@@ -171,8 +188,15 @@ test('extension containers are inert metadata rather than interpreted authority'
   assert(!renderPresentationDocument(model).includes('invented-uninterpreted-value'))
   assert.deepEqual(parsePresentation(serializePresentation(model)).ext, model.ext)
 })
-test('visual comparison refuses missing, failed or drifted coverage and never accepts a baseline', () => {
-  const proof = { schema: 'atelier.presentation-browser-proof/v2', status: 'passed', sourceHead: 'a'.repeat(40), sourceDigest: 'a'.repeat(64), runnerDigest: 'e'.repeat(64), fixtureDigest: 'b'.repeat(64),
+test('shared delivery messages preserve current outcome and concurrent pending state', () => {
+  assert.equal(deliveryMessage('delivered', 1), 'Request delivered. Awaiting host state. Other requests are still pending.')
+  assert.equal(deliveryMessage('failed', 2), 'Request delivery failed. Host state has not been confirmed. Other requests are still pending.')
+  assert.equal(deliveryMessage('suppressed'), 'Request already pending. No additional request sent.')
+  assert.throws(() => deliveryMessage('success'))
+  assert.throws(() => deliveryMessage('delivered', -1))
+})
+test('visual comparison refuses missing, dirty, failed or drifted coverage and never accepts a baseline', () => {
+  const proof = { schema: 'atelier.presentation-browser-proof/v3', status: 'passed', sourceHead: 'a'.repeat(40), sourceDirty: false, sourceDigest: 'a'.repeat(64), runnerDigest: 'e'.repeat(64), fixtureDigest: 'b'.repeat(64),
     scope: 'synthetic-local-browser', nativeDeviceAccepted: false, adopterAccepted: false, visualBaselineAccepted: false,
     environment: { platform: 'fixture', release: 'fixture', architecture: 'fixture', locale: 'en-US', timezone: 'UTC', scale: 1, font: 'pinned-font', motion: 'reduce', viewports: [390], themes: ['light'], densities: ['comfortable'] },
     runs: [{ browser: 'chromium', version: 'fixture-version', status: 'passed', checks: ['fixture-check'], screenshots: [{ file: 'frame.png', sha256: 'c'.repeat(64), capture: { width: 390, height: 3613, scrollWidth: 390, scrollHeight: 3613 }, conditions: { width: 390, height: 960, theme: 'light', density: 'comfortable', font: 'pinned-font', motion: 'reduce', locale: 'en-US', scale: 1 } }] }] }
@@ -180,6 +204,10 @@ test('visual comparison refuses missing, failed or drifted coverage and never ac
   assert.equal(comparePresentationProofs(truncated, truncated).status, 'incomparable')
   assert.equal(comparePresentationProofs({ ...proof, schema: 'atelier.presentation-browser-proof/v1' }, proof).status, 'incomparable')
   assert.equal(comparePresentationProofs(null, proof).status, 'incomparable')
+  assert.equal(comparePresentationProofs(proof, { ...proof, sourceDirty: true }).status, 'incomparable')
+  const unbound = structuredClone(proof); delete unbound.sourceDirty
+  assert.equal(comparePresentationProofs(unbound, proof).status, 'incomparable')
+  assert.equal(comparePresentationProofs({ ...unbound, schema: 'atelier.presentation-browser-proof/v2' }, proof).status, 'incomparable')
   assert.equal(comparePresentationProofs(proof, { ...proof, status: 'failed' }).status, 'incomparable')
   assert.equal(comparePresentationProofs(proof, { ...proof, environment: { font: 'other-font' } }).status, 'incomparable')
   assert.equal(comparePresentationProofs(proof, { ...proof, runs: [] }).status, 'incomparable')

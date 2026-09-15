@@ -27,8 +27,8 @@ function conditionsValid(c, env) {
 // Comparison is deliberately not baseline acceptance or release authorization.
 export function comparePresentationProofs(baseline, candidate) {
   const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
-  const valid = proof => plain(proof) && closed(proof, ['schema', 'status', 'sourceHead', 'sourceDigest', 'runnerDigest', 'fixtureDigest', 'environment', 'scope', 'nativeDeviceAccepted', 'adopterAccepted', 'visualBaselineAccepted', 'runs']) &&
-    proof.schema === 'atelier.presentation-browser-proof/v2' && proof.status === 'passed' &&
+  const valid = proof => plain(proof) && closed(proof, ['schema', 'status', 'sourceHead', 'sourceDirty', 'sourceDigest', 'runnerDigest', 'fixtureDigest', 'environment', 'scope', 'nativeDeviceAccepted', 'adopterAccepted', 'visualBaselineAccepted', 'runs']) &&
+    proof.schema === 'atelier.presentation-browser-proof/v3' && proof.status === 'passed' && proof.sourceDirty === false &&
     /^[a-f0-9]{40}$/.test(proof.sourceHead ?? '') && digest(proof.sourceDigest) && digest(proof.fixtureDigest) && digest(proof.runnerDigest) &&
     proof.scope === 'synthetic-local-browser' && proof.nativeDeviceAccepted === false && proof.adopterAccepted === false && proof.visualBaselineAccepted === false &&
     environmentValid(proof.environment) && Array.isArray(proof.runs) && proof.runs.length > 0 && proof.runs.length <= 3 &&

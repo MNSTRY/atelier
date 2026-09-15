@@ -99,6 +99,19 @@ try {
           }
           run.checks.push(`${theme}:${width}:js-${javaScriptEnabled}`)
         }
+        await page.goto('http://127.0.0.1:4179/')
+        const navigations = []
+        const recordNavigation = frame => { if (frame === page.mainFrame()) navigations.push(frame.url()) }
+        page.on('framenavigated', recordNavigation)
+        await page.locator('input').fill('Invented local topic')
+        await page.locator('input').press('Enter')
+        // Keep the field value as a second reload oracle; a GET to the same URL
+        // would evade a pathname-only assertion.
+        assert.deepEqual(navigations, [])
+        assert.equal(await page.locator('input').inputValue(), 'Invented local topic')
+        assert.equal(await page.locator('form').count(), 0)
+        page.off('framenavigated', recordNavigation)
+        run.checks.push(`enter-no-navigation:js-${javaScriptEnabled}`)
         if (javaScriptEnabled) {
           await page.goto('http://127.0.0.1:4179/')
           // macOS WebKit follows Safari's Option-Tab link-navigation convention

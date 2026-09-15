@@ -47,12 +47,12 @@ const variables = tokenVariables(resolveTokens(theme));
       <section id="practice" class="panel" aria-labelledby="practice-title" tabindex="-1">
         <h2 id="practice-title">Try a local example</h2>
         <p id="demo-note">Use invented text only. Nothing is sent or saved.</p>
-        <form data-demo-form aria-describedby="demo-note">
+        <div data-demo-form role="group" aria-labelledby="practice-title" aria-describedby="demo-note">
           <label for="topic">A topic to explore <span class="muted">(required)</span></label>
           <input id="topic" type="text" required maxlength="80" autocomplete="off" />
           <button type="button" data-demo-check disabled>Check locally</button>
           <p role="status" data-demo-status>Local validation is available when JavaScript is enabled.</p>
-        </form>
+        </div>
       </section>
     </main>
     <footer class="shell"><p>Portable presentation example. Fictional content, no external assets, no analytics.</p></footer>
@@ -65,14 +65,14 @@ const variables = tokenVariables(resolveTokens(theme));
           }
         });
       }
-      for (const form of document.querySelectorAll<HTMLFormElement>('[data-demo-form]')) {
+      for (const form of document.querySelectorAll<HTMLElement>('[data-demo-form]')) {
         const button = form.querySelector<HTMLButtonElement>('[data-demo-check]')!;
         const status = form.querySelector<HTMLElement>('[data-demo-status]')!;
-        form.addEventListener('submit', event => event.preventDefault());
+        const input = form.querySelector<HTMLInputElement>('input')!;
         button.disabled = false;
         status.textContent = 'Ready for a local check. Nothing is sent or saved.';
         button.addEventListener('click', () => {
-          const valid = form.reportValidity();
+          const valid = input.reportValidity();
           status.textContent = valid ? 'Local check passed. Nothing was sent or saved.' : 'Enter a topic before checking. Nothing was sent or saved.';
         });
       }

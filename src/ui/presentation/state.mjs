@@ -1,5 +1,14 @@
 export const stateAxes = Object.freeze(['hovered', 'focused', 'pressed', 'selected', 'disabled', 'pending', 'dragging', 'invalid'])
 export const EDIT_CODE_POINT_LIMIT = 32768
+// Delivery is not business success. Describe the settling request's outcome,
+// independently of unrelated failures, and do not hide concurrent deliveries.
+export function deliveryMessage(outcome, pendingCount = 0) {
+  if (!['sending', 'delivered', 'failed', 'suppressed'].includes(outcome) || !Number.isSafeInteger(pendingCount) || pendingCount < 0) throw new TypeError('invalid delivery state')
+  if (outcome === 'sending') return 'Sending request. Awaiting host state.'
+  if (outcome === 'suppressed') return 'Request already pending. No additional request sent.'
+  const message = outcome === 'failed' ? 'Request delivery failed. Host state has not been confirmed.' : 'Request delivered. Awaiting host state.'
+  return message + (pendingCount ? ' Other requests are still pending.' : '')
+}
 // Match the schema's Unicode code-point limit; never truncate a host draft.
 export function editValueError(value) {
   if (typeof value !== 'string') return 'Draft must be text.'
