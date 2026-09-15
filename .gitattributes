@@ -1,2 +1,5 @@
 # Pack qualification hashes committed bytes; prevent checkout conversion.
 templates/external-project-workspace/packs/** text eol=lf
+
+# Generated schema bytes must match the canonical LF generator on every host.
+src/ui/presentation/schema.generated.mjs text eol=lf
