@@ -1,0 +1,121 @@
+---
+import { resolveTokens, tokenVariables } from '@mnstry/atelier/presentation';
+const { theme = 'light' } = Astro.props;
+const variables = tokenVariables(resolveTokens(theme));
+---
+<!doctype html>
+<html lang="en" style={variables} data-theme={theme}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="description" content="A fictional reading-page fixture for portable presentation compatibility." />
+    <title>Paper workshop — presentation example</title>
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+    <header class="shell">
+      <a class="identity" href="#content">Paper workshop</a>
+      <details data-menu>
+        <summary>Menu</summary>
+        <nav aria-label="Page">
+          <a href="#reading">Read the guide</a>
+          <a href="#practice">Try the example</a>
+          <a href={theme === 'light' ? '/dark/' : '/'}>{theme === 'light' ? 'Dark' : 'Light'} example</a>
+        </nav>
+      </details>
+    </header>
+    <main id="content" tabindex="-1" class="shell">
+      <section class="hero" aria-labelledby="title">
+        <p class="eyebrow">A fictional public-page reference</p>
+        <h1 id="title">Make room for a clear idea.</h1>
+        <p class="lead">Start with a sheet of paper, one useful question, and enough space to notice what matters.</p>
+        <a class="cta" href="#reading">Explore the guide <span aria-hidden="true">↓</span></a>
+        <p class="muted">Synthetic content. No service, registration, or offer is available.</p>
+      </section>
+      <article id="reading" aria-labelledby="reading-title" tabindex="-1">
+        <p class="eyebrow">The guide</p>
+        <h2 id="reading-title">A page you can actually read.</h2>
+        <p>A useful page gives its main idea room. Headings provide landmarks, paragraphs stay at a comfortable measure, and links explain where they lead.</p>
+        <p>Supporting text deserves the same care as a headline. This example uses opaque shared colors instead of fading instructions into the background. Its type stays readable on a narrow screen.</p>
+        <h3>Keep the next step understandable</h3>
+        <p>A link moves to another place. A button performs a local action. Here, the guide remains available without scripts, and the example form never sends your input anywhere.</p>
+        <blockquote>Clarity is a relationship between the content, its presentation, and the person reading it.</blockquote>
+        <p>The next section demonstrates labels and browser validation. It is intentionally small: one field, one action, and an honest result.</p>
+        <a href="#practice">Continue to the local example</a>
+      </article>
+      <section id="practice" class="panel" aria-labelledby="practice-title" tabindex="-1">
+        <h2 id="practice-title">Try a local example</h2>
+        <p id="demo-note">Use invented text only. Nothing is sent or saved.</p>
+        <div data-demo-form role="group" aria-labelledby="practice-title" aria-describedby="demo-note">
+          <label for="topic">A topic to explore <span class="muted">(required)</span></label>
+          <input id="topic" type="text" required maxlength="80" autocomplete="off" />
+          <button type="button" data-demo-check disabled>Check locally</button>
+          <p role="status" data-demo-status>Local validation is available when JavaScript is enabled.</p>
+        </div>
+      </section>
+    </main>
+    <footer class="shell"><p>Portable presentation example. Fictional content, no external assets, no analytics.</p></footer>
+    <script>
+      for (const menu of document.querySelectorAll<HTMLDetailsElement>('[data-menu]')) {
+        menu.addEventListener('keydown', event => {
+          if (event.key === 'Escape' && menu.open) {
+            menu.open = false;
+            menu.querySelector('summary')?.focus();
+          }
+        });
+      }
+      for (const form of document.querySelectorAll<HTMLElement>('[data-demo-form]')) {
+        const button = form.querySelector<HTMLButtonElement>('[data-demo-check]')!;
+        const status = form.querySelector<HTMLElement>('[data-demo-status]')!;
+        const input = form.querySelector<HTMLInputElement>('input')!;
+        button.disabled = false;
+        status.textContent = 'Ready for a local check. Nothing is sent or saved.';
+        button.addEventListener('click', () => {
+          const valid = input.reportValidity();
+          status.textContent = valid ? 'Local check passed. Nothing was sent or saved.' : 'Enter a topic before checking. Nothing was sent or saved.';
+        });
+      }
+    </script>
+  </body>
+</html>
+<style is:global>
+  * { box-sizing: border-box; }
+  html { color-scheme: light; color: var(--ap-color-text); background: var(--ap-color-page); font-family: var(--ap-typography-family); font-size: var(--ap-typography-body); line-height: var(--ap-typography-line-height); }
+  html[data-theme=dark] { color-scheme: dark; }
+  body { margin: 0; }
+  .shell { width: min(100% - 2rem, 72rem); margin-inline: auto; overflow-wrap: anywhere; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--ap-color-border); padding-block: 1rem; }
+  .identity { font-weight: 700; }
+  nav { display: flex; flex-direction: column; gap: .5rem; padding-block: .5rem; }
+  a { color: var(--ap-color-accent); text-underline-offset: .2em; overflow-wrap: anywhere; }
+  a:hover { text-decoration-thickness: 2px; }
+  a:active { background: var(--ap-color-selected); }
+  :is(a,summary,button) { min-height: var(--ap-density-target); display: inline-flex; align-items: center; }
+  summary { cursor: pointer; display: list-item; padding-block: .5rem; }
+  :focus-visible { outline: var(--ap-state-focus-width) solid var(--ap-color-focus); outline-offset: var(--ap-state-focus-offset); }
+  .skip { position: absolute; left: -10000px; }
+  .skip:focus { left: 1rem; top: 1rem; z-index: 2; padding: .5rem; background: var(--ap-color-panel); }
+  .hero { padding-block: clamp(2rem, 7vw, 5rem); max-width: 58rem; }
+  h1 { font-size: clamp(2rem, 6vw, 4rem); line-height: 1.12; letter-spacing: -.025em; max-width: 18ch; margin-block: .5rem 1.5rem; }
+  h2 { font-size: 1.75rem; line-height: 1.25; }
+  h3 { font-size: 1.25rem; }
+  .lead { font-size: 1.25rem; max-width: 48ch; }
+  .eyebrow { font-size: 1rem; font-weight: 700; }
+  .muted, footer { color: var(--ap-color-muted); }
+  .cta { font-weight: 700; gap: .5rem; }
+  article { max-width: 65ch; padding-bottom: 3rem; }
+  article p { margin-block: 1.25rem; }
+  blockquote { margin-inline: 0; border-inline-start: 3px solid var(--ap-color-border); padding-inline-start: 1.25rem; }
+  .panel { background: var(--ap-color-panel); border: 1px solid var(--ap-color-border); border-radius: var(--ap-border-radius); padding: clamp(1rem, 3vw, 2rem); max-width: 48rem; }
+  label, input { display: block; }
+  input { width: 100%; min-height: var(--ap-density-target); margin-block: .5rem 1rem; padding: .5rem; font: inherit; color: var(--ap-color-text); background: var(--ap-color-panel); border: 1px solid var(--ap-color-border); border-radius: var(--ap-border-radius); }
+  button { font: inherit; font-weight: 600; padding: .5rem 1rem; border: 1px solid var(--ap-color-accent); border-radius: var(--ap-border-radius); background: var(--ap-color-accent); color: var(--ap-color-on-accent); cursor: pointer; }
+  button:hover { text-decoration: underline; }
+  button:active { outline: 2px solid var(--ap-color-text); outline-offset: 2px; }
+  button:disabled { cursor: not-allowed; }
+  footer { padding-block: 2rem; font-size: var(--ap-typography-small); }
+  @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+  @media (forced-colors:active) { :focus-visible { outline-color: Highlight; } }
+  @media print { .skip,header,button { display: none; } html { color: #000; background: #fff; } .muted,footer { color: #333; } .panel { background: #fff; } }
+</style>

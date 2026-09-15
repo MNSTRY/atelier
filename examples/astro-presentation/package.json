@@ -1,0 +1,9 @@
+{
+  "name": "atelier-astro-presentation-example",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "astro build" },
+  "dependencies": { "@mnstry/atelier": "file:../.." },
+  "devDependencies": { "astro": "7.3.2" },
+  "engines": { "node": ">=22.19.0 <23" }
+}

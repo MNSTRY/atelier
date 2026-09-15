@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "contract revision 1.0.0; pane presentation only, no workspace allocation authority.",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-pane-presentation.v1.schema.json",
+  "title": "Portable pane presentation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "label",
+    "role",
+    "blocks"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "role": {
+      "enum": [
+        "primary",
+        "context",
+        "utility"
+      ]
+    },
+    "width": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max",
+        "value"
+      ],
+      "properties": {
+        "min": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 90
+        },
+        "max": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 90
+        },
+        "value": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 90
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+      }
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "ext": {
+      "type": "object"
+    }
+  }
+}

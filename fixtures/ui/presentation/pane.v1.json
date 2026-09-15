@@ -1,0 +1,7 @@
+{
+  "id": "working-area",
+  "label": "Working area",
+  "role": "primary",
+  "width": { "min": 30, "max": 75, "value": 60 },
+  "blocks": ["note"]
+}
