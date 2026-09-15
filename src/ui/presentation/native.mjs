@@ -18,32 +18,45 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
     const [, refreshPending] = React.useState(0)
     const active = React.useRef(true)
     const pending = React.useRef(new Map())
+    const failures = React.useRef(new Set())
+    const attempts = React.useRef(new Map())
     const drafts = React.useRef(new Map())
-    const current = React.useRef(null)
+    const current = React.useRef({ model, onRequest, confirm })
     const generation = React.useRef(0)
     const signature = JSON.stringify(model)
-    if (!current.current || current.current.signature !== signature || current.current.onRequest !== onRequest || current.current.confirm !== confirm) generation.current++
-    current.current = { signature, onRequest, confirm }
+    // Only committed model changes revoke pending confirmation. Inline callback
+    // identities routinely change when a host opens its confirmation dialog.
+    const useCommitEffect = React.useLayoutEffect ?? React.useEffect
+    useCommitEffect(() => {
+      if (current.current.signature !== signature) generation.current++
+      current.current = { signature, model, onRequest, confirm }
+    }, [signature, onRequest, confirm])
     for (const [id, value] of drafts.current) if (!model.nodes.some(node => node.id === id && node.value !== value)) drafts.current.delete(id)
     const confirmations = React.useRef(new Set())
     React.useEffect(() => { active.current = true; return () => { active.current = false } }, [])
     const request = async event => {
-      if (typeof onRequest !== 'function' || !active.current) return
+      const host = current.current
+      if (typeof host.onRequest !== 'function' || !active.current) return
       if (pending.current.has(event.id) && event.kind !== 'edit') return
-      const requestGeneration = generation.current
+      const attempt = (attempts.current.get(event.id) ?? 0) + 1
+      attempts.current.set(event.id, attempt)
+      failures.current.delete(event.id)
+      const reportDelivery = () => setDelivery(failures.current.size
+        ? 'Request delivery failed. Host state has not been confirmed.'
+        : pending.current.size ? 'Sending request. Awaiting host state.' : 'Request delivered. Awaiting host state.')
       pending.current.set(event.id, (pending.current.get(event.id) ?? 0) + 1)
       refreshPending(value => value + 1)
-      setDelivery('Sending request. Awaiting host state.')
+      reportDelivery()
       try {
-        await onRequest(Object.freeze({ schema: 'atelier.presentation-request/v1', version: '1.0.0', presentationId: model.id, status: 'proposed', executionAuthority: false, ...event }))
-        if (active.current && generation.current === requestGeneration) setDelivery('Request delivered. Awaiting host state.')
+        await host.onRequest(Object.freeze({ schema: 'atelier.presentation-request/v1', version: '1.0.0', presentationId: host.model.id, status: 'proposed', executionAuthority: false, ...event }))
       } catch {
-        if (active.current && generation.current === requestGeneration) setDelivery('Request delivery failed. Host state has not been confirmed.')
+        // Settlement belongs to the request, not the confirmation/model generation.
+        if (active.current && attempts.current.get(event.id) === attempt) failures.current.add(event.id)
       } finally {
         const remaining = pending.current.get(event.id) - 1
         if (remaining) pending.current.set(event.id, remaining)
         else pending.current.delete(event.id)
-        if (active.current) refreshPending(value => value + 1)
+        if (active.current) { refreshPending(value => value + 1); reportDelivery() }
       }
     }
     const style = { color: tokens.color.text, fontFamily: tokens.typography.family, fontSize: tokens.typography.body, lineHeight: tokens.typography.body * tokens.typography.lineHeight }
@@ -61,13 +74,18 @@ export function createNativePresentation({ React, View, Text, Pressable, TextInp
       onPress: async () => {
         if (node.disabled || typeof onRequest !== 'function' || confirmations.current.has(node.id) || pending.current.has(node.id)) return
         if (node.confirmation) {
-          if (typeof confirm !== 'function') { setDelivery('Confirmation is unavailable in this host. No request sent.'); return }
+          const confirmCurrent = current.current.confirm
+          if (typeof confirmCurrent !== 'function') { setDelivery('Confirmation is unavailable in this host. No request sent.'); return }
           let accepted = false
           const started = generation.current
           confirmations.current.add(node.id)
-          try { accepted = await confirm(Object.freeze({ ...node.confirmation, initialFocus: 'cancel', restoreFocus: true })) === true } catch { accepted = false }
+          try { accepted = await confirmCurrent(Object.freeze({ ...node.confirmation, initialFocus: 'cancel', restoreFocus: true })) === true } catch { accepted = false }
           finally { confirmations.current.delete(node.id) }
-          if (!accepted || !active.current || started !== generation.current) return
+          if (!active.current) return
+          if (started !== generation.current || typeof current.current.onRequest !== 'function' || typeof current.current.confirm !== 'function') {
+            setDelivery('Confirmation is no longer current. No request sent.'); return
+          }
+          if (!accepted) { setDelivery('Confirmation cancelled. No request sent.'); return }
         }
         await request({ kind: 'action', id: node.id, actionRef: node.actionRef, ...(node.confirmation ? { presentationConfirmed: true } : {}) })
       },

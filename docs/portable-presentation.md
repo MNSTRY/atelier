@@ -186,8 +186,12 @@ browser range/drag API. Focus treatment and OS keyboard behavior remain native
 host obligations; injected-tree tests cannot prove them. The proof runner also
 mounts real React against deliberately minimal DOM bindings to exercise stale
 confirmation rejection and concurrent pending state; this is lifecycle proof,
-not React Native or Tamagui compatibility. Changes to the model or confirmation/
-request callback invalidate an outstanding native confirmation conservatively.
+not React Native or Tamagui compatibility. Committed model changes invalidate
+an outstanding native confirmation conservatively, with a visible explanation.
+Equivalent-model rerenders with fresh callback identities do not revoke it;
+delivery uses the latest committed callback. Removing either host port refuses
+confirmation. Request settlement remains visible across model updates, with
+failures retained by request identity until another attempt for that identity.
 Do not claim compatibility
 with a specific framework version until its mounted adapter has been tested.
 
@@ -198,6 +202,14 @@ unavailability reasons. This is HTML suitable for an existing export
 pipeline, not a new semantic document or PDF authority.
 
 ## Proof and visual-regression governance
+
+Browser proof envelopes now use `atelier.presentation-browser-proof/v2`.
+The runner eagerly decodes fixture images and waits for fonts before measuring,
+then verifies stable document dimensions across capture against the PNG header.
+Each frame records pixel dimensions and document scroll dimensions separately
+from viewport conditions. Old v1 receipts remain historical evidence, but compare
+as incomparable: recapture under v2 rather than automatically accepting them.
+Dimension assertions and hashes do not establish image custody or owner approval.
 
 Run from a source checkout using Node 22.18.0:
 

@@ -28,7 +28,7 @@ function conditionsValid(c, env) {
 export function comparePresentationProofs(baseline, candidate) {
   const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
   const valid = proof => plain(proof) && closed(proof, ['schema', 'status', 'sourceHead', 'sourceDigest', 'runnerDigest', 'fixtureDigest', 'environment', 'scope', 'nativeDeviceAccepted', 'adopterAccepted', 'visualBaselineAccepted', 'runs']) &&
-    proof.schema === 'atelier.presentation-browser-proof/v1' && proof.status === 'passed' &&
+    proof.schema === 'atelier.presentation-browser-proof/v2' && proof.status === 'passed' &&
     /^[a-f0-9]{40}$/.test(proof.sourceHead ?? '') && digest(proof.sourceDigest) && digest(proof.fixtureDigest) && digest(proof.runnerDigest) &&
     proof.scope === 'synthetic-local-browser' && proof.nativeDeviceAccepted === false && proof.adopterAccepted === false && proof.visualBaselineAccepted === false &&
     environmentValid(proof.environment) && Array.isArray(proof.runs) && proof.runs.length > 0 && proof.runs.length <= 3 &&
@@ -37,7 +37,11 @@ export function comparePresentationProofs(baseline, candidate) {
     proof.runs.every(run => ['chromium', 'firefox', 'webkit'].includes(run.browser) && run.status === 'passed' &&
       text(run.version) && list(run.checks, x => text(x) && /^[a-z0-9:-]+$/.test(x)) &&
       Array.isArray(run.screenshots) && run.screenshots.length > 0 && run.screenshots.length <= 256 &&
-      run.screenshots.every(frame => closed(frame, ['file', 'sha256', 'conditions'])) &&
+      run.screenshots.every(frame => closed(frame, ['file', 'sha256', 'capture', 'conditions']) &&
+        closed(frame.capture, ['width', 'height', 'scrollWidth', 'scrollHeight']) &&
+        Object.values(frame.capture).every(n => Number.isSafeInteger(n) && positive(n)) &&
+        frame.capture.width === frame.capture.scrollWidth * frame.conditions.scale &&
+        frame.capture.height === frame.capture.scrollHeight * frame.conditions.scale) &&
       new Set(run.screenshots.map(frame => frame.file)).size === run.screenshots.length &&
       run.screenshots.every(frame => /^[a-z0-9-]+\.png$/.test(frame.file) && digest(frame.sha256) && conditionsValid(frame.conditions, proof.environment)))
   const result = (status, reason, changedFrames = []) => Object.freeze({ status, reason, changedFrames, baselineApprovalVerified: false, executionAuthority: false })

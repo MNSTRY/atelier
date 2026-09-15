@@ -172,10 +172,13 @@ test('extension containers are inert metadata rather than interpreted authority'
   assert.deepEqual(parsePresentation(serializePresentation(model)).ext, model.ext)
 })
 test('visual comparison refuses missing, failed or drifted coverage and never accepts a baseline', () => {
-  const proof = { schema: 'atelier.presentation-browser-proof/v1', status: 'passed', sourceHead: 'a'.repeat(40), sourceDigest: 'a'.repeat(64), runnerDigest: 'e'.repeat(64), fixtureDigest: 'b'.repeat(64),
+  const proof = { schema: 'atelier.presentation-browser-proof/v2', status: 'passed', sourceHead: 'a'.repeat(40), sourceDigest: 'a'.repeat(64), runnerDigest: 'e'.repeat(64), fixtureDigest: 'b'.repeat(64),
     scope: 'synthetic-local-browser', nativeDeviceAccepted: false, adopterAccepted: false, visualBaselineAccepted: false,
     environment: { platform: 'fixture', release: 'fixture', architecture: 'fixture', locale: 'en-US', timezone: 'UTC', scale: 1, font: 'pinned-font', motion: 'reduce', viewports: [390], themes: ['light'], densities: ['comfortable'] },
-    runs: [{ browser: 'chromium', version: 'fixture-version', status: 'passed', checks: ['fixture-check'], screenshots: [{ file: 'frame.png', sha256: 'c'.repeat(64), conditions: { width: 390, height: 960, theme: 'light', density: 'comfortable', font: 'pinned-font', motion: 'reduce', locale: 'en-US', scale: 1 } }] }] }
+    runs: [{ browser: 'chromium', version: 'fixture-version', status: 'passed', checks: ['fixture-check'], screenshots: [{ file: 'frame.png', sha256: 'c'.repeat(64), capture: { width: 390, height: 3613, scrollWidth: 390, scrollHeight: 3613 }, conditions: { width: 390, height: 960, theme: 'light', density: 'comfortable', font: 'pinned-font', motion: 'reduce', locale: 'en-US', scale: 1 } }] }] }
+  const truncated = structuredClone(proof); truncated.runs[0].screenshots[0].capture.height = 3472
+  assert.equal(comparePresentationProofs(truncated, truncated).status, 'incomparable')
+  assert.equal(comparePresentationProofs({ ...proof, schema: 'atelier.presentation-browser-proof/v1' }, proof).status, 'incomparable')
   assert.equal(comparePresentationProofs(null, proof).status, 'incomparable')
   assert.equal(comparePresentationProofs(proof, { ...proof, status: 'failed' }).status, 'incomparable')
   assert.equal(comparePresentationProofs(proof, { ...proof, environment: { font: 'other-font' } }).status, 'incomparable')

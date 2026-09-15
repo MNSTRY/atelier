@@ -22,7 +22,7 @@ const sourceDigest = createHash('sha256').update(sources.sort().map(file => file
 const runnerFiles = ['scripts/prove-presentation-browser.mjs', 'scripts/presentation-native-fixture.mjs', 'package-lock.json']
 const runnerDigest = createHash('sha256').update(runnerFiles.map(file => file + '\0' + fs.readFileSync(path.join(root, file))).join('\0')).digest('hex')
 const nativeBundle = await build({ entryPoints: [path.join(root, 'scripts/presentation-native-fixture.mjs')], bundle: true, format: 'iife', platform: 'browser', write: false, logLevel: 'silent' })
-const receipt = { schema: 'atelier.presentation-browser-proof/v1', sourceHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), sourceDigest, runnerDigest,
+const receipt = { schema: 'atelier.presentation-browser-proof/v2', sourceHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), sourceDigest, runnerDigest,
   fixtureDigest: createHash('sha256').update(JSON.stringify(fixture)).digest('hex'), environment: { platform: os.platform(), release: os.release(), architecture: os.arch(), locale: 'en-US', timezone: 'UTC', scale: 1, font: 'system sans-serif', motion: 'reduce', viewports: [320, 390, 768, 1024, 1440], themes: ['light', 'dark'], densities: ['comfortable', 'compact'] }, scope: 'synthetic-local-browser', nativeDeviceAccepted: false, adopterAccepted: false, visualBaselineAccepted: false, runs: [] }
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Presentation proof</title></head><body><script type="module">
 import {renderPresentation,renderReadOnlyDocument} from "/src/ui/presentation/web.mjs";
@@ -70,6 +70,15 @@ try {
       for (const width of [320, 390, 768, 1024, 1440]) for (const theme of ['light', 'dark']) for (const density of ['comfortable', 'compact']) {
         await page.setViewportSize({ width, height: 960 })
         await page.evaluate(model => window.mount(model), { ...fixture, theme, density })
+        // Offscreen lazy images must resolve before full-page geometry is measured.
+        await page.evaluate(async () => {
+          const images = [...document.images];
+          images.forEach(image => { image.loading = 'eager' });
+          await Promise.all(images.map(image => image.decode()));
+          if (images.some(image => !image.complete || !image.naturalWidth)) throw new Error('Incomplete fixture image');
+          await document.fonts.ready;
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+        })
         const metrics = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           targets: [...document.querySelectorAll('button,input,textarea,.ap-link')].filter(e => e.getClientRects().length).map(e => ({ label: e.getAttribute('aria-label') || e.textContent, width: e.getBoundingClientRect().width, height: e.getBoundingClientRect().height })),
           paneRows: [...document.querySelectorAll('[data-ap-pane]')].map(e => e.getBoundingClientRect().top),
@@ -81,8 +90,15 @@ try {
         run.checks.push(`layout:${width}:${theme}:${density}`)
         if ([390, 1440].includes(width) && density === 'comfortable') {
           const filename = `${name}-${width}-${theme}.png`
-          await page.screenshot({ path: path.join(output, filename), fullPage: true, animations: 'disabled' })
-          run.screenshots.push({ file: filename, sha256: createHash('sha256').update(fs.readFileSync(path.join(output, filename))).digest('hex'), conditions: { width, height: 960, theme, density, motion: 'reduce', font: 'system sans-serif', locale: 'en-US', scale: 1 } })
+          const geometry = () => page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }))
+          const beforeCapture = await geometry()
+          const png = await page.screenshot({ path: path.join(output, filename), fullPage: true, animations: 'disabled' })
+          const afterCapture = await geometry()
+          assert.deepEqual(afterCapture, beforeCapture, 'Document geometry changed during capture')
+          const capture = { width: png.readUInt32BE(16), height: png.readUInt32BE(20), scrollWidth: afterCapture.width, scrollHeight: afterCapture.height }
+          assert.equal(capture.width, capture.scrollWidth, 'Captured PNG width differs from document')
+          assert.equal(capture.height, capture.scrollHeight, 'Captured PNG height differs from document')
+          run.screenshots.push({ file: filename, sha256: createHash('sha256').update(png).digest('hex'), capture, conditions: { width, height: 960, theme, density, motion: 'reduce', font: 'system sans-serif', locale: 'en-US', scale: 1 } })
         }
       }
       await page.setViewportSize({ width: 1440, height: 960 })
@@ -226,6 +242,34 @@ try {
       await page.evaluate(() => { document.body.innerHTML = '<div id="native"></div>' })
       await page.addScriptTag({ content: nativeBundle.outputFiles[0].text })
       assert.equal(await page.evaluate(() => window.nativeReactVersion), '19.1.0')
+      // Equivalent parent rerenders commonly create new inline callbacks while
+      // a host-controlled confirmation dialog is open. That is not revocation.
+      await page.evaluate(model => {
+        window.nativeRequests = [];
+        window.nativeMount({ model, onRequest: r => window.nativeRequests.push(r), confirm: () => new Promise(resolve => window.confirmNative = resolve) })
+      }, fixture)
+      await page.getByRole('button', { name: 'Request publication', exact: true }).click()
+      await page.evaluate(model => {
+        window.nativeMount({ model, onRequest: r => window.nativeRequests.push(r), confirm: async () => true });
+        window.confirmNative(true)
+      }, fixture)
+      await page.evaluate(() => Promise.resolve())
+      assert.equal(await page.evaluate(() => window.nativeRequests.length), 1, 'equivalent rerender must preserve confirmation')
+      assert.equal(await page.evaluate(() => window.nativeRequests[0].presentationConfirmed), true)
+      await page.evaluate(() => window.nativeUnmount())
+      await page.evaluate(model => {
+        window.nativeRequests = [];
+        window.nativeMount({ model, onRequest: r => { window.nativeRequests.push(r); return new Promise((_, reject) => window.rejectNative = reject) } })
+      }, fixture)
+      await page.getByRole('textbox', { name: 'Draft text', exact: true }).fill('Host-applied draft')
+      await page.evaluate(model => {
+        model.nodes.find(n => n.type === 'editor').value = 'Host-applied draft';
+        window.nativeMount({ model, onRequest: r => window.nativeRequests.push(r) });
+        window.rejectNative(new Error('fixture delivery refusal'))
+      }, fixture)
+      await page.getByText('Request delivery failed. Host state has not been confirmed.', { exact: true }).waitFor()
+      await page.evaluate(() => window.nativeUnmount())
+      run.checks.push('real-react-native-inline-callback-confirmation-and-post-update-delivery-failure')
       await page.evaluate(model => {
         window.nativeRequests = [];
         window.nativeMount({ model, onRequest: r => window.nativeRequests.push(r), confirm: () => new Promise(resolve => window.confirmNative = resolve) })
