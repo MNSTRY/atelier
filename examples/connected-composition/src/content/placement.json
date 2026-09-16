@@ -1,0 +1,9 @@
+{
+  "schema": "atelier-component-placement/proposal-v1",
+  "placementId": "sample.collection.1",
+  "componentId": "sample.collection",
+  "componentVersion": "1.0.0",
+  "slotRef": "page.main",
+  "props": { "heading": "Workshop notes", "limit": 5 },
+  "dataBindings": [{ "contractRef": "sample.collection.read", "resourceRef": "sample.collection.notes" }]
+}
