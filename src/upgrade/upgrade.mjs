@@ -24,6 +24,8 @@ import {
 import { bundledMnstryReadinessPackV1 } from '../readiness-protocols/bundled-pack.mjs'
 import { loadExtensionPacks } from '../extension-packs/loader.mjs'
 import { inspectPackageProvenance, legacyPackageSource } from './provenance.mjs'
+import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun } from './transaction.mjs'
+export { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun }
 
 export const ATELIER_LOCK_SCHEMA = 'mnstry.atelier-lock@v1'
 export const ATELIER_MIGRATION_SCHEMA = 'mnstry.atelier-migration@v1'
@@ -162,7 +164,7 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
   }
 }
 
-export function writeAtelierLock({ project, templateId = 'existing-workspace' } = {}) {
+export function writeAtelierLock({ project, templateId } = {}) {
   const lockPath = lockPathForProject(project)
   // Packs load in throwing mode on purpose: a broken extension pack cannot be
   // locked. Lock verification is disabled for this one load so re-pinning is
@@ -170,8 +172,18 @@ export function writeAtelierLock({ project, templateId = 'existing-workspace' } 
   // moved or set aside, so it exists at every observable point, and writeJson
   // replaces it atomically (temp file + renameSync). A load failure throws
   // before any write and leaves the previous lock untouched.
+  const previous = readOptionalJson(lockPath)
+  if (previous) {
+    const errors = validateJsonSchema(lockSchema, previous)
+    if (errors.length) throw new Error(`cannot preserve invalid lock history: ${errors.join('; ')}`)
+  }
   const { packs } = loadExtensionPacks(project, { verifyLock: false })
-  const lock = buildAtelierLock({ project, templateId, packs })
+  const lock = buildAtelierLock({ project, templateId: templateId || previous?.template?.id || 'existing-workspace', packs })
+  if (previous) {
+    lock.appliedMigrations = previous.appliedMigrations
+    lock.lastSuccessfulUpgrade = previous.lastSuccessfulUpgrade
+    lock.template = { ...previous.template, ...(templateId ? { id: templateId } : {}) }
+  }
   writeJson(lockPath, lock)
   return lock
 }
@@ -648,7 +660,7 @@ export function runLockCommand(argv = process.argv.slice(2)) {
   }
   const project = commandProject({ argv })
   if (subcommand === 'write') {
-    const lock = writeAtelierLock({ project, templateId: firstString(args.template, args['template-id'], project.config?.template?.id) || 'existing-workspace' })
+    const lock = writeAtelierLock({ project, templateId: firstString(args.template, args['template-id'], project.config?.template?.id) || undefined })
     console.log(JSON.stringify({ ok: true, path: lockPathForProject(project), lock }, null, 2))
     process.exitCode = 0
     return
@@ -670,6 +682,26 @@ export function runLockCommand(argv = process.argv.slice(2)) {
 export function runUpgradeCommand(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
   const project = commandProject({ argv })
+  if (['plan', 'apply', 'status', 'recover'].includes(args._[0])) {
+    try {
+      let result
+      if (args._[0] === 'plan') {
+        if (args.save !== true) throw new Error('exact planning requires --save')
+        result = prepareUpgrade({ project })
+      } else if (args._[0] === 'apply') {
+        if (!firstString(args.plan)) throw new Error('--plan is required')
+        result = applySavedUpgrade({ project, planFile: args.plan, confirm: args.confirm })
+      } else if (args._[0] === 'status') {
+        result = upgradeOperationStatus({ project, operationId: args.operation })
+      } else {
+        if (args['dry-run'] !== true) throw new Error('recovery supports --dry-run only; mutation requires a separately reviewed recovery plan')
+        result = recoverUpgradeDryRun({ project, operationId: args.operation })
+      }
+      console.log(JSON.stringify(result, null, 2))
+      process.exitCode = result.ok === false ? 1 : 0
+    } catch (error) { console.error(error.message); process.exitCode = 1 }
+    return
+  }
   const confirmBreaking = asArray(args['confirm-breaking']).concat(firstString(args['confirm-breaking']) ? [String(args['confirm-breaking'])] : [])
   const allowDirtyGenerated = Boolean(args['allow-dirty-generated'])
   if (args.check) {

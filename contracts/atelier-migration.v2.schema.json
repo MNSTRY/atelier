@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-migration.v2.schema.json",
+  "$comment": "contract revision 2.0.0",
+  "title": "mnstry.atelier-migration@v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "executorDigest",
+    "readScope",
+    "allowedWrites",
+    "sideEffects",
+    "postChecks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-migration@v2"
+    },
+    "id": {
+      "const": "local-lock-projections@1"
+    },
+    "executorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "readScope": {
+      "const": "whole-enrolled-repository"
+    },
+    "allowedWrites": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "sideEffects": {
+      "const": [
+        "git-index",
+        "git-commit"
+      ]
+    },
+    "postChecks": {
+      "const": [
+        "exact-inventory",
+        "lock-schema",
+        "exact-index",
+        "commit-parent-tree-message"
+      ]
+    },
+    "ext": {
+      "type": "object",
+      "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^2\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

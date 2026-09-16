@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-upgrade-plan.v2.schema.json",
+  "$comment": "contract revision 2.0.0",
+  "title": "mnstry.atelier-upgrade-plan@v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "digest",
+    "operation",
+    "workspace",
+    "repositoryId",
+    "configPath",
+    "baseHead",
+    "baseTree",
+    "branch",
+    "createdAt",
+    "expiresAt",
+    "policy",
+    "policyDigest",
+    "executorDigest",
+    "gitDigest",
+    "gitConfigDigest",
+    "hooksDigest",
+    "hooksPath",
+    "readSet",
+    "migration",
+    "writes",
+    "releaseEvidence",
+    "dependencyInstallation",
+    "mode",
+    "recoveryCoverage",
+    "message",
+    "gitAuxDigest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-upgrade-plan@v2"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "operation": {
+      "const": "prepare-local-candidate"
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repositoryId": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "configPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baseHead": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "baseTree": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "policy": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "https://mnstry.ai/schemas/atelier/atelier-adoption-policy.v1.schema.json",
+      "$comment": "contract revision 1.0.0",
+      "title": "mnstry.atelier-adoption-policy@v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "enabled",
+        "mode",
+        "maxAgeSeconds",
+        "recoveryCoverage",
+        "allowedEffects"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-adoption-policy@v1"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "const": "manual-exact-plan"
+        },
+        "maxAgeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "recoveryCoverage": {
+          "const": "local-only"
+        },
+        "allowedEffects": {
+          "const": [
+            "lock-and-projections",
+            "git-commit"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "policyDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "executorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "gitDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "gitConfigDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "hooksDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "hooksPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "readSet": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "state"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "digest",
+                  "mode"
+                ],
+                "properties": {
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "mode": {
+                    "enum": [
+                      "100644",
+                      "100755"
+                    ]
+                  },
+                  "ext": {
+                    "type": "object",
+                    "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+                  }
+                }
+              }
+            ]
+          },
+          "ext": {
+            "type": "object",
+            "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+          }
+        }
+      }
+    },
+    "migration": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "https://mnstry.ai/schemas/atelier/atelier-migration.v2.schema.json",
+      "$comment": "contract revision 2.0.0",
+      "title": "mnstry.atelier-migration@v2",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "executorDigest",
+        "readScope",
+        "allowedWrites",
+        "sideEffects",
+        "postChecks"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-migration@v2"
+        },
+        "id": {
+          "const": "local-lock-projections@1"
+        },
+        "executorDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "readScope": {
+          "const": "whole-enrolled-repository"
+        },
+        "allowedWrites": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sideEffects": {
+          "const": [
+            "git-index",
+            "git-commit"
+          ]
+        },
+        "postChecks": {
+          "const": [
+            "exact-inventory",
+            "lock-schema",
+            "exact-index",
+            "commit-parent-tree-message"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^2\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "writes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "owner",
+          "action",
+          "before",
+          "after",
+          "content"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "enum": [
+              "lock",
+              "generated"
+            ]
+          },
+          "action": {
+            "enum": [
+              "create",
+              "update"
+            ]
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "digest",
+                  "mode"
+                ],
+                "properties": {
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "mode": {
+                    "enum": [
+                      "100644",
+                      "100755"
+                    ]
+                  },
+                  "ext": {
+                    "type": "object",
+                    "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+                  }
+                }
+              }
+            ]
+          },
+          "after": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "digest",
+                  "mode"
+                ],
+                "properties": {
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "mode": {
+                    "enum": [
+                      "100644",
+                      "100755"
+                    ]
+                  },
+                  "ext": {
+                    "type": "object",
+                    "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+                  }
+                }
+              }
+            ]
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 16777216
+          },
+          "ext": {
+            "type": "object",
+            "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+          }
+        }
+      }
+    },
+    "releaseEvidence": {
+      "type": "null"
+    },
+    "dependencyInstallation": {
+      "const": "excluded"
+    },
+    "mode": {
+      "const": "manual-exact-plan"
+    },
+    "recoveryCoverage": {
+      "const": "local-only"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ext": {
+      "type": "object",
+      "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^2\\.[0-9]+\\.[0-9]+$"
+    },
+    "gitAuxDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

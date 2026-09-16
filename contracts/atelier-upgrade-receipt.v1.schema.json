@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-upgrade-receipt.v1.schema.json",
+  "$comment": "contract revision 1.0.0",
+  "title": "mnstry.atelier-upgrade-receipt@v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "operationId",
+    "planDigest",
+    "sequence",
+    "previous",
+    "time",
+    "phase",
+    "step",
+    "expected",
+    "observed",
+    "confirmation"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-upgrade-receipt@v1"
+    },
+    "kind": {
+      "const": "private-event"
+    },
+    "operationId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "planDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "previous": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "phase": {
+      "enum": [
+        "accepted",
+        "write-intent",
+        "write-complete",
+        "stage-intent",
+        "commit-intent",
+        "completed",
+        "commit-refused",
+        "recovery-required"
+      ]
+    },
+    "step": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "confirmation": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "ext": {
+      "type": "object",
+      "description": "Namespaced annotations only. Unknown members MUST be ignored and convey no authority."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

@@ -219,3 +219,12 @@ Review snapshots and decisions are separate from historical v1 locks. See
 [pack lifecycle](extension-pack-lifecycle.md) and
 [inspection portability](review-portability.md) before replacing packs or moving
 state. Updating a package or a digest never silently renews old approval.
+
+## Exact local candidate transactions
+
+For the bounded, manually confirmed single-repository workflow, see
+[Local exact-plan upgrades](exact-upgrades.md). The `upgrade plan --save`,
+`upgrade apply --plan ... --confirm ...`, `upgrade status`, and recovery dry-run
+commands are separate from the legacy flag-based migration workflow above.
+They preserve history and honor existing commit hooks; they do not install a
+new package or activate a runtime.

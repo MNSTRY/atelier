@@ -64,7 +64,11 @@
     "./fixtures/atelier-export/sample-studio-offer.v1.json": "./fixtures/atelier-export/sample-studio-offer.v1.json",
     "./vault": "./src/vault/index.mjs",
     "./contracts/atelier-vault-publication.v1.schema.json": "./contracts/atelier-vault-publication.v1.schema.json",
-    "./vault/source": "./src/vault/source.mjs"
+    "./vault/source": "./src/vault/source.mjs",
+    "./contracts/atelier-adoption-policy.v1.schema.json": "./contracts/atelier-adoption-policy.v1.schema.json",
+    "./contracts/atelier-migration.v2.schema.json": "./contracts/atelier-migration.v2.schema.json",
+    "./contracts/atelier-upgrade-plan.v2.schema.json": "./contracts/atelier-upgrade-plan.v2.schema.json",
+    "./contracts/atelier-upgrade-receipt.v1.schema.json": "./contracts/atelier-upgrade-receipt.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",
