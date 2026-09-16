@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 function escapes(root, candidate) {
   const relative = path.relative(root, candidate)
@@ -79,12 +80,20 @@ export function readRegularTextNoFollow(file) {
   }
 }
 
+export function syncPrivateDirectory(directory) {
+  let fd;
+  try { fd = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(fd); }
+  catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EINVAL', 'EISDIR'].includes(error.code)) throw error;
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
 export function atomicReplacePrivateText(file, text, mode = 0o600) {
   const existing = lstatIfPresent(file)
   if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
     throw new Error('state leaf is not a regular file')
   }
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  const tmp = `${file}.${randomUUID()}.tmp`
   let descriptor
   try {
     descriptor = openRegularFileNoFollow(
@@ -98,6 +107,7 @@ export function atomicReplacePrivateText(file, text, mode = 0o600) {
     fs.closeSync(descriptor)
     descriptor = null
     fs.renameSync(tmp, file)
+    syncPrivateDirectory(path.dirname(file))
   } catch (error) {
     if (descriptor != null) fs.closeSync(descriptor)
     try {

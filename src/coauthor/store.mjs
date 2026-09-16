@@ -1,9 +1,10 @@
+import { withPrivateLock, publishPrivateFile } from '../project/durable-state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { canonicalize } from '../attestation/jcs.mjs';
 import { createCollaborationEventLedger } from '../collaboration/event-ledger.mjs';
-import { ensureContainedPrivateDirectory, openRegularFileNoFollow, atomicReplacePrivateText } from '../project/private-state.mjs';
+import { ensureContainedPrivateDirectory, openRegularFileNoFollow } from '../project/private-state.mjs';
 import { createSession, transition, contentDigest } from './session.mjs';
 import { validateJsonSchema } from '../export/atelier-export-contract.mjs';
 
@@ -54,9 +55,7 @@ export function createCoauthorStore({ workspaceRoot = process.cwd() } = {}) {
   function locked(operation) {
     privatePlacement();
     const lockPath = path.join(directory(), 'operation.lock');
-    const fd = openRegularFileNoFollow(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
-    try { return operation(); }
-    finally { fs.closeSync(fd); fs.unlinkSync(lockPath); }
+    return withPrivateLock(lockPath, operation);
   }
   function load(id) {
     const result = ledger().eventsFor(aggregate(id));
@@ -118,7 +117,7 @@ export function createCoauthorStore({ workspaceRoot = process.cwd() } = {}) {
         if (readText(target) !== bytes) throw new Error('saved draft differs from pending value');
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
-        atomicReplacePrivateText(target, bytes);
+        publishPrivateFile(target, bytes);
       }
       if (readText(target) !== bytes) throw new Error('saved draft readback mismatch');
       verifySources(current.config);
