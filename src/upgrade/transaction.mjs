@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import { resolveGitExecutable, runGit, parseNullConfig } from '../runtime/git-adapter.mjs'
 import { resolveProjectConfig } from '../project/config.mjs'
 import { validateJsonSchema } from '../export/atelier-export-contract.mjs'
@@ -63,7 +64,8 @@ function gitAuxiliary(root) {
   const result = git(root, ['config', '--path', '--get', 'core.excludesFile'], { allowFailure: true })
   if (!result.ok && result.status !== 1) throw new Error('Git ignore configuration unavailable')
   const globalIgnore = result.ok ? path.resolve(root, result.stdout.trim()) : path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'git', 'ignore')
-  const files = [text(root, ['rev-parse', '--git-path', 'info/exclude']), text(root, ['rev-parse', '--git-path', 'info/attributes']), globalIgnore].map((file) => path.resolve(root, file))
+  const globalAttributes = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'git', 'attributes')
+  const files = [text(root, ['rev-parse', '--git-path', 'info/exclude']), text(root, ['rev-parse', '--git-path', 'info/attributes']), globalIgnore, globalAttributes].map((file) => path.resolve(root, file))
   return files.map((file) => ({ path: file, state: fileState(file) }))
 }
 function gitEvidence(root) {
@@ -73,8 +75,12 @@ function gitEvidence(root) {
   const config = parseNullConfig(git(root, ['config', '--null', '--list']).stdout)
   if (config.some(({ key, value }) => /^core\.attributesfile$|^filter\.|^extensions\.(partialclone|worktreeconfig)$|^remote\..*\.promisor$/.test(key) || (/^core\.(sparsecheckout|autocrlf|fsmonitor)$/.test(key) && !/^(false|no|off|0)$/.test(value)))) throw new Error('unsupported Git transformation or checkout configuration')
   if (fs.existsSync(hooksPath) && (fs.lstatSync(hooksPath).isSymbolicLink() || fs.realpathSync(hooksPath) !== hooksPath)) throw new Error('redirected hook directory refused')
+  const auxiliary = gitAuxiliary(root)
+  for (const entry of [auxiliary[1], auxiliary[3]]) {
+    if (entry.state && readBytes(entry.path).length) throw new Error('Git attribute transformations unsupported in slice 1')
+  }
   return {
-    gitAuxDigest: hashObject(gitAuxiliary(root)),
+    gitAuxDigest: hashObject(auxiliary),
     gitDigest: hashBytes(readBytes(resolveGitExecutable(), { allowLinks: true })),
     gitConfigDigest: hashBytes(git(root, ['config', '--null', '--list', '--show-origin']).stdout),
     hooksPath,
@@ -84,11 +90,31 @@ function gitEvidence(root) {
 function executorDigest() {
   const inputs = ['src', 'contracts', 'bin'].map((dir) => ({ dir, files: inventory(path.join(packageRoot, dir)) }))
   for (const file of ['package.json', 'package-lock.json']) inputs.push({ file, state: fileState(path.join(packageRoot, file)) })
-  // Bind actual imported dependency bytes, not only declared package versions.
-  for (const name of ['ajv', 'ajv-formats', 'fast-uri', 'fast-deep-equal', 'json-schema-traverse', 'require-from-string']) {
-    const dir = fs.realpathSync(path.join(packageRoot, 'node_modules', name))
-    inputs.push({ dependency: name, files: inventory(dir, { allowLinks: true }) })
+  // Resolve from the actual importing module, then follow each package's own
+  // dependency resolution. npm may hoist a dependency; nested copies must be
+  // bound to the importer that actually selects them, not a guessed layout.
+  const roots = new Map()
+  const edges = []
+  function dependency(specifier, importer, via) {
+    const entry = fs.realpathSync(createRequire(importer).resolve(specifier))
+    let dir = path.dirname(entry)
+    while (!fs.existsSync(path.join(dir, 'package.json'))) {
+      const parent = path.dirname(dir)
+      if (parent === dir) throw new Error('dependency package identity unavailable')
+      dir = parent
+    }
+    const metadata = readJson(path.join(dir, 'package.json'))
+    const id = hashObject({ name: metadata.name, version: metadata.version, files: inventory(dir, { exclude: ['node_modules'], allowLinks: true }) })
+    edges.push({ via, specifier, id })
+    if (roots.has(dir)) return
+    if (roots.size >= 64) throw new Error('executor dependency closure exceeds bounds')
+    roots.set(dir, id)
+    for (const child of Object.keys(metadata.dependencies ?? {}).sort()) dependency(child, path.join(dir, 'package.json'), id)
   }
+  const importer = fileURLToPath(new URL('../export/atelier-export-contract.mjs', import.meta.url))
+  dependency('ajv/dist/2020.js', importer, 'schema-validator')
+  dependency('ajv-formats', importer, 'schema-validator')
+  inputs.push({ dependencies: edges })
   return hashObject({ inputs, node: process.version })
 }
 function identity(root) {
@@ -99,7 +125,7 @@ function clean(root) {
   const flags = git(root, ['ls-files', '-v', '-z']).stdout.split('\0').filter(Boolean)
   if (flags.some((s) => !s.startsWith('H '))) throw new Error('special index flags unsupported')
   for (const name of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply']) {
-    if (fs.existsSync(text(root, ['rev-parse', '--git-path', name]))) throw new Error('Git operation already in progress')
+    if (fs.existsSync(path.resolve(root, text(root, ['rev-parse', '--git-path', name])))) throw new Error('Git operation already in progress')
   }
 }
 function lease(root, body) {
@@ -192,7 +218,11 @@ function render(project, readSet, createdAt) {
 }
 
 function planDigest(plan) { const { digest, ...authority } = plan; return hashObject(authority) }
+function requireDurableHost() {
+  if (!['linux', 'darwin'].includes(process.platform)) throw new Error('exact upgrade transactions require a qualified Linux or macOS filesystem; this host is unsupported')
+}
 export function prepareUpgrade({ project, now = new Date() }) {
+  requireDurableHost()
   project = canonicalProject(project)
   const root = checkProject(project)
   return lease(root, () => {
@@ -308,6 +338,7 @@ function verifyCommit(root, plan, commit, tree) {
   if (!/^[a-f0-9]{40,64}$/.test(commit) || text(root, ['show', '-s', '--format=%P', commit]) !== plan.baseHead || text(root, ['show', '-s', '--format=%T', commit]) !== tree || text(root, ['show', '-s', '--format=%B', commit]) !== plan.message) throw new Error('commit parent/tree/message mismatch')
 }
 export function applySavedUpgrade({ project, planFile, confirm }) {
+  requireDurableHost()
   project = canonicalProject(project)
   const root = checkProject(project)
   return lease(root, () => {

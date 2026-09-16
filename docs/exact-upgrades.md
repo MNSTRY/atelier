@@ -5,6 +5,11 @@ local candidate from an already installed Atelier executor. They preserve an
 adopter's source branch and configuration, show the exact changes, and retain
 local evidence of what was selected and what Git actually committed.
 
+Execution in this first slice requires Linux or macOS with working directory
+fsync. Other hosts, including native Windows, refuse before transaction state
+creation; existing Atelier commands remain available. The platform refusal is
+tested separately from the POSIX execution scenarios.
+
 This first slice supports **one configuration repository in a linked Git
 worktree**, with its project config and workspace at the root. Its single
 managed repo must point to `.`. It refreshes the lock, graph, HTML projection,

@@ -16,6 +16,7 @@ beforeEach((t) => {
   delete process.env.MNSTRY_ATELIER_ACTOR
   t.after(() => { for (const key of keys) { if (prior[key] === undefined) delete process.env[key]; else process.env[key] = prior[key] } })
 })
+const transactionTest = (name, fn) => test(name, { skip: process.platform === 'win32' ? 'Exact transaction execution requires a qualified POSIX directory-durability path; refusal is tested separately.' : false }, fn)
 const git = (root, args) => {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
@@ -47,7 +48,52 @@ function fixture(t, hook) {
 }
 const apply = (project, prepared) => applySavedUpgrade({ project, planFile: prepared.savedPlan, confirm: prepared.plan.digest })
 
-test('exact plan prepares a customized candidate through existing hooks, retaining source branch', (t) => {
+transactionTest('in-progress Git operations refuse preparation and application from outside the worktree', (t) => {
+  const f = fixture(t)
+  assert.notEqual(fs.realpathSync(process.cwd()), fs.realpathSync(f.root))
+  const prepared = prepareUpgrade(f)
+  const before = git(f.root, ['rev-parse', 'HEAD'])
+  for (const name of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply']) {
+    const marker = path.resolve(f.root, git(f.root, ['rev-parse', '--git-path', name]))
+    if (name.startsWith('rebase-')) fs.mkdirSync(marker)
+    else fs.writeFileSync(marker, `${before}\n`)
+    assert.throws(() => prepareUpgrade(f), /Git operation already in progress/)
+    assert.throws(() => apply(f.project, prepared), /Git operation already in progress/)
+    assert.equal(git(f.root, ['rev-parse', 'HEAD']), before)
+    assert.equal(fs.existsSync(path.join(f.root, 'atelier.lock.json')), false)
+    assert.equal(fs.existsSync(marker), true)
+    fs.rmSync(marker, { recursive: true })
+  }
+})
+
+transactionTest('repository and default global attributes refuse before saved plans or generated writes', (t) => {
+  for (const location of ['repository', 'global']) {
+    const f = fixture(t)
+    const originalXdg = process.env.XDG_CONFIG_HOME
+    const xdg = path.join(path.dirname(f.root), 'xdg')
+    process.env.XDG_CONFIG_HOME = xdg
+    try {
+      const prepared = prepareUpgrade(f)
+      const file = location === 'repository'
+        ? path.resolve(f.root, git(f.root, ['rev-parse', '--git-path', 'info/attributes']))
+        : path.join(xdg, 'git/attributes')
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, '* working-tree-encoding=UTF-16\n')
+      const plans = fs.readdirSync(path.dirname(prepared.savedPlan))
+      assert.throws(() => prepareUpgrade(f), /attribute transformations unsupported/)
+      assert.throws(() => apply(f.project, prepared), /attribute transformations unsupported/)
+      assert.deepEqual(fs.readdirSync(path.dirname(prepared.savedPlan)), plans)
+      assert.equal(fs.existsSync(path.join(f.root, 'atelier.lock.json')), false)
+      assert.equal(fs.existsSync(path.join(f.root, '.atelier-local/upgrades/operations')), false)
+      assert.equal(git(f.root, ['diff', '--cached', '--name-only']), '')
+    } finally {
+      if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = originalXdg
+    }
+  }
+})
+
+transactionTest('exact plan prepares a customized candidate through existing hooks, retaining source branch', (t) => {
   const f = fixture(t, 'exit 0')
   const sourceHead = git(f.source, ['rev-parse', 'HEAD'])
   const p = prepareUpgrade(f)
@@ -65,7 +111,7 @@ test('exact plan prepares a customized candidate through existing hooks, retaini
   assert.throws(() => apply(f.project, p), /repository changed|requires a clean/)
 })
 
-test('wrong confirmation, stale source, expired plans, hook changes and revoked policy refuse before writes', (t) => {
+transactionTest('wrong confirmation, stale source, expired plans, hook changes and revoked policy refuse before writes', (t) => {
   for (const type of ['confirmation', 'source', 'expiry', 'hook', 'policy']) {
     const f = fixture(t)
     const p = prepareUpgrade({ ...f, ...(type === 'expiry' ? { now: new Date(Date.now() - 86400001) } : {}) })
@@ -77,7 +123,7 @@ test('wrong confirmation, stale source, expired plans, hook changes and revoked 
   }
 })
 
-test('rejecting hook retains staged candidate, history and recoverable backups', (t) => {
+transactionTest('rejecting hook retains staged candidate, history and recoverable backups', (t) => {
   const f = fixture(t)
   const lock = writeAtelierLock({ project: f.project, templateId: 'example-template' })
   lock.lastSuccessfulUpgrade = '2025-01-01T00:00:00.000Z'
@@ -100,7 +146,7 @@ test('rejecting hook retains staged candidate, history and recoverable backups',
   assert.equal(recoverUpgradeDryRun({ ...f, operationId: result.operationId }).entries.find((e) => e.path.endsWith('index.html')).state, 'conflict')
 })
 
-test('index-modifying hook and HEAD-changing hook never yield completed receipts', (t) => {
+transactionTest('index-modifying hook and HEAD-changing hook never yield completed receipts', (t) => {
   for (const hook of ['printf "Changed by hook\\n" >> seed.md\ngit add seed.md', 'git update-ref HEAD "$(git commit-tree HEAD^{tree} -p HEAD -m intermediate)"\nexit 1']) {
     const f = fixture(t, hook)
     const p = prepareUpgrade(f)
@@ -110,7 +156,7 @@ test('index-modifying hook and HEAD-changing hook never yield completed receipts
   }
 })
 
-test('symlink outputs, private-state tracking, duplicate or modified plan contents refuse', (t) => {
+transactionTest('symlink outputs, private-state tracking, duplicate or modified plan contents refuse', (t) => {
   const f = fixture(t)
   const p = prepareUpgrade(f)
   const changed = JSON.parse(fs.readFileSync(p.savedPlan)); changed.message = 'unreviewed'
@@ -124,7 +170,7 @@ test('symlink outputs, private-state tracking, duplicate or modified plan conten
   assert.throws(() => apply(f.project, p), /ignored and untracked/)
 })
 
-test('journal corruption cannot become a successful status', (t) => {
+transactionTest('journal corruption cannot become a successful status', (t) => {
   const f = fixture(t)
   const p = prepareUpgrade(f)
   const r = apply(f.project, p)
@@ -148,7 +194,7 @@ test('legacy lock refresh retains lineage and refuses malformed history', (t) =>
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root, 'atelier.lock.json'))), old)
 })
 
-test('v2 contracts refuse unknown authority and v1 inputs', (t) => {
+transactionTest('v2 contracts refuse unknown authority and v1 inputs', (t) => {
   const f = fixture(t)
   const p = prepareUpgrade(f).plan
   assert.throws(() => validateUpgradeDocument('plan', { ...p, install: true }), /additional propert/)
@@ -164,7 +210,7 @@ for (const [kind, directory] of [['policy', 'adoption-policy'], ['migration', 'm
   })
 }
 
-test('interruption after commit leaves a nonterminal journal and a held lease', (t) => {
+transactionTest('interruption after commit leaves a nonterminal journal and a held lease', (t) => {
   const f = fixture(t)
   const p = prepareUpgrade(f)
   const before = git(f.root, ['rev-parse', 'HEAD'])
@@ -192,7 +238,7 @@ test('interruption after commit leaves a nonterminal journal and a held lease', 
   assert.throws(() => apply(f.project, p), /EEXIST/)
 })
 
-test('another writer and backward-clock plan both refuse', (t) => {
+transactionTest('another writer and backward-clock plan both refuse', (t) => {
   const f = fixture(t)
   const p = prepareUpgrade({ ...f, now: new Date(Date.now() + 60000) })
   assert.throws(() => apply(f.project, p), /clock moved backward/)
@@ -200,7 +246,7 @@ test('another writer and backward-clock plan both refuse', (t) => {
   assert.throws(() => prepareUpgrade(f), /EEXIST/)
 })
 
-test('changed auxiliary Git inputs and attempted boundary adoption refuse', (t) => {
+transactionTest('changed auxiliary Git inputs and attempted boundary adoption refuse', (t) => {
   for (const kind of ['ignore', 'boundary']) {
     const f = fixture(t)
     if (kind === 'boundary') {
@@ -219,7 +265,7 @@ test('changed auxiliary Git inputs and attempted boundary adoption refuse', (t) 
   }
 })
 
-test('ignored but tracked authored input remains present in prepared graph', (t) => {
+transactionTest('ignored but tracked authored input remains present in prepared graph', (t) => {
   const f = fixture(t)
   fs.appendFileSync(path.join(f.root, '.gitignore'), 'seed.md\n')
   git(f.root, ['add', '.gitignore']); git(f.root, ['commit', '-m', 'Keep tracked source with ignore rule'])
@@ -228,7 +274,7 @@ test('ignored but tracked authored input remains present in prepared graph', (t)
   assert.ok(graph.nodes.some((node) => node.id === 'workspace:seed'))
 })
 
-test('CLI requires explicit saved-plan arguments and supports exact plan/application', (t) => {
+transactionTest('CLI requires explicit saved-plan arguments and supports exact plan/application', (t) => {
   const f = fixture(t)
   const cli = new URL('../bin/atelier.mjs', import.meta.url).pathname
   const invoke = (...args) => spawnSync(process.execPath, [cli, 'upgrade', ...args, '--project', path.join(f.root, 'atelier.project.json')], { encoding: 'utf8', timeout: 60000 })
@@ -243,4 +289,13 @@ test('CLI requires explicit saved-plan arguments and supports exact plan/applica
   const recovery = invoke('recover', '--operation', operation, '--dry-run')
   assert.equal(recovery.status, 0, recovery.stderr)
   assert.equal(JSON.parse(recovery.stdout).mutation, false)
+})
+
+test('unsupported transaction hosts refuse before inspecting or mutating a workspace', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+  try {
+    Object.defineProperty(process, 'platform', { ...descriptor, value: 'win32' })
+    assert.throws(() => prepareUpgrade({ project: null }), /host is unsupported/)
+    assert.throws(() => applySavedUpgrade({ project: null }), /host is unsupported/)
+  } finally { Object.defineProperty(process, 'platform', descriptor) }
 })
