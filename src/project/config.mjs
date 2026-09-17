@@ -371,8 +371,8 @@ export function resolveProjectConfig({
   return resolved
 }
 
-export function commandProject({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), gitExecutable = 'git' } = {}) {
-  const project = resolveProjectConfig({ argv, env, cwd, gitExecutable })
+export function commandProject({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), gitExecutable = 'git', writeLocalState = true } = {}) {
+  const project = resolveProjectConfig({ argv, env, cwd, gitExecutable, writeLocalState })
   // Fail closed at CLI entry, but only when a real config file was loaded; the
   // defaults/no-file path resolves with an empty config that would spuriously
   // fail document validation.

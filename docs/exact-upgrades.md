@@ -75,6 +75,11 @@ the candidate branch; generating a candidate does not authorize publication.
 
 ## Apply the reviewed bytes
 
+Use `atelier upgrade explain --plan SAVED_PLAN_PATH --format markdown` to read
+the verified plan's effects, expiry and consent limits. The default JSON format
+contains the same report. Explanation is read-only and never grants approval.
+See [guided upgrades](guided-upgrades.md) for the owner-agent workflow.
+
 Use the returned path and digest literally:
 
 ```sh
