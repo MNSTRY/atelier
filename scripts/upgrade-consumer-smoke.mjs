@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { upgradeTestGit } from './upgrade-test-git.mjs'
 
 const git = (root, args) => {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })
@@ -31,6 +32,21 @@ function fixture(consumerRoot) {
 }
 // Runs against the installed tarball, including npm's ordinary hoisted layout.
 export function verifyInstalledUpgrade({ installedRoot, consumerRoot }) {
+  const previous = Object.fromEntries(['HOME', 'XDG_CONFIG_HOME', 'PATH', 'ATELIER_GIT_PATH'].map((key) => [key, process.env[key]]))
+  const environment = fs.mkdtempSync(path.join(consumerRoot, 'upgrade-git-'))
+  try {
+    if (process.platform !== 'win32') Object.assign(process.env, upgradeTestGit(environment).env)
+    verifyUpgrade({ installedRoot, consumerRoot })
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    fs.rmSync(environment, { recursive: true, force: true })
+  }
+}
+
+function verifyUpgrade({ installedRoot, consumerRoot }) {
   const { source, root } = fixture(consumerRoot)
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key) && key !== 'MNSTRY_ATELIER_ACTOR'))
   env.GITHUB_ACTOR = 'author'

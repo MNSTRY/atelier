@@ -9,13 +9,19 @@ import { writeAtelierLock } from '../src/upgrade/upgrade.mjs'
 import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, validateUpgradeDocument } from '../src/upgrade/transaction.mjs'
 import { hashObject } from '../src/upgrade/transaction-files.mjs'
 import { resolveGitExecutable } from '../src/runtime/git-adapter.mjs'
+import { upgradeTestGit } from '../scripts/upgrade-test-git.mjs'
 
 beforeEach((t) => {
-  const keys = ['GITHUB_ACTOR', 'MNSTRY_ATELIER_ACTOR']
+  const keys = ['GITHUB_ACTOR', 'MNSTRY_ATELIER_ACTOR', 'HOME', 'XDG_CONFIG_HOME', 'PATH', 'ATELIER_GIT_PATH']
   const prior = Object.fromEntries(keys.map((k) => [k, process.env[k]]))
+  const environment = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-upgrade-git-'))
+  if (process.platform !== 'win32') Object.assign(process.env, upgradeTestGit(environment).env)
   process.env.GITHUB_ACTOR = 'author'
   delete process.env.MNSTRY_ATELIER_ACTOR
-  t.after(() => { for (const key of keys) { if (prior[key] === undefined) delete process.env[key]; else process.env[key] = prior[key] } })
+  t.after(() => {
+    for (const key of keys) { if (prior[key] === undefined) delete process.env[key]; else process.env[key] = prior[key] }
+    fs.rmSync(environment, { recursive: true, force: true })
+  })
 })
 const transactionTest = (name, fn) => test(name, { skip: process.platform === 'win32' ? 'Exact transaction execution requires a qualified POSIX directory-durability path; refusal is tested separately.' : false }, fn)
 const git = (root, args) => {
@@ -48,6 +54,19 @@ function fixture(t, hook) {
   return { source, root, project }
 }
 const apply = (project, prepared) => applySavedUpgrade({ project, planFile: prepared.savedPlan, confirm: prepared.plan.digest })
+
+transactionTest('configured global filters still refuse in an isolated Git fixture', (t) => {
+  const f = fixture(t)
+  git(f.root, ['config', '--global', 'filter.example.clean', 'cat'])
+  assert.throws(() => prepareUpgrade(f), /unsupported Git transformation/)
+  assert.equal(fs.existsSync(path.join(f.root, '.atelier-local/upgrades/plans')), false)
+  git(f.root, ['config', '--global', '--remove-section', 'filter.example'])
+  const prepared = prepareUpgrade(f)
+  git(f.root, ['config', '--global', 'filter.example.clean', 'cat'])
+  assert.throws(() => apply(f.project, prepared), /unsupported Git transformation/)
+  assert.equal(fs.existsSync(path.join(f.root, 'atelier.lock.json')), false)
+  assert.equal(fs.existsSync(path.join(f.root, '.atelier-local/upgrades/operations')), false)
+})
 
 transactionTest('system attributes refuse preparation and application before generated writes', (t) => {
   const f = fixture(t)
