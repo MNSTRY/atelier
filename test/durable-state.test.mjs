@@ -92,3 +92,60 @@ test('concurrent recoverers cannot both own the next generation', async t => {
   for (const child of children) child.send('go');
   assert.deepEqual((await Promise.all(exited)).sort((a, b) => a - b), [0, 23]);
 });
+
+test('released successor does not resurrect an obsolete reused PID or host', t => {
+  const dir = fixture(t), lock = path.join(dir, 'operation.lock');
+  const module = new URL('../src/project/durable-state.mjs', import.meta.url).href;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { acquirePrivateLock } from ${JSON.stringify(module)};
+    acquirePrivateLock(process.argv[1]); process.exit(74);
+  `, lock]);
+  assert.equal(child.status, 74);
+  acquirePrivateLock(lock)();
+  const first = path.join(`${lock}.owners`, '000000000001.json');
+  const old = JSON.parse(fs.readFileSync(first));
+  // Synthetic PID reuse of an already superseded ticket, then hostname drift.
+  fs.writeFileSync(first, JSON.stringify({ ...old, pid: process.pid }));
+  acquirePrivateLock(lock)();
+  fs.writeFileSync(first, JSON.stringify({ ...old, host: 'f'.repeat(64) }));
+  acquirePrivateLock(lock)();
+  // Completed current ownership also survives host drift without querying PID.
+  const current = path.join(`${lock}.owners`, '000000000004.json');
+  const changed = JSON.stringify({ ...JSON.parse(fs.readFileSync(current)), host: 'f'.repeat(64) });
+  fs.writeFileSync(current, changed); fs.writeFileSync(current.replace('.json', '.released'), changed);
+  acquirePrivateLock(lock)();
+});
+
+test('newest unresolved foreign owner and forged release fail closed with diagnostics', t => {
+  const lock = path.join(fixture(t), 'operation.lock');
+  const release = acquirePrivateLock(lock);
+  const ticket = path.join(`${lock}.owners`, '000000000001.json');
+  const original = fs.readFileSync(ticket, 'utf8');
+  fs.writeFileSync(ticket, JSON.stringify({ ...JSON.parse(original), host: 'f'.repeat(64) }));
+  assert.throws(() => acquirePrivateLock(lock), /host identity differs/);
+  fs.writeFileSync(ticket, original); fs.writeFileSync(ticket.replace('.json', '.released'), '{}');
+  assert.throws(() => acquirePrivateLock(lock), /release identity differs/);
+  fs.unlinkSync(ticket.replace('.json', '.released')); release();
+});
+
+test('explicit metadata exception preserves indexes but never hides symlinks or other names', t => {
+  const dir = fixture(t), current = createVerifiedFileSequence({ directory: dir, ignoreFiles: ['.DS_Store'], initial: () => 0,
+    apply(text, value, index, file) { assert.equal(file, `${index}.json`); return value + JSON.parse(text); } });
+  publishPrivateFile(path.join(dir, '1.json'), '2'); fs.writeFileSync(path.join(dir, '.DS_Store'), 'metadata');
+  assert.equal(current(), 2); publishPrivateFile(path.join(dir, '2.json'), '3'); assert.equal(current(), 5);
+  fs.writeFileSync(path.join(dir, '.unknown'), 'data'); assert.throws(current);
+  fs.unlinkSync(path.join(dir, '.unknown')); fs.unlinkSync(path.join(dir, '.DS_Store'));
+  fs.symlinkSync(path.join(dir, '1.json'), path.join(dir, '.DS_Store')); assert.throws(current, /non-regular/);
+});
+
+test('legacy succession binds exact bytes and refuses a newly created legacy writer', t => {
+  const lock = path.join(fixture(t), 'operation.lock');
+  const dead = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+  fs.writeFileSync(lock, JSON.stringify({ pid: dead.pid }));
+  acquirePrivateLock(lock)();
+  const kill = process.kill;
+  process.kill = (pid, signal) => pid === dead.pid ? true : kill(pid, signal);
+  try { acquirePrivateLock(lock)(); } finally { process.kill = kill; }
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+  assert.throws(() => acquirePrivateLock(lock), /legacy process exists/);
+});
