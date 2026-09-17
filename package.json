@@ -68,7 +68,8 @@
     "./contracts/atelier-adoption-policy.v1.schema.json": "./contracts/atelier-adoption-policy.v1.schema.json",
     "./contracts/atelier-migration.v2.schema.json": "./contracts/atelier-migration.v2.schema.json",
     "./contracts/atelier-upgrade-plan.v2.schema.json": "./contracts/atelier-upgrade-plan.v2.schema.json",
-    "./contracts/atelier-upgrade-receipt.v1.schema.json": "./contracts/atelier-upgrade-receipt.v1.schema.json"
+    "./contracts/atelier-upgrade-receipt.v1.schema.json": "./contracts/atelier-upgrade-receipt.v1.schema.json",
+    "./local-state": "./src/project/durable-state.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

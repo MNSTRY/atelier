@@ -1,3 +1,4 @@
+import { withPrivateLock, publishPrivateFile } from '../project/durable-state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -25,14 +26,7 @@ function read(file) {
   } finally { fs.closeSync(fd); }
 }
 function immutable(file, bytes) {
-  let fd;
-  try {
-    fd = openRegularFileNoFollow(file, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
-    fs.writeFileSync(fd, bytes);
-    fs.fsyncSync(fd);
-  } catch (error) {
-    if (error.code !== 'EEXIST' || !read(file).equals(Buffer.from(bytes))) throw error;
-  } finally { if (fd !== undefined) fs.closeSync(fd); }
+  publishPrivateFile(file, bytes);
   if (!read(file).equals(Buffer.from(bytes))) throw new Error('immutable intake readback mismatch');
 }
 
@@ -54,8 +48,7 @@ export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
   function locked(fn) {
     placement();
     const file = path.join(directory(), 'operation.lock');
-    const fd = openRegularFileNoFollow(file, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
-    try { return fn(); } finally { fs.closeSync(fd); fs.unlinkSync(file); }
+    return withPrivateLock(file, fn);
   }
   function sourceFile(ref) {
     if (typeof ref !== 'string' || !ref || path.isAbsolute(ref) || ref.includes('\\') ||
