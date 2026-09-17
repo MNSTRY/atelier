@@ -64,7 +64,8 @@
     "./fixtures/atelier-export/sample-studio-offer.v1.json": "./fixtures/atelier-export/sample-studio-offer.v1.json",
     "./vault": "./src/vault/index.mjs",
     "./contracts/atelier-vault-publication.v1.schema.json": "./contracts/atelier-vault-publication.v1.schema.json",
-    "./vault/source": "./src/vault/source.mjs"
+    "./vault/source": "./src/vault/source.mjs",
+    "./local-state": "./src/project/durable-state.mjs"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

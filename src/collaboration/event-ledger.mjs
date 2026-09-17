@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { withPrivateLock } from '../project/durable-state.mjs'
 import { canonicalize } from '../attestation/jcs.mjs'
 import {
   atomicReplacePrivateText,
@@ -26,18 +27,13 @@ function validTimestamp(value) {
 }
 
 function secureAppendLine(file, line) {
-  const descriptor = openRegularFileNoFollow(
-    file,
-    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT,
-    0o600,
-  )
+  let previous = '';
   try {
-    fs.writeFileSync(descriptor, line)
-    fs.fsyncSync(descriptor)
-    fs.fchmodSync(descriptor, 0o600)
-  } finally {
-    fs.closeSync(descriptor)
-  }
+    const fd = openRegularFileNoFollow(file);
+    try { previous = fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // The ledger is bounded. Replace its complete validated prefix atomically.
+  atomicReplacePrivateText(file, previous + line);
 }
 
 function eventId(event) {
@@ -215,27 +211,9 @@ export function createCollaborationEventLedger({
   }
 
   function withWriteLock(operation) {
-    let descriptor
-    try {
-      descriptor = fs.openSync(lockPath, 'wx', 0o600)
-      fs.writeFileSync(descriptor, `${process.pid}\n`)
-      fs.fsyncSync(descriptor)
-    } catch (error) {
-      if (descriptor != null) fs.closeSync(descriptor)
-      if (error?.code === 'EEXIST') return { ok: false, status: 423, error: 'collaboration ledger is locked; retry after the active writer finishes' }
-      return { ok: false, status: 500, error: `collaboration ledger lock failed: ${error.message}` }
-    }
-    try {
-      return operation()
-    } finally {
-      fs.closeSync(descriptor)
-      try {
-        fs.unlinkSync(lockPath)
-      } catch {
-        // The completed write remains authoritative; cleanup can be diagnosed
-        // by the next writer's explicit locked result.
-      }
-    }
+    try { return withPrivateLock(lockPath, operation); }
+    catch (error) { return { ok: false, status: error.code === 'EEXIST' ? 423 : 500,
+      error: `collaboration ledger lock/write failed: ${error.message}` }; }
   }
 
   function append({ aggregateId, expectedVersion = 0, type, actor, at = clock(), payload = {}, precondition = null }) {
