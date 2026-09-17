@@ -2,6 +2,13 @@
 
 ## 0.2.0-alpha.7
 
+- Add explicit saved-plan local upgrade transactions with private receipts,
+  existing commit hooks and recovery inspection. Refuse unsupported Git
+  attributes before generated writes and explain abandoned preparation state.
+- `lock write` now preserves valid migration and template history and refuses
+  a malformed previous lock. Inspect and repair or separately archive the
+  invalid lock before retrying; history is no longer silently overwritten.
+
 - Add a source-only Astro reference consumer for build-time presentation tokens,
   no-script reading/navigation, local-only form validation and cross-browser proof.
   Keep public-page mechanics consumer-owned; add no Astro runtime dependency.

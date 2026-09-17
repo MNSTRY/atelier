@@ -56,7 +56,10 @@ Core commands:
   boundary audit                  Report content-rule matches tree-wide without blocking.
   boundary install-hooks          Install staged/private-domain Git guards.
   promote                         Record a git.promote disclosure event.
-  upgrade --dry-run               Plan a safe package/template upgrade.
+  upgrade plan --save             Save an exact local candidate plan.
+  upgrade apply --plan --confirm   Apply the selected plan through commit hooks.
+  upgrade status|recover          Inspect receipts or preview recovery.
+  upgrade --dry-run               Plan a legacy package/template upgrade.
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.
   lock provenance                Inspect actual installed package identity.
