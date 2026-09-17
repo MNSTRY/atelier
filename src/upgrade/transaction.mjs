@@ -64,8 +64,12 @@ function gitAuxiliary(root) {
   const result = git(root, ['config', '--path', '--get', 'core.excludesFile'], { allowFailure: true })
   if (!result.ok && result.status !== 1) throw new Error('Git ignore configuration unavailable')
   const globalIgnore = result.ok ? path.resolve(root, result.stdout.trim()) : path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'git', 'ignore')
-  const globalAttributes = path.join(process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config'), 'git', 'attributes')
-  const files = [text(root, ['rev-parse', '--git-path', 'info/exclude']), text(root, ['rev-parse', '--git-path', 'info/attributes']), globalIgnore, globalAttributes].map((file) => path.resolve(root, file))
+  const attributes = ['GIT_ATTR_GLOBAL', 'GIT_ATTR_SYSTEM'].map((variable) => {
+    const location = text(root, ['var', variable])
+    if (!path.isAbsolute(location)) throw new Error('Git attributes location unavailable')
+    return location
+  })
+  const files = [text(root, ['rev-parse', '--git-path', 'info/exclude']), text(root, ['rev-parse', '--git-path', 'info/attributes']), globalIgnore, ...attributes].map((file) => path.resolve(root, file))
   return files.map((file) => ({ path: file, state: fileState(file) }))
 }
 function gitEvidence(root) {
@@ -76,7 +80,7 @@ function gitEvidence(root) {
   if (config.some(({ key, value }) => /^core\.attributesfile$|^filter\.|^extensions\.(partialclone|worktreeconfig)$|^remote\..*\.promisor$/.test(key) || (/^core\.(sparsecheckout|autocrlf|fsmonitor)$/.test(key) && !/^(false|no|off|0)$/.test(value)))) throw new Error('unsupported Git transformation or checkout configuration')
   if (fs.existsSync(hooksPath) && (fs.lstatSync(hooksPath).isSymbolicLink() || fs.realpathSync(hooksPath) !== hooksPath)) throw new Error('redirected hook directory refused')
   const auxiliary = gitAuxiliary(root)
-  for (const entry of [auxiliary[1], auxiliary[3]]) {
+  for (const entry of [auxiliary[1], ...auxiliary.slice(3)]) {
     if (entry.state && readBytes(entry.path).length) throw new Error('Git attribute transformations unsupported in slice 1')
   }
   return {
@@ -130,6 +134,7 @@ function clean(root) {
 }
 function lease(root, body) {
   const state = privateRoot(root)
+  if (fs.readdirSync(state).some((name) => name.startsWith('prepare-'))) throw new Error('stale preparation directory under .atelier-local/upgrades: verify its writer has stopped, then inspect and separately remove only the abandoned prepare-* directory before retrying; no automatic cleanup performed')
   if (inventory(state).reduce((sum, x) => sum + fs.statSync(path.join(state, x.path)).size, 0) > MAX_BYTES / 2) throw new Error('local evidence capacity exhausted; export and verify before retention maintenance')
   const lock = path.join(state, 'writer')
   fs.mkdirSync(lock) // No time-based stealing, including after an interrupted run.

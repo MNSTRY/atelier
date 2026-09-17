@@ -8,6 +8,7 @@ import { resolveProjectConfig } from '../src/project/config.mjs'
 import { writeAtelierLock } from '../src/upgrade/upgrade.mjs'
 import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, validateUpgradeDocument } from '../src/upgrade/transaction.mjs'
 import { hashObject } from '../src/upgrade/transaction-files.mjs'
+import { resolveGitExecutable } from '../src/runtime/git-adapter.mjs'
 
 beforeEach((t) => {
   const keys = ['GITHUB_ACTOR', 'MNSTRY_ATELIER_ACTOR']
@@ -47,6 +48,48 @@ function fixture(t, hook) {
   return { source, root, project }
 }
 const apply = (project, prepared) => applySavedUpgrade({ project, planFile: prepared.savedPlan, confirm: prepared.plan.digest })
+
+transactionTest('system attributes refuse preparation and application before generated writes', (t) => {
+  const f = fixture(t)
+  const realGit = resolveGitExecutable()
+  const parent = path.dirname(f.root)
+  const attributes = path.join(parent, 'system-attributes')
+  const wrapper = path.join(parent, 'git-wrapper')
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`
+  fs.writeFileSync(wrapper, `#!/bin/sh\nfor arg do\n  if [ "$arg" = GIT_ATTR_SYSTEM ]; then printf '%s\\n' ${quote(attributes)}; exit 0; fi\ndone\nexec ${quote(realGit)} "$@"\n`, { mode: 0o755 })
+  const previous = process.env.ATELIER_GIT_PATH
+  process.env.ATELIER_GIT_PATH = wrapper
+  try {
+    fs.writeFileSync(attributes, '* working-tree-encoding=UTF-16\n')
+    assert.throws(() => prepareUpgrade(f), /attribute transformations unsupported/)
+    assert.equal(fs.existsSync(path.join(f.root, '.atelier-local/upgrades/plans')), false)
+    fs.rmSync(attributes)
+    const prepared = prepareUpgrade(f)
+    fs.writeFileSync(attributes, '* working-tree-encoding=UTF-16\n')
+    assert.throws(() => apply(f.project, prepared), /attribute transformations unsupported/)
+    assert.equal(fs.existsSync(path.join(f.root, 'atelier.lock.json')), false)
+    assert.equal(fs.existsSync(path.join(f.root, '.atelier-local/upgrades/operations')), false)
+    assert.equal(git(f.root, ['diff', '--cached', '--name-only']), '')
+  } finally {
+    if (previous === undefined) delete process.env.ATELIER_GIT_PATH
+    else process.env.ATELIER_GIT_PATH = previous
+  }
+})
+
+transactionTest('abandoned preparation explains refusal without removing scratch or disabling status', (t) => {
+  const f = fixture(t)
+  const prepared = prepareUpgrade(f)
+  const result = apply(f.project, prepared)
+  assert.equal(result.ok, true)
+  const scratch = path.join(f.root, '.atelier-local/upgrades/prepare-stale/.git')
+  fs.mkdirSync(scratch, { recursive: true })
+  fs.writeFileSync(path.join(scratch, 'HEAD'), 'retained interrupted preparation')
+  assert.throws(() => prepareUpgrade(f), /stale preparation directory.*verify its writer has stopped/)
+  assert.throws(() => apply(f.project, prepared), /stale preparation directory.*verify its writer has stopped/)
+  assert.equal(fs.readFileSync(path.join(scratch, 'HEAD'), 'utf8'), 'retained interrupted preparation')
+  assert.equal(fs.existsSync(path.join(f.root, '.atelier-local/upgrades/writer')), false)
+  assert.equal(upgradeOperationStatus({ ...f, operationId: result.operationId }).status, 'completed')
+})
 
 transactionTest('in-progress Git operations refuse preparation and application from outside the worktree', (t) => {
   const f = fixture(t)

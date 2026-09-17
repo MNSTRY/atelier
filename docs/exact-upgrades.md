@@ -53,12 +53,25 @@ repository except Git administration and private local state. The plan also
 binds the repository identity, HEAD, branch, policy, Git executable,
 configuration, Git auxiliary ignore/attribute files, hook directory and files, executor and imported dependency bytes,
 and a fixed expiry. Default lifetime is 24 hours; policy may shorten it.
+The Git fingerprint covers the transaction's selected executable. Legacy
+builders also invoke Git from `PATH`; use the same executable there when
+setting `ATELIER_GIT_PATH`. Cross-host output ordering is not guaranteed.
+Executor checkout metadata may affect generated lock provenance; the saved
+plan binds the resulting bytes rather than promising identical regeneration.
+
+Inherited `GIT_*` overrides such as an IDE's `GIT_ASKPASS` are refused (apart
+from the documented prompt, pager and optional-lock controls). Prepare from
+an environment without those overrides. Repository, global and system Git
+attribute files must be absent or empty for this slice.
 
 Generation uses an isolated private preparation directory and the existing
 builders. Only five registered output paths can be written, and a complete
 before/after inventory checks that boundary. The executor then saves those
 bytes; application does not recalculate or silently replace the selected plan.
 This is a bounded trusted executor, not a sandbox for arbitrary migration code.
+The generated readiness JSON retains absolute local graph and projection paths,
+which may include the account name. Inspect those committed bytes before sharing
+the candidate branch; generating a candidate does not authorize publication.
 
 ## Apply the reviewed bytes
 
@@ -77,6 +90,9 @@ No commit uses `--no-verify`. Hook execution is existing adopter code with its
 normal host privileges, not a new sandbox or a promise of no hook side effects.
 Relevant hook changes invalidate the plan; files or executables that hooks
 consult outside their directory are not transitively fingerprinted.
+Git commit has a 30-second execution budget. A timeout is conservatively
+`recovery-required`, since a hook may already have acted; this budget is not
+a guarantee that all hook descendants terminate within 30 seconds.
 
 A successful Git exit is insufficient: the commit's parent, tree and message,
 staged blobs, branch and worktree must match. A refused commit retains its index
@@ -113,6 +129,11 @@ separately reviewed operation with current authority. It never resets history.
 A crash may leave the writer lease in place. Inspect its owner and verify that
 process has stopped before separately handling the stale lease; elapsed time
 alone never releases it. Status and recovery inspection remain available.
+A crash during preparation can also leave a `prepare-*` scratch directory
+under `.atelier-local/upgrades/`. Further preparation and application refuse
+with a stale-preparation diagnostic. Verify the writer has stopped and inspect
+the directory before separately removing only that abandoned scratch directory.
+The command does not delete it automatically or remove plans, receipts or backups.
 
 Evidence has no automatic deletion. Inventory limits (4,096 files, 64 MiB) and a
 32 MiB retained-state admission threshold and 8 MiB saved-plan limit bound this small-workspace slice.
