@@ -1,5 +1,9 @@
 # Upgrade Guide
 
+For an owner asking their agent to prepare an update, start with
+[guided upgrades](guided-upgrades.md). It separates release selection and staged
+installation from the exact local transaction and the owner's adoption decision.
+
 Use this guide when upgrading a copied private-domain or shared-project starter
 workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write

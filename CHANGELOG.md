@@ -2,6 +2,11 @@
 
 ## 0.2.0-alpha.7
 
+- Add a guided owner-agent upgrade skill and read-only `upgrade explain`
+  reports derived from saved plans. Retain consent and provenance limits,
+  distinguish staged installation from adoption, and route unsupported
+  workspaces through their existing operator procedure.
+
 - Add explicit saved-plan local upgrade transactions with private receipts,
   existing commit hooks and recovery inspection. Refuse unsupported Git
   attributes before generated writes and explain abandoned preparation state.

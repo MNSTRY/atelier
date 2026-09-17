@@ -24,8 +24,9 @@ import {
 import { bundledMnstryReadinessPackV1 } from '../readiness-protocols/bundled-pack.mjs'
 import { loadExtensionPacks } from '../extension-packs/loader.mjs'
 import { inspectPackageProvenance, legacyPackageSource } from './provenance.mjs'
-import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun } from './transaction.mjs'
-export { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun }
+import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, explainSavedUpgrade } from './transaction.mjs'
+import { renderUpgradeExplanation } from './explanation.mjs'
+export { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, explainSavedUpgrade }
 
 export const ATELIER_LOCK_SCHEMA = 'mnstry.atelier-lock@v1'
 export const ATELIER_MIGRATION_SCHEMA = 'mnstry.atelier-migration@v1'
@@ -681,11 +682,17 @@ export function runLockCommand(argv = process.argv.slice(2)) {
 
 export function runUpgradeCommand(argv = process.argv.slice(2)) {
   const args = parseArgs(argv)
-  const project = commandProject({ argv })
-  if (['plan', 'apply', 'status', 'recover'].includes(args._[0])) {
+  const project = commandProject({ argv, writeLocalState: args._[0] !== 'explain' })
+  if (['plan', 'apply', 'status', 'recover', 'explain'].includes(args._[0])) {
     try {
       let result
-      if (args._[0] === 'plan') {
+      if (args._[0] === 'explain') {
+        if (!firstString(args.plan)) throw new Error('--plan is required')
+        if (args.format != null && !['json', 'markdown'].includes(args.format)) throw new Error('--format must be json or markdown')
+        result = explainSavedUpgrade({ project, planFile: args.plan })
+        console.log(args.format === 'markdown' ? renderUpgradeExplanation(result) : JSON.stringify(result, null, 2))
+        return
+      } else if (args._[0] === 'plan') {
         if (args.save !== true) throw new Error('exact planning requires --save')
         result = prepareUpgrade({ project })
       } else if (args._[0] === 'apply') {

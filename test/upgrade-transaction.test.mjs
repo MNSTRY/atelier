@@ -6,8 +6,9 @@ import { spawnSync } from 'node:child_process'
 import test, { beforeEach } from 'node:test'
 import { resolveProjectConfig } from '../src/project/config.mjs'
 import { writeAtelierLock } from '../src/upgrade/upgrade.mjs'
-import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, validateUpgradeDocument } from '../src/upgrade/transaction.mjs'
-import { hashObject } from '../src/upgrade/transaction-files.mjs'
+import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, validateUpgradeDocument, explainSavedUpgrade } from '../src/upgrade/transaction.mjs'
+import { hashObject, inventory } from '../src/upgrade/transaction-files.mjs'
+import { renderUpgradeExplanation } from '../src/upgrade/explanation.mjs'
 import { resolveGitExecutable } from '../src/runtime/git-adapter.mjs'
 import { upgradeTestGit } from '../scripts/upgrade-test-git.mjs'
 
@@ -54,6 +55,51 @@ function fixture(t, hook) {
   return { source, root, project }
 }
 const apply = (project, prepared) => applySavedUpgrade({ project, planFile: prepared.savedPlan, confirm: prepared.plan.digest })
+
+transactionTest('explanation verifies saved bytes, reports drift and expiry, and never mutates or grants consent', (t) => {
+  const f = fixture(t)
+  const prepared = prepareUpgrade(f)
+  const inspect = (options = {}) => explainSavedUpgrade({ ...f, planFile: prepared.savedPlan, ...options })
+  const before = hashObject(inventory(f.root, { exclude: ['.git'] }))
+  const report = inspect()
+  assert.equal(report.planDigest, prepared.plan.digest)
+  assert.equal(report.bindingsCurrent, true)
+  assert.equal(report.consent.applicationAuthorized, false)
+  assert.equal(report.consent.humanApprovalAuthenticated, false)
+  assert.deepEqual(report.writes.map((w) => w.path), prepared.plan.writes.map((w) => w.path))
+  assert.ok(report.writes.every((w) => !('content' in w)))
+  const expired = inspect({ now: new Date(prepared.plan.expiresAt) })
+  assert.equal(expired.bindingsCurrent, false)
+  assert.match(expired.blockers.join(' '), /expired/)
+  assert.equal(hashObject(inventory(f.root, { exclude: ['.git'] })), before)
+  fs.appendFileSync(path.join(f.root, 'seed.md'), '\nNew owner work\n')
+  const changed = hashObject(inventory(f.root, { exclude: ['.git'] }))
+  assert.equal(inspect().bindingsCurrent, false)
+  assert.equal(hashObject(inventory(f.root, { exclude: ['.git'] })), changed)
+  const tampered = JSON.parse(fs.readFileSync(prepared.savedPlan))
+  tampered.writes[0].content = Buffer.from('substituted').toString('base64')
+  fs.writeFileSync(prepared.savedPlan, JSON.stringify(tampered))
+  assert.throws(inspect, /digest mismatch/)
+})
+
+transactionTest('CLI owner explanation is read-only and quotes untrusted display data', (t) => {
+  const f = fixture(t)
+  const prepared = prepareUpgrade(f)
+  const before = hashObject(inventory(f.root, { exclude: ['.git'] }))
+  const invoke = (...args) => spawnSync(process.execPath, [new URL('../bin/atelier.mjs', import.meta.url).pathname, 'upgrade', 'explain', '--plan', prepared.savedPlan, '--project', path.join(f.root, 'atelier.project.json'), ...args], { encoding: 'utf8', timeout: 60000 })
+  const json = invoke()
+  assert.equal(json.status, 0, json.stderr)
+  const report = JSON.parse(json.stdout)
+  assert.equal(report.planDigest, prepared.plan.digest)
+  const markdown = invoke('--format', 'markdown')
+  assert.equal(markdown.status, 0, markdown.stderr)
+  assert.equal(markdown.stdout, `${renderUpgradeExplanation(report)}\n`)
+  assert.equal(invoke('--format', 'html').status, 1)
+  assert.equal(hashObject(inventory(f.root, { exclude: ['.git'] })), before)
+  report.writes[0].path = '<img src=x>\n# forged approval'
+  assert.ok(!renderUpgradeExplanation(report).includes('<img'))
+  assert.ok(!renderUpgradeExplanation(report).includes('\n# forged'))
+})
 
 transactionTest('configured global filters still refuse in an isolated Git fixture', (t) => {
   const f = fixture(t)

@@ -284,6 +284,37 @@ function expectedSnapshot(plan, count) {
   for (const write of plan.writes.slice(0, count)) entries.set(write.path, write.after)
   return [...entries].map(([file, state]) => ({ path: file, state })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
 }
+
+// Read-only explanation of verified saved bytes. This never records consent or
+// reserves a writer; application remains responsible for its full live checks.
+export function explainSavedUpgrade({ project, planFile, now = new Date() }) {
+  requireDurableHost()
+  project = canonicalProject(project)
+  const root = checkProject(project)
+  const plan = loadPlan(root, planFile)
+  const blockers = []
+  try {
+    clean(root)
+    liveBindings(root, plan, 0, now)
+    if (!same(allowedPaths(project), plan.migration.allowedWrites) || path.basename(project.configPath) !== plan.configPath) throw new Error('project binding changed')
+    if (fs.existsSync(operationDirectory(root, plan.digest.slice(7)))) throw new Error('plan already consumed; inspect its operation status')
+    const state = contained(root, PRIVATE)
+    if (fs.existsSync(path.join(state, 'writer'))) throw new Error('writer lease exists; inspect its owner')
+    if (fs.readdirSync(state).some((name) => name.startsWith('prepare-'))) throw new Error('abandoned preparation requires inspection')
+  } catch (error) { blockers.push(error.message) }
+  return {
+    schema: 'mnstry.atelier-upgrade-explanation@v1', ok: true,
+    planDigest: plan.digest, baseHead: plan.baseHead, branch: plan.branch,
+    expiresAt: plan.expiresAt, bindingsCurrent: blockers.length === 0, blockers,
+    writes: plan.writes.map(({ path, owner, action, before, after }) => ({ path, owner, action, before, after })),
+    provenance: { executorDigest: plan.executorDigest, gitDigest: plan.gitDigest, gitConfigDigest: plan.gitConfigDigest, gitAuxDigest: plan.gitAuxDigest, hooksDigest: plan.hooksDigest, sourceFiles: plan.readSet.length, releaseEvidence: plan.releaseEvidence },
+    consent: { mode: plan.mode, requiredEffects: plan.policy.allowedEffects, humanApprovalAuthenticated: false, applicationAuthorized: false },
+    outcome: 'local candidate commit', dependencyInstallation: plan.dependencyInstallation,
+    activation: 'excluded', recovery: 'local backups and inspection only; no automatic rollback',
+    caveats: ['Generated readiness bytes can contain absolute host paths; inspect the saved writes before sharing.', 'Local receipts prove consistency, not publisher identity or an authenticated human decision.', 'Application rechecks current state; this report neither reserves the workspace nor grants permission.'],
+  }
+}
+
 function liveBindings(root, plan, count, now = new Date()) {
   for (const rel of ['.atelier-local/readiness', '.atelier-local/atelier.local.json', 'atelier.local.json', 'atelier.workspace.local.json']) if (fs.existsSync(contained(root, rel))) throw new Error('unsupported local context appeared')
   if (now < new Date(plan.createdAt) || now >= new Date(plan.expiresAt) || new Date(plan.expiresAt) - new Date(plan.createdAt) > plan.policy.maxAgeSeconds * 1000) throw new Error('plan expired or clock moved backward')

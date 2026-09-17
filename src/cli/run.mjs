@@ -131,6 +131,7 @@ Core commands:
   boundary install-hooks          Install staged/private-domain Git guards.
   promote                         Record a git.promote disclosure event.
   upgrade plan --save             Save an exact local candidate plan.
+  upgrade explain --plan          Explain saved changes and consent without writes.
   upgrade apply --plan --confirm   Apply the selected plan through commit hooks.
   upgrade status|recover          Inspect receipts or preview recovery.
   upgrade --dry-run               Plan a legacy package/template upgrade.

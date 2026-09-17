@@ -386,6 +386,7 @@ Then choose the path that matches what you are building:
 - [Continuity commitments](./docs/continuity.md)
 - [Assurance controls and evidence map](./docs/assurance-controls.md)
 - [Upgrade notes](./docs/upgrade.md)
+- [Upgrade with your agent](./docs/guided-upgrades.md)
 
 ## Status and command reference
 
