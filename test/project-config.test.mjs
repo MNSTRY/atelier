@@ -10,6 +10,7 @@ import {
   PROJECT_CONFIG_SCHEMA,
   commandProject,
   projectConfigArg,
+  projectExtMember,
   resolveProjectConfig,
   stripProjectConfigArgs,
   validateProjectConfigDoc,
@@ -298,4 +299,31 @@ test('project config refuses case-insensitive duplicate repository names', () =>
   const errors = validateProjectConfigDoc({ schema: PROJECT_CONFIG_SCHEMA,
     repos: [{ name: 'shared', path: 'one' }, { name: 'SHARED', path: 'two' }] })
   assert.ok(errors.some((message) => message.includes('duplicates another repository name')))
+})
+
+// A structured consumer of an ext member gets the member uninterpreted, and
+// can tell "absent" from "present with any value": absent means its feature is
+// not configured, anything present it must validate itself and refuse when
+// malformed. The v1 validator stays out of a member's contents.
+test('projectExtMember hands over one ext member without interpreting it', () => {
+  const base = { schema: PROJECT_CONFIG_SCHEMA, repos: [{ name: 'content', path: 'content' }] }
+  assert.deepEqual(validateProjectConfigDoc(base), [], 'a config with no ext container stays valid')
+  assert.deepEqual(projectExtMember({ config: base }, 'example.consumer'), { present: false, value: undefined })
+  assert.deepEqual(projectExtMember({ config: { ...base, ext: {} } }, 'example.consumer'), { present: false, value: undefined })
+  assert.deepEqual(projectExtMember({ config: { ...base, ext: { 'another.consumer': { on: true } } } }, 'example.consumer'), { present: false, value: undefined })
+  assert.deepEqual(projectExtMember(undefined, 'example.consumer'), { present: false, value: undefined })
+
+  const member = { enabled: true, futureKey: 'kept as written' }
+  const withMember = { ...base, ext: { 'example.consumer': member } }
+  assert.deepEqual(validateProjectConfigDoc(withMember), [], 'the v1 validator does not look inside a member')
+  assert.equal(projectExtMember({ config: withMember }, 'example.consumer').value, member)
+
+  // Present but malformed is still present: the consumer refuses it, it is never read as "not configured".
+  for (const value of [null, false, 'on', []]) {
+    assert.deepEqual(projectExtMember({ config: { ...base, ext: { 'example.consumer': value } } }, 'example.consumer'), { present: true, value })
+  }
+  for (const container of [[], 'text', 1]) {
+    assert.deepEqual(projectExtMember({ config: { ...base, ext: container } }, 'example.consumer'), { present: true, value: undefined })
+  }
+  assert.deepEqual(projectExtMember({ config: { ...base, ext: { toString: { a: 1 } } } }, 'constructor'), { present: false, value: undefined }, 'only own members count')
 })
