@@ -31,8 +31,8 @@ export function requestLoopback({ host, port, method = 'GET', path = '/health', 
     const settle = (value) => { if (!settled) { settled = true; resolve(value) } }
     const text = payload === null ? null : JSON.stringify(payload)
     const headers = { Host: authorityOf(host, port), Connection: 'close', ...(bearer === null ? {} : { Authorization: `Bearer ${bearer}` }), ...(text === null ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text) }) }
-    // @atelier-egress-local-computed
-    const request = http.request({ host, port, family: host === '::1' ? 6 : 4, method, path, headers, agent: false, timeout: timeoutMs }, (response) => {
+    // The target is one of two literals, whatever was passed in.
+    const request = http.request({ host: host === '::1' ? '::1' : '127.0.0.1', port, family: host === '::1' ? 6 : 4, method, path, headers, agent: false, timeout: timeoutMs }, (response) => {
       const chunks = []
       let size = 0
       response.on('data', (chunk) => {
