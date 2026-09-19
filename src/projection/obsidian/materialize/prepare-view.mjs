@@ -1,14 +1,16 @@
 import { createHash } from 'node:crypto'
-import { DERIVED_RELATION_TYPE, RELATION_TYPES, assertObsidianContract, identitySuffix, readableTitle, selectScope } from '../contracts.mjs'
+import { DERIVED_RELATION_TYPE, RELATION_TYPES, SCOPE_PRIMITIVES, assertObsidianContract, identitySuffix, readableTitle, selectScope } from '../contracts.mjs'
 import { assertStrictUtf8, readMarkdownLens, refuse, sha256Digest } from './byte-lens.mjs'
-import { allocateWorkspacePaths, emptyPathRegistry } from './path-registry.mjs'
+import { allocateWorkspacePaths, collisionKey, emptyPathRegistry, titleWithinBudget } from './path-registry.mjs'
 import { isUserOwnedSettingsPath, prepareSettings } from './settings.mjs'
 
 // prepareView: a pure preparation of one Obsidian view. It reads sources
 // through the caller, returns note, attachment and settings bytes plus a
 // generation manifest, and writes nothing. The canonical graph is the only
 // graph authority: notes and relation rows serialize canonical nodes and
-// edges, and only canonical resolved link occurrences are rewritten.
+// edges, and only canonical resolved link and embed occurrences are rewritten.
+// An embedded asset is copied only when the canonical graph resolved it; the
+// emitter never infers one from authored bytes.
 //
 // Redaction happens where bytes are made. Every title, path and identity that
 // reaches an output is looked up through `vault`, the set selectScope returned
@@ -17,6 +19,8 @@ import { isUserOwnedSettingsPath, prepareSettings } from './settings.mjs'
 export const EMITTER_VERSION = '1.0.0'
 const EXT_KEY = 'mnstry.atelier.obsidian'
 const EMBEDDABLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'])
+// Bytes left for an asset's readable stem beside the longest suffix and extension.
+const ASSET_STEM_BYTE_BUDGET = 255 - '--'.length - 64 - '.'.length - 16
 const RELATIONS_HEADING = '## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n'
 
 const compare = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
@@ -81,8 +85,11 @@ function sourceReader(snapshot) {
 // The byte edits for one source: each is { start, end, emitted } over the
 // source Buffer. Offsets come from the canonical occurrence; the bytes under
 // them are compared with what the graph read, so a graph built from different
-// bytes refuses instead of rewriting the wrong place.
-function linkEdits({ source, lens, occurrences, targetPath }) {
+// bytes refuses instead of rewriting the wrong place. `emittedTarget` names
+// what an occurrence is rewritten to: { key, markdown, wikilink, alias }.
+// Links and asset embeds go through here together, so one overlap check covers
+// both.
+function linkEdits({ source, lens, occurrences, emittedTarget }) {
   const edits = []
   for (const occurrence of occurrences) {
     const { range, targetRange } = occurrence
@@ -92,21 +99,22 @@ function linkEdits({ source, lens, occurrences, targetPath }) {
     }
     if (range.byteStart < lens.body.start || range.byteEnd > lens.body.end) refuse('link-outside-body', 'a canonical link occurrence lies outside the authored body')
     const written = source.subarray(targetRange.byteStart, targetRange.byteEnd).toString('utf8')
-    const allocated = targetPath(occurrence.target)
+    const target = emittedTarget(occurrence)
     if (occurrence.syntax === 'markdown') {
       if (written !== occurrence.href) refuse('mixed-read', 'source bytes under a canonical link differ from the link the graph read')
-      edits.push({ edgeKey: occurrence.target, start: targetRange.byteStart, end: targetRange.byteEnd, emitted: utf8(encodeHref(`${noteBasename(allocated)}.md`)) })
+      edits.push({ ...target.key, start: targetRange.byteStart, end: targetRange.byteEnd, emitted: utf8(target.markdown) })
     } else if (occurrence.syntax === 'wikilink') {
       const whole = source.subarray(range.byteStart, range.byteEnd).toString('utf8')
       if (written.trim() !== occurrence.href || !whole.startsWith('[[') || !whole.endsWith(']]')) {
         refuse('mixed-read', 'source bytes under a canonical link differ from the link the graph read')
       }
-      edits.push({ edgeKey: occurrence.target, start: targetRange.byteStart, end: targetRange.byteEnd, emitted: utf8(noteBasename(allocated)) })
+      edits.push({ ...target.key, start: targetRange.byteStart, end: targetRange.byteEnd, emitted: utf8(target.wikilink) })
       // Keep the words the author chose visible: without an alias the editor
-      // would display the allocated file name.
+      // would display the allocated file name. An embed has no label: what
+      // follows its target (a size, a fragment) stays as authored.
       const tail = source.subarray(targetRange.byteEnd, range.byteEnd - 2).toString('utf8')
-      if (!occurrence.embed && !tail.includes('|')) {
-        edits.push({ edgeKey: occurrence.target, start: range.byteEnd - 2, end: range.byteEnd - 2, emitted: utf8(`|${occurrence.href}`) })
+      if (target.alias && !occurrence.embed && !tail.includes('|')) {
+        edits.push({ ...target.key, start: range.byteEnd - 2, end: range.byteEnd - 2, emitted: utf8(`|${occurrence.href}`) })
       }
     } else {
       refuse('unsupported-link', 'a canonical link occurrence uses an unknown syntax')
@@ -134,6 +142,7 @@ function applyEdits({ source, from, to, edits, noteOffset }) {
     parts.push(edit.emitted)
     inversions.push({
       edgeKey: edit.edgeKey,
+      assetKey: edit.assetKey,
       source: { start: edit.start, end: edit.end },
       note: { start: written, end: written + edit.emitted.length },
       ext: { [EXT_KEY]: { original: base64url(source.subarray(edit.start, edit.end)), emitted: base64url(edit.emitted), encoding: 'base64url' } },
@@ -214,6 +223,55 @@ function assertContained(relativePath) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Embedded assets
+// ---------------------------------------------------------------------------
+
+// The assets this view may copy, by id. Fails closed like a node: only an
+// explicit eligible: true, in a repository the profile enrols, under the
+// repository's audience rule. A malformed or repeated record is withheld.
+function visibleAssets(graph, profile) {
+  const view = { repositories: new Map(profile.repositories.map((repo) => [repo.repoId, repo])), allowedAudiences: new Set(profile.audience.allow) }
+  const seen = new Set()
+  const visible = new Map()
+  for (const asset of Array.isArray(graph.assets) ? graph.assets : []) {
+    if (!asset || typeof asset.id !== 'string' || asset.id === '' || typeof asset.repo !== 'string' || asset.repo === '' || typeof asset.path !== 'string' || asset.path === '') continue
+    if (seen.has(asset.id)) {
+      visible.delete(asset.id)
+      continue
+    }
+    seen.add(asset.id)
+    if (SCOPE_PRIMITIVES.isVisible({ eligible: asset.eligible, repo: asset.repo }, view)) visible.set(asset.id, asset)
+  }
+  return visible
+}
+
+// attachments/<readable stem>--<identity suffix>.<ext>, from the repository and
+// asset identity alone. The suffix lengthens only when two assets of this view
+// would share a name on a case- or normalization-insensitive filesystem.
+function allocateAssetPaths(assets) {
+  const taken = new Set()
+  const allocated = new Map()
+  for (const asset of [...assets].sort((left, right) => compare(left.repo, right.repo) || compare(left.id, right.id))) {
+    const name = asset.path.split('/').at(-1)
+    const dot = name.lastIndexOf('.')
+    const written = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+    const extension = /^[a-z0-9]{1,16}$/.test(written) ? written : 'bin'
+    const stem = readableTitle(titleWithinBudget(dot > 0 ? name.slice(0, dot) : name, ASSET_STEM_BYTE_BUDGET))
+    let length = 12
+    let candidate = `attachments/${stem}--${identitySuffix(asset.repo, asset.id, length)}.${extension}`
+    while (taken.has(collisionKey(candidate))) {
+      length += 4
+      if (length > 64) refuse('path-collision', 'unable to allocate a distinct attachment path')
+      candidate = `attachments/${stem}--${identitySuffix(asset.repo, asset.id, length)}.${extension}`
+    }
+    taken.add(collisionKey(candidate))
+    assertContained(candidate)
+    allocated.set(asset.id, candidate)
+  }
+  return allocated
+}
+
 function canonicalSnapshotOf(graph) {
   if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges) || !Array.isArray(graph.links)) {
     refuse('invalid-snapshot', 'snapshot.graph must carry canonical nodes, edges and links')
@@ -280,6 +338,28 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     occurrencesBySource.get(link.source).push(link)
   }
 
+  // Asset embeds: canonical occurrences whose source is a note of this view and
+  // whose asset this view may copy. Anything else is left exactly as authored
+  // and appears in no output.
+  const assets = visibleAssets(snapshot.graph, profile)
+  const embeddedAssets = new Map()
+  for (const embed of Array.isArray(snapshot.graph.embeds) ? snapshot.graph.embeds : []) {
+    const asset = assets.get(embed?.asset?.id)
+    if (!asset || !vault.has(embed.source) || nodeById.get(embed.source).extension !== 'md') continue
+    embeddedAssets.set(asset.id, asset)
+    if (!occurrencesBySource.has(embed.source)) occurrencesBySource.set(embed.source, [])
+    occurrencesBySource.get(embed.source).push(embed)
+  }
+  const assetPaths = allocateAssetPaths(embeddedAssets.values())
+  const emittedTarget = (occurrence) => {
+    if (occurrence.type === 'embeds_asset') {
+      const attachment = assetPaths.get(occurrence.asset.id)
+      return { key: { assetKey: attachment }, markdown: attachment.split('/').map(encodeHref).join('/'), wikilink: attachment, alias: false }
+    }
+    const stem = noteBasename(pathOf(vaultNode(occurrence.target)))
+    return { key: { edgeKey: occurrence.target }, markdown: encodeHref(`${stem}.md`), wikilink: stem, alias: true }
+  }
+
   const read = sourceReader(snapshot)
   const orderedNodes = [...vault].map((id) => nodeById.get(id)).sort((left, right) => compare(left.repo, right.repo) || compare(left.id, right.id))
   const files = []
@@ -295,16 +375,22 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     const rows = relationRows({ node, outgoing, incoming, vaultNode, pathOf })
     const outsideCount = outsideEdges.filter((edge) => edge.source === node.id || edge.target === node.id).length
     const sourceRecord = { path: node.path, rawDigest, byteLength: source.length }
+    const assetInversions = new Map()
     let authored
     let regions
 
     if (node.extension === 'md') {
       const lens = readMarkdownLens(source, { repoId: node.repo, nodeId: node.id })
-      const edits = linkEdits({ source, lens, occurrences: occurrencesBySource.get(node.id) ?? [], targetPath: (id) => pathOf(vaultNode(id)) })
+      const edits = linkEdits({ source, lens, occurrences: occurrencesBySource.get(node.id) ?? [], emittedTarget })
       const prefix = source.subarray(0, lens.body.start)
       const body = applyEdits({ source, from: lens.body.start, to: lens.body.end, edits, noteOffset: prefix.length })
       authored = Buffer.concat([prefix, body.bytes])
-      for (const { edgeKey, ...inversion } of body.inversions) {
+      for (const { edgeKey, assetKey, ...inversion } of body.inversions) {
+        if (assetKey !== undefined) {
+          if (!assetInversions.has(assetKey)) assetInversions.set(assetKey, [])
+          assetInversions.get(assetKey).push(inversion)
+          continue
+        }
         const key = `${node.id}\u0000${edgeKey}`
         if (!inversionsByEdge.has(key)) inversionsByEdge.set(key, [])
         inversionsByEdge.get(key).push(inversion)
@@ -341,8 +427,24 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
         ...authoredRegions,
         generated: [...(representation ? [{ kind: 'representation', range: representation }] : []), ...generated.regions],
       },
-      ext: { [EXT_KEY]: { source: sourceRecord } },
+      ext: {
+        [EXT_KEY]: {
+          source: sourceRecord,
+          ...(assetInversions.size > 0
+            ? { assetEmbeds: [...assetInversions].map(([attachment, inversions]) => ({ attachment, inversions })).sort((left, right) => compare(left.attachment, right.attachment)) }
+            : {}),
+        },
+      },
     })
+  }
+
+  // One copy per asset, however many notes embed it, read through the pinned
+  // snapshot like every other source.
+  for (const asset of embeddedAssets.values()) {
+    const attachmentPath = assetPaths.get(asset.id)
+    const { bytes, rawDigest } = read(asset.repo, asset.path)
+    attachments.push({ path: attachmentPath, digest: rawDigest, byteLength: bytes.length, ext: { [EXT_KEY]: { kind: 'embedded-asset', repoId: asset.repo, assetPath: asset.path } } })
+    files.push({ path: attachmentPath, kind: 'attachment', bytes, digest: rawDigest })
   }
 
   const links = vaultEdges
@@ -362,7 +464,10 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
 
   const settings = prepareSettings({ existing: existingSettings })
   files.push(...settings.files)
+  const occupied = new Set()
   for (const file of files) {
+    if (occupied.has(collisionKey(file.path))) refuse('path-collision', 'two prepared files would occupy one path')
+    occupied.add(collisionKey(file.path))
     assertContained(file.path)
     if (isUserOwnedSettingsPath(file.path)) refuse('user-owned-settings', 'a prepared view may not carry a settings file the person owns')
   }
@@ -385,7 +490,11 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     ext: { [EXT_KEY]: { emitterVersion: EMITTER_VERSION, mode: selection.mode, settings: settings.ownership } },
   }
   assertObsidianContract('generation-manifest', manifest)
-  assertOnlyVaultIdentities({ manifest, files, vaultSuffixes: new Set(orderedNodes.map((node) => identitySuffix(node.repo, node.id, 64))) })
+  assertOnlyVaultIdentities({
+    manifest,
+    files,
+    vaultSuffixes: new Set([...orderedNodes, ...embeddedAssets.values()].map((item) => identitySuffix(item.repo, item.id, 64))),
+  })
 
   const prior = new Map((priorManifest?.notes ?? []).map((note) => [note.path, note.noteDigest]))
   const changes = { added: [], changed: [], unchanged: [], removed: [] }
@@ -410,7 +519,7 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
 
 // Last check before anything is returned: every allocated-path suffix that
 // appears in generated bytes or in the manifest belongs to a note of this
-// view. Authored bytes are exempt; they are the author's and are never read
+// view or to an asset this view copies. Authored bytes are exempt; they are the author's and are never read
 // for meaning here.
 function assertOnlyVaultIdentities({ manifest, files, vaultSuffixes }) {
   const byPrefix = new Map()
@@ -429,12 +538,25 @@ function assertOnlyVaultIdentities({ manifest, files, vaultSuffixes }) {
   for (const link of manifest.links) {
     for (const inversion of link.inversions ?? []) check(Buffer.from(inversion.ext[EXT_KEY].emitted, 'base64url').toString('utf8'))
   }
+  for (const note of manifest.notes) {
+    for (const embed of note.ext[EXT_KEY].assetEmbeds ?? []) {
+      check(embed.attachment)
+      for (const inversion of embed.inversions) check(Buffer.from(inversion.ext[EXT_KEY].emitted, 'base64url').toString('utf8'))
+    }
+  }
   for (const note of manifest.notes) check(note.path)
   for (const attachment of manifest.attachments) check(attachment.path)
 }
 
 // Adds the fail-closed eligibility flag selectScope reads. A node is eligible
-// only when `isEligible` returns exactly true for it.
-export function withEligibility(graph, isEligible) {
-  return { ...graph, nodes: graph.nodes.map((node) => ({ ...node, eligible: isEligible(node) === true })) }
+// only when `isEligible` returns exactly true for it. Embedded assets follow
+// the same rule through `isAssetEligible`; without it every asset is withheld.
+export function withEligibility(graph, isEligible, isAssetEligible = null) {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => ({ ...node, eligible: isEligible(node) === true })),
+    ...(Array.isArray(graph.assets)
+      ? { assets: graph.assets.map((asset) => ({ ...asset, eligible: typeof isAssetEligible === 'function' && isAssetEligible(asset) === true })) }
+      : {}),
+  }
 }

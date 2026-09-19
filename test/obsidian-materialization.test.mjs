@@ -160,10 +160,10 @@ function invertNote(prepared, nodeId) {
   const note = noteOf(prepared, nodeId)
   const bytes = fileOf(prepared, note.path).bytes
   const authoredEnd = note.regions.body.end
-  const inversions = prepared.manifest.links
-    .filter((link) => link.sourceNodeId === nodeId)
-    .flatMap((link) => link.inversions ?? [])
-    .sort((left, right) => right.note.start - left.note.start)
+  const inversions = [
+    ...prepared.manifest.links.filter((link) => link.sourceNodeId === nodeId).flatMap((link) => link.inversions ?? []),
+    ...(note.ext[EXT].assetEmbeds ?? []).flatMap((embed) => embed.inversions),
+  ].sort((left, right) => right.note.start - left.note.start)
   let restored = bytes.subarray(0, authoredEnd)
   for (const inversion of inversions) {
     assert.deepEqual(restored.subarray(inversion.note.start, inversion.note.end), Buffer.from(inversion.ext[EXT].emitted, 'base64url'))
@@ -524,4 +524,214 @@ test('mutation control: a wrapper that strips the byte order prefix or adds a fi
   const target = noteOf(prepared, 'north-desk:shared-b')
   const terminated = mutateNotes(prepared, (bytes, file) => (file.path === target.path ? Buffer.concat([bytes.subarray(0, target.regions.body.end), Buffer.from('\n'), bytes.subarray(target.regions.body.end)]) : bytes))
   assert.throws(() => assertMatchesGolden(terminated, 'full'), assert.AssertionError)
+})
+
+// ---------------------------------------------------------------------------
+// Embedded assets. A second invented workspace, written per test, so the
+// goldens above stay as they are. `spec.files` maps a workspace-relative path
+// to text or bytes; `spec.assetEligible` is the fail-closed asset predicate.
+// ---------------------------------------------------------------------------
+
+const ASSET_REPOS = ['east-desk', 'west-desk']
+const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>\n')
+const doc = (id, title, body) => `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n${body}`
+const LOGBOOK_BODY = [
+  '# Logbook — café',
+  '',
+  'Gauge ![gauge](img/gauge.png) then spaced ![two words](img/two%20words.png#crop) then far ![swell](../../west-desk/charts/swell.svg).',
+  '',
+  'Wiki ![[pages/img/gauge.png|200]] and ![[west-desk/charts/swell.svg]] and bare ![[buoy.gif|120x80]] beside [[Signal sheet]] and [sheet](signal.md).',
+  '',
+  'Sealed ![sealed](img/sealed.png) and ![[sealed.png]] stay as written.',
+  '',
+  '```',
+  '![fenced](img/gauge.png)',
+  '```',
+  '',
+].join('\n')
+const assetFiles = () => ({
+  'east-desk/pages/logbook.md': doc('east-desk:logbook', 'Logbook', LOGBOOK_BODY),
+  'east-desk/pages/signal.md': doc('east-desk:signal', 'Signal sheet', '# Signal sheet\n\nAgain ![gauge](img/gauge.png).\n'),
+  'east-desk/pages/img/gauge.png': PNG,
+  'east-desk/pages/img/two words.png': Buffer.concat([PNG, Buffer.from([1])]),
+  'east-desk/pages/img/sealed.png': Buffer.from('ZQXSEALEDASSET'),
+  'east-desk/pool/buoy.gif': Buffer.from('GIF89a'),
+  'west-desk/charts/swell.svg': SVG,
+  'west-desk/notes/swell.md': doc('west-desk:swell', 'Swell notes', '# Swell notes\n'),
+})
+const assetProfile = { ...profile, workspaceId: 'ws-synthetic-0003', repositories: ASSET_REPOS.map((repoId) => ({ repoId, root: `repos/${repoId}`, enrollment: 'enrolled' })) }
+const sealedAsset = (asset) => asset.path !== 'pages/img/sealed.png'
+
+function makeAssetSnapshot(t, { files = assetFiles(), assetEligible = sealedAsset, graphEligible = sealedAsset } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-materialize-assets-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  for (const [relative, contents] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, relative)), { recursive: true })
+    fs.writeFileSync(path.join(dir, relative), contents)
+  }
+  for (const name of ASSET_REPOS) fs.mkdirSync(path.join(dir, name, '.git'), { recursive: true })
+  writeJson(path.join(dir, 'atelier.project.json'), {
+    schema: 'mnstry.atelier-project-config@v1',
+    name: 'asset-fixture',
+    roots: { workspace: '.', repoOps: '.' },
+    graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' },
+    projection: { outputRoot: 'atelier-output', readinessPath: 'atelier-output/atelier-readiness.json' },
+    repos: ASSET_REPOS.map((name) => ({ name, path: name, readBoundary: 'team' })),
+  })
+  writeJson(path.join(dir, 'repo-access.v1.json'), {
+    schema: 'mnstry.atelier-repo-access@v1',
+    defaultReadBoundary: 'team',
+    repos: Object.fromEntries(ASSET_REPOS.map((name) => [name, { readBoundary: 'team' }])),
+  })
+  const canonical = buildCanonicalGraph(resolveProjectConfig({ argv: [`--project=${path.join(dir, 'atelier.project.json')}`], cwd: dir }), {
+    isAssetEligible: ({ path: relative }) => graphEligible({ path: relative }),
+  })
+  assert.equal(canonical.ok, true, canonical.errors.join('\n'))
+  const graph = withEligibility(canonical, () => true, assetEligible)
+  const read = (repoId, relative) => fs.readFileSync(path.join(dir, repoId, relative))
+  const pinned = [...graph.nodes, ...graph.assets]
+  const snapshot = snapshotFor(graph, read)
+  snapshot.document.workspaceId = assetProfile.workspaceId
+  snapshot.document.repositories = ASSET_REPOS.map((repoId) => ({
+    repoId,
+    head: null,
+    dirty: true,
+    files: pinned.filter((item) => item.repo === repoId).map((item) => ({ path: item.path, rawDigest: sha256Digest(read(repoId, item.path)), byteLength: read(repoId, item.path).length })),
+  }))
+  return snapshot
+}
+
+const assetScope = { ...fullScope, scopeId: 'scope-assets' }
+const prepareAssets = (snapshot, scope = assetScope, extra = {}) => prepareView({ snapshot, profile: assetProfile, scope, clock, ...extra })
+const assetName = (repoId, relative, stem, extension) => `attachments/${stem}--${identitySuffix(repoId, `${repoId}:asset:${relative}`)}.${extension}`
+const everyOutput = (prepared) => [prepared.files.map((file) => [file.path, file.kind, file.bytes.toString('hex')]), prepared.manifestBytes.toString('utf8'), prepared.diagnostics]
+
+function assertAssetsEmitted(prepared) {
+  const gauge = assetName('east-desk', 'pages/img/gauge.png', 'gauge', 'png')
+  const spaced = assetName('east-desk', 'pages/img/two words.png', 'two words', 'png')
+  const buoy = assetName('east-desk', 'pool/buoy.gif', 'buoy', 'gif')
+  const swell = assetName('west-desk', 'charts/swell.svg', 'swell', 'svg')
+  // One copy per asset: the gauge is embedded three times, from two notes.
+  assert.deepEqual(prepared.manifest.attachments, [
+    { path: buoy, digest: sha256Digest(Buffer.from('GIF89a')), byteLength: 6, ext: { [EXT]: { kind: 'embedded-asset', repoId: 'east-desk', assetPath: 'pool/buoy.gif' } } },
+    { path: gauge, digest: sha256Digest(PNG), byteLength: PNG.length, ext: { [EXT]: { kind: 'embedded-asset', repoId: 'east-desk', assetPath: 'pages/img/gauge.png' } } },
+    { path: swell, digest: sha256Digest(SVG), byteLength: SVG.length, ext: { [EXT]: { kind: 'embedded-asset', repoId: 'west-desk', assetPath: 'charts/swell.svg' } } },
+    { path: spaced, digest: sha256Digest(Buffer.concat([PNG, Buffer.from([1])])), byteLength: PNG.length + 1, ext: { [EXT]: { kind: 'embedded-asset', repoId: 'east-desk', assetPath: 'pages/img/two words.png' } } },
+  ].sort((left, right) => (left.path < right.path ? -1 : 1)))
+  assert.deepEqual(prepared.files.filter((file) => file.kind === 'attachment').map((file) => file.path), prepared.manifest.attachments.map((item) => item.path))
+  assert.deepEqual(fileOf(prepared, gauge).bytes, PNG)
+  assert.deepEqual(fileOf(prepared, swell).bytes, SVG)
+
+  const logbook = noteBytes(prepared, 'east-desk:logbook').toString('utf8')
+  const encoded = (attachment) => attachment.split('/').map(encodeURIComponent).join('/')
+  assert.ok(logbook.includes(`Gauge ![gauge](${gauge}) then spaced ![two words](${encoded(spaced)}#crop) then far ![swell](${swell}).`))
+  assert.ok(encoded(spaced).includes('two%20words--'))
+  assert.ok(logbook.includes(`Wiki ![[${gauge}|200]] and ![[${swell}]] and bare ![[${buoy}|120x80]] beside [[`))
+  // A withheld asset and an embed inside code keep their authored bytes.
+  assert.ok(logbook.includes('Sealed ![sealed](img/sealed.png) and ![[sealed.png]] stay as written.'))
+  assert.ok(logbook.includes('```\n![fenced](img/gauge.png)\n```'))
+
+  const embeds = noteOf(prepared, 'east-desk:logbook').ext[EXT].assetEmbeds
+  assert.deepEqual(embeds.map((item) => [item.attachment, item.inversions.length]), [[buoy, 1], [gauge, 2], [swell, 2], [spaced, 1]].sort((left, right) => (left[0] < right[0] ? -1 : 1)))
+  assert.deepEqual(Object.keys(embeds[0].inversions[0]), ['source', 'note', 'ext'])
+  assert.deepEqual(noteOf(prepared, 'east-desk:signal').ext[EXT].assetEmbeds.map((item) => item.attachment), [gauge])
+  assert.equal(noteOf(prepared, 'west-desk:swell').ext[EXT].assetEmbeds, undefined)
+  assert.deepEqual(validateObsidianContract('generation-manifest', JSON.parse(prepared.manifestBytes.toString('utf8'))), [])
+}
+
+// A note with links and asset embeds inverts to the pinned source digest.
+function assertInvertsToSourceDigest(prepared, snapshot, nodeId, invert = invertNote) {
+  const note = noteOf(prepared, nodeId)
+  const pinned = snapshot.document.repositories.find((repo) => repo.repoId === note.repoId).files.find((file) => file.path === note.ext[EXT].source.path)
+  assert.equal(sha256Digest(invert(prepared, nodeId)), pinned.rawDigest)
+}
+
+test('embedded assets are copied once, rewritten through the inversion map and invert exactly', (t) => {
+  const snapshot = makeAssetSnapshot(t)
+  const prepared = prepareAssets(snapshot)
+  assertAssetsEmitted(prepared)
+  const logbook = noteOf(prepared, 'east-desk:logbook')
+  assert.ok(prepared.manifest.links.some((link) => link.sourceNodeId === logbook.nodeId && (link.inversions ?? []).length > 0), 'fixture no longer mixes links and asset embeds')
+  for (const nodeId of ['east-desk:logbook', 'east-desk:signal', 'west-desk:swell']) assertInvertsToSourceDigest(prepared, snapshot, nodeId)
+
+  // Mutation controls: an inversion that forgets asset embeds, a second copy
+  // of one asset and a rewritten size tail each fail.
+  const linksOnly = (view, nodeId) => invertNote({ ...view, manifest: { ...view.manifest, notes: view.manifest.notes.map((note) => ({ ...note, ext: { [EXT]: { source: note.ext[EXT].source } } })) } }, nodeId)
+  assert.throws(() => assertInvertsToSourceDigest(prepared, snapshot, 'east-desk:logbook', linksOnly), assert.AssertionError)
+  const twice = { ...prepared, manifest: { ...prepared.manifest, attachments: [...prepared.manifest.attachments, { ...prepared.manifest.attachments[0], path: 'attachments/copy.gif' }] } }
+  assert.throws(() => assertAssetsEmitted(twice), assert.AssertionError)
+  const aliased = mutateNotes(prepared, (bytes) => Buffer.from(bytes.toString('utf8').replace('.gif|120x80]]', '.gif|120x80|buoy.gif]]')))
+  assert.throws(() => assertAssetsEmitted(aliased), assert.AssertionError)
+})
+
+test('asset preparation is deterministic: two runs are byte-identical', (t) => {
+  const [first, second] = [prepareAssets(makeAssetSnapshot(t)), prepareAssets(makeAssetSnapshot(t))]
+  const assertSame = (left, right) => assert.deepEqual(everyOutput(left), everyOutput(right))
+  assertSame(first, second)
+  assert.throws(() => assertSame(first, mutateNotes(second, (bytes) => Buffer.concat([bytes, Buffer.from('\n')]))), assert.AssertionError)
+})
+
+test('a withheld asset leaves exactly what a deleted asset leaves, at the graph and at the emitter', (t) => {
+  const { 'east-desk/pages/img/sealed.png': removed, ...withoutSealed } = assetFiles()
+  assert.ok(removed)
+  const deleted = prepareAssets(makeAssetSnapshot(t, { files: withoutSealed }))
+  const assertSameAsDeleted = (prepared) => assert.deepEqual(everyOutput(prepared), everyOutput(deleted))
+  // Withheld by the graph predicate: the graph never reports it.
+  assertSameAsDeleted(prepareAssets(makeAssetSnapshot(t)))
+  // Reported by the graph, withheld only by the fail-closed flag.
+  const flagged = makeAssetSnapshot(t, { graphEligible: () => true })
+  assert.ok(flagged.graph.assets.some((asset) => asset.path === 'pages/img/sealed.png' && asset.eligible === false))
+  assertSameAsDeleted(prepareAssets(flagged))
+  // No second predicate at all withholds every asset.
+  const unflagged = makeAssetSnapshot(t)
+  const none = prepareAssets({ ...unflagged, graph: withEligibility(unflagged.graph, () => true) })
+  assert.deepEqual(none.manifest.attachments, [])
+  assert.ok(noteBytes(none, 'east-desk:logbook').toString('utf8').includes('Gauge ![gauge](img/gauge.png) then spaced ![two words](img/two%20words.png#crop) then far ![swell](../../west-desk/charts/swell.svg).'))
+  assertInvertsToSourceDigest(none, unflagged, 'east-desk:logbook')
+  // Anything but exactly true is withheld.
+  const truthy = prepareAssets({ ...unflagged, graph: { ...unflagged.graph, assets: unflagged.graph.assets.map((asset) => ({ ...asset, eligible: 'true' })) } })
+  assert.deepEqual(truthy.manifest.attachments, [])
+
+  // Mutation control: an eligible sealed asset is emitted, so the comparison fails.
+  const open = prepareAssets(makeAssetSnapshot(t, { graphEligible: () => true, assetEligible: () => true }))
+  assert.ok(open.manifest.attachments.some((item) => item.ext[EXT].assetPath === 'pages/img/sealed.png'))
+  assert.throws(() => assertSameAsDeleted(open), assert.AssertionError)
+})
+
+test('an asset embedded only from outside the view, or from a repository the profile does not enrol, leaves nothing', (t) => {
+  const snapshot = makeAssetSnapshot(t)
+  const assertNoAssetTrace = (prepared) => {
+    assert.deepEqual(prepared.manifest.attachments, [])
+    const everything = JSON.stringify(everyOutput(prepared))
+    for (const trace of ['attachments/', 'embedded-asset', 'assetEmbeds', identitySuffix('east-desk', 'east-desk:asset:pages/img/gauge.png')]) assert.equal(everything.includes(trace), false, trace)
+  }
+  assertNoAssetTrace(prepareAssets(snapshot, { ...scopedScope, scopeId: 'scope-swell', selector: { ids: ['west-desk:swell'] } }))
+  // Mutation control: the full view does carry them.
+  assert.throws(() => assertNoAssetTrace(prepareAssets(snapshot)), assert.AssertionError)
+
+  // A paused repository's asset stays as authored inside a visible note.
+  const paused = { ...assetProfile, repositories: assetProfile.repositories.map((repo) => (repo.repoId === 'west-desk' ? { ...repo, enrollment: 'paused' } : repo)) }
+  const prepared = prepareView({ snapshot, profile: paused, scope: assetScope, clock })
+  assert.deepEqual(prepared.manifest.attachments.map((item) => item.ext[EXT].repoId), ['east-desk', 'east-desk', 'east-desk'])
+  const logbook = noteBytes(prepared, 'east-desk:logbook').toString('utf8')
+  assert.ok(logbook.includes('![swell](../../west-desk/charts/swell.svg)') && logbook.includes('![[west-desk/charts/swell.svg]]'))
+  assertInvertsToSourceDigest(prepared, snapshot, 'east-desk:logbook')
+})
+
+test('an emitted asset is read through the pinned snapshot: unpinned refuses, drifted bytes refuse', (t) => {
+  const snapshot = makeAssetSnapshot(t)
+  const unpinned = { ...snapshot, document: { ...snapshot.document, repositories: snapshot.document.repositories.map((repo) => ({ ...repo, files: repo.files.filter((file) => file.path !== 'pool/buoy.gif') })) } }
+  assert.throws(() => prepareAssets(unpinned), { code: 'source-not-in-snapshot' })
+  const drifted = { ...snapshot, readSource: (repoId, relative) => (relative === 'pool/buoy.gif' ? Buffer.from('GIF87a') : snapshot.readSource(repoId, relative)) }
+  assert.throws(() => prepareAssets(drifted), { code: 'mixed-read' })
+  // A withheld asset is never read, pinned or not.
+  const reads = []
+  prepareAssets({ ...snapshot, readSource: (repoId, relative) => (reads.push(relative), snapshot.readSource(repoId, relative)) })
+  assert.ok(reads.includes('pool/buoy.gif') && !reads.includes('pages/img/sealed.png'))
+  // An embed moved off the bytes the graph read refuses instead of rewriting.
+  const moved = { ...snapshot, graph: { ...snapshot.graph, embeds: snapshot.graph.embeds.map((embed, index) => (index === 0 ? { ...embed, href: 'img/other.png' } : embed)) } }
+  assert.throws(() => prepareAssets(moved), { code: 'mixed-read' })
+  const overlapping = { ...snapshot, graph: { ...snapshot.graph, embeds: [...snapshot.graph.embeds, snapshot.graph.embeds[0]] } }
+  assert.throws(() => prepareAssets(overlapping), { code: 'link-overlap' })
 })

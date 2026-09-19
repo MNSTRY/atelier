@@ -119,9 +119,15 @@ const canonicalEdgeId = (edge) => JSON.stringify([edge.source, edge.type, edge.t
 // edges and the source offsets behind them. Nothing is resolved here: nodes,
 // edges, link occurrences and link findings all come from
 // buildKnowledgeGraph. Each edge gains a stable id and an origin; a derived
-// edge carries every source occurrence that produced it.
-export function buildCanonicalGraph(project, { isLinkTargetEligible } = {}) {
-  const { input, result } = canonicalBuild(project, isLinkTargetEligible ? { isLinkTargetEligible } : {})
+// edge carries every source occurrence that produced it. Embedded assets are
+// reported beside the graph, like link occurrences: `embeds` holds one record
+// per embed occurrence and `assets` each embedded file once. Neither adds a
+// node or an edge.
+export function buildCanonicalGraph(project, { isLinkTargetEligible, isAssetEligible } = {}) {
+  const { input, result } = canonicalBuild(project, {
+    ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}),
+    ...(isAssetEligible ? { isAssetEligible } : {}),
+  })
   const canonical = result.workspaceGraph ?? { nodes: [], edges: [], diagnostics: [] }
   const occurrences = new Map()
   for (const link of result.resolvedLinks ?? []) {
@@ -135,6 +141,8 @@ export function buildCanonicalGraph(project, { isLinkTargetEligible } = {}) {
       ? { id, ...edge, origin: 'declared' }
       : { id, ...edge, origin: 'ordinary-link', occurrences: occurrences.get(id) ?? [] }
   })
+  const embeds = result.resolvedEmbeds ?? []
+  const assets = [...new Map(embeds.map((embed) => [embed.asset.id, embed.asset])).values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   return {
     ok: result.ok && input.missing.length === 0,
     errors: [...input.missing, ...result.errors],
@@ -143,6 +151,8 @@ export function buildCanonicalGraph(project, { isLinkTargetEligible } = {}) {
     edges,
     diagnostics: canonical.diagnostics,
     links: result.resolvedLinks ?? [],
+    embeds,
+    assets,
     linkDiagnostics: result.linkDiagnostics ?? [],
   }
 }

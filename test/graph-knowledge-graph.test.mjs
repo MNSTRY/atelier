@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -512,4 +513,237 @@ test('markdownLinkEdges accepts census nodes that carry only an id, including be
 test('a link whose label is inline code is an ordinary link; a link inside inline code is not', () => {
   const found = scanMarkdownLinks('See [`b.md`](./b.md), not `[c](c.md)` and not `` [[d]] ``.\n')
   assert.deepEqual(found.map((link) => link.href), ['./b.md'])
+})
+
+// ---------------------------------------------------------------------------
+// Embedded assets. An embed of a file that is not a document resolves to an
+// asset record beside the graph; it never becomes a node or an edge. Every
+// oracle below is a function, so a mutation control can show that it fails.
+// ---------------------------------------------------------------------------
+
+const PIXEL = Buffer.from('89504e470d0a1a0a', 'hex')
+
+function makeAssetWorkspace(t) {
+  const made = makeLinkedWorkspace(t)
+  const alpha = made.repos['alpha-notes']
+  const beta = made.repos['beta-notes']
+  note(
+    alpha,
+    'docs/tide.md',
+    'alpha-notes:tide',
+    'Tide tables',
+    [
+      '# Tide tables — café',
+      '',
+      'Plain ![gauge](img/gauge.png) and spaced ![two words](img/two%20words.png#crop) and far ![far](../../beta-notes/charts/swell.svg).',
+      '',
+      'Wiki ![[docs/img/gauge.png|200]] and ![[beta-notes/charts/swell.svg]] and bare ![[buoy.gif|120x80]] and note ![[Harbour log]].',
+      '',
+      'A plain link to a file is no embed: [gauge file](img/gauge.png). Gone: ![gone](img/gone.png).',
+      '',
+      'Inline `![code](img/gauge.png)` and `![[buoy.gif]]` stay literal.',
+      '',
+      '```',
+      '![fenced](img/gauge.png)',
+      '![[buoy.gif]]',
+      '```',
+    ].join('\n'),
+  )
+  note(beta, 'logs/harbour.md', 'beta-notes:harbour', 'Harbour log', '# Harbour log')
+  writeAsset(alpha, 'docs/img/gauge.png', PIXEL)
+  writeAsset(alpha, 'docs/img/two words.png', PIXEL)
+  writeAsset(alpha, 'pool/buoy.gif', 'GIF89a')
+  writeAsset(beta, 'charts/swell.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>')
+  return made
+}
+
+const artifactBytes = (result) => JSON.stringify([result.workspaceGraph, result.repoGraphs.map(({ repoName, graph }) => [repoName, graph])])
+
+function assertEmbedsResolve(result, repos) {
+  assert.deepEqual(
+    result.resolvedEmbeds.map((item) => [item.syntax, item.resolvedBy, item.asset.id, item.href, item.fragment, item.crossRepository]),
+    [
+      ['markdown', 'path', 'alpha-notes:asset:docs/img/gauge.png', 'img/gauge.png', '', false],
+      ['markdown', 'path', 'alpha-notes:asset:docs/img/two words.png', 'img/two%20words.png', '#crop', false],
+      ['markdown', 'path', 'beta-notes:asset:charts/swell.svg', '../../beta-notes/charts/swell.svg', '', true],
+      ['wikilink', 'path', 'alpha-notes:asset:docs/img/gauge.png', 'docs/img/gauge.png', '', false],
+      ['wikilink', 'path', 'beta-notes:asset:charts/swell.svg', 'beta-notes/charts/swell.svg', '', true],
+      ['wikilink', 'basename', 'alpha-notes:asset:pool/buoy.gif', 'buoy.gif', '', false],
+    ],
+  )
+  const [first] = result.resolvedEmbeds
+  assert.deepEqual(Object.keys(first), ['source', 'type', 'asset', 'syntax', 'href', 'fragment', 'resolvedBy', 'crossRepository', 'sourceRepo', 'sourcePath', 'range', 'targetRange'])
+  assert.deepEqual([first.source, first.type, first.sourceRepo, first.sourcePath], ['alpha-notes:tide', 'embeds_asset', 'alpha-notes', 'docs/tide.md'])
+  assert.deepEqual(first.asset, { id: 'alpha-notes:asset:docs/img/gauge.png', repo: 'alpha-notes', path: 'docs/img/gauge.png', extension: 'png' })
+  const bytes = fs.readFileSync(path.join(repos['alpha-notes'], 'docs/tide.md'))
+  const text = bytes.toString('utf8')
+  for (const embed of result.resolvedEmbeds) {
+    assert.equal(text.slice(embed.targetRange.start, embed.targetRange.end), embed.href)
+    assert.equal(bytes.subarray(embed.targetRange.byteStart, embed.targetRange.byteEnd).toString('utf8'), embed.href)
+    assert.equal(bytes.subarray(embed.range.byteStart, embed.range.byteEnd).toString('utf8'), text.slice(embed.range.start, embed.range.end))
+    // The heading holds multi-byte characters, so byte and character offsets differ.
+    assert.notEqual(embed.range.byteStart, embed.range.start)
+  }
+  const sized = result.resolvedEmbeds.find((item) => item.href === 'buoy.gif')
+  assert.equal(text.slice(sized.range.start, sized.range.end), '[[buoy.gif|120x80]]')
+  // A note embed stays a link; a plain link to a file and a missing file stay findings.
+  assert.deepEqual(result.resolvedLinks.map((item) => [item.embed, item.target]), [[true, 'beta-notes:harbour']])
+  assert.deepEqual(result.linkDiagnostics.map((item) => [item.code, item.href]), [
+    ['link-target-unresolved', 'img/gauge.png'],
+    ['link-target-unresolved', 'img/gone.png'],
+  ])
+}
+
+test('markdown and wikilink embeds of enrolled files resolve to asset records with exact offsets', (t) => {
+  const { root, repos, access } = makeAssetWorkspace(t)
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assertEmbedsResolve(result, repos)
+  // Two builds of the same tree agree byte for byte.
+  const again = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(JSON.stringify([again.resolvedEmbeds, again.linkDiagnostics]), JSON.stringify([result.resolvedEmbeds, result.linkDiagnostics]))
+})
+
+test('mutation control: embeds scanned inside code, or a dropped size tail, fail the embed oracle', (t) => {
+  const { root, repos, access } = makeAssetWorkspace(t)
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  const fenced = { ...result.resolvedEmbeds[0], href: 'img/gauge.png', range: { ...result.resolvedEmbeds[0].range } }
+  assert.throws(() => assertEmbedsResolve({ ...result, resolvedEmbeds: [...result.resolvedEmbeds, fenced] }, repos), assert.AssertionError)
+  const shortened = result.resolvedEmbeds.map((item) => (item.href === 'buoy.gif' ? { ...item, range: { ...item.range, end: item.range.end - 1 } } : item))
+  assert.throws(() => assertEmbedsResolve({ ...result, resolvedEmbeds: shortened }, repos), assert.AssertionError)
+})
+
+function assertArtifactsIgnoreAssets(withAssets, withoutAssets) {
+  assert.equal(artifactBytes(withAssets), artifactBytes(withoutAssets))
+  assert.ok(withAssets.resolvedEmbeds.length > 0 && withoutAssets.resolvedEmbeds.length === 0, 'fixture no longer exercises assets')
+}
+
+test('graph artifacts and markdownLinkEdges are byte-identical with and without assets present', (t) => {
+  // One workspace, built with its assets and again after they are deleted.
+  const { root, repos, access } = makeAssetWorkspace(t)
+  const edgesOf = (result) => markdownLinkEdges(repos['alpha-notes'], new Map(result.workspaceGraph.nodes.filter((node) => node.repo === 'alpha-notes').map((node) => [node.path, node])))
+  const withAssets = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  const edgesWithAssets = edgesOf(withAssets)
+  for (const rel of ['alpha-notes/docs/img', 'alpha-notes/pool', 'beta-notes/charts']) fs.rmSync(path.join(root, rel), { recursive: true })
+  const withoutAssets = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assertArtifactsIgnoreAssets(withAssets, withoutAssets)
+  assert.ok(!artifactBytes(withAssets).includes('asset:'))
+  assert.deepEqual(edgesWithAssets, edgesOf(withoutAssets))
+
+  // Mutation control: an embed that became an edge changes the artifact.
+  const leaked = { ...withAssets, workspaceGraph: { ...withAssets.workspaceGraph, edges: [...withAssets.workspaceGraph.edges, { source: 'alpha-notes:tide', target: 'alpha-notes:asset:docs/img/gauge.png', type: 'links_to' }] } }
+  assert.throws(() => assertArtifactsIgnoreAssets(leaked, withoutAssets), assert.AssertionError)
+})
+
+// One source, one embed per case; returns what the resolver reports.
+function resolveEmbeds(t, body, arrange, options = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-embeds-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(root, 'src.md'), body)
+  arrange(root)
+  return resolveWorkspaceLinks({ repos: [{ name: 'r', root, nodesByPath: new Map([['src.md', { id: 'n:src', path: 'src.md' }]]) }], ...options })
+}
+
+const assertUnresolved = (resolved) => {
+  assert.deepEqual(resolved.embeds, [])
+  assert.deepEqual(resolved.diagnostics.map((item) => item.code), resolved.diagnostics.map(() => 'link-target-unresolved'))
+  assert.ok(resolved.diagnostics.length > 0)
+}
+
+test('a bare embed name that matches more than one file refuses to choose', (t) => {
+  const twice = resolveEmbeds(t, '![[buoy.gif]]\n', (root) => {
+    writeAsset(root, 'east/buoy.gif', 'GIF89a')
+    writeAsset(root, 'west/buoy.gif', 'GIF89a')
+  })
+  const assertAmbiguous = (resolved) => {
+    assert.deepEqual(resolved.embeds, [])
+    assert.deepEqual(resolved.diagnostics.map((item) => [item.code, item.candidates]), [['link-target-ambiguous', ['r:asset:east/buoy.gif', 'r:asset:west/buoy.gif']]])
+  }
+  assertAmbiguous(twice)
+  // A withheld namesake is skipped before choosing, exactly as an absent one.
+  const one = resolveEmbeds(t, '![[buoy.gif]]\n', (root) => writeAsset(root, 'east/buoy.gif', 'GIF89a'))
+  const hidden = resolveEmbeds(
+    t,
+    '![[buoy.gif]]\n',
+    (root) => {
+      writeAsset(root, 'east/buoy.gif', 'GIF89a')
+      writeAsset(root, 'west/buoy.gif', 'GIF89a')
+    },
+    { isAssetEligible: ({ path: rel }) => rel !== 'west/buoy.gif' },
+  )
+  assert.deepEqual(hidden, one)
+  assert.equal(one.embeds[0].asset.id, 'r:asset:east/buoy.gif')
+  // Mutation control: the single-file case is not ambiguous.
+  assert.throws(() => assertAmbiguous(one), assert.AssertionError)
+})
+
+test('an asset that is a link on disk, or is reached through one, stays unresolved', (t) => {
+  const body = '![a](img/linked.png) ![b](through/real.png) ![[linked.png]] ![[through/real.png]]\n'
+  const linked = resolveEmbeds(t, body, (root) => {
+    writeAsset(root, 'store/real.png', PIXEL)
+    fs.mkdirSync(path.join(root, 'img'))
+    fs.symlinkSync(path.join(root, 'store/real.png'), path.join(root, 'img/linked.png'))
+    fs.symlinkSync(path.join(root, 'store'), path.join(root, 'through'))
+  })
+  assertUnresolved(linked)
+  assert.equal(linked.diagnostics.length, 4)
+  // Mutation control: the same names as regular files resolve, so the oracle fails.
+  const regular = resolveEmbeds(t, body, (root) => {
+    writeAsset(root, 'img/linked.png', PIXEL)
+    writeAsset(root, 'through/real.png', PIXEL)
+  })
+  assert.equal(regular.embeds.length, 4)
+  assert.throws(() => assertUnresolved(regular), assert.AssertionError)
+})
+
+test('a git-ignored asset, a file inside .git and a Markdown file are never assets', (t) => {
+  const body = '![a](cache/shot.png) ![[shot.png]] ![b](.git/description) ![c](kept/shot.png)\n'
+  const arrange = (ignore) => (root) => {
+    const run = (args) => assert.equal(spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' }).status, 0)
+    run(['init', '--quiet'])
+    fs.writeFileSync(path.join(root, '.gitignore'), ignore)
+    writeAsset(root, 'cache/shot.png', PIXEL)
+    writeAsset(root, 'kept/shot.png', PIXEL)
+    fs.writeFileSync(path.join(root, '.git/description'), 'fixture\n')
+  }
+  const ignored = resolveEmbeds(t, body, arrange('cache/\n'))
+  const assertOnlyKept = (resolved) => {
+    assert.deepEqual(resolved.embeds.map((item) => [item.href, item.asset.id]), [['shot.png', 'r:asset:kept/shot.png'], ['kept/shot.png', 'r:asset:kept/shot.png']])
+    assert.deepEqual(resolved.diagnostics.map((item) => [item.code, item.href]), [['link-target-unresolved', 'cache/shot.png'], ['link-target-unresolved', '.git/description']])
+  }
+  assertOnlyKept(ignored)
+  // Mutation control: without the ignore rule the cached file is an asset and the bare name is ambiguous.
+  assert.throws(() => assertOnlyKept(resolveEmbeds(t, body, arrange('unrelated/\n'))), assert.AssertionError)
+})
+
+test('a withheld asset is reported exactly as a deleted one', (t) => {
+  const body = '# Café\n\n![a](img/sealed.png) and ![[img/sealed.png|40]] and ![[sealed.png]] and ![b](img/open.png)\n'
+  const arrange = (withSealed) => (root) => {
+    writeAsset(root, 'img/open.png', PIXEL)
+    if (withSealed) writeAsset(root, 'img/sealed.png', 'ZQXSEALEDBYTES')
+  }
+  const withheld = resolveEmbeds(t, body, arrange(true), { isAssetEligible: ({ repo, path: rel }) => !(repo === 'r' && rel === 'img/sealed.png') })
+  const deleted = resolveEmbeds(t, body, arrange(false))
+  const assertIndistinguishable = (left, right) => assert.equal(JSON.stringify(left), JSON.stringify(right))
+  assertIndistinguishable(withheld, deleted)
+  assert.deepEqual(withheld.diagnostics.map((item) => item.code), ['link-target-unresolved', 'link-target-unresolved', 'link-target-unresolved'])
+  assert.deepEqual(withheld.embeds.map((item) => item.asset.path), ['img/open.png'])
+  // Mutation control: an eligible sealed file resolves, so the comparison fails.
+  assert.throws(() => assertIndistinguishable(resolveEmbeds(t, body, arrange(true)), deleted), assert.AssertionError)
+})
+
+test('an embed whose path is a census node is never an asset, withheld or not', (t) => {
+  const arrange = (root) => writeAsset(root, 'charts/depth.pdf', '%PDF-1.4\n')
+  const resolve = (options) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-embeds-'))
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+    fs.writeFileSync(path.join(root, 'src.md'), '![chart](charts/depth.pdf)\n')
+    arrange(root)
+    const nodesByPath = new Map([['src.md', { id: 'n:src', path: 'src.md' }], ['charts/depth.pdf', { id: 'n:depth', path: 'charts/depth.pdf' }]])
+    return resolveWorkspaceLinks({ repos: [{ name: 'r', root, nodesByPath }], ...options })
+  }
+  const open = resolve({})
+  assert.deepEqual([open.links.map((link) => link.target), open.embeds], [['n:depth'], []])
+  const sealed = resolve({ isLinkTargetEligible: (node) => node.id !== 'n:depth' })
+  assert.deepEqual([sealed.links, sealed.embeds, sealed.diagnostics.map((item) => item.code)], [[], [], ['link-target-unresolved']])
 })

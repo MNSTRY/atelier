@@ -70,6 +70,50 @@ titles are allowed; duplicate canonical identities refuse; a title-only link
 that matches more than one visible note refuses. Paths are allocated once per
 workspace and reused by every view.
 
+## Embedded assets
+
+An embed (`![](file)` or `![[file]]`) whose target is not a document of the
+census resolves in the canonical graph, never in the emitter. The resolver
+reports `embeds` beside `links`: one `embeds_asset` record per occurrence, with
+the same UTF-16 and byte offsets, naming an asset
+`{ id, repo, path, extension }` whose id is `<repository>:asset:<path>`.
+`buildCanonicalGraph` returns `embeds` and the de-duplicated `assets`. Neither
+is a node or an edge: committed graph artifacts and `markdownLinkEdges` are
+byte-identical with and without assets.
+
+An asset is a regular file inside an enrolled repository root. A link on disk,
+a file reached through one, a git-ignored path, anything inside `.git`, a
+Markdown file and a census node are never assets. Markdown embeds resolve by
+relative path like links. A wikilink embed whose target contains `/` resolves
+by repository-relative path, in the source's repository first and then as
+`<repository>/<path>`; a bare file name resolves by basename across enrolled
+repositories and refuses as `link-target-ambiguous` when more than one file
+matches. `isAssetEligible({ repo, path })` fails closed and is asked per
+candidate before choosing: a refused asset is reported exactly as an absent
+one (`link-target-unresolved`), so a finding never confirms that a withheld
+file exists.
+
+Behaviour change: an embed that resolves to an asset no longer produces a
+`link-target-unresolved` finding. No other finding changes.
+
+In a view, an asset is copied only when the embedding note is in the vault
+set, the asset record carries `eligible: true` (`withEligibility` takes a
+second predicate; without it every asset is withheld) and the profile enrols
+its repository under the same audience rule as a node without an audience of
+its own. It is copied once, byte for byte, to
+`attachments/<readable stem>--<identity suffix>.<ext>`, read through the pinned
+snapshot (`source-not-in-snapshot`, `mixed-read`). The embed target is
+rewritten through the link inversion machinery: a Markdown embed to the
+percent-encoded vault-root path, a wikilink embed to the plain path with its
+size or fragment left as authored and no alias added. The manifest lists the
+copy in `attachments[]` with
+`ext["mnstry.atelier.obsidian"] = { kind: "embedded-asset", repoId, assetPath }`
+and records the inversions on the embedding note at
+`notes[].ext["mnstry.atelier.obsidian"].assetEmbeds = [{ attachment, inversions }]`,
+in the shape of link inversions. A withheld or out-of-selection asset leaves
+the authored embed untouched and appears in no output, manifest entry or
+diagnostic.
+
 ## Publication protocol `obsidian-cli-critical-section/v1`
 
 The journal's `protocolId` names this protocol. A publisher may use it only
