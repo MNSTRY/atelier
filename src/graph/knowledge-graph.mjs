@@ -710,22 +710,19 @@ export const LINK_DIAGNOSTIC_CODES = Object.freeze([
 const MARKDOWN_LINK_RE = /\[[^\]]+\]\(([^)\s#]+)(#[^)]+)?\)/g
 const WIKILINK_RE = /\[\[([^[\]|#^]+)([#^][^[\]|]*)?(?:\|[^[\]]*)?\]\]/g
 
-// Regions whose text is never read as a link: front matter (known or unknown
-// YAML alike), fenced code and inline code. Offsets index the text as read,
-// with no newline normalization.
-function unscannedRanges(text) {
-  const ranges = []
-  let bodyStart = 0
-  if (/^---\r?\n/.test(text)) {
-    const closeRe = /\r?\n---[ \t]*\r?\n/g
-    closeRe.lastIndex = 3
-    const close = closeRe.exec(text)
-    if (close) {
-      bodyStart = close.index + close[0].length
-      ranges.push([0, bodyStart])
-    }
-  }
+function frontMatterEnd(text) {
+  if (!/^---\r?\n/.test(text)) return 0
+  const closeRe = /\r?\n---[ \t]*\r?\n/g
+  closeRe.lastIndex = 3
+  const close = closeRe.exec(text)
+  return close ? close.index + close[0].length : 0
+}
 
+// Fenced code from `bodyStart` on: the closed blocks, and the fence still open
+// when the text ends, if any. The one statement of the fence rules, shared by
+// the link scanner and by `unclosedFenceAtEnd`.
+function fencedBlocks(text, bodyStart) {
+  const ranges = []
   let fence = null
   let offset = bodyStart
   while (offset < text.length) {
@@ -739,14 +736,34 @@ function unscannedRanges(text) {
         fence = null
       }
     } else {
-      const open = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/)
-      if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
-        fence = { char: open[1][0], length: open[1].length, start: offset }
+      const open = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/)
+      if (open && !(open[2][0] === '`' && open[3].includes('`'))) {
+        fence = { char: open[2][0], length: open[2].length, indent: open[1].length, start: offset }
       }
     }
     offset = next
   }
-  if (fence) ranges.push([fence.start, text.length])
+  return { ranges, open: fence }
+}
+
+// The fence a Markdown text ends inside, as the link scanner reads it:
+// { char, length, indent }, or null when every fence closes. Front matter is
+// never read for fences. Anything appended after such a text is code until a
+// closing fence of the same character and at least the same length.
+export function unclosedFenceAtEnd(raw) {
+  const text = String(raw ?? '')
+  const { open } = fencedBlocks(text, frontMatterEnd(text))
+  return open ? { char: open.char, length: open.length, indent: open.indent } : null
+}
+
+// Regions whose text is never read as a link: front matter (known or unknown
+// YAML alike), fenced code and inline code. Offsets index the text as read,
+// with no newline normalization.
+function unscannedRanges(text) {
+  const bodyStart = frontMatterEnd(text)
+  const fenced = fencedBlocks(text, bodyStart)
+  const ranges = bodyStart > 0 ? [[0, bodyStart], ...fenced.ranges] : fenced.ranges
+  if (fenced.open) ranges.push([fenced.open.start, text.length])
 
   // Inline code between the block ranges. A span closes on a backtick run of
   // the same length inside the same paragraph; an unclosed run is plain text.

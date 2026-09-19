@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { unclosedFenceAtEnd } from '../../../graph/knowledge-graph.mjs'
 import { DERIVED_RELATION_TYPE, RELATION_TYPES, SCOPE_PRIMITIVES, assertObsidianContract, identitySuffix, readableTitle, selectScope } from '../contracts.mjs'
 import { assertStrictUtf8, readMarkdownLens, refuse, sha256Digest } from './byte-lens.mjs'
 import { allocateWorkspacePaths, collisionKey, emptyPathRegistry, titleWithinBudget } from './path-registry.mjs'
@@ -183,16 +184,38 @@ function relationRows({ node, outgoing, incoming, vaultNode, pathOf }) {
   return rows
 }
 
-function generatedSections({ precedingBytes, offset, rows, outsideCount }) {
+// An authored body that ends inside a fenced code block would swallow whatever
+// follows it. The closing fence is generated, never authored: it is the first
+// bytes of the first generated region, so authored ranges and inversion stay
+// exact. It repeats the opener's indentation, character and length, starts on
+// its own line and uses the source's line ending. The fence rules are the
+// canonical graph scanner's, not restated here.
+function fenceClosureFor(source, finalNewline) {
+  const fence = unclosedFenceAtEnd(source.toString('utf8'))
+  if (!fence) return null
+  const firstBreak = source.indexOf(0x0a)
+  const crlf = finalNewline === 'crlf' || (finalNewline === 'none' && firstBreak > 0 && source[firstBreak - 1] === 0x0d)
+  const eol = crlf ? '\r\n' : '\n'
+  const line = `${' '.repeat(fence.indent)}${fence.char.repeat(fence.length)}`
+  return { fence: line, text: `${finalNewline === 'none' ? eol : ''}${line}${eol}` }
+}
+
+function generatedSections({ precedingBytes, offset, rows, outsideCount, closure = null }) {
   const regions = []
   const parts = []
   let cursor = offset
   const push = (kind, text) => {
-    const bytes = utf8(text)
+    const closes = closure && regions.length === 0
+    const bytes = utf8(closes ? `${closure.text}${text}` : text)
     parts.push(bytes)
-    regions.push({ kind, range: { start: cursor, end: cursor + bytes.length } })
+    regions.push({
+      kind,
+      range: { start: cursor, end: cursor + bytes.length },
+      ...(closes ? { ext: { [EXT_KEY]: { fenceClosure: { fence: closure.fence, byteLength: Buffer.byteLength(closure.text, 'utf8') } } } } : {}),
+    })
     cursor += bytes.length
   }
+  if (closure) precedingBytes = utf8(closure.text)
   if (rows.length > 0) push('relations', `${separatorAfter(precedingBytes)}${RELATIONS_HEADING}${rows.join('')}`)
   if (outsideCount > 0) {
     const lead = rows.length > 0 ? '\n' : `${separatorAfter(precedingBytes)}${RELATIONS_HEADING}`
@@ -366,6 +389,7 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   const notes = []
   const attachments = []
   const inversionsByEdge = new Map()
+  let fenceClosed = false
 
   for (const node of orderedNodes) {
     const notePathValue = pathOf(node)
@@ -378,6 +402,7 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     const assetInversions = new Map()
     let authored
     let regions
+    let closure = null
 
     if (node.extension === 'md') {
       const lens = readMarkdownLens(source, { repoId: node.repo, nodeId: node.id })
@@ -399,6 +424,7 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
         ...(lens.frontmatter ? { frontmatter: lens.frontmatter } : {}),
         body: { start: lens.body.start, end: authored.length },
       }
+      closure = fenceClosureFor(source, lens.finalNewline)
       Object.assign(sourceRecord, { kind: 'markdown', finalNewline: lens.finalNewline, ...(lens.bom ? { bom: lens.bom } : {}) })
     } else {
       const extension = /^[a-z0-9]{1,16}$/.test(String(node.extension).toLowerCase()) ? String(node.extension).toLowerCase() : 'bin'
@@ -411,7 +437,8 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
       Object.assign(sourceRecord, { kind: 'wrapper', attachment: attachmentPath })
     }
 
-    const generated = generatedSections({ precedingBytes: authored, offset: authored.length, rows, outsideCount })
+    const generated = generatedSections({ precedingBytes: authored, offset: authored.length, rows, outsideCount, closure })
+    if (closure && generated.regions.length > 0) fenceClosed = true
     const bytes = Buffer.concat([authored, generated.bytes])
     assertStrictUtf8(bytes)
     assertContained(notePathValue)
@@ -513,6 +540,7 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     diagnostics: [
       ...selection.diagnostics,
       ...(canonical.externalEdgeCount > 0 ? ['relations-to-identities-outside-the-census-are-not-emitted'] : []),
+      ...(fenceClosed ? ['unclosed-code-fence-closed-in-generated-region'] : []),
     ],
   }
 }

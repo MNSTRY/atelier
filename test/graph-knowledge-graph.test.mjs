@@ -12,6 +12,7 @@ import {
   portableText,
   resolveWorkspaceLinks,
   scanMarkdownLinks,
+  unclosedFenceAtEnd,
   validateRepoAccessConfig,
 } from '../src/graph/knowledge-graph.mjs'
 
@@ -746,4 +747,41 @@ test('an embed whose path is a census node is never an asset, withheld or not', 
   assert.deepEqual([open.links.map((link) => link.target), open.embeds], [['n:depth'], []])
   const sealed = resolve({ isLinkTargetEligible: (node) => node.id !== 'n:depth' })
   assert.deepEqual([sealed.links, sealed.embeds, sealed.diagnostics.map((item) => item.code)], [[], [], ['link-target-unresolved']])
+})
+
+// ---------------------------------------------------------------------------
+// The fence a text ends inside, by the scanner's own rules.
+// ---------------------------------------------------------------------------
+
+test('unclosedFenceAtEnd reports the open fence exactly when the scanner stops reading links', () => {
+  const cases = [
+    ['text\n```js\ncode\n', { char: '`', length: 3, indent: 0 }],
+    ['text\n~~~~\ncode', { char: '~', length: 4, indent: 0 }],
+    ['- item\n\n   `````\n```\nstill code\n', { char: '`', length: 5, indent: 3 }],
+    ['a\r\n```\r\ncode\r\n', { char: '`', length: 3, indent: 0 }],
+    // A shorter or different closing run does not close; a longer one does.
+    ['````\n```\n~~~~\n', { char: '`', length: 4, indent: 0 }],
+    ['```\ncode\n`````\n', null],
+    ['```\ncode\n```\n', null],
+    // Four spaces is indented code, and a backtick fence cannot carry a backtick after it.
+    ['    ```\ncode\n', null],
+    ['``` a`b\ncode\n', null],
+    // Front matter is never read for fences; the body after it is.
+    ['---\nsample: |\n  ```\n---\nbody\n', null],
+    ['---\nsample: |\n  ```\n---\n```\nbody\n', { char: '`', length: 3, indent: 0 }],
+    ['', null],
+  ]
+  const probe = '\n[[Probe target]]\n'
+  const assertAgreesWithScanner = (text, expected, read = unclosedFenceAtEnd) => {
+    assert.deepEqual(read(text), expected, JSON.stringify(text))
+    // Appended text is scanned for links exactly when no fence is open.
+    const appended = scanMarkdownLinks(`${text}${probe}`).some((item) => item.href === 'Probe target')
+    assert.equal(appended, read(text) === null, JSON.stringify(text))
+  }
+  for (const [text, expected] of cases) assertAgreesWithScanner(text, expected)
+  // Mutation controls: a reader that scans front matter, and one that lets any run close a fence.
+  const scansFrontMatter = (text) => unclosedFenceAtEnd(text.replace(/^---\n/, 'x\n'))
+  assert.throws(() => { for (const [text, expected] of cases) assertAgreesWithScanner(text, expected, scansFrontMatter) }, assert.AssertionError)
+  const anyRunCloses = (text) => (unclosedFenceAtEnd(text) && /\n(```|~~~)[^\n]*\n(```|~~~)/.test(text) ? null : unclosedFenceAtEnd(text))
+  assert.throws(() => { for (const [text, expected] of cases) assertAgreesWithScanner(text, expected, anyRunCloses) }, assert.AssertionError)
 })

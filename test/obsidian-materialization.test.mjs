@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { buildCanonicalGraph } from '../src/graph/graph.mjs'
+import { scanMarkdownLinks, unclosedFenceAtEnd } from '../src/graph/knowledge-graph.mjs'
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { identitySuffix, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import {
@@ -734,4 +735,104 @@ test('an emitted asset is read through the pinned snapshot: unpinned refuses, dr
   assert.throws(() => prepareAssets(moved), { code: 'mixed-read' })
   const overlapping = { ...snapshot, graph: { ...snapshot.graph, embeds: [...snapshot.graph.embeds, snapshot.graph.embeds[0]] } }
   assert.throws(() => prepareAssets(overlapping), { code: 'link-overlap' })
+})
+
+// ---------------------------------------------------------------------------
+// An authored body that ends inside a fenced code block
+// ---------------------------------------------------------------------------
+
+const FRONT = '---\ntitle: "Fenced page"\nkg:\n  id: "east-desk:fenced"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n'
+const FENCE_CASES = [
+  { name: 'backtick fence', source: `${FRONT}See [sheet](signal.md).\n\n\`\`\`js\nlet depth = 4\n`, closure: '```\n', fence: '```' },
+  { name: 'tilde fence', source: `${FRONT}See [sheet](signal.md).\n\n~~~\ncode\n`, closure: '~~~\n', fence: '~~~' },
+  { name: 'longer fence holding a shorter one', source: `${FRONT}See [sheet](signal.md).\n\n\`\`\`\`\`\n\`\`\`\ninner\n\`\`\`\n`, closure: '`````\n', fence: '`````' },
+  { name: 'CRLF source', source: `${FRONT}See [sheet](signal.md).\n\n~~~~\ncode\n`.replace(/\n/g, '\r\n'), closure: '~~~~\r\n', fence: '~~~~' },
+  { name: 'body not ending in a line break', source: `${FRONT}See [sheet](signal.md).\n\n\`\`\`\ncode`, closure: '\n```\n', fence: '```' },
+  { name: 'CRLF body not ending in a line break', source: `${FRONT}See [sheet](signal.md).\n\n\`\`\`\ncode`.replace(/\n/g, '\r\n'), closure: '\r\n```\r\n', fence: '```' },
+  { name: 'indented opener inside a list item', source: `${FRONT}See [sheet](signal.md).\n\n- step\n\n  \`\`\`\n  code\n`, closure: '  ```\n', fence: '  ```' },
+  { name: 'no front matter', nodeId: 'east-desk:pages-fenced', source: 'See [sheet](signal.md).\n\n```\ncode\n', closure: '```\n', fence: '```' },
+  { name: 'fence-like line inside front matter', source: `${FRONT.replace('kg:', 'sample: |\n  ~~~~~\nkg:')}See [sheet](signal.md).\n\n\`\`\`\ncode\n`, closure: '```\n', fence: '```', anyNode: true },
+]
+
+function fencedSnapshot(t, source) {
+  return makeAssetSnapshot(t, {
+    files: {
+      'east-desk/pages/fenced.md': source,
+      'east-desk/pages/signal.md': doc('east-desk:signal', 'Signal sheet', '# Signal sheet\n'),
+      'east-desk/pages/alone.md': doc('east-desk:alone', 'Alone', '# Alone\n\n```\nnever closed\n'),
+      'west-desk/notes/swell.md': doc('west-desk:swell', 'Swell notes', '# Swell notes\n'),
+    },
+  })
+}
+
+function assertFenceClosed(prepared, snapshot, nodeId, { closure, fence }) {
+  const note = noteOf(prepared, nodeId)
+  const bytes = fileOf(prepared, note.path).bytes
+  const [first, ...rest] = note.regions.generated
+  assert.deepEqual(first.ext, { [EXT]: { fenceClosure: { fence, byteLength: Buffer.byteLength(closure) } } })
+  for (const region of rest) assert.equal(region.ext, undefined)
+  // The closing fence is the first bytes of the first generated region, directly after the authored body.
+  assert.equal(first.range.start, note.regions.body.end)
+  assert.deepEqual(bytes.subarray(first.range.start, first.range.start + Buffer.byteLength(closure)), Buffer.from(closure))
+  // By the scanner's own rules the note no longer ends in code, and the generated relation is a live link.
+  const text = bytes.toString('utf8')
+  assert.equal(unclosedFenceAtEnd(text), null)
+  const generatedLinks = scanMarkdownLinks(text).filter((item) => item.range.start >= text.indexOf('## Relations (generated)'))
+  assert.ok(text.includes('## Relations (generated)') && generatedLinks.length > 0, 'the generated section was swallowed by the fence')
+  assert.ok(prepared.diagnostics.includes('unclosed-code-fence-closed-in-generated-region'))
+  assertInvertsToSourceDigest(prepared, snapshot, nodeId)
+}
+
+test('an unclosed code fence at the end of a source is closed inside the first generated region', async (t) => {
+  for (const item of FENCE_CASES) {
+    await t.test(item.name, (t) => {
+      const snapshot = fencedSnapshot(t, item.source)
+      const prepared = prepareAssets(snapshot)
+      const nodeId = item.anyNode ? snapshot.graph.nodes.find((node) => node.path === 'pages/fenced.md').id : item.nodeId ?? 'east-desk:fenced'
+      assertFenceClosed(prepared, snapshot, nodeId, item)
+      // Authored bytes before the generated region are the source, link rewrite aside.
+      assert.deepEqual(validateObsidianContract('generation-manifest', JSON.parse(prepared.manifestBytes.toString('utf8'))), [])
+
+      // No generated section follows the lone note: nothing is emitted for it.
+      const alone = noteOf(prepared, 'east-desk:alone')
+      assert.deepEqual(alone.regions.generated, [])
+      assert.deepEqual(noteBytes(prepared, 'east-desk:alone'), snapshot.readSource('east-desk', 'pages/alone.md'))
+    })
+  }
+})
+
+test('a closed fence changes nothing, and a lone unclosed fence yields no closure and no diagnostic', (t) => {
+  const closed = fencedSnapshot(t, `${FRONT}See [sheet](signal.md).\n\n\`\`\`\ncode\n\`\`\`\n`)
+  const prepared = prepareAssets(closed)
+  const note = noteOf(prepared, 'east-desk:fenced')
+  assert.deepEqual(note.regions.generated.map((region) => [region.kind, region.ext]), [['relations', undefined]])
+  assert.ok(noteBytes(prepared, note.nodeId).toString('utf8').includes('code\n```\n\n## Relations (generated)'))
+  assert.deepEqual(prepared.diagnostics, [])
+  assertInvertsToSourceDigest(prepared, closed, note.nodeId)
+
+  // Only the lone note ends in a fence, and nothing generated follows it.
+  const lone = prepareAssets(closed, { ...scopedScope, scopeId: 'scope-alone', selector: { ids: ['east-desk:alone'] } })
+  assert.deepEqual(noteOf(lone, 'east-desk:alone').regions.generated, [])
+  assert.equal(lone.diagnostics.includes('unclosed-code-fence-closed-in-generated-region'), false)
+  assert.equal(JSON.stringify(lone.manifest).includes('fenceClosure'), false)
+})
+
+test('mutation control: a missing, misplaced or mismatched closing fence fails the fence oracle', (t) => {
+  const item = FENCE_CASES[0]
+  const snapshot = fencedSnapshot(t, item.source)
+  const prepared = prepareAssets(snapshot)
+  const target = noteOf(prepared, 'east-desk:fenced')
+  const start = target.regions.generated[0].range.start
+  const rewrite = (transform) => mutateNotes(prepared, (bytes, file) => (file.path === target.path ? transform(bytes) : bytes))
+  // The fence removed: the heading is code again.
+  const swallowed = rewrite((bytes) => Buffer.concat([bytes.subarray(0, start), Buffer.from('   \n'), bytes.subarray(start + 4)]))
+  assert.throws(() => assertFenceClosed(swallowed, snapshot, target.nodeId, item), assert.AssertionError)
+  // A tilde run does not close a backtick fence.
+  const mismatched = rewrite((bytes) => Buffer.concat([bytes.subarray(0, start), Buffer.from('~~~\n'), bytes.subarray(start + 4)]))
+  assert.throws(() => assertFenceClosed(mismatched, snapshot, target.nodeId, item), assert.AssertionError)
+  // A closure recorded on the region but claimed as authored bytes breaks inversion.
+  const claimed = { ...prepared, manifest: { ...prepared.manifest, notes: prepared.manifest.notes.map((note) => (note.nodeId === target.nodeId ? { ...note, regions: { ...note.regions, body: { ...note.regions.body, end: start + 4 } } } : note)) } }
+  assert.throws(() => assertFenceClosed(claimed, snapshot, target.nodeId, item), assert.AssertionError)
+  // A diagnostic that is dropped fails too.
+  assert.throws(() => assertFenceClosed({ ...prepared, diagnostics: [] }, snapshot, target.nodeId, item), assert.AssertionError)
 })

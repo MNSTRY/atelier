@@ -114,6 +114,26 @@ in the shape of link inversions. A withheld or out-of-selection asset leaves
 the authored embed untouched and appears in no output, manifest entry or
 diagnostic.
 
+## Unclosed code fence at the end of a source
+
+An authored Markdown body that ends inside a fenced code block would turn any
+generated section after it into code. When, and only when, a generated section
+follows such a body, the emitter writes a closing fence as the first bytes of
+the first generated region. The fence is generated, not authored: it lies
+inside that region's range, so authored ranges and inversion stay exact. It
+repeats the opener's indentation (0 to 3 spaces), character and length, starts
+on its own line (a line break is added first when the body has none) and uses
+the source's line ending, CRLF or LF. The region records it as
+`ext["mnstry.atelier.obsidian"].fenceClosure = { fence, byteLength }`, where
+`fence` is the emitted fence line without its line ending and `byteLength`
+counts every closure byte, line breaks included. The view is not refused; its
+diagnostics carry `unclosed-code-fence-closed-in-generated-region`. With no
+generated section, nothing is emitted and nothing is reported.
+
+Fence detection is the canonical graph scanner's: `unclosedFenceAtEnd` in
+`src/graph/knowledge-graph.mjs` shares the rules that decide which text is
+scanned for links. Front matter is never read for fences.
+
 ## Publication protocol `obsidian-cli-critical-section/v1`
 
 The journal's `protocolId` names this protocol. A publisher may use it only
