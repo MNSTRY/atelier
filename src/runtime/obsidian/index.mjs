@@ -9,7 +9,7 @@ export {
   LOCAL_POINTER_SCHEMA, MACHINE_SETTINGS_SCHEMA, MAINTENANCE_MODES, authorizeAutomaticApply, defaultDataRoot, defaultMachineSettings, ensureWorkspaceIdentity,
   installApplyPolicy, localPointerPath, protectedRoots, readInstalledApplyPolicy, readLocalPointer, readMachineSettings, resolveDataRoot, revokeApplyPolicy, workspaceStateRoot, writeLocalPointer, writeMachineSettings,
 } from './machine-settings.mjs'
-export { APPLY_RESULT_STATUSES, EXTENSION_KINDS, REPLACEABLE_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createCommandOperations, createMaintenanceExtensions, createObsidianRegistry } from './extension-points.mjs'
+export { APPLY_RESULT_STATUSES, BUILT_IN_OPERATIONS, EXTENSION_KINDS, REPLACEABLE_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createCommandOperations, createMaintenanceExtensions, createObsidianRegistry } from './extension-points.mjs'
 export { CONTRIBUTIONS_DIRECTORY, loadContributions } from './contributions.mjs'
 export { APP_OUTCOMES, MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp } from './app-capability.mjs'
 export { OPENING_OUTCOMES, describeOutcome, openScope, scopeReport } from './opening.mjs'

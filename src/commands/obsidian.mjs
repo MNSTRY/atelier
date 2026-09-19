@@ -9,7 +9,7 @@ import { loadContributions } from '../runtime/obsidian/contributions.mjs'
 import { isoTime } from '../runtime/obsidian/documents.mjs'
 import { readObsidianEnablement } from '../runtime/obsidian/enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from '../runtime/obsidian/errors.mjs'
-import { UNAVAILABLE_APPLY_OPERATION, createObsidianRegistry } from '../runtime/obsidian/extension-points.mjs'
+import { BUILT_IN_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createObsidianRegistry } from '../runtime/obsidian/extension-points.mjs'
 import { LIFECYCLE_PRIMITIVES, readServiceStatusDocument, serviceStatus, startService, stopService } from '../runtime/obsidian/lifecycle.mjs'
 import {
   authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readInstalledApplyPolicy, readMachineSettings,
@@ -39,7 +39,7 @@ import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
 
 export const COMMAND_SCHEMA = 'atelier-obsidian-command/v1'
 export const EXIT = Object.freeze({ ok: 0, error: 1, refused: 2, notSuccess: 3 })
-export const BUILT_IN_OPERATIONS = Object.freeze(['status', 'scope', 'audience', 'mode', 'policy', 'service', 'open', 'apply', 'help'])
+export { BUILT_IN_OPERATIONS }
 const PRODUCTION_ADAPTER = 'obsidian-cli'
 const MAX_POLICY_BYTES = 64 * 1024
 const AUDIENCE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/

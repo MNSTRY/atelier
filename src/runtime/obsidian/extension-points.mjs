@@ -64,6 +64,8 @@ export function normalizeApplyResult(value) {
 // a placeholder that only reports `apply-unavailable`, and the work that ships
 // an apply operation replaces it.
 const OPERATION_NAME = /^[a-z][a-z0-9-]{0,31}$/
+// The operations the command ships. The service composes the same registry, so both refuse the same contributions.
+export const BUILT_IN_OPERATIONS = Object.freeze(['status', 'scope', 'audience', 'mode', 'policy', 'service', 'open', 'apply', 'help'])
 export const REPLACEABLE_OPERATIONS = Object.freeze(['apply'])
 
 export function createCommandOperations({ reserved = [] } = {}) {
@@ -86,7 +88,7 @@ export function createCommandOperations({ reserved = [] } = {}) {
 // One registry per composition: the maintenance extensions the engine reads
 // and the operations the command reads. A contribution is
 // `{ id, register({ extensions, operations }) }`; each is applied once, in order.
-export function createObsidianRegistry({ reservedOperations = [], contributions = [] } = {}) {
+export function createObsidianRegistry({ reservedOperations = BUILT_IN_OPERATIONS, contributions = [] } = {}) {
   const registry = Object.freeze({ extensions: createMaintenanceExtensions(), operations: createCommandOperations({ reserved: reservedOperations }) })
   const applied = []
   for (const contribution of contributions) {

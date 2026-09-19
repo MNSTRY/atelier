@@ -416,6 +416,15 @@ test('below the floor the engine publishes nothing, and status reports why', asy
   await assertUnqualifiedAppIsNeverPublishedThrough(t, createQualifiedAdapterFactory)
 })
 
+test('a service whose adapter factory qualified an app says what it learned in its status, and the command repeats it', async (t) => {
+  const world = makeWorld(t)
+  const adapterFactory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => ({ installed: true, cli: true, running: true, version: '1.12.4' }) }, createAdapter: absentAdapter })
+  await world.service({ adapterFactory, appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } } })
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual(status.json.service.app, { outcome: 'app-version-unsupported', reason: 'below-minimum-version', version: '1.12.4', floor: MINIMUM_APP_VERSION })
+  assert.deepEqual([status.json.scopes[0].outcome, status.json.scopes[0].reason, fs.readdirSync(world.vault()).filter((name) => name.endsWith('.md')).length], ['not-prepared', 'app-version-unsupported', 0], 'nothing was published through it')
+})
+
 test('mutation control: a factory that does not look at the version fails the floor oracle', async (t) => {
   await assert.rejects(assertUnqualifiedAppIsNeverPublishedThrough(t, ({ createAdapter }) => (input) => createAdapter(input)), assert.AssertionError)
 })
