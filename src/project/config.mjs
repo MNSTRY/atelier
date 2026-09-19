@@ -484,6 +484,19 @@ function extErrors(value, label) {
     .map(([key]) => `${label}.${key} must be an object; ext members are namespaced objects`)
 }
 
+// Hands one namespaced ext member to its structured consumer, uninterpreted.
+// The project validator above deliberately does not look inside a member, so
+// the consumer validates it against its own closed contract and fails closed.
+// `present` separates "no such member" (the consumer's feature is simply not
+// configured) from a member that exists with any value at all, including a
+// malformed one, which the consumer must refuse rather than ignore.
+export function projectExtMember(project, key) {
+  const ext = project?.config?.ext
+  if (ext == null) return { present: false, value: undefined }
+  if (typeof ext !== 'object' || Array.isArray(ext)) return { present: true, value: undefined }
+  return Object.hasOwn(ext, key) ? { present: true, value: ext[key] } : { present: false, value: undefined }
+}
+
 export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) {
   const errors = []
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return ['project config must be a JSON object']

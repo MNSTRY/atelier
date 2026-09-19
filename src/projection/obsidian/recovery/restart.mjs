@@ -10,16 +10,25 @@ import { readFileBytes, readFileDigest, refuse, sha256Digest } from './store.mjs
 // or an appended journal entry. Running it again changes nothing.
 //
 // Interrupted states of one note, identified by its write-ahead `capture`
-// entry (base, candidate, staged path, recovery path) with no outcome entry:
+// entry (base, candidate, candidate path, recovery path) with no outcome
+// entry. The candidate path of a replacement is in the unit's recovery
+// directory, so whatever it holds is never in a discardable area:
 //
-//   staged file == candidate            nothing was exchanged. The candidate is
-//                                       retired; the note is as it was.
-//   staged file present, != candidate   the exchange happened and the move to
-//                                       recovery did not: the staged path holds
-//                                       the displaced bytes. They are moved to
-//                                       the recovery path and compared with base.
-//   staged absent, recovery present     exchange and move both happened.
+//   candidate path == candidate digest  nothing was exchanged. The file is a
+//                                       generated candidate and is retired;
+//                                       the note is as it was.
+//   candidate path, any other bytes     the exchange happened and the move to
+//                                       the recovery name did not: the path
+//                                       holds the displaced bytes. They are
+//                                       moved to the recovery name and
+//                                       compared with base.
+//   path absent, recovery name present  exchange and move both happened.
 //   neither                             nothing happened.
+//
+// The journal names every exchange candidate, path and digest, before the file
+// is at that path (the header for candidates known when the run began, a
+// write-ahead entry for a late one), and only complete files are moved there.
+// classifyCandidateFile is the only place that decides between the two kinds.
 //
 // For the whole journal: a pointer that already names this journal gets its
 // missing `manifest-commit` entry; a journal that reached `verifying` with
@@ -30,6 +39,31 @@ import { readFileBytes, readFileDigest, refuse, sha256Digest } from './store.mjs
 const exists = (file) => { try { fs.lstatSync(file); return true } catch (error) { if (error.code === 'ENOENT') return false; throw error } }
 
 const RETIRING_NAME = 'retiring.bin'
+
+// What a file at a candidate path is. `generated-candidate` is claimed only
+// for bytes whose digest the journal recorded for that candidate; those are
+// ours and may be deleted. Everything else, including a file whose candidate
+// digest the journal does not give, is `displaced-bytes`: somebody's content,
+// which is moved or kept and never deleted.
+export function classifyCandidateFile({ file, candidateDigest }) {
+  const digest = file ? readFileDigest(file) : null
+  if (digest === null) return 'absent'
+  return candidateDigest && digest === candidateDigest ? 'generated-candidate' : 'displaced-bytes'
+}
+
+// Every candidate a journal names: from its header, and from the write-ahead
+// entries of late exchange candidates. `preparedRef` is where the bytes were
+// written, in staging, before they were moved to `stagedRef`.
+export function namedCandidates(document) {
+  const named = (journalDetail(document).staged ?? []).map(({ unit, path: notePath, candidateDigest, stagedRef, preparedRef }) => ({ unit, path: notePath, candidateDigest, stagedRef, preparedRef: preparedRef ?? null, late: false }))
+  for (const entry of document.entries) {
+    const detail = journalDetail(entry)
+    if (entry.step === 'capture' && detail.code === 'late-candidate' && detail.stagedRef) {
+      named.push({ unit: detail.unit, path: entry.notePath, candidateDigest: entry.afterDigest ?? null, stagedRef: detail.stagedRef, preparedRef: detail.preparedRef ?? null, late: true })
+    }
+  }
+  return named
+}
 
 function freeName(store, journalId, unit, stem = 'displaced') {
   for (let index = 0; ; index += 1) {
@@ -45,7 +79,7 @@ function freeName(store, journalId, unit, stem = 'displaced') {
 function judgeRetiring({ store, journalId, unit, candidateDigest }) {
   const retiring = store.displacedPath(journalId, unit, RETIRING_NAME)
   if (!exists(retiring)) return { retired: false, capturedPaths: [] }
-  if (candidateDigest && readFileDigest(retiring) === candidateDigest) {
+  if (classifyCandidateFile({ file: retiring, candidateDigest }) === 'generated-candidate') {
     fs.unlinkSync(retiring)
     return { retired: true, capturedPaths: [] }
   }
@@ -55,11 +89,11 @@ function judgeRetiring({ store, journalId, unit, candidateDigest }) {
   return { retired: false, capturedPaths: [capturedPath] }
 }
 
-// A staged path is never unlinked in place: between a digest check and an
+// A candidate path is never unlinked in place: between a digest check and an
 // unlink, a late exchange could put displaced bytes there. It is first moved
 // to a private name, which no payload refers to, and only then judged. That
-// name lives in the unit's recovery directory, never in staging: staging is
-// discardable, and between the two steps the file may be the only copy of
+// name lives in the unit's recovery directory, beside the exchange candidate,
+// never in staging: between the two steps the file may be the only copy of
 // bytes an exchange displaced. A process that dies between the steps leaves
 // `retiring.bin` there, and restart recovery finishes the judgement.
 // Returns { retired, capturedPaths }: every path in `capturedPaths` holds
@@ -110,7 +144,7 @@ export function reconcileUnit({ store, journalId, capture, at }) {
 
   const keepUnexpected = (paths) => { for (const capturedPath of paths) recordDisplaced({ store, journalId, unit, notePath, displacedPath: capturedPath, baseDigest: base, at }) }
   const completeAfterExchange = (holder) => {
-    const target = exists(displaced) ? freeName(store, journalId, unit) : displaced
+    const target = !displaced || exists(displaced) ? freeName(store, journalId, unit) : displaced
     fs.renameSync(holder, target)
     syncPrivateDirectory(path.dirname(target))
     const recorded = recordDisplaced({ store, journalId, unit, notePath, displacedPath: target, baseDigest: base, at })
@@ -122,18 +156,17 @@ export function reconcileUnit({ store, journalId, capture, at }) {
     // staged path is at the retiring name. Bytes that are not the candidate
     // can only have come from the exchange, exactly as if they were still staged.
     const retiring = store.displacedPath(journalId, unit, RETIRING_NAME)
-    const retiringDigest = readFileDigest(retiring)
-    if (retiringDigest !== null && retiringDigest !== candidate && displaced) {
+    if (classifyCandidateFile({ file: retiring, candidateDigest: candidate }) === 'displaced-bytes') {
       const entry = completeAfterExchange(retiring)
       if (staged) keepUnexpected(retireStagedFile({ store, journalId, unit, stagedPath: staged, candidateDigest: candidate }).capturedPaths)
       return entry
     }
-    const stagedDigest = staged ? readFileDigest(staged) : null
-    if (stagedDigest !== null && stagedDigest === candidate) {
+    const atCandidatePath = classifyCandidateFile({ file: staged, candidateDigest: candidate })
+    if (atCandidatePath === 'generated-candidate') {
       keepUnexpected(retireStagedFile({ store, journalId, unit, stagedPath: staged, candidateDigest: candidate }).capturedPaths)
       return settle('skipped', 'interrupted-before-exchange')
     }
-    if (stagedDigest !== null && displaced) return completeAfterExchange(staged)
+    if (atCandidatePath === 'displaced-bytes') return completeAfterExchange(staged)
     keepUnexpected(judgeRetiring({ store, journalId, unit, candidateDigest: candidate }).capturedPaths)
     if (displaced && exists(displaced)) {
       const known = store.listReceipts(journalId).find((receipt) => receipt.role === 'displaced' && receipt.unit === unit && receipt.displacedRef === store.ref(displaced))
@@ -162,13 +195,16 @@ export function reconcileUnit({ store, journalId, capture, at }) {
   return refuse('journal-corrupt', 'a capture entry names an unknown operation')
 }
 
-// Late candidates in staging that no capture entry names. Every one counts:
-// a journal may hold a named late candidate and an orphaned one side by side.
+// Late candidates in staging that no entry names. Every one counts: a journal
+// may hold a named late candidate and an orphaned one side by side. This looks
+// in staging only. Nothing in a unit's recovery directory is ever an orphan:
+// a late exchange candidate gets there after its write-ahead entry, and a
+// file there that the journal does not account for is kept.
 function strays(store, document) {
   const directory = path.join(store.stagingRoot, document.journalId.replaceAll(':', '_'))
   if (!exists(directory)) return []
-  const named = new Set(document.entries.map((entry) => journalDetail(entry).stagedRef).filter(Boolean).map((ref) => path.basename(ref)))
-  return fs.readdirSync(directory).filter((name) => name.endsWith('.late.candidate') && !named.has(name)).map((name) => path.join(directory, name))
+  const named = new Set(document.entries.flatMap((entry) => [journalDetail(entry).stagedRef, journalDetail(entry).preparedRef]).filter(Boolean))
+  return fs.readdirSync(directory).filter((name) => name.endsWith('.late.candidate')).map((name) => path.join(directory, name)).filter((file) => !named.has(store.ref(file)))
 }
 
 const iso = (clock) => { const value = clock(); return (value instanceof Date ? value : new Date(value)).toISOString() }
@@ -183,7 +219,10 @@ export function recoverPublicationsLocked({ store, clock = () => new Date() }) {
     const settled = new Set(document.entries.filter((entry) => entry.step === 'conditional-update').map((entry) => journalDetail(entry).unit))
     const pending = document.entries.filter((entry) => entry.step === 'capture' && journalDetail(entry).intent === true && !settled.has(journalDetail(entry).unit))
     const pendingUnits = new Set(pending.map((entry) => journalDetail(entry).unit))
-    const leftovers = (header.staged ?? []).filter((item) => !pendingUnits.has(item.unit) && exists(store.resolve(item.stagedRef)))
+    // Candidates the journal names that are still on disk. At the candidate path of a pending unit the file is
+    // reconcileUnit's to judge. A file still in staging was never moved to an exchange path, whatever its unit.
+    const leftovers = namedCandidates(document).flatMap((item) => [...(pendingUnits.has(item.unit) ? [] : [item.stagedRef]), item.preparedRef].filter(Boolean).map((ref) => ({ ...item, file: store.resolve(ref) })))
+      .filter((item) => exists(item.file))
     // Retirements interrupted between their two moves, for notes that are otherwise settled.
     const candidateOf = new Map((header.staged ?? []).map((item) => [item.unit, item.candidateDigest]))
     for (const entry of document.entries) if (entry.step === 'capture' && journalDetail(entry).stagedRef && entry.afterDigest) candidateOf.set(journalDetail(entry).unit, entry.afterDigest)
@@ -226,10 +265,10 @@ export function recoverPublicationsLocked({ store, clock = () => new Date() }) {
       if (result.retired) actions.push({ path: pathOf.get(unit) ?? null, outcome: 'ok', code: 'interrupted-retirement-finished' })
     }
     for (const item of leftovers) {
-      const result = retireStagedFile({ store, journalId: document.journalId, unit: item.unit, stagedPath: store.resolve(item.stagedRef), candidateDigest: item.candidateDigest })
+      const result = retireStagedFile({ store, journalId: document.journalId, unit: item.unit, stagedPath: item.file, candidateDigest: item.candidateDigest })
       keepUnexpected(item.unit, item.path, result.capturedPaths)
     }
-    // A staged file that no capture entry names was never put in a payload, so nothing can have exchanged it.
+    // A file in staging that no entry names was never put in a payload, so nothing can have exchanged it.
     for (const orphan of orphans) fs.rmSync(orphan, { force: true })
     const stagingDir = store.stagingDir(document.journalId)
     try { fs.rmdirSync(stagingDir) } catch { /* not empty, or already gone */ }

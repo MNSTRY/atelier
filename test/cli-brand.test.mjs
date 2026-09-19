@@ -51,6 +51,7 @@ Core commands:
   sync plan                       Prepare one bounded, reviewable commit plan.
   sync commit                     Execute an exactly confirmed commit plan.
   sync run --once                 Run one full-state supervisor cycle.
+  obsidian status|open|service    Maintain and open Obsidian views of the corpus.
   egress check                    Check extracted Atelier paths for forbidden egress.
   boundary check                  Enforce private/shared repo placement rules.
   boundary audit                  Report content-rule matches tree-wide without blocking.
@@ -104,7 +105,7 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
   assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
-  assert.equal(commandMap.size, 56)
+  assert.equal(commandMap.size, 57)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {
