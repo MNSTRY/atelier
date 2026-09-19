@@ -1,6 +1,8 @@
 // Continuous maintenance of Obsidian views: typed enablement, private machine
 // settings, observation by digest, pending edits and per-view freshness.
-// Nothing here starts a process, a timer or a listener; `tick()` is explicit.
+// The engine starts no process, timer or listener; `tick()` is explicit. The
+// owned lifecycle (start / status / stop of one loopback service per
+// workspace) is separate, below, and is the only thing here that does.
 export { ObsidianMaintenanceRefusal } from './errors.mjs'
 export { DISABLED_REASONS, ENABLEMENT_STATES, readObsidianEnablement } from './enablement.mjs'
 export {
@@ -16,3 +18,14 @@ export { listConfigFiles, listSourceFiles, listVaultNotes, reconcile } from './o
 export { createFsWatcherFactory, createNullWatcherFactory } from './watchers.mjs'
 export { DEFAULT_ELIGIBILITY, assetEligibilityFor, createProductionSeams } from './pipeline.mjs'
 export { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, DEFAULT_LATE_WRITER_WINDOW_MS, DEFAULT_RETRY_INTERVAL_MS, createMaintenanceEngine } from './engine.mjs'
+export { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock } from './private-lock.mjs'
+export { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
+export { HEALTH_SCHEMA, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'
+export {
+  CONSENT_COVERAGES, SERVICE_ERROR_SCHEMA, SERVICE_SETTINGS_SCHEMA, executableIdentity, publicRecord, readLastServiceError, readServiceRecord, readServiceSettings,
+  removeServiceRecord, serviceNameFor, servicePaths, validateServiceRecord, writeServiceRecord, writeServiceSettings,
+} from './service-record.mjs'
+export { MAX_REQUEST_BYTES, SERVICE_OPERATIONS, createServiceServer } from './service-server.mjs'
+export { DEFAULT_SHUTDOWN_GRACE_MS, SERVICE_STATUS_SCHEMA, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
+export { DEFAULT_START_TIMEOUT_MS, DEFAULT_STOP_TIMEOUT_MS, SERVICE_STATES, serviceStatus, startService, stopService } from './lifecycle.mjs'
+export { STARTUP_PLATFORMS, buildStartupAdapter } from './startup-adapters.mjs'
