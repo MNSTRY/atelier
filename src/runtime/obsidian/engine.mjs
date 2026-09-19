@@ -15,6 +15,8 @@ import {
 import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
+import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
+import { probeHealth } from './service-client.mjs'
 import { FRESHNESS_SCHEMA, LATE_WRITERS_SCHEMA, createMaintenanceStateStore } from './state-store.mjs'
 import { createNullWatcherFactory } from './watchers.mjs'
 
@@ -31,6 +33,11 @@ import { createNullWatcherFactory } from './watchers.mjs'
 //   6. for each invalidated view: canonical graph -> source snapshot ->
 //      prepareView -> publishView, unless that would replace a held note
 //   7. persist the freshness of every view
+//
+// From the moment a workspace is resolved until the tick ends, the tick holds
+// the workspace's private engine lock, so two engines (a service and a
+// foreground command, or two services) never tick one workspace together. An
+// engine that finds the lock held writes nothing and reports `busy`.
 //
 // The engine writes private state and recovery objects. It writes into a
 // vault only by calling publishView, never touches `staging/` or a journal's
@@ -67,6 +74,8 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   isFullReconciliationDue: ({ nowMs, lastFullMs, intervalMs }) => lastFullMs === null || nowMs - lastFullMs >= intervalMs,
   // The embedded assets observed beside the walk: those the last built graph lets a view copy, and no withheld one.
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
+  // One engine per workspace at a time, across processes.
+  acquireEngineLock: acquirePrivateGenerationLock,
   // Held notes that this prepared view would replace, create over or remove.
   publicationConflicts({ prepared, held, bases }) {
     const candidates = new Map(prepared.files.map((file) => [file.path, file.digest]))
@@ -101,6 +110,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility = DEFAULT_ELIGIBILITY,
     fullReconciliationIntervalMs = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS, lateWriterWindowMs = DEFAULT_LATE_WRITER_WINDOW_MS,
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
+    // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
+    lockOwner = null, lockProbe = probeHealth,
   } = options
   if (typeof loadProject !== 'function') throw new TypeError('the engine needs loadProject')
   if (typeof clock !== 'function') throw new TypeError('the engine needs an injected clock')
@@ -122,6 +133,23 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   let running = false
   let watching = { signature: null, handle: null }
   let known = null // { stateStore, maintenanceMode } once a workspace has been resolved
+  let heldLock = null
+  const proveAbandoned = createAbandonmentProof({ probe: lockProbe })
+
+  async function takeLock(workspaceRoot, workspaceId) {
+    if (heldLock) return { acquired: true }
+    const lock = await rules.acquireEngineLock({
+      workspaceRoot, directory: path.join(workspaceRoot, ENGINE_LOCK_DIRECTORY), workspaceId, purpose: 'maintenance-engine', service: lockOwner, clock, proveAbandoned,
+    })
+    if (lock.acquired) heldLock = lock
+    return lock
+  }
+
+  function dropLock() {
+    const lock = heldLock
+    heldLock = null
+    lock?.release()
+  }
 
   function onWatcherEvent(roots, { rootId, relative }) {
     const root = roots.find((item) => item.id === rootId)
@@ -166,7 +194,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   const demote = (entry, state, reason, now) => ({ ...entry, state, reason, verified: false, checkedAt: now })
 
   // Persists "refused" or "disabled" over whatever is known, and only when a workspace already has state.
-  function persistOutcome({ enablement, state, reason, now, scopeIds = [] }) {
+  async function persistOutcome({ enablement, state, reason, now, scopeIds = [] }) {
     if (!known) {
       let pointer = null
       try { pointer = project ? readLocalPointer(project) : null } catch { pointer = null }
@@ -177,6 +205,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       if (!stateStore.exists()) return
       known = { stateStore: createMaintenanceStateStore({ workspaceRoot: fs.realpathSync(root), workspaceId: pointer.workspaceId }), maintenanceMode: 'manual' }
     }
+    // Another engine is ticking this workspace: its state is not ours to write.
+    if (!(await takeLock(known.stateStore.workspaceRoot, known.stateStore.workspaceId)).acquired) return
     const previous = readPreviousFreshness(known.stateStore)
     const entries = new Map()
     for (const entry of previous?.scopes ?? []) entries.set(entry.scopeId, demote(entry, state, reason, now))
@@ -212,7 +242,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const enablement = readObsidianEnablement(project)
     if (enablement.state === 'disabled') {
       stopWatching()
-      persistOutcome({ enablement: 'disabled', state: 'disabled', reason: enablement.reason, now, scopeIds: enablement.scopes.map((scope) => scope.scopeId) })
+      await persistOutcome({ enablement: 'disabled', state: 'disabled', reason: enablement.reason, now, scopeIds: enablement.scopes.map((scope) => scope.scopeId) })
       semantic = null
       firstTick = true
       return { state: 'disabled', reason: enablement.reason, full, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
@@ -226,6 +256,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     assertOutsideRepositories({ managedRoot: requestedRoot, repositoryRoots })
     fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 })
     const workspaceRoot = fs.realpathSync(requestedRoot)
+    const lock = await takeLock(workspaceRoot, workspaceId)
+    if (!lock.acquired) return { state: 'busy', reason: 'engine-lock-held', lock: { reason: lock.reason, holder: lock.holder ?? null }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
     const machine = readMachineSettings({ workspaceRoot, workspaceId })
       ?? writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: defaultMachineSettings({ workspaceId, updatedAt: now }) })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
@@ -432,13 +464,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       } catch (error) {
         if (!isTypedRefusal(error)) throw error
         // Fail closed: nothing is published under a refusal, and every known view says why.
-        try { persistOutcome({ enablement: 'refused', state: 'stale', reason: error.code, now: isoTime(clock) }) } catch { /* the refusal itself is still reported */ }
+        try { await persistOutcome({ enablement: 'refused', state: 'stale', reason: error.code, now: isoTime(clock) }) } catch { /* the refusal itself is still reported */ }
         project = null
         semantic = null
         firstTick = true
         return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail ?? {} }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
       } finally {
-        running = false
+        try { dropLock() } finally { running = false }
       }
     },
     stop() { stopWatching() },
