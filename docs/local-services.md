@@ -172,8 +172,9 @@ the same port does nothing.
 | Status | Meaning | `start` | `stop` |
 | --- | --- | --- | --- |
 | `healthy` | record and health agree on service name, workspace, runtime identifier, PID, executable digest and loopback address, and the PID is alive | reports already running | asks that runtime to stop |
+| `busy` | the recorded port accepts a connection and does not answer health in time, the recorded PID is alive, the recorded entry module still has the recorded digest, and that PID's command line names that entry module (and the recorded runtime identifier when it names one) | reports it as running and busy; starts nothing | refuses with a retry hint; nothing is signalled |
 | `stopped` | no record and nothing listens | starts | nothing to do |
-| `occupied` | something answers on the port without that proof: another program, a silent listener, or a health answer with any field different | refuses; never takes over | refuses |
+| `occupied` | something answers on the port without that proof: another program, a silent listener that is not provably ours, or a health answer with any field different | refuses; never takes over | refuses |
 | `stale-record` | the recorded address is closed and the recorded PID is gone | starts; the new service replaces the record once it listens | refuses; nothing is proven to stop |
 | `pid-not-ours` | the recorded address is closed and a process has the recorded PID (the number was reused, or a process outlived its listener) | starts; that PID is never signalled | refuses; that PID is never signalled |
 
@@ -183,6 +184,14 @@ It waits for health to echo the runtime identifier it generated and the PID of
 the child it created. If that proof never arrives it stops only that child, by
 its process handle, and reports the private operational log,
 `state/service/service.log`.
+
+A tick is largely synchronous, so a healthy service in a long tick may not
+answer health within the deadline. That is `busy`, not `occupied`: it is
+never adopted, never stopped and never started over, and a `start` whose own
+child went straight into a long first tick reports it as started and busy
+instead of ending it. The command line of another process is read from
+`/proc/<pid>/cmdline` on Linux and from `/bin/ps` on macOS. It is not
+established on Windows, where a silent service still reads as `occupied`.
 
 `stop` sends the stop operation to the proven runtime only, waits for that PID
 to end and removes only the generated record. It never looks a process up by
@@ -235,3 +244,79 @@ that needs explicit user authorization; the service refuses to run with
 The service entry refuses to run without an explicitly selected editor
 adapter. Public Atelier tests start only a test entry whose adapter reports
 that no app runs, in temporary directories, on ephemeral loopback ports.
+
+### The `obsidian` command
+
+`atelier obsidian <operation>` is the noninteractive surface over all of the
+above. With `--json` it prints exactly one JSON document, for a refusal too.
+Exit codes: 0 done, 1 an error nobody typed, 2 a typed refusal or a usage
+error, 3 the operation ran and its answer is not success.
+
+| Operation | What it does | Writes |
+| --- | --- | --- |
+| `status` | enablement, machine settings, proven service state, per-view freshness, whether an apply operation exists | nothing |
+| `scope list`, `scope show ID` | the declared views | nothing |
+| `audience show`, `audience set A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. A change invalidates every view at the next tick | private machine settings |
+| `mode show`, `mode set manual\|automatic` | `automatic` refuses without an installed, matching, active automatic policy | private machine settings |
+| `policy show`, `policy install FILE`, `policy revoke` | `install` validates against the apply-policy contract and stores the policy owner-only beside the machine settings, never in a project, a repository or a note. `revoke` marks the stored policy revoked, which the engine reads before its very next dispatch, and returns the mode to manual | private machine settings |
+| `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start needs `--consent-actor ID` | what the lifecycle writes |
+| `service unit --print` | the text `buildStartupAdapter` returns. Installing a unit is not offered | nothing |
+| `open [--scope ID]` | starts or reconnects the owned service, asks it for a tick, reads the view back, qualifies the installed app, has the vault opened | what the service writes |
+
+Reaching the installed app or the operating system is never a default.
+`open`, `service start` and `service unit` refuse with
+`app-adapter-not-selected` unless `--adapter=obsidian-cli` is given, the same
+explicit rule the service entry has, and the modules that talk to an app are
+loaded only after that check. Tests pass their own seams and a guard in the
+test file throws if anything tries to start the app, its command-line tool, an
+operating-system opener or a service manager.
+
+`open` answers one typed outcome, each with a one-line explanation and a next
+step. Only `current` is success:
+
+| Outcome | Meaning |
+| --- | --- |
+| `current` | the proven service ticked after the request; the view's persisted freshness is `current`; read back independently, the trusted generation is the prepared one and every note has the bytes it was published with; the app meets the minimum version, was asked to open this vault, answers for exactly this vault and has finished reading it |
+| `updating` | a publication is under way, a tick outlasted the wait, or a note differs from the trusted generation and has not been looked at yet |
+| `held-for-your-edit` | an edited note is preserved and held |
+| `stale-readable` | a last good vault exists and reads back, but is not proven to be the present generation |
+| `not-prepared` | no generation of this view has been published |
+| `publisher-conflict` | another publisher or an uncoordinated editor holds the vault |
+| `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability; below the minimum version, or a version that cannot be read |
+| `launch-failed` | the operating system refused, or the app never answered for this vault |
+| `indexing` | the app answers for this vault and has not finished reading it |
+| `service-unavailable` | the service could not be started or is not provably ours (`occupied`, no consent yet, a start that never proved ownership) |
+| `busy` | the service is ours and in a long tick |
+| `disabled` | the integration is off or not declared |
+
+`apply-unavailable` is not an opening outcome. It is reported beside pending
+edits, by `status`, `open`, `mode` and the placeholder `apply` operation, for
+as long as no apply operation is registered. `status` does not repeat a
+persisted `current` while no healthy service proves it: opening a vault
+directly bypasses this command, so an old check is reported as
+`stale-readable` with the reason.
+
+The minimum app version is `MINIMUM_APP_VERSION` in
+`src/runtime/obsidian/app-capability.mjs`: 1.13.7, the only version the
+publication protocol was proven on. A prerelease ranks below its release and a
+version that cannot be parsed never passes. The service entry constructs the
+CLI editor adapter only through `createQualifiedAdapterFactory`: for a running
+app below the floor, an unreadable version or a missing command-line
+capability the factory refuses, the engine records that code as the view's
+freshness reason and nothing is published. An app that is positively not
+running needs no version, because nothing is published through it.
+
+The production probe and launcher (`app-production-seams.mjs`) are written
+against the documented command-line interface and have not been exercised
+against a running app in this repository's tests, by design. They are to be
+qualified on an isolated host before they are relied on.
+
+### Registering later work
+
+An apply operation, a proposal adapter and further `obsidian` sub-operations
+are contributions: a module in `src/runtime/obsidian/contributions/` whose
+default export is `{ id, register({ extensions, operations }) }`. The command
+and the service entry both load that directory, so an apply operation
+registered there is the one the service dispatches to and the one `status`
+reports. No dispatch file is edited. A built-in operation name cannot be
+taken, except the placeholder `apply`.
