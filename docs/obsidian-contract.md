@@ -2,7 +2,8 @@
 
 This document freezes what later work receives from the contract and
 feasibility track. It states what is proven, on what, and what is not. Nothing
-here enables a feature; no publisher, service or command exists yet.
+here enables a feature: a publisher exists under
+`src/projection/obsidian/publication/`, and no command or service calls it yet.
 
 ## Registered shapes
 
@@ -152,18 +153,24 @@ and are not part of this repository.
 
 ### Receiving obligations for the production publisher
 
-These are open. The publisher may not claim the protocol outside the proven
-boundary until each is discharged with its own evidence.
+The publisher may not claim the protocol outside the proven boundary until
+each open item is discharged with its own evidence.
 
 | Obligation | State |
 | --- | --- |
-| Atomic exchange without an interpreter dependency | Open. The prototype reaches `renamex_np(RENAME_SWAP)` through the system Python, about 50 ms inside the critical section. |
-| Linux (`renameat2` with `RENAME_EXCHANGE`) | Unproven |
-| Windows | Unproven. No direct equivalent is known; not claimed. |
-| App capability floor | The step that prevents an app write sets the view's undocumented `lastSavedData`. Refuse open notes when it is absent, pin a minimum app version, and re-run the cases on each app release before raising the ceiling. |
-| Transport | CLI replies are occasionally lost while the app stays responsive. Serialize calls; make every call idempotent or outcome-recorded. |
+| Atomic exchange without the system Python | Done. The system Python is gone. The exchange is a raw syscall (`renameatx_np` with `RENAME_SWAP` on macOS, `renameat2` with `RENAME_EXCHANGE` on Linux) reached through the system perl, with no perl module, compiler or package dependency. |
+| Interpreter trust | Done. The perl binary is used only when uid 0 owns it and neither group nor others can write it, in the publisher and in the script the app runs; otherwise `exchange-interpreter-untrusted`. An interpreter is still a dependency, and the exchange still costs a process start inside the critical section. |
+| Exit status of the exchange helper | Done. The critical section reads the staged path after the call and decides from the bytes whether the exchange took place; a helper killed after the call returned no longer reads as a failure. |
+| Linux | Partly open. The exchange primitive is proven in a container on aarch64. The app suite (the interleavings above) has not been run on Linux. |
+| x86_64 | Open. Never run, on macOS or Linux; the syscall numbers are present and untested. |
+| Windows | Refuses. No direct equivalent is known; the publisher refuses with `exchange-unsupported-platform` and publishes nothing. |
+| App capability floor | Partly open. The step that prevents an app write sets the view's undocumented `lastSavedData`; open notes refuse when it is absent. A minimum app version is not pinned yet, and the cases must be re-run on each app release before the ceiling is raised. |
+| Late-writer re-check | Partly open. The publisher re-checks displaced files twice per publication (on the blocking path, and after the quiet period). A holder can write later still, so the check must be repeated by the future maintenance service; carried to the maintenance track. |
+| Displaced bytes between exchange and recovery move | By design the exchange leaves the displaced bytes at the staged path, which is in staging, until the next step moves them to recovery. A crash in between is settled by restart recovery from the journal's write-ahead entry, which names that path. Until then staging is not discardable for that journal. |
+| Transport | CLI replies are occasionally lost while the app stays responsive. Calls are serialized; every call is idempotent or outcome-recorded, and a publish is never resent. |
 | Timer throttling | A hidden app window delays the app's own autosave. Do not read that as a fault. |
 | Unreproduced anomaly | One early run ended with typed text on disk but absent from the editor buffer. It did not recur in any later run. Keep the typing-race case in every qualification run and treat a recurrence as a failed gate. |
+| Link scanner cost | Open, carried. The Markdown link scanner is roughly quadratic in skipped regions times link occurrences on pathological inputs; fine for ordinary documents, minutes for several megabytes of adversarial Markdown. |
 | Link-then-rename | Rejected. It leaves a window in which a concurrent replacement is destroyed. |
 | App-driven save after replacement | Rejected. Observed losing an outside writer's bytes; kept as a negative control. |
 
