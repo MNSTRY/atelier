@@ -2,6 +2,7 @@
 import {
   enrollRepository,
   executeUserConfirmedCommit,
+  obsidianMaintenanceNotice,
   operationTrace,
   planUserConfirmedCommit,
   reconcileRepository,
@@ -35,6 +36,12 @@ function print(value) {
   console.log(JSON.stringify(value, null, 2))
 }
 
+// Status only gains a member when the enrolled project enables Obsidian maintenance; otherwise it is unchanged.
+function withMaintenanceNotice(result) {
+  const notice = obsidianMaintenanceNotice({ repoPath })
+  return notice === null ? result : { ...result, obsidianMaintenance: notice }
+}
+
 async function runLoop({ repoPath, intervalMs, fetchAttempts, once }) {
   do {
     const result = reconcileRepository({ repoPath, fetchAttempts })
@@ -56,7 +63,7 @@ try {
     process.exitCode = result.ok ? 0 : 1
   } else if (subcommand === 'status' || subcommand === 'audit') {
     const result = runtimeStatus({ repoPath })
-    print(result)
+    print(withMaintenanceNotice(result))
     process.exitCode = result.ok ? 0 : 1
   } else if (subcommand === 'reconcile') {
     const result = reconcileRepository({ repoPath, fetchAttempts: integer(args.retries, 3) })

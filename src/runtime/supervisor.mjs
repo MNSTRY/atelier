@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { checkBoundaryPolicy, loadBoundaryPolicy } from '../boundary/policy.mjs'
-import { commandProject } from '../project/config.mjs'
+import { commandProject, resolveProjectConfig } from '../project/config.mjs'
 import { classifyRemoteAuthentication, inspectGitEngine, redactGitDiagnostic, resolveGitExecutable, runGit, sanitizeRemoteUrl } from './git-adapter.mjs'
 import {
   ATELIER_RUNTIME_ENROLLMENT_SCHEMA,
@@ -23,6 +23,7 @@ import {
   writeRuntimeState,
 } from './local-state.mjs'
 import { observeRepository, resolveRepositoryRoot } from './repository-observation.mjs'
+import { maintenanceNoticeFor } from './obsidian/sync-notice.mjs'
 
 export const ATELIER_COMMIT_PLAN_SCHEMA = 'atelier-commit-plan@v1'
 
@@ -785,4 +786,18 @@ export function setRepositoryPaused({ repoPath = process.cwd(), paused, reason =
 export function operationTrace({ repoPath = process.cwd() } = {}) {
   const { paths } = loadEnrollment(repoPath)
   return readOperationTrace(paths.trace)
+}
+
+// Report only. Git synchronization cannot maintain an external Obsidian vault and does not try: when the enrolled
+// project enables that integration, `sync` repeats what maintenance last persisted and points at its own command.
+// Null when the project is not configured for it or has it off, and then the output of `sync` is unchanged.
+export function obsidianMaintenanceNotice({ repoPath = process.cwd(), env = process.env } = {}) {
+  try {
+    const { enrollment } = loadEnrollment(repoPath, { env })
+    if (!enrollment.projectConfig) return null
+    return maintenanceNoticeFor(resolveProjectConfig({ argv: [`--project=${enrollment.projectConfig}`], cwd: enrollment.repoRoot, env, writeLocalState: false }), { env })
+  } catch {
+    // A report must never change what sync does or whether it succeeds.
+    return null
+  }
 }
