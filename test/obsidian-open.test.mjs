@@ -615,6 +615,8 @@ test('open starts the owned service the first time only with a consent, reconnec
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
   const refused = await world.run(['open', '--json'], { seams })
   assert.deepEqual([refused.json.outcome, refused.json.reason, SPAWNED.filter((entry) => entry.test === t.name).length], ['service-unavailable', 'startup-consent-required', 0])
+  const bareStart = await world.run(['service', 'start', '--json'], { seams })
+  assert.deepEqual([bareStart.exit, bareStart.json.error.code, SPAWNED.filter((entry) => entry.test === t.name).length], [EXIT.refused, 'startup-consent-required', 0], 'service start needs the same explicit consent the first time')
   const first = await world.run(openArgs(), { seams })
   const record = readServiceRecord(world.workspace())
   assert.ok(record !== null && isAlive(record.pid), 'the service it started is running')

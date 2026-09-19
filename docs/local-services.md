@@ -311,6 +311,12 @@ against the documented command-line interface and have not been exercised
 against a running app in this repository's tests, by design. They are to be
 qualified on an isolated host before they are relied on.
 
+`atelier sync` does not maintain a vault and does not try. When the enrolled
+project enables the integration, `sync status` gains one member,
+`obsidianMaintenance`, that repeats what maintenance last persisted and points
+at `atelier obsidian status`; it starts no service, ticks no engine and writes
+nothing. With the settings absent or switched off its output is unchanged.
+
 ### Registering later work
 
 An apply operation, a proposal adapter and further `obsidian` sub-operations
