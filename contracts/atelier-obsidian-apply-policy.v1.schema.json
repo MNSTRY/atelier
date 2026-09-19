@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-apply-policy.v1.schema.json",
+  "title": "Obsidian apply policy",
+  "$comment": "contract revision 1.0.0; private state shape; manual or automatic source application under a scoped, revocable policy. Only implemented edit classes are accepted; unknown classes refuse.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "policyId",
+    "workspaceId",
+    "mode",
+    "status",
+    "actor",
+    "version",
+    "digest",
+    "allowedEditClasses",
+    "selector",
+    "maxBatchSize",
+    "retryBudget",
+    "conflictDisposition"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-apply-policy/v1"
+    },
+    "policyId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "workspaceId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "mode": {
+      "enum": [
+        "manual",
+        "automatic"
+      ]
+    },
+    "status": {
+      "enum": [
+        "active",
+        "paused",
+        "revoked"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "allowedEditClasses": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/editClass"
+      }
+    },
+    "selector": {
+      "$ref": "#/$defs/selector"
+    },
+    "maxBatchSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "retryBudget": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16
+    },
+    "conflictDisposition": {
+      "const": "hold"
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "if": {
+    "required": [
+      "mode"
+    ],
+    "properties": {
+      "mode": {
+        "const": "automatic"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "allowedEditClasses": {
+        "minItems": 1
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000]+$"
+    },
+    "selector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "const": true
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ids"
+          ],
+          "properties": {
+            "ids": {
+              "type": "array",
+              "maxItems": 100000,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/identifier"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo"
+          ],
+          "properties": {
+            "repo": {
+              "$ref": "#/$defs/identifier"
+            },
+            "pathPrefix": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tag"
+          ],
+          "properties": {
+            "tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "union"
+          ],
+          "properties": {
+            "union": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/selector"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "intersection"
+          ],
+          "properties": {
+            "intersection": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/selector"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "exclude"
+          ],
+          "properties": {
+            "exclude": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/selector"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        }
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "editClass": {
+      "enum": [
+        "body-replacement"
+      ]
+    }
+  }
+}

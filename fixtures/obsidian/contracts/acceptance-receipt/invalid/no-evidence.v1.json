@@ -1,0 +1,28 @@
+{
+  "schema": "atelier-obsidian-acceptance-receipt/v1",
+  "receiptId": "acceptance-0001",
+  "gate": "G02",
+  "procedureId": "selector-oracles-v1",
+  "candidate": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "treeDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "tarballDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "environment": {
+    "os": {
+      "name": "example-os",
+      "version": "1.0"
+    },
+    "app": {
+      "name": "example-editor",
+      "version": "1.0.0"
+    },
+    "cli": {
+      "version": "1.0.0"
+    }
+  },
+  "evidenceType": "node",
+  "evidence": [],
+  "outcome": "passed",
+  "recordedAt": "2026-01-05T12:00:00Z"
+}

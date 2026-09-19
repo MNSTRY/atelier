@@ -1,0 +1,30 @@
+{
+  "schema": "atelier-obsidian-corpus-profile/v1",
+  "contractVersion": "1.0.0",
+  "workspaceId": "ws-synthetic-0001",
+  "repositories": [
+    {
+      "repoId": "north",
+      "root": "repos/north",
+      "enrollment": "enrolled"
+    },
+    {
+      "repoId": "south",
+      "root": "repos/south",
+      "enrollment": "enrolled"
+    },
+    {
+      "repoId": "west",
+      "root": "repos/west",
+      "enrollment": "enrolled"
+    }
+  ],
+  "audience": {
+    "allow": [
+      "team"
+    ]
+  },
+  "ext": {
+    "checkout": "C:\\example\\north"
+  }
+}

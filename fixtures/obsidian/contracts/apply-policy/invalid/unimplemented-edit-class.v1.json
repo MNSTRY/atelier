@@ -1,0 +1,30 @@
+{
+  "schema": "atelier-obsidian-apply-policy/v1",
+  "policyId": "policy-0001",
+  "workspaceId": "ws-synthetic-0001",
+  "mode": "automatic",
+  "status": "active",
+  "actor": {
+    "kind": "agent",
+    "id": "agent-local"
+  },
+  "version": 3,
+  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "allowedEditClasses": [
+    "body-replacement",
+    "frontmatter-rewrite"
+  ],
+  "selector": {
+    "intersection": [
+      {
+        "repo": "north"
+      },
+      {
+        "type": "md"
+      }
+    ]
+  },
+  "maxBatchSize": 10,
+  "retryBudget": 2,
+  "conflictDisposition": "hold"
+}

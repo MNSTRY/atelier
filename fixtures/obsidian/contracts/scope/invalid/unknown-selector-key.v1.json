@@ -1,0 +1,15 @@
+{
+  "schema": "atelier-obsidian-scope/v1",
+  "scopeId": "scope-topic",
+  "mode": "scoped",
+  "selector": {
+    "tag": "topic",
+    "query": "title:concept"
+  },
+  "expansion": {
+    "depth": 1,
+    "maxNodes": 3,
+    "direction": "outgoing",
+    "order": "canonical-id"
+  }
+}

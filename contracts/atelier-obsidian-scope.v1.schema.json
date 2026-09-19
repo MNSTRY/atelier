@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-scope.v1.schema.json",
+  "title": "Obsidian scope selection",
+  "$comment": "contract revision 1.0.0; portable shape; persisted set expression over stable IDs, repositories, paths, tags and types. An explicit empty selection is valid and means empty.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scopeId",
+    "mode",
+    "selector"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-scope/v1"
+    },
+    "scopeId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "mode": {
+      "$ref": "#/$defs/scopeMode"
+    },
+    "selector": {
+      "$ref": "#/$defs/selector"
+    },
+    "expansion": {
+      "$ref": "#/$defs/expansion"
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "if": {
+    "required": [
+      "mode"
+    ],
+    "properties": {
+      "mode": {
+        "const": "full"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "selector": {
+        "required": [
+          "all"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000]+$"
+    },
+    "selector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ],
+          "properties": {
+            "all": {
+              "const": true
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ids"
+          ],
+          "properties": {
+            "ids": {
+              "type": "array",
+              "maxItems": 100000,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/identifier"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo"
+          ],
+          "properties": {
+            "repo": {
+              "$ref": "#/$defs/identifier"
+            },
+            "pathPrefix": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tag"
+          ],
+          "properties": {
+            "tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "union"
+          ],
+          "properties": {
+            "union": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/selector"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "intersection"
+          ],
+          "properties": {
+            "intersection": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/selector"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "exclude"
+          ],
+          "properties": {
+            "exclude": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "$ref": "#/$defs/selector"
+              }
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        }
+      ]
+    },
+    "expansion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "depth",
+        "maxNodes",
+        "direction",
+        "order"
+      ],
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "maxNodes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "direction": {
+          "enum": [
+            "outgoing",
+            "incoming",
+            "both"
+          ]
+        },
+        "order": {
+          "const": "canonical-id"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "scopeMode": {
+      "enum": [
+        "full",
+        "focus",
+        "scoped"
+      ]
+    }
+  }
+}

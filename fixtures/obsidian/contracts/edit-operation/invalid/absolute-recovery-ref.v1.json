@@ -1,0 +1,21 @@
+{
+  "schema": "atelier-obsidian-edit-operation/v1",
+  "editId": "edit-0001",
+  "workspaceId": "ws-synthetic-0001",
+  "repoId": "north",
+  "nodeId": "a",
+  "origin": {
+    "scopeId": "scope-topic",
+    "generationId": "gen-0001"
+  },
+  "kind": "body-replacement",
+  "baseSourceDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "observed": {
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "byteLength": 132,
+    "recoveryRef": "/srv/example/recovery/edit-0001/observed.bin"
+  },
+  "idempotencyKey": "edit-0001:gen-0001:aaaaaaaa",
+  "state": "pending",
+  "observedAt": "2026-01-05T10:05:00Z"
+}

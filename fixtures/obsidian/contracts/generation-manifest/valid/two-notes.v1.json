@@ -1,0 +1,114 @@
+{
+  "schema": "atelier-obsidian-generation-manifest/v1",
+  "generationId": "gen-0001",
+  "scopeId": "scope-topic",
+  "snapshotId": "snap-0001",
+  "notes": [
+    {
+      "repoId": "north",
+      "nodeId": "a",
+      "title": "Shared concept",
+      "path": "notes/Shared concept--82f6d012eaad.md",
+      "noteDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "regions": {
+        "frontmatter": {
+          "start": 0,
+          "end": 40
+        },
+        "body": {
+          "start": 40,
+          "end": 200
+        },
+        "generated": [
+          {
+            "kind": "relations",
+            "range": {
+              "start": 200,
+              "end": 260
+            }
+          }
+        ]
+      }
+    },
+    {
+      "repoId": "north",
+      "nodeId": "d",
+      "title": "Shared concept",
+      "path": "notes/Shared concept--4cbaa6562753.md",
+      "noteDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "regions": {
+        "frontmatter": {
+          "start": 0,
+          "end": 40
+        },
+        "body": {
+          "start": 40,
+          "end": 200
+        },
+        "generated": [
+          {
+            "kind": "relations",
+            "range": {
+              "start": 200,
+              "end": 260
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "links": [
+    {
+      "edgeId": "e4",
+      "sourceNodeId": "d",
+      "targetNodeId": "a",
+      "type": "links_to",
+      "origin": "markdown",
+      "targetState": "in-scope",
+      "inversions": [
+        {
+          "source": {
+            "start": 12,
+            "end": 30
+          },
+          "note": {
+            "start": 52,
+            "end": 96
+          }
+        }
+      ]
+    },
+    {
+      "edgeId": "e5",
+      "sourceNodeId": "a",
+      "targetNodeId": "d",
+      "type": "supersedes",
+      "origin": "declared",
+      "targetState": "in-scope"
+    },
+    {
+      "edgeId": "e1",
+      "sourceNodeId": "a",
+      "targetNodeId": "b",
+      "type": "related",
+      "origin": "declared",
+      "targetState": "outside-selection"
+    }
+  ],
+  "attachments": [
+    {
+      "path": "attachments/diagram--82f6d012eaad.svg",
+      "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "byteLength": 900
+    }
+  ],
+  "completeness": {
+    "status": "complete",
+    "expectedNotes": 2,
+    "writtenNotes": 2
+  },
+  "freshness": {
+    "status": "current",
+    "checkedAt": "2026-01-05T10:00:05Z"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "schema": "atelier-obsidian-publication-journal/v1",
+  "journalId": "journal-0001",
+  "workspaceId": "ws-synthetic-0001",
+  "scopeId": "scope-topic",
+  "protocolId": "obsidian-cli-critical-section/v1-prototype",
+  "expectedGeneration": null,
+  "targetGeneration": "gen-0001",
+  "state": "committed",
+  "entries": [
+    {
+      "seq": 0,
+      "at": "2026-01-05T10:00:01Z",
+      "step": "capture",
+      "outcome": "ok",
+      "notePath": "notes/Shared concept--82f6d012eaad.md",
+      "beforeDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "recoveryRef": "recovery/edit-0001/observed.bin"
+    },
+    {
+      "seq": 1,
+      "at": "2026-01-05T10:00:02Z",
+      "step": "conditional-update",
+      "outcome": "ok",
+      "notePath": "notes/Shared concept--82f6d012eaad.md",
+      "beforeDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "afterDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    {
+      "seq": 2,
+      "at": "2026-01-05T10:00:03Z",
+      "step": "verify",
+      "outcome": "ok",
+      "notePath": "notes/Shared concept--82f6d012eaad.md",
+      "afterDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    {
+      "seq": 3,
+      "at": "2026-01-05T10:00:04Z",
+      "step": "manifest-commit",
+      "outcome": "ok"
+    }
+  ],
+  "restart": {
+    "count": 0
+  }
+}

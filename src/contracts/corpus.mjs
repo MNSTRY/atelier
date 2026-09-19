@@ -159,6 +159,16 @@ export const CONTRACT_CORPUS = [
     invalidFiles: ['fixtures/analysis-adapter/invalid/manifest-hidden-provider.v1.json'],
     registry: true,
   },
+  // Obsidian projection contracts. test/obsidian-contract.test.mjs owns their
+  // positive and negative coverage (several refusals are semantic, beyond what
+  // a schema matcher can express), so they carry registry: false.
+  ...[
+    'corpus-profile', 'scope', 'source-snapshot', 'generation-manifest', 'publication-journal', 'service-state',
+    'edit-operation', 'apply-policy', 'proposal-receipt', 'acceptance-receipt', 'ext-settings',
+  ].map((shape) => ({
+    name: `atelier-obsidian-${shape}`, contractFile: `contracts/atelier-obsidian-${shape}.v1.schema.json`,
+    fixtureRoot: `fixtures/obsidian/contracts/${shape}`, registry: false,
+  })),
   {
     name: 'analysis-adapter-claim-output',
     contractFile: 'contracts/analysis-adapter.v1.schema.json',

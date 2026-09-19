@@ -1,0 +1,23 @@
+{
+  "schema": "atelier-obsidian-service-state/v1",
+  "workspaceId": "ws-synthetic-0001",
+  "serviceName": "atelier-obsidian-ws-synthetic-0001",
+  "host": "127.0.0.1",
+  "port": 47811,
+  "runtimeId": "runtime-0001",
+  "pid": 4242,
+  "executable": {
+    "path": "/opt/example/bin/node",
+    "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "stateLocation": "/srv/example/atelier/obsidian/ws-synthetic-0001/state",
+  "health": {
+    "status": "healthy",
+    "checkedAt": "2026-01-05T10:00:00Z"
+  },
+  "consent": {
+    "grantedAt": "2026-01-04T09:00:00Z",
+    "actor": "user-local",
+    "coverage": "service"
+  }
+}

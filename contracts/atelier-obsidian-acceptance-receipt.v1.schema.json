@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-acceptance-receipt.v1.schema.json",
+  "title": "Obsidian acceptance receipt",
+  "$comment": "contract revision 1.0.0; portable shape; candidate, tree and tarball identity, OS, app and CLI versions, procedure ID, raw evidence hashes and the actual outcome.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receiptId",
+    "gate",
+    "procedureId",
+    "candidate",
+    "environment",
+    "evidenceType",
+    "evidence",
+    "outcome",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-acceptance-receipt/v1"
+    },
+    "receiptId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "gate": {
+      "type": "string",
+      "pattern": "^G[0-9]{2}$"
+    },
+    "procedureId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "treeDigest"
+      ],
+      "properties": {
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "treeDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "tarballDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "app",
+        "cli"
+      ],
+      "properties": {
+        "os": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        "app": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "installerDigest": {
+              "$ref": "#/$defs/digest"
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        "cli": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "version"
+          ],
+          "properties": {
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "evidenceType": {
+      "enum": [
+        "real-app",
+        "node",
+        "host",
+        "human"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "digest",
+          "byteLength"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "digest": {
+            "$ref": "#/$defs/digest"
+          },
+          "byteLength": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ext": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "outcome": {
+      "enum": [
+        "passed",
+        "failed",
+        "blocked"
+      ]
+    },
+    "recordedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "atelier-obsidian-apply-policy/v1",
+  "policyId": "policy-0002",
+  "workspaceId": "ws-synthetic-0001",
+  "mode": "manual",
+  "status": "active",
+  "actor": {
+    "kind": "user",
+    "id": "user-local"
+  },
+  "version": 1,
+  "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "allowedEditClasses": [],
+  "selector": {
+    "ids": []
+  },
+  "maxBatchSize": 1,
+  "retryBudget": 0,
+  "conflictDisposition": "hold"
+}

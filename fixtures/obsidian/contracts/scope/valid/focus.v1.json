@@ -1,0 +1,11 @@
+{
+  "schema": "atelier-obsidian-scope/v1",
+  "scopeId": "scope-focus",
+  "mode": "focus",
+  "selector": {
+    "ids": [
+      "a",
+      "b"
+    ]
+  }
+}
