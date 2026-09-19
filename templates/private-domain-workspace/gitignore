@@ -1,4 +1,5 @@
 .atelier-local/
+.atelier-local/obsidian.json
 atelier.local.json
 atelier.workspace.local.json
 atelier-attestation-key.local.json

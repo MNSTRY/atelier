@@ -6,6 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { execNpmSync } from '../scripts/npm-cli.mjs'
+import { OBSIDIAN_LOCAL_POINTER, classifyManagedPath } from '../src/project/file-class.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DIRECTORY_LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir'
@@ -79,5 +80,42 @@ test('npm pack ships the template gitignore files', () => {
       files.includes(`templates/${template}/gitignore`),
       `tarball missing templates/${template}/gitignore — npm pack strips .gitignore, so templates must ship the file as gitignore`,
     )
+  }
+})
+
+test('initialized projects ignore the repo-local Obsidian pointer and nothing of the external data directory', () => {
+  const workspaces = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-init-pointer-'))
+  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const ignored = (cwd, rel) => {
+    try {
+      return git(cwd, ['check-ignore', '--no-index', rel]).trim() === rel
+    } catch {
+      return false
+    }
+  }
+  try {
+    for (const template of ['private-domain', 'shared-project', 'distribution', 'external-project']) {
+      const target = path.join(workspaces, template)
+      execFileSync(process.execPath, [path.join(ROOT, 'bin', 'atelier.mjs'), 'init', '--template', template, '--target', target], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      const lines = fs.readFileSync(path.join(target, '.gitignore'), 'utf8').split(/\r?\n/)
+      assert.ok(lines.includes(OBSIDIAN_LOCAL_POINTER), `${template}: the pointer is named explicitly, not only covered by its directory`)
+
+      git(target, ['init', '--quiet'])
+      assert.equal(ignored(target, OBSIDIAN_LOCAL_POINTER), true, `${template}: workspace pointer`)
+      assert.equal(ignored(target, `nested-repo/${OBSIDIAN_LOCAL_POINTER}`), true, `${template}: pointer inside a nested repository folder`)
+
+      // The data directory is external, so no template carries rules for its
+      // layout: an editable vault or recovery folder that did appear inside a
+      // repository would show up in git status instead of being hidden.
+      for (const rel of ['vaults/scope-a/notes/a.md', 'recovery/edit-0001/observed.bin', 'staging/generation-0001/a.md', 'state/manifests/scope-a/current.json']) {
+        assert.equal(ignored(target, rel), false, `${template}: ${rel} must not be ignored`)
+      }
+    }
+    assert.equal(classifyManagedPath('vaults/scope-a/notes/a.md').handling.discardable, false)
+  } finally {
+    fs.rmSync(workspaces, { recursive: true, force: true })
   }
 })

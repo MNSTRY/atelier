@@ -1,0 +1,211 @@
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { acquirePrivateLock, publishPrivateFile } from '../../../project/durable-state.mjs'
+import { checkManagedRoots } from '../../../project/file-class.mjs'
+import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularFileNoFollow, readRegularTextNoFollow } from '../../../project/private-state.mjs'
+
+// Private per-workspace state for one Obsidian view:
+//
+//   <workspaceRoot>/vaults/<scopeId>/                 the editable vault (or an explicit vaultRoot)
+//   <workspaceRoot>/state/manifests/<scopeId>/        trusted manifests and the current pointer
+//   <workspaceRoot>/state/journals/<scopeId>/<id>/    publication journals
+//   <workspaceRoot>/recovery/objects/<sha256>.bin     immutable content-addressed bytes
+//   <workspaceRoot>/recovery/<journalId>/<unit>/      displaced files and receipts
+//   <workspaceRoot>/staging/<journalId>/              disposable prepared candidates
+//   <vault>/.atelier-publication/                     the vault lock, shared by every view of the vault
+//
+// Immutable records are published with publishPrivateFile: a complete file
+// appears atomically under a name that is never overwritten. What that gives
+// is an all-or-nothing record that survives a process crash; it is fsynced,
+// which on some platforms is weaker than a full device flush. A displaced
+// file is different: it is the very file that occupied a note path, it is
+// moved and never copied over, and a program that still holds it open may
+// write into it later. It is therefore never treated as immutable; its digest
+// at the time of the move is recorded in a receipt and re-checked.
+
+export const VAULT_LOCK_DIRECTORY = '.atelier-publication'
+
+// The vault lock, with the semantics of every private lock: the newest ticket
+// owns it, a release marker frees it, and a ticket whose process is gone on
+// this host is stale and is taken over. Nothing else is ever written here.
+// Tickets of superseded generations are removed while the lock is held, the
+// marker before its ticket, so the directory does not grow inside a person's
+// vault and an interrupted removal never leaves a marker without its ticket.
+export function acquireVaultLock(store) {
+  const directory = ensureContainedPrivateDirectory({ workspaceRoot: store.vaultRoot, directory: path.dirname(store.vaultLockPath), label: 'vault publication lock' })
+  const release = acquirePrivateLock(path.join(directory, path.basename(store.vaultLockPath)))
+  try {
+    const owners = `${store.vaultLockPath}.owners`
+    const names = fs.readdirSync(owners).filter((name) => /^\d{12}\.(json|released)$/.test(name)).sort()
+    const newest = names.filter((name) => name.endsWith('.json')).at(-1)?.slice(0, 12)
+    for (const name of names.filter((item) => item.slice(0, 12) < newest).sort((left, right) => (left.endsWith('.released') ? -1 : 1) - (right.endsWith('.released') ? -1 : 1))) {
+      fs.rmSync(path.join(owners, name), { force: true })
+    }
+  } catch { /* history that cannot be pruned is harmless */ }
+  return release
+}
+
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const DIGEST = /^sha256:[0-9a-f]{64}$/
+
+export const sha256Digest = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+
+export class PublicationRefusal extends Error {
+  constructor(code, message, detail = {}) {
+    super(`${code}: ${message}`)
+    this.name = 'PublicationRefusal'
+    this.code = code
+    this.detail = detail
+  }
+}
+
+export function refuse(code, message, detail) {
+  throw new PublicationRefusal(code, message, detail)
+}
+
+// Identifiers become directory names. ':' is legal in an identifier and is not
+// legal in a file name everywhere.
+const segment = (identifier) => identifier.replaceAll(':', '_')
+
+export function readFileDigest(file) {
+  let descriptor
+  try {
+    descriptor = openRegularFileNoFollow(file)
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+  try { return sha256Digest(fs.readFileSync(descriptor)) } finally { fs.closeSync(descriptor) }
+}
+
+export function readFileBytes(file) {
+  const descriptor = openRegularFileNoFollow(file)
+  try { return fs.readFileSync(descriptor) } finally { fs.closeSync(descriptor) }
+}
+
+function publishOnce(file, bytes) {
+  try {
+    publishPrivateFile(file, bytes)
+  } catch (error) {
+    // The name is taken by different bytes. An immutable record is never replaced.
+    if (error.code !== 'EEXIST') throw error
+    return false
+  }
+  return true
+}
+
+// `repositoryRoots` is required: every enrolled repository root of the loaded
+// project. Neither the workspace state nor the vault may overlap one of them,
+// in either direction, lexically or by real path; the store refuses before it
+// creates anything. A caller with no enrolled repository (a test in a
+// temporary directory) says so with an explicit empty list.
+export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vaultRoot, repositoryRoots } = {}) {
+  if (typeof workspaceRoot !== 'string' || !path.isAbsolute(workspaceRoot)) throw new TypeError('workspaceRoot must be an absolute path')
+  for (const [label, value] of [['workspaceId', workspaceId], ['scopeId', scopeId]]) {
+    if (typeof value !== 'string' || !IDENTIFIER.test(value)) throw new TypeError(`${label} must be a contract identifier`)
+  }
+  if (!Array.isArray(repositoryRoots) || repositoryRoots.some((item) => typeof item !== 'string' || !path.isAbsolute(item))) {
+    throw new TypeError('repositoryRoots must list the absolute root of every enrolled repository; pass an explicit empty list when there is none')
+  }
+  if (vaultRoot !== undefined && (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot))) throw new TypeError('vaultRoot must be an absolute path')
+  const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(vaultRoot === undefined ? [] : [vaultRoot])], repositoryRoots })
+  if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
+  fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
+  const root = fs.realpathSync(workspaceRoot)
+  const privateDir = (...parts) => ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, ...parts), label: 'Obsidian publication state' })
+  const requestedVault = vaultRoot ?? path.join(root, 'vaults', segment(scopeId))
+  fs.mkdirSync(requestedVault, { recursive: true })
+  const vault = fs.realpathSync(requestedVault)
+  const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
+  for (const area of ['state', 'recovery', 'staging']) {
+    if (inside(path.join(root, area), vault) || inside(vault, path.join(root, area))) throw new TypeError('the vault may not overlap private publication state')
+  }
+  const manifests = privateDir('state', 'manifests', segment(scopeId))
+  const journals = privateDir('state', 'journals', segment(scopeId))
+  const locks = privateDir('state', 'locks')
+  const objects = privateDir('recovery', 'objects')
+  const staging = privateDir('staging')
+  const pointerFile = path.join(manifests, 'current.json')
+
+  const store = {
+    workspaceRoot: root,
+    workspaceId,
+    scopeId,
+    vaultRoot: vault,
+    journalsRoot: journals,
+    lockPath: path.join(locks, `${segment(scopeId)}.lock`),
+    // One publisher per vault, whichever view or workspace state it belongs to.
+    // Two stores share nothing but the vault, so this lock lives under the
+    // vault's real path, in a dot-directory no note path can name.
+    vaultLockPath: path.join(vault, VAULT_LOCK_DIRECTORY, 'vault.lock'),
+    ref: (absolute) => path.relative(root, absolute).split(path.sep).join('/'),
+    resolve(ref) {
+      const absolute = path.resolve(root, ref)
+      if (!inside(root, absolute) || absolute === root) throw new TypeError('a store reference must stay inside the workspace state')
+      return absolute
+    },
+    journalDir: (journalId) => privateDir('state', 'journals', segment(scopeId), segment(journalId)),
+    stagingDir: (journalId) => privateDir('staging', segment(journalId)),
+    stagingRoot: staging,
+    unitDir: (journalId, unit) => privateDir('recovery', segment(journalId), String(unit).padStart(6, '0')),
+    displacedPath: (journalId, unit, name = 'displaced.bin') => path.join(store.unitDir(journalId, unit), name),
+
+    // Immutable, content-addressed bytes (a base, an observed edit, an outside writer's bytes).
+    retainObject(bytes) {
+      const digest = sha256Digest(bytes)
+      const file = path.join(objects, `${digest.slice('sha256:'.length)}.bin`)
+      publishPrivateFile(file, bytes)
+      return { digest, ref: store.ref(file) }
+    },
+    readObject(digest) {
+      if (!DIGEST.test(digest)) throw new TypeError('digest required')
+      const bytes = readFileBytes(path.join(objects, `${digest.slice('sha256:'.length)}.bin`))
+      if (sha256Digest(bytes) !== digest) refuse('recovery-object-corrupt', 'a retained object no longer matches its name')
+      return bytes
+    },
+    writeReceipt(journalId, unit, receipt) {
+      const body = Buffer.from(`${JSON.stringify({ schema: 'atelier-obsidian-recovery-receipt/v1', journalId, unit, ...receipt }, null, 2)}\n`, 'utf8')
+      const file = path.join(store.unitDir(journalId, unit), `receipt-${receipt.role}-${sha256Digest(body).slice(7, 19)}.json`)
+      publishOnce(file, body)
+      return store.ref(file)
+    },
+    listReceipts(journalId) {
+      const base = path.join(root, 'recovery', segment(journalId))
+      if (!fs.existsSync(base)) return []
+      const receipts = []
+      for (const unit of fs.readdirSync(base).sort()) {
+        for (const name of fs.readdirSync(path.join(base, unit)).filter((entry) => /^receipt-.*\.json$/.test(entry)).sort()) {
+          receipts.push(JSON.parse(readRegularTextNoFollow(path.join(base, unit, name))))
+        }
+      }
+      return receipts
+    },
+
+    // Trusted manifest. The manifest file is immutable; only the small pointer
+    // is replaced, and only as the last step of a publication.
+    readCurrent() {
+      let text
+      try { text = readRegularTextNoFollow(pointerFile) } catch (error) { if (error.code === 'ENOENT') return null; throw error }
+      const pointer = JSON.parse(text)
+      if (pointer.scopeId !== scopeId || pointer.workspaceId !== workspaceId) refuse('state-mismatch', 'the manifest pointer belongs to another view')
+      return pointer
+    },
+    readCurrentManifest() {
+      const pointer = store.readCurrent()
+      if (!pointer) return null
+      const bytes = readFileBytes(path.join(manifests, pointer.manifestFile))
+      if (sha256Digest(bytes) !== pointer.manifestDigest) refuse('state-mismatch', 'the trusted manifest no longer matches its pointer')
+      return JSON.parse(bytes.toString('utf8'))
+    },
+    commitManifest({ manifestBytes, generationId, journalId, retained = [], committedAt }) {
+      const manifestDigest = sha256Digest(manifestBytes)
+      const manifestFile = `${segment(generationId)}--${manifestDigest.slice(7, 19)}.json`
+      publishPrivateFile(path.join(manifests, manifestFile), manifestBytes)
+      const pointer = { schema: 'atelier-obsidian-current-manifest/v1', workspaceId, scopeId, generationId, manifestFile, manifestDigest, journalId, committedAt, retained }
+      atomicReplacePrivateText(pointerFile, `${JSON.stringify(pointer, null, 2)}\n`)
+      return pointer
+    },
+  }
+  return store
+}

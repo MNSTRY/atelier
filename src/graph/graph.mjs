@@ -100,10 +100,51 @@ function externalRepos(project) {
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
 }
 
-function canonicalBuild(project) {
+function canonicalBuild(project, overrides = {}) {
   const input = canonicalInput(project)
-  const result = buildKnowledgeGraph(input.options)
+  const result = buildKnowledgeGraph({ ...input.options, ...overrides })
   return { input, result }
+}
+
+// The supported project-to-options seam: the exact buildKnowledgeGraph options
+// every graph consumer derives from a loaded project, plus the configured
+// repositories that could not be read.
+export function canonicalGraphOptions(project) {
+  return canonicalInput(project)
+}
+
+const canonicalEdgeId = (edge) => JSON.stringify([edge.source, edge.type, edge.target])
+
+// The canonical graph for a loaded project, for consumers that need derived
+// edges and the source offsets behind them. Nothing is resolved here: nodes,
+// edges, link occurrences and link findings all come from
+// buildKnowledgeGraph. Each edge gains a stable id and an origin; a derived
+// edge carries every source occurrence that produced it.
+export function buildCanonicalGraph(project, { isLinkTargetEligible } = {}) {
+  const { input, result } = canonicalBuild(project, isLinkTargetEligible ? { isLinkTargetEligible } : {})
+  const canonical = result.workspaceGraph ?? { nodes: [], edges: [], diagnostics: [] }
+  const occurrences = new Map()
+  for (const link of result.resolvedLinks ?? []) {
+    const id = canonicalEdgeId(link)
+    if (!occurrences.has(id)) occurrences.set(id, [])
+    occurrences.get(id).push(link)
+  }
+  const edges = canonical.edges.map((edge) => {
+    const id = canonicalEdgeId(edge)
+    return edge.declared === true
+      ? { id, ...edge, origin: 'declared' }
+      : { id, ...edge, origin: 'ordinary-link', occurrences: occurrences.get(id) ?? [] }
+  })
+  return {
+    ok: result.ok && input.missing.length === 0,
+    errors: [...input.missing, ...result.errors],
+    options: input.options,
+    nodes: canonical.nodes,
+    edges,
+    diagnostics: canonical.diagnostics,
+    links: result.resolvedLinks ?? [],
+    linkDiagnostics: result.linkDiagnostics ?? [],
+  }
 }
 
 export function buildGraph(project) {

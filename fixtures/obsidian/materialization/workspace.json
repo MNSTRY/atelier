@@ -1,0 +1,54 @@
+{
+  "description": "Invented two-repository workspace. Files are JSON strings so CRLF, the byte order prefix and the missing final newline survive version control; hex is for non-text bytes.",
+  "repositories": [
+    "north-desk",
+    "south-desk"
+  ],
+  "withheldByEligibility": [
+    "north-desk:sealed-ledger"
+  ],
+  "sentinels": [
+    "ZQXWITHHELD",
+    "ZQXBODY",
+    "ZQXSUMMARY",
+    "zqx-hidden-tag",
+    "ZQYWITHHELD",
+    "ZQYBODY",
+    "zqy-hidden-tag",
+    "north-desk:sealed-audit",
+    "sealed/audit"
+  ],
+  "authoredOnlySentinels": [
+    "sealed/ledger",
+    "north-desk:sealed-ledger"
+  ],
+  "files": {
+    "north-desk/plans/harbor-plan.md": {
+      "text": "---\ntitle: \"Harbor plan\"\nkg:\n  id: \"north-desk:harbor-plan\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    supports:\n      - \"south-desk:tide-table\"\n    depends_on:\n      - \"north-desk:shared-a\"\n    related:\n      - \"north-desk:sealed-ledger\"\n---\n\n# Harbor plan\n\nÜberblick — café ☕ first, so byte offsets and character offsets differ.\n\nSee the [tide table](../../south-desk/tables/tide-table.md#spring) and again as [[Tide table]] or [[Tide table#Spring|spring tides]].\nThe [depth chart](../charts/depth-chart.pdf) is a wrapped source. The concept is in [shared](shared-a.md).\n\nLeft alone: [ledger](../sealed/ledger.md), [gone](missing.md), [site](https://example.invalid/page.md) and `[[Tide table]]` in inline code.\n\n```\n[fenced](../../south-desk/tables/tide-table.md)\n[[Tide table]]\n```\n"
+    },
+    "north-desk/plans/shared-a.md": {
+      "text": "---\r\ntitle: \"Shared concept\"\r\nkg:\r\n  id: \"north-desk:shared-a\"\r\n  type: \"document\"\r\n  status: \"active\"\r\n  audience: \"team\"\r\n---\r\n\r\n# Shared concept\r\n\r\nFirst of two notes with one title.\r\nBack to the [plan](harbor-plan.md).\r\n"
+    },
+    "north-desk/plans/shared-b.md": {
+      "text": "---\ntitle: \"Shared concept\"\nkg:\n  id: \"north-desk:shared-b\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    contradicts:\n      - \"north-desk:shared-a\"\n---\n\n# Shared concept\n\nSecond note with the same title, and no final newline"
+    },
+    "north-desk/sealed/ledger.md": {
+      "text": "---\ntitle: \"Sealed ledger ZQXWITHHELD\"\ntags:\n  - \"zqx-hidden-tag\"\nsummary: \"ZQXSUMMARY of the ledger\"\nkg:\n  id: \"north-desk:sealed-ledger\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    supports:\n      - \"north-desk:harbor-plan\"\n---\n\n# Sealed ledger ZQXWITHHELD\n\nZQXBODY text. It links to the [plan](../plans/harbor-plan.md).\n"
+    },
+    "north-desk/sealed/audit.md": {
+      "text": "---\ntitle: \"Vault audit ZQYWITHHELD\"\ntags:\n  - \"zqy-hidden-tag\"\nkg:\n  id: \"north-desk:sealed-audit\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"sensitive\"\n---\n\n# Vault audit ZQYWITHHELD\n\nZQYBODY text about [[Harbor plan]].\n"
+    },
+    "north-desk/journal/signal-log.md": {
+      "text": "﻿# Signal log\n\nA byte order prefix and no front matter. naïve — ✓\n"
+    },
+    "north-desk/charts/depth-chart.pdf": {
+      "hex": "255044462d312e340a25e2e3cfd30a73796e7468657469630a"
+    },
+    "north-desk/charts/depth-chart.pdf.kg.json": {
+      "text": "{\n  \"schema\": \"mnstry.source-sidecar@v1\",\n  \"asset\": \"depth-chart.pdf\",\n  \"title\": \"Depth chart\",\n  \"summary\": \"Invented soundings with [[brackets]] and a #tag that must stay inert.\",\n  \"tags\": [\n    \"chart\"\n  ],\n  \"kg\": {\n    \"id\": \"north-desk:depth-chart\",\n    \"type\": \"evidence\",\n    \"domain\": \"sample\",\n    \"lifecycle\": \"source\",\n    \"status\": \"active\",\n    \"audience\": \"team\",\n    \"relations\": {\n      \"evidences\": [\n        \"north-desk:harbor-plan\"\n      ]\n    }\n  }\n}\n"
+    },
+    "south-desk/tables/tide-table.md": {
+      "text": "---\ntitle: \"Tide table\"\nkg:\n  id: \"south-desk:tide-table\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Tide table\n\n## Spring\n\nUsed by [[Harbor plan|the plan]]; embedded: ![[Harbor plan]]\n"
+    }
+  }
+}

@@ -693,27 +693,304 @@ export function nodeForFile(repoName, repoRoot, coverage, file, repoAccessConfig
   }
 }
 
-export function markdownLinkEdges(repoRoot, nodesByPath) {
-  const edges = []
-  for (const [rel, node] of nodesByPath) {
-    if (!rel.endsWith('.md')) continue
-    const raw = fs.readFileSync(path.join(repoRoot, rel), 'utf8')
-    const re = /\[[^\]]+\]\(([^)\s#]+)(?:#[^)]+)?\)/g
-    let m
-    while ((m = re.exec(raw))) {
-      const href = m[1]
-      if (/^[a-z]+:/i.test(href) || href.startsWith('#')) continue
-      const target = path
-        .normalize(path.join(path.dirname(rel), decodeURIComponent(href)))
-        .split(path.sep)
-        .join('/')
-      const direct = nodesByPath.get(target)
-      const index = nodesByPath.get(posixJoin(target, 'README.md')) || nodesByPath.get(posixJoin(target, 'index.md'))
-      const targetNode = direct || index
-      if (targetNode) edges.push({ source: node.id, target: targetNode.id, type: 'links_to' })
+// ---------------------------------------------------------------------------
+// Ordinary links: Markdown links and wikilinks
+// ---------------------------------------------------------------------------
+
+// Link findings are reported beside the graph, never inside a graph artifact,
+// so committed graphs stay free of offsets and unresolved-link noise.
+export const LINK_DIAGNOSTIC_CODES = Object.freeze([
+  'link-target-unresolved',
+  'link-target-outside-enrolled-roots',
+  'link-target-ambiguous',
+  'link-href-malformed',
+  'link-source-not-utf8',
+])
+
+const MARKDOWN_LINK_RE = /\[[^\]]+\]\(([^)\s#]+)(#[^)]+)?\)/g
+const WIKILINK_RE = /\[\[([^[\]|#^]+)([#^][^[\]|]*)?(?:\|[^[\]]*)?\]\]/g
+
+// Regions whose text is never read as a link: front matter (known or unknown
+// YAML alike), fenced code and inline code. Offsets index the text as read,
+// with no newline normalization.
+function unscannedRanges(text) {
+  const ranges = []
+  let bodyStart = 0
+  if (/^---\r?\n/.test(text)) {
+    const closeRe = /\r?\n---[ \t]*\r?\n/g
+    closeRe.lastIndex = 3
+    const close = closeRe.exec(text)
+    if (close) {
+      bodyStart = close.index + close[0].length
+      ranges.push([0, bodyStart])
     }
   }
-  return edges
+
+  let fence = null
+  let offset = bodyStart
+  while (offset < text.length) {
+    const eol = text.indexOf('\n', offset)
+    const next = eol === -1 ? text.length : eol + 1
+    const line = text.slice(offset, eol === -1 ? text.length : eol).replace(/\r$/, '')
+    if (fence) {
+      const close = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/)
+      if (close && close[1][0] === fence.char && close[1].length >= fence.length) {
+        ranges.push([fence.start, next])
+        fence = null
+      }
+    } else {
+      const open = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/)
+      if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
+        fence = { char: open[1][0], length: open[1].length, start: offset }
+      }
+    }
+    offset = next
+  }
+  if (fence) ranges.push([fence.start, text.length])
+
+  // Inline code between the block ranges. A span closes on a backtick run of
+  // the same length inside the same paragraph; an unclosed run is plain text.
+  const blocks = [...ranges].sort((a, b) => a[0] - b[0])
+  let segmentStart = bodyStart
+  for (const [blockStart, blockEnd] of [...blocks.filter(([start]) => start >= bodyStart), [text.length, text.length]]) {
+    inlineCodeRanges(text, segmentStart, blockStart, ranges)
+    segmentStart = Math.max(segmentStart, blockEnd)
+  }
+  return ranges.sort((a, b) => a[0] - b[0])
+}
+
+function inlineCodeRanges(text, from, to, ranges) {
+  const runRe = /`+/g
+  runRe.lastIndex = from
+  let open
+  while ((open = runRe.exec(text)) && open.index < to) {
+    const blankRe = /\n[ \t]*\r?\n/g
+    blankRe.lastIndex = open.index
+    const blank = blankRe.exec(text)
+    const paragraphEnd = Math.min(to, blank ? blank.index : text.length)
+    const closeRe = /`+/g
+    closeRe.lastIndex = open.index + open[0].length
+    let close
+    let closed = false
+    while ((close = closeRe.exec(text)) && close.index < paragraphEnd) {
+      if (close[0].length !== open[0].length) continue
+      ranges.push([open.index, close.index + close[0].length])
+      runRe.lastIndex = close.index + close[0].length
+      closed = true
+      break
+    }
+    if (!closed) runRe.lastIndex = open.index + open[0].length
+  }
+}
+
+// Every ordinary link occurrence in one Markdown text, in source order.
+// `range` covers the whole construct and `targetRange` the written target, as
+// half-open UTF-16 offsets into the text exactly as read; byte offsets are
+// added by the resolver once the source is known to round-trip as UTF-8.
+export function scanMarkdownLinks(raw) {
+  const text = String(raw ?? '')
+  const skipped = unscannedRanges(text)
+  const overlaps = (ranges, start, end) => ranges.some(([a, b]) => start < b && end > a)
+  // A construct is unscanned when it begins inside such a region. Inline code
+  // inside a link's own label ([`name`](target)) is an ordinary link.
+  const beginsInside = (ranges, start) => ranges.some(([a, b]) => start >= a && start < b)
+  const found = []
+  const wikiRanges = []
+
+  for (const m of text.matchAll(WIKILINK_RE)) {
+    const start = m.index
+    const end = start + m[0].length
+    if (beginsInside(skipped, start)) continue
+    wikiRanges.push([start, end])
+    found.push({
+      syntax: 'wikilink',
+      embed: text[start - 1] === '!',
+      href: m[1].trim(),
+      fragment: m[2] ?? '',
+      range: { start, end },
+      targetRange: { start: start + 2, end: start + 2 + m[1].length },
+    })
+  }
+
+  for (const m of text.matchAll(MARKDOWN_LINK_RE)) {
+    const start = m.index
+    const end = start + m[0].length
+    if (beginsInside(skipped, start) || overlaps(wikiRanges, start, end)) continue
+    const targetStart = start + m[0].indexOf('](') + 2
+    found.push({
+      syntax: 'markdown',
+      embed: text[start - 1] === '!',
+      href: m[1],
+      fragment: m[2] ?? '',
+      range: { start, end },
+      targetRange: { start: targetStart, end: targetStart + m[1].length },
+    })
+  }
+
+  return found.sort((a, b) => a.range.start - b.range.start)
+}
+
+function addByteOffsets(text, occurrences) {
+  const offsets = [...new Set(occurrences.flatMap((item) => [item.range.start, item.range.end, item.targetRange.start, item.targetRange.end]))].sort(
+    (a, b) => a - b,
+  )
+  const bytes = new Map()
+  let previous = 0
+  let total = 0
+  for (const offset of offsets) {
+    total += Buffer.byteLength(text.slice(previous, offset), 'utf8')
+    bytes.set(offset, total)
+    previous = offset
+  }
+  for (const item of occurrences) {
+    for (const range of [item.range, item.targetRange]) {
+      range.byteStart = bytes.get(range.start)
+      range.byteEnd = bytes.get(range.end)
+    }
+  }
+}
+
+// `pathOf` and `repoNameOf` come from the census keys, so a caller's node
+// needs only an id: markdownLinkEdges has always accepted such nodes.
+function wikilinkCandidates(target, nodes, pathOf, repoNameOf) {
+  if (target.includes('/')) {
+    const wanted = new Set([target, `${target}.md`])
+    return { by: 'path', nodes: nodes.filter((node) => wanted.has(pathOf.get(node)) || wanted.has(`${repoNameOf.get(node)}/${pathOf.get(node)}`)) }
+  }
+  const byTitle = nodes.filter((node) => node.title !== undefined && node.title === target)
+  const byName = nodes.filter((node) => {
+    const base = path.posix.basename(pathOf.get(node))
+    return base === target || base.replace(/\.[^.]+$/, '') === target
+  })
+  const merged = [...new Map([...byTitle, ...byName].map((node) => [node.id, node])).values()]
+  return { by: byTitle.length ? 'title' : 'basename', nodes: merged }
+}
+
+// The one resolver for ordinary links across every enrolled repository.
+// `repos` is [{ name, root, nodesByPath }]. A target that is absent, outside
+// the census or refused by `isLinkTargetEligible` is reported identically and
+// never inspected, so a finding cannot confirm that a withheld target exists.
+export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () => true } = {}) {
+  const links = []
+  const diagnostics = []
+  const enrolled = repos.map((repo) => ({ ...repo, root: path.resolve(repo.root) }))
+  const ownerOf = new Map(enrolled.flatMap((repo) => [...repo.nodesByPath.values()].map((node) => [node, repo])))
+  const eligibleNodes = [...ownerOf.keys()].filter((node) => isLinkTargetEligible(node))
+  const pathOf = new Map(enrolled.flatMap((repo) => [...repo.nodesByPath].map(([rel, node]) => [node, rel])))
+  const repoNameOf = new Map([...ownerOf].map(([node, repo]) => [node, repo.name]))
+
+  const owningRepo = (abs) =>
+    enrolled
+      .filter((repo) => abs === repo.root || abs.startsWith(`${repo.root}${path.sep}`))
+      .sort((a, b) => b.root.length - a.root.length)[0] ?? null
+
+  for (const repo of enrolled) {
+    for (const [rel, node] of repo.nodesByPath) {
+      if (!rel.endsWith('.md') || !isLinkTargetEligible(node)) continue
+      const buffer = fs.readFileSync(path.join(repo.root, rel))
+      const text = buffer.toString('utf8')
+      const occurrences = scanMarkdownLinks(text)
+      const finding = (code, occurrence, detail, extra = {}) =>
+        diagnostics.push({
+          severity: 'warning',
+          type: code,
+          code,
+          node: node.id,
+          repo: repo.name,
+          path: rel,
+          ...(occurrence
+            ? { syntax: occurrence.syntax, href: portableText(occurrence.href), range: occurrence.range, targetRange: occurrence.targetRange }
+            : {}),
+          ...extra,
+          message: `${repo.name}/${rel}: ${detail}`,
+        })
+
+      if (Buffer.from(text, 'utf8').equals(buffer)) addByteOffsets(text, occurrences)
+      else if (occurrences.length) finding('link-source-not-utf8', null, 'source is not valid UTF-8; link byte offsets are withheld')
+
+      for (const occurrence of occurrences) {
+        const shown = JSON.stringify(portableText(occurrence.href))
+        let targetNode = null
+        let resolvedBy = 'path'
+
+        if (occurrence.syntax === 'wikilink') {
+          const candidates = wikilinkCandidates(occurrence.href, eligibleNodes, pathOf, repoNameOf)
+          if (candidates.nodes.length > 1) {
+            finding('link-target-ambiguous', occurrence, `wikilink ${shown} matches ${candidates.nodes.length} documents; refusing to choose`, {
+              candidates: candidates.nodes.map((item) => item.id).sort(),
+            })
+            continue
+          }
+          targetNode = candidates.nodes[0] ?? null
+          resolvedBy = candidates.by
+        } else {
+          const href = occurrence.href
+          if (/^[a-z]+:/i.test(href) || href.startsWith('#')) continue
+          let decoded
+          try {
+            decoded = decodeURIComponent(href)
+          } catch {
+            finding('link-href-malformed', occurrence, `link ${shown} is not valid percent-encoding`)
+            continue
+          }
+          const abs = path.join(repo.root, path.dirname(rel), decoded)
+          const owner = owningRepo(abs)
+          if (!owner) {
+            finding('link-target-outside-enrolled-roots', occurrence, `link ${shown} leaves every enrolled repository`)
+            continue
+          }
+          const target = relPath(owner.root, abs)
+          // Eligibility is tested per candidate, before choosing: a withheld
+          // candidate is skipped exactly as an absent one, so it can never
+          // shadow an eligible fallback and change the edge set.
+          targetNode =
+            [target, posixJoin(target, 'README.md'), posixJoin(target, 'index.md')]
+              .map((candidate) => owner.nodesByPath.get(candidate))
+              .find((candidate) => candidate && isLinkTargetEligible(candidate)) ?? null
+        }
+
+        if (!targetNode) {
+          finding('link-target-unresolved', occurrence, `link ${shown} does not resolve to an enrolled document`)
+          continue
+        }
+        links.push({
+          source: node.id,
+          target: targetNode.id,
+          type: 'links_to',
+          syntax: occurrence.syntax,
+          embed: occurrence.embed,
+          href: occurrence.href,
+          fragment: occurrence.fragment,
+          resolvedBy,
+          crossRepository: ownerOf.get(targetNode) !== repo,
+          sourceRepo: repo.name,
+          sourcePath: rel,
+          targetRepo: ownerOf.get(targetNode).name,
+          targetPath: targetNode.path,
+          range: occurrence.range,
+          targetRange: occurrence.targetRange,
+        })
+      }
+    }
+  }
+
+  const order = (item) => `${item.sourceRepo ?? item.repo}/${item.sourcePath ?? item.path}`
+  const byPosition = (a, b) => order(a).localeCompare(order(b)) || (a.range?.start ?? -1) - (b.range?.start ?? -1)
+  return { links: links.sort(byPosition), diagnostics: diagnostics.sort(byPosition) }
+}
+
+// A repository's own artifact depends on that repository alone: path links
+// that stay inside it. Wikilinks and cross-repository links resolve against
+// the whole enrolment and belong to the workspace graph only.
+function repoLocalLink(link) {
+  return !link.crossRepository && link.syntax === 'markdown'
+}
+
+const linkEdge = (link) => ({ source: link.source, target: link.target, type: 'links_to' })
+
+export function markdownLinkEdges(repoRoot, nodesByPath) {
+  const { links } = resolveWorkspaceLinks({ repos: [{ name: path.basename(repoRoot), root: repoRoot, nodesByPath }] })
+  return links.filter(repoLocalLink).map(linkEdge)
 }
 
 export function declaredRelationEdges(nodes) {
@@ -863,6 +1140,7 @@ export function buildKnowledgeGraph({
   externalRepos = [],
   externalRelationPrefixes = [],
   externalRelationIds = [],
+  isLinkTargetEligible = undefined,
 } = {}) {
   if (!workspaceRoot) throw new Error('workspaceRoot is required')
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
@@ -896,6 +1174,7 @@ export function buildKnowledgeGraph({
   const workspaceOrphanSidecars = []
   const workspaceIgnoredSidecars = []
   const repoGraphs = []
+  const census = []
 
   for (const entry of roots) {
     const repoRoot = entry.path
@@ -915,7 +1194,15 @@ export function buildKnowledgeGraph({
       nodesByPath.set(file.rel, node)
     }
 
-    const edges = uniqueEdges([...markdownLinkEdges(repoRoot, nodesByPath), ...declaredRelationEdges(nodes)])
+    census.push({ name: repoName, root: repoRoot, nodes, nodesByPath })
+  }
+
+  // Links resolve once, against every enrolled repository together.
+  const resolved = resolveWorkspaceLinks({ repos: census, ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}) })
+
+  for (const { name: repoName, root: repoRoot, nodes } of census) {
+    const localLinks = resolved.links.filter((link) => link.sourceRepo === repoName && repoLocalLink(link))
+    const edges = uniqueEdges([...localLinks.map(linkEdge), ...declaredRelationEdges(nodes)])
     const graph = {
       schema: KNOWLEDGE_GRAPH_SCHEMA,
       repo: repoName,
@@ -930,6 +1217,7 @@ export function buildKnowledgeGraph({
     workspaceNodes.push(...graph.nodes)
     workspaceEdges.push(...graph.edges)
   }
+  workspaceEdges.push(...resolved.links.filter((link) => !repoLocalLink(link)).map(linkEdge))
 
   const validationErrors = validateKnowledgeGraph(workspaceNodes, workspaceEdges, workspaceOrphanSidecars, {
     externalRelationPrefixes,
@@ -940,7 +1228,7 @@ export function buildKnowledgeGraph({
     workspace: path.basename(resolvedWorkspaceRoot),
     diagnostics: graphDiagnostics(workspaceNodes),
     nodes: workspaceNodes.sort((a, b) => `${a.repo}/${a.path}`.localeCompare(`${b.repo}/${b.path}`)),
-    edges: workspaceEdges.sort((a, b) => `${a.source}:${a.target}:${a.type}`.localeCompare(`${b.source}:${b.target}:${b.type}`)),
+    edges: uniqueEdges(workspaceEdges).sort((a, b) => `${a.source}:${a.target}:${a.type}`.localeCompare(`${b.source}:${b.target}:${b.type}`)),
   }
   workspaceGraph.nodeCount = workspaceGraph.nodes.length
   workspaceGraph.edgeCount = workspaceGraph.edges.length
@@ -952,6 +1240,8 @@ export function buildKnowledgeGraph({
     workspaceGraph,
     orphanSidecars: workspaceOrphanSidecars,
     ignoredSidecars: workspaceIgnoredSidecars,
+    resolvedLinks: resolved.links,
+    linkDiagnostics: resolved.diagnostics,
   }
 }
 

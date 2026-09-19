@@ -7,7 +7,10 @@ import {
   REPO_ACCESS_SCHEMA,
   SOURCE_SIDECAR_SCHEMA,
   buildKnowledgeGraph,
+  markdownLinkEdges,
   portableText,
+  resolveWorkspaceLinks,
+  scanMarkdownLinks,
   validateRepoAccessConfig,
 } from '../src/graph/knowledge-graph.mjs'
 
@@ -202,4 +205,311 @@ test('portableText strips home directories on every OS shape', () => {
   assert.equal(portableText(linux), '~/secret/notes.md')
   assert.equal(portableText(windows), '~\\secret')
   assert.equal(portableText('no paths here'), 'no paths here')
+})
+
+// ---------------------------------------------------------------------------
+// Ordinary links across enrolled repositories. Every document is invented.
+// ---------------------------------------------------------------------------
+
+function makeLinkedWorkspace(t, repoNames = ['alpha-notes', 'beta-notes']) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-links-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const repos = {}
+  for (const name of repoNames) {
+    repos[name] = path.join(root, name)
+    fs.mkdirSync(path.join(repos[name], '.git'), { recursive: true })
+  }
+  const access = {
+    schema: REPO_ACCESS_SCHEMA,
+    defaultReadBoundary: 'team',
+    repos: Object.fromEntries(repoNames.map((name) => [name, { readBoundary: 'team' }])),
+  }
+  return { root, repos, access }
+}
+
+function note(repo, rel, id, title, body) {
+  writeDoc(repo, rel, `title: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"`, body)
+}
+
+const derived = (result) => result.workspaceGraph.edges.filter((edge) => edge.type === 'links_to')
+
+test('an ordinary link into another enrolled repository becomes a canonical links_to edge with exact source offsets', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t)
+  note(repos['alpha-notes'], 'docs/tide.md', 'alpha-notes:tide', 'Tide tables', '# Tide tables — café\n\nSee [the harbour log](../../beta-notes/logs/harbour.md#depth).')
+  note(repos['beta-notes'], 'logs/harbour.md', 'beta-notes:harbour', 'Harbour log', '# Harbour log\n\nBack to [tides](../../alpha-notes/docs/).')
+  note(repos['alpha-notes'], 'docs/README.md', 'alpha-notes:docs-index', 'Docs index', '# Docs index')
+
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.deepEqual(derived(result), [
+    { source: 'alpha-notes:tide', target: 'beta-notes:harbour', type: 'links_to' },
+    { source: 'beta-notes:harbour', target: 'alpha-notes:docs-index', type: 'links_to' },
+  ])
+  assert.deepEqual(result.linkDiagnostics, [])
+
+  // A repository's own artifact never names a document in another repository.
+  for (const { graph } of result.repoGraphs) assert.deepEqual(graph.edges, [])
+
+  const link = result.resolvedLinks.find((item) => item.source === 'alpha-notes:tide')
+  assert.equal(link.crossRepository, true)
+  assert.equal(link.targetRepo, 'beta-notes')
+  assert.equal(link.targetPath, 'logs/harbour.md')
+  assert.equal(link.fragment, '#depth')
+  const file = path.join(repos['alpha-notes'], 'docs/tide.md')
+  const text = fs.readFileSync(file, 'utf8')
+  const bytes = fs.readFileSync(file)
+  assert.equal(text.slice(link.range.start, link.range.end), '[the harbour log](../../beta-notes/logs/harbour.md#depth)')
+  assert.equal(text.slice(link.targetRange.start, link.targetRange.end), '../../beta-notes/logs/harbour.md')
+  // The heading holds multi-byte characters, so byte and character offsets differ.
+  assert.notEqual(link.targetRange.byteStart, link.targetRange.start)
+  assert.equal(bytes.subarray(link.targetRange.byteStart, link.targetRange.byteEnd).toString('utf8'), '../../beta-notes/logs/harbour.md')
+  assert.equal(bytes.subarray(link.range.byteStart, link.range.byteEnd).toString('utf8'), text.slice(link.range.start, link.range.end))
+})
+
+test('a link that leaves every enrolled repository is diagnosed and creates no edge', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t)
+  fs.mkdirSync(path.join(root, 'loose-folder'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'loose-folder/stray.md'), '# Stray\n')
+  note(repos['alpha-notes'], 'docs/tide.md', 'alpha-notes:tide', 'Tide tables', '# Tide tables\n\n[stray](../../loose-folder/stray.md) and [far](../../../elsewhere/far.md).')
+
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.deepEqual(derived(result), [])
+  assert.deepEqual(result.resolvedLinks, [])
+  assert.deepEqual(result.linkDiagnostics.map((item) => [item.code, item.href]), [
+    ['link-target-outside-enrolled-roots', '../../loose-folder/stray.md'],
+    ['link-target-outside-enrolled-roots', '../../../elsewhere/far.md'],
+  ])
+  assert.ok(!JSON.stringify(result.linkDiagnostics).includes(root), 'findings never carry an absolute path')
+})
+
+test('a repository declared external is not an enrolled link target', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t, ['alpha-notes', 'vendor-tool'])
+  delete access.repos['vendor-tool']
+  note(repos['vendor-tool'], 'guide.md', 'vendor-tool:guide', 'Guide', '# Guide')
+  note(repos['alpha-notes'], 'tide.md', 'alpha-notes:tide', 'Tide tables', '# Tide tables\n\n[guide](../vendor-tool/guide.md)')
+
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access, externalRepos: ['vendor-tool'] })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.deepEqual(derived(result), [])
+  assert.deepEqual(result.linkDiagnostics.map((item) => item.code), ['link-target-outside-enrolled-roots'])
+})
+
+test('a title-only wikilink resolves when unique and refuses when two documents share the title', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t, ['alpha-notes', 'beta-notes', 'gamma-notes'])
+  note(repos['alpha-notes'], 'tide.md', 'alpha-notes:tide', 'Tide tables', '# Tide tables\n\n[[Harbour log|the log]] then [[Shared glossary]] then ![[logs/harbour]].')
+  note(repos['beta-notes'], 'logs/harbour.md', 'beta-notes:harbour', 'Harbour log', '# Harbour log')
+  note(repos['beta-notes'], 'glossary.md', 'beta-notes:glossary', 'Shared glossary', '# Shared glossary')
+  note(repos['gamma-notes'], 'terms.md', 'gamma-notes:terms', 'Shared glossary', '# Shared glossary')
+
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.deepEqual(derived(result), [{ source: 'alpha-notes:tide', target: 'beta-notes:harbour', type: 'links_to' }])
+  assert.deepEqual(result.resolvedLinks.map((item) => [item.syntax, item.resolvedBy, item.embed, item.href]), [
+    ['wikilink', 'title', false, 'Harbour log'],
+    ['wikilink', 'path', true, 'logs/harbour'],
+  ])
+  assert.equal(result.linkDiagnostics.length, 1)
+  const [ambiguous] = result.linkDiagnostics
+  assert.equal(ambiguous.code, 'link-target-ambiguous')
+  assert.deepEqual(ambiguous.candidates, ['beta-notes:glossary', 'gamma-notes:terms'])
+  const text = fs.readFileSync(path.join(repos['alpha-notes'], 'tide.md'), 'utf8')
+  assert.equal(text.slice(ambiguous.range.start, ambiguous.range.end), '[[Shared glossary]]')
+})
+
+test('a withheld target yields no edge and a finding identical to an absent target', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t)
+  const body = (name) => `# Tide tables\n\n[one](../beta-notes/${name}.md) and [[${name === 'sealed' ? 'Sealed ledger' : 'Missing ledger'}]].`
+  note(repos['alpha-notes'], 'tide.md', 'alpha-notes:tide', 'Tide tables', body('sealed'))
+  note(repos['beta-notes'], 'sealed.md', 'beta-notes:sealed', 'Sealed ledger', '# Sealed ledger\n\nConfidential summary line.')
+  note(repos['beta-notes'], 'open.md', 'beta-notes:open', 'Open ledger', '# Open ledger\n\n[back](../alpha-notes/tide.md)')
+
+  const withheld = buildKnowledgeGraph({
+    workspaceRoot: root,
+    repoAccessConfig: access,
+    isLinkTargetEligible: (node) => node.id !== 'beta-notes:sealed',
+  })
+  assert.equal(withheld.ok, true, withheld.errors.join('\n'))
+  assert.deepEqual(derived(withheld), [{ source: 'beta-notes:open', target: 'alpha-notes:tide', type: 'links_to' }])
+  assert.deepEqual(withheld.linkDiagnostics.map((item) => item.code), ['link-target-unresolved', 'link-target-unresolved'])
+  const serialized = JSON.stringify([withheld.linkDiagnostics, withheld.resolvedLinks])
+  for (const leak of ['beta-notes:sealed', 'Confidential', 'candidates']) assert.ok(!serialized.includes(leak), leak)
+
+  // The same links to a document that does not exist read exactly the same.
+  note(repos['alpha-notes'], 'tide.md', 'alpha-notes:tide', 'Tide tables', body('absent'))
+  const absent = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  const shape = (items) => items.map(({ href, message, range, targetRange, ...rest }) => ({ ...rest, keys: Object.keys({ href, message, range, targetRange }) }))
+  assert.deepEqual(shape(withheld.linkDiagnostics), shape(absent.linkDiagnostics))
+
+  // A withheld document is not scanned as a source either.
+  const sourceWithheld = buildKnowledgeGraph({
+    workspaceRoot: root,
+    repoAccessConfig: access,
+    isLinkTargetEligible: (node) => node.id !== 'beta-notes:open',
+  })
+  assert.deepEqual(derived(sourceWithheld), [])
+})
+
+test('a withheld directory candidate never shadows an eligible one: links and findings equal the absent case', () => {
+  // Each case names the files present under d/ and which of them are withheld.
+  const run = (present, withheld = []) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-withheld-candidate-'))
+    try {
+      fs.mkdirSync(path.join(root, 'd'))
+      fs.writeFileSync(path.join(root, 'src.md'), 'See [x](d) and [y](d/README.md) and [z](d/index.md).\n')
+      const nodesByPath = new Map([['src.md', { id: 'n:src.md', path: 'src.md' }]])
+      for (const rel of present) {
+        fs.writeFileSync(path.join(root, rel), `# ${rel}\n`)
+        nodesByPath.set(rel, { id: `n:${rel}`, path: rel })
+      }
+      const hidden = new Set(withheld.map((rel) => `n:${rel}`))
+      return resolveWorkspaceLinks({ repos: [{ name: 'r', root, nodesByPath }], isLinkTargetEligible: (node) => !hidden.has(node.id) })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  const indexOnly = run(['d/index.md'])
+  assert.deepEqual(indexOnly.links.map((link) => [link.href, link.target]), [['d', 'n:d/index.md'], ['d/index.md', 'n:d/index.md']])
+  assert.deepEqual(run(['d/index.md', 'd/README.md'], ['d/README.md']), indexOnly)
+
+  const readmeOnly = run(['d/README.md'])
+  assert.deepEqual(readmeOnly.links.map((link) => [link.href, link.target]), [['d', 'n:d/README.md'], ['d/README.md', 'n:d/README.md']])
+  assert.deepEqual(run(['d/README.md', 'd/index.md'], ['d/index.md']), readmeOnly)
+
+  // Both withheld reads exactly as neither present; both eligible prefers README.
+  assert.deepEqual(run(['d/README.md', 'd/index.md'], ['d/README.md', 'd/index.md']), run([]))
+  assert.equal(run(['d/README.md', 'd/index.md']).links[0].target, 'n:d/README.md')
+})
+
+test('in-repository links keep their edges; code, inline code and front matter never become edges', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t, ['alpha-notes'])
+  const repo = repos['alpha-notes']
+  writeDoc(
+    repo,
+    'docs/tide.md',
+    'title: "Tide tables"\nnotes: "[yaml](moon.md)"\nunknown_block:\n  ref: "[[Moon phases]]"\nkg:\n  id: "alpha-notes:tide"\n  type: "document"\n  status: "active"\n  audience: "team"',
+    [
+      '# Tide tables',
+      '',
+      'Real: [moon](moon.md), [section](./moon.md#new), [folder](../guides), [web](https://example.invalid/x.md), [gone](nowhere.md).',
+      '',
+      'Inline `[code](sun.md)` and ``[[Sun cycle]]`` stay literal.',
+      '',
+      '```md',
+      '[fenced](sun.md)',
+      '[[Sun cycle]]',
+      '```',
+      '',
+      '~~~',
+      '[tilde](sun.md)',
+      '~~~',
+    ].join('\n'),
+  )
+  note(repo, 'docs/moon.md', 'alpha-notes:moon', 'Moon phases', '# Moon phases')
+  note(repo, 'docs/sun.md', 'alpha-notes:sun', 'Sun cycle', '# Sun cycle')
+  note(repo, 'guides/README.md', 'alpha-notes:guides', 'Guides', '# Guides')
+
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  const expected = [
+    { source: 'alpha-notes:tide', target: 'alpha-notes:guides', type: 'links_to' },
+    { source: 'alpha-notes:tide', target: 'alpha-notes:moon', type: 'links_to' },
+  ]
+  assert.deepEqual(derived(result), expected)
+  assert.deepEqual(result.repoGraphs[0].graph.edges, expected)
+  assert.ok(!result.resolvedLinks.some((item) => item.target === 'alpha-notes:sun'))
+  assert.deepEqual(result.linkDiagnostics.map((item) => [item.code, item.href]), [['link-target-unresolved', 'nowhere.md']])
+
+  // The long-standing helper answers from the same resolver.
+  const nodesByPath = new Map(result.workspaceGraph.nodes.map((node) => [node.path, node]))
+  assert.deepEqual(markdownLinkEdges(repo, nodesByPath), [
+    { source: 'alpha-notes:tide', target: 'alpha-notes:moon', type: 'links_to' },
+    { source: 'alpha-notes:tide', target: 'alpha-notes:moon', type: 'links_to' },
+    { source: 'alpha-notes:tide', target: 'alpha-notes:guides', type: 'links_to' },
+  ])
+})
+
+test('link scanning keeps CRLF offsets exact and treats an unclosed backtick as text', () => {
+  const text = '---\r\ntitle: "x"\r\nlink: "[y](y.md)"\r\n---\r\n\r\nA stray ` then [real](a.md)\r\n\r\nand `[not](b.md)` here.\r\n'
+  const found = scanMarkdownLinks(text)
+  assert.deepEqual(found.map((item) => item.href), ['a.md'])
+  assert.equal(text.slice(found[0].range.start, found[0].range.end), '[real](a.md)')
+})
+
+test('a malformed percent escape is diagnosed instead of stopping the build', (t) => {
+  const { root, repos, access } = makeLinkedWorkspace(t, ['alpha-notes'])
+  note(repos['alpha-notes'], 'tide.md', 'alpha-notes:tide', 'Tide tables', '# Tide tables\n\n[bad](moon%zz.md)')
+  const result = buildKnowledgeGraph({ workspaceRoot: root, repoAccessConfig: access })
+  assert.equal(result.ok, true, result.errors.join('\n'))
+  assert.deepEqual(result.linkDiagnostics.map((item) => item.code), ['link-href-malformed'])
+})
+
+test('the link scanner differs from the earlier whole-text pattern in exactly the pinned behavior classes', () => {
+  // The earlier reader applied this one pattern to the whole text.
+  const earlier = (text) => [...text.matchAll(/\[[^\]]+\]\(([^)\s#]+)(?:#[^)]+)?\)/g)].map((m) => m[1])
+  const now = (text) => scanMarkdownLinks(text).filter((link) => link.syntax === 'markdown').map((link) => link.href)
+  // [class, case, text, hrefs read now]. `same` rows must equal the earlier reader.
+  const table = [
+    ['fence', 'balanced backtick fence', '```\n[a](t.md)\n```\n', []],
+    ['fence', 'balanced tilde fence', '~~~\n[a](t.md)\n~~~\n', []],
+    ['fence', 'fence with an info string', '```js\n[a](t.md)\n```\n[b](o.md)\n', ['o.md']],
+    ['fence', 'fence indented three spaces', '   ```\n[a](t.md)\n   ```\n', []],
+    ['fence', 'CRLF fence', '```\r\n[a](t.md)\r\n```\r\n[b](o.md)\r\n', ['o.md']],
+    ['fence', 'unbalanced fence runs to the end', '```\nx\n\n[a](t.md)\n', []],
+    ['fence', 'a longer closing fence closes', '~~~\n[a](t.md)\n~~~~\n[b](o.md)\n', ['o.md']],
+    ['fence', 'a shorter closing fence does not close', '````\n[a](t.md)\n```\n[b](o.md)\n', []],
+    ['fence', 'a tilde line does not close a backtick fence', '```\n[a](t.md)\n~~~\n[b](o.md)\n', []],
+    ['inline-code', 'inline code span', 'text `[a](t.md)` more\n', []],
+    ['inline-code', 'double-backtick span', '``[a](t.md)`` then [b](o.md)\n', ['o.md']],
+    ['inline-code', 'two unrelated backticks pair across a link', 'Use ` here. See [a](t.md) and ` again.\n', []],
+    ['front-matter', 'closed front matter', '---\nx: "[a](t.md)"\n---\n\n[b](o.md)\n', ['o.md']],
+    ['same', 'four-space indent is not a fence', '    ```\n    [a](t.md)\n', ['t.md']],
+    ['same', 'backtick in a backtick fence info string is not a fence', '``` `x`\n[a](t.md)\n', ['t.md']],
+    ['same', 'unclosed front matter is body text', '---\nx: [a](t.md)\n', ['t.md']],
+    ['same', 'a thematic break is not front matter', '---\n\n[a](t.md)\n', ['t.md']],
+    ['same', 'an unclosed backtick is plain text', 'A stray ` then [a](t.md)\n', ['t.md']],
+    ['same', 'a blank line ends the paragraph a span may close in', 'Use ` here.\n\nSee [a](t.md) and ` again.\n', ['t.md']],
+    ['same', 'inline code as the link label', '[`n`](t.md)\n', ['t.md']],
+    ['same', 'spans around a link', '`a` [x](t.md) `c`\n', ['t.md']],
+    ['same', 'table, quote, list and image', '| [a](t.md) |\n\n> [b](o.md)\n\n- [c](p.md)\n\n![d](q.md)\n', ['t.md', 'o.md', 'p.md', 'q.md']],
+    ['same', 'fragment and percent-encoding', '[a](t.md#sec) [b](t%20o.md) [c](%zz.md)\n', ['t.md', 't%20o.md', '%zz.md']],
+    ['same', 'CRLF plain text', '[a](t.md)\r\n', ['t.md']],
+  ]
+  for (const [kind, name, text, expected] of table) {
+    assert.deepEqual(now(text), expected, name)
+    if (kind === 'same') assert.deepEqual(earlier(text), expected, `${name}: unchanged from the earlier reader`)
+    else assert.notDeepEqual(earlier(text), expected, `${name}: a pinned difference from the earlier reader`)
+  }
+})
+
+test('malformed percent-encoding is a finding beside the other links of the same source, never a throw', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-bad-percent-'))
+  try {
+    fs.writeFileSync(path.join(root, 'a.md'), '[bad](%zz.md) [worse](b%E0%A4%A.md) [fine](b.md)\n')
+    fs.writeFileSync(path.join(root, 'b.md'), '# B\n')
+    const nodesByPath = new Map([['a.md', { id: 'n:a', path: 'a.md' }], ['b.md', { id: 'n:b', path: 'b.md' }]])
+    const resolved = resolveWorkspaceLinks({ repos: [{ name: 'r', root, nodesByPath }] })
+    assert.deepEqual(resolved.links.map((link) => link.target), ['n:b'])
+    assert.deepEqual(resolved.diagnostics.map((item) => [item.code, item.href]), [['link-href-malformed', '%zz.md'], ['link-href-malformed', 'b%E0%A4%A.md']])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('markdownLinkEdges accepts census nodes that carry only an id, including beside wikilinks', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-minimal-nodes-'))
+  try {
+    fs.writeFileSync(path.join(root, 'a.md'), '# A\n\nSee [b](b.md) and [[b]] and [[notes/c]].\n')
+    fs.writeFileSync(path.join(root, 'b.md'), '# B\n')
+    const nodesByPath = new Map([['a.md', { id: 'n:a' }], ['b.md', { id: 'n:b' }]])
+    assert.deepEqual(markdownLinkEdges(root, nodesByPath), [{ source: 'n:a', target: 'n:b', type: 'links_to' }])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a link whose label is inline code is an ordinary link; a link inside inline code is not', () => {
+  const found = scanMarkdownLinks('See [`b.md`](./b.md), not `[c](c.md)` and not `` [[d]] ``.\n')
+  assert.deepEqual(found.map((link) => link.href), ['./b.md'])
 })
