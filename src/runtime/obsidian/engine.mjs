@@ -76,10 +76,16 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // One engine per workspace at a time, across processes.
   acquireEngineLock: acquirePrivateGenerationLock,
-  // Held notes that this prepared view would replace, create over or remove.
-  publicationConflicts({ prepared, held, bases }) {
+  // Held notes that this prepared view would replace, create over or remove. A held note that already holds exactly
+  // the bytes this view would publish is none of those: its edit reached the source, the source was prepared again,
+  // and publishing changes nothing of the person's. The publisher reads the note again and settles it as already
+  // current only while it still holds those bytes; the next look then finds the note at its base and closes the edit.
+  publicationConflicts({ prepared, held, bases, observed = new Map() }) {
     const candidates = new Map(prepared.files.map((file) => [file.path, file.digest]))
-    return held.filter((notePath) => (bases.has(notePath) ? candidates.get(notePath) !== bases.get(notePath).digest : candidates.has(notePath)))
+    return held.filter((notePath) => {
+      if (candidates.has(notePath) && observed.get(notePath) === candidates.get(notePath)) return false
+      return bases.has(notePath) ? candidates.get(notePath) !== bases.get(notePath).digest : candidates.has(notePath)
+    })
   },
 })
 
@@ -402,7 +408,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const preparedGenerationId = prepared.manifest.generationId
           const trusted = () => store.readCurrent()
           const held = heldPaths(edits, scopeId)
-          const conflicts = rules.publicationConflicts({ prepared, held, bases: basesOf.get(scopeId) ?? new Map() })
+          const observed = new Map(held.map((notePath) => [notePath, index.get(vaultKey(scopeId, notePath))?.digest ?? null]))
+          const conflicts = rules.publicationConflicts({ prepared, held, bases: basesOf.get(scopeId) ?? new Map(), observed })
           if (conflicts.length > 0) {
             // Not even attempted: the prepared view would replace a note somebody edited.
             settle('held-for-your-edit', 'publication-withheld-for-your-edit', { generationId: trusted()?.generationId ?? null, preparedGenerationId, heldNotes: held })

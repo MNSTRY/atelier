@@ -857,6 +857,40 @@ test('mutation control: an engine that publishes over a held note fails the hold
   assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /somebody typed in the vault/, 'defence in depth: the publisher refused the replacement')
 })
 
+// A source apply writes the person's edit into the source. The next prepared note is then byte for byte the note the
+// person already has, and a hold against it would never lift.
+async function assertAppliedEditLiftsTheHold(world, engine) {
+  await engine.tick()
+  const file = world.noteFile('west-wing:tide')
+  const edited = Buffer.from(fs.readFileSync(file, 'utf8').replace('High water at noon.', 'High water at one.'))
+  fs.writeFileSync(file, edited)
+  world.advance(1000)
+  assert.equal(world.scope(await engine.tick()).state, 'held-for-your-edit')
+  // What an apply does to the source, without one: the same replacement in the authored body.
+  fs.writeFileSync(world.source('west-wing/logs/tide.md'), fs.readFileSync(world.source('west-wing/logs/tide.md'), 'utf8').replace('High water at noon.', 'High water at one.'))
+  world.advance(1000)
+  const published = world.scope(await engine.tick())
+  assert.equal(published.generationId, published.preparedGenerationId, 'the view that holds the applied edit is published')
+  world.advance(1000)
+  const settled = world.scope(await engine.tick())
+  assert.deepEqual([settled.state, settled.heldNotes], ['current', []])
+  assert.deepEqual(fs.readFileSync(file), edited, 'the note the person edited was never rewritten')
+  const [edit] = world.state('pending-edits.json').edits
+  assert.deepEqual([edit.state, edit.closedAt !== null], ['withdrawn', true], 'the note is at the bytes it was generated with, so the record closes')
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), edit.objectRef)), edited, 'the preserved bytes stay')
+}
+
+test('an edited note that already holds what the next view would publish is not held against it: the hold lifts and the record closes', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await assertAppliedEditLiftsTheHold(world, world.engine())
+})
+
+test('mutation control: an engine that ignores what the held note holds now never lifts the hold after the edit reached the source', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const blind = world.engine({ primitives: { publicationConflicts: ({ prepared, held, bases }) => ENGINE_PRIMITIVES.publicationConflicts({ prepared, held, bases }) } })
+  await assert.rejects(assertAppliedEditLiftsTheHold(world, blind), assert.AssertionError)
+})
+
 test('an edit to a note the next view does not change still publishes the rest, and the view stays held', needsExchange, async (t) => {
   const world = makeWorld(t)
   const engine = world.engine()
