@@ -40,7 +40,7 @@ import {
 //
 // The service lifecycle (sections 15 onward) starts real child processes and
 // binds real sockets, on 127.0.0.1 and an ephemeral port only. Every child is
-// the test entry under fixtures/obsidian/maintenance/, whose editor adapter
+// the test entry under test/support/obsidian-maintenance/, whose editor adapter
 // reports that no app runs; the production entry is only ever started without
 // an adapter, which it refuses. Every PID a test causes is recorded and killed
 // in teardown, and the last test of the file asserts that none is left.
@@ -1606,8 +1606,8 @@ for (const [label, broken] of [['accepts any bearer', { bearerMatches: () => tru
 // ---------------------------------------------------------------------------
 
 const REPOSITORY_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'maintenance', 'service-entry.mjs')
-const TEST_LAUNCHER = path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'maintenance', 'launcher.mjs')
+const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'service-entry.mjs')
+const TEST_LAUNCHER = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'launcher.mjs')
 const CONSENT = { actor: 'test-suite', coverage: 'service' }
 const IDLE_INTERVAL = 60 * 60 * 1000
 
@@ -1908,7 +1908,7 @@ async function assertUnownedListenerIsLeftAlone(t, rules) {
 test('when health never proves ownership, start stops only the child it created and reports the private log', async (t) => {
   const world = serviceWorld(t)
   const unrelated = sleeper(t)
-  const result = await world.start({ entryPath: path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'maintenance', 'idle-entry.mjs'), startTimeoutMs: 2500 })
+  const result = await world.start({ entryPath: path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'idle-entry.mjs'), startTimeoutMs: 2500 })
   assert.deepEqual([result.state, result.started, result.reason, result.logPath], ['start-failed', false, 'health-never-proved-ownership', servicePaths(world.workspaceRoot()).log])
   assert.match(fs.readFileSync(result.logPath, 'utf8'), /idle entry: alive/, 'the log is where the child wrote')
   await waitFor(() => !isAlive(world.spawned[0]), { label: 'the child that start created to be gone' })
