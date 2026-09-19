@@ -200,7 +200,12 @@ function makeWorld(t, { root } = {}) {
     vault: store.vaultRoot,
     full: (relative) => path.join(store.vaultRoot, relative),
     read: (relative) => { try { return fs.readFileSync(path.join(store.vaultRoot, relative), 'utf8') } catch (error) { if (error.code === 'ENOENT') return null; throw error } },
-    publish: (preparedView, adapter, { publisher = publishView, ...extra } = {}) => publisher({ preparedView, protocolId: PROTOCOL_ID, expectedGeneration: store.readCurrent()?.generationId ?? null, recoveryStore: store, adapter, clock, quietPeriodMs: 0, ...extra }),
+    // Every production publication ends with the staging check below.
+    publish: async (preparedView, adapter, { publisher = publishView, ...extra } = {}) => {
+      const result = await publisher({ preparedView, protocolId: PROTOCOL_ID, expectedGeneration: store.readCurrent()?.generationId ?? null, recoveryStore: store, adapter, clock, quietPeriodMs: 0, ...extra })
+      if (publisher === publishView) assertStagingHoldsOnlyCandidates(store)
+      return result
+    },
   }
   return world
 }
@@ -226,8 +231,19 @@ function filesUnder(directory) {
   return found
 }
 
-// Every byte string kept anywhere outside the vault.
-const keptTexts = (world) => [...filesUnder(path.join(world.root, 'recovery')), ...filesUnder(path.join(world.root, 'staging'))].map((file) => fs.readFileSync(file, 'utf8'))
+// Every byte string kept in recovery. Staging is declared discardable, so it never counts as a place where
+// somebody's bytes are kept.
+const keptTexts = (world) => filesUnder(path.join(world.root, 'recovery')).map((file) => fs.readFileSync(file, 'utf8'))
+const stagedTexts = (world) => filesUnder(path.join(world.root, 'staging')).map((file) => fs.readFileSync(file, 'utf8'))
+
+// When a publication has returned, staging is empty or holds only our own candidates: every file there has a digest
+// that a journal header of this view recorded for a staged candidate.
+function assertStagingHoldsOnlyCandidates(store) {
+  const recorded = new Set(listJournals(store).flatMap((journal) => (journal.document().ext?.['mnstry.atelier.obsidian']?.staged ?? []).map((item) => item.candidateDigest)))
+  for (const file of filesUnder(store.stagingRoot)) {
+    assert.ok(recorded.has(digest(fs.readFileSync(file))), `staging holds bytes that are not a recorded candidate: ${path.relative(store.workspaceRoot, file)}`)
+  }
+}
 const keptSomewhere = (world, text, notePath = NOTE) => world.read(notePath) === text || keptTexts(world).includes(text)
 const snapshotTree = (world) => Object.fromEntries(filesUnder(world.root).filter((file) => !file.includes(`${path.sep}state${path.sep}locks${path.sep}`)).sort().map((file) => [path.relative(world.root, file), hex(fs.readFileSync(file))]))
 const stamp = (file) => { const stat = fs.statSync(file, { bigint: true }); return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` }
@@ -564,7 +580,8 @@ test('I06 an outside atomic-rename writer landing between capture and update is 
 test('I06 an outside writer replacing the note at the instant of the exchange is captured in recovery', needsExchange, async (t) => {
   const world = await seeded(t)
   const external = `${BASE}EXTERNAL AT EXCHANGE\n`
-  const staged = path.join(world.root, 'staging', 'manual.candidate')
+  const staged = path.join(world.root, 'manual', 'manual.candidate')
+  fs.mkdirSync(path.dirname(staged))
   fs.writeFileSync(staged, CANDIDATE)
   const recoveryPath = path.join(world.root, 'recovery', 'manual.displaced')
   const host = createInProcessHost()
@@ -656,8 +673,8 @@ async function crashCase(t, publisher, point) {
   const child = crashChild({ root: world.root, publisher, scenario: 'replace', ...point })
   assert.equal(child.signal, 'SIGKILL', `the child must die at ${point.crashAt}: ${child.stdout} ${child.stderr}`)
   const afterCrash = world.read(NOTE)
-  const everything = [afterCrash, ...keptTexts(world)]
-  return { world, afterCrash, keptBase: everything.includes(BASE), keptCandidate: everything.includes(CANDIDATE) }
+  // The base is a person's bytes: the note or recovery. The candidate is generated: the note, or still staged.
+  return { world, afterCrash, keptBase: [afterCrash, ...keptTexts(world)].includes(BASE), keptCandidate: [afterCrash, ...stagedTexts(world)].includes(CANDIDATE) }
 }
 
 for (const point of CRASH_POINTS) {
@@ -665,7 +682,7 @@ for (const point of CRASH_POINTS) {
     const { world, afterCrash, keptBase, keptCandidate } = await crashCase(t, 'production', point)
     assert.equal(afterCrash, point.disk, 'the note is one coherent version')
     assert.ok(keptBase, 'base bytes kept')
-    assert.ok(keptCandidate, 'candidate bytes kept')
+    assert.ok(keptCandidate, 'the candidate is at the note path or still staged')
 
     const first = recoverPublications({ store: world.store, clock })
     assert.equal(world.read(NOTE), point.disk, 'recovery does not change the note')
@@ -887,7 +904,8 @@ test('I11 full disk: staging refuses and touches nothing, a partial staged file 
       execFileSync('/usr/bin/hdiutil', ['attach', image, '-nobrowse', '-mountpoint', mount], { stdio: 'ignore' })
       attached = true
       const world = await seeded(null, { [NOTE]: BASE, [OTHER]: BASE }, { root: path.join(mount, 'ws') })
-      const preStaged = path.join(world.root, 'staging', 'pre-staged.candidate')
+      const preStaged = path.join(world.root, 'manual', 'pre-staged.candidate')
+      fs.mkdirSync(path.dirname(preStaged))
       fs.writeFileSync(preStaged, CANDIDATE)
       const filler = path.join(mount, 'filler.bin')
       const fd = fs.openSync(filler, 'a')
@@ -900,7 +918,7 @@ test('I11 full disk: staging refuses and touches nothing, a partial staged file 
       assert.ok(['staging-failed', 'state-unwritable', 'exchange-probe-failed'].includes(result.refusal.code), result.refusal.code)
       assert.deepEqual([world.read(NOTE), world.read(OTHER)], before, 'nothing in the vault was touched')
 
-      const partial = path.join(world.root, 'staging', 'partial.candidate')
+      const partial = path.join(world.root, 'manual', 'partial.candidate')
       let enospc = false
       try { fs.writeFileSync(partial, big) } catch (error) { enospc = error.code === 'ENOSPC' }
       assert.ok(enospc, 'the volume is full')
@@ -1327,6 +1345,7 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
       serial += 1
       return publishView({ preparedView: viewOf(`gen-g04-${String(serial).padStart(4, '0')}`, { notes: Object.fromEntries(state) }), protocolId: PROTOCOL_ID,
         expectedGeneration: store.readCurrent()?.generationId ?? null, recoveryStore: store, adapter, quietPeriodMs: 1500, ...extra })
+        .then((result) => { assertStagingHoldsOnlyCandidates(store); return result })
     }
     const buffers = async (notePath) => (await instance.bridge({ op: 'inspect', path: notePath })).views.map((view) => Buffer.from(view.bufferBase64, 'base64').toString('utf8'))
     const openClean = async (notePath, expected, views = 1) => {
@@ -1348,7 +1367,7 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
       if (open) { await instance.stimulus('open', notePath); await openClean(notePath, BASE) }
       return notePath
     }
-    const everythingKept = () => [...filesUnder(path.join(store.workspaceRoot, 'recovery')), ...filesUnder(path.join(store.workspaceRoot, 'staging'))].map((file) => fs.readFileSync(file, 'utf8'))
+    const everythingKept = () => filesUnder(path.join(store.workspaceRoot, 'recovery')).map((file) => fs.readFileSync(file, 'utf8'))
 
     await instance.launch()
     try {
@@ -1433,7 +1452,7 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
           const outcome = noteResult(result, notePath).outcome
           tally[outcome] = (tally[outcome] ?? 0) + 1
           const disk = read(notePath)
-          assert.ok(disk === external || everythingKept().includes(external) || (disk ?? '').includes(`EXTERNAL${round}`), `round ${round}: outside bytes lost (${outcome})`)
+          assert.ok(disk === external || everythingKept().includes(external), `round ${round}: outside bytes lost (${outcome})`)
           state.set(notePath, /^published/.test(outcome) ? CANDIDATE : BASE)
         }
         t.diagnostic(`I06 outcomes: ${JSON.stringify(tally)}`)
