@@ -1,0 +1,65 @@
+{
+  "description": "Invented one-repository workspace for the edit lens. Files are JSON strings so CRLF, mixed line endings, the byte order prefix and missing final newlines survive version control; hex is for non-text bytes.",
+  "repositories": [
+    "reading-room"
+  ],
+  "files": {
+    "reading-room/guide.md": {
+      "text": "---\ntitle: \"Field guide\"\nkg:\n  id: \"reading-room:guide\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    supports:\n      - \"reading-room:delta\"\n---\n\n# Field guide\n\nÜberblick ☕ first: see [first](topics/alpha.md) and [[Alpha topic]] before [second](topics/beta.md#part).\nTwice over: [again](./topics/alpha.md), heading [[Alpha topic#Part one]] and block [[Alpha topic^blk1]].\nPictures: ![plan](assets/plan.png) and ![[assets/plan.png|200]].\n\nLeft alone: \\[escaped\\] text, `[[Alpha topic]]` in inline code, [site](https://example.invalid/a.md) and [gone](missing.md).\n\n```\n[fenced](topics/alpha.md)\n[[Alpha topic]]\n```\n\nClosing words.\n"
+    },
+    "reading-room/topics/alpha.md": {
+      "text": "---\r\ntitle: \"Alpha topic\"\r\nkg:\r\n  id: \"reading-room:alpha\"\r\n  type: \"document\"\r\n  status: \"active\"\r\n  audience: \"team\"\r\n---\r\n\r\n# Alpha topic\r\n\r\n## Part one\r\n\r\nBack to the [guide](../guide.md). ^blk1\r\n"
+    },
+    "reading-room/topics/beta.md": {
+      "text": "---\ntitle: \"Beta topic\"\nkg:\n  id: \"reading-room:beta\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Beta topic\r\n\r\n## Part\n\nMixed line endings and a [[Field guide|pointer]].\r\nNo final newline"
+    },
+    "reading-room/log.md": {
+      "text": "﻿# Reading log\n\nA byte order prefix, no front matter, naïve ✓ and a link to [[Alpha topic]].\n"
+    },
+    "reading-room/delta.md": {
+      "text": "---\ntitle: \"Delta note\"\nkg:\n  id: \"reading-room:delta\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    related:\n      - \"reading-room:alpha\"\n---\n\n# Delta note\n\nNo authored links here at all.\n"
+    },
+    "reading-room/bare.md": {
+      "text": "# Bare note\n\nNo front matter and no links.\n"
+    },
+    "reading-room/open-fence.md": {
+      "text": "---\ntitle: \"Open fence\"\nkg:\n  id: \"reading-room:open-fence\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Open fence\n\nBefore the fence: [[Alpha topic]].\n\n```js\nconst answer = 42\n[[Alpha topic]]"
+    },
+    "reading-room/open-fence-crlf.md": {
+      "text": "---\r\ntitle: \"Open fence two\"\r\nkg:\r\n  id: \"reading-room:open-fence-crlf\"\r\n  type: \"document\"\r\n  status: \"active\"\r\n  audience: \"team\"\r\n---\r\n\r\n# Open fence two\r\n\r\nSee [alpha](topics/alpha.md).\r\n\r\n~~~~\r\nraw text\r\n"
+    },
+    "reading-room/endings/nl0-linked.md": {
+      "text": "---\ntitle: \"Ending nl0 linked\"\nkg:\n  id: \"reading-room:nl0-linked\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Ending nl0\n\nLinked to [[Alpha topic]] here"
+    },
+    "reading-room/endings/nl0-alone.md": {
+      "text": "---\ntitle: \"Ending nl0 alone\"\nkg:\n  id: \"reading-room:nl0-alone\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Ending nl0\n\nNothing generated follows"
+    },
+    "reading-room/endings/nl1-linked.md": {
+      "text": "---\ntitle: \"Ending nl1 linked\"\nkg:\n  id: \"reading-room:nl1-linked\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Ending nl1\n\nLinked to [[Alpha topic]] here\n"
+    },
+    "reading-room/endings/nl1-alone.md": {
+      "text": "---\ntitle: \"Ending nl1 alone\"\nkg:\n  id: \"reading-room:nl1-alone\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Ending nl1\n\nNothing generated follows\n"
+    },
+    "reading-room/endings/nl2-linked.md": {
+      "text": "---\ntitle: \"Ending nl2 linked\"\nkg:\n  id: \"reading-room:nl2-linked\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Ending nl2\n\nLinked to [[Alpha topic]] here\n\n"
+    },
+    "reading-room/endings/nl2-alone.md": {
+      "text": "---\ntitle: \"Ending nl2 alone\"\nkg:\n  id: \"reading-room:nl2-alone\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Ending nl2\n\nNothing generated follows\n\n"
+    },
+    "reading-room/twins.md": {
+      "text": "---\ntitle: \"Twin links\"\nkg:\n  id: \"reading-room:twins\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Twin links\n\nPair: [one](topics/alpha.md) [two](./topics/alpha.md) end.\n\nApart: [left](topics/alpha.md), some words in between, [right](./topics/alpha.md) done.\n"
+    },
+    "reading-room/lookalike.md": {
+      "text": "---\ntitle: \"Lookalike paths\"\nkg:\n  id: \"reading-room:lookalike\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Lookalike paths\n\nThe source itself keeps a [list](notes/todo.md) and an ![image](attachments/missing.png) of its own.\n\nMore words follow.\n"
+    },
+    "reading-room/assets/plan.png": {
+      "hex": "89504e470d0a1a0a73796e7468657469632d706c616e"
+    },
+    "reading-room/charts/table.pdf": {
+      "hex": "255044462d312e340a25e2e3cfd30a73796e7468657469630a"
+    },
+    "reading-room/charts/table.pdf.kg.json": {
+      "text": "{\n  \"schema\": \"mnstry.source-sidecar@v1\",\n  \"asset\": \"table.pdf\",\n  \"title\": \"Reference table\",\n  \"summary\": \"Invented figures.\",\n  \"tags\": [\n    \"chart\"\n  ],\n  \"kg\": {\n    \"id\": \"reading-room:table\",\n    \"type\": \"evidence\",\n    \"domain\": \"sample\",\n    \"lifecycle\": \"source\",\n    \"status\": \"active\",\n    \"audience\": \"team\",\n    \"relations\": {\n      \"evidences\": [\n        \"reading-room:guide\"\n      ]\n    }\n  }\n}\n"
+    }
+  }
+}

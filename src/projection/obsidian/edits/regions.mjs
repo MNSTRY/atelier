@@ -1,0 +1,514 @@
+import { scanMarkdownLinks } from '../../../graph/knowledge-graph.mjs'
+import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal } from '../contracts.mjs'
+import { readMarkdownLens, sha256Digest } from '../materialize/byte-lens.mjs'
+import { alignBodies, commonPrefixLength, commonSubsequenceLength, commonSuffixLength } from './align.mjs'
+
+// The raw-byte edit lens. A person edits a generated NOTE; the lens turns the
+// edited note bytes, the manifest entry the note was generated under, the
+// published note bytes and the base source bytes into the exact new source
+// bytes, or a typed refusal. Everything is a Buffer from start to finish: no
+// newline is normalized, no byte outside the authored body is touched and
+// generated text is never attributed to the author. Nothing is written.
+//
+// A note is three byte classes, in order:
+//
+//   prefix     bytes before regions.body.start: the source's byte order prefix
+//              or front matter, verbatim
+//   authored   the body, with canonical link and embed targets rewritten; each
+//              rewrite is recorded as an inversion
+//   generated  relations, outside-selection rows and, before them, the closing
+//              fence of a body that ends inside a code fence; every generated
+//              region begins with its own separator bytes
+//
+// Refusals carry codes, digests and byte offsets only: never note or source
+// text, titles or machine paths.
+
+const EXT = OBSIDIAN_EXT_KEY
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf])
+const LF = 0x0a
+const CR = 0x0d
+const PIPE = 0x7c
+const LINK_CLOSE = Buffer.from(']]')
+
+export const EDIT_LENS_REFUSALS = Object.freeze([
+  'unknown-note',
+  'unsupported-wrapper-edit',
+  'baseline-mismatch',
+  'stale-base',
+  'manifest-mismatch',
+  'invalid-utf8',
+  'generated-region-edited',
+  'unsupported-frontmatter-edit',
+  'link-rewrite-edited',
+  'unsupported-structural-edit',
+  'ambiguous-link-alignment',
+  'edit-too-large-to-align',
+])
+
+function refuse(code, message, detail = {}) {
+  throw new ObsidianContractRefusal(code, message, detail)
+}
+
+const endsWith = (buffer, tail) => tail.length <= buffer.length && buffer.subarray(buffer.length - tail.length).equals(tail)
+const startsWith = (buffer, head) => head.length <= buffer.length && buffer.subarray(0, head.length).equals(head)
+function trailingLineEndings(buffer) {
+  let count = 0
+  while (count < buffer.length && (buffer[buffer.length - 1 - count] === LF || buffer[buffer.length - 1 - count] === CR)) count += 1
+  return count
+}
+
+function countOccurrences(haystack, needle) {
+  let count = 0
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) count += 1
+  return count
+}
+
+function isStrictUtf8(buffer) {
+  try {
+    new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buffer)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Generated regions
+// ---------------------------------------------------------------------------
+
+// What the published note says about its generated tail: the exact bytes, the
+// leading bytes that are separator or fence closure (`lead`) and the text lines
+// that follow them. The expected bytes are read from the published note under
+// the manifest's ranges; nothing about their wording is restated here.
+function publishedGenerated(noteEntry, published) {
+  const regions = noteEntry.regions.generated
+  const bodyEnd = noteEntry.regions.body.end
+  let cursor = bodyEnd
+  for (const region of regions) {
+    if (region.range.start !== cursor || region.range.end < region.range.start) refuse('manifest-mismatch', 'generated regions do not tile the end of the published note')
+    cursor = region.range.end
+  }
+  if (cursor !== published.length) refuse('manifest-mismatch', 'generated regions do not tile the end of the published note')
+  const bytes = published.subarray(bodyEnd)
+  const closureLength = regions[0]?.ext?.[EXT]?.fenceClosure?.byteLength ?? 0
+  let lead = closureLength
+  while (lead < bytes.length && (bytes[lead] === LF || bytes[lead] === CR)) lead += 1
+  const lines = []
+  let offset = lead
+  while (offset < bytes.length) {
+    const newline = bytes.indexOf(LF, offset)
+    const next = newline === -1 ? bytes.length : newline + 1
+    let end = newline === -1 ? bytes.length : newline
+    if (end > offset && bytes[end - 1] === CR) end -= 1
+    if (end > offset) lines.push(bytes.subarray(offset, end))
+    offset = next
+  }
+  return { bytes, lead: bytes.subarray(0, lead), lines }
+}
+
+// Splits the edited note into its authored part and the state of its generated
+// tail. Returns { authored, generated } with `authored` a view of the edited
+// bytes (prefix included) and `generated` one of:
+//
+//   'none'     the published note had no generated region
+//   'intact'   the edited note still ends with the exact generated bytes
+//   'removed'  no generated line is left anywhere in the edited note
+//
+// A generated line is "left" when it occurs more often than it did in the
+// published authored part, so an author whose own text happens to repeat a
+// generated line is not refused for it. Any other state (edited, moved,
+// duplicated, partially deleted) refuses: generated text is never guessed at
+// and never reaches a source.
+//
+// Removed tail: the authored part is everything before where the tail was.
+// What the person left of the separator or the fence closure is not theirs:
+// the longest leftover that is a prefix of those leading bytes is dropped,
+// provided the authored part then ends in exactly as many line-ending bytes
+// as the published authored part did; otherwise nothing is dropped and the
+// end of the note is the author's. When the rest of the note
+// is byte-identical to the published authored part the edit is no authored
+// edit at all.
+export function splitGeneratedTail({ noteEntry, publishedNoteBytes, editedNoteBytes }) {
+  const generated = publishedGenerated(noteEntry, publishedNoteBytes)
+  const publishedAuthored = publishedNoteBytes.subarray(0, noteEntry.regions.body.end)
+  if (generated.bytes.length === 0) return { authored: editedNoteBytes, generated: 'none' }
+  const surplus = (haystack) => generated.lines.findIndex((line) => countOccurrences(haystack, line) > countOccurrences(publishedAuthored, line))
+
+  if (endsWith(editedNoteBytes, generated.bytes)) {
+    const authored = editedNoteBytes.subarray(0, editedNoteBytes.length - generated.bytes.length)
+    if (surplus(authored) !== -1) refuse('generated-region-edited', 'generated text also appears inside the authored part of the edited note', { generatedLine: surplus(authored) })
+    return { authored, generated: 'intact' }
+  }
+  if (surplus(editedNoteBytes) !== -1) {
+    refuse('generated-region-edited', 'a generated region was edited, moved or partially deleted', { generatedLine: surplus(editedNoteBytes) })
+  }
+  if (startsWith(editedNoteBytes, publishedAuthored) && startsWith(generated.lead, editedNoteBytes.subarray(publishedAuthored.length))) {
+    return { authored: editedNoteBytes.subarray(0, publishedAuthored.length), generated: 'removed' }
+  }
+  for (let keep = generated.lead.length; keep > 0; keep -= 1) {
+    if (!endsWith(editedNoteBytes, generated.lead.subarray(0, keep))) continue
+    const authored = editedNoteBytes.subarray(0, editedNoteBytes.length - keep)
+    if (trailingLineEndings(authored) === trailingLineEndings(publishedAuthored)) return { authored, generated: 'removed' }
+  }
+  return { authored: editedNoteBytes, generated: 'removed' }
+}
+
+// ---------------------------------------------------------------------------
+// Prefix
+// ---------------------------------------------------------------------------
+
+// Returns the edited authored BODY. The prefix must be byte-identical. A byte
+// order prefix is the one exception: it belongs to the source and is kept from
+// the source whether or not the editor kept it in the note.
+export function splitPrefix({ noteEntry, publishedNoteBytes, editedAuthored }) {
+  const prefix = publishedNoteBytes.subarray(0, noteEntry.regions.body.start)
+  const frontmatter = noteEntry.regions.frontmatter ?? null
+  let body
+  if (frontmatter === null) {
+    body = startsWith(editedAuthored, UTF8_BOM) ? editedAuthored.subarray(UTF8_BOM.length) : editedAuthored
+  } else {
+    if (!startsWith(editedAuthored, prefix)) {
+      refuse('unsupported-frontmatter-edit', 'the front matter of the note was edited; only the body can be replaced', { firstDifference: commonPrefixLength(editedAuthored, prefix) })
+    }
+    body = editedAuthored.subarray(prefix.length)
+  }
+  // The body must not read as front matter of its own, and the front matter
+  // must still end where it did, as the source lens reads the result.
+  let lens = null
+  try { lens = readMarkdownLens(Buffer.concat([frontmatter === null ? Buffer.alloc(0) : prefix, body])) } catch { /* refused below */ }
+  const expectedEnd = frontmatter === null ? null : frontmatter.end
+  if (lens === null || (lens.frontmatter?.end ?? null) !== expectedEnd) {
+    refuse('unsupported-frontmatter-edit', 'the edit changes where the front matter of the note begins or ends; only the body can be replaced')
+  }
+  return body
+}
+
+// ---------------------------------------------------------------------------
+// Rewritten links and embeds
+// ---------------------------------------------------------------------------
+
+function inversionUnits({ manifest, noteEntry, publishedNoteBytes, baseSourceBytes }) {
+  const bodyStart = noteEntry.regions.body.start
+  const bodyEnd = noteEntry.regions.body.end
+  const records = [
+    ...manifest.links.filter((link) => link.sourceNodeId === noteEntry.nodeId).flatMap((link) => link.inversions ?? []),
+    ...(noteEntry.ext?.[EXT]?.assetEmbeds ?? []).flatMap((embed) => embed.inversions),
+  ]
+  const units = records.map((record) => {
+    const ext = record.ext?.[EXT]
+    if (!ext || ext.encoding !== 'base64url') refuse('manifest-mismatch', 'an inversion record does not carry its byte strings')
+    const unit = {
+      pStart: record.note.start - bodyStart,
+      pEnd: record.note.end - bodyStart,
+      sourceStart: record.source.start,
+      sourceEnd: record.source.end,
+      original: Buffer.from(ext.original, 'base64url'),
+      emitted: Buffer.from(ext.emitted, 'base64url'),
+    }
+    const consistent = record.note.start >= bodyStart && record.note.end <= bodyEnd && unit.emitted.length > 0
+      && publishedNoteBytes.subarray(record.note.start, record.note.end).equals(unit.emitted)
+      && baseSourceBytes.subarray(record.source.start, record.source.end).equals(unit.original)
+    if (!consistent) refuse('manifest-mismatch', 'an inversion record does not describe the published note and the base source')
+    return unit
+  }).sort((left, right) => left.pStart - right.pStart || left.sourceStart - right.sourceStart)
+  units.forEach((unit, index) => {
+    const previous = units[index - 1]
+    if (previous && (unit.pStart < previous.pEnd || unit.sourceStart < previous.sourceEnd)) refuse('manifest-mismatch', 'inversion records overlap')
+    // An alias the emitter appended: nothing in the source, `|…` in the note,
+    // directly tied to the target rewrite before it.
+    unit.aliasOf = unit.original.length === 0 && unit.emitted[0] === PIPE && previous ? index - 1 : null
+    if (unit.original.length === 0 && unit.aliasOf === null) refuse('manifest-mismatch', 'an inserted alias has no target rewrite before it')
+  })
+  return units
+}
+
+// Where each rewrite is in the edited body. Every unit ends as
+// { state: 'intact', eStart, eEnd } or { state: 'deleted' }; anything else
+// refuses.
+//
+//   intact   the emitted bytes lie whole inside one matched run of the
+//            alignment, or, failing that, occur exactly once between the
+//            edited positions of the unit's matched neighbours
+//   deleted  no byte of the unit is matched and its emitted bytes do not occur
+//            between its neighbours
+//   refused  part of the unit survives (it was modified), it occurs more than
+//            once between its neighbours, or no search could align its range
+export function placeUnits({ units, publishedBody, editedBody, align = alignBodies }) {
+  if (units.length === 0) return []
+  const wanted = (from, to) => units.some((unit) => unit.pStart < to && unit.pEnd > from)
+  const { runs, coarse } = publishedBody.equals(editedBody) ? { runs: [{ p: 0, e: 0, length: publishedBody.length }], coarse: [] } : align(publishedBody, editedBody, { wanted })
+  let placedEnd = 0
+  return units.map((unit, index) => {
+    const whole = runs.find((run) => run.p <= unit.pStart && run.p + run.length >= unit.pEnd)
+    if (whole) {
+      const eStart = whole.e + (unit.pStart - whole.p)
+      placedEnd = eStart + unit.emitted.length
+      return { state: 'intact', eStart, eEnd: placedEnd }
+    }
+    let lower = 0
+    let upper = editedBody.length
+    let matched = 0
+    for (const run of runs) {
+      const runEnd = run.p + run.length
+      if (run.p < unit.pStart) lower = run.e + (Math.min(runEnd, unit.pStart) - run.p)
+      matched += Math.max(0, Math.min(runEnd, unit.pEnd) - Math.max(run.p, unit.pStart))
+      if (runEnd > unit.pEnd) { upper = run.e + (Math.max(run.p, unit.pEnd) - run.p); break }
+    }
+    lower = Math.max(lower, placedEnd)
+    const gap = editedBody.subarray(lower, Math.max(lower, upper))
+    const first = gap.indexOf(unit.emitted)
+    const unique = first !== -1 && gap.indexOf(unit.emitted, first + 1) === -1
+    if (!unique && coarse.some((range) => unit.pStart < range.end && unit.pEnd > range.start)) {
+      refuse('edit-too-large-to-align', 'the edit around a rewritten link is too large to align with the published note', { unit: index })
+    }
+    if (first !== -1 && !unique) refuse('ambiguous-link-alignment', 'a rewritten link cannot be aligned with the published note unambiguously', { unit: index })
+    if (first !== -1) {
+      placedEnd = lower + first + unit.emitted.length
+      return { state: 'intact', eStart: lower + first, eEnd: placedEnd }
+    }
+    if (matched > 0) {
+      if (unit.aliasOf !== null) refuse('link-rewrite-edited', 'the alias the emitter appended to a link was edited', { publishedStart: unit.pStart, publishedEnd: unit.pEnd })
+      refuse('unsupported-structural-edit', 'the target of a rewritten link was edited', { reason: 'rewritten-target-edited', publishedStart: unit.pStart, publishedEnd: unit.pEnd })
+    }
+    return { state: 'deleted' }
+  })
+}
+
+function assertCoherentPlacements({ units, placements, publishedBody, editedBody }) {
+  const intactBefore = (index) => { for (let at = index - 1; at >= 0; at -= 1) if (placements[at].state === 'intact') return at; return -1 }
+  const intactAfter = (index) => { for (let at = index + 1; at < units.length; at += 1) if (placements[at].state === 'intact') return at; return -1 }
+  units.forEach((unit, index) => {
+    const state = placements[index].state
+    if (unit.aliasOf !== null && placements[unit.aliasOf].state !== state) {
+      if (state === 'deleted') refuse('link-rewrite-edited', 'the alias the emitter appended to a link was removed while its link was kept', { publishedStart: unit.pStart, publishedEnd: unit.pEnd })
+      refuse('unsupported-structural-edit', 'the target of a rewritten link was removed while the rest of the link was kept', { reason: 'rewritten-target-edited', publishedStart: unit.pStart, publishedEnd: unit.pEnd })
+    }
+    if (state !== 'deleted') return
+    // The same emitted bytes can stand for different source spellings of one
+    // target. When one of two such neighbours is deleted, which one survives
+    // decides the source bytes. The pairing the alignment chose must keep
+    // strictly more of the published bytes around them than the other
+    // pairing would; a tie, or a comparison too large to make, refuses.
+    for (const kept of [intactBefore(index), intactAfter(index)]) {
+      if (kept === -1 || !units[kept].emitted.equals(unit.emitted) || units[kept].original.equals(unit.original)) continue
+      const first = units[Math.min(index, kept)]
+      const second = units[Math.max(index, kept)]
+      const before = intactBefore(Math.min(index, kept))
+      const after = intactAfter(Math.max(index, kept))
+      const pFrom = before === -1 ? 0 : units[before].pEnd
+      const pTo = after === -1 ? publishedBody.length : units[after].pStart
+      const editedBefore = editedBody.subarray(before === -1 ? 0 : placements[before].eEnd, placements[kept].eStart)
+      const editedAfter = editedBody.subarray(placements[kept].eEnd, after === -1 ? editedBody.length : placements[after].eStart)
+      const score = (survivor) => {
+        const left = commonSubsequenceLength(publishedBody.subarray(pFrom, survivor.pStart), editedBefore)
+        const right = commonSubsequenceLength(publishedBody.subarray(survivor.pEnd, pTo), editedAfter)
+        return left === null || right === null ? null : left + right
+      }
+      const chosen = score(units[kept])
+      const other = score(units[kept] === first ? second : first)
+      if (chosen === null || other === null || chosen <= other) {
+        refuse('ambiguous-link-alignment', 'a deleted link cannot be told apart from a neighbouring link to the same note that the source spells differently', { unit: index })
+      }
+    }
+  })
+}
+
+const folded = (value) => value.normalize('NFC').toLowerCase()
+
+// Every spelling under which the view's notes and attachments can be linked
+// from inside the vault.
+function vaultTargets(manifest) {
+  const targets = new Set()
+  const paths = [...manifest.notes.map((note) => note.path), ...manifest.attachments.map((attachment) => attachment.path)]
+  for (const filePath of paths) {
+    const base = filePath.split('/').at(-1)
+    for (const spelling of [filePath, base]) {
+      targets.add(folded(spelling))
+      if (spelling.endsWith('.md')) targets.add(folded(spelling.slice(0, -'.md'.length)))
+    }
+  }
+  return targets
+}
+
+function namesVaultFile(href, targets) {
+  const spellings = [href]
+  try { spellings.push(decodeURIComponent(href)) } catch { /* not percent-encoded */ }
+  return spellings.some((spelling) => {
+    const target = folded(spelling.replace(/^<|>$/g, '').replace(/^(?:\.\/)+/, '').trim())
+    return targets.has(target) || target.startsWith('notes/') || target.startsWith('attachments/')
+  })
+}
+
+// Links and embeds of `bytes` (a whole authored note, so front matter is
+// skipped as the canonical scanner skips it) that name a vault file, with byte
+// ranges relative to `bodyStart`. The canonical scanner is the only reader of
+// link syntax.
+function vaultLinkOccurrences(bytes, bodyStart, targets) {
+  const text = bytes.toString('utf8')
+  const found = scanMarkdownLinks(text).filter((occurrence) => namesVaultFile(occurrence.href, targets))
+  if (found.length === 0) return []
+  const offsets = [...new Set(found.flatMap((item) => [item.range.start, item.range.end, item.targetRange.start, item.targetRange.end]))].sort((a, b) => a - b)
+  const byteAt = new Map()
+  let previous = 0
+  let total = 0
+  for (const offset of offsets) {
+    total += Buffer.byteLength(text.slice(previous, offset), 'utf8')
+    byteAt.set(offset, total - bodyStart)
+    previous = offset
+  }
+  return found.map((item) => ({
+    start: byteAt.get(item.range.start), end: byteAt.get(item.range.end), targetStart: byteAt.get(item.targetRange.start), targetEnd: byteAt.get(item.targetRange.end),
+  }))
+}
+
+// A link or embed in the edited body that names a vault file must be one the
+// emitter wrote and the person left alone. The one other thing it may be is a
+// target the author's own source already contained, byte for byte and no more
+// often (a source may link to a directory of its own called notes/). Anything else is a
+// structural change: it is never written to a source as a vault-internal path.
+//
+// The reverse holds too. A rewritten target that was the whole target of a
+// link in the published body must still be the whole target of a link, and an
+// appended alias must still be what closes its link. Text typed against
+// either one changes what the link points at once the rewrite is inverted.
+export function findStructuralLinks({ manifest, notePrefix, publishedBody, editedBody, units, placements }) {
+  const targets = vaultTargets(manifest)
+  const within = (occurrence, start, end) => start >= occurrence.targetStart && end <= occurrence.targetEnd
+  const publishedLinks = vaultLinkOccurrences(Buffer.concat([notePrefix, publishedBody]), notePrefix.length, targets)
+  const editedLinks = vaultLinkOccurrences(Buffer.concat([notePrefix, editedBody]), notePrefix.length, targets)
+  const authoredAlready = new Map()
+  for (const occurrence of publishedLinks) {
+    if (units.some((unit) => within(occurrence, unit.pStart, unit.pEnd))) continue
+    const key = publishedBody.toString('latin1', occurrence.targetStart, occurrence.targetEnd)
+    authoredAlready.set(key, (authoredAlready.get(key) ?? 0) + 1)
+  }
+  const structural = []
+  for (const occurrence of editedLinks) {
+    if (placements.some((placement) => placement.state === 'intact' && within(occurrence, placement.eStart, placement.eEnd))) continue
+    const key = editedBody.toString('latin1', occurrence.targetStart, occurrence.targetEnd)
+    if ((authoredAlready.get(key) ?? 0) > 0) { authoredAlready.set(key, authoredAlready.get(key) - 1); continue }
+    structural.push({ bodyStart: occurrence.start, bodyEnd: occurrence.end })
+  }
+  units.forEach((unit, index) => {
+    const placement = placements[index]
+    if (placement.state !== 'intact') return
+    if (unit.aliasOf !== null) {
+      if (!editedBody.subarray(placement.eEnd, placement.eEnd + 2).equals(LINK_CLOSE)) structural.push({ bodyStart: placement.eStart, bodyEnd: placement.eEnd, alias: true })
+      return
+    }
+    const wasWholeTarget = publishedLinks.some((occurrence) => occurrence.targetStart === unit.pStart && occurrence.targetEnd === unit.pEnd)
+    const isWholeTarget = editedLinks.some((occurrence) => occurrence.targetStart === placement.eStart && occurrence.targetEnd === placement.eEnd)
+    if (wasWholeTarget && !isWholeTarget) structural.push({ bodyStart: placement.eStart, bodyEnd: placement.eEnd })
+  })
+  return structural.sort((left, right) => left.bodyStart - right.bodyStart)
+}
+
+// ---------------------------------------------------------------------------
+// The lens
+// ---------------------------------------------------------------------------
+
+export const EDIT_LENS_PRIMITIVES = Object.freeze({
+  splitGeneratedTail,
+  splitPrefix,
+  placeUnits,
+  findStructuralLinks,
+  originalOf: (unit) => unit.original,
+  digestOf: sha256Digest,
+  isStrictUtf8,
+  isEditableSource: (source) => source?.kind === 'markdown',
+})
+
+function lensWith(primitives, { manifest, repoId, nodeId, publishedNoteBytes, editedNoteBytes, baseSourceBytes }) {
+  for (const bytes of [publishedNoteBytes, editedNoteBytes, baseSourceBytes]) if (!Buffer.isBuffer(bytes)) throw new TypeError('the edit lens reads Buffers only')
+  const noteEntry = manifest.notes.find((note) => note.repoId === repoId && note.nodeId === nodeId)
+  if (!noteEntry) refuse('unknown-note', 'the manifest holds no note for this identity')
+  const source = noteEntry.ext?.[EXT]?.source
+  if (!primitives.isEditableSource(source)) refuse('unsupported-wrapper-edit', 'the note represents a source that is not Markdown; it has no editable body')
+  const digests = { publishedNoteDigest: primitives.digestOf(publishedNoteBytes), editedNoteDigest: primitives.digestOf(editedNoteBytes), baseSourceDigest: primitives.digestOf(baseSourceBytes) }
+  if (digests.publishedNoteDigest !== noteEntry.noteDigest) refuse('baseline-mismatch', 'the published note bytes are not the bytes the manifest recorded', { expected: noteEntry.noteDigest, actual: digests.publishedNoteDigest })
+  if (digests.baseSourceDigest !== source.rawDigest) refuse('stale-base', 'the source is no longer the source the note was generated from', { expected: source.rawDigest, actual: digests.baseSourceDigest })
+
+  const bodyStart = noteEntry.regions.body.start
+  const notePrefix = publishedNoteBytes.subarray(0, bodyStart)
+  const sourceLens = readMarkdownLens(baseSourceBytes)
+  if (sourceLens.body.start !== bodyStart || sourceLens.body.end !== baseSourceBytes.length || !baseSourceBytes.subarray(0, bodyStart).equals(notePrefix)) {
+    refuse('manifest-mismatch', 'the recorded body does not begin where the body of the base source begins')
+  }
+  const units = inversionUnits({ manifest, noteEntry, publishedNoteBytes, baseSourceBytes })
+  if (!primitives.isStrictUtf8(editedNoteBytes)) refuse('invalid-utf8', 'the edited note is not valid UTF-8', { editedNoteDigest: digests.editedNoteDigest })
+
+  const tail = primitives.splitGeneratedTail({ noteEntry, publishedNoteBytes, editedNoteBytes })
+  const editedBody = primitives.splitPrefix({ noteEntry, publishedNoteBytes, editedAuthored: tail.authored })
+  const publishedBody = publishedNoteBytes.subarray(bodyStart, noteEntry.regions.body.end)
+  const placements = primitives.placeUnits({ units, publishedBody, editedBody })
+  assertCoherentPlacements({ units, placements, publishedBody, editedBody })
+  // Offsets in a refusal are offsets into the edited note.
+  const shift = tail.authored.length - editedBody.length
+  const structural = primitives.findStructuralLinks({ manifest, notePrefix: noteEntry.regions.frontmatter ? notePrefix : Buffer.alloc(0), publishedBody, editedBody, units, placements })
+  const aliasTouched = structural.find((item) => item.alias)
+  if (aliasTouched) {
+    refuse('link-rewrite-edited', 'text was added to the alias the emitter appended to a link', { noteStart: aliasTouched.bodyStart + shift, noteEnd: aliasTouched.bodyEnd + shift })
+  }
+  if (structural.length > 0) {
+    refuse('unsupported-structural-edit', 'the edit adds or changes a link to a file of the vault', {
+      reason: 'vault-link-changed', occurrences: structural.map((item) => ({ noteStart: item.bodyStart + shift, noteEnd: item.bodyEnd + shift })),
+    })
+  }
+
+  // Between two surviving rewrites the edited bytes ARE the new source bytes.
+  const parts = [baseSourceBytes.subarray(0, bodyStart)]
+  const changedRanges = []
+  let written = bodyStart
+  let sourceCursor = bodyStart
+  let editedCursor = 0
+  const segment = (editedTo, sourceTo) => {
+    const next = editedBody.subarray(editedCursor, editedTo)
+    const base = baseSourceBytes.subarray(sourceCursor, sourceTo)
+    if (!next.equals(base)) {
+      const head = commonPrefixLength(next, base)
+      const end = commonSuffixLength(next, base, next.length, base.length, Math.min(next.length, base.length) - head)
+      changedRanges.push({ start: sourceCursor + head, end: sourceTo - end, newStart: written + head, newEnd: written + next.length - end })
+    }
+    parts.push(next)
+    written += next.length
+  }
+  units.forEach((unit, index) => {
+    const placement = placements[index]
+    if (placement.state !== 'intact') return
+    segment(placement.eStart, unit.sourceStart)
+    const original = primitives.originalOf(unit)
+    parts.push(original)
+    written += original.length
+    sourceCursor = unit.sourceEnd
+    editedCursor = placement.eEnd
+  })
+  segment(editedBody.length, baseSourceBytes.length)
+  const newSourceBytes = Buffer.concat(parts)
+  return {
+    kind: 'body-replacement',
+    newSourceBytes,
+    baseSourceDigest: digests.baseSourceDigest,
+    newSourceDigest: sha256Digest(newSourceBytes),
+    changedRanges,
+    unchanged: changedRanges.length === 0,
+    generated: tail.generated,
+    publishedNoteDigest: digests.publishedNoteDigest,
+    editedNoteDigest: digests.editedNoteDigest,
+  }
+}
+
+// `applyEditLens` returns the body replacement or { kind: 'refusal', code,
+// detail }. It never throws for something a person did to a note; it throws a
+// TypeError for a caller that does not pass Buffers.
+export function createEditLensForOracleTests(primitives = EDIT_LENS_PRIMITIVES) {
+  return function applyEditLens(input) {
+    try {
+      return lensWith(primitives, input)
+    } catch (error) {
+      if (!(error instanceof ObsidianContractRefusal)) throw error
+      return { kind: 'refusal', code: error.code, detail: error.detail ?? {} }
+    }
+  }
+}
+
+export const applyEditLens = createEditLensForOracleTests()
