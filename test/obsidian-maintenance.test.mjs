@@ -1373,7 +1373,45 @@ test('mutation control: a scheduler that starts a tick on every request fails th
 // 16. The private engine lock
 // ---------------------------------------------------------------------------
 
-const SPAWNED = new Set()
+// Every process this suite causes, registered the moment it exists, with the test that caused it and how. A child is
+// followed through its handle, never through its PID alone: a PID is reused (quickly, on Windows) once its process is
+// gone, so asking at the end of the file whether "that PID" still lives can see somebody else's process. A process is
+// declared gone when its own test's teardown saw it gone, and that is remembered.
+const SPAWNED = []
+
+// `stillOurs` is for a process known by PID only (a detached service): it says whether that PID is provably still the
+// process that was registered. Without that proof a bare PID is never signalled: it may be somebody else's by now.
+function registerProcess(t, target, how, stillOurs = () => false) {
+  const child = typeof target === 'number' ? null : target
+  const pid = child ? child.pid : target
+  const known = SPAWNED.find((entry) => entry.pid === pid && !entry.gone)
+  if (known) return known
+  const entry = { pid, child, how, stillOurs, test: t.name, gone: pid === undefined }
+  if (child) child.once('exit', () => { entry.gone = true })
+  SPAWNED.push(entry)
+  return entry
+}
+
+const describeProcess = (entry) => `pid ${entry.pid} (${entry.how}; ${entry.child ? 'followed by its handle' : 'known by PID only'}) started by "${entry.test}"`
+const processLives = (entry) => !entry.gone && (entry.child ? entry.child.exitCode === null && entry.child.signalCode === null : isAlive(entry.pid) && entry.stillOurs())
+
+// Ends one process and waits, bounded, for it to be gone: by its handle and the exit event where there is one, by PID otherwise.
+async function endProcess(entry, boundMs = 10000) {
+  if (!processLives(entry)) { entry.gone = true; return true }
+  const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
+  if (entry.child) {
+    const exited = new Promise((resolve) => { entry.child.once('exit', resolve) })
+    entry.child.kill('SIGKILL')
+    await Promise.race([exited, pause(boundMs)])
+    if (processLives(entry)) { hardKill(entry.pid); await Promise.race([exited, pause(boundMs)]) }
+  } else {
+    hardKill(entry.pid)
+    const until = Date.now() + boundMs
+    while (isAlive(entry.pid) && Date.now() < until) await pause(25)
+  }
+  entry.gone = !processLives(entry)
+  return entry.gone
+}
 const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' } }
 const hardKill = (pid) => { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
 const iso = (ms) => new Date(ms).toISOString()
@@ -1399,8 +1437,8 @@ function freePort() {
 // A process that does nothing, stands for "some unrelated program" and is killed in teardown.
 function sleeper(t) {
   const child = childProcess.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
-  SPAWNED.add(child.pid)
-  t.after(() => hardKill(child.pid))
+  const entry = registerProcess(t, child, 'an idle node process standing for an unrelated program')
+  t.after(() => endProcess(entry))
   return child
 }
 
@@ -1779,16 +1817,27 @@ test('the service refuses without its adapter, without settings, under a startup
 
 // A world whose services are real children. Every PID is recorded the moment it exists and killed in teardown, pass or fail.
 function serviceWorld(t, options) {
-  const pids = new Set()
-  t.after(() => { for (const pid of pids) hardKill(pid) })
-  const world = makeWorld(t, options)
+  const mine = []
+  let world = null
+  // Teardown, pass or fail: a service the record still names is asked to stop as its owner would; then every process of
+  // this test is ended by its handle (or by PID where only a PID is known) and awaited. Registered before the world, so
+  // it does not matter in which order the runner calls the hooks: the directory removal retries.
+  t.after(async () => {
+    if (world === null) return
+    try { const record = recordOf(world); if (record && isAlive(record.pid)) mine.push(registerProcess(t, record.pid, 'the service named by the record at teardown', namedByRecord(record.pid))) } catch { /* no usable record */ }
+    if (mine.some(processLives)) try { await stopService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, stopTimeoutMs: 5000 }) } catch { /* ended below */ }
+    for (const entry of mine) await endProcess(entry)
+  })
+  // A service removes its record on its way out, so a record that still names the PID is the proof that the PID is still that service.
+  const namedByRecord = (pid) => () => { try { return recordOf(world)?.pid === pid } catch { return false } }
+  world = makeWorld(t, options)
   const spawned = []
-  const spawn = (...args) => { const child = childProcess.spawn(...args); pids.add(child.pid); SPAWNED.add(child.pid); spawned.push(child.pid); return child }
+  const spawn = (...args) => { const child = childProcess.spawn(...args); mine.push(registerProcess(t, child, `spawned by startService: ${path.basename(String(args[1]?.[0]))}${args[2]?.detached ? ', detached' : ''}`)); spawned.push(child.pid); return child }
   const base = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn }
   const kills = []
   return Object.assign(world, {
     spawned, kills,
-    track(pid) { pids.add(pid); SPAWNED.add(pid) },
+    track(target, how) { const entry = registerProcess(t, target, how, typeof target === 'number' ? namedByRecord(target) : undefined); mine.push(entry); return entry },
     start: (extra = {}, rules) => startService({ ...base, consent: CONSENT, ...extra }, rules),
     status: (extra = {}, rules) => serviceStatus({ ...base, ...extra }, rules),
     stop: (extra = {}, rules) => stopService({ ...base, stopTimeoutMs: 20000, kill: (...args) => { kills.push(args) }, ...extra }, rules),
@@ -1876,13 +1925,13 @@ test('start needs consent and a literal loopback address, the record is owner-on
 async function assertServiceOutlivesItsLauncher(t, launcherArgs = []) {
   const world = serviceWorld(t)
   const launcher = childProcess.spawn(process.execPath, [TEST_LAUNCHER, `--project=${world.configPath}`, `--data-root=${world.dataRoot}`, ...launcherArgs], { env: world.env, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true })
-  world.track(launcher.pid)
+  world.track(launcher, 'the launching command')
   let output = ''
   launcher.stdout.on('data', (chunk) => { output += chunk })
   // `close`, not `exit`: the launcher's output is complete only once its pipe has closed.
   const code = await new Promise((resolve) => { launcher.once('close', resolve) })
   const reported = JSON.parse(output)
-  if (reported.pid) world.track(reported.pid)
+  if (reported.pid) world.track(reported.pid, 'the detached service the launching command reported')
   assert.deepEqual([code, reported.state, reported.started], [0, 'healthy', true])
   assert.equal(isAlive(launcher.pid), false, 'the launching command is gone')
   const status = await world.status()
@@ -2202,8 +2251,12 @@ test('mutation control: a builder that looks up this machine, or writes the unit
 // ---------------------------------------------------------------------------
 
 test('no process this suite started is left behind', async () => {
-  assert.ok(SPAWNED.size > 0, 'this suite does start processes')
-  await waitFor(() => [...SPAWNED].every((pid) => !isAlive(pid)), { timeoutMs: 10000, label: `every spawned process to be gone: ${[...SPAWNED].filter(isAlive)}` })
+  assert.ok(SPAWNED.length > 0, 'this suite does start processes')
+  // Anything its own test did not see gone is ended here as a last resort, and then named: the guard fails either way.
+  const left = SPAWNED.filter(processLives)
+  const outcomes = []
+  for (const entry of left) outcomes.push(`${describeProcess(entry)}: ${(await endProcess(entry)) ? 'ended by the guard' : 'STILL RUNNING after the guard tried to end it'}`)
+  assert.deepEqual(outcomes, [], 'every process was ended by the test that started it')
   if (process.platform !== 'win32') {
     const children = childProcess.spawnSync('pgrep', ['-P', String(process.pid)], { encoding: 'utf8' })
     if (!children.error) assert.deepEqual(children.stdout.split('\n').filter((line) => line.trim() !== '' && isAlive(Number(line))), [], 'the test process has no child left')
