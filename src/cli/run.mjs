@@ -62,6 +62,7 @@ export const commandMap = new Map([
   ['review', ['src/commands/review.mjs']],
   ['coauthor', ['src/commands/coauthor.mjs']],
   ['skills', ['src/commands/skills.mjs']],
+  ['obsidian', ['src/commands/obsidian.mjs']],
 ])
 
 function isDefaultBrand(brand) {
@@ -227,6 +228,17 @@ Assembles a local feedback report under ignored .atelier-local/feedback/ (mode 0
     announcements: `Usage: ${c} announcements list [--dir DIR] [--public-key FILE] | verify <file> [--public-key FILE] [--json] | show <file> [--public-key FILE]
 
 MNSTRY announcements are a pull-only channel: signed JSON documents under announcements/ in the repository. The trust anchor is always the committed MNSTRY key, or one you pass explicitly with --public-key; --dir changes only where documents are read from and never which key verifies them. Every run names the key and keyId it used. The kit never fetches anything — receiving announcements is the git pull you chose to run, and show refuses to print a body whose signature does not verify.`,
+    obsidian: `Usage: ${c} obsidian status|scope|audience|mode|policy|service|open [--project atelier.project.json] [--data-root DIR] [--json]
+
+  ${c} obsidian status
+  ${c} obsidian scope list | scope show ID
+  ${c} obsidian audience show | set A,B | clear
+  ${c} obsidian mode show | set manual|automatic
+  ${c} obsidian policy show | install FILE | revoke
+  ${c} obsidian service start [--consent-actor ID] --adapter=obsidian-cli | status | stop | unit --print --adapter=obsidian-cli
+  ${c} obsidian open [--scope ID] [--consent-actor ID] [--allow-stale] --adapter=obsidian-cli
+
+Noninteractive. With --json exactly one JSON document is printed, for a refusal too. status, scope, audience show, mode show, policy show and service status are read-only. open reports current only when the owned maintenance service ticked after the request, the view's trusted generation is the prepared one and reads back byte for byte, and the installed Obsidian meets the minimum version and answers for that vault; every other outcome is typed and exits 3. Reaching the installed app is never a default: open, service start and service unit need --adapter=obsidian-cli. Audiences, mode and the apply policy are private machine settings, never project configuration and never a note. Until an apply operation ships every apply reports apply-unavailable. Exit codes: 0 done, 1 internal error, 2 refusal or usage, 3 ran and the answer is not success.`,
     sync: `Usage:
   ${c} sync enroll --repo DIR [--project atelier.project.json] [--git ABSOLUTE_PATH]
   ${c} sync status --repo DIR
