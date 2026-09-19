@@ -1,0 +1,412 @@
+{
+  "schema": "atelier-obsidian-scope-oracles/v1",
+  "profileFixture": "fixtures/obsidian/contracts/corpus-profile/valid/three-repositories.v1.json",
+  "nodes": [
+    {
+      "id": "a",
+      "repo": "north",
+      "path": "plans/one.md",
+      "tags": [
+        "topic"
+      ],
+      "type": "md",
+      "title": "Shared concept",
+      "eligible": true
+    },
+    {
+      "id": "b",
+      "repo": "south",
+      "path": "notes/two.json",
+      "tags": [
+        "other"
+      ],
+      "type": "json",
+      "title": "Second concept",
+      "eligible": true
+    },
+    {
+      "id": "c",
+      "repo": "west",
+      "path": "notes/three.html",
+      "tags": [
+        "topic"
+      ],
+      "type": "html",
+      "title": "Third concept",
+      "eligible": true
+    },
+    {
+      "id": "d",
+      "repo": "north",
+      "path": "notes/four.md",
+      "tags": [],
+      "type": "md",
+      "title": "Shared concept",
+      "eligible": true
+    },
+    {
+      "id": "x",
+      "repo": "north",
+      "path": "private/five.md",
+      "tags": [
+        "topic"
+      ],
+      "type": "md",
+      "title": "Withheld",
+      "eligible": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "a",
+      "target": "b",
+      "type": "related",
+      "origin": "declared"
+    },
+    {
+      "id": "e2",
+      "source": "b",
+      "target": "c",
+      "type": "supports",
+      "origin": "declared"
+    },
+    {
+      "id": "e3",
+      "source": "c",
+      "target": "a",
+      "type": "contradicts",
+      "origin": "declared"
+    },
+    {
+      "id": "e4",
+      "source": "d",
+      "target": "a",
+      "type": "links_to",
+      "origin": "markdown"
+    },
+    {
+      "id": "e5",
+      "source": "a",
+      "target": "d",
+      "type": "supersedes",
+      "origin": "declared"
+    },
+    {
+      "id": "e6",
+      "source": "a",
+      "target": "c",
+      "type": "implements",
+      "origin": "declared"
+    },
+    {
+      "id": "e7",
+      "source": "d",
+      "target": "b",
+      "type": "depends_on",
+      "origin": "declared"
+    },
+    {
+      "id": "e8",
+      "source": "c",
+      "target": "d",
+      "type": "evidences",
+      "origin": "declared"
+    },
+    {
+      "id": "e9",
+      "source": "b",
+      "target": "d",
+      "type": "belongs_to",
+      "origin": "declared"
+    },
+    {
+      "id": "e10",
+      "source": "a",
+      "target": "x",
+      "type": "related",
+      "origin": "declared"
+    }
+  ],
+  "cases": [
+    {
+      "name": "full",
+      "selector": {
+        "all": true
+      },
+      "expectedNodes": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "expectedEdges": [
+        "e1",
+        "e2",
+        "e3",
+        "e4",
+        "e5",
+        "e6",
+        "e7",
+        "e8",
+        "e9"
+      ]
+    },
+    {
+      "name": "explicit-cross-repository",
+      "selector": {
+        "ids": [
+          "a",
+          "b"
+        ]
+      },
+      "expectedNodes": [
+        "a",
+        "b"
+      ],
+      "expectedEdges": [
+        "e1"
+      ]
+    },
+    {
+      "name": "repo",
+      "selector": {
+        "repo": "north"
+      },
+      "expectedNodes": [
+        "a",
+        "d"
+      ],
+      "expectedEdges": [
+        "e4",
+        "e5"
+      ]
+    },
+    {
+      "name": "path",
+      "selector": {
+        "repo": "north",
+        "pathPrefix": "plans/"
+      },
+      "expectedNodes": [
+        "a"
+      ],
+      "expectedEdges": []
+    },
+    {
+      "name": "tag",
+      "selector": {
+        "tag": "topic"
+      },
+      "expectedNodes": [
+        "a",
+        "c"
+      ],
+      "expectedEdges": [
+        "e3",
+        "e6"
+      ]
+    },
+    {
+      "name": "type",
+      "selector": {
+        "type": "html"
+      },
+      "expectedNodes": [
+        "c"
+      ],
+      "expectedEdges": []
+    },
+    {
+      "name": "union",
+      "selector": {
+        "union": [
+          {
+            "repo": "north"
+          },
+          {
+            "ids": [
+              "b"
+            ]
+          }
+        ]
+      },
+      "expectedNodes": [
+        "a",
+        "b",
+        "d"
+      ],
+      "expectedEdges": [
+        "e1",
+        "e4",
+        "e5",
+        "e7",
+        "e9"
+      ]
+    },
+    {
+      "name": "intersection",
+      "selector": {
+        "intersection": [
+          {
+            "repo": "north"
+          },
+          {
+            "tag": "topic"
+          }
+        ]
+      },
+      "expectedNodes": [
+        "a"
+      ],
+      "expectedEdges": []
+    },
+    {
+      "name": "exclude",
+      "selector": {
+        "exclude": [
+          {
+            "all": true
+          },
+          {
+            "repo": "north"
+          }
+        ]
+      },
+      "expectedNodes": [
+        "b",
+        "c"
+      ],
+      "expectedEdges": [
+        "e2"
+      ]
+    },
+    {
+      "name": "empty",
+      "selector": {
+        "ids": []
+      },
+      "expectedNodes": [],
+      "expectedEdges": []
+    },
+    {
+      "name": "withheld",
+      "selector": {
+        "ids": [
+          "x"
+        ]
+      },
+      "expectedNodes": [],
+      "expectedEdges": [],
+      "diagnostic": "selection-has-no-visible-members"
+    },
+    {
+      "name": "focus",
+      "selector": {
+        "ids": [
+          "a",
+          "b"
+        ]
+      },
+      "expectedNodes": [
+        "a",
+        "b"
+      ],
+      "expectedEdges": [
+        "e1"
+      ],
+      "mode": "focus",
+      "expectedVaultNodes": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "expectedFilterPaths": [
+        "notes/Shared concept--82f6d012eaad.md",
+        "notes/Second concept--242ab15f42c6.md"
+      ]
+    },
+    {
+      "name": "bounded-expand",
+      "selector": {
+        "ids": [
+          "a"
+        ]
+      },
+      "expectedNodes": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expectedEdges": [
+        "e1",
+        "e2",
+        "e3",
+        "e6"
+      ],
+      "truncated": true,
+      "expansion": {
+        "depth": 1,
+        "maxNodes": 3,
+        "direction": "outgoing",
+        "order": "canonical-id"
+      }
+    },
+    {
+      "name": "duplicate-titles-allowed",
+      "selector": {
+        "ids": [
+          "a",
+          "d"
+        ]
+      },
+      "expectedNodes": [
+        "a",
+        "d"
+      ],
+      "expectedEdges": [
+        "e4",
+        "e5"
+      ],
+      "expectedDistinctPaths": true
+    }
+  ],
+  "refusals": [
+    {
+      "name": "duplicate-identity",
+      "mutation": "append a second node with canonical identity a",
+      "expectedError": "duplicate-identity"
+    },
+    {
+      "name": "ambiguous-title-link",
+      "input": "[[Shared concept]]",
+      "expectedError": "ambiguous-target"
+    },
+    {
+      "name": "unknown-selector",
+      "selector": {
+        "run": "anything"
+      },
+      "expectedError": "unknown-selector"
+    },
+    {
+      "name": "unbounded-expansion",
+      "selector": {
+        "ids": [
+          "a"
+        ]
+      },
+      "expectedError": "missing-expansion-budget",
+      "expansion": {
+        "depth": 1
+      }
+    }
+  ],
+  "pathRegistry": {
+    "a": "notes/Shared concept--82f6d012eaad.md",
+    "b": "notes/Second concept--242ab15f42c6.md",
+    "c": "notes/Third concept--15d5bedaa8ca.md",
+    "d": "notes/Shared concept--4cbaa6562753.md"
+  }
+}
