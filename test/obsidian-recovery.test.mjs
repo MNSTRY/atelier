@@ -23,10 +23,17 @@ import {
   probeExchange,
   publishView,
   resetExchangeProbeCache,
+  resolveExchange,
   runInProcess,
   validatePayload,
 } from '../src/projection/obsidian/publication/index.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publication/test-seam.mjs'
+
+// The publisher refuses outright where no atomic exchange exists (Windows today),
+// so every case that needs a publication is skipped there with this reason. The
+// native refusal itself is asserted on every platform further down.
+const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
+const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which is asserted separately' }
 import { createRecoveryStore, listJournals, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
 
 // Every G00 interleaving, replayed against the production publisher on a real
@@ -292,7 +299,7 @@ function crashChild(job) {
 const replacePayload = (overrides = {}) => ({ op: 'publish', mode: 'replace', vaultRoot: '/vault', path: 'notes/Example.md', operationId: 'journal-1:0', baseSha256: 'a'.repeat(64), candidateSha256: 'b'.repeat(64),
   stagedPath: '/state/staged', recoveryPath: '/state/recovery', ...overrides })
 
-test('bridge payload is closed: three operations, no test-only keys, no path the person owns', () => {
+test('bridge payload is closed: three operations, no test-only keys, no path the person owns', needsExchange, () => {
   assert.doesNotThrow(() => validatePayload(replacePayload()))
   assert.doesNotThrow(() => validatePayload({ op: 'inspect', vaultRoot: '/vault', path: POLICY }))
   const { candidateSha256, stagedPath, ...removal } = replacePayload({ mode: 'remove' })
@@ -320,7 +327,7 @@ test('bridge payload is closed: three operations, no test-only keys, no path the
   ]) assert.throws(() => validatePayload(bad), TypeError, JSON.stringify(bad))
 })
 
-test('note text never becomes code, the script body is constant, and the crash seam is not in it', () => {
+test('note text never becomes code, the script body is constant, and the crash seam is not in it', needsExchange, () => {
   const hostile = "notes/');process.exit(1);('.md"
   const code = buildEvalCode({ op: 'inspect', vaultRoot: '/vault', path: hostile })
   assert.ok(!code.includes('process.exit(1)'))
@@ -339,7 +346,7 @@ test('note text never becomes code, the script body is constant, and the crash s
 // Exchange
 // ---------------------------------------------------------------------------
 
-test('atomic exchange swaps two files, fails without changing anything, and refuses where it is unavailable', (t) => {
+test('atomic exchange swaps two files, fails without changing anything, and refuses where it is unavailable', needsExchange, (t) => {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-exchange-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const [first, second] = [path.join(dir, 'a'), path.join(dir, 'b')]
@@ -358,7 +365,7 @@ test('atomic exchange swaps two files, fails without changing anything, and refu
   assert.deepEqual(fs.readdirSync(dir).sort(), ['a', 'b', 'false-perl'], 'the probe leaves no scratch files')
 })
 
-test('an unsupported platform refuses the whole publication and touches nothing', async (t) => {
+test('an unsupported platform refuses the whole publication and touches nothing', needsExchange, async (t) => {
   const world = await seeded(t)
   resetExchangeProbeCache()
   const before = snapshotTree(world)
@@ -369,11 +376,23 @@ test('an unsupported platform refuses the whole publication and touches nothing'
   resetExchangeProbeCache()
 })
 
+test('where this platform has no atomic exchange, the publisher refuses natively and touches nothing', { skip: EXCHANGE_HERE && 'this platform has an exchange; the injected-platform case above covers the refusal' }, async (t) => {
+  const world = makeWorld(t)
+  fs.mkdirSync(path.dirname(world.full(NOTE)), { recursive: true })
+  fs.writeFileSync(world.full(NOTE), BASE)
+  const before = snapshotTree(world)
+  const result = await world.publish(viewOf('gen-0001', { notes: { [NOTE]: CANDIDATE } }), absentAdapter())
+  assert.equal(result.state, 'refused')
+  assert.match(result.refusal.code, /^exchange-unsupported-/)
+  assert.equal(world.read(NOTE), BASE)
+  assert.deepEqual(snapshotTree(world), before)
+})
+
 // ---------------------------------------------------------------------------
 // G00 interleavings against the production publisher
 // ---------------------------------------------------------------------------
 
-test('I00 clean open note publishes; the editor shows the candidate through one transaction and is recorded as saved', async (t) => {
+test('I00 clean open note publishes; the editor shows the candidate through one transaction and is recorded as saved', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const view = app.open(NOTE)
@@ -396,7 +415,7 @@ test('I00 clean open note publishes; the editor shows the candidate through one 
   assert.deepEqual(fs.readdirSync(path.join(world.root, 'staging')), [], 'staging is empty after a committed publication')
 })
 
-test('I01/I02 an edit saved before capture, or between capture and the conditional update, refuses without writing', async (t) => {
+test('I01/I02 an edit saved before capture, or between capture and the conditional update, refuses without writing', needsExchange, async (t) => {
   for (const when of ['before-capture', 'between-capture-and-update']) {
     const world = await seeded(t)
     const app = new ModelApp(world.vault)
@@ -416,7 +435,7 @@ test('I01/I02 an edit saved before capture, or between capture and the condition
   }
 })
 
-test('I03 an unsaved buffer refuses; the delayed save then keeps the edit; a later run still does not overwrite it', async (t) => {
+test('I03 an unsaved buffer refuses; the delayed save then keeps the edit; a later run still does not overwrite it', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const view = app.open(NOTE)
@@ -433,7 +452,7 @@ test('I03 an unsaved buffer refuses; the delayed save then keeps the edit; a lat
   assert.ok(world.read(NOTE).includes('UNSAVED') && view.data.includes('UNSAVED'))
 })
 
-test('I04 typing racing the critical section never loses the typed text (25 rounds at every await point)', async (t) => {
+test('I04 typing racing the critical section never loses the typed text (25 rounds at every await point)', needsExchange, async (t) => {
   const tally = {}
   for (let round = 0; round < 25; round += 1) {
     const world = await seeded(null)
@@ -465,7 +484,7 @@ test('I04 typing racing the critical section never loses the typed text (25 roun
   t.diagnostic(`I04 outcomes: ${JSON.stringify(tally)}`)
 })
 
-test('I05 a second window: clean windows both receive the candidate; an unsaved edit in the other window refuses', async (t) => {
+test('I05 a second window: clean windows both receive the candidate; an unsaved edit in the other window refuses', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const main = app.open(NOTE)
@@ -498,13 +517,13 @@ async function outsideWriterBetweenCaptureAndUpdate(t, publisher) {
   return { safe: keptSomewhere(world, external), world }
 }
 
-test('I06 an outside atomic-rename writer landing between capture and update is never lost', async (t) => {
+test('I06 an outside atomic-rename writer landing between capture and update is never lost', needsExchange, async (t) => {
   const { safe, world } = await outsideWriterBetweenCaptureAndUpdate(t, publishView)
   assert.ok(safe)
   assert.ok(world.read(NOTE).includes('EXTERNAL WRITER'), 'the production publisher refuses and the outside bytes stay in the note')
 })
 
-test('I06 an outside writer replacing the note at the instant of the exchange is captured in recovery', async (t) => {
+test('I06 an outside writer replacing the note at the instant of the exchange is captured in recovery', needsExchange, async (t) => {
   const world = await seeded(t)
   const external = `${BASE}EXTERNAL AT EXCHANGE\n`
   const staged = path.join(world.root, 'staging', 'manual.candidate')
@@ -523,7 +542,7 @@ test('I06 an outside writer replacing the note at the instant of the exchange is
   assert.equal(fs.readFileSync(recoveryPath, 'utf8'), external, 'whatever occupied the path at the exchange is the recovery file')
 })
 
-test('I06 a real outside process doing atomic renames while the publisher runs never loses its bytes (25 rounds)', async (t) => {
+test('I06 a real outside process doing atomic renames while the publisher runs never loses its bytes (25 rounds)', needsExchange, async (t) => {
   const tally = {}
   for (let round = 0; round < 25; round += 1) {
     const world = await seeded(null)
@@ -551,7 +570,7 @@ test('I06 a real outside process doing atomic renames while the publisher runs n
   t.diagnostic(`I06 outcomes: ${JSON.stringify(tally)}`)
 })
 
-test('I06a the app never writes the note as a result of publication; a following outside write survives the delayed save', async (t) => {
+test('I06a the app never writes the note as a result of publication; a following outside write survives the delayed save', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const view = app.open(NOTE)
@@ -567,7 +586,7 @@ test('I06a the app never writes the note as a result of publication; a following
   assert.equal(world.read(NOTE), external)
 })
 
-test('I07 a note removed before publication is recreated only by exclusive create; a note that vanishes before the update refuses and creates nothing', async (t) => {
+test('I07 a note removed before publication is recreated only by exclusive create; a note that vanishes before the update refuses and creates nothing', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const adapter = modelAdapter(app, { plan: { after: (payload) => { if (payload.op === 'inspect' && payload.path === NOTE) fs.rmSync(world.full(NOTE)) } } })
@@ -639,7 +658,7 @@ for (const point of CRASH_POINTS) {
   })
 }
 
-test('interrupted conditional removal: killed after the move, the bytes are in recovery and recovery settles it', async (t) => {
+test('interrupted conditional removal: killed after the move, the bytes are in recovery and recovery settles it', needsExchange, async (t) => {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
   const child = crashChild({ root: world.root, publisher: 'production', scenario: 'remove', crashAt: 'after-removal-move', coordinated: true })
   assert.equal(child.signal, 'SIGKILL')
@@ -652,7 +671,7 @@ test('interrupted conditional removal: killed after the move, the bytes are in r
   assert.ok(keptTexts(world).includes(BASE))
 })
 
-test('I10 the app going away mid-publication leaves a coherent note and a retryable state', async (t) => {
+test('I10 the app going away mid-publication leaves a coherent note and a retryable state', needsExchange, async (t) => {
   for (const when of ['dropBefore', 'dropAfter']) {
     const world = await seeded(t)
     const app = new ModelApp(world.vault)
@@ -681,7 +700,7 @@ test('I10 the app going away mid-publication leaves a coherent note and a retrya
   }
 })
 
-test('a lost publish reply is re-read from the app and the publish is never resent', async (t) => {
+test('a lost publish reply is re-read from the app and the publish is never resent', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   app.open(NOTE)
@@ -758,7 +777,7 @@ test('I11 full disk: staging refuses and touches nothing, a partial staged file 
     }
   })
 
-test('I12 a program holding the note open writes late: the bytes land in recovery, are detected after the quiet period, and the base is still retained', async (t) => {
+test('I12 a program holding the note open writes late: the bytes land in recovery, are detected after the quiet period, and the base is still retained', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   app.open(NOTE)
@@ -791,7 +810,7 @@ test('I12 a program holding the note open writes late: the bytes land in recover
   assert.equal(world.store.readObject(findings[0].observedDigest).toString('utf8'), later)
 })
 
-test('I13 an outside in-place rewrite after publication is kept, and the next generation does not overwrite it', async (t) => {
+test('I13 an outside in-place rewrite after publication is kept, and the next generation does not overwrite it', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   app.open(NOTE)
@@ -811,7 +830,7 @@ test('I13 an outside in-place rewrite after publication is kept, and the next ge
   assert.equal(world.read(NOTE), external)
 })
 
-test('an outside write that lands between publication and verification is reported and kept', async (t) => {
+test('an outside write that lands between publication and verification is reported and kept', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const external = `${CANDIDATE}RIGHT AFTER\n`
@@ -826,7 +845,7 @@ test('an outside write that lands between publication and verification is report
 // Mutation controls: the suite fails a publisher that replaces unconditionally
 // ---------------------------------------------------------------------------
 
-test('mutation control: a renaming publisher loses the outside writer and loses the base in a crash', async (t) => {
+test('mutation control: a renaming publisher loses the outside writer and loses the base in a crash', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const external = `${BASE}EXTERNAL WRITER\n`
@@ -846,7 +865,7 @@ test('mutation control: a renaming publisher loses the outside writer and loses 
 // Scope changes, new notes, attachments
 // ---------------------------------------------------------------------------
 
-test('a note that left the scope is removed only by a conditional move to recovery; an edited one is never deleted and stays surfaced', async (t) => {
+test('a note that left the scope is removed only by a conditional move to recovery; an edited one is never deleted and stays surfaced', needsExchange, async (t) => {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
   fs.writeFileSync(world.full(OTHER), `${BASE}MY EDIT\n`)
   const app = new ModelApp(world.vault)
@@ -867,7 +886,7 @@ test('a note that left the scope is removed only by a conditional move to recove
   assert.equal(world.read(OTHER), `${BASE}MY EDIT\n`)
 })
 
-test('conditional removal refuses an unsaved buffer, and puts back a note replaced at the instant of the move', async (t) => {
+test('conditional removal refuses an unsaved buffer, and puts back a note replaced at the instant of the move', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
   const view = app.open(NOTE)
@@ -892,7 +911,7 @@ test('conditional removal refuses an unsaved buffer, and puts back a note replac
   assert.equal(fs.existsSync(recoveryPath), false)
 })
 
-test('a new note appears by exclusive create; a file that is already there, or appears first, is never overwritten', async (t) => {
+test('a new note appears by exclusive create; a file that is already there, or appears first, is never overwritten', needsExchange, async (t) => {
   const world = await seeded(t)
   fs.writeFileSync(world.full(OTHER), 'mine\n')
   const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: BASE, [OTHER]: CANDIDATE } }), absentAdapter())
@@ -909,7 +928,7 @@ test('a new note appears by exclusive create; a file that is already there, or a
   assert.deepEqual(filesUnder(path.join(racing.root, 'staging')), [])
 })
 
-test('attachments follow the same conditional rules', async (t) => {
+test('attachments follow the same conditional rules', needsExchange, async (t) => {
   const world = makeWorld(t)
   const file = 'attachments/Chart--0123456789ab.png'
   const first = await world.publish(viewOf('gen-0001', { notes: { [NOTE]: BASE }, attachments: { [file]: Buffer.from([1, 2, 3]) } }), absentAdapter())
@@ -925,7 +944,7 @@ test('attachments follow the same conditional rules', async (t) => {
   assert.equal(third.state, 'committed')
 })
 
-test('a partly published view is updating, stays bound to what it published, and converges on a later run', async (t) => {
+test('a partly published view is updating, stays bound to what it published, and converges on a later run', needsExchange, async (t) => {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
   const app = new ModelApp(world.vault)
   const busy = app.open(OTHER)
@@ -950,7 +969,7 @@ test('a partly published view is updating, stays bound to what it published, and
 // Settings ownership
 // ---------------------------------------------------------------------------
 
-test('policy settings are owned per key through the conditional protocol; everything else under the settings root is never touched', async (t) => {
+test('policy settings are owned per key through the conditional protocol; everything else under the settings root is never touched', needsExchange, async (t) => {
   const world = makeWorld(t)
   fs.mkdirSync(world.full('.obsidian'))
   const appWritten = { 'file-explorer': true, 'global-search': true, graph: true, publish: false, sync: true, backlink: true }
@@ -1001,7 +1020,7 @@ test('policy settings are owned per key through the conditional protocol; everyt
   assert.equal(refused.refusal.code, 'invalid-prepared-view')
 })
 
-test('a vault without a policy file gets one by exclusive create', async (t) => {
+test('a vault without a policy file gets one by exclusive create', needsExchange, async (t) => {
   const world = makeWorld(t)
   const result = await world.publish(viewOf('gen-0001', { notes: { [NOTE]: BASE }, settings: true }), absentAdapter())
   assert.equal(noteResult(result, POLICY).outcome, 'created')
@@ -1012,7 +1031,7 @@ test('a vault without a policy file gets one by exclusive create', async (t) => 
 // Path selection, capability floor, refusals
 // ---------------------------------------------------------------------------
 
-test('path selection: the direct path only when no Obsidian runs; a running app that cannot be coordinated with refuses everything', async (t) => {
+test('path selection: the direct path only when no Obsidian runs; a running app that cannot be coordinated with refuses everything', needsExchange, async (t) => {
   const world = await seeded(t)
   const before = snapshotTree(world)
   const silent = createEditorAdapter({ call: async () => { throw new Error('socket not found') }, processProbe: () => 'running' })
@@ -1033,7 +1052,7 @@ test('path selection: the direct path only when no Obsidian runs; a running app 
   assert.equal(defaultObsidianProcessProbe({ platform: 'linux', run: () => '/usr/bin/electron /opt/obsidian/app.asar\n' }), 'running')
 })
 
-test('capability floor: an open note on an app build without the saved-content field refuses; a closed note still publishes', async (t) => {
+test('capability floor: an open note on an app build without the saved-content field refuses; a closed note still publishes', needsExchange, async (t) => {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
   const app = new ModelApp(world.vault)
   app.open(NOTE, { savedField: false })
@@ -1043,7 +1062,7 @@ test('capability floor: an open note on an app build without the saved-content f
   assert.equal(noteResult(result, OTHER).outcome, 'published')
 })
 
-test('staging that cannot be written refuses before anything is touched; a held lock refuses a second publisher', async (t) => {
+test('staging that cannot be written refuses before anything is touched; a held lock refuses a second publisher', needsExchange, async (t) => {
   const world = await seeded(t)
   const before = snapshotTree(world)
   const stagingRoot = path.join(world.root, 'staging')
@@ -1065,7 +1084,7 @@ test('staging that cannot be written refuses before anything is touched; a held 
   assert.equal((await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), absentAdapter())).state, 'committed')
 })
 
-test('refusals: unknown protocol, wrong expected generation, a view for another scope, a symlinked note path', async (t) => {
+test('refusals: unknown protocol, wrong expected generation, a view for another scope, a symlinked note path', needsExchange, async (t) => {
   const world = await seeded(t)
   const view = viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } })
   const call = (overrides) => publishView({ preparedView: view, protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: world.store, adapter: absentAdapter(), quietPeriodMs: 0, ...overrides })
@@ -1092,7 +1111,7 @@ test('refusals: unknown protocol, wrong expected generation, a view for another 
 // CLI transport, against a stand-in executable (never the real CLI)
 // ---------------------------------------------------------------------------
 
-test('CLI transport: explicit environment, SIGKILL on timeout, serialized calls, lost publish reply re-read through collect', async (t) => {
+test('CLI transport: explicit environment, SIGKILL on timeout, serialized calls, lost publish reply re-read through collect', needsExchange, async (t) => {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-cli-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const log = path.join(dir, 'calls.log')
