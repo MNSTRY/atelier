@@ -54,7 +54,7 @@ import { resolveExchange } from '../src/projection/obsidian/publication/index.mj
 import { createObsidianRegistry } from '../src/runtime/obsidian/extension-points.mjs'
 import { createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 import { revokeApplyPolicy } from '../src/runtime/obsidian/machine-settings.mjs'
-import { APPLY_WORKSPACE_ID, digestOf as bytesDigest, git, makeApplyWorld, noteText, treeListing } from './support/obsidian-edits/apply-world.mjs'
+import { APPLY_WORKSPACE_ID, GONE_HOLDER_PID, digestOf as bytesDigest, git, goneHolderProof, makeApplyWorld, noteText, treeListing } from './support/obsidian-edits/apply-world.mjs'
 
 // Invented fixtures only. Every note under test is the output of the real
 // prepareView over a workspace written to a temporary directory; an edit is a
@@ -1389,13 +1389,16 @@ test('replay: every index is a cache, rebuilt byte-identical from the events and
 })
 
 const exitedPid = () => childProcess.spawnSync(process.execPath, ['-e', ''], { windowsHide: true }).pid
+// An abandoned lease is held under GONE_HOLDER_PID, whose absence is injected (apply-world.mjs says why). The PID of a
+// real child that exited is used by one test only, which expects that PID to be somebody else's by then and tries again.
+const WHERE_THE_HOLDER_IS_GONE = { ...OBJECT_STORE_PRIMITIVES, proveAbandoned: goneHolderProof() }
 
 // One object taken through observe (three views), lease, intent, the source
 // write (simulated: `source.digest`), applied and release, with a crash at the
 // `crashIndex`-th durable step; then a restart that recovers and finishes.
 // `decide` is how the restart settles an intent whose outcome is unknown.
 async function crashCycle(t, { crashIndex, holderPid, decide }) {
-  const world = arbitrationWorld(t)
+  const world = arbitrationWorld(t, { primitives: WHERE_THE_HOLDER_IS_GONE })
   const operations = [
     makeOperation({ ...GUIDE, edited: 'edit a' }),
     makeOperation({ ...GUIDE, scopeId: 'scope-other', edited: 'edit a' }),
@@ -1450,7 +1453,7 @@ function decideFromDigests({ store, lease, intent, source }) {
 }
 
 async function crashOracle(t, decide) {
-  const holderPid = exitedPid()
+  const holderPid = GONE_HOLDER_PID
   const clean = await crashCycle(t, { crashIndex: -1, holderPid, decide })
   assert.equal(clean.crashed, null)
   assert.deepEqual(clean.summary.operations.map((entry) => [entry[1], entry[4].length]), [['applied', 2], ['superseded', 1]])
@@ -1582,10 +1585,12 @@ async function leaseOracle(t, primitives) {
   assert.throws(() => store.recordApplied({ ...GUIDE, nonce: 'a'.repeat(32) }, appliedOf(operation)), refusalCode('lease-not-held'))
   assert.throws(() => store.recordRefused({ ...GUIDE, nonce: 'a'.repeat(32) }, { idempotencyKey: operation.idempotencyKey, code: 'policy-revoked' }), refusalCode('lease-not-held'))
 
-  // A holder whose process is gone on this machine: taken over, with the proof recorded.
-  const gone = await store.acquireLease(GUIDE, { pid: exitedPid() })
+  // A holder whose process is gone on this machine: taken over, with the proof recorded. The rule under test decides
+  // every other holder; only the absence of this one PID is injected.
+  const gone = await store.acquireLease(GUIDE, { pid: GONE_HOLDER_PID })
   store.recordIntent(gone.lease, intentOf(operation))
-  const takeover = await world.open().acquireLease(GUIDE)
+  const goneProof = goneHolderProof()
+  const takeover = await world.open({ primitives: { ...primitives, proveAbandoned: (ticket, options) => (ticket.pid === GONE_HOLDER_PID ? goneProof(ticket, options) : primitives.proveAbandoned(ticket, options)) } }).acquireLease(GUIDE)
   assert.deepEqual([takeover.acquired, takeover.takeover], [true, { nonce: gone.lease.nonce, reason: 'holder-process-gone' }])
   assert.equal(takeover.object.intent.status, 'outcome-unknown', 'what the gone holder left is handed to the new one')
   // The holder that was thought gone can do nothing more.
@@ -1613,6 +1618,30 @@ async function leaseOracle(t, primitives) {
   store.releaseLease(onMoved.lease)
 }
 
+test('arbitration: a lease left by a real process that exited is taken over under the production proof, and a PID the system has already given to somebody else is, correctly, not', async (t) => {
+  // The one test that asks the operating system about a real exited child. Its PID can be reused at once, and the
+  // lease is then rightly kept (`live-process-unproven`): that round releases with the nonce it holds and tries again.
+  const world = arbitrationWorld(t)
+  const reasons = []
+  for (let round = 0; round < 8 && !reasons.includes('holder-process-gone'); round += 1) {
+    const identity = guideNode(`left-behind-${round}`)
+    const left = await world.store.acquireLease(identity, { pid: exitedPid() })
+    assert.equal(left.acquired, true)
+    const attempt = await world.open().acquireLease(identity)
+    if (attempt.acquired) {
+      assert.deepEqual(attempt.takeover, { nonce: left.lease.nonce, reason: 'holder-process-gone' })
+      assert.equal(world.open().releaseLease(attempt.lease), true)
+      reasons.push('holder-process-gone')
+    } else {
+      assert.deepEqual([attempt.code, attempt.reason], ['lease-held', 'live-process-unproven'], 'the only other answer: that PID is a live process again')
+      assert.equal(world.store.releaseLease(left.lease), true)
+      reasons.push(attempt.reason)
+    }
+  }
+  t.diagnostic(`real exited holders: ${reasons.join(', ')}`)
+  assert.ok(reasons.includes('holder-process-gone'), `eight PIDs of exited children were all live again: ${reasons.join(', ')}`)
+})
+
 test('arbitration: the object lease has one holder, refuses while held, is released by an event, is taken over only from a process that is gone, never on a timeout, and guards every apply record', async (t) => {
   await leaseOracle(t, OBJECT_STORE_PRIMITIVES)
   const onTimeout = { ...OBJECT_STORE_PRIMITIVES, proveAbandoned: createAbandonmentProof({ maxAgeMs: 30 * 60 * 1000 }) }
@@ -1620,7 +1649,7 @@ test('arbitration: the object lease has one holder, refuses while held, is relea
 
   // A ticket written on another machine is never judged from here: it needs a person.
   const world = arbitrationWorld(t)
-  const held = await world.store.acquireLease(GUIDE, { pid: exitedPid() })
+  const held = await world.store.acquireLease(GUIDE, { pid: GONE_HOLDER_PID })
   const elsewhere = world.open({ primitives: { ...OBJECT_STORE_PRIMITIVES, proveAbandoned: createAbandonmentProof({ machine: 'e'.repeat(64) }) } })
   world.time.now += 24 * 3600 * 1000
   const foreign = await elsewhere.acquireLease(GUIDE)
@@ -2356,7 +2385,7 @@ test('apply crash recovery: a crash at every durable step, with and without a co
     const written = Buffer.concat([base, utf8(`\nsaved by another program during round ${index}\n`)])
     const edit = world.editOf(nodeId)
     const crashing = world.sourceApply({
-      leasePid: exitedPid(),
+      leasePid: GONE_HOLDER_PID,
       crash: (step) => { if (step === row.step) throw new Error(`crash at ${step}`) },
       beforeExchange: async () => { if (row.writer) { fs.writeFileSync(`${sourceFile}.tmp`, written); fs.renameSync(`${sourceFile}.tmp`, sourceFile) } },
     })
@@ -2571,7 +2600,7 @@ test('apply command beside a damaged object log: recover settles the healthy int
   const world = raceWorld(t, 2)
   const [healthy, damaged] = [0, 1].map((index) => world.editOf(`race-room:round-${index}`))
   for (const edit of [healthy, damaged]) {
-    await assert.rejects(world.sourceApply({ leasePid: exitedPid(), crash: (step) => { if (step === 'intent-recorded') throw new Error(`crash at ${step}`) } }).apply({ editId: edit.editId, mode: 'manual' }), /crash at/)
+    await assert.rejects(world.sourceApply({ leasePid: GONE_HOLDER_PID, crash: (step) => { if (step === 'intent-recorded') throw new Error(`crash at ${step}`) } }).apply({ editId: edit.editId, mode: 'manual' }), /crash at/)
   }
   // Another program wrote over an event of the second object. Its log can no longer be read.
   const directory = objectDirectory(world.workspaceRoot(), { repoId: 'race-room', nodeId: 'race-room:round-1' })
@@ -2580,7 +2609,7 @@ test('apply command beside a damaged object log: recover settles the healthy int
   const candidatesOf = () => filesUnder(world.recovery()).filter((file) => /\.candidate$/.test(file)).length
   assert.equal(candidatesOf(), 2)
 
-  const recovered = await runApplyCommand(world, ['apply', 'recover', '--json'], { leasePid: exitedPid() })
+  const recovered = await runApplyCommand(world, ['apply', 'recover', '--json'])
   assert.equal(recovered.exit, 0, recovered.text)
   assert.deepEqual(recovered.json.recovered.map((item) => [item.editId, item.status, item.code]).sort(), [[healthy.editId, 'refused', 'interrupted-before-exchange'], [damaged.editId, 'refused', 'object-event-malformed']].sort())
   assert.equal((await world.sourceApply().show(healthy.editId)).object.outcomeUnknown, false, 'the healthy apply is settled')

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { resolveProjectConfig, writeJson } from '../../../src/project/config.mjs'
-import { createSourceApplyForOracleTests, SOURCE_APPLY_PRIMITIVES, withApplyPolicyDigest } from '../../../src/projection/obsidian/edits/index.mjs'
+import { OBJECT_STORE_PRIMITIVES, createObjectStoreForOracleTests, createSourceApplyForOracleTests, SOURCE_APPLY_PRIMITIVES, withApplyPolicyDigest } from '../../../src/projection/obsidian/edits/index.mjs'
 import { createEditorAdapter } from '../../../src/projection/obsidian/publication/index.mjs'
 import { createRecoveryStore } from '../../../src/projection/obsidian/recovery/index.mjs'
 import { createMaintenanceEngine } from '../../../src/runtime/obsidian/engine.mjs'
@@ -12,6 +12,7 @@ import { createMaintenanceExtensions } from '../../../src/runtime/obsidian/exten
 import { ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } from '../../../src/runtime/obsidian/machine-settings.mjs'
 import { observeVaultEdits, trustedNoteBases } from '../../../src/runtime/obsidian/pending-edits.mjs'
 import { createProductionSeams } from '../../../src/runtime/obsidian/pipeline.mjs'
+import { createAbandonmentProof, isProcessAlive } from '../../../src/runtime/obsidian/private-lock.mjs'
 import { createMaintenanceStateStore } from '../../../src/runtime/obsidian/state-store.mjs'
 
 // An invented project of real git repositories in a temporary directory, a
@@ -20,6 +21,14 @@ import { createMaintenanceStateStore } from '../../../src/runtime/obsidian/state
 // Every source file an apply can reach lives under that temporary directory.
 
 export const EXT = 'mnstry.atelier.obsidian'
+
+// A holder that is gone, deterministically. The PID of a child that exited can be handed to another process at once
+// (quickly on Windows), and a lease held under it is then, correctly, not taken over. A test that needs an abandoned
+// lease holds it under this PID instead, and opens the object store with a proof whose ONLY injected part is that
+// this PID is not alive; every other PID is asked of the operating system, and the production rule decides.
+export const GONE_HOLDER_PID = 2 ** 31 - 2
+export const goneHolderProof = (options = {}) => createAbandonmentProof({ ...options, alive: (pid) => pid !== GONE_HOLDER_PID && isProcessAlive(pid) })
+export const objectStoreWhereTheHolderIsGone = createObjectStoreForOracleTests({ ...OBJECT_STORE_PRIMITIVES, proveAbandoned: goneHolderProof() })
 export const APPLY_WORKSPACE_ID = `ws-${'0b'.repeat(12)}`
 const fixedRandom = (size) => Buffer.alloc(size, 0x0b)
 const START = Date.parse('2026-01-05T10:00:00.000Z')
@@ -115,7 +124,7 @@ export function makeApplyWorld(t, { files, repositories, scopes = [{ scopeId: 's
       installApplyPolicy({ workspaceRoot: workspaceStateRoot(dataRoot, APPLY_WORKSPACE_ID), workspaceId: APPLY_WORKSPACE_ID, policy, repositoryRoots: protectedRoots(loadProject()), updatedAt: clock().toISOString() })
       return policy
     },
-    sourceApply: (options = {}, primitives = SOURCE_APPLY_PRIMITIVES) => createSourceApplyForOracleTests(primitives)({ loadProject, dataRoot, env, clock, quietPeriodMs: 0, ...options }),
+    sourceApply: (options = {}, primitives = SOURCE_APPLY_PRIMITIVES) => createSourceApplyForOracleTests(primitives)({ loadProject, dataRoot, env, clock, quietPeriodMs: 0, objectStore: objectStoreWhereTheHolderIsGone, ...options }),
     engine({ applyOperation = null, ...options } = {}) {
       const extensions = createMaintenanceExtensions()
       if (applyOperation) extensions.register('apply-operation', applyOperation)

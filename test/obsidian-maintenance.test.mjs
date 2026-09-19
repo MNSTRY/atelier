@@ -17,7 +17,7 @@ import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src
 import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 import { withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } from '../src/runtime/obsidian/lifecycle.mjs'
-import { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
+import { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock, isProcessAlive, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
 import { HEALTH_SCHEMA, authorityOf, probeHealth, requestLoopback } from '../src/runtime/obsidian/service-client.mjs'
 import { SERVICE_ENTRY_PATH } from '../src/runtime/obsidian/service-main.mjs'
 import { readLastServiceError, readServiceRecord, readServiceSettings, serviceNameFor, servicePaths, writeServiceRecord, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
@@ -1551,13 +1551,30 @@ test('the engine lock: one holder, released and pruned, and taken from a dead ho
   assert.deepEqual(fs.readdirSync(lock.directory).sort(), ['000000000006.json', '000000000006.released'], 'a lock taken on every tick does not grow')
   if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(lock.directory, '000000000006.json')).mode & 0o777, 0o600)
 
-  // A holder that never released and whose process is gone.
-  lock.plant(9, lock.ticket({ pid: exitedPid() }))
-  const inspected = await inspectPrivateGenerationLock({ directory: lock.directory, workspaceId: 'ws-lock' })
+  // A holder that never released and whose process is gone. That this one PID is not alive is injected: the PID of a
+  // real child that exited can be another live process a moment later, and the lock is then, correctly, kept.
+  const gonePid = 2 ** 31 - 2
+  const proveAbandoned = createAbandonmentProof({ alive: (pid) => pid !== gonePid && isProcessAlive(pid) })
+  lock.plant(9, lock.ticket({ pid: gonePid }))
+  const inspected = await inspectPrivateGenerationLock({ directory: lock.directory, workspaceId: 'ws-lock', proveAbandoned })
   assert.deepEqual([inspected.available, inspected.reason], [true, 'holder-process-gone'])
-  const taken = await lock.acquire()
+  const taken = await lock.acquire(proveAbandoned)
   assert.deepEqual([taken.acquired, taken.generation], [true, 10])
   taken.release()
+})
+
+test('the engine lock left by a real process that exited is taken under the production proof; a PID that is already somebody else keeps it', async (t) => {
+  // The one lock test that asks the operating system about a real exited child, and expects PID reuse.
+  const reasons = []
+  for (let round = 0; round < 8 && !reasons.includes('holder-process-gone'); round += 1) {
+    const lock = lockWorld(t)
+    lock.plant(1, lock.ticket({ pid: exitedPid() }))
+    const inspected = await inspectPrivateGenerationLock({ directory: lock.directory, workspaceId: 'ws-lock' })
+    assert.ok(['holder-process-gone', 'live-process-unproven'].includes(inspected.reason), inspected.reason)
+    assert.equal(inspected.available, inspected.reason === 'holder-process-gone')
+    reasons.push(inspected.reason)
+  }
+  assert.ok(reasons.includes('holder-process-gone'), `eight PIDs of exited children were all live again: ${reasons.join(', ')}`)
 })
 
 async function assertLiveHoldersKeepTheLock(t, acquireWith) {

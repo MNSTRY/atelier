@@ -243,12 +243,14 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
   // `loadProject`, `dataRoot`, `env`, `platform` and `clock` are what the engine and the command are given.
   // `crash(step)` is the crash seam; `beforeExchange()` runs after the intent is durable and before the policy is
   // read again, so a test can land a writer or a revocation exactly there; `leasePid` lets a test hold a lease as a
-  // process that is gone; `extraManagedRoots` adds managed roots to the ones the workspace has.
+  // process that is gone, and `objectStore` lets it open the object store with the proof of that injected, since a
+  // real PID that exited can belong to another process a moment later; `extraManagedRoots` adds managed roots to the
+  // ones the workspace has.
   return function createSourceApply(context = {}) {
     const {
       loadProject, dataRoot, env = process.env, platform = process.platform, clock = () => new Date(), eligibility = DEFAULT_ELIGIBILITY,
       quietPeriodMs = DEFAULT_APPLY_QUIET_PERIOD_MS, recheckWindowMs = DEFAULT_APPLY_RECHECK_WINDOW_MS, exchangeOptions = {},
-      crash = () => {}, beforeExchange = async () => {}, leasePid, extraManagedRoots = [], manualBatchBound = MAX_MANUAL_BATCH_SIZE,
+      crash = () => {}, beforeExchange = async () => {}, leasePid, extraManagedRoots = [], manualBatchBound = MAX_MANUAL_BATCH_SIZE, objectStore = openObjectStore,
     } = context
     if (!Number.isInteger(manualBatchBound) || manualBatchBound < 1 || manualBatchBound > MAX_MANUAL_BATCH_SIZE) throw new TypeError('manualBatchBound is an integer from 1 to MAX_MANUAL_BATCH_SIZE')
     if (typeof loadProject !== 'function') throw new TypeError('source apply needs loadProject')
@@ -274,7 +276,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       const workspace = {
         project, enablement, workspaceRoot, workspaceId, repositoryRoots, machine,
         stateStore: createMaintenanceStateStore({ workspaceRoot, workspaceId }),
-        objects: openObjectStore({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock }),
+        objects: objectStore({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock }),
         storeOf(scopeId) {
           if (!stores.has(scopeId)) stores.set(scopeId, seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId, repositoryRoots }))
           return stores.get(scopeId)
