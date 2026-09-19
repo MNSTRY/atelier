@@ -202,12 +202,13 @@ export function installApplyPolicy({ workspaceRoot, workspaceId, policy, reposit
 // dispatch, so a revocation or a pause takes effect for the very next edit.
 // Anything missing, malformed or mismatched is "not authorized", never an
 // error that could be mistaken for permission.
-export function authorizeAutomaticApply({ workspaceRoot, workspaceId }) {
+// `assumeAutomatic` answers "would automatic mode be authorized": the check `mode set automatic` makes before it writes.
+export function authorizeAutomaticApply({ workspaceRoot, workspaceId, assumeAutomatic = false }) {
   const denied = (reason) => ({ authorized: false, reason, policy: null })
   let settings
   try { settings = readMachineSettings({ workspaceRoot, workspaceId }) } catch { return denied('machine-settings-invalid') }
   if (!settings) return denied('machine-settings-absent')
-  if (settings.maintenanceMode !== 'automatic') return denied('maintenance-mode-manual')
+  if (settings.maintenanceMode !== 'automatic' && assumeAutomatic !== true) return denied('maintenance-mode-manual')
   if (settings.applyPolicy === null) return denied('no-apply-policy-installed')
   let policy
   try {
@@ -222,4 +223,30 @@ export function authorizeAutomaticApply({ workspaceRoot, workspaceId }) {
   if (policy.mode !== 'automatic') return denied('apply-policy-manual')
   if (policy.status !== 'active') return denied(`apply-policy-${policy.status}`)
   return { authorized: true, reason: 'apply-policy-active', policy }
+}
+
+// The installed policy as stored, validated, or null. A stored policy that does not validate refuses.
+export function readInstalledApplyPolicy({ workspaceRoot, workspaceId }) {
+  const policy = readJsonFile(settingsFile(workspaceRoot, 'apply-policy.json'), 'invalid-apply-policy', 'the apply policy')
+  if (policy === null) return null
+  try { assertObsidianContract('apply-policy', policy) } catch (error) {
+    if (error instanceof ObsidianContractRefusal) refuse('invalid-apply-policy', 'the stored apply policy does not satisfy its contract', { errors: error.detail?.errors ?? [] })
+    throw error
+  }
+  if (policy.workspaceId !== workspaceId) refuse('invalid-apply-policy', 'the stored apply policy belongs to another workspace')
+  return policy
+}
+
+// Revocation. The stored policy is marked revoked first: from that write on, every authorization read denies, so an
+// apply that is queued behind it is never dispatched. Then maintenance goes back to manual, so installing a policy
+// later does not resume automatic apply by itself.
+export function revokeApplyPolicy({ workspaceRoot, workspaceId, repositoryRoots, updatedAt }) {
+  const policy = readInstalledApplyPolicy({ workspaceRoot, workspaceId })
+  const current = readMachineSettings({ workspaceRoot, workspaceId })
+  if (policy === null && (current === null || current.applyPolicy === null)) return { revoked: false, reason: 'no-apply-policy-installed', policy: null }
+  assertOutsideRepositories({ managedRoot: workspaceRoot, repositoryRoots })
+  const revoked = policy === null ? null : { ...policy, status: 'revoked' }
+  if (revoked !== null) atomicReplacePrivateText(path.join(settingsDirectory(workspaceRoot), 'apply-policy.json'), canonicalJson(revoked))
+  if (current !== null) writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: { ...current, maintenanceMode: 'manual', updatedAt } })
+  return { revoked: true, reason: policy?.status === 'revoked' ? 'already-revoked' : 'revoked', policy: revoked }
 }
