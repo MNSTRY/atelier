@@ -154,13 +154,24 @@ export function criticalSection(P, host) {
   if (!call || !perl) return done('exchange-unavailable', { wrote: false })
   // Atomic exchange: whatever occupied the note path at this instant lands at
   // the staged path, so no concurrent replacement of the note can be lost.
+  let exitStatus = 0
   try {
     host.require('child_process').execFileSync(perl, ['-e', host.exchange.script, '--', String(call.number), String(call.cwd), P.stagedPath, full], { stdio: 'ignore' })
   } catch (error) {
-    // All-or-nothing: a failure (for example a full disk) leaves the note as it was.
-    return done('exchange-failed', { ...snapshot(), wrote: false, exitStatus: error.status == null ? null : error.status })
+    exitStatus = error.status == null ? null : error.status
   }
-  step('exchanged')
+  // What happened is read from the files, not from the exit status: a helper
+  // killed after the call returned reports failure although the exchange took
+  // place. The staged path is private, so bytes there that are not the
+  // candidate can only be what the exchange displaced from the note path.
+  let stagedNow = null
+  try { stagedNow = sha(fs.readFileSync(P.stagedPath)) } catch (error) { stagedNow = null }
+  if (stagedNow === null || stagedNow === P.candidateSha256) {
+    // All-or-nothing: a failure (for example a full disk) leaves the note as it was.
+    const seen = snapshot()
+    return done('exchange-failed', { ...seen, wrote: stagedNow === null && seen.diskSha256 === P.candidateSha256, exitStatus })
+  }
+  step('exchanged', exitStatus === 0 ? undefined : { exitStatus })
   crash('after-exchange')
   fs.renameSync(P.stagedPath, P.recoveryPath)
   const recoveredSha256 = sha(fs.readFileSync(P.recoveryPath))

@@ -388,16 +388,15 @@ async function publishUnit(unit, context) {
   return outcome(reply.status, { blocking: true, ...(seenObject ? { observedDigest: seenObject.digest, objectRef: seenObject.ref } : {}), ...(reply.exitStatus === undefined ? {} : { exitStatus: reply.exitStatus }) })
 }
 
-function retire(plan, { store, journalId }) {
-  const result = retireStagedFile({ stagedPath: plan.stagedPath, candidateDigest: plan.candidateDigest, fallbackPath: store.displacedPath(journalId, plan.unit, 'unexpected-at-staged-path.bin') })
-  if (result.capturedPath) recordDisplaced({ store, journalId, unit: plan.unit, notePath: plan.path, displacedPath: result.capturedPath, baseDigest: plan.baseDigest ?? null, at: new Date().toISOString() })
+function retire(plan, { store, journalId, crash }) {
+  const result = retireStagedFile({ store, journalId, unit: plan.unit, stagedPath: plan.stagedPath, candidateDigest: plan.candidateDigest, crash })
+  for (const capturedPath of result.capturedPaths) recordDisplaced({ store, journalId, unit: plan.unit, notePath: plan.path, displacedPath: capturedPath, baseDigest: plan.baseDigest ?? null, at: new Date().toISOString() })
 }
 
 // A candidate that could not be known when the run began (settings merged from
 // the bytes on disk now; a kept note that has gone missing).
 function stageLate(plan, { store, journalId }) {
   const stagedPath = path.join(store.stagingDir(journalId), `${String(plan.unit).padStart(6, '0')}.late.candidate`)
-  fs.rmSync(`${stagedPath}.retired`, { force: true })
   stageCandidate(stagedPath, plan.bytes, plan.mode ?? 0o644)
   return stagedPath
 }

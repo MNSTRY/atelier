@@ -49,6 +49,7 @@ const CANDIDATE = '# Synthetic note\n\nThe quick GENERATED fox jumps.\n\nUnrelat
 const NOTE = 'notes/Synthetic note--0123456789ab.md'
 const OTHER = 'notes/Other--ba9876543210.md'
 const POLICY = '.obsidian/core-plugins.json'
+const EDITED = `${BASE}EDITED ON DISK\n`
 const digest = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`
 const hex = (value) => createHash('sha256').update(value).digest('hex')
 const clock = () => new Date()
@@ -278,8 +279,13 @@ if (process.env.ATELIER_OBSIDIAN_RECOVERY_CHILD) {
   const world = makeWorld(null, { root: job.root })
   const seam = { at: job.crashAt, halt: () => process.kill(process.pid, 'SIGKILL') }
   const app = new ModelApp(world.vault)
-  if (job.coordinated) app.open(NOTE)
-  const adapter = job.coordinated ? modelAdapter(app, { crashSeam: seam }) : absentAdapter()
+  const opened = job.coordinated ? app.open(NOTE) : null
+  // Two ways into the retirement of a staged candidate: the note was edited on disk before the run (the unit is
+  // settled as a conflict first), or typing lands after the inspection (the refusal comes back from the critical
+  // section while the unit's write-ahead entry is still pending).
+  if (job.scenario === 'retire-settled') fs.writeFileSync(world.full(NOTE), EDITED)
+  const plan = job.scenario === 'retire-pending' ? { after: (payload) => { if (payload.op === 'inspect' && payload.path === NOTE) opened.type('TYPED', 'brown') } } : {}
+  const adapter = job.coordinated ? modelAdapter(app, { crashSeam: seam, plan }) : absentAdapter()
   const view = job.scenario === 'remove' ? viewOf('gen-0002', { notes: { [OTHER]: BASE } }) : viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } })
   const result = await PUBLISHERS[job.publisher]({ preparedView: view, protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: world.store, adapter, clock, quietPeriodMs: 0, [CRASH_INJECTION_TEST_SEAM]: seam })
   process.stdout.write(JSON.stringify({ state: result.state }))
@@ -689,6 +695,118 @@ for (const point of CRASH_POINTS) {
     assert.deepEqual(filesUnder(path.join(world.root, 'staging')), [], 'no staged file outlives recovery and convergence')
   })
 }
+
+// A host whose exchange helper really exchanges and is then reported as killed by a signal.
+function killedAfterExchangeHost(options = {}) {
+  const host = createInProcessHost(options)
+  const realRequire = host.require
+  host.require = (name) => (name !== 'child_process' ? realRequire(name) : { execFileSync: (...args) => {
+    realRequire('child_process').execFileSync(...args)
+    throw Object.assign(new Error('the helper was killed after the call returned'), { status: null, signal: 'SIGKILL' })
+  } })
+  return host
+}
+
+test('an exchange helper killed after the exchange took place is reported as the publication it was', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const staged = path.join(world.root, 'manual', 'killed.candidate')
+  fs.mkdirSync(path.dirname(staged))
+  fs.writeFileSync(staged, CANDIDATE)
+  const recoveryPath = path.join(world.root, 'recovery', 'killed.displaced')
+  const reply = runInProcess({ op: 'publish', mode: 'replace', vaultRoot: world.vault, path: NOTE, operationId: 'manual:2', baseSha256: hex(BASE), candidateSha256: hex(CANDIDATE), stagedPath: staged, recoveryPath }, killedAfterExchangeHost())
+  assert.equal(reply.status, 'published', 'the files say the exchange happened; the exit status does not decide')
+  assert.equal(reply.wrote, true)
+  assert.equal(world.read(NOTE), CANDIDATE)
+  assert.equal(fs.readFileSync(recoveryPath, 'utf8'), BASE)
+  assert.equal(fs.existsSync(staged), false)
+
+  // A helper that fails without exchanging is still a failure that changed nothing.
+  const failing = createInProcessHost()
+  const realRequire = failing.require
+  failing.require = (name) => (name !== 'child_process' ? realRequire(name) : { execFileSync: () => { throw Object.assign(new Error('no space'), { status: 28 }) } })
+  fs.writeFileSync(staged, `${CANDIDATE}next\n`)
+  const failed = runInProcess({ op: 'publish', mode: 'replace', vaultRoot: world.vault, path: NOTE, operationId: 'manual:3', baseSha256: hex(CANDIDATE), candidateSha256: hex(`${CANDIDATE}next\n`), stagedPath: staged, recoveryPath: `${recoveryPath}.2` }, failing)
+  assert.deepEqual([failed.status, failed.wrote, failed.exitStatus], ['exchange-failed', false, 28])
+  assert.equal(world.read(NOTE), CANDIDATE)
+
+  // Through the publisher: the outside writer's bytes displaced by that exchange are in recovery, and the view commits.
+  const racing = await seeded(t)
+  const external = `${BASE}EXTERNAL AT A KILLED EXCHANGE\n`
+  const host = killedAfterExchangeHost()
+  const swapThenDie = host.require('child_process').execFileSync
+  const hostRequire = host.require
+  host.require = (name) => (name !== 'child_process' ? hostRequire(name) : { execFileSync: (...args) => {
+    fs.writeFileSync(`${racing.full(NOTE)}.ext~`, external); fs.renameSync(`${racing.full(NOTE)}.ext~`, racing.full(NOTE))
+    return swapThenDie(...args)
+  } })
+  const adapter = createEditorAdapter({ call: createInProcessCall(host), processProbe: () => 'running', kind: 'model' })
+  const result = await racing.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter)
+  assert.equal(noteResult(result).outcome, 'published-external-captured', JSON.stringify(result))
+  assert.equal(result.state, 'committed')
+  assert.equal(racing.read(NOTE), CANDIDATE)
+  assert.equal(fs.readFileSync(racing.store.resolve(noteResult(result).recoveryRef), 'utf8'), external)
+  assert.deepEqual(filesUnder(path.join(racing.root, 'staging')), [])
+})
+
+const recoveryTexts = (world) => filesUnder(path.join(world.root, 'recovery')).map((file) => fs.readFileSync(file, 'utf8'))
+const retiringFiles = (world) => filesUnder(path.join(world.root, 'recovery')).filter((file) => path.basename(file) === 'retiring.bin')
+
+for (const scenario of ['retire-settled', 'retire-pending']) {
+  test(`killed between the two moves of a staged file's retirement (${scenario}): the file is in recovery, never in staging, and restart finishes the judgement`, needsExchange, async (t) => {
+    // Our own candidate at the retiring name is deleted.
+    const own = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+    const child = crashChild({ root: own.root, publisher: 'production', scenario, crashAt: 'after-retire-move', coordinated: true })
+    assert.equal(child.signal, 'SIGKILL', `${child.stdout} ${child.stderr}`)
+    assert.deepEqual(filesUnder(path.join(own.root, 'staging')), [], 'the file being retired has left staging')
+    assert.equal(retiringFiles(own).length, 1)
+    assert.equal(fs.readFileSync(retiringFiles(own)[0], 'utf8'), CANDIDATE)
+    const report = recoverPublications({ store: own.store, clock })
+    assert.deepEqual(retiringFiles(own), [])
+    assert.ok(!recoveryTexts(own).includes(CANDIDATE), 'a candidate is generated bytes and is not kept')
+    assert.equal(report.journals.length, 1)
+    const tree = snapshotTree(own)
+    assert.deepEqual(recoverPublications({ store: own.store, clock }).journals, [])
+    assert.deepEqual(snapshotTree(own), tree)
+
+    // Bytes that are not the candidate (what an exchange displaced) are kept and surfaced.
+    const foreign = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+    assert.equal(crashChild({ root: foreign.root, publisher: 'production', scenario, crashAt: 'after-retire-move', coordinated: true }).signal, 'SIGKILL')
+    const displacedBytes = `${BASE}DISPLACED BY AN EXCHANGE NOBODY REPORTED\n`
+    fs.writeFileSync(retiringFiles(foreign)[0], displacedBytes)
+    if (scenario === 'retire-pending') fs.writeFileSync(foreign.full(NOTE), CANDIDATE) // the exchange that displaced them put the candidate at the note path
+    const kept = recoverPublications({ store: foreign.store, clock })
+    assert.deepEqual(retiringFiles(foreign), [])
+    assert.ok(recoveryTexts(foreign).includes(displacedBytes), 'the displaced bytes are still in recovery, under a name of their own')
+    const [journalId] = kept.journals.map((item) => item.journalId)
+    const receipt = foreign.store.listReceipts(journalId).find((item) => item.role === 'displaced' && item.digestAtMove === digest(displacedBytes))
+    assert.equal(receipt?.externalCaptured, true, 'and a receipt surfaces them as an outside writer\'s bytes')
+    assert.equal(kept.journals[0].actions.at(-1).code, scenario === 'retire-pending' ? 'completed-after-exchange' : 'unexpected-bytes-at-staged-path-kept')
+    const again = snapshotTree(foreign)
+    assert.deepEqual(recoverPublications({ store: foreign.store, clock }).journals, [])
+    assert.deepEqual(snapshotTree(foreign), again)
+  })
+}
+
+test('every orphaned late candidate is swept on restart, also beside one that a capture entry names', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  fs.mkdirSync(world.full('.obsidian'))
+  fs.writeFileSync(world.full(POLICY), JSON.stringify({ sync: true }))
+  fs.mkdirSync(path.dirname(world.full(OTHER)), { recursive: true })
+  fs.writeFileSync(world.full(OTHER), 'mine\n')
+  // The policy file is published from a late candidate that its capture entry names; the other note conflicts, so the journal stays open.
+  const result = await world.publish(viewOf('gen-0001', { notes: { [OTHER]: BASE }, settings: true }), absentAdapter())
+  assert.equal(result.state, 'updating', JSON.stringify(result))
+  assert.equal(noteResult(result, POLICY).outcome, 'published')
+  const [document] = assertJournalsValid(world)
+  assert.ok(document.entries.some((entry) => entry.ext?.['mnstry.atelier.obsidian']?.stagedRef?.endsWith('.late.candidate')), 'a capture entry names a late candidate')
+  const stagingDir = world.store.stagingDir(document.journalId)
+  const orphans = [path.join(stagingDir, '000007.late.candidate'), path.join(stagingDir, '000008.late.candidate')]
+  for (const orphan of orphans) fs.writeFileSync(orphan, 'generated bytes nobody named\n')
+  const report = recoverPublications({ store: world.store, clock })
+  assert.equal(report.journals.length, 1)
+  assert.deepEqual(filesUnder(path.join(world.root, 'staging')), [], 'both orphans are gone')
+  assert.deepEqual(recoverPublications({ store: world.store, clock }).journals, [])
+})
 
 test('interrupted conditional removal: killed after the move, the bytes are in recovery and recovery settles it', needsExchange, async (t) => {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })

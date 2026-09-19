@@ -7,5 +7,6 @@
 // Points inside the critical section: after-exchange, after-recovery-move,
 // after-editor-update, after-removal-move. Points in the publisher:
 // after-staging, after-capture, after-publish, before-manifest-commit,
-// after-manifest-pointer.
+// after-manifest-pointer. Inside the retirement of a staged file, between its
+// move to the unit's recovery directory and the judgement: after-retire-move.
 export const CRASH_INJECTION_TEST_SEAM = Symbol('atelier.obsidian.crash-injection-test-seam')
