@@ -12,7 +12,7 @@ import {
   assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
   readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
 } from './machine-settings.mjs'
-import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
+import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
@@ -80,12 +80,19 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   // the bytes this view would publish is none of those: its edit reached the source, the source was prepared again,
   // and publishing changes nothing of the person's. The publisher reads the note again and settles it as already
   // current only while it still holds those bytes; the next look then finds the note at its base and closes the edit.
+  // `observed` holds what `heldNoteDigest` answered for each held note immediately before this call.
   publicationConflicts({ prepared, held, bases, observed = new Map() }) {
     const candidates = new Map(prepared.files.map((file) => [file.path, file.digest]))
     return held.filter((notePath) => {
       if (candidates.has(notePath) && observed.get(notePath) === candidates.get(notePath)) return false
       return bases.has(notePath) ? candidates.get(notePath) !== bases.get(notePath).digest : candidates.has(notePath)
     })
+  },
+  // What a held note holds at the moment of that decision: one read of the file, now. The observation index is not
+  // asked (`indexed` is its answer, for the mutation control): its entry was taken earlier in the tick, behind a stat
+  // comparison, and the person may have typed since. A note that cannot be read answers null, and the hold stays.
+  heldNoteDigest({ file }) {
+    try { return readFileFacts(file)?.digest ?? null } catch { return null }
   },
 })
 
@@ -408,7 +415,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const preparedGenerationId = prepared.manifest.generationId
           const trusted = () => store.readCurrent()
           const held = heldPaths(edits, scopeId)
-          const observed = new Map(held.map((notePath) => [notePath, index.get(vaultKey(scopeId, notePath))?.digest ?? null]))
+          const observed = new Map(held.map((notePath) => [notePath, rules.heldNoteDigest({ file: path.join(store.vaultRoot, notePath), indexed: index.get(vaultKey(scopeId, notePath))?.digest ?? null })]))
           const conflicts = rules.publicationConflicts({ prepared, held, bases: basesOf.get(scopeId) ?? new Map(), observed })
           if (conflicts.length > 0) {
             // Not even attempted: the prepared view would replace a note somebody edited.

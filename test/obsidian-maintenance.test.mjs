@@ -891,6 +891,44 @@ test('mutation control: an engine that ignores what the held note holds now neve
   await assert.rejects(assertAppliedEditLiftsTheHold(world, blind), assert.AssertionError)
 })
 
+// The hold is lifted on what the note holds at the moment of the decision. The person types again after the tick
+// looked at the vault and before it decides, in a way no stat can show: same size, same time.
+async function assertLateEditKeepsTheHold(world, primitives) {
+  let editAgain = null
+  const engine = world.engine({ primitives, seams: { prepareView: (input) => { const prepared = createProductionSeams().prepareView(input); editAgain?.(); return prepared } } })
+  await engine.tick()
+  const file = world.noteFile('west-wing:tide')
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('High water at noon.', 'High water at one.'))
+  world.advance(1000)
+  assert.equal(world.scope(await engine.tick()).state, 'held-for-your-edit')
+  fs.writeFileSync(world.source('west-wing/logs/tide.md'), fs.readFileSync(world.source('west-wing/logs/tide.md'), 'utf8').replace('High water at noon.', 'High water at one.'))
+  world.advance(1000)
+  const again = Buffer.from(fs.readFileSync(file, 'utf8').replace('High water at one.', 'High water at two.'))
+  let typedAgain = false
+  editAgain = () => {
+    if (typedAgain) return
+    typedAgain = true
+    const { atime, mtime, size } = fs.statSync(file)
+    assert.equal(again.length, size)
+    fs.writeFileSync(file, again)
+    fs.utimesSync(file, atime, mtime)
+  }
+  world.calls.publishView.length = 0
+  const entry = world.scope(await engine.tick())
+  assert.equal(typedAgain, true, 'the person typed between the look at the vault and the decision')
+  assert.deepEqual([entry.state, entry.reason], ['held-for-your-edit', 'publication-withheld-for-your-edit'])
+  assert.deepEqual(world.calls.publishView.filter((scopeId) => scopeId === entry.scopeId), [], 'the publisher is not called for a view whose held note changed again')
+  assert.deepEqual(fs.readFileSync(file), again, 'what the person typed last is what the note holds')
+}
+
+test('the hold is decided on what the held note holds at that moment: a second edit made after the tick looked at the vault, with the same size and time, keeps the hold and the publisher is not called', needsExchange, async (t) => {
+  await assertLateEditKeepsTheHold(makeWorld(t), ENGINE_PRIMITIVES)
+})
+
+test('mutation control: an engine that lifts the hold on the digest of its observation index publishes over the second edit', needsExchange, async (t) => {
+  await assert.rejects(assertLateEditKeepsTheHold(makeWorld(t), { heldNoteDigest: ({ indexed }) => indexed }), assert.AssertionError)
+})
+
 test('an edit to a note the next view does not change still publishes the rest, and the view stays held', needsExchange, async (t) => {
   const world = makeWorld(t)
   const engine = world.engine()
