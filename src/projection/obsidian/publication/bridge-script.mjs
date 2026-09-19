@@ -135,13 +135,14 @@ export function criticalSection(P, host) {
     const movedSha256 = sha(fs.readFileSync(P.recoveryPath))
     if (movedSha256 !== P.baseSha256) {
       // Something replaced the note between the check and the move. Put it back without overwriting anything.
-      try {
-        fs.linkSync(P.recoveryPath, full)
-        fs.unlinkSync(P.recoveryPath)
-        return done('remove-reverted', { ...snapshot(), wrote: false, observedSha256: movedSha256 })
-      } catch (error) {
+      try { fs.linkSync(P.recoveryPath, full) } catch (error) {
+        // The path is taken again, or cannot be linked: the moved bytes stay in recovery.
         return done('removed-external-captured', { ...snapshot(), wrote: true, externalCaptured: true, recoveredSha256: movedSha256 })
       }
+      // The note is live again from here on, whatever happens to the second name.
+      let recoveryNameLeft = false
+      try { fs.unlinkSync(P.recoveryPath) } catch (error) { recoveryNameLeft = true }
+      return done('remove-reverted', { ...snapshot(), wrote: false, observedSha256: movedSha256, recoveryNameLeft })
     }
     return done('removed', { ...snapshot(), wrote: true, externalCaptured: false, recoveredSha256: movedSha256 })
   }

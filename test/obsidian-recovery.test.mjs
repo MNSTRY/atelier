@@ -1119,6 +1119,47 @@ test('conditional removal refuses an unsaved buffer, and puts back a note replac
   assert.equal(fs.existsSync(recoveryPath), false)
 })
 
+test('a put-back that cannot remove its second name still reports the note as live, and that name is never treated as displaced bytes', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const external = `${BASE}REPLACED AT THE MOVE\n`
+  // The note is replaced at the instant of the move, and the recovery name cannot be unlinked afterwards.
+  const stubbornHost = () => {
+    const host = createInProcessHost()
+    const realRequire = host.require
+    const realFs = realRequire('fs')
+    host.require = (name) => (name !== 'fs' ? realRequire(name) : new Proxy(realFs, { get: (target, key) => {
+      if (key === 'renameSync') return (from, to) => { if (from === world.full(NOTE)) { realFs.writeFileSync(`${from}.ext~`, external); realFs.renameSync(`${from}.ext~`, from) } return realFs.renameSync(from, to) }
+      if (key === 'unlinkSync') return (file) => { if (file.includes(`${path.sep}recovery${path.sep}`)) throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); return realFs.unlinkSync(file) }
+      return target[key]
+    } }))
+    return host
+  }
+  const recoveryPath = path.join(world.root, 'recovery', 'manual-stubborn.displaced')
+  const reply = runInProcess({ op: 'publish', mode: 'remove', vaultRoot: world.vault, path: NOTE, operationId: 'manual:4', baseSha256: hex(BASE), recoveryPath }, stubbornHost())
+  assert.deepEqual([reply.status, reply.wrote, reply.recoveryNameLeft], ['remove-reverted', false, true], 'the note was put back: it is not reported as removed')
+  assert.equal(world.read(NOTE), external)
+  fs.rmSync(recoveryPath)
+
+  // Through the publisher: the note stays managed and surfaced, the leftover name goes, and later edits are not a late writer's.
+  fs.writeFileSync(world.full(NOTE), BASE)
+  const adapter = createEditorAdapter({ call: createInProcessCall(stubbornHost()), processProbe: () => 'running', kind: 'model' })
+  const result = await world.publish(viewOf('gen-0002', { notes: {} }), adapter)
+  assert.equal(noteResult(result).outcome, 'retained-edit', JSON.stringify(result))
+  assert.deepEqual(result.retainedEdits.map((item) => item.path), [NOTE])
+  assert.equal(world.read(NOTE), external)
+  assert.ok(!filesUnder(path.join(world.root, 'recovery')).some((file) => fs.statSync(file).ino === fs.statSync(world.full(NOTE)).ino), 'no recovery name is a second name of the live note')
+  fs.appendFileSync(world.full(NOTE), 'the person keeps writing\n')
+  assert.deepEqual(recheckDisplacedFiles({ store: world.store, clock }), [])
+
+  // State left by an earlier build: a displaced receipt whose file is a hard link to the live note.
+  const legacy = await seeded(t)
+  const held = legacy.store.displacedPath('journal-legacy', 0)
+  fs.linkSync(legacy.full(NOTE), held)
+  legacy.store.writeReceipt('journal-legacy', 0, { role: 'displaced', notePath: NOTE, displacedRef: legacy.store.ref(held), digestAtMove: digest(BASE), baseDigest: digest(BASE), externalCaptured: false, at: clock().toISOString() })
+  fs.appendFileSync(legacy.full(NOTE), 'ongoing edits to the live note\n')
+  assert.deepEqual(recheckDisplacedFiles({ store: legacy.store, journalIds: ['journal-legacy'], clock }), [], 'edits to the live note are not reported as a late writer')
+})
+
 test('a new note appears by exclusive create; a file that is already there, or appears first, is never overwritten', needsExchange, async (t) => {
   const world = await seeded(t)
   fs.writeFileSync(world.full(OTHER), 'mine\n')
@@ -1348,6 +1389,29 @@ test('one publisher per vault: a second view, from other workspace state, refuse
   const child = crashChild({ root: killed.root, publisher: 'production', scenario: 'replace', crashAt: 'after-staging', coordinated: false })
   assert.equal(child.signal, 'SIGKILL', `${child.stdout} ${child.stderr}`)
   assert.doesNotThrow(() => acquireVaultLock(killed.store)(), 'the stale ticket is taken over, as for the view lock')
+})
+
+test('a manifest that declares one path twice, or as both a note and an attachment, is refused before anything is touched', async (t) => {
+  const world = makeWorld(t)
+  const file = 'attachments/Chart--0123456789ab.png'
+  const publish = (preparedView) => publishView({ preparedView, protocolId: PROTOCOL_ID, expectedGeneration: null, recoveryStore: world.store, adapter: absentAdapter(), clock, quietPeriodMs: 0 })
+  const before = snapshotTree(world)
+
+  // One path as a note and as an attachment, with the same bytes so that every other check agrees.
+  const both = viewOf('gen-0001', { notes: { [NOTE]: BASE }, attachments: { [file]: Buffer.from(BASE) } })
+  both.manifest.attachments.push({ path: NOTE, digest: digest(BASE), byteLength: Buffer.byteLength(BASE) })
+  const twiceNote = viewOf('gen-0001', { notes: { [NOTE]: BASE } })
+  twiceNote.manifest.notes.push({ ...twiceNote.manifest.notes[0], nodeId: 'node-second' })
+  twiceNote.manifest.completeness = { status: 'complete', expectedNotes: 2, writtenNotes: 2 }
+  const twiceAttachment = viewOf('gen-0001', { attachments: { [file]: Buffer.from([1, 2, 3]) } })
+  twiceAttachment.manifest.attachments.push({ ...twiceAttachment.manifest.attachments[0] })
+  for (const [label, view] of Object.entries({ both, twiceNote, twiceAttachment })) {
+    const result = await publish(view)
+    assert.equal(result.state, 'refused', label)
+    assert.equal(result.refusal.code, 'invalid-prepared-view', label)
+  }
+  assert.deepEqual(snapshotTree(world), before)
+  assert.equal(world.read(NOTE), null)
 })
 
 test('refusals: unknown protocol, wrong expected generation, a view for another scope, a symlinked note path', needsExchange, async (t) => {

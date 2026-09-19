@@ -46,7 +46,12 @@ function validatePreparedView(preparedView, store) {
   const { manifest } = preparedView
   if (manifest.scopeId !== store.scopeId) refuse('invalid-prepared-view', 'the prepared view belongs to another scope')
   if (manifest.completeness.status !== 'complete') refuse('invalid-prepared-view', 'a partial generation is not published')
-  const expected = new Map([...manifest.notes.map((note) => [note.path, note.noteDigest]), ...manifest.attachments.map((item) => [item.path, item.digest])])
+  // Closed over the manifest itself: one path names one file, as a note or as an attachment, once.
+  const expected = new Map()
+  for (const [declared, fileDigest] of [...manifest.notes.map((note) => [note.path, note.noteDigest]), ...manifest.attachments.map((item) => [item.path, item.digest])]) {
+    if (expected.has(declared)) refuse('invalid-prepared-view', 'the manifest declares one path more than once')
+    expected.set(declared, fileDigest)
+  }
   const seen = new Set()
   for (const file of preparedView.files) {
     if (!isAddressableVaultPath(file.path) || isUserOwnedSettingsPath(file.path)) refuse('invalid-prepared-view', 'a prepared path is outside what the publisher may write')
@@ -385,6 +390,10 @@ async function publishUnit(unit, context) {
 
   if (plan.stagedPath) retire(plan, context)
   if (reply.status === 'remove-reverted') {
+    // The put-back may have left its second name behind. It names the live note, not displaced bytes: it gets no
+    // receipt, and it is removed here when it still is that very file.
+    const [live, left] = [fs.lstatSync(note, { throwIfNoEntry: false }), fs.lstatSync(displaced, { throwIfNoEntry: false })]
+    if (live && left && live.ino === left.ino && live.dev === left.dev) try { fs.unlinkSync(displaced) } catch { /* the late-writer check skips a name that is the live note */ }
     settle('conflict', 'remove-reverted')
     const bytes = readNote(note)
     const object = bytes === null ? null : observe(bytes)

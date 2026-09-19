@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { listJournals } from './journal.mjs'
 import { readFileBytes, sha256Digest } from './store.mjs'
 
@@ -17,6 +19,11 @@ export function recheckDisplacedFiles({ store, journalIds, clock = () => new Dat
     const receipts = store.listReceipts(journalId)
     const known = new Set(receipts.filter((receipt) => receipt.role === 'late-writer').map((receipt) => `${receipt.unit}\u0000${receipt.observedDigest}`))
     for (const receipt of receipts.filter((item) => item.role === 'displaced')) {
+      // A recovery name that is a hard link to the live note (an interrupted
+      // put-back) is the note itself: edits to it are not a late writer's.
+      const live = receipt.notePath ? fs.lstatSync(path.join(store.vaultRoot, receipt.notePath), { throwIfNoEntry: false }) : null
+      const held = fs.lstatSync(store.resolve(receipt.displacedRef), { throwIfNoEntry: false })
+      if (live && held && live.ino === held.ino && live.dev === held.dev) continue
       let bytes
       try { bytes = readFileBytes(store.resolve(receipt.displacedRef)) } catch (error) {
         if (error.code !== 'ENOENT') throw error

@@ -3,9 +3,14 @@ import { refuse } from './byte-lens.mjs'
 
 // The persistent path registry: one readable note path per canonical identity,
 // allocated once per workspace and reused by every scope and generation. A
-// path, once allocated, never changes because a source title changed. The
-// registry is machine-private trusted state; a view receives only the entries
-// of the notes it holds.
+// path, once allocated, never changes because a source title changed.
+//
+// The registry is workspace-wide, not view-wide: preparing any view allocates
+// for every visible node of the workspace and returns the whole grown registry
+// to the caller, which holds it as machine-private trusted state. It therefore
+// names visible nodes outside the view's selection. It never includes a
+// withheld node: allocation runs over the visible nodes only. A view's
+// manifest and notes carry only the paths of the notes the view holds.
 
 export const PATH_REGISTRY_SCHEMA = 'atelier-obsidian-path-registry/v1'
 
