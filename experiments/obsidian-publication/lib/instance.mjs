@@ -34,7 +34,7 @@ export function createLayout(root = fs.mkdtempSync(path.join(fs.realpathSync(os.
 }
 
 export class Instance {
-  constructor(layout) { this.layout = layout; this.env = { ...process.env, HOME: layout.home }; }
+  constructor(layout) { this.layout = layout; this.env = { ...process.env, HOME: layout.home }; this.transportRetries = []; }
 
   get socket() { return path.join(this.layout.home, '.obsidian-cli.sock'); }
 
@@ -81,11 +81,12 @@ export class Instance {
   async bridge(payload) {
     if (payload.op !== 'publish') {
       for (let attempt = 0; ; attempt += 1) {
-        try { return await this.bridgeOnce(payload); } catch (error) { if (attempt >= 2 || !/timed out/.test(error.message)) throw error; }
+        try { return await this.bridgeOnce(payload); } catch (error) { if (attempt >= 2 || !/timed out/.test(error.message)) throw error; this.transportRetries.push(payload.op); }
       }
     }
     try { return await this.bridgeOnce(payload); } catch (error) {
       if (!/timed out/.test(error.message)) throw error;
+      this.transportRetries.push('publish-reply-lost');
       const record = await this.bridge({ op: 'collect', path: payload.path });
       if (record.missing || record.stagedPath !== payload.stagedPath) throw new Error(`Publish reply lost and no outcome recorded: ${error.message}`);
       return { ...record, status: record.outcome, replyLost: true };
@@ -111,14 +112,33 @@ export class Instance {
     };
     if (!scripts[name]) throw new Error(`Unknown stimulus ${name}`);
     const data = Buffer.from(JSON.stringify({ path: notePath, ...extra }), 'utf8').toString('base64');
-    const reply = await this.cli('eval', `code=(()=>{const P=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${data}'),c=>c.charCodeAt(0))));return ${scripts[name]}})()`);
-    if (!reply.includes('=> ok')) throw new Error(`Stimulus ${name} failed: ${reply.slice(0, 300)}`);
-    return reply;
+    const code = `code=(()=>{const P=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${data}'),c=>c.charCodeAt(0))));return ${scripts[name]}})()`;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const reply = await this.cli('eval', code);
+        if (!reply.includes('=> ok')) throw new Error(`Stimulus ${name} failed: ${reply.slice(0, 300)}`);
+        return reply;
+      } catch (error) {
+        // popoutEdit changes text, so it is never repeated blindly.
+        if (attempt >= 2 || name === 'popoutEdit' || !/timed out/.test(error.message)) throw error;
+        this.transportRetries.push(`stimulus:${name}`);
+      }
+    }
   }
 
   // Real input path: Chromium dispatches this like keyboard text entry into
   // the focused editor of the main window.
-  async typeText(text) { return this.cli('dev:cdp', 'method=Input.insertText', `params=${JSON.stringify({ text })}`); }
+  // When a typing call's reply is lost, retype only if the text did not arrive.
+  async typeText(text, notePath) {
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await this.cli('dev:cdp', 'method=Input.insertText', `params=${JSON.stringify({ text })}`); } catch (error) {
+        if (attempt >= 2 || !notePath || !/timed out/.test(error.message)) throw error;
+        this.transportRetries.push('typeText');
+        const state = await this.bridge({ op: 'inspect', path: notePath });
+        if (state.views.some((view) => Buffer.from(view.bufferBase64, 'base64').toString('utf8').includes(text))) return 'arrived';
+      }
+    }
+  }
 
   async quit() {
     if (!this.child) return;

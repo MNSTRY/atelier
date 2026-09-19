@@ -26,6 +26,7 @@ const CANDIDATE = '# Synthetic note\n\nThe quick GENERATED fox jumps.\n\nUnrelat
 const layout = createLayout();
 let app = new Instance(layout);
 const results = [];
+const transportRetries = [];
 let serial = 0;
 
 const notePath = (id) => `notes/${id}.md`;
@@ -69,6 +70,7 @@ async function record(id, title, body) {
   } catch (error) {
     results.push({ id, title, pass: false, error: String(error && error.stack || error), ms: Date.now() - started });
   }
+  transportRetries.push(...app.transportRetries.splice(0));
   const last = results[results.length - 1];
   console.log(`${last.pass ? 'PASS' : 'FAIL'} ${id} ${title}${last.pass ? '' : ` :: ${last.reason || last.error}`}`);
 }
@@ -89,7 +91,7 @@ async function main() {
   await record('I01', 'saved edit before capture refuses without writing', async () => {
     await seed('i01');
     await app.stimulus('focusAt', notePath('i01'), { anchor: 'brown' });
-    await app.typeText('SAVEDEDIT');
+    await app.typeText('SAVEDEDIT', notePath('i01'));
     await sleep(3200);
     const before = read(full('i01'));
     const reply = await publish('i01');
@@ -101,7 +103,7 @@ async function main() {
     await seed('i02');
     const captured = sha256(read(full('i02'))); // driver capture happens here
     await app.stimulus('focusAt', notePath('i02'), { anchor: 'brown' });
-    await app.typeText('MIDSAVE');
+    await app.typeText('MIDSAVE', notePath('i02'));
     await sleep(3200); // Obsidian's own delayed save lands after capture
     const reply = await publish('i02');
     const pass = captured === sha256(BASE) && ['disk-changed', 'editor-edit'].includes(reply.status) && reply.wrote === false && kept('MIDSAVE', read(full('i02')), ...buffers(reply));
@@ -111,7 +113,7 @@ async function main() {
   await record('I03', 'unsaved active buffer refuses, then the delayed save keeps the edit', async () => {
     await seed('i03');
     await app.stimulus('focusAt', notePath('i03'), { anchor: 'brown' });
-    await app.typeText('UNSAVED');
+    await app.typeText('UNSAVED', notePath('i03'));
     const reply = await publish('i03');
     const diskAtRefusal = read(full('i03'));
     await sleep(3200);
@@ -127,7 +129,7 @@ async function main() {
       await seed(id);
       await app.stimulus('focusAt', notePath(id), { anchor: 'brown' }); // caret inside the text the generator rewrites
       const delay = (round * 7) % 90;
-      const typing = sleep(delay).then(() => app.typeText(typed));
+      const typing = sleep(delay).then(() => app.typeText(typed, notePath(id)));
       const reply = await publish(id, { guardMs: 25000 });
       await typing;
       let final;
@@ -280,7 +282,7 @@ async function main() {
       const everything = [disk, read(staged), read(path.join(small.recovery, 'i11.prev'))];
       const allOrNothing = (reply.wrote ? disk === CANDIDATE : disk === BASE) && everything.includes(BASE);
       await app.stimulus('focusAt', notePath('i11'), { anchor: 'Unrelated' });
-      await app.typeText('TYPEDWHILEFULL');
+      await app.typeText('TYPEDWHILEFULL', notePath('i11'));
       await sleep(5000);
       const whileFull = await app.bridge({ op: 'inspect', path: notePath('i11') });
       const bufferKept = kept('TYPEDWHILEFULL', ...buffers(whileFull));
@@ -307,7 +309,7 @@ try { version = await main(); } catch (error) { fatal = String(error && error.st
 await app.quit();
 const receipt = { gate: 'G00', protocol: PROTOCOL_ID, exchange, generatedAt: new Date().toISOString(), obsidian: version,
   host: { platform: process.platform, release: os.release(), arch: process.arch, node: process.version },
-  synthetic: true, passed: !fatal && results.every((result) => result.pass), fatal, selectedCases: only.length ? only : 'all', notCovered: [], results };
+  synthetic: true, passed: !fatal && results.every((result) => result.pass), fatal, selectedCases: only.length ? only : 'all', transportRetries, notCovered: [], results };
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`);
 console.log(`${receipt.passed ? 'ALL LISTED CASES PASSED' : 'NOT PASSED'}; receipt ${out}; evidence root ${layout.root}`);
