@@ -47,7 +47,7 @@ import { createAbandonmentProof, machineDigest } from '../src/runtime/obsidian/p
 import { RACE_MODES, digestOf, makeOperation, raceIdentity, raceOperation, resultOf, stormIdentity, stormOperation } from './support/obsidian-edits/operations.mjs'
 import { EXT, WORKSPACE_ID, prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
 import {
-  APPLY_POLICY_PRIMITIVES, SOURCE_APPLY_PRIMITIVES, SOURCE_APPLY_REFUSALS, SOURCE_APPLY_STEPS, applyPolicyDigest, canonicalApplyPolicy, createApplyCommandOperation, createApplyPolicyForOracleTests,
+  APPLY_POLICY_PRIMITIVES, MAX_MANUAL_BATCH_SIZE, SOURCE_APPLY_PRIMITIVES, SOURCE_APPLY_REFUSALS, SOURCE_APPLY_STEPS, applyPolicyDigest, canonicalApplyPolicy, createApplyCommandOperation, createApplyPolicyForOracleTests,
   createEngineApplyOperation, createSourceApplyContribution, decideApply, withApplyPolicyDigest,
 } from '../src/projection/obsidian/edits/index.mjs'
 import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
@@ -2084,6 +2084,11 @@ test('apply refusals, manual and automatic: every refusal is typed, keeps the ed
   const batch = await world.sourceApply({ exchangeOptions: { platform: 'win32' } }).applyBatch({ mode: 'automatic', editIds: ['batch-a', 'batch-b'].map((name) => world.editOf(caseNode(name)).editId) })
   assert.deepEqual(batch.map((result) => result.code), ['exchange-unavailable', 'batch-bound-reached'])
   assertNothingWritten(world, batchBefore, 'batch')
+  // A batch a person names is bounded as well: by the largest bound a policy can carry, or by what the caller sets.
+  assert.equal(MAX_MANUAL_BATCH_SIZE, 1000)
+  const manualBatch = await world.sourceApply({ exchangeOptions: { platform: 'win32' }, manualBatchBound: 1 }).applyBatch({ mode: 'manual', editIds: ['batch-a', 'batch-b'].map((name) => world.editOf(caseNode(name)).editId) })
+  assert.deepEqual(manualBatch.map((result) => result.code), ['exchange-unavailable', 'batch-bound-reached'])
+  assertNothingWritten(world, batchBefore, 'manual batch')
 
   // Absent and withheld are one answer through the whole apply, not only in the decision: a withheld object whose
   // source was renamed, one whose source was deleted, one that never existed and one that is simply withheld answer
@@ -2471,6 +2476,33 @@ test('apply never writes inside a git directory: a nested repository, any spelli
   // Mutation control: the first segment alone does not see any of the three.
   const firstSegmentOnly = { ...SOURCE_APPLY_PRIMITIVES, gitDirectory: ({ repositoryRoot }) => path.join(repositoryRoot, '.git'), isGitIgnored: () => false }
   assert.deepEqual(locate('apart', 'storage/info/inside.md', firstSegmentOnly), { located: path.join(dir, 'apart/storage/info/inside.md') }, 'without the question to git, the git directory under another name is written into')
+})
+
+test('an exchange that reports a failure is not believed: the outcome is read from the digests on disk, so a swap that happened is recorded as applied with its backup, and one that did not happen is a refusal that leaves the source alone', needsExchange, async (t) => {
+  const world = raceWorld(t, 2)
+  const failure = () => Object.assign(new Error('synthetic exchange failure'), { name: 'ExchangeRefusal', code: 'exchange-failed' })
+  const rows = [
+    { name: 'swapped, then reported failed', commit: ({ candidatePath, sourcePath, exchange }) => { exchange(candidatePath, sourcePath); throw failure() }, expected: ['applied', 'applied-after-restart'], source: 'candidate' },
+    { name: 'never swapped', commit: () => { throw failure() }, expected: ['refused', 'exchange-unavailable'], source: 'base' },
+  ]
+  for (const [index, row] of rows.entries()) {
+    const sourceFile = world.source(`race-room/rounds/round-${index}.md`)
+    const base = fs.readFileSync(sourceFile)
+    const candidate = replaceNth(base, `Original sentence ${index}.`, `Edited sentence ${index}.`)
+    const edit = world.editOf(`race-room:round-${index}`)
+    const result = await world.sourceApply({}, { ...SOURCE_APPLY_PRIMITIVES, commit: row.commit }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    assert.deepEqual([result.status, result.code], row.expected, `${row.name}: ${JSON.stringify(result)}`)
+    assert.deepEqual(fs.readFileSync(sourceFile), { base, candidate }[row.source], `${row.name}: the source is the ${row.source}`)
+    const shown = await world.sourceApply().show(edit.editId)
+    assert.deepEqual([shown.object.outcomeUnknown, shown.operation.state], [false, row.source === 'candidate' ? 'applied' : 'pending'], row.name)
+    assert.deepEqual(filesUnder(world.recovery()).filter((file) => /\.candidate$/.test(file)), [], `${row.name}: nothing is left at a candidate path`)
+    if (row.source === 'candidate') {
+      assert.deepEqual([result.actor, result.oldSourceDigest, result.newSourceDigest], ['person-synthetic', bytesDigest(base), bytesDigest(candidate)])
+      assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), result.backupRef)), base, 'the old source is the retained backup')
+      const again = await world.sourceApply().apply({ editId: edit.editId, mode: 'manual' })
+      assert.deepEqual([again.status, again.code, again.replayed], ['applied', 'already-applied', true], 'a repeated request is answered from the record')
+    }
+  }
 })
 
 // A file system call that fails once, for one path, the way it fails when another program removes or replaces what

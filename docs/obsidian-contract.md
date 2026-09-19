@@ -296,8 +296,10 @@ matching active policy is refused.
 
 The digest of a policy is `sha256:` and the hex SHA-256 of its canonical form:
 the policy document without its `digest` member, keys sorted at every depth,
-two-space indentation, one final newline, UTF-8. `maxBatchSize` bounds a
-dispatch (the engine's, and `applyBatch`). `retryBudget` allows one attempt and
+two-space indentation, one final newline, UTF-8. `maxBatchSize` bounds an
+automatic dispatch (the engine's, and `applyBatch` in automatic mode); a batch
+a person names through `applyBatch` is bounded too, by 1000, the largest bound
+a policy can carry, and the rest of either batch refuses `batch-bound-reached`. `retryBudget` allows one attempt and
 that many retries per operation under one revision of the policy; it is counted
 over the refusals recorded in the events of the object, so a restart does not
 refill it, and a spent budget refuses before anything is recorded.
@@ -342,7 +344,12 @@ nothing a policy says overrides a stale source.
    the files are exchanged back, so its bytes return to the source path; what
    that displaces must be the candidate, and anything else is kept with a
    receipt. `apply-refused`, `concurrent-source-writer`, with every reference.
-   Nothing is retried inside one call.
+   Nothing is retried inside one call. An exchange that reports a failure is
+   not believed either way: only the candidate still at its path beside the
+   source as it was read means that nothing was exchanged
+   (`exchange-unavailable`); anything else is decided as restart recovery
+   decides it, so an exchange that did take place is recorded as applied
+   (`applied-after-restart`) with its backup.
 10. After a quiet period the backup is read again. A program that opened the
     source before the exchange still holds the old file and can write into it
     at any later time: `source-changed-after-apply`, both byte sets retained.
@@ -365,7 +372,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `manifest-unavailable`, `published-note-unavailable` | the generation's manifest, or the note as it was published, cannot be established |
 | `repository-not-enrolled`, `source-not-in-graph`, `source-moved` | the identity of a visible object no longer names that path: a renamed or moved source (a deleted one is `object-not-visible`) |
 | `source-missing`, `source-symlink`, `source-not-regular-file`, `source-hard-linked`, `source-outside-repository`, `source-inside-managed-root`, `source-inside-git-directory`, `source-git-ignored`, `source-ignore-state-unknown` | the path is not one this operation writes |
-| `object-not-visible`, `edit-class-not-allowed`, `maintenance-mode-manual`, `no-apply-policy-installed`, `apply-policy-revoked`, `apply-policy-paused`, `apply-policy-invalid`, `apply-policy-reference-mismatch`, `policy-digest-mismatch`, `policy-changed-since-dispatch`, `policy-selector-invalid`, `outside-policy-selection`, `retry-budget-exhausted`, `batch-bound-reached` | the decision |
+| `invalid-apply-request`, `object-not-visible`, `edit-class-not-allowed`, `conflict-disposition-unsupported`, `maintenance-mode-manual`, `no-apply-policy-installed`, `apply-policy-revoked`, `apply-policy-paused`, `apply-policy-invalid`, `apply-policy-reference-mismatch`, `policy-digest-mismatch`, `policy-changed-since-dispatch`, `policy-selector-invalid`, `outside-policy-selection`, `retry-budget-exhausted`, `batch-bound-reached` | the decision |
 | `stale-source`, `object-conflicted`, `sibling-edit-unobservable`, `lease-held` | arbitration; the operation stays conflicted or pending with its bytes |
 | `edit-not-applicable`, `change-outside-authored-body`, `no-source-change` | the lens result is not an applicable body replacement |
 | `exchange-unavailable`, `apply-volume-mismatch` | this machine cannot write conditionally here |
@@ -399,6 +406,17 @@ list`, `show`, `run` and `recover` answer such a record as a typed refusal.
 - The applied source is a new file: a hard link is refused up front, extended
   attributes and ownership are those of the candidate, and only the permission
   bits are carried over.
+- A hard link is refused when the path is checked. One that another program
+  creates on the source after that check and before the exchange keeps the old
+  bytes under its other name; the source path itself ends as the applied file,
+  and nothing detects the second name.
+- Where no atomic exchange exists the whole apply half of the test suite is
+  skipped: on such a platform the only executed evidence is that apply refuses
+  `exchange-unavailable` and writes nothing.
+- Lifting the hold after an apply relies on the publisher: it reads the note
+  again under its own lock and settles it as already current only while the
+  note still holds the prepared bytes. The engine's own read of the held note
+  narrows the window; the publisher's expected-bytes check closes it.
 - Between the exchange and the exchange back, readers of the source path see
   the candidate for a moment. A third write in that moment is kept: the source
   ends as one whole version and the other is in recovery with a receipt.

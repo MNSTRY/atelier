@@ -7,7 +7,7 @@
 // file, under the policy decision of policy.mjs.
 export { ALIGN_LIMITS, alignBodies } from './align.mjs'
 export {
-  DEFAULT_APPLY_QUIET_PERIOD_MS, SOURCE_APPLY_DIRECTORY, SOURCE_APPLY_OPERATION_ID, SOURCE_APPLY_PRIMITIVES, SOURCE_APPLY_PROTOCOL_ID, SOURCE_APPLY_RECORD_SCHEMA, SOURCE_APPLY_REFUSALS,
+  DEFAULT_APPLY_QUIET_PERIOD_MS, MAX_MANUAL_BATCH_SIZE, SOURCE_APPLY_DIRECTORY, SOURCE_APPLY_OPERATION_ID, SOURCE_APPLY_PRIMITIVES, SOURCE_APPLY_PROTOCOL_ID, SOURCE_APPLY_RECORD_SCHEMA, SOURCE_APPLY_REFUSALS,
   SOURCE_APPLY_STEPS, SourceApplyRefusal, createSourceApply, createSourceApplyForOracleTests,
 } from './apply.mjs'
 export { createApplyCommandOperation, createEngineApplyOperation, createSourceApplyContribution, processApplyContext } from './contribution.mjs'

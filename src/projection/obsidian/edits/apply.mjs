@@ -79,6 +79,8 @@ export const SOURCE_APPLY_DIRECTORY = path.join('state', 'source-apply')
 export const SOURCE_APPLY_OPERATION_ID = 'atelier.source-apply/v1'
 export const DEFAULT_APPLY_QUIET_PERIOD_MS = 1500
 export const DEFAULT_APPLY_RECHECK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+// A batch a person names attempts at most this many edits: the largest bound a policy can carry.
+export const MAX_MANUAL_BATCH_SIZE = 1000
 const UNIT = 0
 
 export const SOURCE_APPLY_STEPS = Object.freeze(['apply-record-written', 'candidate-written', 'intent-recorded', 'exchanged', 'exchanged-back', 'backup-recorded', 'applied-recorded', 'settled'])
@@ -246,8 +248,9 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
     const {
       loadProject, dataRoot, env = process.env, platform = process.platform, clock = () => new Date(), eligibility = DEFAULT_ELIGIBILITY,
       quietPeriodMs = DEFAULT_APPLY_QUIET_PERIOD_MS, recheckWindowMs = DEFAULT_APPLY_RECHECK_WINDOW_MS, exchangeOptions = {},
-      crash = () => {}, beforeExchange = async () => {}, leasePid, extraManagedRoots = [],
+      crash = () => {}, beforeExchange = async () => {}, leasePid, extraManagedRoots = [], manualBatchBound = MAX_MANUAL_BATCH_SIZE,
     } = context
+    if (!Number.isInteger(manualBatchBound) || manualBatchBound < 1 || manualBatchBound > MAX_MANUAL_BATCH_SIZE) throw new TypeError('manualBatchBound is an integer from 1 to MAX_MANUAL_BATCH_SIZE')
     if (typeof loadProject !== 'function') throw new TypeError('source apply needs loadProject')
     const seams = { ...createProductionSeams(), ...(context.seams ?? {}) }
     const exchange = (from, to) => exchangeFiles(from, to, exchangeOptions)
@@ -611,7 +614,15 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
 
         try { rules.commit({ candidatePath, sourcePath: located.absolute, exchange }) } catch (error) {
           if (!isTyped(error) && error?.name !== 'ExchangeRefusal') throw error
-          abandon('exchange-unavailable', { presentSourceDigest: presentOf(digestOrNull(located.absolute)) }, { cause: error.code })
+          // An exchange that says it failed is not believed either way: the files are read. Only the candidate still
+          // at its path beside the source as it was read says that nothing was exchanged. Anything else is decided
+          // exactly as restart recovery decides it, from digests on disk, so an exchange that did take place is
+          // recorded as applied, with its backup, and never as a refusal.
+          const presentSourceDigest = digestOrNull(located.absolute)
+          if (digestOrNull(candidatePath) === newSourceDigest && presentSourceDigest === sourceDigest) abandon('exchange-unavailable', { presentSourceDigest }, { cause: error.code })
+          const settled = settleInterrupted(workspace, lease, record, workspace.objects.stateOf(identity))
+          if (settled.status !== 'applied') refuse(settled.code, { applyId, cause: error.code, ...((settled.recoveryRefs ?? []).length > 0 ? { recoveryRefs: settled.recoveryRefs } : {}) })
+          return resultOf(edit, 'applied', settled.code, { replayed: false, idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef: settled.backupRef })
         }
         seam('exchanged', { applyId })
 
@@ -694,11 +705,12 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         return workspace === null ? refusalResult(null, refusal, { editId: typeof request?.editId === 'string' ? request.editId.slice(0, 64) : null }) : value
       },
 
-      // Several edits under one request. In automatic mode at most `maxBatchSize` of them are attempted; the rest
-      // are refused `batch-bound-reached` and nothing is written for them.
+      // Several edits under one request. At most a bound of them are attempted: `maxBatchSize` of the installed
+      // policy in automatic mode, `manualBatchBound` for a batch a person names. The rest are refused
+      // `batch-bound-reached` and nothing is written for them.
       async applyBatch({ editIds, ...request }) {
         const results = []
-        let bound = Infinity
+        let bound = manualBatchBound
         for (const editId of editIds) {
           if (results.filter((result) => result.code !== 'batch-bound-reached').length >= bound) { results.push(resultOf(null, 'refused', 'batch-bound-reached', { editId })); continue }
           const { workspace, refusal, value } = await guarded((opened) => {
@@ -785,9 +797,9 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       },
     }
 
-    // Without a readable policy there is no bound to apply here; every edit is then refused by the decision itself.
+    // Without a readable policy every edit is refused by the decision itself; the bound is then the largest a policy can carry.
     function installedBatchBound(workspace) {
-      try { return readInstalledApplyPolicy({ workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId })?.maxBatchSize ?? Infinity } catch (error) { if (!isTyped(error)) throw error; return Infinity }
+      try { return readInstalledApplyPolicy({ workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId })?.maxBatchSize ?? MAX_MANUAL_BATCH_SIZE } catch (error) { if (!isTyped(error)) throw error; return MAX_MANUAL_BATCH_SIZE }
     }
   }
 }
