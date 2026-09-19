@@ -56,9 +56,17 @@ export class Instance {
     return this;
   }
 
+  // A CLI call that outlives its timeout is killed outright (the CLI ignores
+  // SIGTERM while waiting on the app) and reported with a renderer probe.
   async cli(...args) {
-    const { stdout } = await run(path.join(APP_DIR, 'obsidian-cli'), args, { env: this.env, maxBuffer: 64 * 1024 * 1024, timeout: 60000 });
-    return stdout;
+    try {
+      const { stdout, stderr } = await run(path.join(APP_DIR, 'obsidian-cli'), args, { env: this.env, maxBuffer: 64 * 1024 * 1024, timeout: 20000, killSignal: 'SIGKILL' });
+      return stdout || stderr;
+    } catch (error) {
+      if (!error.killed) throw error;
+      const probe = await run(path.join(APP_DIR, 'obsidian-cli'), ['eval', 'code=1+1'], { env: this.env, timeout: 8000, killSignal: 'SIGKILL' }).then(({ stdout }) => stdout.trim(), () => 'renderer-unresponsive');
+      throw new Error(`CLI call timed out: ${args[0]} ${String(args[1] || '').slice(0, 60)}; renderer probe: ${probe}`);
+    }
   }
 
   async version() { return (await this.cli('version')).trim(); }
@@ -66,7 +74,7 @@ export class Instance {
   async bridge(payload) {
     const out = await this.cli('eval', `code=${buildEvalCode(payload)}`);
     const start = out.indexOf('=> ');
-    if (start < 0) throw new Error(`Bridge returned no value: ${out.slice(0, 400)}`);
+    if (start < 0) throw new Error(`Bridge returned no value: ${JSON.stringify(out.slice(0, 600))}`);
     return JSON.parse(out.slice(start + 3));
   }
 
@@ -82,7 +90,9 @@ export class Instance {
     };
     if (!scripts[name]) throw new Error(`Unknown stimulus ${name}`);
     const data = Buffer.from(JSON.stringify({ path: notePath, ...extra }), 'utf8').toString('base64');
-    return this.cli('eval', `code=(()=>{const P=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${data}'),c=>c.charCodeAt(0))));return ${scripts[name]}})()`);
+    const reply = await this.cli('eval', `code=(()=>{const P=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${data}'),c=>c.charCodeAt(0))));return ${scripts[name]}})()`);
+    if (!reply.includes('=> ok')) throw new Error(`Stimulus ${name} failed: ${reply.slice(0, 300)}`);
+    return reply;
   }
 
   // Real input path: Chromium dispatches this like keyboard text entry into

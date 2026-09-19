@@ -37,7 +37,15 @@ async function seed(id, { open = true } = {}) {
   fs.writeFileSync(full(id), BASE);
   await sleep(1200);
   await app.stimulus('closeAll', notePath(id));
-  if (open) { await app.stimulus('open', notePath(id)); await sleep(700); }
+  if (!open) return;
+  await app.stimulus('open', notePath(id));
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const state = await app.bridge({ op: 'inspect', path: notePath(id) });
+    if (state.views.length === 1 && !state.views[0].dirty && state.views[0].bufferSha256 === sha256(BASE)) { await sleep(300); return; }
+    if (attempt % 10 === 9) { await app.stimulus('closeAll', notePath(id)); await app.stimulus('open', notePath(id)); }
+    await sleep(250);
+  }
+  throw new Error(`Seeded note ${id} never became a clean open view`);
 }
 
 function publish(id, options = {}) {
@@ -46,11 +54,14 @@ function publish(id, options = {}) {
   const recovery = path.join(layout.recovery, `${id}-${serial}.prev`);
   fs.writeFileSync(staged, CANDIDATE);
   return app.bridge({ op: 'publish', path: notePath(id), baseSha256: sha256(options.base ?? BASE), candidateSha256: sha256(CANDIDATE),
-    stagedPath: staged, recoveryLinkPath: recovery, guardMs: options.guardMs ?? 2600, haltAt: options.haltAt ?? 'none', exchange })
+    stagedPath: staged, recoveryLinkPath: recovery, guardMs: options.guardMs ?? 2600, haltAt: options.haltAt ?? 'none', exchange, editorRoute: options.editorRoute ?? 'no-write' })
     .then((reply) => ({ ...reply, staged, recovery }));
 }
 
+const only = arg('only', '').split(',').filter(Boolean);
+
 async function record(id, title, body) {
+  if (only.length && !only.includes(id)) return;
   const started = Date.now();
   try {
     const verdict = await body();
@@ -117,12 +128,12 @@ async function main() {
       await app.stimulus('focusAt', notePath(id), { anchor: 'brown' }); // caret inside the text the generator rewrites
       const delay = (round * 7) % 90;
       const typing = sleep(delay).then(() => app.typeText(typed));
-      const reply = await publish(id, { guardMs: 2800 });
+      const reply = await publish(id, { guardMs: Number(arg('guard', '9000')) });
       await typing;
-      await sleep(3000);
-      const final = await app.bridge({ op: 'inspect', path: notePath(id) });
+      await sleep(Number(arg('guard', '9000')) + 500);
+      const final = await app.bridge({ op: 'collect', path: notePath(id) });
       const safe = kept(typed, read(full(id)), ...buffers(final));
-      rounds.push({ round, delayMs: delay, status: reply.status, safe, capturedEdits: (reply.capturedEdits || []).length });
+      rounds.push({ round, delayMs: delay, status: reply.status, safe, capturedEdits: (final.capturedEdits || []).length, trace: safe ? undefined : final.trace });
       if (!safe) return { pass: false, reason: `typed token lost in round ${round}`, rounds, disk: read(full(id)), buffers: buffers(final) };
     }
     const statuses = rounds.reduce((tally, { status }) => ({ ...tally, [status]: (tally[status] || 0) + 1 }), {});
@@ -165,6 +176,28 @@ async function main() {
     const statuses = rounds.reduce((tally, { status }) => ({ ...tally, [status]: (tally[status] || 0) + 1 }), {});
     return { pass: true, statuses, rounds };
   });
+
+  // Regression for the observed loss (20-round run, I06 round 12): after the
+  // exchange the app rewrote the open note in place and overwrote an outside
+  // writer. The invariant is that publication causes no later write by the app.
+  const stamp = (file) => { const s = fs.statSync(file, { bigint: true }); return `${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`; };
+  for (const [id, editorRoute, expectWrite] of [['I06a', 'no-write', false], ['I06b', 'app-save', true]]) {
+    await record(id, expectWrite ? 'negative control: the rejected app-save route is detected rewriting the note' : 'open note is never rewritten by the app after publication; a following outside write survives', async () => {
+      const note = id.toLowerCase();
+      await seed(note);
+      const reply = await publish(note, { editorRoute, guardMs: 500 });
+      const published = reply.recovery && stamp(full(note));
+      const first = Date.now();
+      let rewritten = false;
+      while (Date.now() - first < 4000) { if (stamp(full(note)) !== published) { rewritten = true; break; } await sleep(5); }
+      if (expectWrite) return { pass: reply.status === 'published' && rewritten, status: reply.status, rewritten };
+      const external = `${CANDIDATE}OUTSIDE WRITER\n`;
+      fs.writeFileSync(`${full(note)}.ext~`, external); fs.renameSync(`${full(note)}.ext~`, full(note));
+      await sleep(4000);
+      const final = await app.bridge({ op: 'inspect', path: notePath(note) });
+      return { pass: reply.status === 'published' && !rewritten && read(full(note)) === external && buffers(final).every((text) => text === external), status: reply.status, rewritten };
+    });
+  }
 
   await record('I07', 'note removed before publication refuses and creates nothing', async () => {
     await seed('i07');

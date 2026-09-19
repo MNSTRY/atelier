@@ -5,9 +5,12 @@
 // Note text never becomes code: candidate and recovery bytes travel as files
 // and are bound by SHA-256, not interpolated.
 
-const OPS = new Set(['inspect', 'publish']);
+const OPS = new Set(['inspect', 'publish', 'collect']);
 const HALTS = new Set(['none', 'after-link', 'after-rename']);
 const EXCHANGES = new Set(['atomic-swap', 'link-rename']);
+// 'app-save' is the rejected variant, kept only as the negative control for the
+// no-write-after-publication regression: it lets the app rewrite the note in place.
+const EDITOR_ROUTES = new Set(['no-write', 'app-save']);
 const SHA = /^[0-9a-f]{64}$/;
 
 export const PROTOCOL_ID = 'obsidian-cli-critical-section/v1-prototype';
@@ -15,7 +18,7 @@ export const PROTOCOL_ID = 'obsidian-cli-critical-section/v1-prototype';
 export function validatePayload(payload) {
   const fail = (message) => { throw new TypeError(`Invalid bridge payload: ${message}`); };
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('object required');
-  const allowed = ['op', 'path', 'baseSha256', 'candidateSha256', 'stagedPath', 'recoveryLinkPath', 'guardMs', 'haltAt', 'exchange'];
+  const allowed = ['op', 'path', 'baseSha256', 'candidateSha256', 'stagedPath', 'recoveryLinkPath', 'guardMs', 'haltAt', 'exchange', 'editorRoute'];
   for (const key of Object.keys(payload)) if (!allowed.includes(key)) fail(`unknown key ${key}`);
   if (!OPS.has(payload.op)) fail('unknown op');
   const notePath = payload.path;
@@ -28,11 +31,12 @@ export function validatePayload(payload) {
     for (const key of ['stagedPath', 'recoveryLinkPath']) {
       if (typeof payload[key] !== 'string' || !payload[key].startsWith('/')) fail(`${key} must be absolute`);
     }
-    if (!Number.isInteger(payload.guardMs) || payload.guardMs < 0 || payload.guardMs > 10000) fail('guardMs out of range');
+    if (!Number.isInteger(payload.guardMs) || payload.guardMs < 0 || payload.guardMs > 30000) fail('guardMs out of range');
     if (!HALTS.has(payload.haltAt ?? 'none')) fail('unknown haltAt');
     if (!EXCHANGES.has(payload.exchange)) fail('unknown exchange');
+    if (!EDITOR_ROUTES.has(payload.editorRoute ?? 'no-write')) fail('unknown editorRoute');
   } else if (Object.keys(payload).some((key) => !['op', 'path'].includes(key))) {
-    fail('inspect accepts only op and path');
+    fail('inspect and collect accept only op and path');
   }
   return payload;
 }
@@ -67,11 +71,16 @@ function inApp(P) {
   const done = (status, extra) => JSON.stringify({ status, trace, ...(extra || {}) });
 
   if (P.op === 'inspect') return done('inspected', snapshot());
+  const store = (window.__atelierG00 = window.__atelierG00 || {});
+  if (P.op === 'collect') return JSON.stringify({ status: 'collected', ...(store[P.path] || { missing: true }), ...snapshot() });
 
   // ---- critical section begins (synchronous) ----
   step('enter');
   if (!fs.existsSync(full)) return done('note-missing', snapshot());
   const open = views();
+  // Capability floor: the no-write editor update below relies on the view's
+  // saved-content marker. Refuse open notes on an app build that lacks it.
+  if (open.some((view) => typeof view.lastSavedData !== 'string')) return done('unsupported-app', { wrote: false });
   const edited = open.filter((view) => view.dirty || sha(view.getViewData()) !== P.baseSha256);
   if (edited.length) return done('editor-edit', { ...snapshot(), wrote: false });
   if (disk() !== P.baseSha256) return done('disk-changed', { ...snapshot(), wrote: false });
@@ -101,13 +110,20 @@ function inApp(P) {
   const guard = app.workspace.on('editor-change', (editor, info) => {
     if (info && info.file && info.file.path === P.path) {
       const text = editor.getValue();
+      step('editor-change', { buffer: sha(text).slice(0, 8), dirty: views().map((view) => Boolean(view.dirty)) });
       captured.push({ ms: Number((performance.now() - t0).toFixed(3)), bufferSha256: sha(text), bufferBase64: Buffer.from(text, 'utf8').toString('base64') });
     }
   });
+  // Evidence only: vault events for this note during the guard window.
+  const vaultRefs = ['modify', 'delete', 'create', 'rename'].map((name) => app.vault.on(name, (file) => {
+    if (file && file.path === P.path) step(`vault-${name}`, { views: views().map((view) => ({ dirty: Boolean(view.dirty), buffer: sha(view.getViewData()).slice(0, 8) })) });
+  }));
   const candidateText = candidate.toString('utf8');
-  const saves = open.map((view) => {
+  open.forEach((view) => {
     // Route the change through the editor so Obsidian never takes its lossy
-    // external-modification merge path for this view, then let Obsidian save.
+    // external-modification merge path for this view. Obsidian must not write
+    // the file itself afterwards: an in-place save here would overwrite an
+    // outside writer that replaced the note after the exchange (observed).
     // Minimal line hunks in one transaction keep carets and selections in
     // untouched text where the user left them.
     const a = view.getViewData().split(/(?<=\n)/);
@@ -135,19 +151,23 @@ function inApp(P) {
     }
     view.editor.transaction({ changes: changes.map((change) => ({ from: view.editor.offsetToPos(change.from), to: view.editor.offsetToPos(change.to), text: change.text })) });
     if (view.getViewData() !== candidateText) { step('hunk-fallback'); view.editor.setValue(candidateText); }
-    return view.save();
+    if (P.editorRoute === 'app-save') view.save();
+    else view.lastSavedData = candidateText; // the delayed save now sees nothing to write
   });
   captured.length = 0; // our own transaction is not a user edit
   step('editor-routed', { openViews: open.length });
   // ---- critical section ends ----
 
-  return Promise.allSettled(saves)
-    .then(() => new Promise((resolve) => setTimeout(resolve, P.guardMs)))
-    .then(() => {
-      app.workspace.offref(guard);
-      step('settled');
-      return done(externalCaptured ? 'published-external-captured' : 'published', { ...snapshot(), wrote: true, openViews: open.length, capturedEdits: captured, externalCaptured });
-    });
+  // Return at once; evidence for the guard window is fetched later with
+  // op "collect" so no CLI call stays open while other calls are made.
+  const evidence = (store[P.path] = { trace, capturedEdits: captured, guardOpen: true });
+  setTimeout(() => {
+    app.workspace.offref(guard);
+    vaultRefs.forEach((ref) => app.vault.offref(ref));
+    step('settled');
+    evidence.guardOpen = false;
+  }, P.guardMs);
+  return done(externalCaptured ? 'published-external-captured' : 'published', { ...snapshot(), wrote: true, openViews: open.length, externalCaptured });
 }
 
 export function buildEvalCode(payload) {
