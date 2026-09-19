@@ -1413,7 +1413,8 @@ async function endProcess(entry, boundMs = 10000) {
   return entry.gone
 }
 const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' } }
-const hardKill = (pid) => { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
+// Never this process: some tests plant a record that names the test process itself as a live, unrelated PID.
+const hardKill = (pid) => { if (pid === process.pid) return; try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
 const iso = (ms) => new Date(ms).toISOString()
 
 async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condition' } = {}) {
@@ -1824,7 +1825,7 @@ function serviceWorld(t, options) {
   // it does not matter in which order the runner calls the hooks: the directory removal retries.
   t.after(async () => {
     if (world === null) return
-    try { const record = recordOf(world); if (record && isAlive(record.pid)) mine.push(registerProcess(t, record.pid, 'the service named by the record at teardown', namedByRecord(record.pid))) } catch { /* no usable record */ }
+    try { const record = recordOf(world); if (record && record.pid !== process.pid && isAlive(record.pid)) mine.push(registerProcess(t, record.pid, 'the service named by the record at teardown', namedByRecord(record.pid))) } catch { /* no usable record */ }
     if (mine.some(processLives)) try { await stopService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, stopTimeoutMs: 5000 }) } catch { /* ended below */ }
     for (const entry of mine) await endProcess(entry)
   })
