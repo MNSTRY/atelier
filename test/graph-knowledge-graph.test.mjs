@@ -445,6 +445,58 @@ test('a malformed percent escape is diagnosed instead of stopping the build', (t
   assert.deepEqual(result.linkDiagnostics.map((item) => item.code), ['link-href-malformed'])
 })
 
+test('the link scanner differs from the earlier whole-text pattern in exactly the pinned behavior classes', () => {
+  // The earlier reader applied this one pattern to the whole text.
+  const earlier = (text) => [...text.matchAll(/\[[^\]]+\]\(([^)\s#]+)(?:#[^)]+)?\)/g)].map((m) => m[1])
+  const now = (text) => scanMarkdownLinks(text).filter((link) => link.syntax === 'markdown').map((link) => link.href)
+  // [class, case, text, hrefs read now]. `same` rows must equal the earlier reader.
+  const table = [
+    ['fence', 'balanced backtick fence', '```\n[a](t.md)\n```\n', []],
+    ['fence', 'balanced tilde fence', '~~~\n[a](t.md)\n~~~\n', []],
+    ['fence', 'fence with an info string', '```js\n[a](t.md)\n```\n[b](o.md)\n', ['o.md']],
+    ['fence', 'fence indented three spaces', '   ```\n[a](t.md)\n   ```\n', []],
+    ['fence', 'CRLF fence', '```\r\n[a](t.md)\r\n```\r\n[b](o.md)\r\n', ['o.md']],
+    ['fence', 'unbalanced fence runs to the end', '```\nx\n\n[a](t.md)\n', []],
+    ['fence', 'a longer closing fence closes', '~~~\n[a](t.md)\n~~~~\n[b](o.md)\n', ['o.md']],
+    ['fence', 'a shorter closing fence does not close', '````\n[a](t.md)\n```\n[b](o.md)\n', []],
+    ['fence', 'a tilde line does not close a backtick fence', '```\n[a](t.md)\n~~~\n[b](o.md)\n', []],
+    ['inline-code', 'inline code span', 'text `[a](t.md)` more\n', []],
+    ['inline-code', 'double-backtick span', '``[a](t.md)`` then [b](o.md)\n', ['o.md']],
+    ['inline-code', 'two unrelated backticks pair across a link', 'Use ` here. See [a](t.md) and ` again.\n', []],
+    ['front-matter', 'closed front matter', '---\nx: "[a](t.md)"\n---\n\n[b](o.md)\n', ['o.md']],
+    ['same', 'four-space indent is not a fence', '    ```\n    [a](t.md)\n', ['t.md']],
+    ['same', 'backtick in a backtick fence info string is not a fence', '``` `x`\n[a](t.md)\n', ['t.md']],
+    ['same', 'unclosed front matter is body text', '---\nx: [a](t.md)\n', ['t.md']],
+    ['same', 'a thematic break is not front matter', '---\n\n[a](t.md)\n', ['t.md']],
+    ['same', 'an unclosed backtick is plain text', 'A stray ` then [a](t.md)\n', ['t.md']],
+    ['same', 'a blank line ends the paragraph a span may close in', 'Use ` here.\n\nSee [a](t.md) and ` again.\n', ['t.md']],
+    ['same', 'inline code as the link label', '[`n`](t.md)\n', ['t.md']],
+    ['same', 'spans around a link', '`a` [x](t.md) `c`\n', ['t.md']],
+    ['same', 'table, quote, list and image', '| [a](t.md) |\n\n> [b](o.md)\n\n- [c](p.md)\n\n![d](q.md)\n', ['t.md', 'o.md', 'p.md', 'q.md']],
+    ['same', 'fragment and percent-encoding', '[a](t.md#sec) [b](t%20o.md) [c](%zz.md)\n', ['t.md', 't%20o.md', '%zz.md']],
+    ['same', 'CRLF plain text', '[a](t.md)\r\n', ['t.md']],
+  ]
+  for (const [kind, name, text, expected] of table) {
+    assert.deepEqual(now(text), expected, name)
+    if (kind === 'same') assert.deepEqual(earlier(text), expected, `${name}: unchanged from the earlier reader`)
+    else assert.notDeepEqual(earlier(text), expected, `${name}: a pinned difference from the earlier reader`)
+  }
+})
+
+test('malformed percent-encoding is a finding beside the other links of the same source, never a throw', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-bad-percent-'))
+  try {
+    fs.writeFileSync(path.join(root, 'a.md'), '[bad](%zz.md) [worse](b%E0%A4%A.md) [fine](b.md)\n')
+    fs.writeFileSync(path.join(root, 'b.md'), '# B\n')
+    const nodesByPath = new Map([['a.md', { id: 'n:a', path: 'a.md' }], ['b.md', { id: 'n:b', path: 'b.md' }]])
+    const resolved = resolveWorkspaceLinks({ repos: [{ name: 'r', root, nodesByPath }] })
+    assert.deepEqual(resolved.links.map((link) => link.target), ['n:b'])
+    assert.deepEqual(resolved.diagnostics.map((item) => [item.code, item.href]), [['link-href-malformed', '%zz.md'], ['link-href-malformed', 'b%E0%A4%A.md']])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('markdownLinkEdges accepts census nodes that carry only an id, including beside wikilinks', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-minimal-nodes-'))
   try {
