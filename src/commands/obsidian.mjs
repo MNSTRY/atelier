@@ -328,6 +328,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
 
     const contributed = registry.operations.get(operationName)
     if (contributed === null && !Object.hasOwn(operations, operationName)) refuse('usage', `unknown operation: ${String(operationName).slice(0, 40)}`)
+    // One option table serves every operation. No built-in operation has a use for an actor; a contributed one says so itself.
+    if (contributed === null && flags.actor !== undefined) refuse('usage', '--actor belongs to `apply run`; this operation does not take it')
     const result = contributed !== null
       ? await contributed.run({ args: positionals.slice(1), flags: { ...flags }, registry, loadProject, dataRoot, env, platform, clock, readable, writable })
       : await operations[operationName]()

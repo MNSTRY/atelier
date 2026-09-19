@@ -916,6 +916,18 @@ test('audience set validates, clear removes, and a project that does not declare
   assert.equal(fs.existsSync(bare.dataRoot), false, 'and nothing was created for it')
 })
 
+test('--actor is an option of apply run: every operation that has no use for it refuses it as a usage error and does nothing', async (t) => {
+  const world = makeWorld(t)
+  const before = listing(world.dir)
+  for (const argv of [['status'], ['scope', 'list'], ['audience', 'show'], ['mode', 'show'], ['mode', 'set', 'manual'], ['policy', 'show'], ['policy', 'revoke'], ['service', 'status'], ['open', 'scope-whole'], ['apply']]) {
+    const answer = await world.run([...argv, '--actor', 'person-synthetic', '--json'])
+    assert.deepEqual([answer.exit, answer.json.error.code], [EXIT.refused, 'usage'], argv.join(' '))
+    assert.match(answer.json.error.message, /--actor/, argv.join(' '))
+  }
+  assert.deepEqual(listing(world.dir), before, 'a refused option changes nothing')
+  assert.equal((await world.run(['mode', 'show', '--json'])).exit, EXIT.ok, 'the same operation without the option answers')
+})
+
 test('policy install verifies the digest a policy carries and names the expected one; policy digest prints it, reads only, and the filled-in file installs', async (t) => {
   const world = makeWorld(t)
   const { file, policy } = world.policyFile({ digest: digest('a digest nobody computed') })

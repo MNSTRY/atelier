@@ -443,7 +443,7 @@ list`, `show`, `run` and `recover` answer such a record as a typed refusal.
   record of the object store is the authority. When it is not (the person
   removed a generated region, for example) the view stays held.
 - `--actor` is an option of `apply run`. The command has one option table for
-  every operation, so other `apply` operations refuse it and operations outside
-  `apply` do not read it.
+  every operation; every other operation, of `apply` or not, refuses it as a
+  usage error and does nothing.
 - Proven on macOS arm64 on APFS with a real second process. Linux, x86_64 and
   other filesystems carry the open obligations of the exchange listed above.
