@@ -43,14 +43,14 @@ export function createEngineApplyOperation({ context = processApplyContext, crea
   }
 }
 
-const SUMMARY = 'list | show EDIT | run EDIT [ACTOR] | recover  Pending edits and the explicit apply of one of them to its source file.'
+const SUMMARY = 'list | show EDIT | run EDIT [--actor ID] | recover  Pending edits and the explicit apply of one of them to its source file.'
 
 export function createApplyCommandOperation({ create = createSourceApply } = {}) {
   return {
     name: 'apply',
     summary: SUMMARY,
     async run({ args, flags, loadProject, dataRoot, env, platform, clock }) {
-      const [sub = 'list', editId, actorArgument] = args
+      const [sub = 'list', editId, ...extra] = args
       const sourceApply = create({ loadProject, ...(dataRoot === undefined ? {} : { dataRoot }), env, platform, clock })
       const typed = async (operation) => {
         try { return await operation() } catch (error) {
@@ -58,6 +58,8 @@ export function createApplyCommandOperation({ create = createSourceApply } = {})
           throw error
         }
       }
+      // The option table of the command is one table for every operation, so only `run` can say that it has no use for an actor.
+      if (sub !== 'run' && flags.actor !== undefined) refuse('usage', '--actor belongs to `apply run`')
       const needsEdit = () => { if (typeof editId !== 'string' || !EDIT_ID.test(editId)) refuse('usage', 'name the edit: an identifier that `obsidian apply list` printed') }
       if (sub === 'list') {
         const edits = await typed(() => sourceApply.list())
@@ -70,7 +72,8 @@ export function createApplyCommandOperation({ create = createSourceApply } = {})
       }
       if (sub === 'run') {
         needsEdit()
-        const actor = actorArgument ?? flags['consent-actor']
+        if (extra.length > 0) refuse('usage', 'run takes one edit; name the actor with --actor ID')
+        const { actor } = flags
         if (actor !== undefined && !ACTOR.test(actor)) refuse('usage', 'the actor must be an identifier')
         const result = await sourceApply.apply({ editId, mode: 'manual', ...(actor === undefined ? {} : { actor }) })
         const applied = result.status === 'applied'
@@ -81,7 +84,7 @@ export function createApplyCommandOperation({ create = createSourceApply } = {})
         if (report.refusal) refuse(report.refusal.code, 'interrupted applies could not be looked at')
         return { exit: EXIT.ok, document: report, human: report.recovered.length === 0 ? ['no interrupted apply'] : report.recovered.map((item) => `${item.applyId}\t${item.status}\t${item.code}`) }
       }
-      return refuse('usage', 'apply takes list, show EDIT, run EDIT [ACTOR] or recover')
+      return refuse('usage', 'apply takes list, show EDIT, run EDIT [--actor ID] or recover')
     },
   }
 }

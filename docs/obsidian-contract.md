@@ -272,7 +272,7 @@ obligation against other source writers; its protocol follows.
 Source apply writes one edit made in a vault back to the one source file the
 note was generated from. It is the only operation of this integration that
 writes a source file. A person's explicit Apply (`atelier obsidian apply run
-EDIT [ACTOR]`, or the same call through the API by an agent acting for them)
+EDIT [--actor ID]`, or the same call through the API by an agent acting for them)
 and an automatic policy reach the same function; they differ only in who
 authorises. It never stages, commits or otherwise asks git to change anything:
 the one git call asks whether the path is ignored.
@@ -390,7 +390,8 @@ Only bytes with the recorded candidate digest are ours to delete.
   the hold lifts and the pending record closes as `withdrawn`; the `applied`
   record of the object store is the authority. When it is not (the person
   removed a generated region, for example) the view stays held.
-- The command takes the actor as a positional argument, or from
-  `--consent-actor`; the command's closed option table has no `--actor`.
+- `--actor` is an option of `apply run`. The command has one option table for
+  every operation, so other `apply` operations refuse it and operations outside
+  `apply` do not read it.
 - Proven on macOS arm64 on APFS with a real second process. Linux, x86_64 and
   other filesystems carry the open obligations of the exchange listed above.

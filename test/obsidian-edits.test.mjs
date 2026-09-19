@@ -2262,15 +2262,15 @@ test('apply command: list, show, run and recover answer one JSON document with t
   assert.deepEqual([listed.exit, listed.json.ok, listed.json.operation, listed.json.edits.map((edit) => [edit.editId, edit.nodeId, edit.state])], [0, true, 'apply', [[first, 'race-room:round-0', 'queued'], [second, 'race-room:round-1', 'queued']].sort(([left], [right]) => (left < right ? -1 : 1))])
   const refused = await runApplyCommand(world, ['apply', 'run', first, '--json'], { exchangeOptions: { platform: 'win32' } })
   assert.deepEqual([refused.exit, refused.json.ok, refused.json.result.status, refused.json.result.code], [3, false, 'refused', 'exchange-unavailable'])
-  const ran = await runApplyCommand(world, ['apply', 'run', first, 'person-synthetic', '--json'])
+  const ran = await runApplyCommand(world, ['apply', 'run', first, '--actor', 'person-synthetic', '--json'])
   assert.deepEqual([ran.exit, ran.json.ok, ran.json.result.status, ran.json.result.actor], [0, true, 'applied', 'person-synthetic'])
   assert.match(fs.readFileSync(world.source('race-room/rounds/round-0.md'), 'utf8'), /Edited sentence 0\./)
   const shown = await runApplyCommand(world, ['apply', 'show', first, '--json'])
   assert.deepEqual([shown.exit, shown.json.edit.operation.state, shown.json.edit.outcomes.at(-1).status], [0, 'applied', 'applied'])
-  const human = await runApplyCommand(world, ['apply', 'run', second, '--consent-actor', 'person-two'])
+  const human = await runApplyCommand(world, ['apply', 'run', second, '--actor=person-two'])
   assert.deepEqual([human.exit, human.text.split('\n')[0]], [0, 'applied: applied'])
   assert.deepEqual((await runApplyCommand(world, ['apply', 'recover', '--json'])).json.recovered, [])
-  for (const [argv, code] of [[['apply', 'run', '--json'], 'usage'], [['apply', 'run', 'not-an-edit', '--json'], 'usage'], [['apply', 'run', first, 'not an actor', '--json'], 'usage'], [['apply', 'sideways', '--json'], 'usage'], [['apply', 'show', `edit-${'0'.repeat(32)}`, '--json'], 'unknown-edit']]) {
+  for (const [argv, code] of [[['apply', 'run', '--json'], 'usage'], [['apply', 'run', 'not-an-edit', '--json'], 'usage'], [['apply', 'run', first, '--actor', 'not an actor', '--json'], 'usage'], [['apply', 'run', first, 'person-positional', '--json'], 'usage'], [['apply', 'list', '--actor', 'person-x', '--json'], 'usage'], [['apply', 'sideways', '--json'], 'usage'], [['apply', 'show', `edit-${'0'.repeat(32)}`, '--json'], 'unknown-edit']]) {
     const answer = await runApplyCommand(world, argv)
     assert.deepEqual([answer.exit, answer.json.error.code], [2, code], argv.join(' '))
   }
