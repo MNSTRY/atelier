@@ -259,11 +259,10 @@ test('the default data root is computed per platform and creates nothing', (t) =
   assert.throws(() => defaultDataRoot({ platform: 'win32', env: {}, homedir: 'C:\\Users\\synthetic' }), (error) => error.code === 'data-root-unresolvable')
 
   // Purity guard: resolving against a real, empty home directory leaves it empty.
-  for (const platform of ['darwin', 'linux']) {
-    const resolved = defaultDataRoot({ platform, env: {}, homedir: home })
-    assert.ok(resolved.startsWith(home))
-    assert.equal(fs.existsSync(resolved), false)
-  }
+  // With the host's own platform: a real temporary directory is an absolute path only in the host's path flavor.
+  const resolved = defaultDataRoot({ platform: process.platform, env: process.platform === 'win32' ? { LOCALAPPDATA: home } : {}, homedir: home })
+  assert.ok(resolved.startsWith(home))
+  assert.equal(fs.existsSync(resolved), false)
   assert.deepEqual(fs.readdirSync(home), [], 'the resolver created nothing')
 
   // Under the test runner the platform default is refused outright, so a test that forgets to inject a root cannot reach a real one.
