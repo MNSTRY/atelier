@@ -1,0 +1,12 @@
+{
+  "schema": "atelier-obsidian-proposal-receipt/v1",
+  "receiptId": "receipt-0001",
+  "repoId": "north",
+  "storeId": "store-north",
+  "adapterOperationId": "adapter-op-edit-0002",
+  "editId": "edit-0002",
+  "proposalId": "proposal-0001",
+  "dedupe": "new",
+  "backpressure": "dropped",
+  "recordedAt": "2026-01-05T10:06:00Z"
+}

@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-edit-operation.v1.schema.json",
+  "title": "Obsidian edit operation",
+  "$comment": "contract revision 1.0.0; portable shape; repository and node identity, origin scope and generation, base digest, observed byte reference, idempotency key and state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "editId",
+    "workspaceId",
+    "repoId",
+    "nodeId",
+    "origin",
+    "kind",
+    "baseSourceDigest",
+    "observed",
+    "idempotencyKey",
+    "state"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-edit-operation/v1"
+    },
+    "editId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "workspaceId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "repoId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "nodeId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopeId",
+        "generationId"
+      ],
+      "properties": {
+        "scopeId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "generationId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "kind": {
+      "enum": [
+        "body-replacement",
+        "semantic-proposal"
+      ]
+    },
+    "baseSourceDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "observed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest",
+        "byteLength",
+        "recoveryRef"
+      ],
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "byteLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recoveryRef": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "state": {
+      "enum": [
+        "pending",
+        "applied",
+        "conflicted",
+        "proposed",
+        "superseded",
+        "refused"
+      ]
+    },
+    "observedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000]+$"
+    }
+  }
+}

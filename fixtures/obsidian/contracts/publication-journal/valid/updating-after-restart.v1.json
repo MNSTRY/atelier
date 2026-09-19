@@ -1,0 +1,22 @@
+{
+  "schema": "atelier-obsidian-publication-journal/v1",
+  "journalId": "journal-0002",
+  "workspaceId": "ws-synthetic-0001",
+  "scopeId": "scope-topic",
+  "protocolId": "example-protocol/v2",
+  "expectedGeneration": "gen-0001",
+  "targetGeneration": "gen-0002",
+  "state": "updating",
+  "entries": [
+    {
+      "seq": 0,
+      "at": "2026-01-05T11:00:00Z",
+      "step": "restart",
+      "outcome": "ok"
+    }
+  ],
+  "restart": {
+    "count": 1,
+    "lastRecoveredAt": "2026-01-05T11:00:00Z"
+  }
+}

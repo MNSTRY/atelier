@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-publication-journal.v1.schema.json",
+  "title": "Obsidian publication journal",
+  "$comment": "contract revision 1.0.0; private state shape; durable capture, conditional operation, partial transition, verification and restart. The publication protocol ID is mandatory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "journalId",
+    "workspaceId",
+    "scopeId",
+    "protocolId",
+    "expectedGeneration",
+    "targetGeneration",
+    "state",
+    "entries",
+    "restart"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-publication-journal/v1"
+    },
+    "journalId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "workspaceId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "scopeId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "protocolId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9./-]*$"
+    },
+    "expectedGeneration": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "targetGeneration": {
+      "$ref": "#/$defs/identifier"
+    },
+    "state": {
+      "enum": [
+        "prepared",
+        "captured",
+        "updating",
+        "verifying",
+        "committed",
+        "failed",
+        "recovering"
+      ]
+    },
+    "entries": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seq",
+          "at",
+          "step",
+          "outcome"
+        ],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "at": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "step": {
+            "enum": [
+              "capture",
+              "conditional-update",
+              "verify",
+              "manifest-commit",
+              "restart"
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "conflict",
+              "failed",
+              "skipped"
+            ]
+          },
+          "notePath": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "beforeDigest": {
+            "$ref": "#/$defs/digest"
+          },
+          "afterDigest": {
+            "$ref": "#/$defs/digest"
+          },
+          "recoveryRef": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "ext": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "restart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastRecoveredAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000]+$"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "schema": "atelier-obsidian-scope/v1",
+  "scopeId": "scope-topic",
+  "mode": "scoped",
+  "selector": {
+    "exclude": [
+      {
+        "union": [
+          {
+            "repo": "north",
+            "pathPrefix": "plans/"
+          },
+          {
+            "tag": "topic"
+          },
+          {
+            "ids": [
+              "b"
+            ]
+          }
+        ]
+      },
+      {
+        "intersection": [
+          {
+            "type": "html"
+          },
+          {
+            "repo": "west"
+          }
+        ]
+      }
+    ]
+  },
+  "expansion": {
+    "depth": 1,
+    "maxNodes": 3,
+    "direction": "outgoing",
+    "order": "canonical-id"
+  }
+}

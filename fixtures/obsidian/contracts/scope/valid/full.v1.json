@@ -1,0 +1,8 @@
+{
+  "schema": "atelier-obsidian-scope/v1",
+  "scopeId": "scope-full",
+  "mode": "full",
+  "selector": {
+    "all": true
+  }
+}

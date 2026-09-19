@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-source-snapshot.v1.schema.json",
+  "title": "Obsidian source snapshot",
+  "$comment": "contract revision 1.0.0; portable shape; raw byte digests pinned to one canonical graph read. Mixed reads refuse.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "snapshotId",
+    "workspaceId",
+    "capturedAt",
+    "readConsistency",
+    "graphPin",
+    "versions",
+    "repositories"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-source-snapshot/v1"
+    },
+    "snapshotId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "workspaceId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "capturedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "readConsistency": {
+      "const": "single-read"
+    },
+    "graphPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "graphDigest",
+        "nodeCount",
+        "edgeCount"
+      ],
+      "properties": {
+        "graphDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "nodeCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "edgeCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "config",
+        "emitter"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "config": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "emitter": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "repositories": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repoId",
+          "head",
+          "dirty",
+          "files"
+        ],
+        "properties": {
+          "repoId": {
+            "$ref": "#/$defs/identifier"
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "dirty": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "maxItems": 1000000,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "rawDigest",
+                "byteLength"
+              ],
+              "properties": {
+                "path": {
+                  "$ref": "#/$defs/relativePath"
+                },
+                "rawDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "byteLength": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ext": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "ext": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000]+$"
+    }
+  }
+}

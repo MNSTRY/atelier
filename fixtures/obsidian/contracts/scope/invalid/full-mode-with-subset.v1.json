@@ -1,0 +1,8 @@
+{
+  "schema": "atelier-obsidian-scope/v1",
+  "scopeId": "scope-topic",
+  "mode": "full",
+  "selector": {
+    "repo": "north"
+  }
+}

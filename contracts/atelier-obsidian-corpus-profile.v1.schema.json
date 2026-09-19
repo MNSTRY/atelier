@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-corpus-profile.v1.schema.json",
+  "title": "Obsidian corpus profile",
+  "$comment": "contract revision 1.0.0; portable shape; stable workspace and repository identities, enrollment and audience. No machine-local paths.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspaceId",
+    "repositories",
+    "audience"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-corpus-profile/v1"
+    },
+    "workspaceId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "repositories": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repoId",
+          "root",
+          "enrollment"
+        ],
+        "properties": {
+          "repoId": {
+            "$ref": "#/$defs/identifier"
+          },
+          "root": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "enrollment": {
+            "enum": [
+              "enrolled",
+              "paused",
+              "withdrawn"
+            ]
+          },
+          "audience": {
+            "$ref": "#/$defs/identifier"
+          },
+          "ext": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "audience": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allow"
+      ],
+      "properties": {
+        "allow": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\\\u0000]+$"
+    }
+  }
+}

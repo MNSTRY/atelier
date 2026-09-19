@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-obsidian-proposal-receipt.v1.schema.json",
+  "title": "Obsidian proposal receipt",
+  "$comment": "contract revision 1.0.0; portable shape; repository-scoped store, stable adapter operation identity, proposal ID, dedupe and backpressure outcome.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receiptId",
+    "repoId",
+    "storeId",
+    "adapterOperationId",
+    "editId",
+    "proposalId",
+    "dedupe",
+    "backpressure",
+    "recordedAt"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-obsidian-proposal-receipt/v1"
+    },
+    "receiptId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "repoId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "storeId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "adapterOperationId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "editId": {
+      "$ref": "#/$defs/identifier"
+    },
+    "proposalId": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dedupe": {
+      "enum": [
+        "new",
+        "duplicate",
+        "recovered"
+      ]
+    },
+    "backpressure": {
+      "enum": [
+        "accepted",
+        "deferred",
+        "refused"
+      ]
+    },
+    "recordedAt": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "ext": {
+      "type": "object"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  },
+  "if": {
+    "required": [
+      "backpressure"
+    ],
+    "properties": {
+      "backpressure": {
+        "const": "accepted"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "proposalId": {
+        "type": "string"
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "proposalId": {
+        "type": "null"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

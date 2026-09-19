@@ -1,0 +1,49 @@
+{
+  "schema": "atelier-obsidian-source-snapshot/v1",
+  "snapshotId": "snap-0001",
+  "workspaceId": "ws-synthetic-0001",
+  "capturedAt": "2026-01-05T10:00:00Z",
+  "readConsistency": "single-read",
+  "graphPin": {
+    "graphDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "nodeCount": 5,
+    "edgeCount": 10
+  },
+  "versions": {
+    "source": "1",
+    "config": "1",
+    "emitter": "1.0.0"
+  },
+  "repositories": [
+    {
+      "repoId": "north",
+      "head": "0123456789abcdef0123456789abcdef01234567",
+      "dirty": false,
+      "files": [
+        {
+          "path": "plans/one.md",
+          "rawDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "byteLength": 120,
+          "content": "inline body"
+        },
+        {
+          "path": "notes/four.md",
+          "rawDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "byteLength": 64
+        }
+      ]
+    },
+    {
+      "repoId": "south",
+      "head": null,
+      "dirty": true,
+      "files": [
+        {
+          "path": "notes/two.json",
+          "rawDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          "byteLength": 48
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema": "atelier-obsidian-scope/v1",
+  "scopeId": "scope-topic",
+  "mode": "scoped",
+  "selector": {
+    "run": "anything"
+  },
+  "expansion": {
+    "depth": 1,
+    "maxNodes": 3,
+    "direction": "outgoing",
+    "order": "canonical-id"
+  }
+}

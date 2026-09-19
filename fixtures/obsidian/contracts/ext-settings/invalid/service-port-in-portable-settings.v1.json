@@ -1,0 +1,28 @@
+{
+  "schema": "atelier-obsidian-ext-settings/v1",
+  "enabled": true,
+  "defaultScopeId": "scope-full",
+  "scopes": [
+    {
+      "scopeId": "scope-full",
+      "mode": "full",
+      "selector": {
+        "all": true
+      }
+    },
+    {
+      "scopeId": "scope-topic",
+      "mode": "scoped",
+      "selector": {
+        "tag": "topic"
+      },
+      "expansion": {
+        "depth": 1,
+        "maxNodes": 3,
+        "direction": "outgoing",
+        "order": "canonical-id"
+      }
+    }
+  ],
+  "port": 47811
+}
