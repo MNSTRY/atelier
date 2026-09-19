@@ -265,4 +265,132 @@ each open item is discharged with its own evidence.
 | App-driven save after replacement | Rejected. Observed losing an outside writer's bytes; kept as a negative control. |
 
 Source application back into canonical files carries the same conditional-write
-obligation against other source writers and is proven separately.
+obligation against other source writers; its protocol follows.
+
+## Source apply protocol `source-apply-exchange/v1`
+
+Source apply writes one edit made in a vault back to the one source file the
+note was generated from. It is the only operation of this integration that
+writes a source file. A person's explicit Apply (`atelier obsidian apply run
+EDIT [ACTOR]`, or the same call through the API by an agent acting for them)
+and an automatic policy reach the same function; they differ only in who
+authorises. It never stages, commits or otherwise asks git to change anything:
+the one git call asks whether the path is ignored.
+
+### Who authorises
+
+| Mode | Authority | Actor recorded |
+| --- | --- | --- |
+| `manual` | an explicit request that names the edit; the integration must be enabled | the request's actor, else `manual-request` |
+| `automatic` | the installed policy, read from private state at the decision and again immediately before the write: machine mode `automatic`, status `active`, the policy's recomputed digest equal to the digest it carries, the object inside the policy's `selector`, `body-replacement` in `allowedEditClasses`, retry budget not spent | the policy's actor, with the policy identifier and digest |
+
+In both modes the object must be visible in the canonical graph as it is now
+(eligible, enrolled, audience allowed). An absent object and a withheld one get
+the same answer. There is no ambient agent mode: an automatic request with no
+matching active policy is refused.
+
+The digest of a policy is `sha256:` and the hex SHA-256 of its canonical form:
+the policy document without its `digest` member, keys sorted at every depth,
+two-space indentation, one final newline, UTF-8. `maxBatchSize` bounds a
+dispatch (the engine's, and `applyBatch`). `retryBudget` allows one attempt and
+that many retries per operation under one revision of the policy; it is counted
+over the refusals recorded in the events of the object, so a restart does not
+refill it, and a spent budget refuses before anything is recorded.
+`conflictDisposition` is `hold`: a conflict stays queued with its bytes, and
+nothing a policy says overrides a stale source.
+
+### Order of one apply
+
+1. Resolve the workspace, the pending edit, its view and the immutable manifest
+   of the generation the edit was observed under.
+2. Build the canonical graph now. The identity must still name the path the
+   manifest recorded, in an enrolled repository. That path must be a regular
+   file with one name, reached through no symbolic link, inside the repository,
+   outside every managed root and the git directory, and not git-ignored.
+3. Read the source. Run the lens from the preserved edit bytes, never from the
+   note as it is now. Record the observation of this edit and of every other
+   open edit of the same object, so a divergent edit in another view makes the
+   object conflicted before anything is written.
+4. Take the object lease. An earlier apply whose outcome is unknown is settled
+   first, from digests on disk.
+5. Refuse, writing nothing: a repeated request (answered from the record), a
+   stale source, a conflicted object, a lens refusal, a change outside the
+   authored body, a result equal to the source, the policy, a volume that is
+   not the source's, a missing exchange.
+6. Write the apply record, then the candidate (the new source bytes, with the
+   source's mode, fsynced) in `recovery/<applyId>/000000/` of the private
+   workspace state.
+7. Record `apply-intent` in the object store.
+8. Read the policy again. Exchange the candidate with the source atomically.
+9. Read what the exchange displaced. Equal to the base: it stays as the
+   retained backup under its recovery name, with a receipt binding its digest;
+   the source is verified; `applied` is recorded with old and new digests, the
+   actor and the policy. Not equal: another program saved the source between
+   the read and the exchange. Its bytes are retained as an immutable object and
+   the files are exchanged back, so its bytes return to the source path; what
+   that displaces must be the candidate, and anything else is kept with a
+   receipt. `apply-refused`, `concurrent-source-writer`, with every reference.
+   Nothing is retried inside one call.
+10. After a quiet period the backup is read again. A program that opened the
+    source before the exchange still holds the old file and can write into it
+    at any later time: `source-changed-after-apply`, both byte sets retained.
+    An applied source leaves a closed journal of this protocol beside the
+    publication journals of the view, so the maintenance engine's late-writer
+    re-check covers the backup on the tick of the apply and on later ticks,
+    for as long as it covers a publication.
+
+The candidate is never written inside a repository working tree, where a stray
+file could be committed by somebody. An exchange cannot cross a volume, so the
+private workspace state and the source must share one; otherwise the apply
+refuses `apply-volume-mismatch`. Where no atomic exchange exists (Windows
+today) it refuses `exchange-unavailable`. Both write nothing.
+
+### Refusals
+
+| Code | When |
+| --- | --- |
+| `integration-disabled`, `workspace-not-prepared`, `unknown-edit`, `foreign-workspace`, `unknown-scope`, `edit-not-open` | the request cannot be resolved |
+| `manifest-unavailable`, `published-note-unavailable` | the generation's manifest, or the note as it was published, cannot be established |
+| `repository-not-enrolled`, `source-not-in-graph`, `source-moved` | the identity no longer names that path: a deleted, renamed or moved source |
+| `source-missing`, `source-symlink`, `source-not-regular-file`, `source-hard-linked`, `source-outside-repository`, `source-inside-managed-root`, `source-inside-git-directory`, `source-git-ignored`, `source-ignore-state-unknown` | the path is not one this operation writes |
+| `object-not-visible`, `edit-class-not-allowed`, `maintenance-mode-manual`, `no-apply-policy-installed`, `apply-policy-revoked`, `apply-policy-paused`, `apply-policy-invalid`, `apply-policy-reference-mismatch`, `policy-digest-mismatch`, `policy-changed-since-dispatch`, `policy-selector-invalid`, `outside-policy-selection`, `retry-budget-exhausted`, `batch-bound-reached` | the decision |
+| `stale-source`, `object-conflicted`, `sibling-edit-unobservable`, `lease-held` | arbitration; the operation stays conflicted or pending with its bytes |
+| `edit-not-applicable`, `change-outside-authored-body`, `no-source-change` | the lens result is not an applicable body replacement |
+| `exchange-unavailable`, `apply-volume-mismatch` | this machine cannot write conditionally here |
+| `concurrent-source-writer`, `source-changed-during-apply` | another program wrote the source during the apply; every byte is retained |
+| `interrupted-before-exchange`, `apply-interrupted-needs-person` | what restart recovery decided for an interrupted apply |
+
+### Restart recovery
+
+An `apply-intent` with no outcome is never guessed. `atelier obsidian apply
+recover`, and the next apply of the same object, decide from digests on disk.
+Only bytes with the recorded candidate digest are ours to delete.
+
+| At the candidate path | Source | Decision |
+| --- | --- | --- |
+| the candidate | anything | nothing was exchanged, or it was exchanged back: the candidate is retired, `interrupted-before-exchange` |
+| the base | the candidate | applied: the base becomes the backup, `applied` is recorded |
+| anything else | anything | everything is kept with receipts, `apply-interrupted-needs-person` |
+| nothing, backup recorded as the base | the candidate | applied |
+| nothing, no backup | the base | `interrupted-before-exchange` |
+
+### Limits
+
+- The applied source is a new file: a hard link is refused up front, extended
+  attributes and ownership are those of the candidate, and only the permission
+  bits are carried over.
+- Between the exchange and the exchange back, readers of the source path see
+  the candidate for a moment. A third write in that moment is kept: the source
+  ends as one whole version and the other is in recovery with a receipt.
+- A program that holds the old file open and writes later has its bytes
+  retained and surfaced, not merged: deciding what the source should be is a
+  person's work.
+- After an apply the next tick prepares the view again. When the prepared note
+  is byte for byte the note the person edited, it is published over nothing,
+  the hold lifts and the pending record closes as `withdrawn`; the `applied`
+  record of the object store is the authority. When it is not (the person
+  removed a generated region, for example) the view stays held.
+- The command takes the actor as a positional argument, or from
+  `--consent-actor`; the command's closed option table has no `--actor`.
+- Proven on macOS arm64 on APFS with a real second process. Linux, x86_64 and
+  other filesystems carry the open obligations of the exchange listed above.
