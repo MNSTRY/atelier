@@ -791,13 +791,16 @@ export function scanMarkdownLinks(raw) {
   const text = String(raw ?? '')
   const skipped = unscannedRanges(text)
   const overlaps = (ranges, start, end) => ranges.some(([a, b]) => start < b && end > a)
+  // A construct is unscanned when it begins inside such a region. Inline code
+  // inside a link's own label ([`name`](target)) is an ordinary link.
+  const beginsInside = (ranges, start) => ranges.some(([a, b]) => start >= a && start < b)
   const found = []
   const wikiRanges = []
 
   for (const m of text.matchAll(WIKILINK_RE)) {
     const start = m.index
     const end = start + m[0].length
-    if (overlaps(skipped, start, end)) continue
+    if (beginsInside(skipped, start)) continue
     wikiRanges.push([start, end])
     found.push({
       syntax: 'wikilink',
@@ -812,7 +815,7 @@ export function scanMarkdownLinks(raw) {
   for (const m of text.matchAll(MARKDOWN_LINK_RE)) {
     const start = m.index
     const end = start + m[0].length
-    if (overlaps(skipped, start, end) || overlaps(wikiRanges, start, end)) continue
+    if (beginsInside(skipped, start) || overlaps(wikiRanges, start, end)) continue
     const targetStart = start + m[0].indexOf('](') + 2
     found.push({
       syntax: 'markdown',
@@ -847,14 +850,16 @@ function addByteOffsets(text, occurrences) {
   }
 }
 
-function wikilinkCandidates(target, nodes) {
+// `pathOf` and `repoNameOf` come from the census keys, so a caller's node
+// needs only an id: markdownLinkEdges has always accepted such nodes.
+function wikilinkCandidates(target, nodes, pathOf, repoNameOf) {
   if (target.includes('/')) {
     const wanted = new Set([target, `${target}.md`])
-    return { by: 'path', nodes: nodes.filter((node) => wanted.has(node.path) || wanted.has(`${node.repo}/${node.path}`)) }
+    return { by: 'path', nodes: nodes.filter((node) => wanted.has(pathOf.get(node)) || wanted.has(`${repoNameOf.get(node)}/${pathOf.get(node)}`)) }
   }
-  const byTitle = nodes.filter((node) => node.title === target)
+  const byTitle = nodes.filter((node) => node.title !== undefined && node.title === target)
   const byName = nodes.filter((node) => {
-    const base = path.posix.basename(node.path)
+    const base = path.posix.basename(pathOf.get(node))
     return base === target || base.replace(/\.[^.]+$/, '') === target
   })
   const merged = [...new Map([...byTitle, ...byName].map((node) => [node.id, node])).values()]
@@ -871,6 +876,8 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
   const enrolled = repos.map((repo) => ({ ...repo, root: path.resolve(repo.root) }))
   const ownerOf = new Map(enrolled.flatMap((repo) => [...repo.nodesByPath.values()].map((node) => [node, repo])))
   const eligibleNodes = [...ownerOf.keys()].filter((node) => isLinkTargetEligible(node))
+  const pathOf = new Map(enrolled.flatMap((repo) => [...repo.nodesByPath].map(([rel, node]) => [node, rel])))
+  const repoNameOf = new Map([...ownerOf].map(([node, repo]) => [node, repo.name]))
 
   const owningRepo = (abs) =>
     enrolled
@@ -907,7 +914,7 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
         let resolvedBy = 'path'
 
         if (occurrence.syntax === 'wikilink') {
-          const candidates = wikilinkCandidates(occurrence.href, eligibleNodes)
+          const candidates = wikilinkCandidates(occurrence.href, eligibleNodes, pathOf, repoNameOf)
           if (candidates.nodes.length > 1) {
             finding('link-target-ambiguous', occurrence, `wikilink ${shown} matches ${candidates.nodes.length} documents; refusing to choose`, {
               candidates: candidates.nodes.map((item) => item.id).sort(),

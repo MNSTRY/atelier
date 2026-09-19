@@ -411,3 +411,20 @@ test('a malformed percent escape is diagnosed instead of stopping the build', (t
   assert.equal(result.ok, true, result.errors.join('\n'))
   assert.deepEqual(result.linkDiagnostics.map((item) => item.code), ['link-href-malformed'])
 })
+
+test('markdownLinkEdges accepts census nodes that carry only an id, including beside wikilinks', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-minimal-nodes-'))
+  try {
+    fs.writeFileSync(path.join(root, 'a.md'), '# A\n\nSee [b](b.md) and [[b]] and [[notes/c]].\n')
+    fs.writeFileSync(path.join(root, 'b.md'), '# B\n')
+    const nodesByPath = new Map([['a.md', { id: 'n:a' }], ['b.md', { id: 'n:b' }]])
+    assert.deepEqual(markdownLinkEdges(root, nodesByPath), [{ source: 'n:a', target: 'n:b', type: 'links_to' }])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a link whose label is inline code is an ordinary link; a link inside inline code is not', () => {
+  const found = scanMarkdownLinks('See [`b.md`](./b.md), not `[c](c.md)` and not `` [[d]] ``.\n')
+  assert.deepEqual(found.map((link) => link.href), ['./b.md'])
+})
