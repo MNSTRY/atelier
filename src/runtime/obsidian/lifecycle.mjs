@@ -6,6 +6,7 @@ import { isoTime } from './documents.mjs'
 import { refuse } from './errors.mjs'
 import { ensureWorkspaceIdentity } from './machine-settings.mjs'
 import { acquirePrivateGenerationLock, createAbandonmentProof, isProcessAlive } from './private-lock.mjs'
+import { processRunsRecordedExecutable } from './process-identity.mjs'
 import { DEFAULT_PROBE_TIMEOUT_MS, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'
 import { SERVICE_ENTRY_PATH } from './service-main.mjs'
 import {
@@ -21,7 +22,11 @@ import { resolveServiceWorkspace } from './service.mjs'
 // owner-only record and the health answer agree on service name, workspace,
 // runtime identifier, PID, executable digest and literal loopback address,
 // and that PID is alive. Anything else that answers on the port is
-// `occupied`: it is not adopted, not stopped and not replaced. A record whose
+// `occupied`: it is not adopted, not stopped and not replaced. One case is
+// told apart from it: a listener that accepts and does not answer in time
+// while the recorded PID is alive and provably runs the recorded executable is
+// our own service in a long tick. That is `busy`: never adopted, never
+// stopped and never started over; it is simply asked again later. A record whose
 // address refuses connections is `stale-record` when its PID is gone and
 // `pid-not-ours` when that PID is alive (the number was reused, or a process
 // outlived its listener): such a PID is never signalled.
@@ -29,7 +34,7 @@ import { resolveServiceWorkspace } from './service.mjs'
 // Nothing here looks a process up by port, name or pattern, and nothing here
 // removes anything but the one generated record.
 
-export const SERVICE_STATES = Object.freeze(['stopped', 'healthy', 'occupied', 'stale-record', 'pid-not-ours'])
+export const SERVICE_STATES = Object.freeze(['stopped', 'healthy', 'busy', 'occupied', 'stale-record', 'pid-not-ours'])
 export const DEFAULT_START_TIMEOUT_MS = 20 * 1000
 export const DEFAULT_STOP_TIMEOUT_MS = 45 * 1000
 
@@ -50,6 +55,8 @@ export const LIFECYCLE_PRIMITIVES = Object.freeze({
   refusesOccupied: (status) => status.state === 'occupied',
   // Whether a stop may be sent at all.
   mayStop: (status) => status.state === 'healthy',
+  // Whether the live recorded PID provably runs the recorded executable, when health did not answer in time.
+  provesOurProcess: (record) => processRunsRecordedExecutable(record),
 })
 
 function context({ loadProject, dataRoot, env, platform, create = false, randomBytes }) {
@@ -70,6 +77,8 @@ async function evaluate({ workspaceRoot, workspaceId }, { probeTimeoutMs = DEFAU
   const answer = await probeHealth({ ...address, timeoutMs: probeTimeoutMs })
   if (record === null) return answer.kind === 'refused' ? { ...base, state: 'stopped', reason: 'no-record-and-nothing-listens' } : { ...base, state: 'occupied', reason: 'a-listener-without-a-record', answer: answer.kind }
   if (answer.kind === 'refused') return alive(record.pid) ? { ...base, state: 'pid-not-ours', reason: 'recorded-pid-is-alive-but-nothing-listens' } : { ...base, state: 'stale-record', reason: 'recorded-pid-is-gone' }
+  // Only a timeout can be a busy service: a refusal, a foreign answer or a failed connection never is.
+  if (answer.kind === 'timeout' && alive(record.pid) && rules.provesOurProcess(record) === true) return { ...base, state: 'busy', reason: 'our-service-did-not-answer-health-in-time', answer: answer.kind }
   if (answer.kind !== 'health') return { ...base, state: 'occupied', reason: answer.kind === 'timeout' ? 'listener-did-not-answer-in-time' : 'listener-is-not-this-service', answer: answer.kind }
   const differing = rules.disagreements(record, answer.body)
   if (differing.length > 0) return { ...base, state: 'occupied', reason: 'health-identity-differs', disagreements: differing }
@@ -128,6 +137,7 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
     if (lock.acquired) break
     const meanwhile = await evaluate(workspace, { probeTimeoutMs, alive, rules })
     if (rules.isOurs(meanwhile)) return { ...shown(meanwhile), started: false, alreadyRunning: true }
+    if (meanwhile.state === 'busy') return { ...shown(meanwhile), started: false, alreadyRunning: true, busy: true }
     if (Date.now() >= deadline) refuse('service-start-in-progress', 'another start of this workspace holds the start lock', { reason: lock.reason })
     await sleep(100)
   }
@@ -136,6 +146,8 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   try {
     const before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
     if (rules.isOurs(before)) return { ...shown(before), started: false, alreadyRunning: true }
+    // Running, and in a long tick: nothing is started beside it and nothing replaces it.
+    if (before.state === 'busy') return { ...shown(before), started: false, alreadyRunning: true, busy: true }
     if (rules.refusesOccupied(before)) refuse('service-port-occupied', 'something that is not this service answers on the loopback port; it is never taken over', { reason: before.reason, address: before.address })
     // `stale-record` and `pid-not-ours`: nothing listens, so the recorded runtime is not serving. Its PID is never signalled;
     // the new service replaces the record once it listens. Nothing under recovery or staging is touched on the way.
@@ -169,6 +181,11 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
       }
       await sleep(50)
     }
+    // The child created here wrote the record and went straight into a long first tick: it runs, and is not stopped.
+    if (exited === null && last?.state === 'busy' && last.record?.runtimeId === runtimeId && last.record?.pid === child.pid) {
+      if (detached) child.unref()
+      return { ...shown(last), started: true, alreadyRunning: false, busy: true, ...(detached ? {} : { child }) }
+    }
     // Ownership was never proven: only the child created here is stopped, by its handle.
     if (exited === null) { child.kill(); const until = Date.now() + 5000; while (exited === null && Date.now() < until) await sleep(25) }
     removeServiceRecord({ workspaceRoot, workspaceId, runtimeId, pid: child.pid })
@@ -186,6 +203,7 @@ export async function stopService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   const status = await evaluate(workspace, { probeTimeoutMs, alive, rules })
   if (status.state === 'stopped') return { ...shown(status), stopped: false, refused: false }
   // Any disagreement refuses. Nothing is signalled, and the record stays for a person to look at.
+  if (status.state === 'busy') return { ...shown(status), stopped: false, refused: true, retry: true, reason: 'service-is-busy-ask-again-later' }
   if (!rules.mayStop(status)) return { ...shown(status), stopped: false, refused: true }
 
   const { record } = status
@@ -204,4 +222,37 @@ export async function stopService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   // The service removes its own record on the way out; after a hard end it is removed here, and only if it still names that runtime.
   removeServiceRecord({ workspaceRoot, workspaceId, runtimeId: record.runtimeId, pid: record.pid })
   return { state: 'stopped', stopped: true, refused: false, reason: 'stopped-the-proven-runtime', workspaceId, runtimeId: record.runtimeId, pid: record.pid }
+}
+
+// One authenticated request to the proven runtime, and to nothing else: anything but a healthy status is answered
+// with that status and no request is made.
+async function askProvenRuntime(options, rules, { method, operation, timeoutMs }) {
+  const { loadProject, dataRoot, probeTimeoutMs, env = process.env, platform = process.platform, alive = isProcessAlive } = options
+  const { workspace } = context({ loadProject, dataRoot, env, platform })
+  if (!workspace?.workspaceRoot) return { requested: false, state: 'stopped', reason: 'workspace-not-prepared' }
+  const status = await evaluate(workspace, { probeTimeoutMs, alive, rules })
+  if (status.state !== 'healthy') return { requested: false, state: status.state, reason: status.reason }
+  const { record } = status
+  const answer = await requestLoopback({ host: record.host, port: record.port, method, path: operation, bearer: record.ext.bearer, payload: method === 'POST' ? { runtimeId: record.runtimeId } : null, timeoutMs })
+  return { requested: true, state: 'healthy', answer }
+}
+
+// Asks the proven runtime for one tick now and returns what that tick reported. A tick that outlasts the wait is
+// `pending`, not an error.
+export async function requestServiceTick(options = {}, rules = LIFECYCLE_PRIMITIVES) {
+  const asked = await askProvenRuntime(options, rules, { method: 'POST', operation: '/tick', timeoutMs: options.tickTimeoutMs ?? 60 * 1000 })
+  if (!asked.requested) return asked
+  const { answer } = asked
+  if (answer.kind === 'timeout') return { requested: true, state: 'healthy', pending: true, tick: null, reason: 'tick-still-running' }
+  if (answer.kind !== 'response' || answer.statusCode !== 200 || answer.body === null) return { requested: true, state: 'healthy', pending: false, tick: null, reason: 'tick-was-not-answered' }
+  return { requested: true, state: 'healthy', pending: false, tick: answer.body, reason: 'tick-ran' }
+}
+
+// The status document of the proven runtime: loop, last tick, last error code, freshness summary and, where the
+// service qualifies an app, what it last learned about it. Null when it did not answer.
+export async function readServiceStatusDocument(options = {}, rules = LIFECYCLE_PRIMITIVES) {
+  const asked = await askProvenRuntime(options, rules, { method: 'GET', operation: '/status', timeoutMs: options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS })
+  if (!asked.requested) return { ...asked, document: null }
+  const { answer } = asked
+  return { requested: true, state: 'healthy', document: answer.kind === 'response' && answer.statusCode === 200 ? answer.body : null }
 }
