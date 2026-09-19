@@ -1220,6 +1220,29 @@ test('path selection: the direct path only when no Obsidian runs; a running app 
   assert.equal(defaultObsidianProcessProbe({ platform: 'linux', run: () => '/usr/bin/electron /opt/obsidian/app.asar\n' }), 'running')
 })
 
+test('the direct path reads the process table again immediately before the first note: an app started during staging stops it', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  let probes = 0
+  // Absent at path selection, running by the time staging is done.
+  const startedMeanwhile = createEditorAdapter({ call: async () => { throw new Error('socket not found') }, processProbe: () => ((probes += 1) === 1 ? 'absent' : 'running') })
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } }), startedMeanwhile)
+  assert.equal(result.mode, 'direct')
+  assert.equal(probes, 2, 'one reading for path selection, one immediately before the first note')
+  assert.equal(result.state, 'updating')
+  assert.equal(noteResult(result).outcome, 'editor-uncoordinated')
+  assert.equal(noteResult(result, OTHER).blocking, false, 'a note with nothing to write does not block')
+  assert.equal(world.read(NOTE), BASE, 'nothing is exchanged without editor coordination once an app may be running')
+  assert.equal(world.store.readCurrent().generationId, 'gen-0001')
+
+  // With no app the same view publishes, and the table was still read twice.
+  probes = 0
+  const stillAbsent = createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => { probes += 1; return 'absent' } })
+  const converged = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } }), stillAbsent)
+  assert.equal(converged.state, 'committed', JSON.stringify(converged))
+  assert.equal(probes, 2)
+  assert.equal(world.read(NOTE), CANDIDATE)
+})
+
 test('capability floor: an open note on an app build without the saved-content field refuses; a closed note still publishes', needsExchange, async (t) => {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
   const app = new ModelApp(world.vault)

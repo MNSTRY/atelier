@@ -155,7 +155,6 @@ export async function publishView(options = {}) {
     if (probe.state !== 'coordinated' && probe.state !== 'absent') refuse('editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
     const mode = probe.state === 'coordinated' ? 'in-app' : 'direct'
     const channel = mode === 'in-app' ? adapter : createDirectAdapter({ crashSeam: seam })
-    let lastProbe = Date.now()
 
     // Same volume, and an exchange that works on it.
     const vaultDevice = fs.statSync(store.vaultRoot).dev
@@ -198,8 +197,16 @@ export async function publishView(options = {}) {
 
     const context = { store, journal, journalId, channel, clock, crash, mode }
     const results = []
+    // The direct path has no editor coordination, so it is only right while no
+    // Obsidian runs. Staging takes time and an app may have started since path
+    // selection: the process table is read again immediately before the first
+    // note, whatever time has passed, and again whenever two seconds have
+    // passed since the last reading. An app that starts after a reading and
+    // before the next is not seen; that window is at most two seconds plus
+    // one note's publication.
+    let lastProbe = null
     for (const unit of units) {
-      if (mode === 'direct' && Date.now() - lastProbe > 2000) {
+      if (mode === 'direct' && (lastProbe === null || Date.now() - lastProbe > 2000)) {
         lastProbe = Date.now()
         const again = await adapter.probe({ vaultRoot: store.vaultRoot })
         if (again.state !== 'absent') context.uncoordinated = again.reason

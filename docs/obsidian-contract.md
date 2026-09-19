@@ -93,6 +93,24 @@ within the proven boundary below.
 A refusal is always an acceptable outcome. A note being edited stays one
 generation behind until its editor is clean.
 
+### The path with no app
+
+When the process table shows, positively, that no Obsidian runs, the same
+critical section runs in the publisher's own process with no editor to
+coordinate with. The table is read at path selection, again immediately before
+the first note whatever time has passed, and again whenever two seconds have
+passed since the last reading. Once a reading is anything other than absent,
+every remaining note that would be written refuses.
+
+Residual window, stated plainly: an app that starts after a reading and before
+the next is not seen, for at most two seconds plus one note's publication. In
+that window a note is exchanged with no editor check. Bytes saved to disk are
+still protected by the on-disk comparison and the exchange. An unsaved buffer
+in the newly started app is not: the app then takes its own
+external-modification merge, which can drop overlapping edits. The probe also
+cannot see an app on another machine that reaches the vault through a shared
+or synchronized folder, or an app packaged under another executable name.
+
 ### Proven boundary
 
 macOS (Darwin 25, arm64) with Obsidian 1.13.7 (installer 1.12.7), CLI enabled,
