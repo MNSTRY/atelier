@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AtelierDiagnosticError, resolveProjectConfig } from '../project/config.mjs'
 import { ObsidianContractRefusal } from '../projection/obsidian/contracts.mjs'
+import { applyPolicyDigest } from '../projection/obsidian/edits/policy.mjs'
 import { MINIMUM_APP_VERSION } from '../runtime/obsidian/app-capability.mjs'
 import { loadContributions } from '../runtime/obsidian/contributions.mjs'
 import { isoTime } from '../runtime/obsidian/documents.mjs'
@@ -51,6 +52,7 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   audience show | set A,B | clear      The audiences this machine lets into a view (private; none by default).
   mode show | set manual|automatic     Whether queued edits wait for a person or are applied under the policy.
   policy show | install FILE | revoke  The private apply policy. Automatic mode needs an installed, active one.
+  policy digest FILE                   The digest FILE has to carry to be installed. Reads FILE; writes nothing.
   service start [--consent-actor ID] --adapter=${PRODUCTION_ADAPTER}
   service status | stop                The owned maintenance service of this workspace.
   service unit --print --adapter=${PRODUCTION_ADAPTER}
@@ -91,6 +93,7 @@ const NEXT = Object.freeze({
   'startup-consent-required': 'pass --consent-actor ID to record who allows the maintenance service to run',
   'automatic-mode-refused': 'install an active automatic policy with `obsidian policy install FILE`',
   [APPLY_UNAVAILABLE]: 'no apply operation ships yet; edits stay preserved and queued',
+  'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
   disabled: 'declare the Obsidian settings in the project configuration',
 })
 
@@ -246,23 +249,33 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           const { applyPolicy, automaticApply } = shownMachine(machineOf(workspace), workspace)
           return { exit: EXIT.ok, document: { installed: policy !== null, reference: applyPolicy, policy, automaticApply }, human: [policy === null ? 'no apply policy is installed' : `${policy.policyId} v${policy.version} ${policy.mode} ${policy.status}; automatic apply ${automaticApply.authorized ? 'authorized' : `not authorized (${automaticApply.reason})`}`] }
         }
-        if (sub === 'install') {
-          if (value === undefined) refuse('usage', 'policy install FILE')
+        const readPolicyFile = () => {
+          if (value === undefined) refuse('usage', `policy ${sub} FILE`)
           const file = path.resolve(cwd, value)
-          let policy
           try {
             if (fs.statSync(file).size > MAX_POLICY_BYTES) refuse('invalid-apply-policy', 'the policy file is larger than a policy can be')
-            policy = JSON.parse(fs.readFileSync(file, 'utf8'))
+            return JSON.parse(fs.readFileSync(file, 'utf8'))
           } catch (error) {
             if (error instanceof ObsidianMaintenanceRefusal) throw error
-            refuse('invalid-apply-policy', 'the policy file cannot be read as JSON', { cause: error.code ?? 'not-json' })
+            return refuse('invalid-apply-policy', 'the policy file cannot be read as JSON', { cause: error.code ?? 'not-json' })
           }
+        }
+        if (sub === 'digest') {
+          // Read-only: the digest of the canonical form of FILE, for a person or an agent to fill in. Nothing is installed.
+          const policy = readPolicyFile()
+          if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) refuse('invalid-apply-policy', 'a policy is a JSON object')
+          const digest = applyPolicyDigest(policy)
+          const carried = typeof policy.digest === 'string' ? policy.digest : null
+          return { exit: EXIT.ok, document: { digest, carried, matches: carried === digest }, human: [digest, carried === digest ? 'the file carries this digest' : 'set the "digest" member of the file to this value, then run `policy install FILE`'] }
+        }
+        if (sub === 'install') {
+          const policy = readPolicyFile()
           const { workspace, repositoryRoots, now } = writable()
-          // Validated against the frozen contract and stored owner-only beside the machine settings, outside every repository and vault.
-          installApplyPolicy({ ...workspace, policy, repositoryRoots, updatedAt: now })
+          // Validated against the frozen contract, its digest verified, and stored owner-only beside the machine settings, outside every repository and vault.
+          installApplyPolicy({ ...workspace, policy, repositoryRoots, updatedAt: now, digestOf: applyPolicyDigest })
           return { exit: EXIT.ok, document: { installed: true, reference: { policyId: policy.policyId, version: policy.version, digest: policy.digest }, status: policy.status, mode: policy.mode }, human: [`installed ${policy.policyId} v${policy.version} (${policy.mode}, ${policy.status}); the maintenance mode is unchanged`] }
         }
-        if (sub !== 'revoke') refuse('usage', 'policy show | policy install FILE | policy revoke')
+        if (sub !== 'revoke') refuse('usage', 'policy show | policy install FILE | policy digest FILE | policy revoke')
         const { workspace, repositoryRoots, now } = writable()
         const result = revokeApplyPolicy({ ...workspace, repositoryRoots, updatedAt: now })
         return { exit: EXIT.ok, document: { revoked: result.revoked, reason: result.reason, maintenanceMode: 'manual' }, human: [result.revoked ? 'revoked; no queued edit is applied from now on, and the mode is manual' : 'no apply policy was installed'] }

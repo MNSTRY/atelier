@@ -91,6 +91,9 @@ const EXT = 'mnstry.atelier.obsidian'
 const START = Date.parse('2026-01-05T10:00:00.000Z')
 const iso = (ms) => new Date(ms).toISOString()
 const digest = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`
+// The policy without its `digest` member, keys sorted at every depth, two-space indentation, one final newline, UTF-8.
+const sortedDeep = (value) => (Array.isArray(value) ? value.map(sortedDeep) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedDeep(value[key])])) : value)
+const canonicalPolicyDigest = ({ digest: _carried, ...content }) => digest(Buffer.from(`${JSON.stringify(sortedDeep(content), null, 2)}\n`, 'utf8'))
 const fixedRandom = (size) => Buffer.alloc(size, 7)
 const WORKSPACE_ID = `ws-${'07'.repeat(12)}`
 const CONSENT = { actor: 'test-suite', coverage: 'service' }
@@ -238,6 +241,8 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
         schema: 'atelier-obsidian-apply-policy/v1', policyId: 'policy-synthetic', workspaceId: WORKSPACE_ID, mode: 'automatic', status: 'active', actor: { kind: 'agent', id: 'agent-synthetic' },
         version: 1, digest: digest('policy-synthetic-1'), allowedEditClasses: ['body-replacement'], selector: { all: true }, maxBatchSize: 10, retryBudget: 2, conflictDisposition: 'hold', ...overrides,
       }
+      // The digest a policy must carry, computed here from the documented canonical form and never by the code under test.
+      if (overrides.digest === undefined) policy.digest = canonicalPolicyDigest(policy)
       const file = path.join(dir, `policy-${randomBytes(4).toString('hex')}.json`)
       fs.writeFileSync(file, JSON.stringify(policy))
       return { file, policy }
@@ -909,6 +914,34 @@ test('audience set validates, clear removes, and a project that does not declare
   const bare = makeWorld(t, { ext: null, machine: null })
   assert.equal((await bare.run(['audience', 'set', 'team', '--json'])).json.error.code, 'disabled')
   assert.equal(fs.existsSync(bare.dataRoot), false, 'and nothing was created for it')
+})
+
+test('policy install verifies the digest a policy carries and names the expected one; policy digest prints it, reads only, and the filled-in file installs', async (t) => {
+  const world = makeWorld(t)
+  const { file, policy } = world.policyFile({ digest: digest('a digest nobody computed') })
+  const expected = canonicalPolicyDigest(policy)
+  const before = { project: listing(world.projectDir), data: fs.existsSync(world.dataRoot) ? listing(world.dataRoot) : null }
+  const refused = await world.run(['policy', 'install', file, '--json'])
+  assert.deepEqual([refused.exit, refused.json.error.code, refused.json.error.detail], [EXIT.refused, 'policy-digest-mismatch', { expected, carried: policy.digest }])
+  assert.equal((await world.run(['policy', 'show', '--json'])).json.installed, false, 'a policy whose digest is wrong is not stored')
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), policy, 'the file of the person is never rewritten')
+
+  const printed = await world.run(['policy', 'digest', file, '--json'])
+  assert.deepEqual([printed.exit, printed.json.digest, printed.json.carried, printed.json.matches], [EXIT.ok, expected, policy.digest, false])
+  assert.equal((await world.run(['policy', 'digest', file])).stdout.trim().split('\n')[0], expected, 'the first line is the digest and nothing else')
+  assert.deepEqual({ project: listing(world.projectDir), data: fs.existsSync(world.dataRoot) ? listing(world.dataRoot) : null }, before, 'policy digest and a refused install write nothing')
+  // Key order and the carried digest do not change it.
+  const reordered = path.join(world.dir, 'policy-reordered.json')
+  fs.writeFileSync(reordered, JSON.stringify(Object.fromEntries(Object.entries({ ...policy, digest: expected }).reverse())))
+  assert.equal((await world.run(['policy', 'digest', reordered, '--json'])).json.matches, true)
+  for (const [argv, code] of [[['policy', 'digest'], 'usage'], [['policy', 'digest', path.join(world.dir, 'no-such-file.json')], 'invalid-apply-policy']]) {
+    const answer = await world.run([...argv, '--json'])
+    assert.deepEqual([answer.exit, answer.json.error.code], [EXIT.refused, code], argv.join(' '))
+  }
+
+  const installed = await world.run(['policy', 'install', reordered, '--json'])
+  assert.deepEqual([installed.exit, installed.json.reference.digest], [EXIT.ok, expected])
+  assert.deepEqual((await world.run(['mode', 'set', 'automatic', '--json'])).exit, EXIT.ok)
 })
 
 test('policy install validates against the frozen contract and stores privately; mode set automatic refuses without an installed, matching, active policy', async (t) => {

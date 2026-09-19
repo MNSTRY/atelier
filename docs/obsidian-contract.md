@@ -296,7 +296,10 @@ matching active policy is refused.
 
 The digest of a policy is `sha256:` and the hex SHA-256 of its canonical form:
 the policy document without its `digest` member, keys sorted at every depth,
-two-space indentation, one final newline, UTF-8. `maxBatchSize` bounds an
+two-space indentation, one final newline, UTF-8. `atelier obsidian policy
+digest FILE` prints it and writes nothing; `policy install FILE` recomputes it
+and refuses `policy-digest-mismatch`, naming the digest the file has to carry.
+The file is never rewritten for the person. `maxBatchSize` bounds an
 automatic dispatch (the engine's, and `applyBatch` in automatic mode); a batch
 a person names through `applyBatch` is bounded too, by 1000, the largest bound
 a policy can carry, and the rest of either batch refuses `batch-bound-reached`. `retryBudget` allows one attempt and
