@@ -360,6 +360,11 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `concurrent-source-writer`, `source-changed-during-apply` | another program wrote the source during the apply; every byte is retained |
 | `interrupted-before-exchange`, `apply-interrupted-needs-person` | what restart recovery decided for an interrupted apply |
 
+A path that another program removes or replaces between two steps, before the
+intent is recorded, answers one of these refusals (`source-missing`,
+`source-not-regular-file`, `workspace-not-prepared`), never an exception. The
+mode of the source is read from the descriptor its bytes were read from.
+
 ### Restart recovery
 
 An `apply-intent` with no outcome is never guessed. `atelier obsidian apply

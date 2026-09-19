@@ -2410,6 +2410,68 @@ test('apply command: list, show, run and recover answer one JSON document with t
   }
 })
 
+// A file system call that fails once, for one path, the way it fails when another program removes or replaces what
+// was there a moment ago. `when` sees the arguments of the call.
+function failOnce(t, method, when, code) {
+  const original = fs[method]
+  let failed = 0
+  fs[method] = function patched(...args) {
+    if (failed === 0 && when(...args)) { failed += 1; throw Object.assign(new Error(`${code}: synthetic race`), { code }) }
+    return original.apply(this, args)
+  }
+  const restore = () => { fs[method] = original }
+  t.after(restore)
+  return { restore, failed: () => failed }
+}
+
+test('apply beside a program that removes or replaces a path between two calls: every such race is one of the declared typed refusals, in both modes of failure, and writes nothing', needsExchange, async (t) => {
+  const world = raceWorld(t, 5)
+  const sourceOf = (index) => world.source(`race-room/rounds/round-${index}.md`)
+  const sources = () => treeListing(world.repo('race-room'), { skip: (relative) => relative.startsWith('.git/') })
+  const before = sources()
+  const same = (left, right) => typeof left === 'string' && path.resolve(left) === path.resolve(right)
+  const rows = [
+    // Armed by the open of the source. Its mode is read from that descriptor, so the one later look at the path is
+    // the second reading that prepares the note again, which sees the file on its next call: applied, or typed.
+    { name: 'the source gone for one call after it was read', code: 'ENOENT', method: 'lstatSync', armedBy: 'openSync', when: (index, armed) => (file, options) => armed() && same(file, sourceOf(index)) && options === undefined, expected: ['source-missing'], mayNotFire: true },
+    { name: 'the directory of the source replaced before the volume check', code: 'ENOTDIR', method: 'statSync', when: (index) => (file) => same(file, path.dirname(sourceOf(index))), expected: ['source-missing'] },
+    { name: 'the recovery directory removed before the volume check', code: 'ENOENT', method: 'statSync', when: () => (file) => same(file, world.recovery()), expected: ['workspace-not-prepared'] },
+    { name: 'the workspace state removed between the pointer and its resolution', code: 'ENOENT', method: 'realpathSync', when: () => (file) => typeof file === 'string' && file.includes(APPLY_WORKSPACE_ID), expected: ['workspace-not-prepared'] },
+    { name: 'a directory on the way to the source replaced by a file while it is walked', code: 'ENOTDIR', method: 'lstatSync', when: (index) => (file, options) => same(file, sourceOf(index)) && options !== undefined, expected: ['source-missing'] },
+  ]
+  for (const [index, row] of rows.entries()) {
+    const edit = world.editOf(`race-room:round-${index}`)
+    const apply = world.sourceApply()
+    let armed = false
+    const arming = row.armedBy ? failOnce(t, row.armedBy, (file) => { if (same(file, sourceOf(index))) armed = true; return false }, 'never') : null
+    const fault = failOnce(t, row.method, row.when(index, () => armed), row.code)
+    let result
+    try { result = await apply.apply({ editId: edit.editId, mode: 'manual' }) } finally { fault.restore(); arming?.restore() }
+    assert.ok(!row.armedBy || armed, `${row.name}: the source was opened`)
+    if (row.mayNotFire && result.status === 'applied') continue
+    assert.equal(fault.failed(), 1, `${row.name}: the call was made`)
+    assert.deepEqual([result.status, row.expected.includes(result.code), SOURCE_APPLY_REFUSALS.includes(result.code)], ['refused', true, true], `${row.name}: ${result.code}`)
+    assert.deepEqual(sources()[`rounds/round-${index}.md`], before[`rounds/round-${index}.md`], `${row.name}: the source is untouched`)
+    assert.equal((await world.sourceApply().apply({ editId: edit.editId, mode: 'manual' })).status, 'applied', `${row.name}: the edit is still there and applies once the race is over`)
+  }
+})
+
+test('apply beside a real removal: the source deleted, or its directory replaced by a file, after the path was checked refuses typed and creates nothing', needsExchange, async (t) => {
+  const world = raceWorld(t, 2)
+  const removals = [
+    { code: 'source-missing', act: (file) => fs.rmSync(file) },
+    { code: 'source-not-regular-file', act: (file) => { fs.rmSync(path.dirname(file), { recursive: true }); fs.writeFileSync(path.dirname(file), 'a file now') } },
+  ]
+  for (const [index, removal] of removals.entries()) {
+    const file = world.source(`race-room/rounds/round-${index}.md`)
+    const apply = world.sourceApply({}, { ...SOURCE_APPLY_PRIMITIVES, isGitIgnored: () => { removal.act(file); return false } })
+    const result = await apply.apply({ editId: world.editOf(`race-room:round-${index}`).editId, mode: 'manual' })
+    assert.deepEqual([result.status, result.code], ['refused', removal.code])
+    assert.equal(fs.existsSync(file), false, 'no source file is created')
+    if (index === 0) fs.writeFileSync(file, 'restored for the next round')
+  }
+})
+
 test('apply command beside a damaged object log: recover settles the healthy interrupted apply and reports the damaged object by its code, show answers a typed refusal, and nothing is repaired or deleted', needsExchange, async (t) => {
   const world = raceWorld(t, 2)
   const [healthy, damaged] = [0, 1].map((index) => world.editOf(`race-room:round-${index}`))

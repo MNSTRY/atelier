@@ -108,15 +108,21 @@ const isTyped = (error) => error instanceof ApplyRefusal || error instanceof Edi
   || error instanceof ObsidianContractRefusal || error instanceof AtelierDiagnosticError
 const segment = (identifier) => identifier.replaceAll(':', '_')
 const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
-const lstatOrNull = (file) => fs.lstatSync(file, { throwIfNoEntry: false }) ?? null
+// What a path answers when another program removed or replaced it, or a directory on the way to it, since it was last
+// looked at. Between the check of a path and the intent every such answer is a typed refusal, never an exception.
+const GONE = new Set(['ENOENT', 'ENOTDIR', 'ELOOP'])
+const lstatOrNull = (file) => { try { return fs.lstatSync(file, { throwIfNoEntry: false }) ?? null } catch (error) { if (GONE.has(error.code)) return null; throw error } }
 
 // One open, never through a symbolic link, and only of a regular file. A source can be replaced by another program
-// at any moment, so nothing is assumed about the file between two calls.
-function readNoFollow(file) {
+// at any moment, so nothing is assumed about the file between two calls: the mode comes from the same descriptor as
+// the bytes.
+function readNoFollow(file, { withMode = false } = {}) {
   const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
   try {
-    if (!fs.fstatSync(descriptor).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'EISDIR' })
-    return fs.readFileSync(descriptor)
+    const stat = fs.fstatSync(descriptor)
+    if (!stat.isFile()) throw Object.assign(new Error('not a regular file'), { code: 'EISDIR' })
+    const bytes = fs.readFileSync(descriptor)
+    return withMode ? { bytes, mode: stat.mode & 0o777 } : bytes
   } finally { fs.closeSync(descriptor) }
 }
 
@@ -236,8 +242,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       const pointer = readLocalPointer(project)
       if (pointer === null) refuse('workspace-not-prepared')
       const requested = workspaceStateRoot(resolveDataRoot({ dataRoot, pointer, project, env, platform }), pointer.workspaceId)
-      if (!fs.existsSync(requested)) refuse('workspace-not-prepared')
-      const workspaceRoot = fs.realpathSync(requested)
+      let workspaceRoot
+      try { workspaceRoot = fs.realpathSync(requested) } catch (error) { if (GONE.has(error.code)) refuse('workspace-not-prepared'); throw error }
       const { workspaceId } = pointer
       const repositoryRoots = protectedRoots(project)
       const machine = readMachineSettings({ workspaceRoot, workspaceId })
@@ -275,7 +281,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       let names = []
       try { names = fs.readdirSync(directory) } catch (error) { if (error.code !== 'ENOENT') throw error }
       for (const name of names.filter((item) => item.startsWith(`${segment(generationId)}--`) && item.endsWith('.json')).sort()) {
-        const bytes = readFileBytes(path.join(directory, name))
+        let bytes
+        try { bytes = readFileBytes(path.join(directory, name)) } catch (error) { if (GONE.has(error.code)) continue; throw error }
         if (name !== `${segment(generationId)}--${sha256Digest(bytes).slice(7, 19)}.json`) continue
         const manifest = JSON.parse(bytes.toString('utf8'))
         if (manifest.generationId === generationId && manifest.scopeId === scopeId) return manifest
@@ -296,7 +303,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
           const { graph, profile } = currentCorpus(workspace)
           const snapshot = seams.captureSnapshot({ project: workspace.project, graph, workspaceId: workspace.workspaceId, index: new Map(), configDigest: manifest.ext?.[EXT]?.configDigest ?? `sha256:${'0'.repeat(64)}`, capturedAt: isoTime(clock) })
           files = seams.prepareView({ snapshot, profile, scope, persistentPathRegistry: workspace.stateStore.readPathRegistry(), priorManifest: manifest, existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8') }).files
-        } catch (error) { if (!isTyped(error)) throw error }
+        } catch (error) { if (!isTyped(error) && !GONE.has(error?.code)) throw error }
         workspace.prepared.set(scope.scopeId, files)
       }
       const file = workspace.prepared.get(scope.scopeId).find((item) => item.path === noteEntry.path && item.digest === noteEntry.noteDigest)
@@ -480,10 +487,10 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         if (!early.allowed && ['object-not-visible', 'retry-budget-exhausted'].includes(early.code)) refuse(early.code, early.detail)
         const vaultRoots = workspace.enablement.scopes.map((scope) => workspace.storeOf(scope.scopeId).vaultRoot)
         const located = locateSource({ project: workspace.project, repoId: identity.repoId, relative: node.path, managedRoots: [workspace.workspaceRoot, ...vaultRoots, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, env })
-        let sourceBytes
-        try { sourceBytes = readNoFollow(located.absolute) } catch (error) { refuse(error.code === 'ENOENT' ? 'source-missing' : error.code === 'ELOOP' ? 'source-symlink' : 'source-not-regular-file') }
+        let source
+        try { source = readNoFollow(located.absolute, { withMode: true }) } catch (error) { refuse(error.code === 'ENOENT' ? 'source-missing' : error.code === 'ELOOP' ? 'source-symlink' : 'source-not-regular-file') }
+        const { bytes: sourceBytes, mode: sourceMode } = source
         const sourceDigest = sha256Digest(sourceBytes)
-        const sourceMode = fs.lstatSync(located.absolute).mode & 0o777
 
         // This edit and every other open edit of the object are observed before anything is decided, so a divergent
         // edit made in another view makes the object conflicted before any source is written.
@@ -541,7 +548,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         // The candidate's directory, on the volume of the source, with an exchange that works there.
         const store = workspace.storeOf(edit.scopeId)
         const recoveryRoot = store.resolve('recovery')
-        if (fs.statSync(recoveryRoot).dev !== fs.statSync(path.dirname(located.absolute)).dev) refuseRecorded('apply-volume-mismatch')
+        const volumeOf = (directory, code) => { try { return fs.statSync(directory).dev } catch (error) { if (GONE.has(error.code)) refuse(code, { cause: 'changed-while-applying' }); throw error } }
+        if (volumeOf(recoveryRoot, 'workspace-not-prepared') !== volumeOf(path.dirname(located.absolute), 'source-missing')) refuseRecorded('apply-volume-mismatch')
         const probe = probeExchange({ directory: store.exchangeProbeDir(), ...exchangeOptions })
         if (!probe.supported) refuseRecorded('exchange-unavailable', {}, { cause: probe.code })
 
