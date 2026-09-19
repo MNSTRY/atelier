@@ -93,6 +93,27 @@ within the proven boundary below.
 A refusal is always an acceptable outcome. A note being edited stays one
 generation behind until its editor is clean.
 
+### One publisher per vault
+
+A publication holds two locks: the view's, in its private state, and the
+vault's. Two views, or two sets of workspace state, that point at one vault
+share nothing but the vault, so the vault lock lives under the vault's real
+path in `.atelier-publication/`, a dot-directory that no note path can name
+and that the app does not show. The second publisher refuses with
+`publication-in-progress` and writes nothing. It is the only thing the
+publisher writes in a vault besides notes, attachments and the policy
+settings file.
+
+Release and recovery follow the view lock exactly. A finished publication
+writes a release marker. A publisher that dies leaves a ticket naming its
+process; the next publisher on the same host sees that the process is gone and
+takes the lock over, so a crash does not wedge the vault. Superseded tickets
+are removed while the lock is held. Two cases refuse until a person acts: a
+ticket written on another host (a vault reached through a shared or
+synchronized folder), and an unrelated live process that reuses the dead
+publisher's process ID, which clears when that process exits. When no
+publisher is running anywhere, deleting `.atelier-publication/` is safe.
+
 ### The path with no app
 
 When the process table shows, positively, that no Obsidian runs, the same

@@ -7,7 +7,7 @@ import { isPolicySettingsPath, isUserOwnedSettingsPath, prepareSettings } from '
 import { createJournal, newJournalId } from '../recovery/journal.mjs'
 import { recheckDisplacedFiles } from '../recovery/late-writer.mjs'
 import { publishedSinceCommit, reconcileUnit, recordDisplaced, recoverPublicationsLocked, retireStagedFile } from '../recovery/restart.mjs'
-import { PublicationRefusal, readFileBytes, refuse, sha256Digest } from '../recovery/store.mjs'
+import { PublicationRefusal, acquireVaultLock, readFileBytes, refuse, sha256Digest } from '../recovery/store.mjs'
 import { PROTOCOL_ID, isAddressableVaultPath } from './bridge-script.mjs'
 import { probeExchange } from './exchange.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from './test-seam.mjs'
@@ -129,20 +129,27 @@ export async function publishView(options = {}) {
   if (!adapter || typeof adapter.probe !== 'function') throw new TypeError('publishView needs an editor coordination adapter')
   if (expectedGeneration !== null && typeof expectedGeneration !== 'string') throw new TypeError('expectedGeneration must be a generation identity or null')
 
-  let release = null
+  const releases = []
   let journal = null
   try {
     if (protocolId !== PROTOCOL_ID) refuse('unknown-protocol', 'the publisher implements exactly one publication protocol')
     const { manifest, manifestBytes } = validatePreparedView(preparedView, store)
     // A release that could not be written (a full disk) is finished first.
-    if (unreleased.has(store.lockPath)) {
-      try { unreleased.get(store.lockPath)() } catch (error) { refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) }) }
-      unreleased.delete(store.lockPath)
+    for (const lockPath of [store.vaultLockPath, store.lockPath]) {
+      if (!unreleased.has(lockPath)) continue
+      try { unreleased.get(lockPath)() } catch (error) { refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) }) }
+      unreleased.delete(lockPath)
     }
-    try { release = acquirePrivateLock(store.lockPath) } catch (error) {
-      if (error.code === 'EEXIST') refuse('publication-in-progress', 'another publication of this view holds the lock')
-      refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
+    // Two locks, the view's and then the vault's: a second view or a second
+    // workspace state pointed at the same vault refuses instead of racing.
+    const acquire = (lockPath, take, held) => {
+      try { releases.push([lockPath, take()]) } catch (error) {
+        if (error.code === 'EEXIST') refuse('publication-in-progress', `another publication ${held} holds the lock`)
+        refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
+      }
     }
+    acquire(store.lockPath, () => acquirePrivateLock(store.lockPath), 'of this view')
+    acquire(store.vaultLockPath, () => acquireVaultLock(store), 'into this vault')
     const recovered = recoverPublicationsLocked({ store, clock })
     const pointer = store.readCurrent()
     if (pointer?.generationId === manifest.generationId) {
@@ -245,7 +252,7 @@ export async function publishView(options = {}) {
     }
     return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail }, notes: [], retainedEdits: [], lateWriters: [] }
   } finally {
-    if (release) try { release() } catch { unreleased.set(store.lockPath, release) }
+    for (const [lockPath, release] of releases.reverse()) try { release() } catch { unreleased.set(lockPath, release) }
   }
 }
 

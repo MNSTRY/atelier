@@ -34,7 +34,7 @@ import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publicatio
 // native refusal itself is asserted on every platform further down.
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which is asserted separately' }
-import { createRecoveryStore, listJournals, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
+import { VAULT_LOCK_DIRECTORY, acquireVaultLock, createRecoveryStore, listJournals, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
 
 // Every G00 interleaving, replayed against the production publisher on a real
 // filesystem. The editor is a model: an in-process object with the surface the
@@ -245,7 +245,7 @@ function assertStagingHoldsOnlyCandidates(store) {
   }
 }
 const keptSomewhere = (world, text, notePath = NOTE) => world.read(notePath) === text || keptTexts(world).includes(text)
-const snapshotTree = (world) => Object.fromEntries(filesUnder(world.root).filter((file) => !file.includes(`${path.sep}state${path.sep}locks${path.sep}`)).sort().map((file) => [path.relative(world.root, file), hex(fs.readFileSync(file))]))
+const snapshotTree = (world) => Object.fromEntries(filesUnder(world.root).filter((file) => !file.includes(`${path.sep}state${path.sep}locks${path.sep}`) && !file.includes(`${path.sep}${VAULT_LOCK_DIRECTORY}${path.sep}`)).sort().map((file) => [path.relative(world.root, file), hex(fs.readFileSync(file))]))
 const stamp = (file) => { const stat = fs.statSync(file, { bigint: true }); return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` }
 const noteResult = (result, notePath = NOTE) => result.notes.find((item) => item.path === notePath)
 
@@ -1273,6 +1273,41 @@ test('staging that cannot be written refuses before anything is touched; a held 
     release()
   }
   assert.equal((await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), absentAdapter())).state, 'committed')
+})
+
+test('one publisher per vault: a second view, from other workspace state, refuses while the vault is being published into', needsExchange, async (t) => {
+  const first = await seeded(t)
+  const otherRoot = fs.mkdtempSync(path.join(TMP, 'atelier-recovery-second-'))
+  t.after(() => fs.rmSync(otherRoot, { recursive: true, force: true }))
+  const second = createRecoveryStore({ workspaceRoot: otherRoot, workspaceId: 'ws-synthetic-0006', scopeId: 'scope-second', vaultRoot: first.vault, repositoryRoots: [] })
+  assert.notEqual(second.lockPath, first.store.lockPath, 'the two views do not share a view lock')
+  assert.equal(second.vaultLockPath, first.store.vaultLockPath, 'they share the vault lock, which lives under the vault\'s real path')
+  const secondView = viewOf('gen-0001', { notes: { [OTHER]: BASE }, scopeId: 'scope-second' })
+  const publishSecond = () => publishView({ preparedView: secondView, protocolId: PROTOCOL_ID, expectedGeneration: null, recoveryStore: second, adapter: absentAdapter(), clock, quietPeriodMs: 0 })
+
+  // While the first view is inside a publication, the second one refuses and writes nothing.
+  let during = null
+  const result = await first.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), absentAdapter(),
+    { [CRASH_INJECTION_TEST_SEAM]: { at: 'after-staging', halt: () => { during = publishSecond() } } })
+  assert.equal(result.state, 'committed')
+  during = await during
+  assert.equal(during.state, 'refused')
+  assert.equal(during.refusal.code, 'publication-in-progress')
+  assert.match(during.refusal.message, /into this vault/)
+  assert.equal(first.read(OTHER), null)
+  assert.deepEqual(filesUnder(path.join(otherRoot, 'staging')), [])
+
+  // Released: the second view publishes. Superseded tickets do not pile up in the vault.
+  assert.equal((await publishSecond()).state, 'committed')
+  assert.equal(first.read(OTHER), BASE)
+  const owners = fs.readdirSync(`${first.store.vaultLockPath}.owners`)
+  assert.ok(owners.length <= 2, `only the newest ticket and its release stay: ${owners}`)
+
+  // A publisher killed while it held the vault lock does not wedge the vault: its ticket names a dead process.
+  const killed = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const child = crashChild({ root: killed.root, publisher: 'production', scenario: 'replace', crashAt: 'after-staging', coordinated: false })
+  assert.equal(child.signal, 'SIGKILL', `${child.stdout} ${child.stderr}`)
+  assert.doesNotThrow(() => acquireVaultLock(killed.store)(), 'the stale ticket is taken over, as for the view lock')
 })
 
 test('refusals: unknown protocol, wrong expected generation, a view for another scope, a symlinked note path', needsExchange, async (t) => {

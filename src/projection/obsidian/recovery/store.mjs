@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { publishPrivateFile } from '../../../project/durable-state.mjs'
+import { acquirePrivateLock, publishPrivateFile } from '../../../project/durable-state.mjs'
 import { checkManagedRoots } from '../../../project/file-class.mjs'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularFileNoFollow, readRegularTextNoFollow } from '../../../project/private-state.mjs'
 
@@ -13,6 +13,7 @@ import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularF
 //   <workspaceRoot>/recovery/objects/<sha256>.bin     immutable content-addressed bytes
 //   <workspaceRoot>/recovery/<journalId>/<unit>/      displaced files and receipts
 //   <workspaceRoot>/staging/<journalId>/              disposable prepared candidates
+//   <vault>/.atelier-publication/                     the vault lock, shared by every view of the vault
 //
 // Immutable records are published with publishPrivateFile: a complete file
 // appears atomically under a name that is never overwritten. What that gives
@@ -22,6 +23,28 @@ import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularF
 // moved and never copied over, and a program that still holds it open may
 // write into it later. It is therefore never treated as immutable; its digest
 // at the time of the move is recorded in a receipt and re-checked.
+
+export const VAULT_LOCK_DIRECTORY = '.atelier-publication'
+
+// The vault lock, with the semantics of every private lock: the newest ticket
+// owns it, a release marker frees it, and a ticket whose process is gone on
+// this host is stale and is taken over. Nothing else is ever written here.
+// Tickets of superseded generations are removed while the lock is held, the
+// marker before its ticket, so the directory does not grow inside a person's
+// vault and an interrupted removal never leaves a marker without its ticket.
+export function acquireVaultLock(store) {
+  const directory = ensureContainedPrivateDirectory({ workspaceRoot: store.vaultRoot, directory: path.dirname(store.vaultLockPath), label: 'vault publication lock' })
+  const release = acquirePrivateLock(path.join(directory, path.basename(store.vaultLockPath)))
+  try {
+    const owners = `${store.vaultLockPath}.owners`
+    const names = fs.readdirSync(owners).filter((name) => /^\d{12}\.(json|released)$/.test(name)).sort()
+    const newest = names.filter((name) => name.endsWith('.json')).at(-1)?.slice(0, 12)
+    for (const name of names.filter((item) => item.slice(0, 12) < newest).sort((left, right) => (left.endsWith('.released') ? -1 : 1) - (right.endsWith('.released') ? -1 : 1))) {
+      fs.rmSync(path.join(owners, name), { force: true })
+    }
+  } catch { /* history that cannot be pruned is harmless */ }
+  return release
+}
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const DIGEST = /^sha256:[0-9a-f]{64}$/
@@ -112,6 +135,10 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
     vaultRoot: vault,
     journalsRoot: journals,
     lockPath: path.join(locks, `${segment(scopeId)}.lock`),
+    // One publisher per vault, whichever view or workspace state it belongs to.
+    // Two stores share nothing but the vault, so this lock lives under the
+    // vault's real path, in a dot-directory no note path can name.
+    vaultLockPath: path.join(vault, VAULT_LOCK_DIRECTORY, 'vault.lock'),
     ref: (absolute) => path.relative(root, absolute).split(path.sep).join('/'),
     resolve(ref) {
       const absolute = path.resolve(root, ref)
