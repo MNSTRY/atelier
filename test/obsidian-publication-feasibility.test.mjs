@@ -27,6 +27,7 @@ test('bridge payload accepts only the closed publish and inspect shapes', () => 
     publish({ guardMs: 60000 }),
     publish({ haltAt: 'whenever' }),
     publish({ exchange: 'overwrite-in-place' }),
+    publish({ editorRoute: 'force-save' }),
     { op: 'inspect', path: 'notes/Example.md', stagedPath: '/tmp/x' },
   ]) assert.throws(() => validatePayload(bad), TypeError);
 });
@@ -50,5 +51,6 @@ test('real isolated Obsidian instance preserves every supported interleaving', {
   const receipt = JSON.parse(fs.readFileSync(out, 'utf8'));
   assert.equal(receipt.fatal, null, receipt.fatal || '');
   assert.deepEqual(receipt.results.filter((result) => !result.pass).map((result) => result.id), [], run.stdout);
+  assert.equal(receipt.selectedCases, 'all', 'a partial selection cannot close G00');
   assert.deepEqual(receipt.notCovered, [], 'every architecture interleaving must be exercised before G00 can close');
 });

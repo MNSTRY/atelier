@@ -7,7 +7,7 @@
 //
 // Usage: node experiments/obsidian-publication/run-g00.mjs [--exchange atomic-swap|link-rename] [--races N] [--out FILE]
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -128,12 +128,16 @@ async function main() {
       await app.stimulus('focusAt', notePath(id), { anchor: 'brown' }); // caret inside the text the generator rewrites
       const delay = (round * 7) % 90;
       const typing = sleep(delay).then(() => app.typeText(typed));
-      const reply = await publish(id, { guardMs: Number(arg('guard', '9000')) });
+      const reply = await publish(id, { guardMs: 25000 });
       await typing;
-      await sleep(Number(arg('guard', '9000')) + 500);
-      const final = await app.bridge({ op: 'collect', path: notePath(id) });
-      const safe = kept(typed, read(full(id)), ...buffers(final));
-      rounds.push({ round, delayMs: delay, status: reply.status, safe, capturedEdits: (final.capturedEdits || []).length, trace: safe ? undefined : final.trace });
+      let final;
+      let safe = false;
+      for (const started = Date.now(); Date.now() - started < 20000 && !safe;) {
+        await sleep(1000);
+        final = await app.bridge({ op: 'collect', path: notePath(id) });
+        safe = kept(typed, read(full(id)), ...buffers(final)) && final.views.every((view) => !view.dirty);
+      }
+      rounds.push({ round, delayMs: delay, status: reply.status, replyLost: reply.replyLost || undefined, safe, capturedEdits: (final.capturedEdits || []).length, trace: safe ? undefined : final.trace });
       if (!safe) return { pass: false, reason: `typed token lost in round ${round}`, rounds, disk: read(full(id)), buffers: buffers(final) };
     }
     const statuses = rounds.reduce((tally, { status }) => ({ ...tally, [status]: (tally[status] || 0) + 1 }), {});
@@ -239,6 +243,61 @@ async function main() {
     return { pass: disk === BASE || disk === CANDIDATE, outcome, diskIs: disk === BASE ? 'base' : disk === CANDIDATE ? 'candidate' : 'other' };
   });
 
+  await record('I11', 'full disk: staging refuses, a pre-staged publication stays all-or-nothing, typed text survives until space returns', async () => {
+    if (process.platform !== 'darwin') return { pass: false, reason: 'disk-full case is implemented for macOS disk images only' };
+    await app.quit();
+    const image = path.join(layout.root, 'full.dmg');
+    const mount = path.join(layout.root, 'fullvol');
+    fs.mkdirSync(mount);
+    execFileSync('/usr/bin/hdiutil', ['create', '-size', '24m', '-fs', 'APFS', '-volname', 'AtelierG00Full', image], { stdio: 'ignore' });
+    execFileSync('/usr/bin/hdiutil', ['attach', image, '-nobrowse', '-mountpoint', mount], { stdio: 'ignore' });
+    const small = createLayout(undefined, mount); // own short root: the CLI socket path must stay under the 104-byte limit
+    const full2 = (id) => path.join(small.vault, notePath(id));
+    const filler = path.join(mount, 'filler.bin');
+    const fill = () => { const fd = fs.openSync(filler, 'a'); try { for (const size of [1 << 20, 1 << 14, 1 << 9, 1]) { const chunk = Buffer.alloc(size, 1); for (;;) { try { fs.writeSync(fd, chunk); } catch { break; } } } } finally { fs.closeSync(fd); } };
+    const previous = app;
+    app = new Instance(small);
+    try {
+      await app.launch();
+      fs.writeFileSync(full2('i11'), BASE);
+      await sleep(1500);
+      await app.stimulus('open', notePath('i11'));
+      await sleep(1500);
+      const staged = path.join(small.staging, 'i11.md');
+      fs.writeFileSync(staged, CANDIDATE);
+      fill();
+      // A candidate larger than the space left cannot be staged; the partial file it leaves must be refused by digest.
+      const big = Buffer.from(`${CANDIDATE}${'x'.repeat(4 << 20)}`);
+      const partial = path.join(small.staging, 'partial.md');
+      let stagingRefused = false;
+      try { fs.writeFileSync(partial, big); } catch (error) { stagingRefused = error.code === 'ENOSPC'; }
+      const partialReply = await app.bridge({ op: 'publish', path: notePath('i11'), baseSha256: sha256(BASE), candidateSha256: sha256(big), stagedPath: partial,
+        recoveryLinkPath: path.join(small.recovery, 'partial.prev'), guardMs: 0, haltAt: 'none', exchange, editorRoute: 'no-write' }).catch((error) => ({ status: `error: ${error.message.slice(0, 80)}` }));
+      stagingRefused = stagingRefused && ['staged-mismatch'].includes(partialReply.status) && read(full2('i11')) === BASE;
+      const reply = await app.bridge({ op: 'publish', path: notePath('i11'), baseSha256: sha256(BASE), candidateSha256: sha256(CANDIDATE), stagedPath: staged,
+        recoveryLinkPath: path.join(small.recovery, 'i11.prev'), guardMs: 1000, haltAt: 'none', exchange, editorRoute: 'no-write' });
+      const disk = read(full2('i11'));
+      const everything = [disk, read(staged), read(path.join(small.recovery, 'i11.prev'))];
+      const allOrNothing = (reply.wrote ? disk === CANDIDATE : disk === BASE) && everything.includes(BASE);
+      await app.stimulus('focusAt', notePath('i11'), { anchor: 'Unrelated' });
+      await app.typeText('TYPEDWHILEFULL');
+      await sleep(5000);
+      const whileFull = await app.bridge({ op: 'inspect', path: notePath('i11') });
+      const bufferKept = kept('TYPEDWHILEFULL', ...buffers(whileFull));
+      const diskWhileFull = read(full2('i11'));
+      fs.rmSync(filler);
+      await app.typeText('!');
+      let recovered = false;
+      for (const started = Date.now(); Date.now() - started < 20000 && !recovered;) { await sleep(1000); recovered = kept('TYPEDWHILEFULL', read(full2('i11'))); }
+      return { pass: stagingRefused && allOrNothing && bufferKept && recovered, stagingRefused, partialStatus: partialReply.status, publishStatus: reply.status, exchangeExit: reply.exitStatus, allOrNothing, bufferKept,
+        diskWhileFull: diskWhileFull === null ? 'missing' : diskWhileFull.length === 0 ? 'EMPTY (app truncated its own file)' : kept('TYPEDWHILEFULL', diskWhileFull) ? 'has typed text' : 'previous content', recoveredAfterSpaceReturned: recovered };
+    } finally {
+      await app.quit();
+      try { execFileSync('/usr/bin/hdiutil', ['detach', mount, '-force'], { stdio: 'ignore' }); } catch { /* already detached */ }
+      app = previous;
+    }
+  });
+
   return version;
 }
 
@@ -248,7 +307,7 @@ try { version = await main(); } catch (error) { fatal = String(error && error.st
 await app.quit();
 const receipt = { gate: 'G00', protocol: PROTOCOL_ID, exchange, generatedAt: new Date().toISOString(), obsidian: version,
   host: { platform: process.platform, release: os.release(), arch: process.arch, node: process.version },
-  synthetic: true, passed: !fatal && results.every((result) => result.pass), fatal, notCovered: ['disk-full'], results };
+  synthetic: true, passed: !fatal && results.every((result) => result.pass), fatal, selectedCases: only.length ? only : 'all', notCovered: [], results };
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`);
 console.log(`${receipt.passed ? 'ALL LISTED CASES PASSED' : 'NOT PASSED'}; receipt ${out}; evidence root ${layout.root}`);

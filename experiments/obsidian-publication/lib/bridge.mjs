@@ -91,7 +91,12 @@ function inApp(P) {
     // Atomic exchange: whatever occupied the note path at this instant lands at
     // the staged path, so no concurrent replacement of the note can be lost.
     const SWAP = 'import ctypes,sys\nl=ctypes.CDLL(None,use_errno=True)\nr=l.renamex_np(sys.argv[1].encode(),sys.argv[2].encode(),2)\nsys.exit(0 if r==0 else (ctypes.get_errno() or 1))';
-    require('child_process').execFileSync('/usr/bin/python3', ['-c', SWAP, P.stagedPath, full], { stdio: 'ignore' });
+    try {
+      require('child_process').execFileSync('/usr/bin/python3', ['-c', SWAP, P.stagedPath, full], { stdio: 'ignore' });
+    } catch (error) {
+      // The exchange is all-or-nothing, so a failure (for example a full disk) leaves the note as it was.
+      return done('exchange-failed', { ...snapshot(), wrote: false, exitStatus: error.status ?? null });
+    }
     step('swapped');
     if (P.haltAt === 'after-link') process.kill(process.pid, 'SIGKILL');
     fs.renameSync(P.stagedPath, P.recoveryLinkPath);
@@ -160,14 +165,16 @@ function inApp(P) {
 
   // Return at once; evidence for the guard window is fetched later with
   // op "collect" so no CLI call stays open while other calls are made.
-  const evidence = (store[P.path] = { trace, capturedEdits: captured, guardOpen: true });
+  const outcome = externalCaptured ? 'published-external-captured' : 'published';
+  // The outcome is kept in the app so a driver whose reply was lost can re-read it.
+  const evidence = (store[P.path] = { outcome, stagedPath: P.stagedPath, wrote: true, openViews: open.length, externalCaptured, trace, capturedEdits: captured, guardOpen: true });
   setTimeout(() => {
     app.workspace.offref(guard);
     vaultRefs.forEach((ref) => app.vault.offref(ref));
     step('settled');
     evidence.guardOpen = false;
   }, P.guardMs);
-  return done(externalCaptured ? 'published-external-captured' : 'published', { ...snapshot(), wrote: true, openViews: open.length, externalCaptured });
+  return done(outcome, { ...snapshot(), wrote: true, openViews: open.length, externalCaptured });
 }
 
 export function buildEvalCode(payload) {

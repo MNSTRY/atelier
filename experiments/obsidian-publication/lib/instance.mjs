@@ -21,9 +21,11 @@ const APP_DIR = process.env.ATELIER_OBSIDIAN_APP_DIR || '/Applications/Obsidian.
 
 export const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
-export function createLayout(root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-g00-'))) {
-  const layout = { root, home: path.join(root, 'home'), profile: path.join(root, 'profile'), vault: path.join(root, 'vault'),
-    staging: path.join(root, 'staging'), recovery: path.join(root, 'recovery') };
+// dataRoot lets the vault, staging and recovery live on another volume (the
+// disk-full case) while the app profile stays on a healthy one.
+export function createLayout(root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-g00-')), dataRoot = root) {
+  const layout = { root, home: path.join(root, 'home'), profile: path.join(root, 'profile'), vault: path.join(dataRoot, 'vault'),
+    staging: path.join(dataRoot, 'staging'), recovery: path.join(dataRoot, 'recovery') };
   for (const dir of [layout.home, layout.profile, path.join(layout.vault, 'notes'), layout.staging, layout.recovery]) fs.mkdirSync(dir, { recursive: true });
   if (process.env.ATELIER_OBSIDIAN_ASAR) fs.copyFileSync(process.env.ATELIER_OBSIDIAN_ASAR, path.join(layout.profile, path.basename(process.env.ATELIER_OBSIDIAN_ASAR)));
   fs.writeFileSync(path.join(layout.profile, 'obsidian.json'), JSON.stringify({
@@ -39,7 +41,10 @@ export class Instance {
   async launch() {
     fs.rmSync(this.socket, { force: true });
     const log = fs.openSync(path.join(this.layout.root, 'app.log'), 'a');
-    this.child = spawn(path.join(APP_DIR, 'Obsidian'), [`--user-data-dir=${this.layout.profile}`, '--use-mock-keychain', '--password-store=basic'], { env: this.env, detached: true, stdio: ['ignore', log, log] });
+    this.child = spawn(path.join(APP_DIR, 'Obsidian'), [`--user-data-dir=${this.layout.profile}`, '--use-mock-keychain', '--password-store=basic',
+      // Real typing implies a focused window. The test window is usually hidden, and Chromium then throttles the
+      // app's own save timers, which is not a condition a typing user can be in.
+      '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows'], { env: this.env, detached: true, stdio: ['ignore', log, log] });
     this.child.unref();
     for (let attempt = 0; attempt < 120; attempt += 1) {
       if (fs.existsSync(this.socket)) {
@@ -71,7 +76,23 @@ export class Instance {
 
   async version() { return (await this.cli('version')).trim(); }
 
+  // Read-only calls retry. A publish is never resent: when its reply is lost
+  // the outcome is re-read from the app, and an absent record means it never ran.
   async bridge(payload) {
+    if (payload.op !== 'publish') {
+      for (let attempt = 0; ; attempt += 1) {
+        try { return await this.bridgeOnce(payload); } catch (error) { if (attempt >= 2 || !/timed out/.test(error.message)) throw error; }
+      }
+    }
+    try { return await this.bridgeOnce(payload); } catch (error) {
+      if (!/timed out/.test(error.message)) throw error;
+      const record = await this.bridge({ op: 'collect', path: payload.path });
+      if (record.missing || record.stagedPath !== payload.stagedPath) throw new Error(`Publish reply lost and no outcome recorded: ${error.message}`);
+      return { ...record, status: record.outcome, replyLost: true };
+    }
+  }
+
+  async bridgeOnce(payload) {
     const out = await this.cli('eval', `code=${buildEvalCode(payload)}`);
     const start = out.indexOf('=> ');
     if (start < 0) throw new Error(`Bridge returned no value: ${JSON.stringify(out.slice(0, 600))}`);
