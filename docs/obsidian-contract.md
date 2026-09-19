@@ -275,7 +275,8 @@ writes a source file. A person's explicit Apply (`atelier obsidian apply run
 EDIT [--actor ID]`, or the same call through the API by an agent acting for them)
 and an automatic policy reach the same function; they differ only in who
 authorises. It never stages, commits or otherwise asks git to change anything:
-the one git call asks whether the path is ignored.
+its two git calls ask whether the path is ignored and where the git directory
+is.
 
 ### Who authorises
 
@@ -311,7 +312,13 @@ nothing a policy says overrides a stale source.
 2. The identity must still name the path the
    manifest recorded, in an enrolled repository. That path must be a regular
    file with one name, reached through no symbolic link, inside the repository,
-   outside every managed root and the git directory, and not git-ignored.
+   outside every managed root and every git directory, and not git-ignored.
+   A git directory is any path with a segment spelled `.git` in any case (a
+   nested repository, a submodule), anything under `<root>/.git`, and anything
+   under the directory git itself names for the repository, which a `gitdir:`
+   file can place elsewhere; a git that cannot name it refuses
+   `source-ignore-state-unknown`. The only git calls ask whether the path is
+   ignored and where the git directory is.
 3. Read the source. Run the lens from the preserved edit bytes, never from the
    note as it is now. Record the observation of this edit and of every other
    open edit of the same object, so a divergent edit in another view makes the

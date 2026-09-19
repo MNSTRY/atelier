@@ -2440,6 +2440,39 @@ test('apply command: list, show, run and recover answer one JSON document with t
   }
 })
 
+test('apply never writes inside a git directory: a nested repository, any spelling of .git on the way, and a git directory that lives under another name are refused; a git that cannot say where its directory is refuses too', async (t) => {
+  const { locateSource } = await import('../src/projection/obsidian/edits/apply.mjs')
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'atelier-gitdir-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+  const write = (relative, text = 'synthetic\n') => { fs.mkdirSync(path.dirname(path.join(dir, relative)), { recursive: true }); fs.writeFileSync(path.join(dir, relative), text) }
+  // `plain` holds a nested repository; the git directory of `apart` is `apart/storage`, named by a `gitdir:` file.
+  write('plain/notes/kept.md')
+  git(path.join(dir, 'plain'), ['init', '-q'])
+  write('plain/vendor/lib/readme.md')
+  git(path.join(dir, 'plain/vendor/lib'), ['init', '-q'])
+  write('plain/vendor/lib/.git/info/inside.md')
+  write('plain/.git/info/top.md')
+  fs.mkdirSync(path.join(dir, 'apart'))
+  git(dir, ['init', '-q', `--separate-git-dir=${path.join(dir, 'apart', 'storage')}`, path.join(dir, 'apart')])
+  assert.match(fs.readFileSync(path.join(dir, 'apart/.git'), 'utf8'), /^gitdir: /)
+  write('apart/storage/info/inside.md')
+  write('apart/notes/kept.md')
+  const project = { repos: [{ name: 'plain', path: path.join(dir, 'plain') }, { name: 'apart', path: path.join(dir, 'apart') }] }
+  const locate = (repoId, relative, rules = SOURCE_APPLY_PRIMITIVES) => {
+    try { return { located: locateSource({ project, repoId, relative, managedRoots: [], isGitIgnored: rules.isGitIgnored, gitDirectory: rules.gitDirectory, env: process.env }).absolute } } catch (error) { return { code: error.code, cause: error.detail?.cause } }
+  }
+  assert.deepEqual(locate('plain', '.git/info/top.md'), { code: 'source-inside-git-directory', cause: undefined })
+  assert.deepEqual(locate('plain', 'vendor/lib/.git/info/inside.md').code, 'source-inside-git-directory', 'a nested repository')
+  assert.deepEqual(locate('plain', 'vendor/lib/.GIT/info/inside.md').code, 'source-inside-git-directory', 'whatever the case of the name')
+  assert.deepEqual(locate('apart', 'storage/info/inside.md').code, 'source-inside-git-directory', 'a git directory that is not called .git')
+  assert.deepEqual(locate('plain', 'notes/kept.md'), { located: path.join(dir, 'plain/notes/kept.md') })
+  assert.deepEqual(locate('apart', 'notes/kept.md'), { located: path.join(dir, 'apart/notes/kept.md') })
+  assert.deepEqual(locate('plain', 'notes/kept.md', { ...SOURCE_APPLY_PRIMITIVES, gitDirectory: () => null }), { code: 'source-ignore-state-unknown', cause: 'git-directory-unknown' })
+  // Mutation control: the first segment alone does not see any of the three.
+  const firstSegmentOnly = { ...SOURCE_APPLY_PRIMITIVES, gitDirectory: ({ repositoryRoot }) => path.join(repositoryRoot, '.git'), isGitIgnored: () => false }
+  assert.deepEqual(locate('apart', 'storage/info/inside.md', firstSegmentOnly), { located: path.join(dir, 'apart/storage/info/inside.md') }, 'without the question to git, the git directory under another name is written into')
+})
+
 // A file system call that fails once, for one path, the way it fails when another program removes or replaces what
 // was there a moment ago. `when` sees the arguments of the call.
 function failOnce(t, method, when, code) {

@@ -137,6 +137,9 @@ function digestOrNull(file) {
 }
 const presentOf = (digest) => (digest === 'unreadable' ? null : digest)
 
+// No GIT_* variable of the caller reaches a git that is asked about a repository.
+const gitEnvironment = (env) => ({ ...Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('GIT_'))), GIT_OPTIONAL_LOCKS: '0' })
+
 // ---------------------------------------------------------------------------
 // The decisions the oracles of test/obsidian-edits.test.mjs are sensitive to.
 // Production always uses these; the tests substitute deliberately broken ones
@@ -158,9 +161,15 @@ export const SOURCE_APPLY_PRIMITIVES = Object.freeze({
   keepDisplaced: ({ from, to }) => { fs.renameSync(from, to); syncPrivateDirectory(path.dirname(to)) },
   // Whether git ignores the path: true, false, or null when git cannot say.
   isGitIgnored({ repositoryRoot, relative, env = process.env }) {
-    const clean = Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('GIT_')))
-    const result = spawnSync('git', ['-C', repositoryRoot, 'check-ignore', '-q', '--', relative], { env: { ...clean, GIT_OPTIONAL_LOCKS: '0' }, stdio: 'ignore', timeout: 8000 })
+    const result = spawnSync('git', ['-C', repositoryRoot, 'check-ignore', '-q', '--', relative], { env: gitEnvironment(env), stdio: 'ignore', timeout: 8000 })
     return result.status === 0 ? true : result.status === 1 ? false : null
+  },
+  // Where git keeps this repository, which need not be `<root>/.git`: a worktree, a submodule and a repository made
+  // with a separate git directory name it in a `gitdir:` file. The absolute path, or null when git cannot say.
+  gitDirectory({ repositoryRoot, env = process.env }) {
+    const result = spawnSync('git', ['-C', repositoryRoot, 'rev-parse', '--absolute-git-dir'], { env: gitEnvironment(env), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000 })
+    const answer = result.status === 0 && typeof result.stdout === 'string' ? result.stdout.replace(/\r?\n$/, '') : ''
+    return answer !== '' && path.isAbsolute(answer) ? answer : null
   },
 })
 
@@ -180,12 +189,17 @@ const STALE_OBSERVER = createEditObserverForOracleTests({
 
 // The absolute path of the one file an apply may write, or a typed refusal. Every directory on the way is a real
 // directory and the leaf is a regular file with a single name; nothing is created and nothing is followed.
-function locateSource({ project, repoId, relative, managedRoots, isGitIgnored, env }) {
+//
+// A git directory is refused three ways, because no one of them sees every case: any segment of the path spelled
+// `.git` in any case (a nested repository or a submodule; a file system that folds case), the real path lying inside
+// `<root>/.git`, and the real path lying inside the directory git itself names for the repository. A git that cannot
+// name it refuses: nothing is written on a guess.
+export function locateSource({ project, repoId, relative, managedRoots, isGitIgnored, gitDirectory = SOURCE_APPLY_PRIMITIVES.gitDirectory, env }) {
   const repo = (project.repos ?? []).find((item) => item.name === repoId && !item.external && typeof item.path === 'string')
   if (!repo) refuse('repository-not-enrolled')
   const parts = typeof relative === 'string' ? relative.split('/') : []
   if (parts.length === 0 || parts.some((part) => part === '' || part === '.' || part === '..') || path.isAbsolute(relative) || relative.includes('\\')) refuse('source-outside-repository')
-  if (parts[0] === '.git') refuse('source-inside-git-directory')
+  if (parts.some((part) => part.toLowerCase() === '.git')) refuse('source-inside-git-directory')
   let repositoryRoot
   try { repositoryRoot = fs.realpathSync.native(repo.path) } catch { refuse('repository-not-enrolled', { cause: 'root-unreadable' }) }
   let current = repositoryRoot
@@ -206,6 +220,11 @@ function locateSource({ project, repoId, relative, managedRoots, isGitIgnored, e
     try { managed = fs.realpathSync.native(managedRoot) } catch { continue }
     if (inside(managed, real)) refuse('source-inside-managed-root')
   }
+  const realOrSelf = (directory) => { try { return fs.realpathSync.native(directory) } catch { return directory } }
+  if (inside(realOrSelf(path.join(repositoryRoot, '.git')), real)) refuse('source-inside-git-directory')
+  const gitDir = gitDirectory({ repositoryRoot, env })
+  if (typeof gitDir !== 'string') refuse('source-ignore-state-unknown', { cause: 'git-directory-unknown' })
+  if (inside(realOrSelf(gitDir), real)) refuse('source-inside-git-directory')
   const ignored = isGitIgnored({ repositoryRoot, relative, env })
   if (ignored === true) refuse('source-git-ignored')
   if (ignored !== false) refuse('source-ignore-state-unknown')
@@ -416,7 +435,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       }
       let sourceDigest = null
       try {
-        const located = locateSource({ project: workspace.project, repoId: record.repoId, relative: record.sourcePath, managedRoots: [workspace.workspaceRoot, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, env })
+        const located = locateSource({ project: workspace.project, repoId: record.repoId, relative: record.sourcePath, managedRoots: [workspace.workspaceRoot, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, gitDirectory: rules.gitDirectory, env })
         sourceDigest = digestOrNull(located.absolute)
       } catch (error) { if (!(error instanceof ApplyRefusal)) throw error }
       const refused = (code, disposition, recoveryRefs = []) => {
@@ -494,7 +513,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         const early = decideWith('body-replacement', attemptsIn(before))
         if (!early.allowed && early.code === 'retry-budget-exhausted') refuse(early.code, early.detail)
         const vaultRoots = workspace.enablement.scopes.map((scope) => workspace.storeOf(scope.scopeId).vaultRoot)
-        const located = locateSource({ project: workspace.project, repoId: identity.repoId, relative: node.path, managedRoots: [workspace.workspaceRoot, ...vaultRoots, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, env })
+        const located = locateSource({ project: workspace.project, repoId: identity.repoId, relative: node.path, managedRoots: [workspace.workspaceRoot, ...vaultRoots, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, gitDirectory: rules.gitDirectory, env })
         let source
         try { source = readNoFollow(located.absolute, { withMode: true }) } catch (error) { refuse(error.code === 'ENOENT' ? 'source-missing' : error.code === 'ELOOP' ? 'source-symlink' : 'source-not-regular-file') }
         const { bytes: sourceBytes, mode: sourceMode } = source
