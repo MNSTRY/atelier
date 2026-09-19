@@ -623,7 +623,7 @@ async function crashCase(t, publisher, point) {
 }
 
 for (const point of CRASH_POINTS) {
-  test(`${point.label ?? 'interrupted'}: killed ${point.crashAt}${point.coordinated ? '' : ' (direct path)'}: coherent note, base and candidate both kept, idempotent recovery, convergence`, async (t) => {
+  test(`${point.label ?? 'interrupted'}: killed ${point.crashAt}${point.coordinated ? '' : ' (direct path)'}: coherent note, base and candidate both kept, idempotent recovery, convergence`, needsExchange, async (t) => {
     const { world, afterCrash, keptBase, keptCandidate } = await crashCase(t, 'production', point)
     assert.equal(afterCrash, point.disk, 'the note is one coherent version')
     assert.ok(keptBase, 'base bytes kept')
