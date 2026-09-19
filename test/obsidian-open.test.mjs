@@ -1080,7 +1080,8 @@ test('the maintenance notice is null unless the integration is enabled, and read
 
 function syncFixture(t, ext) {
   const git = resolveGitExecutable()
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-opening-sync-')))
+  // The native form: on Windows a temporary directory can be an 8.3 short path, and enrollment records the long one.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-opening-sync-')))
   t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
   runGit(git, root, ['init', '--initial-branch=main'])
   for (const [key, value] of [['user.name', 'Atelier Test'], ['user.email', 'atelier@example.invalid'], ['commit.gpgsign', 'false']]) runGit(git, root, ['config', key, value])
@@ -1089,9 +1090,19 @@ function syncFixture(t, ext) {
   writeJson(path.join(root, 'repo-access.v1.json'), { schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'team', repos: { workspace: { readBoundary: 'team' } } })
   runGit(git, root, ['add', '.'])
   runGit(git, root, ['commit', '-m', 'initial'])
-  enrollRepository({ repoPath: root, projectConfig: path.join(root, 'atelier.project.json'), gitExecutable: git })
+  // No project path is passed: enrollment finds atelier.project.json under the root it resolved itself, so the recorded
+  // path and the root it is later checked against are the same spelling on every platform.
+  const enrolled = enrollRepository({ repoPath: root, gitExecutable: git })
+  assert.equal(path.basename(enrolled.enrollment.projectConfig ?? ''), 'atelier.project.json', 'the enrollment names the project configuration')
   const { MNSTRY_ATELIER_PROJECT_CONFIG: _config, MNSTRY_ATELIER_LOCAL_CONFIG: _overlay, ...env } = process.env
-  const status = () => { const result = childProcess.spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'src/commands/sync.mjs'), 'status', '--repo', root], { encoding: 'utf8', env, windowsHide: true }); return { code: result.status, document: JSON.parse(result.stdout) } }
+  const status = () => {
+    const result = childProcess.spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'src/commands/sync.mjs'), 'status', '--repo', root], { encoding: 'utf8', env, windowsHide: true })
+    let document
+    try { document = JSON.parse(result.stdout) } catch {
+      throw new Error(`sync status printed no JSON document: exit ${result.status}, signal ${result.signal}, error ${result.error?.code ?? result.error?.message ?? 'none'}, stdout ${JSON.stringify(String(result.stdout).slice(0, 500))}, stderr ${JSON.stringify(String(result.stderr).slice(0, 2000))}`)
+    }
+    return { code: result.status, document }
+  }
   return { root, status }
 }
 
