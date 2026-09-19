@@ -53,3 +53,47 @@ export function normalizeApplyResult(value) {
   }
   return { status: 'failed', code: 'invalid-apply-result' }
 }
+
+// ---------------------------------------------------------------------------
+// Sub-operations of the `obsidian` command, and contributions
+// ---------------------------------------------------------------------------
+
+// Later work adds `obsidian <operation>` sub-operations the same way it adds
+// an apply operation: by registering on a value, never by editing the command
+// dispatcher. A built-in name cannot be taken, with one exception: `apply` is
+// a placeholder that only reports `apply-unavailable`, and the work that ships
+// an apply operation replaces it.
+const OPERATION_NAME = /^[a-z][a-z0-9-]{0,31}$/
+export const REPLACEABLE_OPERATIONS = Object.freeze(['apply'])
+
+export function createCommandOperations({ reserved = [] } = {}) {
+  const registered = new Map()
+  return Object.freeze({
+    register(operation) {
+      const valid = operation !== null && typeof operation === 'object' && typeof operation.name === 'string' && OPERATION_NAME.test(operation.name)
+        && typeof operation.summary === 'string' && operation.summary !== '' && typeof operation.run === 'function'
+      if (!valid) refuse('invalid-extension', 'a command operation needs a name, a summary and run()')
+      if (reserved.includes(operation.name) && !REPLACEABLE_OPERATIONS.includes(operation.name)) refuse('operation-name-reserved', 'a built-in operation cannot be replaced', { name: operation.name })
+      if (registered.has(operation.name)) refuse('extension-already-registered', 'an operation of this name is already registered', { name: operation.name })
+      registered.set(operation.name, operation)
+      return operation.name
+    },
+    get: (name) => registered.get(name) ?? null,
+    describe: () => [...registered.values()].map(({ name, summary }) => ({ name, summary })).sort((left, right) => (left.name < right.name ? -1 : 1)),
+  })
+}
+
+// One registry per composition: the maintenance extensions the engine reads
+// and the operations the command reads. A contribution is
+// `{ id, register({ extensions, operations }) }`; each is applied once, in order.
+export function createObsidianRegistry({ reservedOperations = [], contributions = [] } = {}) {
+  const registry = Object.freeze({ extensions: createMaintenanceExtensions(), operations: createCommandOperations({ reserved: reservedOperations }) })
+  const applied = []
+  for (const contribution of contributions) {
+    if (contribution === null || typeof contribution !== 'object' || typeof contribution.id !== 'string' || contribution.id === '' || typeof contribution.register !== 'function') refuse('invalid-extension', 'a contribution needs an id and register()')
+    if (applied.includes(contribution.id)) refuse('extension-already-registered', 'a contribution of this id was already applied', { id: contribution.id })
+    contribution.register(registry)
+    applied.push(contribution.id)
+  }
+  return Object.freeze({ ...registry, contributions: Object.freeze(applied) })
+}
