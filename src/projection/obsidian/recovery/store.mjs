@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { publishPrivateFile } from '../../../project/durable-state.mjs'
+import { checkManagedRoots } from '../../../project/file-class.mjs'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularFileNoFollow, readRegularTextNoFollow } from '../../../project/private-state.mjs'
 
 // Private per-workspace state for one Obsidian view:
@@ -71,16 +72,26 @@ function publishOnce(file, bytes) {
   return true
 }
 
-export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vaultRoot } = {}) {
+// `repositoryRoots` is required: every enrolled repository root of the loaded
+// project. Neither the workspace state nor the vault may overlap one of them,
+// in either direction, lexically or by real path; the store refuses before it
+// creates anything. A caller with no enrolled repository (a test in a
+// temporary directory) says so with an explicit empty list.
+export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vaultRoot, repositoryRoots } = {}) {
   if (typeof workspaceRoot !== 'string' || !path.isAbsolute(workspaceRoot)) throw new TypeError('workspaceRoot must be an absolute path')
   for (const [label, value] of [['workspaceId', workspaceId], ['scopeId', scopeId]]) {
     if (typeof value !== 'string' || !IDENTIFIER.test(value)) throw new TypeError(`${label} must be a contract identifier`)
   }
+  if (!Array.isArray(repositoryRoots) || repositoryRoots.some((item) => typeof item !== 'string' || !path.isAbsolute(item))) {
+    throw new TypeError('repositoryRoots must list the absolute root of every enrolled repository; pass an explicit empty list when there is none')
+  }
+  if (vaultRoot !== undefined && (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot))) throw new TypeError('vaultRoot must be an absolute path')
+  const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(vaultRoot === undefined ? [] : [vaultRoot])], repositoryRoots })
+  if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
   const root = fs.realpathSync(workspaceRoot)
   const privateDir = (...parts) => ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, ...parts), label: 'Obsidian publication state' })
   const requestedVault = vaultRoot ?? path.join(root, 'vaults', segment(scopeId))
-  if (!path.isAbsolute(requestedVault)) throw new TypeError('vaultRoot must be an absolute path')
   fs.mkdirSync(requestedVault, { recursive: true })
   const vault = fs.realpathSync(requestedVault)
   const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }

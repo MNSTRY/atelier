@@ -183,13 +183,19 @@ export function classifyManagedPath(relativePath) {
   return { path: rel, area, class: resolved, handling: MANAGED_AREA_HANDLING[resolved] }
 }
 
+// The real path of a target that may not exist yet: the deepest existing
+// ancestor is resolved and the missing tail is appended. Only "does not exist"
+// moves up a level. Any other failure (a directory that cannot be searched,
+// a link loop) is thrown: a lexical path standing in for a real one would
+// weaken the alias check exactly where it matters.
 function realLocation(target, realpath) {
   const missing = []
   let current = path.resolve(target)
   for (;;) {
     try {
       return path.join(realpath(current), ...missing.reverse())
-    } catch {
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error
       const parent = path.dirname(current)
       if (parent === current) return path.resolve(target)
       missing.push(path.basename(current))
@@ -208,13 +214,29 @@ function isSymbolicLink(target, lstat) {
   }
 }
 
+// True when the path or any of its ancestors is a symbolic link.
+function crossesSymbolicLink(target, lstat) {
+  for (let current = path.resolve(target); ; current = path.dirname(current)) {
+    if (isSymbolicLink(current, lstat)) return true
+    if (path.dirname(current) === current) return false
+  }
+}
+
 // Refuse a managed root that overlaps an enrolled repository in either
 // direction, under lexical or real paths. `realpath` and `lstat` are the only
 // filesystem reads, and both can be supplied; nothing is created or changed.
+// A real path that cannot be established refuses; it is never replaced by the
+// lexical path.
 export function checkManagedRoots({ managedRoots = [], repositoryRoots = [], realpath = fs.realpathSync.native, lstat = fs.lstatSync } = {}) {
   const refusals = []
   const refuse = (code, managedRoot, repositoryRoot, message) => refusals.push({ code, managedRoot, repositoryRoot, message })
-  const locate = (root) => ({ given: root, lexical: path.resolve(root), real: realLocation(root, realpath) })
+  const locate = (root) => {
+    try {
+      return { given: root, lexical: path.resolve(root), real: realLocation(root, realpath) }
+    } catch (error) {
+      return { given: root, lexical: path.resolve(root), real: null, errorCode: error?.code ?? 'unknown' }
+    }
+  }
   const repositories = repositoryRoots.map(locate)
 
   for (const managedRoot of managedRoots) {
@@ -223,6 +245,10 @@ export function checkManagedRoots({ managedRoots = [], repositoryRoots = [], rea
       continue
     }
     const managed = locate(managedRoot)
+    if (managed.real === null) {
+      refuse('managed-root-realpath-failed', managedRoot, null, `the real path of a managed root cannot be established (${managed.errorCode})`)
+      continue
+    }
     if (isSymbolicLink(managed.lexical, lstat)) {
       refuse('managed-root-symlink-alias', managedRoot, null, 'a managed root must not be a symbolic link')
     }
@@ -231,8 +257,21 @@ export function checkManagedRoots({ managedRoots = [], repositoryRoots = [], rea
       const around = (kind) => containsPath(managed[kind], repository[kind])
       if (inside('lexical')) refuse('managed-root-inside-repository', managedRoot, repository.given, 'a managed root must sit outside every enrolled repository')
       else if (around('lexical')) refuse('repository-inside-managed-root', managedRoot, repository.given, 'an enrolled repository must not sit inside a managed root')
-      else if (inside('real') || around('real')) {
-        refuse('managed-root-symlink-alias', managedRoot, repository.given, 'a symbolic link makes the managed root and an enrolled repository overlap')
+      else if (repository.real === null) {
+        refuse('managed-root-realpath-failed', managedRoot, repository.given, `the real path of an enrolled repository cannot be established (${repository.errorCode})`)
+      } else if (inside('real') || around('real')) {
+        // Name the cause that is actually there. Folding letter case and
+        // Unicode normalization alone may explain the overlap; otherwise a
+        // symbolic link on either path does; otherwise something else presents
+        // one location under two names (a mount, for example).
+        const folded = (value) => value.normalize('NFC').toLowerCase()
+        const byFolding = containsPath(folded(repository.lexical), folded(managed.lexical)) || containsPath(folded(managed.lexical), folded(repository.lexical))
+        if (!byFolding && (crossesSymbolicLink(managed.lexical, lstat) || crossesSymbolicLink(repository.lexical, lstat))) {
+          refuse('managed-root-symlink-alias', managedRoot, repository.given, 'a symbolic link makes the managed root and an enrolled repository overlap')
+        } else {
+          refuse('managed-root-realpath-overlap', managedRoot, repository.given,
+            'the managed root and an enrolled repository are written differently but name overlapping locations, and no symbolic link explains it: look for a difference in letter case or Unicode normalization on a filesystem that folds them, or a mount that presents one location under two names')
+        }
       }
     }
   }
@@ -247,6 +286,7 @@ export function checkRepositoryEnrollment({ repositoryRoot, managedRoots = [], r
     'managed-root-inside-repository': 'enrollment-contains-managed-root',
     'repository-inside-managed-root': 'enrollment-inside-managed-root',
     'managed-root-symlink-alias': 'enrollment-aliases-managed-root',
+    'managed-root-realpath-overlap': 'enrollment-realpath-overlaps-managed-root',
   }
   const blocking = refusals.filter((item) => item.repositoryRoot !== null).map((item) => ({ ...item, code: codes[item.code] ?? item.code }))
   return { ok: blocking.length === 0, refusals: blocking }

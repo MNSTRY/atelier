@@ -241,9 +241,69 @@ test('symbolic-link aliases between a managed root and a repository are refused'
     managedRoots: [path.resolve('/virtual/data')],
     repositoryRoots: [path.resolve('/virtual/repo')],
     realpath: (target) => (target === path.resolve('/virtual/data') ? path.resolve('/virtual/repo/inner') : target),
-    lstat: () => ({ isSymbolicLink: () => false }),
+    lstat: (target) => ({ isSymbolicLink: () => target === path.resolve('/virtual/data') }),
   })
-  assert.deepEqual(codes(mapped), ['managed-root-symlink-alias'])
+  assert.deepEqual(codes(mapped), ['managed-root-symlink-alias', 'managed-root-symlink-alias'])
+})
+
+test('a real-path overlap with no symbolic link is named as such, not as a link alias', (t) => {
+  const codes = (result) => result.refusals.map((item) => item.code)
+  const noLinks = () => ({ isSymbolicLink: () => false })
+  // Letter case on a folding filesystem, without a disk.
+  const folding = checkManagedRoots({
+    managedRoots: [path.resolve('/virtual/code/proj/data')],
+    repositoryRoots: [path.resolve('/virtual/Code/proj')],
+    realpath: (target) => target.replace(`${path.sep}code${path.sep}`, `${path.sep}Code${path.sep}`),
+    lstat: noLinks,
+  })
+  assert.deepEqual(codes(folding), ['managed-root-realpath-overlap'])
+  assert.match(folding.refusals[0].message, /letter case/)
+  assert.doesNotMatch(folding.refusals[0].message, /^a symbolic link/)
+
+  // Folding explains the overlap even when some ancestor happens to be a link.
+  const foldingUnderLink = checkManagedRoots({
+    managedRoots: [path.resolve('/virtual/code/proj/data')],
+    repositoryRoots: [path.resolve('/virtual/Code/proj')],
+    realpath: (target) => target.replace(`${path.sep}code${path.sep}`, `${path.sep}Code${path.sep}`),
+    lstat: (target) => ({ isSymbolicLink: () => target === path.resolve('/virtual') }),
+  })
+  assert.deepEqual(codes(foldingUnderLink), ['managed-root-realpath-overlap'])
+
+  // Neither folding nor a link: still an overlap, still not called a link.
+  const mounted = checkManagedRoots({
+    managedRoots: [path.resolve('/virtual/data')],
+    repositoryRoots: [path.resolve('/virtual/repo')],
+    realpath: (target) => (target === path.resolve('/virtual/data') ? path.resolve('/virtual/repo/inner') : target),
+    lstat: noLinks,
+  })
+  assert.deepEqual(codes(mounted), ['managed-root-realpath-overlap'])
+  assert.deepEqual(codes(checkRepositoryEnrollment({ repositoryRoot: path.resolve('/virtual/repo'), managedRoots: [path.resolve('/virtual/data')],
+    realpath: (target) => (target === path.resolve('/virtual/data') ? path.resolve('/virtual/repo/inner') : target), lstat: noLinks })), ['enrollment-realpath-overlaps-managed-root'])
+
+  // On a real case-folding volume (the macOS default), with no link anywhere below the base.
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-managed-case-')))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(base, 'Proj'))
+  if (!fs.existsSync(path.join(base, 'proj'))) return t.diagnostic('this volume is case-sensitive; the real-volume case is covered by the injected one')
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [path.join(base, 'proj', 'data')], repositoryRoots: [path.join(base, 'Proj')] })), ['managed-root-realpath-overlap'])
+})
+
+test('a real path that cannot be established refuses; it is never replaced by the lexical path', () => {
+  const codes = (result) => result.refusals.map((item) => item.code)
+  const denied = (blocked) => (target) => {
+    if (target === blocked) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    if (target.startsWith(path.resolve('/virtual/absent'))) throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    return target
+  }
+  const lstat = () => ({ isSymbolicLink: () => false })
+  const data = path.resolve('/virtual/data')
+  const repo = path.resolve('/virtual/repo')
+  const managedDenied = checkManagedRoots({ managedRoots: [data], repositoryRoots: [repo], realpath: denied(data), lstat })
+  assert.deepEqual(codes(managedDenied), ['managed-root-realpath-failed'])
+  assert.match(managedDenied.refusals[0].message, /EACCES/)
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [data], repositoryRoots: [repo], realpath: denied(repo), lstat })), ['managed-root-realpath-failed'])
+  // A root that does not exist yet is still fine: only "does not exist" moves up a level.
+  assert.equal(checkManagedRoots({ managedRoots: [path.resolve('/virtual/absent/data')], repositoryRoots: [repo], realpath: denied(null), lstat }).ok, true)
 })
 
 test('a later enrollment that would contain a managed root is refused', (t) => {

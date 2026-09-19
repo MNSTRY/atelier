@@ -192,7 +192,7 @@ const absentAdapter = () => createEditorAdapter({ call: async () => { throw new 
 function makeWorld(t, { root } = {}) {
   const workspaceRoot = root ?? fs.mkdtempSync(path.join(TMP, 'atelier-recovery-'))
   if (t) t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
-  const store = createRecoveryStore({ workspaceRoot, workspaceId: 'ws-synthetic-0003', scopeId: 'scope-synthetic' })
+  const store = createRecoveryStore({ workspaceRoot, workspaceId: 'ws-synthetic-0003', scopeId: 'scope-synthetic', repositoryRoots: [] })
   const world = {
     root: store.workspaceRoot,
     store,
@@ -291,6 +291,38 @@ function crashChild(job) {
   delete env.NODE_TEST_CONTEXT
   return spawnSync(process.execPath, [SELF], { env, encoding: 'utf8', timeout: 60000 })
 }
+
+// ---------------------------------------------------------------------------
+// Store construction
+// ---------------------------------------------------------------------------
+
+test('a store refuses, before creating anything, a workspace root or vault that overlaps an enrolled repository', (t) => {
+  const base = fs.mkdtempSync(path.join(TMP, 'atelier-store-guard-'))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  const repo = path.join(base, 'projects', 'alpha-notes')
+  fs.mkdirSync(repo, { recursive: true })
+  const ids = { workspaceId: 'ws-synthetic-0005', scopeId: 'scope-synthetic' }
+  const data = path.join(base, 'data')
+  const refusal = (options, code) => assert.throws(() => createRecoveryStore({ ...ids, ...options }), (error) => error.name === 'PublicationRefusal' && error.code === code && error.detail.refusals.length > 0, code)
+
+  assert.throws(() => createRecoveryStore({ ...ids, workspaceRoot: data }), TypeError, 'the enrolled repository roots are required')
+  assert.throws(() => createRecoveryStore({ ...ids, workspaceRoot: data, repositoryRoots: ['relative/repo'] }), TypeError)
+  refusal({ workspaceRoot: path.join(repo, 'atelier-output'), repositoryRoots: [repo] }, 'managed-root-inside-repository')
+  refusal({ workspaceRoot: path.join(base, 'projects'), repositoryRoots: [repo] }, 'repository-inside-managed-root')
+  refusal({ workspaceRoot: data, vaultRoot: path.join(repo, 'vault'), repositoryRoots: [repo] }, 'managed-root-inside-repository')
+  refusal({ workspaceRoot: data, vaultRoot: base, repositoryRoots: [repo] }, 'repository-inside-managed-root')
+  assert.deepEqual(fs.readdirSync(base), ['projects'], 'a refused store created nothing')
+  assert.deepEqual(fs.readdirSync(repo), [])
+
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(repo, path.join(base, 'innocent'), 'dir')
+    refusal({ workspaceRoot: path.join(base, 'innocent', 'state'), repositoryRoots: [repo] }, 'managed-root-symlink-alias')
+    assert.deepEqual(fs.readdirSync(repo), [])
+  }
+
+  const store = createRecoveryStore({ ...ids, workspaceRoot: data, repositoryRoots: [repo] })
+  assert.equal(store.vaultRoot, path.join(fs.realpathSync(data), 'vaults', 'scope-synthetic'))
+})
 
 // ---------------------------------------------------------------------------
 // Payload and script
@@ -1163,7 +1195,7 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
     const layout = createLayout()
     const instance = new Instance(layout)
     const vault = fs.realpathSync(layout.vault)
-    const store = createRecoveryStore({ workspaceRoot: path.join(layout.root, 'atelier-state'), workspaceId: 'ws-synthetic-0004', scopeId: 'scope-synthetic', vaultRoot: vault })
+    const store = createRecoveryStore({ workspaceRoot: path.join(layout.root, 'atelier-state'), workspaceId: 'ws-synthetic-0004', scopeId: 'scope-synthetic', vaultRoot: vault, repositoryRoots: [] })
     // The isolated app is reached only through its private HOME. The process probe is fixed to "running": another
     // Obsidian may be running on this desktop, and this test must never take the direct path.
     const adapter = createObsidianCliAdapter({ cliPath: path.join(appDir, 'obsidian-cli'), env: instance.env, processProbe: () => 'running' })
