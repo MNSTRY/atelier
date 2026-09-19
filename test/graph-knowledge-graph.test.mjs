@@ -9,6 +9,7 @@ import {
   buildKnowledgeGraph,
   markdownLinkEdges,
   portableText,
+  resolveWorkspaceLinks,
   scanMarkdownLinks,
   validateRepoAccessConfig,
 } from '../src/graph/knowledge-graph.mjs'
@@ -347,6 +348,38 @@ test('a withheld target yields no edge and a finding identical to an absent targ
     isLinkTargetEligible: (node) => node.id !== 'beta-notes:open',
   })
   assert.deepEqual(derived(sourceWithheld), [])
+})
+
+test('a withheld directory candidate never shadows an eligible one: links and findings equal the absent case', () => {
+  // Each case names the files present under d/ and which of them are withheld.
+  const run = (present, withheld = []) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-withheld-candidate-'))
+    try {
+      fs.mkdirSync(path.join(root, 'd'))
+      fs.writeFileSync(path.join(root, 'src.md'), 'See [x](d) and [y](d/README.md) and [z](d/index.md).\n')
+      const nodesByPath = new Map([['src.md', { id: 'n:src.md', path: 'src.md' }]])
+      for (const rel of present) {
+        fs.writeFileSync(path.join(root, rel), `# ${rel}\n`)
+        nodesByPath.set(rel, { id: `n:${rel}`, path: rel })
+      }
+      const hidden = new Set(withheld.map((rel) => `n:${rel}`))
+      return resolveWorkspaceLinks({ repos: [{ name: 'r', root, nodesByPath }], isLinkTargetEligible: (node) => !hidden.has(node.id) })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  const indexOnly = run(['d/index.md'])
+  assert.deepEqual(indexOnly.links.map((link) => [link.href, link.target]), [['d', 'n:d/index.md'], ['d/index.md', 'n:d/index.md']])
+  assert.deepEqual(run(['d/index.md', 'd/README.md'], ['d/README.md']), indexOnly)
+
+  const readmeOnly = run(['d/README.md'])
+  assert.deepEqual(readmeOnly.links.map((link) => [link.href, link.target]), [['d', 'n:d/README.md'], ['d/README.md', 'n:d/README.md']])
+  assert.deepEqual(run(['d/README.md', 'd/index.md'], ['d/index.md']), readmeOnly)
+
+  // Both withheld reads exactly as neither present; both eligible prefers README.
+  assert.deepEqual(run(['d/README.md', 'd/index.md'], ['d/README.md', 'd/index.md']), run([]))
+  assert.equal(run(['d/README.md', 'd/index.md']).links[0].target, 'n:d/README.md')
 })
 
 test('in-repository links keep their edges; code, inline code and front matter never become edges', (t) => {

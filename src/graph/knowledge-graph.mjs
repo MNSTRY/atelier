@@ -940,12 +940,13 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
             continue
           }
           const target = relPath(owner.root, abs)
+          // Eligibility is tested per candidate, before choosing: a withheld
+          // candidate is skipped exactly as an absent one, so it can never
+          // shadow an eligible fallback and change the edge set.
           targetNode =
-            owner.nodesByPath.get(target) ||
-            owner.nodesByPath.get(posixJoin(target, 'README.md')) ||
-            owner.nodesByPath.get(posixJoin(target, 'index.md')) ||
-            null
-          if (targetNode && !isLinkTargetEligible(targetNode)) targetNode = null
+            [target, posixJoin(target, 'README.md'), posixJoin(target, 'index.md')]
+              .map((candidate) => owner.nodesByPath.get(candidate))
+              .find((candidate) => candidate && isLinkTargetEligible(candidate)) ?? null
         }
 
         if (!targetNode) {
