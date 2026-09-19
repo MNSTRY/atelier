@@ -77,7 +77,8 @@ export function resetExchangeProbeCache() {
 }
 
 // Self-test on two scratch files inside `directory`, which must be on the
-// volume that holds the vault. The verdict is cached per volume. A refusal is
+// volume that holds the vault. The publisher passes a directory inside the
+// recovery area, where exchange candidates live. The verdict is cached per volume. A refusal is
 // returned, not thrown: { supported: false, code, message }.
 export function probeExchange({ directory, ...options } = {}) {
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw new TypeError('probeExchange needs an absolute directory')
@@ -85,7 +86,7 @@ export function probeExchange({ directory, ...options } = {}) {
   try {
     key = `${options.platform ?? process.platform}/${options.arch ?? process.arch}/${options.perlPath ?? ''}/${fs.statSync(directory).dev}`
   } catch (error) {
-    return { supported: false, code: 'exchange-probe-failed', message: `the staging area cannot be read: ${error.code ?? error.message}` }
+    return { supported: false, code: 'exchange-probe-failed', message: `the exchange directory cannot be read: ${error.code ?? error.message}` }
   }
   if (probed.has(key)) return probed.get(key)
   const id = randomUUID()

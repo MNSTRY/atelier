@@ -34,7 +34,7 @@ import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publicatio
 // native refusal itself is asserted on every platform further down.
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which is asserted separately' }
-import { VAULT_LOCK_DIRECTORY, acquireVaultLock, createRecoveryStore, listJournals, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
+import { EXCHANGE_CANDIDATE_NAME, LATE_EXCHANGE_CANDIDATE_NAME, VAULT_LOCK_DIRECTORY, acquireVaultLock, classifyCandidateFile, createRecoveryStore, listJournals, namedCandidates, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
 
 // Every G00 interleaving, replayed against the production publisher on a real
 // filesystem. The editor is a model: an in-process object with the surface the
@@ -203,7 +203,7 @@ function makeWorld(t, { root } = {}) {
     // Every production publication ends with the staging check below.
     publish: async (preparedView, adapter, { publisher = publishView, ...extra } = {}) => {
       const result = await publisher({ preparedView, protocolId: PROTOCOL_ID, expectedGeneration: store.readCurrent()?.generationId ?? null, recoveryStore: store, adapter, clock, quietPeriodMs: 0, ...extra })
-      if (publisher === publishView) assertStagingHoldsOnlyCandidates(store)
+      if (publisher === publishView) assertStagingNeverHoldsDisplacedBytes(extra.recoveryStore ?? store)
       return result
     },
   }
@@ -236,14 +236,49 @@ function filesUnder(directory) {
 const keptTexts = (world) => filesUnder(path.join(world.root, 'recovery')).map((file) => fs.readFileSync(file, 'utf8'))
 const stagedTexts = (world) => filesUnder(path.join(world.root, 'staging')).map((file) => fs.readFileSync(file, 'utf8'))
 
-// When a publication has returned, staging is empty or holds only our own candidates: every file there has a digest
-// that a journal header of this view recorded for a staged candidate.
-function assertStagingHoldsOnlyCandidates(store) {
-  const recorded = new Set(listJournals(store).flatMap((journal) => (journal.document().ext?.['mnstry.atelier.obsidian']?.staged ?? []).map((item) => item.candidateDigest)))
+// The staging oracle. At every crash point and after every run, no file under staging has ever held or holds
+// displaced bytes: displaced bytes are only ever at the vault path, at the unit's exchange candidate path in
+// recovery, or at the recovery store's final names.
+//   ever: an exchange leaves the displaced bytes at exactly the candidate path that the unit's write-ahead entry
+//         (and the header) names, so no replacement may name a candidate path outside its own unit recovery directory;
+//   now:  every file under staging is, byte for byte, a generated candidate the journal recorded, and is none of
+//         the texts the case knows to be a person's.
+const EXT = 'mnstry.atelier.obsidian'
+function assertStagingNeverHoldsDisplacedBytes(store, { persons = [] } = {}) {
+  const recorded = new Set()
+  for (const journal of listJournals(store)) {
+    const document = journal.document()
+    const unitRef = (unit) => `recovery/${document.journalId.replaceAll(':', '_')}/${String(unit).padStart(6, '0')}/`
+    const opOf = new Map((document.ext?.[EXT]?.units ?? []).map((item) => [item.unit, item.op]))
+    const exchanged = []
+    for (const item of namedCandidates(document)) {
+      recorded.add(item.candidateDigest)
+      if (item.late || opOf.get(item.unit) === 'replace') exchanged.push(item)
+    }
+    for (const entry of document.entries) {
+      const detail = entry.ext?.[EXT] ?? {}
+      if (entry.step !== 'capture' || !detail.stagedRef) continue
+      if (entry.afterDigest) recorded.add(entry.afterDigest)
+      if (detail.op === 'replace') exchanged.push({ unit: detail.unit, stagedRef: detail.stagedRef })
+    }
+    for (const item of exchanged) {
+      assert.ok(item.stagedRef.startsWith(unitRef(item.unit)) && !item.stagedRef.startsWith('staging/'),
+        `an exchange candidate is outside its unit recovery directory, so displaced bytes would sit there: ${item.stagedRef}`)
+    }
+  }
+  const personDigests = new Set(persons.map((text) => digest(text)))
   for (const file of filesUnder(store.stagingRoot)) {
-    assert.ok(recorded.has(digest(fs.readFileSync(file))), `staging holds bytes that are not a recorded candidate: ${path.relative(store.workspaceRoot, file)}`)
+    const found = digest(fs.readFileSync(file))
+    assert.ok(recorded.has(found), `staging holds bytes that are not a recorded candidate: ${path.relative(store.workspaceRoot, file)}`)
+    assert.ok(!personDigests.has(found), `staging holds a person's bytes: ${path.relative(store.workspaceRoot, file)}`)
   }
 }
+
+// Mutation control for the oracle: the old layout, in which a candidate that will be exchanged waits in staging.
+const exchangeInStaging = (store) => Object.assign(Object.create(store), {
+  exchangeCandidatePath: (journalId, unit, { late = false } = {}) => path.join(store.stagingDir(journalId), `${String(unit).padStart(6, '0')}.exchange${late ? '.late' : ''}.candidate`),
+})
+const exchangeCandidateFiles = (world) => filesUnder(path.join(world.root, 'recovery')).filter((file) => [EXCHANGE_CANDIDATE_NAME, LATE_EXCHANGE_CANDIDATE_NAME].includes(path.basename(file)))
 const keptSomewhere = (world, text, notePath = NOTE) => world.read(notePath) === text || keptTexts(world).includes(text)
 const snapshotTree = (world) => Object.fromEntries(filesUnder(world.root).filter((file) => !file.includes(`${path.sep}state${path.sep}locks${path.sep}`) && !file.includes(`${path.sep}${VAULT_LOCK_DIRECTORY}${path.sep}`)).sort().map((file) => [path.relative(world.root, file), hex(fs.readFileSync(file))]))
 const stamp = (file) => { const stat = fs.statSync(file, { bigint: true }); return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` }
@@ -293,6 +328,7 @@ const PUBLISHERS = { production: publishView, renaming: renamingPublisher }
 if (process.env.ATELIER_OBSIDIAN_RECOVERY_CHILD) {
   const job = JSON.parse(process.env.ATELIER_OBSIDIAN_RECOVERY_CHILD)
   const world = makeWorld(null, { root: job.root })
+  const recoveryStore = job.layout === 'exchange-in-staging' ? exchangeInStaging(world.store) : world.store
   const seam = { at: job.crashAt, halt: () => process.kill(process.pid, 'SIGKILL') }
   const app = new ModelApp(world.vault)
   const opened = job.coordinated ? app.open(NOTE) : null
@@ -302,8 +338,10 @@ if (process.env.ATELIER_OBSIDIAN_RECOVERY_CHILD) {
   if (job.scenario === 'retire-settled') fs.writeFileSync(world.full(NOTE), EDITED)
   const plan = job.scenario === 'retire-pending' ? { after: (payload) => { if (payload.op === 'inspect' && payload.path === NOTE) opened.type('TYPED', 'brown') } } : {}
   const adapter = job.coordinated ? modelAdapter(app, { crashSeam: seam, plan }) : absentAdapter()
-  const view = job.scenario === 'remove' ? viewOf('gen-0002', { notes: { [OTHER]: BASE } }) : viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } })
-  const result = await PUBLISHERS[job.publisher]({ preparedView: view, protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: world.store, adapter, clock, quietPeriodMs: 0, [CRASH_INJECTION_TEST_SEAM]: seam })
+  const view = job.scenario === 'remove' ? viewOf('gen-0002', { notes: { [OTHER]: BASE } })
+    : job.scenario === 'settings' ? viewOf('gen-0002', { notes: { [NOTE]: BASE, [OTHER]: BASE }, settings: true })
+      : viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } })
+  const result = await PUBLISHERS[job.publisher]({ preparedView: view, protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore, adapter, clock, quietPeriodMs: 0, [CRASH_INJECTION_TEST_SEAM]: seam })
   process.stdout.write(JSON.stringify({ state: result.state }))
   process.exit(0)
 }
@@ -696,25 +734,42 @@ test('I07 a note removed before publication is recreated only by exclusive creat
 })
 
 // I08, I09 and every other interrupted state: a real process is killed at the named point.
+// `atCandidatePath` is what the journal must say the file at the unit's exchange candidate path is at that instant:
+// absent, a generated candidate (ours, deletable), or displaced bytes (a person's, never deletable).
 const CRASH_POINTS = [
-  { crashAt: 'after-staging', coordinated: true, disk: BASE },
-  { crashAt: 'after-capture', coordinated: true, disk: BASE },
-  { crashAt: 'after-exchange', coordinated: true, disk: CANDIDATE, label: 'I08' },
-  { crashAt: 'after-exchange', coordinated: false, disk: CANDIDATE, label: 'I08 without an app' },
-  { crashAt: 'after-recovery-move', coordinated: true, disk: CANDIDATE },
-  { crashAt: 'after-editor-update', coordinated: true, disk: CANDIDATE, label: 'I09' },
-  { crashAt: 'after-publish', coordinated: true, disk: CANDIDATE, label: 'I09' },
-  { crashAt: 'before-manifest-commit', coordinated: true, disk: CANDIDATE },
-  { crashAt: 'after-manifest-pointer', coordinated: true, disk: CANDIDATE },
+  { crashAt: 'before-candidate-move', coordinated: true, disk: BASE, atCandidatePath: 'absent' },
+  { crashAt: 'after-staging', coordinated: true, disk: BASE, atCandidatePath: 'generated-candidate' },
+  { crashAt: 'after-capture', coordinated: true, disk: BASE, atCandidatePath: 'generated-candidate' },
+  { crashAt: 'after-exchange', coordinated: true, disk: CANDIDATE, label: 'I08', atCandidatePath: 'displaced-bytes' },
+  { crashAt: 'after-exchange', coordinated: false, disk: CANDIDATE, label: 'I08 without an app', atCandidatePath: 'displaced-bytes' },
+  { crashAt: 'after-recovery-move', coordinated: true, disk: CANDIDATE, atCandidatePath: 'absent' },
+  { crashAt: 'after-editor-update', coordinated: true, disk: CANDIDATE, label: 'I09', atCandidatePath: 'absent' },
+  { crashAt: 'after-publish', coordinated: true, disk: CANDIDATE, label: 'I09', atCandidatePath: 'absent' },
+  { crashAt: 'before-manifest-commit', coordinated: true, disk: CANDIDATE, atCandidatePath: 'absent' },
+  { crashAt: 'after-manifest-pointer', coordinated: true, disk: CANDIDATE, atCandidatePath: 'absent' },
 ]
+
+// The journal's verdict on the file at a note's exchange candidate path, and the text there.
+function candidatePathVerdict(world, notePath) {
+  for (const journal of listJournals(world.store).reverse()) {
+    const named = namedCandidates(journal.document()).find((item) => item.path === notePath && item.stagedRef.startsWith('recovery/'))
+    if (!named) continue
+    const file = world.store.resolve(named.stagedRef)
+    const verdict = classifyCandidateFile({ file, candidateDigest: named.candidateDigest })
+    return { journalId: journal.document().journalId, file, verdict, text: verdict === 'absent' ? null : fs.readFileSync(file, 'utf8') }
+  }
+  return { verdict: 'unnamed' }
+}
 
 async function crashCase(t, publisher, point) {
   const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
   const child = crashChild({ root: world.root, publisher, scenario: 'replace', ...point })
   assert.equal(child.signal, 'SIGKILL', `the child must die at ${point.crashAt}: ${child.stdout} ${child.stderr}`)
   const afterCrash = world.read(NOTE)
-  // The base is a person's bytes: the note or recovery. The candidate is generated: the note, or still staged.
-  return { world, afterCrash, keptBase: [afterCrash, ...keptTexts(world)].includes(BASE), keptCandidate: [afterCrash, ...stagedTexts(world)].includes(CANDIDATE) }
+  // The base is a person's bytes: the note or recovery. The candidate is generated: the note, staging while it is
+  // only being prepared, or the unit's exchange candidate path.
+  const waiting = exchangeCandidateFiles(world).map((file) => fs.readFileSync(file, 'utf8'))
+  return { world, afterCrash, keptBase: [afterCrash, ...keptTexts(world)].includes(BASE), keptCandidate: [afterCrash, ...stagedTexts(world), ...waiting].includes(CANDIDATE) }
 }
 
 for (const point of CRASH_POINTS) {
@@ -722,11 +777,31 @@ for (const point of CRASH_POINTS) {
     const { world, afterCrash, keptBase, keptCandidate } = await crashCase(t, 'production', point)
     assert.equal(afterCrash, point.disk, 'the note is one coherent version')
     assert.ok(keptBase, 'base bytes kept')
-    assert.ok(keptCandidate, 'the candidate is at the note path or still staged')
+    assert.ok(keptCandidate, 'the candidate is at the note path, in staging, or at its exchange candidate path')
+    // The staging invariant, at the instant of the crash, and the journal's verdict on the candidate path.
+    assertStagingNeverHoldsDisplacedBytes(world.store, { persons: [BASE] })
+    const at = candidatePathVerdict(world, NOTE)
+    assert.equal(at.verdict, point.atCandidatePath, 'the journal tells a generated candidate from displaced bytes')
+    if (at.verdict === 'generated-candidate') assert.equal(at.text, CANDIDATE)
+    if (at.verdict === 'displaced-bytes') assert.equal(at.text, BASE, 'the displaced bytes are in the unit recovery directory, not in staging')
+    if (point.crashAt === 'before-candidate-move') assert.ok(stagedTexts(world).includes(CANDIDATE), 'a candidate still being prepared is generated bytes in staging')
 
     const first = recoverPublications({ store: world.store, clock })
     assert.equal(world.read(NOTE), point.disk, 'recovery does not change the note')
     assert.ok([world.read(NOTE), ...keptTexts(world)].includes(BASE), 'base bytes kept through recovery')
+    assert.deepEqual(exchangeCandidateFiles(world), [], 'recovery leaves nothing at an exchange candidate path')
+    assertStagingNeverHoldsDisplacedBytes(world.store, { persons: [BASE] })
+    const interruptedId = listJournals(world.store)[1].document().journalId
+    if (point.disk === BASE) {
+      // A generated candidate is never mistaken for a person's content: it is deleted, not kept, and gets no receipt.
+      assert.ok(!keptTexts(world).includes(CANDIDATE))
+      assert.deepEqual(world.store.listReceipts(interruptedId), [])
+    } else {
+      // Displaced bytes are never deleted as a candidate: they are in recovery with a receipt.
+      const receipt = world.store.listReceipts(interruptedId).find((item) => item.role === 'displaced' && item.notePath === NOTE)
+      assert.equal(receipt?.digestAtMove, digest(BASE))
+      assert.equal(fs.readFileSync(world.store.resolve(receipt.displacedRef), 'utf8'), BASE)
+    }
     const tree = snapshotTree(world)
     const second = recoverPublications({ store: world.store, clock })
     assert.deepEqual(second.journals, [], 'a second recovery finds nothing to do')
@@ -843,6 +918,84 @@ for (const scenario of ['retire-settled', 'retire-pending']) {
     assert.deepEqual(snapshotTree(foreign), again)
   })
 }
+
+// The late-candidate path: the policy file's candidate is merged from the bytes on disk, so the header cannot name
+// it. It is exchanged, so it goes to the unit recovery directory, after a write-ahead entry that names it.
+const LATE_POINTS = [
+  { crashAt: 'after-late-write-ahead', published: false, atCandidatePath: 'absent' },
+  { crashAt: 'after-capture', published: false, atCandidatePath: 'generated-candidate' },
+  { crashAt: 'after-exchange', published: true, atCandidatePath: 'displaced-bytes' },
+  { crashAt: 'after-recovery-move', published: true, atCandidatePath: 'absent' },
+]
+
+for (const point of LATE_POINTS) {
+  test(`late candidate: killed ${point.crashAt}: the person's settings are never in staging, the journal tells the candidate from displaced bytes, recovery settles it`, needsExchange, async (t) => {
+    const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+    const mine = `${JSON.stringify({ sync: true, 'invented-plugin': true })}\n`
+    fs.mkdirSync(world.full('.obsidian'))
+    fs.writeFileSync(world.full(POLICY), mine)
+    const child = crashChild({ root: world.root, publisher: 'production', scenario: 'settings', crashAt: point.crashAt, coordinated: false })
+    assert.equal(child.signal, 'SIGKILL', `the child must die at ${point.crashAt}: ${child.stdout} ${child.stderr}`)
+
+    assertStagingNeverHoldsDisplacedBytes(world.store, { persons: [mine] })
+    assert.ok(!stagedTexts(world).includes(mine))
+    assert.ok([world.read(POLICY), ...keptTexts(world)].includes(mine), 'the person\'s settings are at the vault path or in recovery')
+    const at = candidatePathVerdict(world, POLICY)
+    assert.equal(at.verdict, point.atCandidatePath)
+    assert.equal(path.basename(at.file), LATE_EXCHANGE_CANDIDATE_NAME)
+    if (at.verdict === 'displaced-bytes') assert.equal(at.text, mine)
+    if (at.verdict === 'generated-candidate') assert.notEqual(at.text, mine)
+    if (point.crashAt === 'after-late-write-ahead') assert.equal(filesUnder(path.join(world.root, 'staging')).length, 1, 'named by the journal, still generated bytes in staging')
+
+    const generated = point.published ? world.read(POLICY) : (at.text ?? stagedTexts(world)[0])
+    recoverPublications({ store: world.store, clock })
+    assert.deepEqual(exchangeCandidateFiles(world), [])
+    assert.deepEqual(filesUnder(path.join(world.root, 'staging')), [])
+    assert.ok([world.read(POLICY), ...keptTexts(world)].includes(mine))
+    const receipts = world.store.listReceipts(at.journalId)
+    if (point.published) assert.equal(receipts.find((item) => item.role === 'displaced' && item.notePath === POLICY)?.digestAtMove, digest(mine))
+    else {
+      assert.equal(world.read(POLICY), mine, 'nothing was exchanged')
+      assert.deepEqual(receipts, [], 'a generated candidate gets no receipt')
+      assert.ok(!keptTexts(world).includes(generated), 'and is not kept as if it were somebody\'s')
+    }
+    const tree = snapshotTree(world)
+    assert.deepEqual(recoverPublications({ store: world.store, clock }).journals, [])
+    assert.deepEqual(snapshotTree(world), tree)
+
+    const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: BASE, [OTHER]: BASE }, settings: true }), absentAdapter())
+    assert.equal(result.state, 'committed', JSON.stringify(result))
+    assert.deepEqual(JSON.parse(world.read(POLICY)), { sync: false, 'invented-plugin': true, publish: false })
+    assert.ok(keptTexts(world).includes(mine), 'the displaced settings are in recovery after convergence')
+    assert.deepEqual(exchangeCandidateFiles(world), [])
+    assert.deepEqual(filesUnder(path.join(world.root, 'staging')), [])
+  })
+}
+
+test('mutation control: a layout that stages an exchange candidate under staging again fails the staging oracle', needsExchange, async (t) => {
+  // After a run that returned: the journal names a replacement's candidate path in staging.
+  const world = await seeded(t)
+  const broken = exchangeInStaging(world.store)
+  const result = await publishView({ preparedView: viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: broken, adapter: absentAdapter(), clock, quietPeriodMs: 0 })
+  assert.equal(result.state, 'committed', 'the broken layout still publishes, so only the oracle can catch it')
+  assert.throws(() => assertStagingNeverHoldsDisplacedBytes(world.store), /outside its unit recovery directory/)
+
+  // At the crash point between exchange and recovery move: the person's bytes really are in staging.
+  const crashed = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const child = crashChild({ root: crashed.root, publisher: 'production', scenario: 'replace', crashAt: 'after-exchange', coordinated: false, layout: 'exchange-in-staging' })
+  assert.equal(child.signal, 'SIGKILL', `${child.stdout} ${child.stderr}`)
+  assert.ok(stagedTexts(crashed).includes(BASE), 'the control must put displaced bytes in staging, or the oracle proves nothing')
+  assert.throws(() => assertStagingNeverHoldsDisplacedBytes(crashed.store, { persons: [BASE] }))
+  // The "now" half alone also fails: with the journal's word ignored, staging holds bytes that are no candidate.
+  const physical = filesUnder(crashed.store.stagingRoot).map((file) => digest(fs.readFileSync(file)))
+  assert.ok(physical.includes(digest(BASE)) && !physical.includes(digest(CANDIDATE)))
+
+  // The production layout at the same point passes, with the same bytes in the unit recovery directory.
+  const sound = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  assert.equal(crashChild({ root: sound.root, publisher: 'production', scenario: 'replace', crashAt: 'after-exchange', coordinated: false }).signal, 'SIGKILL')
+  assert.ok(!stagedTexts(sound).includes(BASE))
+  assert.doesNotThrow(() => assertStagingNeverHoldsDisplacedBytes(sound.store, { persons: [BASE] }))
+})
 
 test('every orphaned late candidate is swept on restart, also beside one that a capture entry names', needsExchange, async (t) => {
   const world = makeWorld(t)
@@ -1345,6 +1498,20 @@ test('staging that cannot be written refuses before anything is touched; a held 
   assert.equal(result.refusal.code, 'staging-failed')
   assert.deepEqual(snapshotTree(world), before)
 
+  // The move into the unit recovery directory fails after the journal was opened: the candidate is removed from
+  // staging, no unit directory is left behind to look like an unfinished recovery unit, and the vault is untouched.
+  const recoveryRoot = path.join(world.root, 'recovery')
+  const unitRoots = () => fs.readdirSync(recoveryRoot).filter((name) => name.startsWith('journal-'))
+  const unitRootsBefore = unitRoots()
+  fs.chmodSync(recoveryRoot, 0o500)
+  try { result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), absentAdapter()) } finally { fs.chmodSync(recoveryRoot, 0o700) }
+  assert.equal(result.refusal?.code, 'staging-failed', JSON.stringify(result))
+  assert.equal(world.read(NOTE), BASE)
+  assert.deepEqual(filesUnder(path.join(world.root, 'staging')), [])
+  assert.deepEqual(unitRoots(), unitRootsBefore, 'no stray unit directory')
+  assert.deepEqual(exchangeCandidateFiles(world), [])
+  assert.deepEqual(recoverPublications({ store: world.store, clock }).journals, [], 'and nothing for restart recovery to settle')
+
   const release = acquirePrivateLock(world.store.lockPath)
   try {
     const second = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), absentAdapter())
@@ -1507,7 +1674,7 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
       serial += 1
       return publishView({ preparedView: viewOf(`gen-g04-${String(serial).padStart(4, '0')}`, { notes: Object.fromEntries(state) }), protocolId: PROTOCOL_ID,
         expectedGeneration: store.readCurrent()?.generationId ?? null, recoveryStore: store, adapter, quietPeriodMs: 1500, ...extra })
-        .then((result) => { assertStagingHoldsOnlyCandidates(store); return result })
+        .then((result) => { assertStagingNeverHoldsDisplacedBytes(store); return result })
     }
     const buffers = async (notePath) => (await instance.bridge({ op: 'inspect', path: notePath })).views.map((view) => Buffer.from(view.bufferBase64, 'base64').toString('utf8'))
     const openClean = async (notePath, expected, views = 1) => {
