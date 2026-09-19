@@ -149,7 +149,12 @@ async function main() {
   await record('I05', 'separate window holding an unsaved edit refuses; clean windows both receive the candidate', async () => {
     await seed('i05');
     await app.stimulus('openPopout', notePath('i05'));
-    await sleep(1500);
+    // A window that is still loading holds a buffer unlike the base, and the protocol rightly refuses then. Wait for both.
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const state = await app.bridge({ op: 'inspect', path: notePath('i05') });
+      if (state.views.length === 2 && state.views.every((view) => !view.dirty && view.bufferSha256 === sha256(BASE))) break;
+      await sleep(250);
+    }
     const clean = await publish('i05');
     const cleanOk = clean.status === 'published' && clean.openViews === 2 && clean.views.some((view) => view.popout) && buffers(clean).every((text) => text === CANDIDATE);
     fs.writeFileSync(full('i05'), BASE);
@@ -204,6 +209,35 @@ async function main() {
       return { pass: reply.status === 'published' && !rewritten && read(full(note)) === external && buffers(final).every((text) => text === external), status: reply.status, rewritten };
     });
   }
+
+  await record('I12', 'outside writer holding the note open writes in place after publication: bytes land in recovery and are detected', async () => {
+    await seed('i12');
+    const late = `${BASE}LATE IN-PLACE WRITER\n`;
+    const holder = spawn(process.execPath, ['-e', "const fs=require('fs');const fd=fs.openSync(process.argv[1],'r+');process.stdin.once('data',()=>{fs.ftruncateSync(fd,0);fs.writeSync(fd,process.argv[2],0);fs.closeSync(fd);process.exit(0)});console.log('held')", full('i12'), late], { stdio: ['pipe', 'pipe', 'ignore'] });
+    await new Promise((resolve) => holder.stdout.once('data', resolve));
+    const reply = await publish('i12', { guardMs: 500 });
+    const recoveryAtPublish = sha256(fs.readFileSync(reply.recovery));
+    const exited = new Promise((resolve) => holder.on('exit', resolve));
+    holder.stdin.write('go\n');
+    await exited;
+    await sleep(1500);
+    const recovered = read(reply.recovery);
+    const detected = sha256(recovered) !== recoveryAtPublish; // the publisher must re-check displaced bytes after a quiet period
+    const final = await app.bridge({ op: 'inspect', path: notePath('i12') });
+    return { pass: reply.status === 'published' && recoveryAtPublish === sha256(BASE) && recovered === late && detected && read(full('i12')) === CANDIDATE && buffers(final).every((text) => text === CANDIDATE),
+      status: reply.status, lateBytesIn: recovered === late ? 'recovery' : 'LOST', detected };
+  });
+
+  await record('I13', 'outside writer rewriting the published note in place afterwards is kept and shown by the editor', async () => {
+    await seed('i13');
+    const reply = await publish('i13', { guardMs: 500 });
+    const external = `${CANDIDATE}IN-PLACE AFTER PUBLICATION\n`;
+    await sleep(300);
+    fs.writeFileSync(full('i13'), external);
+    await sleep(4000);
+    const final = await app.bridge({ op: 'inspect', path: notePath('i13') });
+    return { pass: reply.status === 'published' && read(full('i13')) === external && buffers(final).every((text) => text === external), status: reply.status };
+  });
 
   await record('I07', 'note removed before publication refuses and creates nothing', async () => {
     await seed('i07');
