@@ -126,6 +126,8 @@ Core commands:
   sync plan                       Prepare one bounded, reviewable commit plan.
   sync commit                     Execute an exactly confirmed commit plan.
   sync run --once                 Run one full-state supervisor cycle.
+  obsidian status|open|service    Maintain and open Obsidian views of the corpus.
+  obsidian status|open            Inspect or open the maintained Obsidian views.
   egress check                    Check extracted Atelier paths for forbidden egress.
   boundary check                  Enforce private/shared repo placement rules.
   boundary audit                  Report content-rule matches tree-wide without blocking.
