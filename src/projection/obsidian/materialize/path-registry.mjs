@@ -31,12 +31,12 @@ export function collisionKey(value) {
   return value.normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC')
 }
 
-function titleWithinBudget(title) {
+export function titleWithinBudget(title, budget = TITLE_BYTE_BUDGET) {
   let kept = ''
   let bytes = 0
   for (const character of String(title ?? '').normalize('NFC')) {
     bytes += Buffer.byteLength(character, 'utf8')
-    if (bytes > TITLE_BYTE_BUDGET) break
+    if (bytes > budget) break
     kept += character
   }
   return kept
