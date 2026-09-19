@@ -80,6 +80,9 @@ export const OBJECT_STORE_PRIMITIVES = Object.freeze({
   indexIsCurrent: ({ index, eventCount, headDigest }) => index.sequence === eventCount && index.headDigest === headDigest,
 })
 
+// The members of `values` that were given: an absent optional member is absent from the event, never null.
+const optional = (values) => Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined && value !== null))
+
 function readBytesNoFollow(file) {
   const descriptor = openRegularFileNoFollow(file)
   try { return fs.readFileSync(descriptor) } finally { fs.closeSync(descriptor) }
@@ -466,21 +469,21 @@ export function createObjectStoreForOracleTests(primitives = OBJECT_STORE_PRIMIT
       },
 
       // Write-ahead: recorded before the source is touched.
-      recordIntent(lease, { idempotencyKey, expectedSourceDigest, newSourceDigest, actor, policy }) {
-        return underLease(lease, 'apply-intent', { idempotencyKey, expectedSourceDigest, newSourceDigest, actor, policy })
+      recordIntent(lease, { idempotencyKey, expectedSourceDigest, newSourceDigest, actor, policy, applyId }) {
+        return underLease(lease, 'apply-intent', { idempotencyKey, expectedSourceDigest, newSourceDigest, actor, policy, ...optional({ applyId }) })
       },
 
       // The source was written: old and new digests, who, and under what.
-      recordApplied(lease, { idempotencyKey, oldSourceDigest, newSourceDigest, actor, policy }) {
-        return underLease(lease, 'applied', { idempotencyKey, oldSourceDigest, newSourceDigest, actor, policy })
+      recordApplied(lease, { idempotencyKey, oldSourceDigest, newSourceDigest, actor, policy, applyId, backupRef }) {
+        return underLease(lease, 'applied', { idempotencyKey, oldSourceDigest, newSourceDigest, actor, policy, ...optional({ applyId, backupRef }) })
       },
 
       // The source was not written. `presentSourceDigest` is what the source
       // was read to be, when it was read. `disposition` is what becomes of a
       // pending operation: 'retained' (try again later), 'conflicted', 'refused'.
-      recordRefused(lease, { idempotencyKey, code, presentSourceDigest = null, disposition = 'retained' }) {
+      recordRefused(lease, { idempotencyKey, code, presentSourceDigest = null, disposition = 'retained', applyId, policy, recoveryRefs }) {
         if (!REFUSED_DISPOSITIONS.includes(disposition)) refuseArbitration('invalid-event', 'the disposition is not one this store records', { type: 'apply-refused' })
-        return underLease(lease, 'apply-refused', { idempotencyKey, code, presentSourceDigest, disposition })
+        return underLease(lease, 'apply-refused', { idempotencyKey, code, presentSourceDigest, disposition, ...optional({ applyId, policy, recoveryRefs }) })
       },
 
       // Reads every event of the object again, from the files, writes down

@@ -59,6 +59,8 @@ const NONCE = /^[0-9a-f]{32}$/
 const MACHINE = /^[0-9a-f]{64}$/
 const CODE = /^[a-z][a-z0-9-]{0,63}$/
 const REFERENCE = /^recovery\/objects\/[0-9a-f]{64}\.bin$/
+// A file of one source apply: the displaced source, or bytes found where they were not expected.
+const APPLY_REFERENCE = /^recovery\/[A-Za-z0-9._-]{1,128}\/\d{6}\/[A-Za-z0-9._-]{1,64}\.bin$/
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/
 const VERSION = /^\d+\.\d+\.\d+$/
 
@@ -69,6 +71,7 @@ const is = {
   machine: (value) => typeof value === 'string' && MACHINE.test(value),
   code: (value) => typeof value === 'string' && CODE.test(value),
   reference: (value) => typeof value === 'string' && REFERENCE.test(value),
+  retained: (value) => typeof value === 'string' && (REFERENCE.test(value) || APPLY_REFERENCE.test(value)),
   time: (value) => typeof value === 'string' && TIME.test(value) && !Number.isNaN(Date.parse(value)),
   version: (value) => typeof value === 'string' && VERSION.test(value),
   identifier: isIdentifier,
@@ -87,7 +90,7 @@ const shape = (required, optional = {}) => (value) => plain(value)
   && Object.entries(optional).every(([key, check]) => !Object.hasOwn(value, key) || check(value[key]))
 const extOf = (check) => shape({ [EXT]: check })
 
-const policy = (value) => shape({ mode: oneOf(['manual']) })(value) || shape({ mode: oneOf(['automatic']), policyDigest: is.digest })(value)
+const policy = (value) => shape({ mode: oneOf(['manual']) })(value) || shape({ mode: oneOf(['automatic']), policyDigest: is.digest }, { policyId: is.identifier })(value)
 
 // The recorded form of an edit operation: the frozen contract's required
 // members and, under the extension key, digests and references only. The
@@ -126,9 +129,12 @@ const BODIES = {
     takeover: nullable(shape({ nonce: is.nonce, reason: is.code })),
   }),
   'lease-released': shape({ nonce: is.nonce }),
-  'apply-intent': shape({ nonce: is.nonce, idempotencyKey: is.key, expectedSourceDigest: is.digest, newSourceDigest: is.digest, actor: is.identifier, policy }),
-  applied: shape({ nonce: is.nonce, idempotencyKey: is.key, oldSourceDigest: is.digest, newSourceDigest: is.digest, actor: is.identifier, policy }),
-  'apply-refused': shape({ nonce: is.nonce, idempotencyKey: is.key, code: is.code, presentSourceDigest: nullable(is.digest), disposition: oneOf(REFUSED_DISPOSITIONS) }),
+  // `applyId` names the write-ahead record and the recovery directory of one source apply; `backupRef` the displaced
+  // source it retained; `recoveryRefs` every file or object a refused apply retained.
+  'apply-intent': shape({ nonce: is.nonce, idempotencyKey: is.key, expectedSourceDigest: is.digest, newSourceDigest: is.digest, actor: is.identifier, policy }, { applyId: is.identifier }),
+  applied: shape({ nonce: is.nonce, idempotencyKey: is.key, oldSourceDigest: is.digest, newSourceDigest: is.digest, actor: is.identifier, policy }, { applyId: is.identifier, backupRef: is.retained }),
+  'apply-refused': shape({ nonce: is.nonce, idempotencyKey: is.key, code: is.code, presentSourceDigest: nullable(is.digest), disposition: oneOf(REFUSED_DISPOSITIONS) },
+    { applyId: is.identifier, policy, recoveryRefs: listOf(is.retained, { max: 16 }) }),
   'siblings-stale': shape({
     appliedSequence: is.positive,
     newSourceDigest: is.digest,
@@ -206,7 +212,7 @@ const sameList = (left, right) => left.length === right.length && left.every((it
 const equivalent = (left, right) => left.baseSourceDigest === right.baseSourceDigest && left.newSourceDigest !== null && left.newSourceDigest === right.newSourceDigest
 
 function createState() {
-  return { identity: null, sequence: 0, operations: new Map(), sourceDigest: null, sourceFrom: null, hint: null, lastAppliedKey: null, lease: null, intent: null, applies: [], declared: new Map(), violations: [] }
+  return { identity: null, sequence: 0, operations: new Map(), sourceDigest: null, sourceFrom: null, hint: null, lastAppliedKey: null, lease: null, intent: null, applies: [], outcomes: [], declared: new Map(), violations: [] }
 }
 
 function assign(state, { entry, state: next, reason = null, by = null, drop = false }) {
@@ -303,15 +309,17 @@ const HANDLERS = {
     state.lastAppliedKey = body.idempotencyKey
     sourceMoved(state, body.newSourceDigest, body.idempotencyKey, rules)
     state.applies.push({ appliedSequence: sequence, newSourceDigest: body.newSourceDigest, views: viewsOf(state, body.idempotencyKey), declared: false })
+    state.outcomes.push({ sequence, idempotencyKey: body.idempotencyKey, status: 'applied', code: 'applied', oldSourceDigest: body.oldSourceDigest, newSourceDigest: body.newSourceDigest, actor: body.actor, policy: body.policy, applyId: body.applyId ?? null, backupRef: body.backupRef ?? null })
     return null
   },
-  'apply-refused'(state, { body }, rules) {
+  'apply-refused'(state, { body, sequence }, rules) {
     if (state.lease?.nonce !== body.nonce) return 'lease-not-held'
     const entry = state.operations.get(body.idempotencyKey)
     if (entry === undefined) return 'unknown-operation'
     if (state.intent !== null && state.intent.idempotencyKey !== body.idempotencyKey) return 'intent-unresolved'
     if (state.intent === null && !OPEN.has(entry.state)) return 'operation-not-applicable'
     state.intent = null
+    state.outcomes.push({ sequence, idempotencyKey: body.idempotencyKey, status: 'refused', code: body.code, presentSourceDigest: body.presentSourceDigest, disposition: body.disposition, policy: body.policy ?? null, applyId: body.applyId ?? null, recoveryRefs: body.recoveryRefs ?? [] })
     if (body.presentSourceDigest !== null) sourceMoved(state, body.presentSourceDigest, null, rules)
     if (entry.state === 'pending' && body.disposition !== 'retained') assign(state, { entry, state: body.disposition, reason: body.code })
     return null
@@ -380,6 +388,9 @@ function summarize(state) {
     // decides from its digest.
     intent: state.intent === null ? null : { ...state.intent, status: 'outcome-unknown' },
     siblingsStale: state.applies.map((apply) => ({ ...apply })),
+    // Every recorded outcome of an apply, oldest first: what a repeated request is answered from, and what a retry
+    // budget is counted over.
+    applyOutcomes: state.outcomes.map((outcome) => ({ ...outcome })),
     undeclared: {
       siblingsStale: pendingApply === undefined ? null : { appliedSequence: pendingApply.appliedSequence, newSourceDigest: pendingApply.newSourceDigest, views: pendingApply.views },
       superseded: undeclared(state, 'superseded'),
