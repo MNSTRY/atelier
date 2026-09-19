@@ -70,6 +70,8 @@ export async function runMaintenanceService(options = {}) {
     intervalMs = DEFAULT_TICK_INTERVAL_MS, maxBackoffMs = Math.max(DEFAULT_MAX_BACKOFF_MS, intervalMs), shutdownGraceMs = DEFAULT_SHUTDOWN_GRACE_MS,
     clock = () => new Date(), log = () => {}, pid = process.pid, randomBytes = cryptoRandomBytes, env = process.env, platform = process.platform,
     engineOptions = {}, createEngine = createMaintenanceEngine,
+    // What the adapter factory last learned about the installed app, when it qualifies one. Codes and versions only.
+    appStatus = null,
   } = options
   if (typeof loadProject !== 'function') throw new TypeError('the service needs loadProject')
   if (typeof adapterFactory !== 'function') throw new TypeError('the service needs an adapterFactory')
@@ -156,7 +158,7 @@ export async function runMaintenanceService(options = {}) {
         let lastError = null
         try { lastError = readLastServiceError({ workspaceRoot, workspaceId }) } catch (error) { if (!isTyped(error)) throw error; lastError = { unreadable: error.code } }
         if (lastError?.schema) { const { schema: _schema, workspaceId: _workspace, ...shown } = lastError; lastError = shown }
-        return { schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary() }
+        return { schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(), ...(typeof appStatus === 'function' ? { app: appStatus() } : {}) }
       },
       async tick() {
         const outcome = await loop.tickNow()

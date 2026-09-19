@@ -18,10 +18,18 @@ import { runMaintenanceService } from './service.mjs'
 // Without `--adapter` the process refuses before it listens or ticks: reaching
 // a running app is a decision of whoever starts the service, never a default.
 
+// Reaching a real app happens here and nowhere else in the service: the
+// production probe and the CLI transport are imported only once `--adapter`
+// selected them. The editor adapter is constructed only for an app that meets
+// the minimum version; below it, or when the version cannot be read, the
+// factory refuses, the engine records that reason and nothing is published.
 const ADAPTERS = Object.freeze({
   'obsidian-cli': async () => {
-    const { createObsidianCliAdapter } = await import('../../projection/obsidian/publication/transport.mjs')
-    return () => createObsidianCliAdapter()
+    const [{ createObsidianCliAdapter }, { createProductionAppProbe }, { createQualifiedAdapterFactory }] = await Promise.all([
+      import('../../projection/obsidian/publication/transport.mjs'), import('./app-production-seams.mjs'), import('./app-capability.mjs'),
+    ])
+    const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe(), createAdapter: () => createObsidianCliAdapter() })
+    return { adapterFactory, appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } } }
   },
 })
 
@@ -74,6 +82,8 @@ if (invokedDirectly) {
   }
   if (options) {
     const { adapter, ...rest } = options
-    await runServiceProcess({ ...rest, entryPath: SERVICE_ENTRY_PATH, adapterFactory: await ADAPTERS[adapter]() })
+    const [{ loadContributions }, { createObsidianRegistry }] = await Promise.all([import('./contributions.mjs'), import('./extension-points.mjs')])
+    const registry = createObsidianRegistry({ contributions: await loadContributions() })
+    await runServiceProcess({ ...rest, entryPath: SERVICE_ENTRY_PATH, ...(await ADAPTERS[adapter]()), engineOptions: { extensions: registry.extensions } })
   }
 }
