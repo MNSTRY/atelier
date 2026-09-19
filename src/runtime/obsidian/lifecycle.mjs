@@ -189,7 +189,7 @@ export async function stopService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   if (!rules.mayStop(status)) return { ...shown(status), stopped: false, refused: true }
 
   const { record } = status
-  const answer = await requestLoopback({ host: record.host, port: record.port, method: 'POST', path: '/stop', bearer: record.ext.bearer, payload: { runtimeId: record.runtimeId }, timeoutMs: probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS * 5 })
+  const answer = await requestLoopback({ host: record.host, port: record.port, method: 'POST', path: '/stop', bearer: record.ext.bearer, payload: { runtimeId: record.runtimeId }, timeoutMs: Math.max(probeTimeoutMs ?? 0, 2 * DEFAULT_PROBE_TIMEOUT_MS) })
   const accepted = answer.kind === 'response' && answer.statusCode === 202 && answer.body?.runtimeId === record.runtimeId && answer.body?.pid === record.pid
   if (!accepted) return { ...shown(status), stopped: false, refused: true, reason: 'stop-was-not-accepted-by-the-proven-runtime' }
   const until = Date.now() + stopTimeoutMs

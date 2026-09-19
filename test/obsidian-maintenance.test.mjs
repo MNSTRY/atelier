@@ -1424,7 +1424,8 @@ function lockWorld(t) {
   return {
     root, directory, ticket,
     plant(generation, document) { fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, `${String(generation).padStart(12, '0')}.json`), typeof document === 'string' ? document : JSON.stringify(document)) },
-    acquire: (proveAbandoned = createAbandonmentProof({ probe: (address) => probeHealth({ ...address, timeoutMs: 400 }) })) => acquirePrivateGenerationLock({ workspaceRoot: root, directory, workspaceId: 'ws-lock', purpose: 'maintenance-engine', clock: () => new Date(START), proveAbandoned }),
+    // The deadline is short only where a test wants a listener that never answers; a closed port may take seconds to refuse on some platforms.
+    acquire: (proveAbandoned = createAbandonmentProof({ probe: (address) => probeHealth({ ...address, timeoutMs: address.port === lockWorld.silentPort ? 400 : 5000 }) })) => acquirePrivateGenerationLock({ workspaceRoot: root, directory, workspaceId: 'ws-lock', purpose: 'maintenance-engine', clock: () => new Date(START), proveAbandoned }),
   }
 }
 
@@ -1456,6 +1457,7 @@ async function assertLiveHoldersKeepTheLock(t, acquireWith) {
   const silent = await freePort()
   await listenOn(t, answering, healthOf({ schema: HEALTH_SCHEMA, serviceName: 'atelier-obsidian-ws-lock', workspaceId: 'ws-lock', runtimeId: 'rt-holder', pid: unrelated.pid, host: '127.0.0.1', port: answering, executableDigest: digest('entry') }))
   await listenOn(t, silent, () => { /* accepts, never answers */ })
+  lockWorld.silentPort = silent
   const service = (port, runtimeId = 'rt-holder') => ({ host: '127.0.0.1', port, runtimeId })
   const cases = [
     ['a live process that recorded no health address', { pid: unrelated.pid }, false, 'live-process-unproven'],
@@ -1770,7 +1772,7 @@ function serviceWorld(t, options) {
   const world = makeWorld(t, options)
   const spawned = []
   const spawn = (...args) => { const child = childProcess.spawn(...args); pids.add(child.pid); SPAWNED.add(child.pid); spawned.push(child.pid); return child }
-  const base = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, probeTimeoutMs: 1500, spawn }
+  const base = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn }
   const kills = []
   return Object.assign(world, {
     spawned, kills,
@@ -1902,6 +1904,16 @@ async function assertUnownedListenerIsLeftAlone(t, rules) {
     assert.equal(requests.every((line) => line === 'GET /health'), true, 'only health was ever asked of it')
   }
 }
+
+test('when health never proves ownership, start stops only the child it created and reports the private log', async (t) => {
+  const world = serviceWorld(t)
+  const unrelated = sleeper(t)
+  const result = await world.start({ entryPath: path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'maintenance', 'idle-entry.mjs'), startTimeoutMs: 2500 })
+  assert.deepEqual([result.state, result.started, result.reason, result.logPath], ['start-failed', false, 'health-never-proved-ownership', servicePaths(world.workspaceRoot()).log])
+  assert.match(fs.readFileSync(result.logPath, 'utf8'), /idle entry: alive/, 'the log is where the child wrote')
+  await waitFor(() => !isAlive(world.spawned[0]), { label: 'the child that start created to be gone' })
+  assert.deepEqual([world.spawned.length, isAlive(unrelated.pid), recordOf(world), (await world.status()).state], [1, true, null, 'stopped'], 'only that child was stopped, and no record was left')
+})
 
 test('an unowned listener on the port is occupied: status does not adopt it, start does not take it over, stop does not touch it', async (t) => {
   await assertUnownedListenerIsLeftAlone(t, LIFECYCLE_PRIMITIVES)

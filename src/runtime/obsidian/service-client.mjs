@@ -9,7 +9,8 @@ import { refuse } from './errors.mjs'
 
 export const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', '::1'])
 export const HEALTH_SCHEMA = 'atelier-obsidian-service-health/v1'
-export const DEFAULT_PROBE_TIMEOUT_MS = 2000
+// Long enough for a closed port to refuse on every platform: some answer a refused loopback connection only after retrying for about two seconds.
+export const DEFAULT_PROBE_TIMEOUT_MS = 5000
 const MAX_RESPONSE_BYTES = 64 * 1024
 
 export const authorityOf = (host, port) => (host === '::1' ? `[::1]:${port}` : `${host}:${port}`)
