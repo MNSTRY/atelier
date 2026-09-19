@@ -4,4 +4,4 @@
 // a source file or to a vault.
 export { ALIGN_LIMITS, alignBodies } from './align.mjs'
 export { EDIT_LENS_VERSION, EDIT_OBSERVATION_STEPS, createEditObserverForOracleTests, editIdempotencyKey, observeEdit } from './observe.mjs'
-export { EDIT_LENS_PRIMITIVES, EDIT_LENS_REFUSALS, applyEditLens, createEditLensForOracleTests, findStructuralLinks, placeUnits, splitGeneratedTail, splitPrefix } from './regions.mjs'
+export { EDIT_LENS_PRIMITIVES, EDIT_LENS_REFUSALS, applyEditLens, assertRewritesAccounted, createEditLensForOracleTests, findStructuralLinks, placeUnits, splitGeneratedTail, splitPrefix } from './regions.mjs'

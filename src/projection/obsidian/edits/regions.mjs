@@ -229,19 +229,25 @@ function inversionUnits({ manifest, noteEntry, publishedNoteBytes, baseSourceByt
 //   intact   the emitted bytes lie whole inside one matched run of the
 //            alignment, or, failing that, occur exactly once between the
 //            edited positions of the unit's matched neighbours
-//   deleted  no byte of the unit is matched and its emitted bytes do not occur
-//            between its neighbours
+//            or, when no byte of the unit is matched at all (the alignment
+//            paired its surroundings with other text), are found between the
+//            previous placement and the next unit the alignment did place
+//   deleted  no byte of the unit is matched and its emitted bytes are not
+//            found by either search
 //   refused  part of the unit survives (it was modified), it occurs more than
 //            once between its neighbours, or no search could align its range
-export function placeUnits({ units, publishedBody, editedBody, align = alignBodies }) {
+export function placeUnits({ units, publishedBody, editedBody, align = alignBodies, wideSearch = true }) {
   if (units.length === 0) return []
   const wanted = (from, to) => units.some((unit) => unit.pStart < to && unit.pEnd > from)
   const { runs, coarse } = publishedBody.equals(editedBody) ? { runs: [{ p: 0, e: 0, length: publishedBody.length }], coarse: [] } : align(publishedBody, editedBody, { wanted })
+  const aligned = units.map((unit) => {
+    const run = runs.find((item) => item.p <= unit.pStart && item.p + item.length >= unit.pEnd)
+    return run ? run.e + (unit.pStart - run.p) : null
+  })
   let placedEnd = 0
   return units.map((unit, index) => {
-    const whole = runs.find((run) => run.p <= unit.pStart && run.p + run.length >= unit.pEnd)
-    if (whole) {
-      const eStart = whole.e + (unit.pStart - whole.p)
+    if (aligned[index] !== null) {
+      const eStart = aligned[index]
       placedEnd = eStart + unit.emitted.length
       return { state: 'intact', eStart, eEnd: placedEnd }
     }
@@ -265,6 +271,24 @@ export function placeUnits({ units, publishedBody, editedBody, align = alignBodi
     if (first !== -1) {
       placedEnd = lower + first + unit.emitted.length
       return { state: 'intact', eStart: lower + first, eEnd: placedEnd }
+    }
+    if (matched === 0 && wideSearch) {
+      // A shortest edit script may pair the text around an untouched rewrite
+      // with other text and call the rewrite itself inserted. Its bytes are
+      // then still in the edited body, before the next rewrite that was
+      // aligned. The first occurrence is taken only when every rewrite that
+      // could claim it inverts to the same source bytes.
+      let next = index + 1
+      while (next < units.length && aligned[next] === null) next += 1
+      const from = Math.max(lower, placedEnd)
+      const wide = editedBody.subarray(from, Math.max(from, next < units.length ? aligned[next] : editedBody.length))
+      const found = wide.indexOf(unit.emitted)
+      if (found !== -1) {
+        const rivals = units.slice(index + 1, next).some((other) => other.emitted.equals(unit.emitted) && !other.original.equals(unit.original))
+        if (rivals && wide.indexOf(unit.emitted, found + 1) !== -1) refuse('ambiguous-link-alignment', 'a rewritten link cannot be aligned with the published note unambiguously', { unit: index })
+        placedEnd = from + found + unit.emitted.length
+        return { state: 'intact', eStart: from + found, eEnd: placedEnd }
+      }
     }
     if (matched > 0) {
       if (unit.aliasOf !== null) refuse('link-rewrite-edited', 'the alias the emitter appended to a link was edited', { publishedStart: unit.pStart, publishedEnd: unit.pEnd })
@@ -311,6 +335,44 @@ function assertCoherentPlacements({ units, placements, publishedBody, editedBody
       }
     }
   })
+}
+
+// The final invariant, independent of how the alignment went: every rewrite
+// of the published body is either substituted (intact) or gone (deleted), and
+// what is left of the edited body, which becomes source bytes verbatim, holds
+// no vault identity that the published authored text did not already hold.
+// A vault identity is the `--<hex>` suffix of a note or attachment path of
+// this view, wherever it appears: in a link, in code or in plain prose.
+const IDENTITY = /--[0-9a-f]{12,64}(?![0-9a-f])/g
+
+export function assertRewritesAccounted({ manifest, units, placements, publishedBody, editedBody }) {
+  if (placements.length !== units.length || placements.some((placement) => placement.state !== 'intact' && placement.state !== 'deleted')) {
+    refuse('unsupported-structural-edit', 'a rewritten link is neither kept nor deleted', { reason: 'rewrite-unaccounted' })
+  }
+  placements.forEach((placement, index) => {
+    if (placement.state === 'intact' && !editedBody.subarray(placement.eStart, placement.eEnd).equals(units[index].emitted)) {
+      refuse('unsupported-structural-edit', 'a rewritten link is not where it was placed', { reason: 'rewrite-unaccounted' })
+    }
+  })
+  const known = new Set()
+  for (const item of [...manifest.notes, ...manifest.attachments]) for (const match of item.path.matchAll(IDENTITY)) known.add(match[0])
+  const identities = (body, holes) => {
+    const found = []
+    let cursor = 0
+    for (const [start, end] of [...holes, [body.length, body.length]]) {
+      for (const match of body.toString('latin1', cursor, start).matchAll(IDENTITY)) if (known.has(match[0])) found.push({ identity: match[0], start: cursor + match.index, end: cursor + match.index + match[0].length })
+      cursor = end
+    }
+    return found
+  }
+  const allowance = new Map()
+  for (const item of identities(publishedBody, units.map((unit) => [unit.pStart, unit.pEnd]))) allowance.set(item.identity, (allowance.get(item.identity) ?? 0) + 1)
+  const surplus = []
+  for (const item of identities(editedBody, placements.filter((placement) => placement.state === 'intact').map((placement) => [placement.eStart, placement.eEnd]))) {
+    if ((allowance.get(item.identity) ?? 0) > 0) allowance.set(item.identity, allowance.get(item.identity) - 1)
+    else surplus.push({ bodyStart: item.start, bodyEnd: item.end })
+  }
+  return surplus
 }
 
 const folded = (value) => value.normalize('NFC').toLowerCase()
@@ -412,6 +474,7 @@ export const EDIT_LENS_PRIMITIVES = Object.freeze({
   splitPrefix,
   placeUnits,
   findStructuralLinks,
+  assertRewritesAccounted,
   originalOf: (unit) => unit.original,
   digestOf: sha256Digest,
   isStrictUtf8,
@@ -452,6 +515,13 @@ function lensWith(primitives, { manifest, repoId, nodeId, publishedNoteBytes, ed
   if (structural.length > 0) {
     refuse('unsupported-structural-edit', 'the edit adds or changes a link to a file of the vault', {
       reason: 'vault-link-changed', occurrences: structural.map((item) => ({ noteStart: item.bodyStart + shift, noteEnd: item.bodyEnd + shift })),
+    })
+  }
+
+  const unaccounted = primitives.assertRewritesAccounted({ manifest, units, placements, publishedBody, editedBody }) ?? []
+  if (unaccounted.length > 0) {
+    refuse('unsupported-structural-edit', 'the edited body names a file of the vault outside the links the emitter rewrote', {
+      reason: 'vault-identity-in-authored-text', occurrences: unaccounted.map((item) => ({ noteStart: item.bodyStart + shift, noteEnd: item.bodyEnd + shift })),
     })
   }
 

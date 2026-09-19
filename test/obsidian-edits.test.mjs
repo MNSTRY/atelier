@@ -171,7 +171,6 @@ const BODY_EDITS = [
   { name: 'no front matter', file: 'bare.md', note: [['no links', 'no links yet']] },
   { name: 'derived-only metadata: generated relations, no authored link', file: 'delta.md', note: [['No authored links here at all.', 'Still no authored links.']] },
   { name: 'edit inside a closed code fence', file: 'guide.md', note: [['[fenced](topics/alpha.md)', '[fenced](topics/alpha.md) plus `more`']] },
-  { name: 'a vault-looking link typed inside a code fence is code', file: 'guide.md', note: [['[[Alpha topic]]\n```', `[[${ALPHA_WIKI}]]\n\`\`\``]] },
   { name: 'edit before an unclosed fence', file: 'open-fence.md', note: [['Before the fence', 'Ahead of the fence']] },
   { name: 'edit inside an unclosed fence', file: 'open-fence.md', note: [['const answer = 42', 'const answer = 43']] },
   { name: 'text appended inside an unclosed fence, before the generated closure', file: 'open-fence.md', note: [atBodyEnd('\nmore()')], source: [atSourceEnd('\nmore()')] },
@@ -315,6 +314,10 @@ const REFUSED_EDITS = [
   { name: 'rewritten target retargeted to another note', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[[${ALPHA_WIKI}|Alpha topic]] before`, `[[${BETA_WIKI}|Alpha topic]] before`]] },
   { name: 'text typed against a rewritten target', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[first](${ALPHA_MD})`, `[first](zz${ALPHA_MD})`]] },
   { name: 'text typed after a rewritten target', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[first](${ALPHA_MD})`, `[first](${ALPHA_MD}zz)`]] },
+  { name: 'a vault file named inside a code fence, where no link is read', file: 'guide.md', code: 'unsupported-structural-edit', note: [['[[Alpha topic]]\n```', `[[${ALPHA_WIKI}]]\n\`\`\``]] },
+  { name: 'a vault file named in plain prose', file: 'guide.md', code: 'unsupported-structural-edit', note: [['Closing words.', `Closing words about ${BETA_WIKI}.`]] },
+  { name: 'a code fence opened before a rewritten link', file: 'open-fence.md', code: 'unsupported-structural-edit', note: [['Before the fence', '```\nBefore the fence']] },
+  { name: 'a rewritten link wrapped in inline code', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[[${ALPHA_WIKI}|Alpha topic]] before`, `\`[[${ALPHA_WIKI}|Alpha topic]]\` before`]] },
   { name: 'rewritten link copied elsewhere', file: 'guide.md', code: 'unsupported-structural-edit', note: [['Closing words.', `Closing words. [first](${ALPHA_MD})`]] },
   { name: 'authored lookalike link duplicated', file: 'lookalike.md', code: 'unsupported-structural-edit', note: [['More words follow.', 'More words and a second [list](notes/todo.md) follow.']] },
   { name: 'ambiguous deletion between two spellings of one target', file: 'twins.md', code: 'ambiguous-link-alignment', note: [[`${ALPHA_MD}) [two](`, '']] },
@@ -401,66 +404,98 @@ function inversionsOf(context) {
   ].sort((left, right) => left.note.start - right.note.start)
 }
 
-// Random edits on body lines that hold no rewrite: insertions of plain words
-// and deletions of whole characters, applied to the note and, through the
-// recorded offsets, to the source.
-function randomEdits(context, random) {
+// Fuzz: random edits anywhere in the authored body, also on lines that hold a
+// rewrite, that never touch a rewrite's own bytes or sit exactly on its edge.
+// Inserted text is often copied from the note itself (adversarial repeats for
+// the alignment) or is a line ending, a fence or a bracket, which change what
+// the canonical scanner reads as code or as a link. The same edit is applied
+// to the source through the recorded offsets. The lens must return exactly
+// that source or refuse; wrong bytes are the only failure.
+const FUZZ_TEXTS = ['', 'x', ' words here ', '\n', '\r\n', '\n\n', '- item\n', 'é☕', '```', '```\n', '~~~\n', '`', '[', ']]', '[[', '](', '---\n']
+// Found by an earlier fuzz: an alignment that pairs a blank line with an
+// inserted one and calls the untouched rewrite beside it deleted.
+const FUZZ_REGRESSIONS = [
+  { file: 'open-fence.md', edits: [[199, 199, '\r\n'], [155, 155, 'e\n\nBefore the fen']] },
+  { file: 'open-fence-crlf.md', edits: [[217, 221, '\r\n'], [156, 165, 'x']] },
+  { file: 'open-fence.md', edits: [[221, 232, 'en'], [153, 153, '.\n\n```js\nconst ans']] },
+]
+
+function fuzzTrial(context, random) {
   const note = context.publishedNoteBytes
   const { start, end } = context.note.regions.body
   const inversions = inversionsOf(context)
-  const lines = []
-  for (let offset = start; offset < end;) {
-    const newline = note.indexOf(0x0a, offset)
-    const next = newline === -1 || newline >= end ? end : newline + 1
-    let contentEnd = next
-    while (contentEnd > offset && (note[contentEnd - 1] === 0x0a || note[contentEnd - 1] === 0x0d)) contentEnd -= 1
-    const lookalike = ['notes/', 'attachments/'].some((name) => note.subarray(offset, next).includes(name))
-    if (!lookalike && !inversions.some((item) => item.note.start < next && item.note.end >= offset)) lines.push([offset, contentEnd])
-    offset = next
-  }
   const boundary = (offset) => { while (offset < end && (note[offset] & 0xc0) === 0x80) offset += 1; return offset }
-  const toSource = (offset) => offset - inversions.filter((item) => item.note.end <= offset).reduce((total, item) => total + (item.note.end - item.note.start) - (item.source.end - item.source.start), 0)
+  const touches = (from, to) => inversions.some((item) => from <= item.note.end && to >= item.note.start)
   const edits = []
-  const used = new Set()
-  for (let count = 1 + Math.floor(random() * 3); count > 0; count -= 1) {
-    const index = Math.floor(random() * lines.length)
-    if (used.has(index)) continue
-    used.add(index)
-    const [from, to] = lines[index]
-    const at = boundary(from + Math.floor(random() * (to - from + 1)))
-    const until = random() < 0.5 ? at : Math.min(to, boundary(at + Math.floor(random() * 12)))
-    const text = random() < 0.3 ? '' : ['word', ' two words ', 'x', 'é ☕', '  '][Math.floor(random() * 5)]
-    if (until === at && text === '') continue
-    edits.push({ at, until, text: utf8(text) })
+  for (let count = 1 + Math.floor(random() * 4); count > 0; count -= 1) {
+    const at = boundary(start + Math.floor(random() * (end - start)))
+    const until = random() < 0.5 ? at : Math.min(end, boundary(at + Math.floor(random() * 20)))
+    if (touches(at, until)) continue
+    let text
+    if (random() < 0.5) {
+      const from = boundary(start + Math.floor(random() * (end - start)))
+      const to = Math.min(end, boundary(from + Math.floor(random() * 25)))
+      text = touches(from, to) ? utf8('plain') : note.subarray(from, to)
+    } else text = utf8(FUZZ_TEXTS[Math.floor(random() * FUZZ_TEXTS.length)])
+    if ((until === at && text.length === 0) || edits.some((edit) => !(until < edit.at || at > edit.until))) continue
+    edits.push({ at, until, text })
   }
-  edits.sort((left, right) => right.at - left.at)
-  let edited = note
-  let expected = context.baseSourceBytes
-  for (const edit of edits) {
-    edited = Buffer.concat([edited.subarray(0, edit.at), edit.text, edited.subarray(edit.until)])
-    expected = Buffer.concat([expected.subarray(0, toSource(edit.at)), edit.text, expected.subarray(toSource(edit.until))])
-  }
-  return { edited, expected }
+  return edits
 }
 
-function propertyOracle(lens, trials) {
-  const random = mulberry32(20260105)
-  const files = [...cases.keys()].filter((file) => cases.get(file).note.ext[EXT].source.kind === 'markdown')
-  let changed = 0
-  for (let trial = 0; trial < trials; trial += 1) {
-    const file = files[trial % files.length]
+function fuzzOracle(lens, { seed, trials }) {
+  const random = mulberry32(seed)
+  const files = [...cases.keys()].filter((file) => cases.get(file).note.ext[EXT].source.kind === 'markdown' && cases.get(file).note.regions.body.end - cases.get(file).note.regions.body.start >= 2)
+  const tally = { exact: 0, refused: {}, wrong: [] }
+  const planned = [
+    ...FUZZ_REGRESSIONS.map((item) => ({ file: item.file, edits: item.edits.map(([at, until, text]) => ({ at, until, text: utf8(text) })) })),
+    ...Array.from({ length: trials }, (_, trial) => ({ file: files[trial % files.length], edits: fuzzTrial(cases.get(files[trial % files.length]), random) })),
+  ]
+  for (const { file, edits } of planned) {
+    if (edits.length === 0) continue
     const context = cases.get(file)
-    const { edited, expected } = randomEdits(context, random)
-    assertExactSource(context, runLens(context, edited, lens), expected, `trial ${trial} on ${file}`)
-    if (!expected.equals(context.baseSourceBytes)) changed += 1
+    const inversions = inversionsOf(context)
+    const toSource = (offset) => offset - inversions.filter((item) => item.note.end <= offset).reduce((total, item) => total + (item.note.end - item.note.start) - (item.source.end - item.source.start), 0)
+    let edited = context.publishedNoteBytes
+    let expected = context.baseSourceBytes
+    for (const edit of [...edits].sort((left, right) => right.at - left.at)) {
+      edited = Buffer.concat([edited.subarray(0, edit.at), edit.text, edited.subarray(edit.until)])
+      expected = Buffer.concat([expected.subarray(0, toSource(edit.at)), edit.text, expected.subarray(toSource(edit.until))])
+    }
+    const result = runLens(context, edited, lens)
+    if (result.kind === 'refusal') { tally.refused[result.code] = (tally.refused[result.code] ?? 0) + 1; continue }
+    // Second oracle, independent of the expected bytes: no emitted target
+    // reaches the source unless the base or the inserted text held it, and
+    // nothing outside the body moved.
+    const bodyStart = context.note.regions.body.start
+    const count = (haystack, needle) => { let total = 0; for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) total += 1; return total }
+    const leaked = inversions.some((item) => {
+      const emitted = Buffer.from(item.ext[EXT].emitted, 'base64url')
+      if (item.source.start === item.source.end) return false
+      return count(result.newSourceBytes, emitted) > count(context.baseSourceBytes, emitted) + edits.reduce((total, edit) => total + count(edit.text, emitted), 0)
+    })
+    const prefixKept = result.newSourceBytes.subarray(0, bodyStart).equals(context.baseSourceBytes.subarray(0, bodyStart))
+    if (result.newSourceBytes.equals(expected) && !leaked && prefixKept) tally.exact += 1
+    else tally.wrong.push({ file, leaked, prefixKept, edits: edits.map((edit) => [edit.at, edit.until, edit.text.toString('utf8')]) })
   }
-  assert.ok(changed > trials / 2)
+  assert.deepEqual(tally.wrong.slice(0, 3), [], `${tally.wrong.length} wrong results`)
+  return tally
 }
 
-test('lens: property, seeded random edits away from rewrites equal the same edit applied to the source', () => {
-  propertyOracle(applyEditLens, 600)
-  assert.throws(() => propertyOracle(broken.keepsEmittedBytes, 60), 'mutation control')
-  assert.throws(() => propertyOracle(broken.normalizesNewlines, 60), 'mutation control')
+test('lens: fuzz, exact or refused, never wrong', (t) => {
+  const tally = fuzzOracle(applyEditLens, { seed: Number(process.env.ATELIER_EDIT_FUZZ_SEED ?? 20260105), trials: Number(process.env.ATELIER_EDIT_FUZZ_TRIALS ?? 4000) })
+  const refused = Object.values(tally.refused).reduce((total, value) => total + value, 0)
+  t.diagnostic(`fuzz: ${JSON.stringify({ exact: tally.exact, refused: tally.refused, wrong: 0 })}`)
+  // A lens that refuses everything is never wrong either.
+  assert.ok(tally.exact > 4 * refused, `only ${tally.exact} exact results beside ${refused} refusals`)
+  const passesUnplacedRewritesThrough = createEditLensForOracleTests({
+    ...EDIT_LENS_PRIMITIVES,
+    placeUnits: (input) => placeUnits({ ...input, wideSearch: false }),
+    assertRewritesAccounted: () => [],
+  })
+  assert.throws(() => fuzzOracle(passesUnplacedRewritesThrough, { seed: 20260105, trials: 0 }), /wrong results/, 'mutation control: unplaced rewrites written to the source')
+  assert.throws(() => fuzzOracle(broken.keepsEmittedBytes, { seed: 20260105, trials: 200 }), /wrong results/, 'mutation control')
+  assert.throws(() => fuzzOracle(broken.normalizesNewlines, { seed: 20260105, trials: 200 }), /wrong results/, 'mutation control')
 })
 
 test('lens: applying it twice gives identical results', () => {
@@ -537,7 +572,7 @@ function assertCarriesNoText(value, allowed, label) {
 }
 
 test('lens: refusals carry codes, digests and byte offsets, never note text, titles or paths', () => {
-  const allowed = new Set([...EDIT_LENS_REFUSALS, 'refusal', 'rewritten-target-edited', 'vault-link-changed'])
+  const allowed = new Set([...EDIT_LENS_REFUSALS, 'refusal', 'rewritten-target-edited', 'vault-link-changed', 'vault-identity-in-authored-text', 'rewrite-unaccounted'])
   let refusals = 0
   for (const row of REFUSED_EDITS) {
     const context = cases.get(row.file)
@@ -728,7 +763,7 @@ test('observation: the immutable edit bytes are recorded before classification, 
 
 function assertOperationCarriesNoText(operation, label) {
   const identities = new Set([operation.editId, operation.workspaceId, operation.repoId, operation.nodeId, operation.origin.scopeId, operation.origin.generationId, operation.idempotencyKey, operation.observedAt])
-  const vocabulary = new Set([...EDIT_LENS_REFUSALS, 'edit-bytes-missing', 'atelier-obsidian-edit-operation/v1', '1.0.0', EDIT_LENS_VERSION, 'body-replacement', 'semantic-proposal', 'pending', 'proposed', 'refused', 'conflicted', 'intact', 'removed', 'none', 'rewritten-target-edited', 'vault-link-changed'])
+  const vocabulary = new Set([...EDIT_LENS_REFUSALS, 'edit-bytes-missing', 'atelier-obsidian-edit-operation/v1', '1.0.0', EDIT_LENS_VERSION, 'body-replacement', 'semantic-proposal', 'pending', 'proposed', 'refused', 'conflicted', 'intact', 'removed', 'none', 'rewritten-target-edited', 'vault-link-changed', 'vault-identity-in-authored-text', 'rewrite-unaccounted'])
   const visit = (value, pointer) => {
     if (typeof value === 'string') {
       // The vault-relative note path is the one readable string: it names the note the edit was made in.
