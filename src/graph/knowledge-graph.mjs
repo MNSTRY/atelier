@@ -710,22 +710,19 @@ export const LINK_DIAGNOSTIC_CODES = Object.freeze([
 const MARKDOWN_LINK_RE = /\[[^\]]+\]\(([^)\s#]+)(#[^)]+)?\)/g
 const WIKILINK_RE = /\[\[([^[\]|#^]+)([#^][^[\]|]*)?(?:\|[^[\]]*)?\]\]/g
 
-// Regions whose text is never read as a link: front matter (known or unknown
-// YAML alike), fenced code and inline code. Offsets index the text as read,
-// with no newline normalization.
-function unscannedRanges(text) {
-  const ranges = []
-  let bodyStart = 0
-  if (/^---\r?\n/.test(text)) {
-    const closeRe = /\r?\n---[ \t]*\r?\n/g
-    closeRe.lastIndex = 3
-    const close = closeRe.exec(text)
-    if (close) {
-      bodyStart = close.index + close[0].length
-      ranges.push([0, bodyStart])
-    }
-  }
+function frontMatterEnd(text) {
+  if (!/^---\r?\n/.test(text)) return 0
+  const closeRe = /\r?\n---[ \t]*\r?\n/g
+  closeRe.lastIndex = 3
+  const close = closeRe.exec(text)
+  return close ? close.index + close[0].length : 0
+}
 
+// Fenced code from `bodyStart` on: the closed blocks, and the fence still open
+// when the text ends, if any. The one statement of the fence rules, shared by
+// the link scanner and by `unclosedFenceAtEnd`.
+function fencedBlocks(text, bodyStart) {
+  const ranges = []
   let fence = null
   let offset = bodyStart
   while (offset < text.length) {
@@ -739,14 +736,34 @@ function unscannedRanges(text) {
         fence = null
       }
     } else {
-      const open = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/)
-      if (open && !(open[1][0] === '`' && open[2].includes('`'))) {
-        fence = { char: open[1][0], length: open[1].length, start: offset }
+      const open = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/)
+      if (open && !(open[2][0] === '`' && open[3].includes('`'))) {
+        fence = { char: open[2][0], length: open[2].length, indent: open[1].length, start: offset }
       }
     }
     offset = next
   }
-  if (fence) ranges.push([fence.start, text.length])
+  return { ranges, open: fence }
+}
+
+// The fence a Markdown text ends inside, as the link scanner reads it:
+// { char, length, indent }, or null when every fence closes. Front matter is
+// never read for fences. Anything appended after such a text is code until a
+// closing fence of the same character and at least the same length.
+export function unclosedFenceAtEnd(raw) {
+  const text = String(raw ?? '')
+  const { open } = fencedBlocks(text, frontMatterEnd(text))
+  return open ? { char: open.char, length: open.length, indent: open.indent } : null
+}
+
+// Regions whose text is never read as a link: front matter (known or unknown
+// YAML alike), fenced code and inline code. Offsets index the text as read,
+// with no newline normalization.
+function unscannedRanges(text) {
+  const bodyStart = frontMatterEnd(text)
+  const fenced = fencedBlocks(text, bodyStart)
+  const ranges = bodyStart > 0 ? [[0, bodyStart], ...fenced.ranges] : fenced.ranges
+  if (fenced.open) ranges.push([fenced.open.start, text.length])
 
   // Inline code between the block ranges. A span closes on a backtick run of
   // the same length inside the same paragraph; an unclosed run is plain text.
@@ -866,12 +883,43 @@ function wikilinkCandidates(target, nodes, pathOf, repoNameOf) {
   return { by: byTitle.length ? 'title' : 'basename', nodes: merged }
 }
 
+// Embedded assets: files an embed names that are not documents of the census.
+// An asset is a regular file inside an enrolled repository root: never a link
+// on disk, never reached through one, never git-ignored, never inside `.git`,
+// never Markdown and never a census node.
+const assetId = (repoName, rel) => `${repoName}:asset:${rel}`
+const insideGitDirectory = (rel) => rel.split('/').includes('.git')
+const isMarkdownPath = (rel) => rel.toLowerCase().endsWith('.md')
+
+// `gitIgnoreFilter` lists a fully ignored directory once, so every ancestor of
+// a path is tested, not the path alone.
+function ignoredAtAnyDepth(isIgnored, rel) {
+  const parts = rel.split('/')
+  return parts.some((_, index) => isIgnored(parts.slice(0, index + 1).join('/')))
+}
+
+// True only for a regular file whose real location is exactly `rel` under the
+// real repository root: a link anywhere on the way, or a name that matches
+// only because the filesystem folds case, is not this file.
+function isRegularFileInside(root, rel) {
+  try {
+    const abs = path.join(root, rel)
+    if (!fs.lstatSync(abs).isFile()) return false
+    return relPath(fs.realpathSync.native(root), fs.realpathSync.native(abs)) === rel
+  } catch {
+    return false
+  }
+}
+
 // The one resolver for ordinary links across every enrolled repository.
-// `repos` is [{ name, root, nodesByPath }]. A target that is absent, outside
-// the census or refused by `isLinkTargetEligible` is reported identically and
-// never inspected, so a finding cannot confirm that a withheld target exists.
-export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () => true } = {}) {
+// `repos` is [{ name, root, nodesByPath, isIgnored? }]. A target that is
+// absent, outside the census or refused by `isLinkTargetEligible` is reported
+// identically and never inspected, so a finding cannot confirm that a withheld
+// target exists. `isAssetEligible({ repo, path })` gives embedded assets the
+// same rule: a refused asset reads exactly as an absent one.
+export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () => true, isAssetEligible = () => true } = {}) {
   const links = []
+  const embeds = []
   const diagnostics = []
   const enrolled = repos.map((repo) => ({ ...repo, root: path.resolve(repo.root) }))
   const ownerOf = new Map(enrolled.flatMap((repo) => [...repo.nodesByPath.values()].map((node) => [node, repo])))
@@ -883,6 +931,65 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
     enrolled
       .filter((repo) => abs === repo.root || abs.startsWith(`${repo.root}${path.sep}`))
       .sort((a, b) => b.root.length - a.root.length)[0] ?? null
+
+  // One ignore lookup per repository, made only when an embed needs it.
+  const ignoreFilters = new Map()
+  const ignoredIn = (owner) => {
+    if (!ignoreFilters.has(owner)) ignoreFilters.set(owner, owner.isIgnored ?? gitIgnoreFilter(owner.root))
+    return ignoreFilters.get(owner)
+  }
+  // Eligibility is asked before the file is looked at, so a refused asset and
+  // an absent one take the same path to the same finding.
+  const assetAt = (owner, rel) => {
+    if (!rel || rel.startsWith('../') || rel === '..' || path.posix.isAbsolute(rel)) return null
+    if (owner.nodesByPath.has(rel) || isMarkdownPath(rel) || insideGitDirectory(rel)) return null
+    if (isAssetEligible({ repo: owner.name, path: rel }) !== true) return null
+    if (ignoredAtAnyDepth(ignoredIn(owner), rel) || !isRegularFileInside(owner.root, rel)) return null
+    return { id: assetId(owner.name, rel), repo: owner.name, path: rel, extension: path.posix.extname(rel).slice(1).toLowerCase() }
+  }
+
+  // Basename index over every enrolled repository: built once, and only when a
+  // bare wikilink embed asks for it. It holds names only; eligibility is tested
+  // per candidate when a name is looked up.
+  let basenameIndex = null
+  const assetsNamed = (name) => {
+    if (!basenameIndex) {
+      basenameIndex = new Map()
+      const roots = new Set(enrolled.map((item) => item.root))
+      for (const owner of enrolled) {
+        const isIgnored = ignoredIn(owner)
+        const visit = (dir) => {
+          for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (ent.name === '.git') continue
+            const abs = path.join(dir, ent.name)
+            const rel = relPath(owner.root, abs)
+            if (isIgnored(rel)) continue
+            // A nested enrolled repository owns its own files.
+            if (ent.isDirectory()) {
+              if (!roots.has(abs)) visit(abs)
+            } else if (ent.isFile() && !isMarkdownPath(rel) && !owner.nodesByPath.has(rel)) {
+              if (!basenameIndex.has(ent.name)) basenameIndex.set(ent.name, [])
+              basenameIndex.get(ent.name).push({ owner, rel })
+            }
+          }
+        }
+        visit(owner.root)
+      }
+    }
+    return (basenameIndex.get(name) ?? []).map(({ owner, rel }) => assetAt(owner, rel)).filter(Boolean)
+  }
+
+  // A wikilink embed names an asset by repository-relative path (the source's
+  // own repository first, then `<repository>/<path>`), or by bare file name.
+  const wikilinkAssets = (repo, target) => {
+    if (!target.includes('/')) return { by: 'basename', assets: assetsNamed(target) }
+    const wanted = path.posix.normalize(target)
+    const candidates = [
+      assetAt(repo, wanted),
+      ...enrolled.filter((owner) => wanted.startsWith(`${owner.name}/`)).map((owner) => assetAt(owner, wanted.slice(owner.name.length + 1))),
+    ].filter(Boolean)
+    return { by: 'path', assets: candidates.slice(0, 1) }
+  }
 
   for (const repo of enrolled) {
     for (const [rel, node] of repo.nodesByPath) {
@@ -911,6 +1018,7 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
       for (const occurrence of occurrences) {
         const shown = JSON.stringify(portableText(occurrence.href))
         let targetNode = null
+        let asset = null
         let resolvedBy = 'path'
 
         if (occurrence.syntax === 'wikilink') {
@@ -923,6 +1031,17 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
           }
           targetNode = candidates.nodes[0] ?? null
           resolvedBy = candidates.by
+          if (!targetNode && occurrence.embed) {
+            const found = wikilinkAssets(repo, occurrence.href)
+            if (found.assets.length > 1) {
+              finding('link-target-ambiguous', occurrence, `embed ${shown} matches ${found.assets.length} files; refusing to choose`, {
+                candidates: found.assets.map((item) => item.id).sort(),
+              })
+              continue
+            }
+            asset = found.assets[0] ?? null
+            resolvedBy = found.by
+          }
         } else {
           const href = occurrence.href
           if (/^[a-z]+:/i.test(href) || href.startsWith('#')) continue
@@ -947,8 +1066,26 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
             [target, posixJoin(target, 'README.md'), posixJoin(target, 'index.md')]
               .map((candidate) => owner.nodesByPath.get(candidate))
               .find((candidate) => candidate && isLinkTargetEligible(candidate)) ?? null
+          if (!targetNode && occurrence.embed) asset = assetAt(owner, target)
         }
 
+        if (asset) {
+          embeds.push({
+            source: node.id,
+            type: 'embeds_asset',
+            asset,
+            syntax: occurrence.syntax,
+            href: occurrence.href,
+            fragment: occurrence.fragment,
+            resolvedBy,
+            crossRepository: asset.repo !== repo.name,
+            sourceRepo: repo.name,
+            sourcePath: rel,
+            range: occurrence.range,
+            targetRange: occurrence.targetRange,
+          })
+          continue
+        }
         if (!targetNode) {
           finding('link-target-unresolved', occurrence, `link ${shown} does not resolve to an enrolled document`)
           continue
@@ -976,7 +1113,7 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
 
   const order = (item) => `${item.sourceRepo ?? item.repo}/${item.sourcePath ?? item.path}`
   const byPosition = (a, b) => order(a).localeCompare(order(b)) || (a.range?.start ?? -1) - (b.range?.start ?? -1)
-  return { links: links.sort(byPosition), diagnostics: diagnostics.sort(byPosition) }
+  return { links: links.sort(byPosition), embeds: embeds.sort(byPosition), diagnostics: diagnostics.sort(byPosition) }
 }
 
 // A repository's own artifact depends on that repository alone: path links
@@ -1141,6 +1278,7 @@ export function buildKnowledgeGraph({
   externalRelationPrefixes = [],
   externalRelationIds = [],
   isLinkTargetEligible = undefined,
+  isAssetEligible = undefined,
 } = {}) {
   if (!workspaceRoot) throw new Error('workspaceRoot is required')
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
@@ -1194,11 +1332,11 @@ export function buildKnowledgeGraph({
       nodesByPath.set(file.rel, node)
     }
 
-    census.push({ name: repoName, root: repoRoot, nodes, nodesByPath })
+    census.push({ name: repoName, root: repoRoot, nodes, nodesByPath, isIgnored })
   }
 
   // Links resolve once, against every enrolled repository together.
-  const resolved = resolveWorkspaceLinks({ repos: census, ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}) })
+  const resolved = resolveWorkspaceLinks({ repos: census, ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}), ...(isAssetEligible ? { isAssetEligible } : {}) })
 
   for (const { name: repoName, root: repoRoot, nodes } of census) {
     const localLinks = resolved.links.filter((link) => link.sourceRepo === repoName && repoLocalLink(link))
@@ -1241,6 +1379,7 @@ export function buildKnowledgeGraph({
     orphanSidecars: workspaceOrphanSidecars,
     ignoredSidecars: workspaceIgnoredSidecars,
     resolvedLinks: resolved.links,
+    resolvedEmbeds: resolved.embeds,
     linkDiagnostics: resolved.diagnostics,
   }
 }
