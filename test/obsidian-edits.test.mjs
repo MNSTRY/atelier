@@ -46,6 +46,15 @@ import { observeVaultEdits } from '../src/runtime/obsidian/pending-edits.mjs'
 import { createAbandonmentProof, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
 import { RACE_MODES, digestOf, makeOperation, raceIdentity, raceOperation, resultOf, stormIdentity, stormOperation } from './support/obsidian-edits/operations.mjs'
 import { EXT, WORKSPACE_ID, prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
+import {
+  APPLY_POLICY_PRIMITIVES, SOURCE_APPLY_PRIMITIVES, SOURCE_APPLY_REFUSALS, SOURCE_APPLY_STEPS, applyPolicyDigest, canonicalApplyPolicy, createApplyCommandOperation, createApplyPolicyForOracleTests,
+  createEngineApplyOperation, createSourceApplyContribution, decideApply, withApplyPolicyDigest,
+} from '../src/projection/obsidian/edits/index.mjs'
+import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
+import { createObsidianRegistry } from '../src/runtime/obsidian/extension-points.mjs'
+import { createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
+import { revokeApplyPolicy } from '../src/runtime/obsidian/machine-settings.mjs'
+import { APPLY_WORKSPACE_ID, digestOf as bytesDigest, git, makeApplyWorld, noteText, treeListing } from './support/obsidian-edits/apply-world.mjs'
 
 // Invented fixtures only. Every note under test is the output of the real
 // prepareView over a workspace written to a temporary directory; an edit is a
@@ -1645,4 +1654,687 @@ test('arbitration: events, indexes, acknowledgements, listings and refusals hold
   for (const machinePath of [world.dir, os.tmpdir()]) assert.ok(!everything.includes(JSON.stringify(machinePath).slice(1, -1)), 'a machine path leaked')
   assert.throws(() => assertArbitrationCarriesNoText([{ ...written[0], excerpt: 'Closing words, revised.' }], 'control', identifiers), 'mutation control: an event that quotes the note')
   assert.throws(() => assertArbitrationCarriesNoText([{ ...written[0], file: path.join(world.dir, 'guide.md') }], 'control', identifiers), 'mutation control: an event that names a machine path')
+})
+
+// ---------------------------------------------------------------------------
+// Source apply: one policy-aware operation, manual and automatic
+// ---------------------------------------------------------------------------
+//
+// Every source file written below lives in a temporary directory made by the
+// test: invented repositories, initialised with a real git so that the index,
+// the history and `git status` can be compared before and after.
+
+const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
+const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: source apply refuses exchange-unavailable, which its own test asserts' }
+
+const LANTERN = 'east-wing/notes/lantern.md'
+const APPLY_FILES = Object.freeze({
+  [LANTERN]: noteText({ id: 'east-wing:lantern', title: 'Lantern room', body: 'The lamp turns once a minute. See the [compass](compass.md).\n\nA second paragraph that nobody edits.' }),
+  'east-wing/notes/compass.md': noteText({ id: 'east-wing:compass', title: 'Compass rose', body: 'North is painted red.' }),
+  'east-wing/notes/ledger.md': noteText({ id: 'east-wing:ledger', title: 'Ledger', body: 'Kept for the keeper only.', audience: 'private' }),
+  'west-wing/logs/tide.md': noteText({ id: 'west-wing:tide', title: 'Tide log', body: 'High water at noon.' }),
+})
+const WHOLE = { scopeId: 'scope-whole', mode: 'full', selector: { all: true } }
+const EAST = { scopeId: 'scope-east', mode: 'scoped', selector: { repo: 'east-wing' } }
+const applyWorld = (t, options = {}) => makeApplyWorld(t, { repositories: ['east-wing', 'west-wing'], files: APPLY_FILES, scopes: [WHOLE, EAST], ...options })
+
+// The whole project tree (git directories included), and what git says about each repository.
+const projectState = (world) => ({
+  tree: treeListing(world.projectDir),
+  status: Object.fromEntries(['east-wing', 'west-wing'].filter((name) => fs.existsSync(world.repo(name))).map((name) => [name, git(world.repo(name), ['status', '--porcelain'])])),
+})
+const assertNothingWritten = (world, before, label) => assert.deepEqual(projectState(world), before, `${label}: a refusal writes nothing, anywhere in the project, and leaves the git index alone`)
+
+test('manual apply, end to end: the person\'s edit becomes exactly the expected source bytes, the old source is retained, a second run is a no-op, and the next ticks republish, lift the hold and refresh the sibling view', needsExchange, async (t) => {
+  const world = applyWorld(t)
+  const engine = world.engine()
+  assert.deepEqual((await engine.tick()).scopes.map((scope) => scope.state), ['current', 'current'])
+  const baseSource = fs.readFileSync(world.source(LANTERN))
+  const expected = replaceNth(baseSource, 'once a minute', 'twice a minute')
+  const editedNote = world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  world.advance(1000)
+  const held = await engine.tick()
+  assert.equal(held.scopes.find((scope) => scope.scopeId === 'scope-whole').state, 'held-for-your-edit')
+  const edit = world.editOf('east-wing:lantern')
+  const before = projectState(world)
+
+  const sourceApply = world.sourceApply()
+  const listed = await sourceApply.list()
+  assert.deepEqual(listed.map((item) => [item.editId, item.repoId, item.nodeId, item.state]), [[edit.editId, 'east-wing', 'east-wing:lantern', 'queued']])
+  // The live note is never what gets applied: it is scribbled over before the apply and the preserved bytes win.
+  fs.writeFileSync(world.noteFile('east-wing:lantern'), Buffer.concat([editedNote, utf8('\nscribbled after the edit was preserved\n')]))
+  const result = await sourceApply.apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+  fs.writeFileSync(world.noteFile('east-wing:lantern'), editedNote)
+  assert.deepEqual([result.status, result.code, result.replayed, result.actor, result.policy], ['applied', 'applied', false, 'person-synthetic', { mode: 'manual' }])
+  assert.deepEqual([result.oldSourceDigest, result.newSourceDigest], [sha256Digest(baseSource), sha256Digest(expected)])
+
+  const after = projectState(world)
+  assert.equal(fs.readFileSync(world.source(LANTERN)).toString('hex'), expected.toString('hex'), 'the source is exactly the expected edit')
+  const changed = Object.keys(after.tree).filter((key) => after.tree[key] !== before.tree[key])
+  assert.deepEqual([changed, Object.keys(before.tree).filter((key) => !(key in after.tree)), Object.keys(after.tree).filter((key) => !(key in before.tree))], [[LANTERN], [], []], 'one file changed; no file appeared or went; the git directory is byte for byte what it was')
+  assert.deepEqual(after.status, { 'east-wing': ' M notes/lantern.md\n', 'west-wing': '' }, 'nothing is staged or committed')
+  assert.equal(fs.lstatSync(world.source(LANTERN)).mode & 0o777, 0o644)
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), result.backupRef)), baseSource, 'the old source is retained as the backup')
+
+  const shown = await sourceApply.show(edit.editId)
+  assert.deepEqual([shown.operation.state, shown.object.outcomeUnknown, shown.outcomes.map((outcome) => [outcome.status, outcome.actor, outcome.oldSourceDigest, outcome.newSourceDigest])],
+    ['applied', false, [['applied', 'person-synthetic', sha256Digest(baseSource), sha256Digest(expected)]]])
+  const again = await sourceApply.apply({ editId: edit.editId, mode: 'manual', actor: 'someone-else' })
+  assert.deepEqual([again.status, again.code, again.replayed, again.actor, again.applyId], ['applied', 'already-applied', true, 'person-synthetic', result.applyId], 'a repeated request is answered from the record')
+  assert.deepEqual(projectState(world), after, 'the second run wrote nothing')
+
+  world.advance(1000)
+  await engine.tick()
+  world.advance(1000)
+  const settled = await engine.tick()
+  assert.deepEqual(settled.scopes.map((scope) => [scope.scopeId, scope.state, scope.heldNotes]), [['scope-east', 'current', []], ['scope-whole', 'current', []]], 'the hold is lifted and both views are current')
+  assert.deepEqual(settled.pendingEdits, [])
+  assert.deepEqual(fs.readFileSync(world.noteFile('east-wing:lantern')), editedNote, 'the note the person edited is the newly prepared note, never rewritten')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:lantern', 'scope-east'), 'utf8'), /twice a minute/, 'the sibling view was refreshed from the new source')
+  const closed = world.pendingEdits().find((item) => item.editId === edit.editId)
+  assert.equal(closed.state, 'withdrawn')
+  assert.deepEqual((await sourceApply.apply({ editId: edit.editId, mode: 'manual' })).code, 'already-applied', 'the record answers even after the pending edit closed')
+})
+
+test('automatic apply: an installed, in-scope, active policy applies with no confirmation through the engine, and manual mode never touches a source however many ticks pass', needsExchange, async (t) => {
+  const world = applyWorld(t)
+  const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock }
+  const engine = world.engine({ applyOperation: createEngineApplyOperation({ context }) })
+  await engine.tick()
+  const baseSource = fs.readFileSync(world.source(LANTERN))
+  world.editNote('east-wing:lantern', 'once a minute', 'three times a minute')
+  const before = projectState(world)
+  for (let tick = 0; tick < 12; tick += 1) {
+    world.advance(5 * 60 * 1000)
+    assert.deepEqual((await engine.tick()).dispatched, [])
+  }
+  assertNothingWritten(world, before, 'twelve ticks in manual mode, with the apply operation registered')
+  // A policy alone is not a mode: still nothing.
+  const policy = world.installPolicy({ selector: { repo: 'east-wing' } })
+  world.advance(5 * 60 * 1000)
+  await engine.tick()
+  assertNothingWritten(world, before, 'a policy installed while the mode is manual')
+
+  world.configureMachine({ maintenanceMode: 'automatic' })
+  world.advance(5 * 60 * 1000)
+  const report = await engine.tick()
+  assert.deepEqual(report.dispatched.map((item) => [item.status, item.code, item.state]), [['applied', 'applied', 'applied']])
+  assert.deepEqual(fs.readFileSync(world.source(LANTERN)), replaceNth(baseSource, 'once a minute', 'three times a minute'))
+  assert.deepEqual(projectState(world).status, { 'east-wing': ' M notes/lantern.md\n', 'west-wing': '' })
+  const [outcome] = (await world.sourceApply().show(report.dispatched[0].editId)).outcomes
+  assert.deepEqual([outcome.actor, outcome.policy], ['agent-synthetic', { mode: 'automatic', policyDigest: policy.digest, policyId: 'policy-synthetic' }], 'the actor and the policy are the installed ones')
+  world.advance(1000)
+  const next = await engine.tick()
+  assert.deepEqual(next.scopes.map((scope) => scope.state), ['current', 'current'])
+  assert.deepEqual([next.dispatched.length, next.pendingEdits], [0, []])
+})
+
+test('mutation control: an apply whose policy decision always allows fails the manual-mode source oracle', needsExchange, async (t) => {
+  const world = applyWorld(t)
+  await world.engine().tick()
+  world.editNote('east-wing:lantern', 'once a minute', 'never')
+  world.queueDirectly()
+  const before = projectState(world)
+  const lax = world.sourceApply({}, { decide: () => ({ allowed: true, actor: 'anyone', policy: { mode: 'manual' }, retryBudget: null }) })
+  await lax.apply({ editId: world.editOf('east-wing:lantern').editId, mode: 'automatic' })
+  assert.throws(() => assertNothingWritten(world, before, 'no policy installed'), assert.AssertionError)
+})
+
+test('policy: the canonical digest excludes the digest member and ignores key order, and one decision function serves manual and automatic requests', () => {
+  const content = { schema: 'atelier-obsidian-apply-policy/v1', policyId: 'policy-a', workspaceId: APPLY_WORKSPACE_ID, mode: 'automatic', status: 'active', actor: { kind: 'agent', id: 'agent-a' }, version: 1,
+    allowedEditClasses: ['body-replacement'], selector: { ids: ['room:a'] }, maxBatchSize: 2, retryBudget: 1, conflictDisposition: 'hold' }
+  const policy = withApplyPolicyDigest({ ...content, digest: bytesDigest('anything') })
+  assert.equal(policy.digest, bytesDigest(canonicalApplyPolicy(policy)))
+  assert.equal(applyPolicyDigest(Object.fromEntries(Object.entries(policy).reverse())), policy.digest)
+  assert.equal(canonicalApplyPolicy(policy).includes('"digest"'), false)
+  assert.notEqual(applyPolicyDigest({ ...policy, maxBatchSize: 3 }), policy.digest)
+
+  const node = (id, extra = {}) => ({ id, repo: 'room', path: `${id.slice(5)}.md`, eligible: true, audience: 'team', ...extra })
+  const graph = { nodes: [node('room:a'), node('room:b'), node('room:c', { audience: 'private' }), node('room:d', { eligible: false })], edges: [] }
+  const profile = { schema: 'atelier-obsidian-corpus-profile/v1', workspaceId: APPLY_WORKSPACE_ID, repositories: [{ repoId: 'room', root: 'room', enrollment: 'enrolled' }], audience: { allow: ['team'] } }
+  const decideWith = (installed, primitives = {}) => createApplyPolicyForOracleTests({ authorize: () => (installed.authorized === false ? installed : { authorized: true, reason: 'apply-policy-active', policy: installed }), ...primitives })
+  const ask = (decide, nodeId, request, extra = {}) => decide({ request: { editId: 'edit-x', ...request }, workspace: {}, graph, profile, object: { repoId: 'room', nodeId }, editClass: 'body-replacement', attempts: [], ...extra })
+  const decide = decideWith(policy)
+  assert.deepEqual(ask(decide, 'room:a', { mode: 'manual', actor: 'person-a' }), { allowed: true, actor: 'person-a', policy: { mode: 'manual' }, retryBudget: null })
+  assert.deepEqual(ask(decide, 'room:a', { mode: 'automatic' }), { allowed: true, actor: 'agent-a', policy: { mode: 'automatic', policyDigest: policy.digest, policyId: 'policy-a' }, retryBudget: 1 })
+  const codeOf = (decision) => [decision.allowed, decision.code]
+  for (const mode of ['manual', 'automatic']) {
+    assert.deepEqual(codeOf(ask(decide, 'room:c', { mode })), [false, 'object-not-visible'], `${mode}: a withheld audience`)
+    assert.deepEqual(codeOf(ask(decide, 'room:d', { mode })), [false, 'object-not-visible'], `${mode}: an ineligible object`)
+    assert.deepEqual(codeOf(ask(decide, 'room:zz', { mode })), [false, 'object-not-visible'], `${mode}: an absent object answers exactly as a withheld one`)
+    assert.deepEqual(codeOf(ask(decide, 'room:a', { mode }, { editClass: 'semantic-proposal' })), [false, 'edit-class-not-allowed'], `${mode}: a class no apply exists for`)
+  }
+  assert.deepEqual(codeOf(ask(decide, 'room:b', { mode: 'automatic' })), [false, 'outside-policy-selection'])
+  assert.deepEqual(codeOf(ask(decide, 'room:a', { mode: 'automatic', policyDigest: bytesDigest('older revision') })), [false, 'policy-changed-since-dispatch'])
+  assert.deepEqual(codeOf(ask(decide, 'room:a', { mode: 'automatic' }, { attempts: [{ policyDigest: policy.digest }, { policyDigest: policy.digest }] })), [false, 'retry-budget-exhausted'])
+  assert.equal(ask(decide, 'room:a', { mode: 'automatic' }, { attempts: [{ policyDigest: policy.digest }, { policyDigest: bytesDigest('another revision') }] }).allowed, true, 'a new revision starts a new budget')
+  assert.deepEqual(codeOf(ask(decideWith({ ...policy, maxBatchSize: 9 }), 'room:a', { mode: 'automatic' })), [false, 'policy-digest-mismatch'])
+  assert.deepEqual(codeOf(ask(decideWith(withApplyPolicyDigest({ ...policy, allowedEditClasses: [] })), 'room:a', { mode: 'automatic' })), [false, 'apply-policy-invalid'], 'an automatic policy that allows no class is not a policy')
+  assert.deepEqual(codeOf(ask(decideWith(withApplyPolicyDigest({ ...policy, allowedEditClasses: ['rename'] })), 'room:a', { mode: 'automatic' })), [false, 'apply-policy-invalid'], 'an unknown class refuses')
+  assert.deepEqual(codeOf(ask(decideWith(withApplyPolicyDigest({ ...policy, selector: { repo: 'unknown-room' } })), 'room:a', { mode: 'automatic' })), [false, 'policy-selector-invalid'])
+  assert.deepEqual(codeOf(ask(decideWith({ authorized: false, reason: 'no-apply-policy-installed', policy: null }), 'room:a', { mode: 'automatic' })), [false, 'no-apply-policy-installed'], 'there is no ambient agent mode')
+  assert.deepEqual(codeOf(ask(decide, 'room:a', { mode: 'agent' })), [false, 'invalid-apply-request'])
+  assert.deepEqual(codeOf(ask(decide, 'room:a', { mode: 'manual', actor: 'not an identifier' })), [false, 'invalid-apply-request'])
+  assert.deepEqual(codeOf(decideApply({ request: { mode: 'automatic', editId: 'edit-x' }, workspace: { workspaceRoot: path.join(os.tmpdir(), 'atelier-no-such-workspace'), workspaceId: APPLY_WORKSPACE_ID }, graph, profile, object: { repoId: 'room', nodeId: 'room:a' }, editClass: 'body-replacement' })), [false, 'machine-settings-absent'], 'production reads the installed policy from disk')
+  assert.deepEqual(Object.keys(APPLY_POLICY_PRIMITIVES).sort(), ['authorize', 'digestOf', 'select'])
+  // Mutation control: a decision that trusts the digest a policy carries accepts a tampered policy.
+  assert.equal(ask(decideWith({ ...policy, maxBatchSize: 9 }, { digestOf: (installed) => installed.digest }), 'room:a', { mode: 'automatic' }).allowed, true)
+})
+
+// One world, one note per case. No publisher is needed to refuse, so the view is written directly and this table
+// runs on every platform.
+const REFUSAL_CASES = Object.freeze(['disabled', 'stale', 'renamed', 'deleted', 'symlinked', 'symlinked-directory', 'hard-linked', 'ignored', 'ignore-unknown', 'managed-root', 'not-visible', 'lens', 'conflicted',
+  'exchange', 'volume', 'unknown-scope', 'no-policy', 'manual-mode', 'revoked', 'revoked-by-command', 'paused', 'outside-selection', 'digest-mismatch', 'changed-since-dispatch', 'budget', 'batch-a', 'batch-b', 'revoked-late', 'no-change'])
+const caseFile = (name) => `east-wing/cases/${name === 'symlinked-directory' ? 'linked/' : ''}${name}.md`
+const caseNode = (name) => `east-wing:case-${name}`
+function refusalWorld(t) {
+  const files = { ...APPLY_FILES, 'east-wing/charts/table.pdf': Buffer.from('255044462d312e340a73796e7468657469630a', 'hex'),
+    'east-wing/charts/table.pdf.kg.json': `${JSON.stringify({ schema: 'mnstry.source-sidecar@v1', asset: 'table.pdf', title: 'Reference table', summary: 'Invented figures.', tags: ['chart'], kg: { id: 'east-wing:table', type: 'evidence', domain: 'sample', lifecycle: 'source', status: 'active', audience: 'team', relations: { evidences: ['east-wing:lantern'] } } }, null, 2)}\n` }
+  for (const name of REFUSAL_CASES) files[caseFile(name)] = noteText({ id: caseNode(name), title: `Case ${name}`, body: 'Original sentence.', audience: name === 'not-visible' ? 'private' : 'team' })
+  files[caseFile('no-change')] = files[caseFile('no-change')].replace('  audience: "team"\n', '  audience: "team"\n  relations:\n    supports:\n      - "east-wing:compass"\n')
+  const world = applyWorld(t, { files, audienceAllow: ['team', 'private'] })
+  for (const scope of [WHOLE, EAST]) world.publishDirectly(scope.scopeId)
+  for (const name of REFUSAL_CASES) world.editNote(caseNode(name), 'Original sentence.', name === 'no-change' ? 'Original sentence.' : 'Edited sentence.')
+  // A generated region removed and nothing authored changed: a body replacement that changes no source byte.
+  const noChange = world.noteFile(caseNode('no-change'))
+  const entry = world.manifest().notes.find((note) => note.nodeId === caseNode('no-change'))
+  assert.ok(entry.regions.generated.length > 0, 'the fixture note has a generated region to remove')
+  fs.writeFileSync(noChange, fs.readFileSync(noChange).subarray(0, entry.regions.body.end))
+  world.editNote(caseNode('lens'), '# Case lens', `# Case lens\n\nA new link to [[${path.basename(world.manifest().notes.find((note) => note.nodeId === 'east-wing:compass').path, '.md')}]].`)
+  world.editNote(caseNode('conflicted'), 'Original sentence.', 'Another sentence entirely.', 'scope-east')
+  fs.appendFileSync(world.noteFile('east-wing:table'), '\nTyped into a note that stands for a file.\n')
+  for (const scope of [WHOLE, EAST]) world.queueDirectly(scope.scopeId)
+  return world
+}
+
+test('apply refusals, manual and automatic: every refusal is typed, keeps the edit and writes nothing anywhere in the project', async (t) => {
+  const world = refusalWorld(t)
+  const objects = () => openObjectStore({ stateRoot: world.workspaceRoot(), workspaceId: APPLY_WORKSPACE_ID, repositoryRoots: [world.projectDir], clock: world.clock })
+  const automatic = (overrides) => { world.configureMachine({ maintenanceMode: 'automatic' }); return world.installPolicy(overrides) }
+  const seen = new Set()
+  async function refuses(name, expected, { mode = 'manual', setup = () => {}, options = {}, primitives, request = {}, nodeId = caseNode(name), scopeId } = {}) {
+    const edit = world.editOf(nodeId, scopeId)
+    assert.ok(edit, `${name}: the fixture queued no edit`)
+    const undo = setup()
+    let before = projectState(world)
+    // A case that changes the project in the middle of the apply compares with the project as it was just after.
+    const rebase = () => { before = projectState(world) }
+    const result = await world.sourceApply(typeof options === 'function' ? options(rebase) : options, primitives).apply({ editId: edit.editId, mode, ...request })
+    assert.deepEqual([result.status, result.code], expected, `${name}: ${JSON.stringify(result)}`)
+    assert.ok(SOURCE_APPLY_REFUSALS.includes(result.code) || /^(apply-policy|maintenance-mode|no-apply-policy|policy-|outside-policy|retry-budget|object-not-visible)/.test(result.code), `${name}: ${result.code} is a declared code`)
+    assertNothingWritten(world, before, name)
+    assert.ok(world.pendingEdits().some((item) => item.editId === edit.editId && item.closedAt === null), `${name}: the pending edit stays`)
+    assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), edit.objectRef)).length > 0, true, `${name}: the preserved bytes stay`)
+    seen.add(result.code)
+    undo?.()
+    return result
+  }
+  const source = (name) => world.source(caseFile(name))
+  const swap = (name, replace) => () => { const bytes = fs.readFileSync(source(name)); replace(); return () => { fs.rmSync(source(name), { force: true }); fs.writeFileSync(source(name), bytes) } }
+
+  await refuses('disabled', ['refused', 'integration-disabled'], { setup: () => { world.setEnabled(false); return () => world.setEnabled(true) } })
+  await refuses('unknown-edit', ['refused', 'unknown-edit'], { nodeId: caseNode('stale'), request: { editId: `edit-${'0'.repeat(32)}` } })
+  await refuses('renamed', ['refused', 'source-moved'], { setup: () => { fs.renameSync(source('renamed'), `${source('renamed')}.moved.md`); return () => fs.renameSync(`${source('renamed')}.moved.md`, source('renamed')) } })
+  await refuses('deleted', ['refused', 'source-not-in-graph'], { setup: swap('deleted', () => fs.rmSync(source('deleted'))) })
+  if (process.platform !== 'win32') {
+    const elsewhere = path.join(world.dir, 'elsewhere.md')
+    fs.writeFileSync(elsewhere, fs.readFileSync(source('symlinked')))
+    // A census never follows a link, so a source that became one is no longer in the graph at all.
+    const toLink = () => { fs.rmSync(source('symlinked')); fs.symlinkSync(elsewhere, source('symlinked')) }
+    await refuses('symlinked', ['refused', 'source-not-in-graph'], { setup: swap('symlinked', toLink) })
+    // The path check does not rely on that: a link that appears after the graph was read refuses too.
+    const production = createProductionSeams()
+    const afterGraph = (change) => (rebase) => ({ seams: { buildGraph: (input) => { const graph = production.buildGraph(input); change(); rebase(); return graph } } })
+    await refuses('symlinked', ['refused', 'source-symlink'], { options: afterGraph(toLink), setup: swap('symlinked', () => {}) })
+    const linked = path.dirname(source('symlinked-directory'))
+    const away = path.join(world.dir, 'linked-away')
+    await refuses('symlinked-directory', ['refused', 'source-symlink'], { options: afterGraph(() => { fs.renameSync(linked, away); fs.symlinkSync(away, linked) }), setup: () => () => { fs.rmSync(linked); fs.renameSync(away, linked) } })
+  }
+  await refuses('hard-linked', ['refused', 'source-hard-linked'], { setup: () => { const twin = path.join(world.dir, 'twin.md'); fs.linkSync(source('hard-linked'), twin); return () => fs.rmSync(twin) } })
+  await refuses('ignored', ['refused', 'source-git-ignored'], { primitives: { isGitIgnored: () => true } })
+  await refuses('ignore-unknown', ['refused', 'source-ignore-state-unknown'], { primitives: { isGitIgnored: () => null } })
+  await refuses('managed-root', ['refused', 'source-inside-managed-root'], { options: { extraManagedRoots: [world.repo('east-wing')] } })
+  await refuses('not-visible', ['refused', 'object-not-visible'], { setup: () => { world.configureMachine({ audienceAllow: ['team'] }); return () => world.configureMachine({ audienceAllow: ['team', 'private'] }) } })
+  const lens = await refuses('lens', ['refused', 'edit-not-applicable'])
+  assert.equal(lens.detail.cause, 'unsupported-structural-edit')
+  const wrapper = await refuses('wrapper', ['refused', 'edit-not-applicable'], { nodeId: 'east-wing:table' })
+  assert.equal(wrapper.detail.cause, 'unsupported-wrapper-edit')
+  await refuses('no-change', ['refused', 'no-source-change'])
+  await refuses('conflicted', ['conflict', 'object-conflicted'])
+  await refuses('conflicted', ['conflict', 'object-conflicted'], { scopeId: 'scope-east' })
+  assert.deepEqual(objects().stateOf({ repoId: 'east-wing', nodeId: caseNode('conflicted') }).operations.map((entry) => [entry.state, entry.reason, entry.origins.length]), [['conflicted', 'divergent-edits', 1], ['conflicted', 'divergent-edits', 1]], 'both edits are retained, neither wins')
+  await refuses('exchange', ['refused', 'exchange-unavailable'], { options: { exchangeOptions: { platform: 'win32' } } })
+  await refuses('stale', ['conflict', 'stale-source'], { setup: swap('stale', () => fs.appendFileSync(source('stale'), '\nSaved by somebody else first.\n')) })
+  assert.deepEqual(objects().stateOf({ repoId: 'east-wing', nodeId: caseNode('stale') }).operations.map((entry) => entry.state), ['conflicted'], 'a stale source makes the operation a conflict, with its bytes kept')
+
+  // Automatic: the installed policy, read from disk, decides.
+  await refuses('no-policy', ['refused', 'maintenance-mode-manual'], { mode: 'automatic' })
+  await refuses('no-policy', ['refused', 'no-apply-policy-installed'], { mode: 'automatic', setup: () => { world.configureMachine({ maintenanceMode: 'automatic' }) } })
+  await refuses('manual-mode', ['refused', 'maintenance-mode-manual'], { mode: 'automatic', setup: () => { world.installPolicy(); world.configureMachine({ maintenanceMode: 'manual' }) } })
+  await refuses('revoked', ['refused', 'apply-policy-revoked'], { mode: 'automatic', setup: () => { automatic({ status: 'revoked' }) } })
+  await refuses('paused', ['refused', 'apply-policy-paused'], { mode: 'automatic', setup: () => { automatic({ status: 'paused' }) } })
+  await refuses('revoked-by-command', ['refused', 'maintenance-mode-manual'], { mode: 'automatic', setup: () => { automatic(); revokeApplyPolicy({ workspaceRoot: world.workspaceRoot(), workspaceId: APPLY_WORKSPACE_ID, repositoryRoots: [world.projectDir], updatedAt: world.clock().toISOString() }) } })
+  await refuses('outside-selection', ['refused', 'outside-policy-selection'], { mode: 'automatic', setup: () => { automatic({ selector: { repo: 'west-wing' } }) } })
+  await refuses('outside-selection', ['refused', 'outside-policy-selection'], { mode: 'automatic', setup: () => { automatic({ selector: { ids: [caseNode('budget')] } }) } })
+  await refuses('not-visible', ['refused', 'object-not-visible'], { mode: 'automatic', setup: () => { automatic(); world.configureMachine({ audienceAllow: ['team'] }); return () => world.configureMachine({ audienceAllow: ['team', 'private'] }) } })
+  await refuses('digest-mismatch', ['refused', 'policy-digest-mismatch'], { mode: 'automatic', setup: () => { automatic({ digest: bytesDigest('not the digest of this policy') }) } })
+  const installed = automatic()
+  await refuses('changed-since-dispatch', ['refused', 'policy-changed-since-dispatch'], { mode: 'automatic', request: { policyDigest: bytesDigest('the revision it was queued under') } })
+  await refuses('conflicted', ['conflict', 'object-conflicted'], { mode: 'automatic' })
+  await refuses('lens', ['refused', 'edit-not-applicable'], { mode: 'automatic' })
+  await refuses('stale', ['conflict', 'object-conflicted'], { mode: 'automatic' })
+
+  // The retry budget is counted in the events of the object, so it survives a restart, and once it is spent a further
+  // attempt appends nothing.
+  automatic({ retryBudget: 1 })
+  const unavailable = { mode: 'automatic', options: { exchangeOptions: { platform: 'win32' } } }
+  await refuses('budget', ['refused', 'exchange-unavailable'], unavailable)
+  await refuses('budget', ['refused', 'exchange-unavailable'], unavailable)
+  const sequence = objects().stateOf({ repoId: 'east-wing', nodeId: caseNode('budget') }).sequence
+  await refuses('budget', ['refused', 'retry-budget-exhausted'], unavailable)
+  await refuses('budget', ['refused', 'retry-budget-exhausted'], { mode: 'automatic' })
+  assert.equal(objects().stateOf({ repoId: 'east-wing', nodeId: caseNode('budget') }).sequence, sequence, 'a spent budget appends nothing')
+  assert.deepEqual(objects().stateOf({ repoId: 'east-wing', nodeId: caseNode('budget') }).operations.map((entry) => entry.state), ['pending'], 'the edit stays pending, never dropped')
+  // A manual request that would only repeat the last refusal records it once.
+  const manualSequence = () => objects().stateOf({ repoId: 'east-wing', nodeId: caseNode('exchange') }).sequence
+  const once = manualSequence()
+  await refuses('exchange', ['refused', 'exchange-unavailable'], { options: { exchangeOptions: { platform: 'win32' } } })
+  assert.equal(manualSequence() - once, 2, 'a lease taken and released, and no second copy of the same refusal')
+
+  // The batch bound of the installed policy.
+  automatic({ maxBatchSize: 1 })
+  const batchBefore = projectState(world)
+  const batch = await world.sourceApply({ exchangeOptions: { platform: 'win32' } }).applyBatch({ mode: 'automatic', editIds: ['batch-a', 'batch-b'].map((name) => world.editOf(caseNode(name)).editId) })
+  assert.deepEqual(batch.map((result) => result.code), ['exchange-unavailable', 'batch-bound-reached'])
+  assertNothingWritten(world, batchBefore, 'batch')
+
+  assert.equal(installed.digest, applyPolicyDigest(installed))
+  for (const code of ['integration-disabled', 'source-moved', 'source-not-in-graph', 'source-hard-linked', 'source-git-ignored', 'source-inside-managed-root', 'object-not-visible', 'edit-not-applicable', 'object-conflicted', 'exchange-unavailable', 'stale-source', 'apply-policy-revoked', 'apply-policy-paused', 'outside-policy-selection', 'policy-digest-mismatch', 'retry-budget-exhausted']) assert.ok(seen.has(code), code)
+})
+
+// ---------------------------------------------------------------------------
+// Concurrent source writers: a real second process
+// ---------------------------------------------------------------------------
+
+const WRITER_CHILD = path.join(root, 'test/support/obsidian-edits/writer-child.mjs')
+const WRITER_STYLES = Object.freeze(['rename', 'inplace', 'append'])
+const WRITER_TIMINGS = Object.freeze(['before', 'between', 'after', 'free'])
+const RACE_ROUNDS = Math.max(20, Number(process.env.ATELIER_APPLY_RACE_ROUNDS ?? 24))
+const RACE_EXTRA_FREE_ROUNDS = 36
+
+// One writer process: tracked by handle, spoken to by line, and awaited when told to exit.
+function startWriter(t, survivors, file, style, label) {
+  const child = childProcess.spawn(process.execPath, [WRITER_CHILD, file, style], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+  const entry = { label, child, exited: false, stderr: '' }
+  survivors.push(entry)
+  const exit = new Promise((resolve) => child.once('exit', (code, signal) => { entry.exited = true; resolve({ code, signal }) }))
+  child.stderr.on('data', (chunk) => { entry.stderr += chunk })
+  const waiting = []
+  const lines = []
+  let buffered = ''
+  child.stdout.on('data', (chunk) => {
+    buffered += chunk
+    for (let at = buffered.indexOf('\n'); at !== -1; at = buffered.indexOf('\n')) {
+      const line = buffered.slice(0, at)
+      buffered = buffered.slice(at + 1)
+      const next = waiting.shift()
+      if (next) next(line); else lines.push(line)
+    }
+  })
+  const nextLine = () => (lines.length > 0 ? Promise.resolve(lines.shift()) : Promise.race([new Promise((resolve) => waiting.push(resolve)), exit.then(() => { throw new Error(`${label}: the writer exited early: ${entry.stderr.slice(0, 200)}`) })]))
+  const writes = []
+  const take = (line) => { const [, tag, payloadHex, holds] = line.split(' '); writes.push({ tag, payload: Buffer.from(payloadHex, 'hex'), holds }) }
+  return {
+    writes,
+    ready: async () => assert.equal(await nextLine(), 'ready'),
+    async write(tag) { child.stdin.write(`write ${tag}\n`); take(await nextLine()) },
+    async free(count, maxDelayMs, tag) {
+      child.stdin.write(`free ${count} ${maxDelayMs} ${tag}\n`)
+      for (let line = await nextLine(); line !== 'freedone'; line = await nextLine()) take(line)
+    },
+    async stop() { child.stdin.write('exit\n'); const { code } = await exit; assert.equal(code, 0, `${label}: ${entry.stderr.slice(0, 200)}`) },
+  }
+}
+
+function filesUnder(directory) {
+  const found = []
+  const walk = (current) => { for (const entry of fs.readdirSync(current, { withFileTypes: true })) { const absolute = path.join(current, entry.name); if (entry.isDirectory()) walk(absolute); else if (entry.isFile()) found.push(absolute) } }
+  walk(directory)
+  return found
+}
+
+// The oracle of one round. Every byte a writer wrote is in the source file or retained under recovery; the source is
+// one whole version (the base, the candidate, or what a writer's file held after one of its writes), never a mixture;
+// a round that did not apply never leaves the candidate at the source path; an applied round retained the base.
+function assertRoundKeptEveryByte({ world, label, style, sourceFile, base, candidate, writes, result }) {
+  const source = fs.readFileSync(sourceFile)
+  const retained = filesUnder(world.recovery()).map((file) => fs.readFileSync(file))
+  // A program that saves the whole file replaces its own earlier save; only an appending one adds to it.
+  for (const write of style === 'append' ? writes : writes.slice(-1)) {
+    assert.ok(source.includes(write.payload) || retained.some((bytes) => bytes.includes(write.payload)), `${label}: the bytes of write ${write.tag} are neither in the source nor retained in recovery (${result.status}/${result.code})`)
+  }
+  const whole = new Set([sha256Digest(base), sha256Digest(candidate), ...writes.map((write) => write.holds)])
+  assert.ok(whole.has(sha256Digest(source)), `${label}: the source is a mixture of versions (${result.status}/${result.code})`)
+  if (result.status !== 'applied') assert.notEqual(sha256Digest(source), sha256Digest(candidate), `${label}: refused, and yet the source holds the candidate`)
+  else assert.ok(retained.some((bytes) => bytes.equals(base)), `${label}: applied without retaining the old source`)
+}
+
+function raceWorld(t, count) {
+  const files = { 'race-room/about.md': noteText({ id: 'race-room:about', title: 'About the races', body: 'Nothing here is edited.' }) }
+  for (let index = 0; index < count; index += 1) files[`race-room/rounds/round-${index}.md`] = noteText({ id: `race-room:round-${index}`, title: `Round ${index}`, body: `Original sentence ${index}.\n\nA paragraph nobody edits.` })
+  const world = makeApplyWorld(t, { repositories: ['race-room'], files, scopes: [WHOLE] })
+  world.publishDirectly()
+  for (let index = 0; index < count; index += 1) world.editNote(`race-room:round-${index}`, `Original sentence ${index}.`, `Edited sentence ${index}.`)
+  world.queueDirectly()
+  return world
+}
+
+async function raceRound({ t, world, survivors, index, mode, style, timing, primitives, tally, timings }) {
+  const label = `${mode}/${style}/${timing}/round-${index}`
+  const sourceFile = world.source(`race-room/rounds/round-${index}.md`)
+  const base = fs.readFileSync(sourceFile)
+  const candidate = replaceNth(base, `Original sentence ${index}.`, `Edited sentence ${index}.`)
+  const writer = startWriter(t, survivors, sourceFile, style, label)
+  await writer.ready()
+  if (timing === 'before') await writer.write('before')
+  // A free-running writer saves at a moment of its own choosing, anywhere from before the apply begins to after it ends.
+  const racing = timing === 'free' ? writer.free(1, Math.ceil(timings.average() * 2) + 20, 'free') : null
+  const startedAt = performance.now()
+  const sourceApply = world.sourceApply({ beforeExchange: async () => { if (timing === 'between') await writer.write('between') } }, primitives)
+  const result = await sourceApply.apply({ editId: world.editOf(`race-room:round-${index}`).editId, mode })
+  if (timing !== 'free' && timing !== 'between') timings.add(performance.now() - startedAt)
+  if (timing === 'after') await writer.write('after')
+  await racing
+  await writer.stop()
+  const late = await sourceApply.recheck()
+  assertRoundKeptEveryByte({ world, label, style, sourceFile, base, candidate, writes: writer.writes, result })
+  const kind = result.status === 'applied' ? 'applied' : result.code
+  const key = `${style}/${timing}`
+  tally[key] ??= {}
+  tally[key][kind] = (tally[key][kind] ?? 0) + 1
+  if (late.some((finding) => finding.editId === result.editId)) tally[key]['source-changed-after-apply'] = (tally[key]['source-changed-after-apply'] ?? 0) + 1
+  return { result, late }
+}
+
+async function runRaces(t, mode, { primitives, rounds = RACE_ROUNDS, extra = RACE_EXTRA_FREE_ROUNDS } = {}) {
+  const survivors = []
+  t.after(async () => { for (const entry of survivors.filter((item) => !item.exited)) { entry.child.kill('SIGKILL'); await new Promise((resolve) => entry.child.once('exit', resolve)) } })
+  const world = raceWorld(t, rounds + extra)
+  if (mode === 'automatic') { world.configureMachine({ maintenanceMode: 'automatic' }); world.installPolicy({ selector: { repo: 'race-room' } }) }
+  const tally = {}
+  const measured = []
+  const timings = { add: (ms) => measured.push(ms), average: () => (measured.length === 0 ? 150 : measured.reduce((sum, ms) => sum + ms, 0) / measured.length) }
+  const combos = WRITER_STYLES.flatMap((style) => WRITER_TIMINGS.map((timing) => ({ style, timing })))
+  let index = 0
+  for (; index < rounds; index += 1) await raceRound({ t, world, survivors, index, mode, ...combos[index % combos.length], primitives, tally, timings })
+  // The free-running race proves something only when both sides of it happened.
+  const sides = () => { const free = Object.entries(tally).filter(([key]) => key.endsWith('/free')).flatMap(([, counts]) => Object.entries(counts)); return { applied: free.some(([kind]) => kind === 'applied'), refused: free.some(([kind]) => ['stale-source', 'concurrent-source-writer'].includes(kind)) } }
+  for (; index < rounds + extra && !(sides().applied && sides().refused); index += 1) await raceRound({ t, world, survivors, index, mode, style: WRITER_STYLES[index % WRITER_STYLES.length], timing: 'free', primitives, tally, timings })
+  assert.deepEqual(survivors.filter((entry) => !entry.exited).map((entry) => entry.label), [], 'a writer child is still running')
+  return { tally, rounds: index, sides: sides() }
+}
+
+function assertBothSides(mode, { tally, rounds, sides }) {
+  console.log(`source apply races, ${mode}: ${rounds} rounds ${JSON.stringify(tally)}`)
+  const total = (kind) => Object.values(tally).reduce((sum, counts) => sum + (counts[kind] ?? 0), 0)
+  assert.ok(total('applied') > 0, 'no round applied')
+  assert.ok(total('concurrent-source-writer') > 0, 'no round met a writer between the read and the exchange')
+  assert.ok(total('stale-source') > 0, 'no round met a writer before the read')
+  assert.ok(total('source-changed-after-apply') > 0, 'no round met a writer that still held the old file')
+  for (const style of WRITER_STYLES) {
+    assert.ok((tally[`${style}/between`]?.['concurrent-source-writer'] ?? 0) > 0, `${style}: a write between the read and the exchange is refused and kept`)
+    assert.ok((tally[`${style}/before`]?.['stale-source'] ?? 0) > 0, `${style}: a write before the read is a stale source`)
+    assert.ok((tally[`${style}/after`]?.applied ?? 0) > 0, `${style}: a write after the exchange does not undo the apply`)
+  }
+  assert.deepEqual(sides, { applied: true, refused: true }, 'the free-running race was one-sided')
+}
+
+test('manual apply against concurrent source writers, a real second process in three styles and four timings: no byte of any writer is lost, the source is never a mixture, and both outcomes occur', needsExchange, async (t) => {
+  assertBothSides('manual', await runRaces(t, 'manual'))
+})
+
+test('automatic apply against concurrent source writers, a real second process in three styles and four timings: no byte of any writer is lost, the source is never a mixture, and both outcomes occur', needsExchange, async (t) => {
+  assertBothSides('automatic', await runRaces(t, 'automatic'))
+})
+
+async function oneRaceRound(t, { style, timing, primitives }) {
+  const survivors = []
+  t.after(async () => { for (const entry of survivors.filter((item) => !item.exited)) { entry.child.kill('SIGKILL'); await new Promise((resolve) => entry.child.once('exit', resolve)) } })
+  const world = raceWorld(t, 1)
+  try { return await raceRound({ t, world, survivors, index: 0, mode: 'manual', style, timing, primitives, tally: {}, timings: { add() {}, average: () => 100 } }) } finally {
+    assert.deepEqual(survivors.filter((entry) => !entry.exited).map((entry) => entry.label), [], 'a writer child is still running')
+  }
+}
+
+test('mutation control: an apply that checks and then renames loses the concurrent writer and fails the byte oracle', needsExchange, async (t) => {
+  assert.equal((await oneRaceRound(t, { style: 'rename', timing: 'between' })).result.code, 'concurrent-source-writer', 'the same round passes in production')
+  await assert.rejects(oneRaceRound(t, { style: 'rename', timing: 'between', primitives: { commit: ({ candidatePath, sourcePath }) => fs.renameSync(candidatePath, sourcePath) } }), assert.AssertionError)
+})
+
+test('mutation control: an apply that does not exchange back leaves its candidate over the writer and fails the oracle', needsExchange, async (t) => {
+  await assert.rejects(oneRaceRound(t, { style: 'inplace', timing: 'between', primitives: { exchangeBack: () => {} } }), /refused, and yet the source holds the candidate/)
+})
+
+test('mutation control: an apply that deletes the displaced file loses a late writer and fails the byte oracle', needsExchange, async (t) => {
+  const production = await oneRaceRound(t, { style: 'inplace', timing: 'after' })
+  assert.deepEqual([production.result.status, production.late.map((finding) => finding.code)], ['applied', ['source-changed-after-apply']], 'in production the late write is captured, with both byte sets retained')
+  const copyThenDelete = ({ from, to }) => { fs.writeFileSync(to, fs.readFileSync(from)); fs.rmSync(from) }
+  await assert.rejects(oneRaceRound(t, { style: 'inplace', timing: 'after', primitives: { keepDisplaced: copyThenDelete } }), /neither in the source nor retained/)
+})
+
+test('policy is read again immediately before the write: a policy revoked between the decision and the exchange refuses and writes nothing, and the mutation control that skips the reread writes', needsExchange, async (t) => {
+  async function revokedLate(primitives) {
+    const world = raceWorld(t, 1)
+    world.configureMachine({ maintenanceMode: 'automatic' })
+    world.installPolicy()
+    const before = projectState(world)
+    const revoke = async () => { revokeApplyPolicy({ workspaceRoot: world.workspaceRoot(), workspaceId: APPLY_WORKSPACE_ID, repositoryRoots: [world.projectDir], updatedAt: world.clock().toISOString() }) }
+    const result = await world.sourceApply({ beforeExchange: revoke }, primitives).apply({ editId: world.editOf('race-room:round-0').editId, mode: 'automatic' })
+    return { world, before, result }
+  }
+  const { world, before, result } = await revokedLate()
+  assert.deepEqual([result.status, result.code], ['refused', 'maintenance-mode-manual'], 'revocation also returns the machine to manual mode, which is what the reread meets first')
+  assertNothingWritten({ ...world, repo: (name) => path.join(world.projectDir, name) }, before, 'revoked late')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'the candidate was retired')
+  const state = openObjectStore({ stateRoot: world.workspaceRoot(), workspaceId: APPLY_WORKSPACE_ID, repositoryRoots: [world.projectDir], clock: world.clock }).stateOf({ repoId: 'race-room', nodeId: 'race-room:round-0' })
+  assert.deepEqual([state.intent, state.operations.map((entry) => entry.state)], [null, ['pending']], 'the intent is settled as refused and the edit stays pending')
+  const careless = await revokedLate({ decideAgain: false })
+  assert.equal(careless.result.status, 'applied')
+  assert.throws(() => assertNothingWritten({ ...careless.world, repo: (name) => path.join(careless.world.projectDir, name) }, careless.before, 'revoked late'), assert.AssertionError)
+})
+
+test('mutation control: an apply that trusts the live note instead of the preserved bytes fails the expected-source oracle', needsExchange, async (t) => {
+  async function applied(primitives) {
+    const world = raceWorld(t, 1)
+    const expected = replaceNth(fs.readFileSync(world.source('race-room/rounds/round-0.md')), 'Original sentence 0.', 'Edited sentence 0.')
+    const edit = world.editOf('race-room:round-0')
+    fs.writeFileSync(world.noteFile('race-room:round-0'), replaceNth(fs.readFileSync(world.noteFile('race-room:round-0')), 'Edited sentence 0.', 'Typed after the edit was preserved.'))
+    const result = await world.sourceApply({}, primitives).apply({ editId: edit.editId, mode: 'manual' })
+    assert.equal(result.status, 'applied')
+    assert.deepEqual(fs.readFileSync(world.source('race-room/rounds/round-0.md')), expected)
+  }
+  await applied()
+  await assert.rejects(applied({ editedBytes: ({ workspace, edit }) => fs.readFileSync(path.join(workspace.storeOf(edit.scopeId).vaultRoot, edit.path)) }), assert.AssertionError)
+})
+
+// ---------------------------------------------------------------------------
+// Crash at every durable step of source apply
+// ---------------------------------------------------------------------------
+
+const CRASH_TABLE = Object.freeze([
+  { step: 'apply-record-written', unknown: false, recovered: ['refused', 'interrupted-before-exchange'], source: 'base', operation: 'pending', retry: 'applied' },
+  { step: 'candidate-written', unknown: false, recovered: ['refused', 'interrupted-before-exchange'], source: 'base', operation: 'pending', retry: 'applied' },
+  { step: 'intent-recorded', unknown: true, recovered: ['refused', 'interrupted-before-exchange'], source: 'base', operation: 'pending', retry: 'applied' },
+  { step: 'exchanged', unknown: true, recovered: ['applied', 'applied-after-restart'], source: 'candidate', operation: 'applied', retry: 'already-applied' },
+  { step: 'exchanged', retryInsteadOfRecover: true, unknown: true, recovered: null, source: 'candidate', operation: 'applied', retry: 'already-applied' },
+  { step: 'backup-recorded', unknown: true, recovered: ['applied', 'applied-after-restart'], source: 'candidate', operation: 'applied', retry: 'already-applied' },
+  { step: 'applied-recorded', unknown: false, recovered: ['applied', 'applied'], source: 'candidate', operation: 'applied', retry: 'already-applied' },
+  { step: 'settled', unknown: false, recovered: null, source: 'candidate', operation: 'applied', retry: 'already-applied' },
+  { step: 'exchanged', writer: true, unknown: true, recovered: ['conflict', 'apply-interrupted-needs-person'], source: 'candidate', operation: 'superseded', retry: 'already-applied-or-conflict' },
+  { step: 'exchanged-back', writer: true, unknown: true, recovered: ['refused', 'interrupted-before-exchange'], source: 'writer', operation: 'conflicted', retry: 'stale-source' },
+])
+
+test('apply crash recovery: a crash at every durable step, with and without a concurrent writer, is settled from digests on disk; no byte is lost and an unknown outcome is never guessed', needsExchange, async (t) => {
+  assert.deepEqual([...new Set(CRASH_TABLE.map((row) => row.step))].sort(), [...SOURCE_APPLY_STEPS].sort(), 'every durable step is crashed at')
+  const world = raceWorld(t, CRASH_TABLE.length)
+  const report = []
+  for (const [index, row] of CRASH_TABLE.entries()) {
+    const label = `${row.step}${row.writer ? '+writer' : ''}${row.retryInsteadOfRecover ? '+retry' : ''}`
+    const nodeId = `race-room:round-${index}`
+    const sourceFile = world.source(`race-room/rounds/round-${index}.md`)
+    const base = fs.readFileSync(sourceFile)
+    const candidate = replaceNth(base, `Original sentence ${index}.`, `Edited sentence ${index}.`)
+    const written = Buffer.concat([base, utf8(`\nsaved by another program during round ${index}\n`)])
+    const edit = world.editOf(nodeId)
+    const crashing = world.sourceApply({
+      leasePid: exitedPid(),
+      crash: (step) => { if (step === row.step) throw new Error(`crash at ${step}`) },
+      beforeExchange: async () => { if (row.writer) { fs.writeFileSync(`${sourceFile}.tmp`, written); fs.renameSync(`${sourceFile}.tmp`, sourceFile) } },
+    })
+    await assert.rejects(crashing.apply({ editId: edit.editId, mode: 'manual' }), /crash at/, label)
+
+    const fresh = world.sourceApply()
+    assert.equal((await fresh.show(edit.editId)).object.outcomeUnknown, row.unknown, `${label}: an intent without an outcome is reported as unknown, not guessed`)
+    if (row.retryInsteadOfRecover) {
+      const retried = await fresh.apply({ editId: edit.editId, mode: 'manual' })
+      assert.deepEqual([retried.status, retried.code, retried.replayed], ['applied', 'already-applied', true], `${label}: a retry after a lost reply settles from the files and does not apply twice`)
+    } else {
+      const mine = (await fresh.recover()).recovered.filter((item) => item.editId === edit.editId)
+      assert.deepEqual(mine.map((item) => [item.status, item.code]), row.recovered === null ? [] : [row.recovered], label)
+    }
+    assert.deepEqual((await fresh.recover()).recovered.filter((item) => item.editId === edit.editId), [], `${label}: recovery run again finds nothing to do`)
+
+    const source = fs.readFileSync(sourceFile)
+    assert.deepEqual(source, { base, candidate, writer: written }[row.source], `${label}: the source is ${row.source}`)
+    const retained = filesUnder(world.recovery()).map((file) => fs.readFileSync(file))
+    for (const [name, bytes] of [['base', base], ...(row.writer ? [['writer', written]] : [])]) assert.ok(source.equals(bytes) || retained.some((kept) => kept.equals(bytes)), `${label}: the ${name} bytes are in the source or retained`)
+    assert.deepEqual(filesUnder(world.recovery()).filter((file) => /\.candidate$|retiring\.bin$/.test(file)).filter((file) => fs.readFileSync(file).equals(candidate)), [], `${label}: no candidate of ours is left behind`)
+    const shown = await fresh.show(edit.editId)
+    assert.deepEqual([shown.object.outcomeUnknown, shown.operation?.state ?? 'pending'], [false, row.operation], label)
+    const retry = await fresh.apply({ editId: edit.editId, mode: 'manual' })
+    if (row.retry === 'already-applied-or-conflict') assert.ok(['already-applied', 'already-applied-by-equal-edit', 'edit-not-applicable', 'object-conflicted', 'stale-source'].includes(retry.code), `${label}: ${retry.code}`)
+    else assert.equal(retry.status === 'applied' && !retry.replayed ? 'applied' : retry.code, row.retry, label)
+    if (row.retry === 'applied') assert.deepEqual(fs.readFileSync(sourceFile), candidate)
+    report.push(`${label} -> ${row.recovered === null ? (row.retryInsteadOfRecover ? 'retry' : 'nothing to recover') : row.recovered.join('/')}; source ${row.source}; then ${retry.code}`)
+  }
+  console.log(`source apply crash table:\n  ${report.join('\n  ')}`)
+})
+
+// ---------------------------------------------------------------------------
+// Where no atomic exchange exists; the command; disclosure
+// ---------------------------------------------------------------------------
+
+test('apply without an atomic exchange (Windows today) refuses exchange-unavailable, in both modes, and writes nothing', async (t) => {
+  const world = raceWorld(t, 2)
+  world.configureMachine({ maintenanceMode: 'automatic' })
+  world.installPolicy()
+  // Where the exchange exists it is taken away; where it does not, production refuses by itself.
+  const options = EXCHANGE_HERE ? { exchangeOptions: { platform: 'win32' } } : {}
+  const before = treeListing(world.projectDir)
+  for (const [index, mode] of ['manual', 'automatic'].entries()) {
+    const result = await world.sourceApply(options).apply({ editId: world.editOf(`race-room:round-${index}`).editId, mode })
+    assert.deepEqual([result.status, result.code, result.detail.cause], ['refused', 'exchange-unavailable', 'exchange-unsupported-platform'], mode)
+  }
+  assert.deepEqual(treeListing(world.projectDir), before, 'nothing in the project changed')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was even written')
+  assert.deepEqual(world.pendingEdits().filter((edit) => edit.closedAt === null).length, 2, 'both edits stay pending')
+})
+
+async function runApplyCommand(world, argv, options = {}) {
+  const { runObsidianCommand } = await import('../src/commands/obsidian.mjs')
+  const out = []
+  const exit = await runObsidianCommand({ argv, seams: {}, loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock, stdout: (text) => out.push(text), stderr: (text) => out.push(text),
+    contributions: [createSourceApplyContribution({ create: (context) => world.sourceApply({ ...context, ...options }) })] })
+  const text = out.join('\n')
+  return { exit, text, json: argv.includes('--json') ? JSON.parse(text) : null }
+}
+
+test('apply command: list, show, run and recover answer one JSON document with the exit codes of the obsidian command, and the contribution registers the engine operation and replaces the placeholder', needsExchange, async (t) => {
+  const registry = createObsidianRegistry({ contributions: [createSourceApplyContribution()] })
+  assert.deepEqual([registry.extensions.applyOperation().id, registry.operations.describe().map((item) => item.name), registry.contributions], ['atelier.source-apply/v1', ['apply'], ['atelier.source-apply']])
+  assert.equal(typeof createApplyCommandOperation().run, 'function')
+  const shipped = await import('../src/runtime/obsidian/contributions/source-apply.mjs')
+  assert.equal(shipped.default.id, 'atelier.source-apply')
+
+  const world = raceWorld(t, 2)
+  const [first, second] = [0, 1].map((index) => world.editOf(`race-room:round-${index}`).editId)
+  const listed = await runApplyCommand(world, ['apply', 'list', '--json'])
+  assert.deepEqual([listed.exit, listed.json.ok, listed.json.operation, listed.json.edits.map((edit) => [edit.editId, edit.nodeId, edit.state])], [0, true, 'apply', [[first, 'race-room:round-0', 'queued'], [second, 'race-room:round-1', 'queued']].sort(([left], [right]) => (left < right ? -1 : 1))])
+  const refused = await runApplyCommand(world, ['apply', 'run', first, '--json'], { exchangeOptions: { platform: 'win32' } })
+  assert.deepEqual([refused.exit, refused.json.ok, refused.json.result.status, refused.json.result.code], [3, false, 'refused', 'exchange-unavailable'])
+  const ran = await runApplyCommand(world, ['apply', 'run', first, 'person-synthetic', '--json'])
+  assert.deepEqual([ran.exit, ran.json.ok, ran.json.result.status, ran.json.result.actor], [0, true, 'applied', 'person-synthetic'])
+  assert.match(fs.readFileSync(world.source('race-room/rounds/round-0.md'), 'utf8'), /Edited sentence 0\./)
+  const shown = await runApplyCommand(world, ['apply', 'show', first, '--json'])
+  assert.deepEqual([shown.exit, shown.json.edit.operation.state, shown.json.edit.outcomes.at(-1).status], [0, 'applied', 'applied'])
+  const human = await runApplyCommand(world, ['apply', 'run', second, '--consent-actor', 'person-two'])
+  assert.deepEqual([human.exit, human.text.split('\n')[0]], [0, 'applied: applied'])
+  assert.deepEqual((await runApplyCommand(world, ['apply', 'recover', '--json'])).json.recovered, [])
+  for (const [argv, code] of [[['apply', 'run', '--json'], 'usage'], [['apply', 'run', 'not-an-edit', '--json'], 'usage'], [['apply', 'run', first, 'not an actor', '--json'], 'usage'], [['apply', 'sideways', '--json'], 'usage'], [['apply', 'show', `edit-${'0'.repeat(32)}`, '--json'], 'unknown-edit']]) {
+    const answer = await runApplyCommand(world, argv)
+    assert.deepEqual([answer.exit, answer.json.error.code], [2, code], argv.join(' '))
+  }
+})
+
+test('apply disclosure: results, listings, recovery reports, command output, events and apply errors hold no note text, source text, title or machine path', needsExchange, async (t) => {
+  const world = applyWorld(t)
+  for (const scope of [WHOLE, EAST]) world.publishDirectly(scope.scopeId)
+  world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  world.editNote('west-wing:tide', 'at noon', 'at one')
+  world.editNote('east-wing:compass', 'painted red', 'painted blue')
+  world.editNote('east-wing:compass', 'painted red', 'painted green', 'scope-east')
+  for (const scope of [WHOLE, EAST]) world.queueDirectly(scope.scopeId)
+  const sourceApply = world.sourceApply()
+  const collected = [await sourceApply.list()]
+  collected.push(await sourceApply.apply({ editId: world.editOf('east-wing:lantern').editId, mode: 'manual' }))
+  collected.push(await sourceApply.apply({ editId: world.editOf('east-wing:compass').editId, mode: 'manual' }))
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nA line saved by somebody else.\n')
+  collected.push(await sourceApply.apply({ editId: world.editOf('west-wing:tide').editId, mode: 'automatic' }))
+  collected.push(await sourceApply.apply({ editId: world.editOf('west-wing:tide').editId, mode: 'manual' }))
+  for (const edit of world.pendingEdits()) collected.push(await sourceApply.show(edit.editId))
+  collected.push(await sourceApply.recover(), await sourceApply.recheck(), await sourceApply.list())
+  for (const argv of [['apply', 'list'], ['apply', 'list', '--json'], ['apply', 'show', world.editOf('west-wing:tide').editId], ['apply', 'run', world.editOf('west-wing:tide').editId], ['apply', 'run', 'edit-unknown', '--json']]) collected.push((await runApplyCommand(world, argv)).text)
+  for (const file of [...filesUnder(path.join(world.workspaceRoot(), 'state', 'objects')), ...filesUnder(path.join(world.workspaceRoot(), 'state', 'object-index'))]) collected.push(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(collected.filter((item) => item?.status).map((item) => item.code).sort(), ['applied', 'object-conflicted', 'stale-source', 'stale-source'])
+
+  const forbidden = [world.dir, fs.realpathSync.native(os.tmpdir()), os.homedir(), 'Lantern room', 'Tide log', 'Compass rose', 'The lamp', 'a minute', 'High water', 'painted', 'somebody else', 'lantern.md', 'tide.md', 'notes/', 'logs/', '--d486', '# ']
+  const walk = (value, trail) => {
+    if (typeof value === 'string') { for (const text of forbidden) assert.equal(value.includes(text), false, `${trail} discloses ${JSON.stringify(text.slice(0, 12))}`); return }
+    if (Array.isArray(value)) { value.forEach((item, index) => walk(item, `${trail}[${index}]`)); return }
+    if (value !== null && typeof value === 'object') for (const [key, item] of Object.entries(value)) { walk(key, `${trail}.key`); walk(item, `${trail}.${key}`) }
+  }
+  walk(collected, 'collected')
+  // Mutation control: the walk fails on a result that carries a path.
+  assert.throws(() => walk([{ status: 'refused', code: 'source-missing', detail: { file: world.source(LANTERN) } }], 'mutant'), assert.AssertionError)
+})
+
+test('apply leaves the old source where the maintenance engine looks again: a holder of the old file that writes after the apply is captured on a later tick, and surfaced as source-changed-after-apply', needsExchange, async (t) => {
+  const world = applyWorld(t)
+  const engine = world.engine()
+  await engine.tick()
+  world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  world.advance(1000)
+  await engine.tick()
+  const edit = world.editOf('east-wing:lantern')
+  const base = fs.readFileSync(world.source(LANTERN))
+  // Another program opened the source before the apply and keeps it open.
+  const held = fs.openSync(world.source(LANTERN), 'r+')
+  t.after(() => { try { fs.closeSync(held) } catch { /* closed below */ } })
+  const sourceApply = world.sourceApply()
+  const result = await sourceApply.apply({ editId: edit.editId, mode: 'manual' })
+  assert.equal(result.code, 'applied')
+  world.advance(1000)
+  assert.deepEqual((await engine.tick()).lateWriters, [], 'nothing was written late yet')
+  const late = utf8('\nwritten through a descriptor opened before the apply\n')
+  fs.writeSync(held, late, 0, late.length, base.length)
+  fs.fsyncSync(held)
+  fs.closeSync(held)
+  world.advance(1000)
+  const report = await engine.tick()
+  assert.deepEqual(report.lateWriters.map((finding) => [finding.journalId, finding.digestAtMove, finding.observedDigest]), [[result.applyId, sha256Digest(base), sha256Digest(Buffer.concat([base, late]))]], 'the engine tick found the late write in the backup of the apply')
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), report.lateWriters[0].objectRef)), Buffer.concat([base, late]), 'and retained it')
+  assert.match(fs.readFileSync(world.source(LANTERN), 'utf8'), /twice a minute/, 'the source keeps the applied edit')
+  assert.deepEqual((await sourceApply.show(edit.editId)).lateWriters.map((finding) => [finding.code, finding.applyId]), [['source-changed-after-apply', result.applyId]])
+  world.advance(1000)
+  assert.deepEqual((await engine.tick()).lateWriters, [], 'a finding is reported once')
 })
