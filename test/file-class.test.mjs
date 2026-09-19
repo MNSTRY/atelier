@@ -1,14 +1,27 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import {
+  DISPOSABLE_STAGING,
   DISTRIBUTED_RUNTIME_COPY,
+  EDITABLE_VAULT,
+  FILE_CLASSES,
   GENERATED_PROJECTION,
+  IGNORED_LOCAL,
   KIT_FILE_CLASSES,
+  MANAGED_AREA_HANDLING,
+  OBSIDIAN_LOCAL_POINTER,
+  RECOVERY_RECORD,
   SOURCE,
+  TRUSTED_STATE,
+  UNKNOWN_MANAGED,
+  checkManagedRoots,
+  checkRepositoryEnrollment,
+  classifyManagedPath,
   classifyPath,
   createPathClassifier,
   generatedProjectionBasenames,
@@ -127,4 +140,123 @@ test('kit manifest fixtures agree with the file-class contract', () => {
 
   const { fileClasses, ...withoutClasses } = valid
   assert.equal(validate(withoutClasses), false, 'fileClasses is required: an unclassified kit fails validation')
+})
+
+test('the repo-local Obsidian pointer is ignored-local and no declaration can make it discardable', () => {
+  for (const rel of [OBSIDIAN_LOCAL_POINTER, `nested-repo/${OBSIDIAN_LOCAL_POINTER}`]) {
+    const result = classifyPath(rel)
+    assert.equal(result.class, IGNORED_LOCAL)
+    assert.equal(result.handling.discardable, false)
+    assert.equal(result.handling.conflictsNeedHuman, false)
+  }
+  const hostile = [...KIT_FILE_CLASSES, { pattern: '.atelier-local/**', class: GENERATED_PROJECTION }]
+  assert.equal(classifyPath(OBSIDIAN_LOCAL_POINTER, { fileClasses: hostile }).class, IGNORED_LOCAL)
+  assert.equal(classifyPath('.atelier-local/other.json').class, SOURCE, 'only the named pointer is reclassified')
+
+  // ignored-local is never declarable for a tracked path, so the kit manifest contract is unchanged.
+  assert.deepEqual(FILE_CLASSES, [SOURCE, GENERATED_PROJECTION, DISTRIBUTED_RUNTIME_COPY])
+  assert.match(validateFileClasses([{ pattern: 'x', class: IGNORED_LOCAL }]).join('\n'), /class must be one of/)
+})
+
+test('inside a managed data root only staging is discardable', () => {
+  const expected = {
+    'vaults/scope-a/notes/Shared concept--7a91f803c2.md': EDITABLE_VAULT,
+    'vaults/scope-a/.obsidian/app.json': EDITABLE_VAULT,
+    'state/manifests/scope-a/current.json': TRUSTED_STATE,
+    'state/objects/repo-a/node-a/edit.json': TRUSTED_STATE,
+    'recovery/edit-0001/observed.bin': RECOVERY_RECORD,
+    'staging/generation-0001/notes/a.md': DISPOSABLE_STAGING,
+  }
+  for (const [rel, managedClass] of Object.entries(expected)) {
+    const result = classifyManagedPath(rel)
+    assert.equal(result.class, managedClass, rel)
+    assert.equal(result.handling.discardable, managedClass === DISPOSABLE_STAGING, rel)
+  }
+  assert.deepEqual(
+    Object.entries(MANAGED_AREA_HANDLING).filter(([, handling]) => handling.discardable).map(([name]) => name),
+    [DISPOSABLE_STAGING],
+  )
+
+  // Anything that is not plainly under staging/ is kept.
+  for (const rel of ['', 'staging', 'staging/', 'Staging/generation-0001/a.md', 'staging/../vaults/scope-a/a.md', '../staging/x', '/staging/x', 'C:/staging/x', 'staging-old/x', 'vaults', 'notes/a.md']) {
+    const result = classifyManagedPath(rel)
+    assert.equal(result.handling.discardable, false, JSON.stringify(rel))
+    assert.notEqual(result.class, DISPOSABLE_STAGING, JSON.stringify(rel))
+  }
+  assert.equal(classifyManagedPath('unplanned/file').class, UNKNOWN_MANAGED)
+  assert.equal(classifyManagedPath('staging\\generation-0001\\a.md').class, DISPOSABLE_STAGING, 'Windows separators use the same dialect')
+
+  // An editable vault is never generated output for the tracked-file resolver either.
+  assert.equal(classifyPath('vaults/scope-a/notes/a.md').handling.discardable, false)
+  assert.equal(classifyPath('recovery/edit-0001/observed.bin').handling.discardable, false)
+})
+
+test('a managed root that overlaps an enrolled repository is refused in both directions', (t) => {
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-managed-root-')))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  const repo = path.join(base, 'workspace', 'alpha-notes')
+  const other = path.join(base, 'workspace', 'beta-notes')
+  const data = path.join(base, 'data', 'obsidian', 'workspace-0001')
+  for (const dir of [repo, other, data]) fs.mkdirSync(dir, { recursive: true })
+  const codes = (result) => result.refusals.map((item) => item.code)
+
+  assert.deepEqual(checkManagedRoots({ managedRoots: [data], repositoryRoots: [repo, other] }), { ok: true, refusals: [] })
+  assert.deepEqual(checkManagedRoots({ managedRoots: [path.join(base, 'data', 'not-created-yet')], repositoryRoots: [repo] }).ok, true)
+
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [path.join(repo, 'atelier-output', 'vault')], repositoryRoots: [repo, other] })), ['managed-root-inside-repository'])
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [repo], repositoryRoots: [repo] })), ['managed-root-inside-repository'])
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [path.join(base, 'workspace')], repositoryRoots: [repo, other] })), [
+    'repository-inside-managed-root',
+    'repository-inside-managed-root',
+  ])
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: ['relative/data'], repositoryRoots: [repo] })), ['managed-root-not-absolute'])
+  assert.equal(checkManagedRoots({ managedRoots: [`${repo}-data`], repositoryRoots: [repo] }).ok, true, 'a sibling sharing a name prefix is not inside')
+})
+
+test('symbolic-link aliases between a managed root and a repository are refused', (t) => {
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-managed-alias-')))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  const repo = path.join(base, 'workspace', 'alpha-notes')
+  const data = path.join(base, 'data')
+  for (const dir of [path.join(repo, 'docs'), data]) fs.mkdirSync(dir, { recursive: true })
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+  const codes = (result) => result.refusals.map((item) => item.code)
+
+  // A link outside the repository that lands inside it.
+  fs.symlinkSync(path.join(repo, 'docs'), path.join(base, 'innocent'), linkType)
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [path.join(base, 'innocent', 'vault')], repositoryRoots: [repo] })), ['managed-root-symlink-alias'])
+
+  // A repository path that is really a link into the managed root.
+  fs.mkdirSync(path.join(data, 'held'), { recursive: true })
+  fs.symlinkSync(path.join(data, 'held'), path.join(base, 'workspace', 'linked-repo'), linkType)
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [data], repositoryRoots: [path.join(base, 'workspace', 'linked-repo')] })), ['managed-root-symlink-alias'])
+
+  // A managed root that is itself a link is refused even when it lands somewhere harmless.
+  fs.mkdirSync(path.join(base, 'elsewhere'))
+  fs.symlinkSync(path.join(base, 'elsewhere'), path.join(base, 'data-link'), linkType)
+  assert.deepEqual(codes(checkManagedRoots({ managedRoots: [path.join(base, 'data-link')], repositoryRoots: [repo] })), ['managed-root-symlink-alias'])
+
+  // The filesystem reads are injectable, so the guard is checkable without a disk.
+  const mapped = checkManagedRoots({
+    managedRoots: [path.resolve('/virtual/data')],
+    repositoryRoots: [path.resolve('/virtual/repo')],
+    realpath: (target) => (target === path.resolve('/virtual/data') ? path.resolve('/virtual/repo/inner') : target),
+    lstat: () => ({ isSymbolicLink: () => false }),
+  })
+  assert.deepEqual(codes(mapped), ['managed-root-symlink-alias'])
+})
+
+test('a later enrollment that would contain a managed root is refused', (t) => {
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-managed-enroll-')))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  const data = path.join(base, 'home', 'data', 'obsidian', 'workspace-0001')
+  fs.mkdirSync(data, { recursive: true })
+  fs.mkdirSync(path.join(base, 'projects', 'alpha-notes'), { recursive: true })
+  const codes = (result) => result.refusals.map((item) => item.code)
+
+  assert.equal(checkRepositoryEnrollment({ repositoryRoot: path.join(base, 'projects', 'alpha-notes'), managedRoots: [data] }).ok, true)
+  assert.deepEqual(codes(checkRepositoryEnrollment({ repositoryRoot: path.join(base, 'home'), managedRoots: [data] })), ['enrollment-contains-managed-root'])
+  assert.deepEqual(codes(checkRepositoryEnrollment({ repositoryRoot: path.join(data, 'vaults', 'scope-a'), managedRoots: [data] })), ['enrollment-inside-managed-root'])
+  fs.symlinkSync(path.join(base, 'home'), path.join(base, 'projects', 'home-alias'), process.platform === 'win32' ? 'junction' : 'dir')
+  assert.deepEqual(codes(checkRepositoryEnrollment({ repositoryRoot: path.join(base, 'projects', 'home-alias'), managedRoots: [data] })), ['enrollment-aliases-managed-root'])
 })

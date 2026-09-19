@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { basenameOf, matchesPathPattern, normalizeRelPath } from './path-match.mjs'
 
 export const FILE_CLASS_SCHEMA = 'mnstry.atelier-file-classes@v1'
@@ -6,7 +8,12 @@ export const SOURCE = 'source'
 export const GENERATED_PROJECTION = 'generated-projection'
 export const DISTRIBUTED_RUNTIME_COPY = 'distributed-runtime-copy'
 
+// Declarable classes for tracked files. The kit manifest schema closes this set.
 export const FILE_CLASSES = Object.freeze([SOURCE, GENERATED_PROJECTION, DISTRIBUTED_RUNTIME_COPY])
+
+// A machine-local file that git never tracks. It is not declarable: nothing
+// tracked can be ignored-local, so it stays out of FILE_CLASSES.
+export const IGNORED_LOCAL = 'ignored-local'
 
 // What each class means for automated handling. Sync loops, merge policies, upgrade
 // tooling, and CI guards all read this instead of each keeping a list of filenames
@@ -15,7 +22,16 @@ export const FILE_CLASS_HANDLING = Object.freeze({
   [SOURCE]: Object.freeze({ rederivable: false, discardable: false, conflictsNeedHuman: true }),
   [GENERATED_PROJECTION]: Object.freeze({ rederivable: true, discardable: true, conflictsNeedHuman: false }),
   [DISTRIBUTED_RUNTIME_COPY]: Object.freeze({ rederivable: true, discardable: true, conflictsNeedHuman: false }),
+  // Holds this machine's only reference to external editable state. Never
+  // swept, never synced, never a merge conflict.
+  [IGNORED_LOCAL]: Object.freeze({ rederivable: false, discardable: false, conflictsNeedHuman: false }),
 })
+
+// The one repo-local file the Obsidian view leaves in a repository or
+// workspace: a pointer to the external data directory and its local settings.
+// It lives under the existing ignored local-state directory.
+export const OBSIDIAN_LOCAL_POINTER = '.atelier-local/obsidian.json'
+export const IGNORED_LOCAL_PATTERNS = Object.freeze([`**/${OBSIDIAN_LOCAL_POINTER}`])
 
 // The kit's own declaration — the single place these paths are classified. A
 // distributed-runtime-copy is canonical in exactly one repo role and rederivable
@@ -75,6 +91,12 @@ export function validateFileClasses(entries, { label = 'fileClasses' } = {}) {
  */
 export function classifyPath(filePath, { repoRole = null, fileClasses = KIT_FILE_CLASSES } = {}) {
   const rel = normalizeRelPath(filePath)
+  // Not overridable: a declaration cannot turn a local pointer into something
+  // a sync loop may discard or commit.
+  const localPattern = IGNORED_LOCAL_PATTERNS.find((pattern) => matchesPathPattern(pattern, rel))
+  if (localPattern) {
+    return { path: rel, class: IGNORED_LOCAL, pattern: localPattern, canonicalRepoRole: null, canonicalHere: true, declared: false, handling: FILE_CLASS_HANDLING[IGNORED_LOCAL] }
+  }
   let matched = null
   for (const entry of fileClasses) {
     if (matchesPathPattern(entry.pattern, rel)) matched = entry
@@ -124,4 +146,108 @@ export function generatedProjectionDirectoryBasenames(fileClasses = KIT_FILE_CLA
     if (parent && !parent.includes('*')) names.add(parent)
   }
   return names
+}
+
+// ---------------------------------------------------------------------------
+// External managed data root: <data>/obsidian/<workspace-id>/
+// ---------------------------------------------------------------------------
+
+export const EDITABLE_VAULT = 'editable-vault'
+export const TRUSTED_STATE = 'trusted-state'
+export const RECOVERY_RECORD = 'recovery-record'
+export const DISPOSABLE_STAGING = 'disposable-staging'
+export const UNKNOWN_MANAGED = 'unknown-managed'
+
+// Only staging is discardable. A vault holds a person's edits and recovery
+// holds the only other copy of them, so neither is ever generated output, and
+// anything unrecognized is kept.
+export const MANAGED_AREA_HANDLING = Object.freeze({
+  [EDITABLE_VAULT]: Object.freeze({ rederivable: false, discardable: false, conflictsNeedHuman: true }),
+  [TRUSTED_STATE]: Object.freeze({ rederivable: false, discardable: false, conflictsNeedHuman: true }),
+  [RECOVERY_RECORD]: Object.freeze({ rederivable: false, discardable: false, conflictsNeedHuman: true }),
+  [DISPOSABLE_STAGING]: Object.freeze({ rederivable: true, discardable: true, conflictsNeedHuman: false }),
+  [UNKNOWN_MANAGED]: Object.freeze({ rederivable: false, discardable: false, conflictsNeedHuman: true }),
+})
+
+const MANAGED_AREAS = Object.freeze({ vaults: EDITABLE_VAULT, state: TRUSTED_STATE, recovery: RECOVERY_RECORD, staging: DISPOSABLE_STAGING })
+
+// Classify a path relative to one workspace's managed data root. Matching is
+// exact and case-sensitive, and a path that climbs, is absolute or names only
+// the area directory itself is never discardable.
+export function classifyManagedPath(relativePath) {
+  const rel = normalizeRelPath(relativePath).replace(/\/+$/, '')
+  const segments = rel.split('/')
+  const contained = rel !== '' && !rel.startsWith('/') && !/^[A-Za-z]:/.test(rel) && !segments.some((part) => part === '..' || part === '.' || part === '')
+  const area = contained && segments.length > 1 && Object.hasOwn(MANAGED_AREAS, segments[0]) ? segments[0] : null
+  const resolved = area ? MANAGED_AREAS[area] : UNKNOWN_MANAGED
+  return { path: rel, area, class: resolved, handling: MANAGED_AREA_HANDLING[resolved] }
+}
+
+function realLocation(target, realpath) {
+  const missing = []
+  let current = path.resolve(target)
+  for (;;) {
+    try {
+      return path.join(realpath(current), ...missing.reverse())
+    } catch {
+      const parent = path.dirname(current)
+      if (parent === current) return path.resolve(target)
+      missing.push(path.basename(current))
+      current = parent
+    }
+  }
+}
+
+const containsPath = (outer, inner) => inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : `${outer}${path.sep}`)
+
+function isSymbolicLink(target, lstat) {
+  try {
+    return lstat(target).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+// Refuse a managed root that overlaps an enrolled repository in either
+// direction, under lexical or real paths. `realpath` and `lstat` are the only
+// filesystem reads, and both can be supplied; nothing is created or changed.
+export function checkManagedRoots({ managedRoots = [], repositoryRoots = [], realpath = fs.realpathSync.native, lstat = fs.lstatSync } = {}) {
+  const refusals = []
+  const refuse = (code, managedRoot, repositoryRoot, message) => refusals.push({ code, managedRoot, repositoryRoot, message })
+  const locate = (root) => ({ given: root, lexical: path.resolve(root), real: realLocation(root, realpath) })
+  const repositories = repositoryRoots.map(locate)
+
+  for (const managedRoot of managedRoots) {
+    if (typeof managedRoot !== 'string' || !path.isAbsolute(managedRoot)) {
+      refuse('managed-root-not-absolute', managedRoot, null, 'a managed root must be an absolute path')
+      continue
+    }
+    const managed = locate(managedRoot)
+    if (isSymbolicLink(managed.lexical, lstat)) {
+      refuse('managed-root-symlink-alias', managedRoot, null, 'a managed root must not be a symbolic link')
+    }
+    for (const repository of repositories) {
+      const inside = (kind) => containsPath(repository[kind], managed[kind])
+      const around = (kind) => containsPath(managed[kind], repository[kind])
+      if (inside('lexical')) refuse('managed-root-inside-repository', managedRoot, repository.given, 'a managed root must sit outside every enrolled repository')
+      else if (around('lexical')) refuse('repository-inside-managed-root', managedRoot, repository.given, 'an enrolled repository must not sit inside a managed root')
+      else if (inside('real') || around('real')) {
+        refuse('managed-root-symlink-alias', managedRoot, repository.given, 'a symbolic link makes the managed root and an enrolled repository overlap')
+      }
+    }
+  }
+  return { ok: refusals.length === 0, refusals }
+}
+
+// The same guard at enrolment time: a repository that would contain, sit
+// inside or alias an existing managed root cannot be enrolled.
+export function checkRepositoryEnrollment({ repositoryRoot, managedRoots = [], realpath, lstat } = {}) {
+  const { refusals } = checkManagedRoots({ managedRoots, repositoryRoots: [repositoryRoot], ...(realpath ? { realpath } : {}), ...(lstat ? { lstat } : {}) })
+  const codes = {
+    'managed-root-inside-repository': 'enrollment-contains-managed-root',
+    'repository-inside-managed-root': 'enrollment-inside-managed-root',
+    'managed-root-symlink-alias': 'enrollment-aliases-managed-root',
+  }
+  const blocking = refusals.filter((item) => item.repositoryRoot !== null).map((item) => ({ ...item, code: codes[item.code] ?? item.code }))
+  return { ok: blocking.length === 0, refusals: blocking }
 }
