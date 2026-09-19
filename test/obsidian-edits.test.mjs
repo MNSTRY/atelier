@@ -39,7 +39,7 @@ import {
   openObjectStore,
   placeUnits,
 } from '../src/projection/obsidian/edits/index.mjs'
-import { validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
+import { ObsidianContractRefusal, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import { sha256Digest } from '../src/projection/obsidian/materialize/index.mjs'
 import { createRecoveryStore } from '../src/projection/obsidian/recovery/index.mjs'
 import { observeVaultEdits } from '../src/runtime/obsidian/pending-edits.mjs'
@@ -146,6 +146,36 @@ const broken = {
     splitGeneratedTail: (input) => {
       const tail = EDIT_LENS_PRIMITIVES.splitGeneratedTail(input)
       return tail.generated === 'removed' ? { ...tail, authored: input.editedNoteBytes } : tail
+    },
+  }),
+  // The rule this lens once had: only COMPLETE generated lines count as left
+  // over, and when nothing else decides, the end of the note is the author's.
+  guessesWhereTheAuthorStopped: createEditLensForOracleTests({
+    ...EDIT_LENS_PRIMITIVES,
+    splitGeneratedTail: ({ noteEntry, publishedNoteBytes, editedNoteBytes }) => {
+      const bodyEnd = noteEntry.regions.body.end
+      const bytes = publishedNoteBytes.subarray(bodyEnd)
+      const publishedAuthored = publishedNoteBytes.subarray(0, bodyEnd)
+      if (bytes.length === 0) return { authored: editedNoteBytes, generated: 'none' }
+      let lead = noteEntry.regions.generated[0]?.ext?.[EXT]?.fenceClosure?.byteLength ?? 0
+      while (lead < bytes.length && (bytes[lead] === 0x0a || bytes[lead] === 0x0d)) lead += 1
+      const lines = bytes.subarray(lead).toString('latin1').split(/\r?\n/).filter((line) => line.length > 0).map((line) => Buffer.from(line, 'latin1'))
+      const count = (haystack, needle) => { let total = 0; for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) total += 1; return total }
+      const surplus = (haystack) => lines.some((line) => count(haystack, line) > count(publishedAuthored, line))
+      const ends = (buffer, tail) => tail.length <= buffer.length && buffer.subarray(buffer.length - tail.length).equals(tail)
+      const lineEndings = (buffer) => { let total = 0; while (total < buffer.length && (buffer[buffer.length - 1 - total] === 0x0a || buffer[buffer.length - 1 - total] === 0x0d)) total += 1; return total }
+      if (ends(editedNoteBytes, bytes)) {
+        const authored = editedNoteBytes.subarray(0, editedNoteBytes.length - bytes.length)
+        if (surplus(authored)) throw new ObsidianContractRefusal('generated-region-edited', 'generated text inside the authored part')
+        return { authored, generated: 'intact' }
+      }
+      if (surplus(editedNoteBytes)) throw new ObsidianContractRefusal('generated-region-edited', 'a generated line is left')
+      for (let keep = lead; keep > 0; keep -= 1) {
+        if (!ends(editedNoteBytes, bytes.subarray(0, keep))) continue
+        const authored = editedNoteBytes.subarray(0, editedNoteBytes.length - keep)
+        if (authored.equals(publishedAuthored) || lineEndings(authored) === lineEndings(publishedAuthored)) return { authored, generated: 'removed' }
+      }
+      return { authored: editedNoteBytes, generated: 'removed' }
     },
   }),
   ignoresFrontMatter: createEditLensForOracleTests({ ...EDIT_LENS_PRIMITIVES, splitPrefix: ({ noteEntry, editedAuthored }) => editedAuthored.subarray(noteEntry.regions.body.start) }),
@@ -328,6 +358,68 @@ test('regions: a generated region that was edited, moved, duplicated or partiall
   assert.throws(() => generatedRefusalOracle(broken.acceptsAnyGeneratedTail), 'mutation control')
 })
 
+const markdownWithTail = () => [...cases].filter(([, context]) => context.note.ext[EXT].source.kind === 'markdown' && context.note.regions.generated.length > 0)
+const leadOf = (context) => {
+  const generated = generatedOf(context)
+  let lead = context.note.regions.generated[0].ext?.[EXT]?.fenceClosure?.byteLength ?? 0
+  while (generated[lead] === 0x0a || generated[lead] === 0x0d) lead += 1
+  return lead
+}
+
+// A generated tail cut in the middle of a line leaves no complete generated
+// line behind. Whatever is left is still generated text: the only answers are
+// a refusal or, where what is left is nothing but separator bytes, the
+// unchanged source.
+function generatedTruncationOracle(lens) {
+  let refused = 0
+  for (const [file, context] of markdownWithTail()) {
+    const authored = authoredOf(context)
+    const generated = generatedOf(context)
+    const lead = leadOf(context)
+    const settle = (edited, label, separatorOnly) => {
+      const result = runLens(context, edited, lens)
+      // A cut inside a multi-byte character is refused for its encoding first.
+      const wellFormed = (() => { try { new TextDecoder('utf-8', { fatal: true }).decode(edited); return true } catch { return false } })()
+      if (result.kind === 'refusal') { assertRefusal(result, wellFormed ? 'generated-region-edited' : 'invalid-utf8', label); refused += 1; return }
+      // Bytes that read both ways: the cut took line endings and the author's
+      // own line endings complete the tail again. The note then still ends
+      // with the whole tail and the author's part is shorter by line endings.
+      const dropped = edited.length - generated.length >= 0 && edited.subarray(edited.length - generated.length).equals(generated) ? authored.length - (edited.length - generated.length) : null
+      if (dropped !== null && dropped > 0 && authored.subarray(authored.length - dropped).every((byte) => byte === 0x0a || byte === 0x0d)) {
+        assertExactSource(context, result, context.baseSourceBytes.subarray(0, context.baseSourceBytes.length - dropped), label)
+        return
+      }
+      assert.ok(separatorOnly, `${label}: a fragment of generated text was accepted`)
+      assertExactSource(context, result, context.baseSourceBytes, label)
+    }
+    for (let kept = lead + 1; kept < generated.length; kept += 1) settle(Buffer.concat([authored, generated.subarray(0, kept)]), `${file}: tail cut from the right, ${kept} bytes left`, false)
+    for (let from = 1; from < generated.length; from += 1) {
+      const left = generated.subarray(from)
+      settle(Buffer.concat([authored, left]), `${file}: tail cut from the left at ${from}`, left.every((byte) => byte === 0x0a || byte === 0x0d))
+    }
+    // The same cuts beside an authored edit, and a fragment left inside the body.
+    const revised = replaceNth(authored, '# ', '# Revised ')
+    const middle = lead + Math.floor((generated.length - lead) / 2)
+    for (const [name, edited] of Object.entries({
+      'cut from the right beside an authored edit': Buffer.concat([revised, generated.subarray(0, middle)]),
+      'cut from the left beside an authored edit': Buffer.concat([revised, generated.subarray(middle)]),
+      'fragment left in the middle of the body': insertAt(authored, context.note.regions.body.start, generated.subarray(lead, Math.min(generated.length, lead + 12))),
+    })) assertRefusal(runLens(context, edited, lens), 'generated-region-edited', `${file}: ${name}`)
+  }
+  assert.ok(refused > 500, `only ${refused} truncations were tried`)
+}
+
+test('regions: a generated tail cut in the middle of a line, from either side or beside an authored edit, never reaches the source', () => {
+  // The smallest case: the person selects from the middle of the generated heading to the end of the note and deletes.
+  const context = cases.get('guide.md')
+  const generated = generatedOf(context)
+  const cut = generated.indexOf(utf8('## Rela')) + '## Rela'.length
+  assert.ok(cut > leadOf(context))
+  assertRefusal(runLens(context, Buffer.concat([authoredOf(context), generated.subarray(0, cut)])), 'generated-region-edited', 'heading cut after seven bytes')
+  generatedTruncationOracle(applyEditLens)
+  assert.throws(() => generatedTruncationOracle(broken.guessesWhereTheAuthorStopped), /fragment of generated text was accepted|expected generated-region-edited|new source bytes differ/, 'mutation control: complete lines only, and the end of the note taken for the author\'s')
+})
+
 test('regions: a generated region deleted entirely is not an authored edit, and its separator and fence closure are not the author\'s', () => {
   generatedRemovedOracle(applyEditLens)
   assert.throws(() => generatedRemovedOracle(broken.keepsSeparatorOfRemovedTail), 'mutation control')
@@ -452,16 +544,20 @@ const FUZZ_REGRESSIONS = [
   { file: 'open-fence.md', edits: [[221, 232, 'en'], [153, 153, '.\n\n```js\nconst ans']] },
 ]
 
-function fuzzTrial(context, random) {
+function fuzzTrial(context, random, { wholeNote = false } = {}) {
   const note = context.publishedNoteBytes
   const { start, end } = context.note.regions.body
+  // With `wholeNote` an edit may begin or end anywhere up to the last byte of
+  // the note, so it can fall on the boundary and inside the generated tail,
+  // and one edit in five deletes everything from where it begins.
+  const limit = wholeNote ? note.length : end
   const inversions = inversionsOf(context)
-  const boundary = (offset) => { while (offset < end && (note[offset] & 0xc0) === 0x80) offset += 1; return offset }
+  const boundary = (offset, stop = end) => { while (offset < stop && (note[offset] & 0xc0) === 0x80) offset += 1; return offset }
   const touches = (from, to) => inversions.some((item) => from <= item.note.end && to >= item.note.start)
   const edits = []
   for (let count = 1 + Math.floor(random() * 4); count > 0; count -= 1) {
-    const at = boundary(start + Math.floor(random() * (end - start)))
-    const until = random() < 0.5 ? at : Math.min(end, boundary(at + Math.floor(random() * 20)))
+    const at = boundary(start + Math.floor(random() * (limit - start)), limit)
+    const until = wholeNote && random() < 0.2 ? note.length : random() < 0.5 ? at : Math.min(limit, boundary(at + Math.floor(random() * 20), limit))
     if (touches(at, until)) continue
     let text
     if (random() < 0.5) {
@@ -475,40 +571,69 @@ function fuzzTrial(context, random) {
   return edits
 }
 
-function fuzzOracle(lens, { seed, trials }) {
+const countOf = (haystack, needle) => { let total = 0; for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) total += 1; return total }
+const GENERATED_RUN = 8
+
+// Every run of GENERATED_RUN bytes of the generated tail that reaches past its
+// separator. None may occur in a new source more often than the base source
+// and the text typed in this trial account for.
+function generatedRunsLeaked(context, newSourceBytes, edits) {
+  if (context.note.regions.generated.length === 0) return false
+  const generated = generatedOf(context)
+  const runs = new Set()
+  for (let at = Math.max(0, leadOf(context) - GENERATED_RUN + 1); at + GENERATED_RUN <= generated.length; at += 1) runs.add(generated.toString('latin1', at, at + GENERATED_RUN))
+  return [...runs].some((run) => {
+    const needle = Buffer.from(run, 'latin1')
+    return countOf(newSourceBytes, needle) > countOf(context.baseSourceBytes, needle) + edits.reduce((total, edit) => total + countOf(edit.text, needle), 0)
+  })
+}
+
+function fuzzOracle(lens, { seed, trials, wholeNote = false }) {
   const random = mulberry32(seed)
   const files = [...cases.keys()].filter((file) => cases.get(file).note.ext[EXT].source.kind === 'markdown' && cases.get(file).note.regions.body.end - cases.get(file).note.regions.body.start >= 2)
-  const tally = { exact: 0, refused: {}, wrong: [] }
+  const tally = { exact: 0, refused: {}, wrong: [], inTail: { exact: 0, refused: 0 } }
   const planned = [
     ...FUZZ_REGRESSIONS.map((item) => ({ file: item.file, edits: item.edits.map(([at, until, text]) => ({ at, until, text: utf8(text) })) })),
-    ...Array.from({ length: trials }, (_, trial) => ({ file: files[trial % files.length], edits: fuzzTrial(cases.get(files[trial % files.length]), random) })),
+    ...Array.from({ length: trials }, (_, trial) => ({ file: files[trial % files.length], edits: fuzzTrial(cases.get(files[trial % files.length]), random, { wholeNote }) })),
   ]
   for (const { file, edits } of planned) {
     if (edits.length === 0) continue
     const context = cases.get(file)
+    const bodyEnd = context.note.regions.body.end
     const inversions = inversionsOf(context)
     const toSource = (offset) => offset - inversions.filter((item) => item.note.end <= offset).reduce((total, item) => total + (item.note.end - item.note.start) - (item.source.end - item.source.start), 0)
+    const inTail = edits.some((edit) => edit.until > bodyEnd)
     let edited = context.publishedNoteBytes
     let expected = context.baseSourceBytes
     for (const edit of [...edits].sort((left, right) => right.at - left.at)) {
       edited = Buffer.concat([edited.subarray(0, edit.at), edit.text, edited.subarray(edit.until)])
-      expected = Buffer.concat([expected.subarray(0, toSource(edit.at)), edit.text, expected.subarray(toSource(edit.until))])
+      // No byte of the tail is the author's to change: what an edit does
+      // beyond the body is never part of an expected source, so a success
+      // for such a trial is exact only where the tail was removed whole.
+      if (edit.until <= bodyEnd) expected = Buffer.concat([expected.subarray(0, toSource(edit.at)), edit.text, expected.subarray(toSource(edit.until))])
     }
     const result = runLens(context, edited, lens)
-    if (result.kind === 'refusal') { tally.refused[result.code] = (tally.refused[result.code] ?? 0) + 1; continue }
+    if (result.kind === 'refusal') {
+      tally.refused[result.code] = (tally.refused[result.code] ?? 0) + 1
+      if (inTail) tally.inTail.refused += 1
+      continue
+    }
     // Second oracle, independent of the expected bytes: no emitted target
-    // reaches the source unless the base or the inserted text held it, and
-    // nothing outside the body moved.
+    // reaches the source unless the base or the inserted text held it, no run
+    // of generated bytes does either, and nothing outside the body moved.
     const bodyStart = context.note.regions.body.start
-    const count = (haystack, needle) => { let total = 0; for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) total += 1; return total }
     const leaked = inversions.some((item) => {
       const emitted = Buffer.from(item.ext[EXT].emitted, 'base64url')
       if (item.source.start === item.source.end) return false
-      return count(result.newSourceBytes, emitted) > count(context.baseSourceBytes, emitted) + edits.reduce((total, edit) => total + count(edit.text, emitted), 0)
+      return countOf(result.newSourceBytes, emitted) > countOf(context.baseSourceBytes, emitted) + edits.reduce((total, edit) => total + countOf(edit.text, emitted), 0)
     })
+    // Asked of every trial that touched the tail: text the author moves about
+    // inside the body may well share eight bytes with a generated row (the
+    // title of a related note), and that text is theirs.
+    const generatedLeaked = inTail && generatedRunsLeaked(context, result.newSourceBytes, edits)
     const prefixKept = result.newSourceBytes.subarray(0, bodyStart).equals(context.baseSourceBytes.subarray(0, bodyStart))
-    if (result.newSourceBytes.equals(expected) && !leaked && prefixKept) tally.exact += 1
-    else tally.wrong.push({ file, leaked, prefixKept, edits: edits.map((edit) => [edit.at, edit.until, edit.text.toString('utf8')]) })
+    if (result.newSourceBytes.equals(expected) && !leaked && !generatedLeaked && prefixKept) { tally.exact += 1; if (inTail) tally.inTail.exact += 1 }
+    else tally.wrong.push({ file, leaked, generatedLeaked, prefixKept, edits: edits.map((edit) => [edit.at, edit.until, edit.text.toString('utf8')]) })
   }
   assert.deepEqual(tally.wrong.slice(0, 3), [], `${tally.wrong.length} wrong results`)
   return tally
@@ -528,6 +653,15 @@ test('lens: fuzz, exact or refused, never wrong', (t) => {
   assert.throws(() => fuzzOracle(passesUnplacedRewritesThrough, { seed: 20260105, trials: 0 }), /wrong results/, 'mutation control: unplaced rewrites written to the source')
   assert.throws(() => fuzzOracle(broken.keepsEmittedBytes, { seed: 20260105, trials: 200 }), /wrong results/, 'mutation control')
   assert.throws(() => fuzzOracle(broken.normalizesNewlines, { seed: 20260105, trials: 200 }), /wrong results/, 'mutation control')
+})
+
+test('lens: fuzz over the whole note, the boundary and the generated tail included: exact or refused, and no run of generated bytes in a source', (t) => {
+  const options = { seed: Number(process.env.ATELIER_EDIT_FUZZ_SEED ?? 20260105), trials: Number(process.env.ATELIER_EDIT_FUZZ_TRIALS ?? 4000), wholeNote: true }
+  const tally = fuzzOracle(applyEditLens, options)
+  t.diagnostic(`fuzz, whole note: ${JSON.stringify({ exact: tally.exact, refused: tally.refused, inTail: tally.inTail, wrong: 0 })}`)
+  assert.ok(tally.inTail.refused > options.trials / 10, 'the generated tail was edited often enough to matter')
+  assert.ok(tally.exact > tally.inTail.refused / 4, 'edits that stay in the body still succeed')
+  assert.throws(() => fuzzOracle(broken.guessesWhereTheAuthorStopped, { ...options, seed: 20260105, trials: 1500 }), /wrong results/, 'mutation control: the end of the note taken for the author\'s')
 })
 
 test('lens: applying it twice gives identical results', () => {
