@@ -1,0 +1,173 @@
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { publishPrivateFile } from '../../../project/durable-state.mjs'
+import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularFileNoFollow, readRegularTextNoFollow } from '../../../project/private-state.mjs'
+
+// Private per-workspace state for one Obsidian view:
+//
+//   <workspaceRoot>/vaults/<scopeId>/                 the editable vault (or an explicit vaultRoot)
+//   <workspaceRoot>/state/manifests/<scopeId>/        trusted manifests and the current pointer
+//   <workspaceRoot>/state/journals/<scopeId>/<id>/    publication journals
+//   <workspaceRoot>/recovery/objects/<sha256>.bin     immutable content-addressed bytes
+//   <workspaceRoot>/recovery/<journalId>/<unit>/      displaced files and receipts
+//   <workspaceRoot>/staging/<journalId>/              disposable prepared candidates
+//
+// Immutable records are published with publishPrivateFile: a complete file
+// appears atomically under a name that is never overwritten. What that gives
+// is an all-or-nothing record that survives a process crash; it is fsynced,
+// which on some platforms is weaker than a full device flush. A displaced
+// file is different: it is the very file that occupied a note path, it is
+// moved and never copied over, and a program that still holds it open may
+// write into it later. It is therefore never treated as immutable; its digest
+// at the time of the move is recorded in a receipt and re-checked.
+
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const DIGEST = /^sha256:[0-9a-f]{64}$/
+
+export const sha256Digest = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+
+export class PublicationRefusal extends Error {
+  constructor(code, message, detail = {}) {
+    super(`${code}: ${message}`)
+    this.name = 'PublicationRefusal'
+    this.code = code
+    this.detail = detail
+  }
+}
+
+export function refuse(code, message, detail) {
+  throw new PublicationRefusal(code, message, detail)
+}
+
+// Identifiers become directory names. ':' is legal in an identifier and is not
+// legal in a file name everywhere.
+const segment = (identifier) => identifier.replaceAll(':', '_')
+
+export function readFileDigest(file) {
+  let descriptor
+  try {
+    descriptor = openRegularFileNoFollow(file)
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+  try { return sha256Digest(fs.readFileSync(descriptor)) } finally { fs.closeSync(descriptor) }
+}
+
+export function readFileBytes(file) {
+  const descriptor = openRegularFileNoFollow(file)
+  try { return fs.readFileSync(descriptor) } finally { fs.closeSync(descriptor) }
+}
+
+function publishOnce(file, bytes) {
+  try {
+    publishPrivateFile(file, bytes)
+  } catch (error) {
+    // The name is taken by different bytes. An immutable record is never replaced.
+    if (error.code !== 'EEXIST') throw error
+    return false
+  }
+  return true
+}
+
+export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vaultRoot } = {}) {
+  if (typeof workspaceRoot !== 'string' || !path.isAbsolute(workspaceRoot)) throw new TypeError('workspaceRoot must be an absolute path')
+  for (const [label, value] of [['workspaceId', workspaceId], ['scopeId', scopeId]]) {
+    if (typeof value !== 'string' || !IDENTIFIER.test(value)) throw new TypeError(`${label} must be a contract identifier`)
+  }
+  fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
+  const root = fs.realpathSync(workspaceRoot)
+  const privateDir = (...parts) => ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, ...parts), label: 'Obsidian publication state' })
+  const requestedVault = vaultRoot ?? path.join(root, 'vaults', segment(scopeId))
+  if (!path.isAbsolute(requestedVault)) throw new TypeError('vaultRoot must be an absolute path')
+  fs.mkdirSync(requestedVault, { recursive: true })
+  const vault = fs.realpathSync(requestedVault)
+  const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
+  for (const area of ['state', 'recovery', 'staging']) {
+    if (inside(path.join(root, area), vault) || inside(vault, path.join(root, area))) throw new TypeError('the vault may not overlap private publication state')
+  }
+  const manifests = privateDir('state', 'manifests', segment(scopeId))
+  const journals = privateDir('state', 'journals', segment(scopeId))
+  const locks = privateDir('state', 'locks')
+  const objects = privateDir('recovery', 'objects')
+  const staging = privateDir('staging')
+  const pointerFile = path.join(manifests, 'current.json')
+
+  const store = {
+    workspaceRoot: root,
+    workspaceId,
+    scopeId,
+    vaultRoot: vault,
+    journalsRoot: journals,
+    lockPath: path.join(locks, `${segment(scopeId)}.lock`),
+    ref: (absolute) => path.relative(root, absolute).split(path.sep).join('/'),
+    resolve(ref) {
+      const absolute = path.resolve(root, ref)
+      if (!inside(root, absolute) || absolute === root) throw new TypeError('a store reference must stay inside the workspace state')
+      return absolute
+    },
+    journalDir: (journalId) => privateDir('state', 'journals', segment(scopeId), segment(journalId)),
+    stagingDir: (journalId) => privateDir('staging', segment(journalId)),
+    stagingRoot: staging,
+    unitDir: (journalId, unit) => privateDir('recovery', segment(journalId), String(unit).padStart(6, '0')),
+    displacedPath: (journalId, unit, name = 'displaced.bin') => path.join(store.unitDir(journalId, unit), name),
+
+    // Immutable, content-addressed bytes (a base, an observed edit, an outside writer's bytes).
+    retainObject(bytes) {
+      const digest = sha256Digest(bytes)
+      const file = path.join(objects, `${digest.slice('sha256:'.length)}.bin`)
+      publishPrivateFile(file, bytes)
+      return { digest, ref: store.ref(file) }
+    },
+    readObject(digest) {
+      if (!DIGEST.test(digest)) throw new TypeError('digest required')
+      const bytes = readFileBytes(path.join(objects, `${digest.slice('sha256:'.length)}.bin`))
+      if (sha256Digest(bytes) !== digest) refuse('recovery-object-corrupt', 'a retained object no longer matches its name')
+      return bytes
+    },
+    writeReceipt(journalId, unit, receipt) {
+      const body = Buffer.from(`${JSON.stringify({ schema: 'atelier-obsidian-recovery-receipt/v1', journalId, unit, ...receipt }, null, 2)}\n`, 'utf8')
+      const file = path.join(store.unitDir(journalId, unit), `receipt-${receipt.role}-${sha256Digest(body).slice(7, 19)}.json`)
+      publishOnce(file, body)
+      return store.ref(file)
+    },
+    listReceipts(journalId) {
+      const base = path.join(root, 'recovery', segment(journalId))
+      if (!fs.existsSync(base)) return []
+      const receipts = []
+      for (const unit of fs.readdirSync(base).sort()) {
+        for (const name of fs.readdirSync(path.join(base, unit)).filter((entry) => /^receipt-.*\.json$/.test(entry)).sort()) {
+          receipts.push(JSON.parse(readRegularTextNoFollow(path.join(base, unit, name))))
+        }
+      }
+      return receipts
+    },
+
+    // Trusted manifest. The manifest file is immutable; only the small pointer
+    // is replaced, and only as the last step of a publication.
+    readCurrent() {
+      let text
+      try { text = readRegularTextNoFollow(pointerFile) } catch (error) { if (error.code === 'ENOENT') return null; throw error }
+      const pointer = JSON.parse(text)
+      if (pointer.scopeId !== scopeId || pointer.workspaceId !== workspaceId) refuse('state-mismatch', 'the manifest pointer belongs to another view')
+      return pointer
+    },
+    readCurrentManifest() {
+      const pointer = store.readCurrent()
+      if (!pointer) return null
+      const bytes = readFileBytes(path.join(manifests, pointer.manifestFile))
+      if (sha256Digest(bytes) !== pointer.manifestDigest) refuse('state-mismatch', 'the trusted manifest no longer matches its pointer')
+      return JSON.parse(bytes.toString('utf8'))
+    },
+    commitManifest({ manifestBytes, generationId, journalId, retained = [], committedAt }) {
+      const manifestDigest = sha256Digest(manifestBytes)
+      const manifestFile = `${segment(generationId)}--${manifestDigest.slice(7, 19)}.json`
+      publishPrivateFile(path.join(manifests, manifestFile), manifestBytes)
+      const pointer = { schema: 'atelier-obsidian-current-manifest/v1', workspaceId, scopeId, generationId, manifestFile, manifestDigest, journalId, committedAt, retained }
+      atomicReplacePrivateText(pointerFile, `${JSON.stringify(pointer, null, 2)}\n`)
+      return pointer
+    },
+  }
+  return store
+}
