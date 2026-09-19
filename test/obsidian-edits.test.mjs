@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import test, { after, before } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -7,13 +8,21 @@ import {
   ALIGN_LIMITS,
   EDIT_LENS_PRIMITIVES,
   EDIT_LENS_REFUSALS,
+  EDIT_LENS_VERSION,
+  EDIT_OBSERVATION_STEPS,
   alignBodies,
   applyEditLens,
   createEditLensForOracleTests,
+  createEditObserverForOracleTests,
+  editIdempotencyKey,
+  observeEdit,
   placeUnits,
 } from '../src/projection/obsidian/edits/index.mjs'
+import { validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import { sha256Digest } from '../src/projection/obsidian/materialize/index.mjs'
-import { EXT, prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
+import { createRecoveryStore } from '../src/projection/obsidian/recovery/index.mjs'
+import { observeVaultEdits } from '../src/runtime/obsidian/pending-edits.mjs'
+import { EXT, WORKSPACE_ID, prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
 
 // Invented fixtures only. Every note under test is the output of the real
 // prepareView over a workspace written to a temporary directory; an edit is a
@@ -540,4 +549,216 @@ test('lens: refusals carry codes, digests and byte offsets, never note text, tit
   assert.ok(refusals >= 15)
   assert.throws(() => assertCarriesNoText({ kind: 'refusal', code: 'link-rewrite-edited', detail: { text: 'Closing words.' } }, allowed, 'control'), 'mutation control: a refusal that quotes the note')
   assert.throws(() => assertCarriesNoText({ kind: 'refusal', code: 'stale-base', detail: { file: path.join(root, 'guide.md') } }, allowed, 'control'), 'mutation control: a refusal that names a path')
+})
+
+// ---------------------------------------------------------------------------
+// Observation
+// ---------------------------------------------------------------------------
+
+// A pending edit exactly as the maintenance engine queues it: the edited note
+// is written into a temporary vault, and the engine's own observation keeps
+// its bytes in the recovery object store before it records anything.
+function queueEdit(t, context, editedNoteBytes, { scopeId = 'scope-full', manifest = context.manifest } = {}) {
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-edit-observation-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const store = createRecoveryStore({ workspaceRoot: path.join(dir, 'workspace-state'), workspaceId: WORKSPACE_ID, scopeId, repositoryRoots: [] })
+  const notePath = path.join(store.vaultRoot, ...context.note.path.split('/'))
+  fs.mkdirSync(path.dirname(notePath), { recursive: true })
+  fs.writeFileSync(notePath, editedNoteBytes)
+  const { edits } = observeVaultEdits({
+    store, workspaceId: WORKSPACE_ID, scopeId, manifest,
+    bases: new Map([[context.note.path, { digest: context.note.noteDigest, repoId: context.repoId, nodeId: context.nodeId }]]),
+    digestOf: () => sha256Digest(fs.readFileSync(notePath)), edits: [], now: '2026-01-05T10:05:00.000Z',
+  })
+  assert.equal(edits.length, 1)
+  return { store, edit: edits[0], notePath }
+}
+
+const observe = (queued, context, extra = {}, observer = observeEdit) => observer({
+  edit: queued.edit, store: queued.store, manifest: context.manifest, publishedNoteBytes: context.publishedNoteBytes, baseSourceBytes: context.baseSourceBytes, ...extra,
+})
+
+test('observation: a preserved body edit becomes a pending body-replacement operation bound to identity, origin and digests', (t) => {
+  const context = cases.get('guide.md')
+  const edited = replaceNth(context.publishedNoteBytes, 'Closing words.', 'Closing words, revised.')
+  const expected = replaceNth(context.baseSourceBytes, 'Closing words.', 'Closing words, revised.')
+  const queued = queueEdit(t, context, edited)
+  const sourceBefore = Buffer.from(context.baseSourceBytes)
+  const { operation, outcome } = observe(queued, context)
+  assert.deepEqual(validateObsidianContract('edit-operation', operation), [])
+  assertExactSource(context, outcome, expected, 'observed edit')
+  const at = context.baseSourceBytes.indexOf(utf8('.'), context.baseSourceBytes.indexOf(utf8('Closing words')))
+  assert.deepEqual(operation, {
+    schema: 'atelier-obsidian-edit-operation/v1',
+    contractVersion: '1.0.0',
+    editId: queued.edit.editId,
+    workspaceId: WORKSPACE_ID,
+    repoId: 'reading-room',
+    nodeId: 'reading-room:guide',
+    origin: { scopeId: 'scope-full', generationId: context.manifest.generationId, ext: { [EXT]: { notePath: context.note.path, baseNoteDigest: context.note.noteDigest, publishedNoteDigest: context.note.noteDigest } } },
+    kind: 'body-replacement',
+    baseSourceDigest: sha256Digest(context.baseSourceBytes),
+    observed: { digest: sha256Digest(edited), byteLength: edited.length, recoveryRef: queued.edit.objectRef },
+    idempotencyKey: editIdempotencyKey({ workspaceId: WORKSPACE_ID, repoId: 'reading-room', nodeId: 'reading-room:guide', baseSourceDigest: sha256Digest(context.baseSourceBytes), observedDigest: sha256Digest(edited) }),
+    state: 'pending',
+    observedAt: '2026-01-05T10:05:00.000Z',
+    ext: {
+      [EXT]: {
+        lensVersion: EDIT_LENS_VERSION,
+        publishedNoteRef: `recovery/objects/${context.note.noteDigest.slice(7)}.bin`,
+        baseSourceRef: `recovery/objects/${sha256Digest(context.baseSourceBytes).slice(7)}.bin`,
+        currentSourceDigest: sha256Digest(context.baseSourceBytes),
+        result: { newSourceDigest: sha256Digest(expected), newByteLength: expected.length, changedRanges: [{ start: at, end: at, newStart: at, newEnd: at + ', revised'.length }], unchanged: false, generated: 'intact' },
+      },
+    },
+  })
+  // Everything the operation refers to is retained, immutable, under its digest.
+  for (const bytes of [edited, context.publishedNoteBytes, context.baseSourceBytes]) assert.ok(queued.store.readObject(sha256Digest(bytes)).equals(bytes))
+  // Nothing was written to the source or to the vault.
+  assert.ok(context.baseSourceBytes.equals(sourceBefore))
+  assert.ok(fs.readFileSync(queued.notePath).equals(edited))
+})
+
+test('observation: identical edits over identical bases coalesce under one idempotency key and nothing else does', (t) => {
+  const context = cases.get('guide.md')
+  const edited = replaceNth(context.publishedNoteBytes, 'Closing words.', 'Closing words, revised.')
+  const first = observe(queueEdit(t, context, edited), context).operation
+  // The same bytes seen from another view and generation of the same workspace.
+  const elsewhere = { ...context.manifest, scopeId: 'scope-other', generationId: 'gen-other-0001' }
+  const second = observe(queueEdit(t, context, edited, { scopeId: 'scope-other', manifest: elsewhere }), { ...context, manifest: elsewhere }).operation
+  assert.notEqual(first.editId, second.editId)
+  assert.equal(first.idempotencyKey, second.idempotencyKey)
+  assert.match(first.idempotencyKey, /^op-[0-9a-f]{64}$/)
+  const other = observe(queueEdit(t, context, replaceNth(context.publishedNoteBytes, 'Closing words.', 'Closing words!')), context).operation
+  assert.notEqual(first.idempotencyKey, other.idempotencyKey)
+  const key = (change) => editIdempotencyKey({ workspaceId: WORKSPACE_ID, repoId: 'reading-room', nodeId: 'reading-room:guide', baseSourceDigest: first.baseSourceDigest, observedDigest: first.observed.digest, ...change })
+  assert.equal(key({}), first.idempotencyKey)
+  for (const change of [{ workspaceId: 'ws-other' }, { repoId: 'other-room' }, { nodeId: 'reading-room:alpha' }, { baseSourceDigest: sha256Digest(utf8('another base')) }, { observedDigest: sha256Digest(utf8('another edit')) }]) {
+    assert.notEqual(key(change), first.idempotencyKey)
+  }
+})
+
+test('observation: what the lens refuses is classified, never applied: proposals, conflicts and refusals', (t) => {
+  const guide = cases.get('guide.md')
+  const rows = [
+    { name: 'new vault link', context: guide, edited: replaceNth(guide.publishedNoteBytes, 'Closing words.', `Closing words and [[${BETA_WIKI}]].`), code: 'unsupported-structural-edit', kind: 'semantic-proposal', state: 'proposed' },
+    { name: 'front matter', context: guide, edited: replaceNth(guide.publishedNoteBytes, 'title: "Field guide"', 'title: "Field manual"'), code: 'unsupported-frontmatter-edit', kind: 'semantic-proposal', state: 'proposed' },
+    { name: 'generated region', context: guide, edited: replaceNth(guide.publishedNoteBytes, '- supports →', '- supports =>'), code: 'generated-region-edited', kind: 'body-replacement', state: 'refused' },
+    { name: 'alias', context: guide, edited: replaceNth(guide.publishedNoteBytes, '|Alpha topic]] before', '|the alpha]] before'), code: 'link-rewrite-edited', kind: 'body-replacement', state: 'refused' },
+    { name: 'wrapper', context: cases.get('charts/table.pdf'), edited: replaceNth(cases.get('charts/table.pdf').publishedNoteBytes, 'Format', 'Formats'), code: 'unsupported-wrapper-edit', kind: 'body-replacement', state: 'refused' },
+    { name: 'stale base', context: guide, edited: replaceNth(guide.publishedNoteBytes, 'Closing words.', 'Closing words, revised.'), extra: { baseSourceBytes: replaceNth(guide.baseSourceBytes, 'Closing words.', 'Closing words!') }, code: 'stale-base', kind: 'body-replacement', state: 'conflicted' },
+    { name: 'baseline mismatch', context: guide, edited: replaceNth(guide.publishedNoteBytes, 'Closing words.', 'Closing words, revised.'), extra: { publishedNoteBytes: cases.get('delta.md').publishedNoteBytes }, code: 'baseline-mismatch', kind: 'body-replacement', state: 'refused' },
+  ]
+  for (const row of rows) {
+    const { operation, outcome } = observe(queueEdit(t, row.context, row.edited), row.context, row.extra)
+    assert.deepEqual(validateObsidianContract('edit-operation', operation), [], row.name)
+    assert.deepEqual([outcome.kind, outcome.code, operation.kind, operation.state, operation.ext[EXT].refusal.code], ['refusal', row.code, row.kind, row.state, row.code], row.name)
+    assert.equal(operation.ext[EXT].result, undefined, row.name)
+    // The base an operation is keyed on is the one the note was generated from.
+    assert.equal(operation.baseSourceDigest, row.context.note.ext[EXT].source.rawDigest, row.name)
+  }
+  const stale = observe(queueEdit(t, guide, rows[5].edited), guide, rows[5].extra).operation
+  assert.equal(stale.ext[EXT].currentSourceDigest, sha256Digest(rows[5].extra.baseSourceBytes))
+  // A record of another generation is not judged against this manifest.
+  const queued = queueEdit(t, guide, rows[5].edited)
+  const foreign = observe({ ...queued, edit: { ...queued.edit, generationId: 'gen-other-0001' } }, guide)
+  assert.deepEqual([foreign.outcome.code, foreign.operation.state], ['unknown-note', 'refused'])
+})
+
+function missingBytesOracle(t, observer) {
+  const context = cases.get('guide.md')
+  const edited = replaceNth(context.publishedNoteBytes, 'Closing words.', 'Closing words, revised.')
+  const queued = queueEdit(t, context, edited)
+  fs.rmSync(queued.store.resolve(queued.edit.objectRef), { force: true })
+  // The live note still holds the very same bytes. It is not a substitute.
+  assert.ok(fs.readFileSync(queued.notePath).equals(edited))
+  const { operation, outcome } = observe(queued, context, {}, observer(queued))
+  assert.deepEqual([outcome.kind, outcome.code, operation.state, operation.observed.byteLength], ['refusal', 'edit-bytes-missing', 'refused', 0])
+  assert.deepEqual(validateObsidianContract('edit-operation', operation), [])
+  // Retained bytes that no longer match their name are missing too.
+  const corrupt = queueEdit(t, context, edited)
+  const file = corrupt.store.resolve(corrupt.edit.objectRef)
+  if (process.platform !== 'win32') fs.chmodSync(file, 0o600)
+  fs.writeFileSync(file, utf8('not the edit'))
+  assert.equal(observe(corrupt, context, {}, observer(corrupt)).outcome.code, 'edit-bytes-missing')
+}
+
+test('observation: preserved bytes that are absent refuse edit-bytes-missing; the live vault note is never read instead', (t) => {
+  missingBytesOracle(t, () => observeEdit)
+  const rereadsVault = (queued) => createEditObserverForOracleTests({
+    ...EDIT_OBSERVATION_STEPS,
+    preserve: (input) => {
+      const live = fs.readFileSync(queued.notePath)
+      return { edited: live, publishedRef: input.store.retainObject(input.publishedNoteBytes).ref, baseRef: input.store.retainObject(input.baseSourceBytes).ref }
+    },
+  })
+  assert.throws(() => missingBytesOracle(t, rereadsVault), 'mutation control: an observer that re-reads the live note')
+})
+
+function orderOracle(t, steps) {
+  const context = cases.get('guide.md')
+  const edited = replaceNth(context.publishedNoteBytes, 'Closing words.', 'Closing words, revised.')
+  const queued = queueEdit(t, context, edited)
+  let classified = 0
+  const observer = createEditObserverForOracleTests(steps({ onClassify: () => { classified += 1 } }))
+  const crash = new Error('crash seam')
+  assert.throws(() => observe(queued, context, { afterPreserved: () => { throw crash } }, observer), (error) => error === crash)
+  // At the seam every immutable byte is retained and nothing has been classified.
+  assert.equal(classified, 0, 'classification ran before the bytes were recorded')
+  for (const bytes of [edited, context.publishedNoteBytes, context.baseSourceBytes]) assert.ok(queued.store.readObject(sha256Digest(bytes)).equals(bytes))
+  // After the crash the same record observes to the same operation.
+  const again = observe(queued, context, {}, observer)
+  assert.equal(classified, 1)
+  assert.deepEqual(again.operation, observe(queued, context).operation)
+}
+
+test('observation: the immutable edit bytes are recorded before classification, across a crash seam', (t) => {
+  const counting = ({ onClassify }) => ({ ...EDIT_OBSERVATION_STEPS, classify: (input) => { onClassify(); return EDIT_OBSERVATION_STEPS.classify(input) } })
+  orderOracle(t, counting)
+  const classifiesFirst = ({ onClassify }) => ({
+    ...counting({ onClassify }),
+    preserve: (input) => {
+      const edited = input.store.readObject(input.edit.observedDigest)
+      counting({ onClassify }).classify({ manifest: cases.get('guide.md').manifest, repoId: 'reading-room', nodeId: 'reading-room:guide', publishedNoteBytes: input.publishedNoteBytes, editedNoteBytes: edited, baseSourceBytes: input.baseSourceBytes })
+      return EDIT_OBSERVATION_STEPS.preserve(input)
+    },
+  })
+  assert.throws(() => orderOracle(t, classifiesFirst), 'mutation control: an observer that classifies before it records')
+})
+
+function assertOperationCarriesNoText(operation, label) {
+  const identities = new Set([operation.editId, operation.workspaceId, operation.repoId, operation.nodeId, operation.origin.scopeId, operation.origin.generationId, operation.idempotencyKey, operation.observedAt])
+  const vocabulary = new Set([...EDIT_LENS_REFUSALS, 'edit-bytes-missing', 'atelier-obsidian-edit-operation/v1', '1.0.0', EDIT_LENS_VERSION, 'body-replacement', 'semantic-proposal', 'pending', 'proposed', 'refused', 'conflicted', 'intact', 'removed', 'none', 'rewritten-target-edited', 'vault-link-changed'])
+  const visit = (value, pointer) => {
+    if (typeof value === 'string') {
+      // The vault-relative note path is the one readable string: it names the note the edit was made in.
+      if (pointer === `/origin/ext/${EXT}/notePath`) return assert.equal(value, operation.origin.ext[EXT].notePath)
+      assert.ok(DIGEST.test(value) || /^recovery\/objects\/[0-9a-f]{64}\.bin$/.test(value) || identities.has(value) || vocabulary.has(value), `${label}: ${pointer} carries ${JSON.stringify(value)}`)
+    } else if (Array.isArray(value)) value.forEach((item, index) => visit(item, `${pointer}/${index}`))
+    else if (value && typeof value === 'object') for (const [key, item] of Object.entries(value)) visit(item, `${pointer}/${key}`)
+    else assert.ok(value === null || typeof value === 'number' || typeof value === 'boolean', `${label}: ${pointer}`)
+  }
+  visit(operation, '')
+}
+
+test('observation: operation documents hold identities, digests, offsets, codes and store references only', (t) => {
+  const guide = cases.get('guide.md')
+  const edits = [
+    replaceNth(guide.publishedNoteBytes, 'Closing words.', 'Closing words, revised.'),
+    replaceNth(guide.publishedNoteBytes, 'Closing words.', `Closing words and [[${BETA_WIKI}]].`),
+    replaceNth(guide.publishedNoteBytes, 'title: "Field guide"', 'title: "Field manual"'),
+    replaceNth(guide.publishedNoteBytes, '|Alpha topic]] before', '|the alpha]] before'),
+    authoredOf(guide),
+  ]
+  for (const [index, edited] of edits.entries()) {
+    const queued = queueEdit(t, guide, edited)
+    const { operation } = observe(queued, guide)
+    assertOperationCarriesNoText(operation, `edit ${index}`)
+    // A raw path never appears, however it is escaped in JSON.
+    const serialized = JSON.stringify(operation)
+    for (const machinePath of [queued.store.workspaceRoot, queued.store.vaultRoot, os.tmpdir()]) assert.ok(!serialized.includes(JSON.stringify(machinePath).slice(1, -1)), `edit ${index}`)
+  }
+  const { operation } = observe(queueEdit(t, guide, edits[0]), guide)
+  assert.throws(() => assertOperationCarriesNoText({ ...operation, ext: { [EXT]: { ...operation.ext[EXT], excerpt: 'Closing words, revised.' } } }, 'control'), 'mutation control: an operation that quotes the note')
+  assert.throws(() => assertOperationCarriesNoText({ ...operation, ext: { [EXT]: { ...operation.ext[EXT], file: path.join(os.tmpdir(), 'guide.md') } } }, 'control'), 'mutation control: an operation that names a machine path')
 })
