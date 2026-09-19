@@ -1,5 +1,6 @@
 node_modules/
 .atelier-local/
+.atelier-local/obsidian.json
 atelier-output/
 atelier.local.json
 atelier.workspace.local.json
