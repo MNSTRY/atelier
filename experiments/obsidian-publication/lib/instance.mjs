@@ -104,7 +104,8 @@ export class Instance {
   // notes and place the caret. Real typing goes through typeText (CDP input).
   async stimulus(name, notePath, extra = {}) {
     const scripts = {
-      open: `app.workspace.getLeaf(false).openFile(app.vault.getFileByPath(P.path)).then(()=>'ok')`,
+      // Always open in the main window: after a pop-out closes, the "current" leaf can belong to a window that is going away.
+      open: `app.workspace.createLeafInParent(app.workspace.rootSplit,0).openFile(app.vault.getFileByPath(P.path)).then(()=>'ok')`,
       openPopout: `app.workspace.openPopoutLeaf().openFile(app.vault.getFileByPath(P.path)).then(()=>'ok')`,
       closeAll: `(app.workspace.getLeavesOfType('markdown').forEach(l=>l.detach()),'ok')`,
       focusAt: `(()=>{const v=app.workspace.getLeavesOfType('markdown').map(l=>l.view).find(v=>v.file&&v.file.path===P.path&&v.containerEl.ownerDocument===document);app.workspace.setActiveLeaf(v.leaf,{focus:true});v.editor.focus();const at=v.editor.getValue().indexOf(P.anchor);v.editor.setCursor(v.editor.offsetToPos(at+P.anchor.length));return 'ok'})()`,
