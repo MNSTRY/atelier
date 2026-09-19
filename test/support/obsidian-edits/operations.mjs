@@ -51,3 +51,7 @@ export function raceOperation({ round, role, mode }) {
     edited: mode === 'same-edit' ? `edit of round ${round}` : `edit of ${role} in round ${round}`,
   })
 }
+
+// Many offers against one object at once: the same edit from many views.
+export const stormIdentity = (batch) => ({ repoId: 'race-room', nodeId: `race-room:storm-${batch}` })
+export const stormOperation = ({ batch, role, index }) => makeOperation({ workspaceId: 'ws-race', ...stormIdentity(batch), scopeId: `storm-${role}-${index}`, base: 'base shared', edited: 'edit of the storm' })

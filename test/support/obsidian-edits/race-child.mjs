@@ -1,16 +1,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { openObjectStore } from '../../../src/projection/obsidian/edits/index.mjs'
-import { RACE_MODES, raceIdentity, raceOperation } from './operations.mjs'
+import { RACE_MODES, raceIdentity, raceOperation, stormOperation } from './operations.mjs'
 
 // One of two real processes that meet on the same objects. Each round has its
 // own object and starts at an agreed wall-clock instant: this process offers
 // its edit, then tries for the object lease once. While it holds a lease it
 // holds an exclusive file beside the store, which is a second, independent
 // witness that nobody else held the lease at the same time. It prints what it
-// saw as one JSON document and exits.
+// saw as one JSON document and exits. After the rounds both processes append
+// to one object as fast as they can.
 
-const { stateRoot, holdRoot, role, rounds, firstRound, startAt, periodMs, holdMs } = JSON.parse(process.argv[2])
+const { stateRoot, holdRoot, role, rounds, firstRound, startAt, periodMs, holdMs, storm } = JSON.parse(process.argv[2])
 const store = openObjectStore({ stateRoot, workspaceId: 'ws-race', repositoryRoots: [], clock: () => new Date() })
 
 const spinUntil = (instant) => { while (Date.now() < instant) { /* a few milliseconds at most */ } }
@@ -51,4 +52,7 @@ for (let index = 0; index < rounds; index += 1) {
   }
   report.push(seen)
 }
-process.stdout.write(`${JSON.stringify({ role, pid: process.pid, report })}\n`)
+const stormSequences = []
+await waitUntil(Math.max(Date.now() + 50, startAt + rounds * periodMs + 300))
+for (let index = 0; index < storm; index += 1) stormSequences.push(store.observe(stormOperation({ batch: firstRound, role, index })).acknowledgement.sequence)
+process.stdout.write(`${JSON.stringify({ role, pid: process.pid, report, stormSequences })}\n`)

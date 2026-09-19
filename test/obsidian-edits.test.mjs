@@ -44,7 +44,7 @@ import { sha256Digest } from '../src/projection/obsidian/materialize/index.mjs'
 import { createRecoveryStore } from '../src/projection/obsidian/recovery/index.mjs'
 import { observeVaultEdits } from '../src/runtime/obsidian/pending-edits.mjs'
 import { createAbandonmentProof, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
-import { RACE_MODES, digestOf, makeOperation, raceIdentity, raceOperation, resultOf } from './support/obsidian-edits/operations.mjs'
+import { RACE_MODES, digestOf, makeOperation, raceIdentity, raceOperation, resultOf, stormIdentity, stormOperation } from './support/obsidian-edits/operations.mjs'
 import { EXT, WORKSPACE_ID, prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
 
 // Invented fixtures only. Every note under test is the output of the real
@@ -1081,14 +1081,15 @@ test('multi-vault arbitration: two real processes race to observe and to take th
   const holdRoot = path.join(dir, 'holds')
   fs.mkdirSync(holdRoot)
   const roundsPerBatch = Number(process.env.ATELIER_EDIT_RACE_ROUNDS ?? 24)
-  const tally = { rounds: 0, first: { a: 0, b: 0 }, acquired: { a: 0, b: 0 }, refused: { a: 0, b: 0 }, applied: { a: 0, b: 0 }, modes: {}, leaseReasons: {} }
-  const bothSides = () => ['first', 'acquired', 'refused'].every((what) => tally[what].a > 0 && tally[what].b > 0)
+  const stormSize = 30
+  const tally = { rounds: 0, stormsInterleaved: 0, first: { a: 0, b: 0 }, acquired: { a: 0, b: 0 }, refused: { a: 0, b: 0 }, applied: { a: 0, b: 0 }, modes: {}, leaseReasons: {} }
+  const bothSides = () => tally.stormsInterleaved > 0 && ['first', 'acquired', 'refused'].every((what) => tally[what].a > 0 && tally[what].b > 0)
 
   // A run in which one process always wins proves nothing, so batches repeat
   // (at most four) until each process has been first, has taken a lease and
   // has been refused one.
   for (let batch = 0; batch < 4 && !bothSides(); batch += 1) {
-    const shared = { stateRoot, holdRoot, rounds: roundsPerBatch, firstRound: batch * roundsPerBatch, startAt: Date.now() + 2500, periodMs: 150, holdMs: 25 }
+    const shared = { stateRoot, holdRoot, rounds: roundsPerBatch, firstRound: batch * roundsPerBatch, startAt: Date.now() + 2500, periodMs: 150, holdMs: 25, storm: stormSize }
     const reports = await Promise.all(['a', 'b'].map((role) => runRaceChild(t, survivors, { ...shared, role })))
     const store = openObjectStore({ stateRoot, workspaceId: 'ws-race', repositoryRoots: [], clock: () => new Date(ARBITRATION_START) })
     for (let index = 0; index < roundsPerBatch; index += 1) {
@@ -1131,6 +1132,17 @@ test('multi-vault arbitration: two real processes race to observe and to take th
         assert.equal(events.filter((event) => ['apply-intent', 'applied'].includes(event.type)).length, 0, label)
       }
     }
+    // Both processes appending to one object at once: every offer has its own event, in one sequence.
+    const storm = readEventFiles(stateRoot, stormIdentity(shared.firstRound))
+    assert.deepEqual(storm.map((event) => event.type), ['observed', ...Array.from({ length: 2 * stormSize - 1 }, () => 'coalesced')])
+    assert.deepEqual(reports.flatMap((item) => item.stormSequences).sort((left, right) => left - right), storm.map((event) => event.sequence), 'every acknowledged offer is its own event')
+    for (const { role, stormSequences } of reports) {
+      for (const [index, sequence] of stormSequences.entries()) assert.equal(storm[sequence - 1].body.operation.editId, stormOperation({ batch: shared.firstRound, role, index }).editId)
+    }
+    const stormed = store.recoverObject(stormIdentity(shared.firstRound))
+    assert.deepEqual([stormed.state, stormed.operations.length, stormed.operations[0].origins.length], ['pending', 1, 2 * stormSize])
+    const [stormA, stormB] = reports.map((item) => item.stormSequences)
+    if (Math.min(...stormA) < Math.max(...stormB) && Math.min(...stormB) < Math.max(...stormA)) tally.stormsInterleaved += 1
   }
   t.diagnostic(`race tallies: ${JSON.stringify(tally)}`)
   assert.ok(bothSides(), `both sides of every race must occur: ${JSON.stringify(tally)}`)
