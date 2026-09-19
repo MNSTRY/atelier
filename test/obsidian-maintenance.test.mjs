@@ -1633,8 +1633,15 @@ async function inProcessService(t, world, options = {}) {
 
 function assertNothingSensitive(world, texts, bearer) {
   const forbidden = [world.dir, TMP, os.homedir(), process.execPath, REPOSITORY_ROOT, 'Lantern', 'Compass', 'Tide', 'notes/', 'logs/', '.md', 'east-wing', 'west-wing', 'sounding']
+  // A path inside JSON text has its backslashes doubled, so the raw form alone would miss a Windows path. Each word is
+  // looked for raw, as JSON writes it and with forward slashes, in the text and in every key and string value it parses to.
+  const forms = (word) => [...new Set([word, JSON.stringify(word).slice(1, -1), word.replaceAll('\\', '/')])]
+  const strings = (value) => (typeof value === 'string' ? [value] : value !== null && typeof value === 'object' ? Object.entries(value).flatMap(([key, item]) => [key, ...strings(item)]) : [])
   for (const [label, text] of Object.entries(texts)) {
-    for (const word of forbidden) assert.equal(text.includes(word), false, `${label} carries "${word}"`)
+    let parsed = null
+    try { parsed = JSON.parse(text) } catch { parsed = null }
+    const haystacks = [text, ...strings(parsed), ...strings(parsed).map((item) => item.replaceAll('\\', '/'))]
+    for (const word of forbidden) assert.equal(haystacks.some((haystack) => forms(word).some((form) => haystack.includes(form))), false, `${label} carries "${word}"`)
   }
   assert.equal(texts.health.includes(bearer), false, 'health never carries the bearer')
 }
@@ -1675,6 +1682,12 @@ test('health echoes service name, workspace, runtime identifier and PID and noth
 
 test('mutation control: a health answer that names a path fails the disclosure oracle', (t) => {
   const world = makeWorld(t)
+  // A Windows path, on every platform: JSON doubles its backslashes, and a leak may also arrive with forward slashes.
+  const windows = { dir: 'C:\\synthetic\\world' }
+  for (const leaked of ['C:\\synthetic\\world\\state', 'C:/synthetic/world/state']) {
+    assert.throws(() => assertNothingSensitive(windows, { health: JSON.stringify({ stateLocation: leaked }) }, 'unused'), assert.AssertionError, leaked)
+    assert.throws(() => assertNothingSensitive(windows, { health: '{}', status: JSON.stringify({ [leaked]: 1 }) }, 'unused'), assert.AssertionError, leaked)
+  }
   assert.throws(() => assertNothingSensitive(world, { health: JSON.stringify({ stateLocation: world.workspaceRoot() }) }, 'unused'), assert.AssertionError)
   assert.throws(() => assertNothingSensitive(world, { health: '{}', status: JSON.stringify({ heldNotes: ['notes/Tide log--0123456789ab.md'] }) }, 'unused'), assert.AssertionError)
 })
