@@ -356,7 +356,7 @@ function indexSnapshot(canonicalSnapshot) {
 
 // The three set primitives the literal oracles are sensitive to. Production
 // always uses these; test/obsidian-contract.test.mjs substitutes deliberately
-// broken ones through createScopeSelector to prove the oracles can fail.
+// broken ones through createScopeSelectorForOracleTests to prove the oracles can fail.
 export const SCOPE_PRIMITIVES = Object.freeze({
   // Eligibility and audience. Fails closed: only an explicit eligible: true in
   // an enrolled repository with an allowed audience is visible.
@@ -416,7 +416,10 @@ function normalizeExpansion(expansion) {
   return { depth, maxNodes, direction, order }
 }
 
-export function createScopeSelector(primitives = SCOPE_PRIMITIVES) {
+// Test seam only. Substituting isVisible removes the eligibility and audience
+// boundary, so nothing outside test/obsidian-contract.test.mjs may call this;
+// runtime code uses selectScope.
+export function createScopeSelectorForOracleTests(primitives = SCOPE_PRIMITIVES) {
   const { isVisible, difference, hasBudget } = { ...SCOPE_PRIMITIVES, ...primitives }
 
   function evaluate(selector, context, depth) {
@@ -533,7 +536,7 @@ export function createScopeSelector(primitives = SCOPE_PRIMITIVES) {
   }
 }
 
-export const selectScope = createScopeSelector()
+export const selectScope = createScopeSelectorForOracleTests()
 
 // Resolves a title-only wikilink among visible nodes. A title shared by more
 // than one visible node refuses instead of choosing a target.

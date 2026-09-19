@@ -14,7 +14,7 @@ import {
   ObsidianContractRefusal,
   RELATION_TYPES,
   allocateNotePaths,
-  createScopeSelector,
+  createScopeSelectorForOracleTests,
   readObsidianExtSettings,
   resolveTitleLink,
   selectScope,
@@ -451,17 +451,17 @@ test('control: the real selector fails no oracle', () => {
 })
 
 test('mutation: ignoring exclusion fails the exclude oracle', () => {
-  const broken = createScopeSelector({ difference: (base) => base })
+  const broken = createScopeSelectorForOracleTests({ difference: (base) => base })
   assert.deepEqual(failingCases(broken), ['exclude'])
 })
 
 test('mutation: unbounded expansion fails the bounded-expand oracle', () => {
-  const broken = createScopeSelector({ hasBudget: () => true })
+  const broken = createScopeSelectorForOracleTests({ hasBudget: () => true })
   assert.deepEqual(failingCases(broken), ['bounded-expand'])
 })
 
 test('mutation: removing the withheld filter fails every oracle the withheld node can reach', () => {
-  const broken = createScopeSelector({ isVisible: () => true })
+  const broken = createScopeSelectorForOracleTests({ isVisible: () => true })
   assert.deepEqual(failingCases(broken), ['full', 'repo', 'tag', 'union', 'intersection', 'withheld', 'focus'])
 })
 
