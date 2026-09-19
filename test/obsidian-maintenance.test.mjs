@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import childProcess from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs'
+import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { resolveProjectConfig, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
 import { createEditorAdapter, publishView, resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
@@ -13,6 +16,15 @@ import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publicatio
 import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src/runtime/obsidian/engine.mjs'
 import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 import { withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
+import { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } from '../src/runtime/obsidian/lifecycle.mjs'
+import { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
+import { HEALTH_SCHEMA, authorityOf, probeHealth, requestLoopback } from '../src/runtime/obsidian/service-client.mjs'
+import { SERVICE_ENTRY_PATH } from '../src/runtime/obsidian/service-main.mjs'
+import { readLastServiceError, readServiceRecord, readServiceSettings, serviceNameFor, servicePaths, writeServiceRecord, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
+import { MAX_REQUEST_BYTES, SERVER_PRIMITIVES, createServiceServerForOracleTests } from '../src/runtime/obsidian/service-server.mjs'
+import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
+import { buildStartupAdapter } from '../src/runtime/obsidian/startup-adapters.mjs'
+import { TICK_LOOP_PRIMITIVES, createTickLoopForOracleTests } from '../src/runtime/obsidian/tick-loop.mjs'
 import {
   FRESHNESS_STATES, ObsidianMaintenanceRefusal, UNAVAILABLE_APPLY_OPERATION, authorizeAutomaticApply, createFsWatcherFactory, createMaintenanceEngine,
   createMaintenanceExtensions, createMaintenanceStateStore, defaultDataRoot, ensureWorkspaceIdentity, installApplyPolicy, localPointerPath, protectedRoots,
@@ -25,6 +37,13 @@ import {
 // publisher takes its own path. Invented, synthetic content only. No test
 // reads or writes a person's data directory: every engine gets a temporary
 // data root, and the resolver refuses the platform default under the runner.
+//
+// The service lifecycle (sections 15 onward) starts real child processes and
+// binds real sockets, on 127.0.0.1 and an ephemeral port only. Every child is
+// the test entry under fixtures/obsidian/maintenance/, whose editor adapter
+// reports that no app runs; the production entry is only ever started without
+// an adapter, which it refuses. Every PID a test causes is recorded and killed
+// in teardown, and the last test of the file asserts that none is left.
 
 // The publisher refuses outright where no atomic exchange exists (Windows
 // today), so every case that needs a publication is skipped there.
@@ -86,7 +105,7 @@ function listing(directory) {
 // One temporary project, one temporary data root, one controllable clock.
 function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual', audienceAllow: ['team'] } } = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-maintenance-'))
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
   const projectDir = path.join(dir, 'project')
   const dataRoot = path.join(dir, 'data')
   for (const [relative, content] of Object.entries(FILES)) {
@@ -103,7 +122,7 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
   const loadProject = () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: projectDir, env, writeLocalState: false })
   let nowMs = START
   const world = {
-    dir, projectDir, dataRoot, configPath, loadProject,
+    dir, projectDir, dataRoot, configPath, loadProject, env,
     clock: () => new Date(nowMs),
     advance: (ms) => { nowMs += ms },
     calls: { buildGraph: 0, prepareView: 0, publishView: [] },
@@ -1254,4 +1273,911 @@ test('the engine refuses to be built without its seams, and ticks do not overlap
   assert.deepEqual([one.state, two.state].sort(), ['busy', 'disabled'])
   const store = createMaintenanceStateStore({ workspaceRoot: world.dataRoot, workspaceId: WORKSPACE_ID })
   assert.equal(store.exists(), false)
+})
+
+// ---------------------------------------------------------------------------
+// 15. The tick loop: no overlap, errors survived, bounded backoff
+// ---------------------------------------------------------------------------
+
+const turn = () => new Promise((resolve) => { setImmediate(resolve) })
+
+function handTimers() {
+  const pending = []
+  return {
+    pending,
+    setTimer: (fn, delay) => { const handle = { fn, delay }; pending.push(handle); return handle },
+    clearTimer: (handle) => { const at = pending.indexOf(handle); if (at >= 0) pending.splice(at, 1) },
+    fire() { const handle = pending.shift(); handle.fn(); return handle.delay },
+  }
+}
+
+async function assertLoopSurvivesAnError(makeLoop) {
+  const timers = handTimers()
+  const outcomes = []
+  let calls = 0
+  const loop = makeLoop({
+    intervalMs: 1000, maxBackoffMs: 4000, setTimer: timers.setTimer, clearTimer: timers.clearTimer, onOutcome: (outcome) => { outcomes.push(outcome) },
+    tick: async () => { calls += 1; if (calls === 2) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); return { state: 'ticked', call: calls } },
+  })
+  loop.start()
+  await turn()
+  assert.deepEqual([calls, timers.pending.map((handle) => handle.delay)], [1, [1000]], 'one tick, then one timer at the interval')
+  timers.fire()
+  await turn()
+  assert.deepEqual([outcomes[1].ok, outcomes[1].error.code, outcomes[1].consecutiveFailures], [false, 'ENOSPC', 1], 'the error is handed over, not thrown away')
+  assert.deepEqual(timers.pending.map((handle) => handle.delay), [2000], 'the loop goes on, later')
+  timers.fire()
+  await turn()
+  assert.deepEqual([calls, outcomes[2].ok, outcomes[2].report.call, outcomes[2].consecutiveFailures], [3, true, 3, 0], 'the next tick proceeds')
+  assert.deepEqual(timers.pending.map((handle) => handle.delay), [1000], 'one success returns the loop to its interval')
+  await loop.stop()
+  assert.deepEqual(timers.pending, [], 'a stopped loop leaves no timer')
+}
+
+test('the tick loop survives a tick that throws: the error is recorded, the next tick proceeds, and the backoff is bounded', async () => {
+  await assertLoopSurvivesAnError((options) => createTickLoopForOracleTests(options))
+  const timers = handTimers()
+  const loop = createTickLoopForOracleTests({ intervalMs: 1000, maxBackoffMs: 4000, setTimer: timers.setTimer, clearTimer: timers.clearTimer, tick: async () => { throw new Error('always') } })
+  loop.start()
+  const delays = []
+  for (let round = 0; round < 6; round += 1) { await turn(); delays.push(timers.fire()) }
+  assert.deepEqual(delays, [2000, 4000, 4000, 4000, 4000, 4000], 'a failure that stays is retried slowly, never in a tight loop and never past the ceiling')
+  await loop.stop()
+  assert.throws(() => createTickLoopForOracleTests({ tick: async () => {}, intervalMs: 1000, maxBackoffMs: 10 }), TypeError)
+})
+
+test('mutation control: a loop that ends on the first error fails the survival oracle', async () => {
+  await assert.rejects(assertLoopSurvivesAnError((options) => createTickLoopForOracleTests(options, { ...TICK_LOOP_PRIMITIVES, continuesAfterError: () => false })), assert.AssertionError)
+})
+
+async function assertTicksNeverOverlap(makeLoop) {
+  const timers = handTimers()
+  let inside = 0
+  let most = 0
+  let calls = 0
+  const gates = []
+  const loop = makeLoop({
+    intervalMs: 1000, setTimer: timers.setTimer, clearTimer: timers.clearTimer,
+    tick: async () => { calls += 1; const call = calls; inside += 1; most = Math.max(most, inside); await new Promise((resolve) => { gates.push(resolve) }); inside -= 1; return { call } },
+  })
+  loop.start()
+  await turn()
+  assert.deepEqual([calls, timers.pending.length], [1, 0], 'no timer runs while a tick is in flight')
+  const [first, second] = [loop.tickNow(), loop.tickNow()]
+  await turn()
+  assert.equal(calls, 1, 'a request during a tick does not start another')
+  gates.shift()()
+  await turn()
+  assert.equal(calls, 2, 'one follow-up tick answers everyone who asked meanwhile')
+  gates.shift()()
+  assert.deepEqual([(await first).report.call, (await second).report.call], [2, 2], 'and it started after they asked')
+  assert.equal(most, 1, 'never two ticks at once')
+  const stopping = loop.tickNow()
+  await turn()
+  const stopped = loop.stop()
+  gates.shift()()
+  await stopped
+  assert.equal((await stopping).report.call, 3, 'stop lets the tick in flight finish')
+  assert.deepEqual([(await loop.tickNow()).stopped, timers.pending.length, inside], [true, 0, 0])
+}
+
+test('ticks never overlap: the interval, tick-now and stop all wait for the tick in flight', async () => {
+  await assertTicksNeverOverlap((options) => createTickLoopForOracleTests(options))
+})
+
+test('mutation control: a scheduler that starts a tick on every request fails the overlap oracle', async () => {
+  const eager = (options) => { const loop = createTickLoopForOracleTests(options); return { ...loop, tickNow: async () => ({ ok: true, report: await options.tick() }) } }
+  await assert.rejects(assertTicksNeverOverlap(eager), assert.AssertionError)
+})
+
+// ---------------------------------------------------------------------------
+// 16. The private engine lock
+// ---------------------------------------------------------------------------
+
+const SPAWNED = new Set()
+const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' } }
+const hardKill = (pid) => { try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ } }
+const iso = (ms) => new Date(ms).toISOString()
+
+async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condition' } = {}) {
+  const until = Date.now() + timeoutMs
+  for (;;) {
+    const value = await check()
+    if (value) return value
+    if (Date.now() > until) throw new Error(`timed out waiting for ${label}`)
+    await new Promise((resolve) => { setTimeout(resolve, everyMs) })
+  }
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.once('error', reject)
+    server.listen({ host: '127.0.0.1', port: 0 }, () => { const { port } = server.address(); server.close(() => resolve(port)) })
+  })
+}
+
+// A process that does nothing, stands for "some unrelated program" and is killed in teardown.
+function sleeper(t) {
+  const child = childProcess.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
+  SPAWNED.add(child.pid)
+  t.after(() => hardKill(child.pid))
+  return child
+}
+
+const exitedPid = () => childProcess.spawnSync(process.execPath, ['-e', ''], { windowsHide: true }).pid
+
+async function listenOn(t, port, handler) {
+  const server = http.createServer(handler)
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: '127.0.0.1', port }, resolve) })
+  t.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections() }))
+  return server
+}
+
+const healthOf = (body) => (request, response) => { response.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' }); response.end(JSON.stringify(typeof body === 'function' ? body(request) : body)) }
+
+function lockWorld(t) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-maintenance-lock-')))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const directory = path.join(root, ENGINE_LOCK_DIRECTORY)
+  const ticket = (overrides = {}) => ({ schema: LOCK_TICKET_SCHEMA, workspaceId: 'ws-lock', purpose: 'maintenance-engine', pid: process.pid, machine: machineDigest(), nonce: randomBytes(16).toString('hex'), acquiredAt: iso(START), service: null, ...overrides })
+  return {
+    root, directory, ticket,
+    plant(generation, document) { fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, `${String(generation).padStart(12, '0')}.json`), typeof document === 'string' ? document : JSON.stringify(document)) },
+    acquire: (proveAbandoned = createAbandonmentProof({ probe: (address) => probeHealth({ ...address, timeoutMs: 400 }) })) => acquirePrivateGenerationLock({ workspaceRoot: root, directory, workspaceId: 'ws-lock', purpose: 'maintenance-engine', clock: () => new Date(START), proveAbandoned }),
+  }
+}
+
+test('the engine lock: one holder, released and pruned, and taken from a dead holder only', async (t) => {
+  const lock = lockWorld(t)
+  const first = await lock.acquire()
+  assert.deepEqual([first.acquired, first.generation], [true, 1])
+  const contender = await lock.acquire()
+  assert.deepEqual([contender.acquired, contender.reason, contender.holder.pid], [false, 'held-by-this-process', process.pid])
+  assert.equal(first.release(), true)
+  assert.equal(first.release(), false, 'a release happens once')
+  for (let round = 0; round < 5; round += 1) { const held = await lock.acquire(); assert.equal(held.acquired, true); held.release() }
+  assert.deepEqual(fs.readdirSync(lock.directory).sort(), ['000000000006.json', '000000000006.released'], 'a lock taken on every tick does not grow')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(lock.directory, '000000000006.json')).mode & 0o777, 0o600)
+
+  // A holder that never released and whose process is gone.
+  lock.plant(9, lock.ticket({ pid: exitedPid() }))
+  const inspected = await inspectPrivateGenerationLock({ directory: lock.directory, workspaceId: 'ws-lock' })
+  assert.deepEqual([inspected.available, inspected.reason], [true, 'holder-process-gone'])
+  const taken = await lock.acquire()
+  assert.deepEqual([taken.acquired, taken.generation], [true, 10])
+  taken.release()
+})
+
+async function assertLiveHoldersKeepTheLock(t, acquireWith) {
+  const unrelated = sleeper(t)
+  const closedPort = await freePort()
+  const answering = await freePort()
+  const silent = await freePort()
+  await listenOn(t, answering, healthOf({ schema: HEALTH_SCHEMA, serviceName: 'atelier-obsidian-ws-lock', workspaceId: 'ws-lock', runtimeId: 'rt-holder', pid: unrelated.pid, host: '127.0.0.1', port: answering, executableDigest: digest('entry') }))
+  await listenOn(t, silent, () => { /* accepts, never answers */ })
+  const service = (port, runtimeId = 'rt-holder') => ({ host: '127.0.0.1', port, runtimeId })
+  const cases = [
+    ['a live process that recorded no health address', { pid: unrelated.pid }, false, 'live-process-unproven'],
+    ['a service that answers health as itself', { pid: unrelated.pid, service: service(answering) }, false, 'holder-answers-health'],
+    ['a service whose address accepts and does not answer in time', { pid: unrelated.pid, service: service(silent) }, false, 'live-process-unproven'],
+    ['a holder on another machine', { pid: exitedPid(), machine: 'f'.repeat(64) }, false, 'held-on-another-machine'],
+    ['a service whose address is closed: the PID is somebody else now', { pid: unrelated.pid, service: service(closedPort) }, true, null],
+    ['a service whose address answers as another runtime', { pid: unrelated.pid, service: service(answering, 'rt-earlier') }, true, null],
+  ]
+  for (const [label, overrides, acquired, reason] of cases) {
+    const lock = lockWorld(t)
+    lock.plant(3, lock.ticket(overrides))
+    const result = await acquireWith(lock)
+    assert.deepEqual([result.acquired, result.reason ?? null], [acquired, reason], label)
+    if (result.acquired) result.release()
+  }
+  for (const [label, plant, reason] of [['an unknown file', (lock) => { lock.plant(1, lock.ticket()); fs.writeFileSync(path.join(lock.directory, 'notes.txt'), 'x') }, 'unknown-lock-file'], ['a malformed ticket', (lock) => lock.plant(2, '{"pid":1}'), 'unreadable-lock-ticket'], ['a ticket of another workspace', (lock) => lock.plant(2, lock.ticket({ workspaceId: 'ws-another', pid: exitedPid() })), 'unreadable-lock-ticket']]) {
+    const lock = lockWorld(t)
+    plant(lock)
+    const before = listing(lock.directory)
+    const result = await acquireWith(lock)
+    assert.deepEqual([result.acquired, result.reason], [false, reason], label)
+    assert.deepEqual(listing(lock.directory), before, `${label} is left for a person, untouched`)
+  }
+  assert.equal(isAlive(unrelated.pid), true, 'no holder was ever signalled')
+}
+
+test('the engine lock is taken from a live holder only with proof: a closed or differently answering service address; everything else needs a person', async (t) => {
+  await assertLiveHoldersKeepTheLock(t, (lock) => lock.acquire())
+})
+
+test('mutation control: a takeover rule that trusts a PID number alone fails the lock oracle', async (t) => {
+  await assert.rejects(assertLiveHoldersKeepTheLock(t, (lock) => lock.acquire(async () => ({ abandoned: true, reason: 'assumed' }))), assert.AssertionError)
+})
+
+const REFUSED_PUBLICATION = { state: 'refused', refusal: { code: 'exchange-unsupported-platform', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
+
+async function assertSecondEngineIsExcluded(world, primitives) {
+  let open
+  const gate = new Promise((resolve) => { open = resolve })
+  let entered
+  const inside = new Promise((resolve) => { entered = resolve })
+  const first = world.engine({ primitives, seams: { publishView: async () => { entered(); await gate; return REFUSED_PUBLICATION } } })
+  const second = world.engine({ primitives, seams: { publishView: async () => REFUSED_PUBLICATION } })
+  const running = first.tick()
+  await inside
+  const stateBefore = listing(path.join(world.workspaceRoot(), 'state', 'maintenance'))
+  const report = await second.tick()
+  const stateAfter = listing(path.join(world.workspaceRoot(), 'state', 'maintenance'))
+  open()
+  await running
+  assert.deepEqual([report.state, report.reason, report.lock?.reason], ['busy', 'engine-lock-held', 'held-by-this-process'])
+  assert.deepEqual(world.calls.publishView.length, 1, 'the excluded engine reached no seam')
+  assert.deepEqual(stateAfter, stateBefore, 'and wrote no state while the other engine was ticking')
+  assert.equal((await second.tick()).state, 'ticked', 'once the first tick ends the second engine ticks')
+}
+
+test('two engines cannot tick one workspace together: the second reports busy and writes nothing', async (t) => {
+  await assertSecondEngineIsExcluded(makeWorld(t), ENGINE_PRIMITIVES)
+})
+
+test('mutation control: an engine without the lock fails the exclusion oracle', async (t) => {
+  await assert.rejects(assertSecondEngineIsExcluded(makeWorld(t), { ...ENGINE_PRIMITIVES, acquireEngineLock: async () => ({ acquired: true, release() {} }) }), assert.AssertionError)
+})
+
+// ---------------------------------------------------------------------------
+// 17. The listener: four fixed operations, loopback only, credentialed mutation
+// ---------------------------------------------------------------------------
+
+function raw({ port, method = 'GET', route = '/health', headers = {}, body = null }) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ host: '127.0.0.1', port, method, path: route, setHost: false, agent: false, headers: { Connection: 'close', ...(body === null ? {} : { 'Content-Length': Buffer.byteLength(body) }), ...headers } }, (response) => {
+      const chunks = []
+      response.on('data', (chunk) => chunks.push(chunk))
+      response.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); let parsed = null; try { parsed = JSON.parse(text) } catch { parsed = null } resolve({ statusCode: response.statusCode, text, body: parsed }) })
+    })
+    request.on('error', reject)
+    request.end(body ?? undefined)
+  })
+}
+
+async function assertOnlyAuthorisedRequestsAct(t, primitives) {
+  const port = await freePort()
+  const bearer = randomBytes(32).toString('base64url')
+  const calls = { status: 0, tick: 0, stop: 0 }
+  const identity = { serviceName: 'atelier-obsidian-ws-listener', workspaceId: 'ws-listener', runtimeId: 'rt-listener', pid: process.pid, host: '127.0.0.1', port, executableDigest: digest('entry'), startedAt: iso(START) }
+  const listener = createServiceServerForOracleTests({ identity, bearer, operations: { healthStatus: () => 'healthy', status: () => { calls.status += 1; return { ok: true } }, tick: async () => { calls.tick += 1; return { ok: true } }, stop: async () => { calls.stop += 1 } } }, primitives)
+  await listener.listen()
+  t.after(() => listener.close())
+  const Host = authorityOf('127.0.0.1', port)
+  const authorised = { Host, Authorization: `Bearer ${bearer}` }
+  const named = JSON.stringify({ runtimeId: 'rt-listener' })
+  const refused = [
+    ['no bearer', { method: 'POST', route: '/stop', headers: { Host }, body: named }, 401],
+    ['a wrong bearer', { method: 'POST', route: '/tick', headers: { Host, Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }, body: named }, 401],
+    ['the bearer under another scheme', { method: 'POST', route: '/stop', headers: { Host, Authorization: `Basic ${bearer}` }, body: named }, 401],
+    ['status without a bearer', { route: '/status', headers: { Host } }, 401],
+    ['GET on stop', { route: '/stop', headers: authorised }, 405],
+    ['POST on status', { method: 'POST', route: '/status', headers: authorised, body: named }, 405],
+    ['DELETE on tick', { method: 'DELETE', route: '/tick', headers: authorised }, 405],
+    ['an oversized payload', { method: 'POST', route: '/stop', headers: authorised, body: JSON.stringify({ runtimeId: 'rt-listener', padding: 'x'.repeat(MAX_REQUEST_BYTES) }) }, 413],
+    ['a payload that is not JSON', { method: 'POST', route: '/stop', headers: authorised, body: 'stop' }, 400],
+    ['a payload naming another runtime', { method: 'POST', route: '/stop', headers: authorised, body: JSON.stringify({ runtimeId: 'rt-earlier' }) }, 409],
+    ['a payload with anything else in it', { method: 'POST', route: '/tick', headers: authorised, body: JSON.stringify({ runtimeId: 'rt-listener', command: 'anything' }) }, 409],
+    ['a hostname in Host', { method: 'POST', route: '/stop', headers: { ...authorised, Host: `localhost:${port}` }, body: named }, 403],
+    ['a foreign Host', { method: 'POST', route: '/stop', headers: { ...authorised, Host: `maintenance.invalid:${port}` }, body: named }, 403],
+    ['Host without the port', { method: 'POST', route: '/stop', headers: { ...authorised, Host: '127.0.0.1' }, body: named }, 403],
+    ['a cross-site Origin', { method: 'POST', route: '/stop', headers: { ...authorised, Origin: 'http://maintenance.invalid' }, body: named }, 403],
+    ['Sec-Fetch-Site: cross-site', { method: 'POST', route: '/tick', headers: { ...authorised, 'Sec-Fetch-Site': 'cross-site' }, body: named }, 403],
+    ['Sec-Fetch-Site: same-site', { method: 'POST', route: '/tick', headers: { ...authorised, 'Sec-Fetch-Site': 'same-site' }, body: named }, 403],
+    ['a cross-site read of health', { route: '/health', headers: { Host, Origin: 'http://maintenance.invalid' } }, 403],
+    ['an unknown path', { route: '/files/notes', headers: authorised }, 404],
+    ['a query on a known path', { method: 'POST', route: '/stop?force=1', headers: authorised, body: named }, 404],
+    ['a path that climbs', { method: 'POST', route: '/../stop', headers: authorised, body: named }, 404],
+    ['an evaluation path', { method: 'POST', route: '/eval', headers: authorised, body: named }, 404],
+  ]
+  for (const [label, request, statusCode] of refused) assert.equal((await raw({ port, ...request })).statusCode, statusCode, label)
+  assert.deepEqual(calls, { status: 0, tick: 0, stop: 0 }, 'no refused request reached an operation')
+
+  const health = await raw({ port, headers: { Host } })
+  assert.deepEqual([health.statusCode, Object.keys(health.body).sort()], [200, ['executableDigest', 'host', 'pid', 'port', 'runtimeId', 'schema', 'serviceName', 'startedAt', 'status', 'workspaceId']])
+  assert.equal(health.text.includes(bearer), false)
+  assert.equal((await raw({ port, route: '/status', headers: authorised })).statusCode, 200)
+  assert.equal((await raw({ port, method: 'POST', route: '/tick', headers: { ...authorised, Origin: `http://${Host}`, 'Sec-Fetch-Site': 'same-origin' }, body: named })).statusCode, 200)
+  assert.deepEqual((await raw({ port, method: 'POST', route: '/stop', headers: authorised, body: named })).body, { stopping: true, runtimeId: 'rt-listener', pid: process.pid })
+  await waitFor(() => calls.stop === 1, { label: 'the stop operation' })
+  assert.deepEqual(calls, { status: 1, tick: 1, stop: 1 })
+}
+
+test('the listener refuses everything but its four operations: credential, method, payload size, Host, Origin and path', async (t) => {
+  await assertOnlyAuthorisedRequestsAct(t, SERVER_PRIMITIVES)
+  assert.throws(() => createServiceServerForOracleTests({ identity: { host: '0.0.0.0', port: 4000 }, bearer: 'x'.repeat(43), operations: {} }), /literal loopback/)
+  assert.throws(() => createServiceServerForOracleTests({ identity: { host: 'localhost', port: 4000 }, bearer: 'x'.repeat(43), operations: {} }), /literal loopback/)
+  await assert.rejects(async () => requestLoopback({ host: 'localhost', port: 4000 }), (error) => error.code === 'service-address-not-loopback')
+  await assert.rejects(async () => probeHealth({ host: '0.0.0.0', port: 4000 }), (error) => error.code === 'service-address-not-loopback')
+  assert.equal(authorityOf('::1', 4000), '[::1]:4000')
+})
+
+for (const [label, broken] of [['accepts any bearer', { bearerMatches: () => true }], ['accepts any Host', { hostMatches: () => true }], ['accepts any origin', { originAllowed: () => true }], ['reads payloads of any size', { maxRequestBytes: 1024 * 1024 }]]) {
+  test(`mutation control: a listener that ${label} fails the request oracle`, async (t) => {
+    await assert.rejects(assertOnlyAuthorisedRequestsAct(t, { ...SERVER_PRIMITIVES, ...broken }), assert.AssertionError)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 18. The service, in this process: health, status, tick errors, consent
+// ---------------------------------------------------------------------------
+
+const REPOSITORY_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'maintenance', 'service-entry.mjs')
+const TEST_LAUNCHER = path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'maintenance', 'launcher.mjs')
+const CONSENT = { actor: 'test-suite', coverage: 'service' }
+const IDLE_INTERVAL = 60 * 60 * 1000
+
+function writeSettings(world, port, coverage = 'service') {
+  return writeServiceSettings({ workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID, settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: iso(START), actor: CONSENT.actor, coverage }, updatedAt: iso(START) } })
+}
+
+const recordOf = (world) => readServiceRecord({ workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID })
+const callService = (record, method, route, payload = null) => requestLoopback({ host: record.host, port: record.port, method, path: route, bearer: record.ext.bearer, payload, timeoutMs: 30000 })
+const tickService = (record) => callService(record, 'POST', '/tick', { runtimeId: record.runtimeId })
+
+async function inProcessService(t, world, options = {}) {
+  const port = await freePort()
+  writeSettings(world, port, options.coverage)
+  const { coverage: _coverage, engineOptions = {}, ...rest } = options
+  const service = await runMaintenanceService({
+    loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, adapterFactory: absentAdapter, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, clock: world.clock,
+    engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }), ...engineOptions }, ...rest,
+  })
+  t.after(() => service.shutdown('test-teardown'))
+  return { service, port, record: recordOf(world) }
+}
+
+function assertNothingSensitive(world, texts, bearer) {
+  const forbidden = [world.dir, TMP, os.homedir(), process.execPath, REPOSITORY_ROOT, 'Lantern', 'Compass', 'Tide', 'notes/', 'logs/', '.md', 'east-wing', 'west-wing', 'sounding']
+  for (const [label, text] of Object.entries(texts)) {
+    for (const word of forbidden) assert.equal(text.includes(word), false, `${label} carries "${word}"`)
+  }
+  assert.equal(texts.health.includes(bearer), false, 'health never carries the bearer')
+}
+
+test('health echoes service name, workspace, runtime identifier and PID and nothing sensitive; status summarises without a path or a title', async (t) => {
+  const world = makeWorld(t)
+  const { service, port, record } = await inProcessService(t, world, EXCHANGE_HERE ? {} : { engineOptions: { seams: { publishView: async () => REFUSED_PUBLICATION } } })
+  await service.tickNow()
+  if (EXCHANGE_HERE) {
+    // A held note, so that status has a held path it must not show.
+    fs.appendFileSync(world.noteFile('west-wing:tide'), EDITED_TAIL)
+    fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nA line added at the source.\n')
+    world.advance(1000)
+    assert.equal((await tickService(record)).body.scopes[0].state, 'held-for-your-edit')
+  }
+  const health = await raw({ port, headers: { Host: authorityOf('127.0.0.1', port) } })
+  assert.deepEqual(
+    { ...health.body, startedAt: null },
+    { schema: HEALTH_SCHEMA, serviceName: serviceNameFor(WORKSPACE_ID), workspaceId: WORKSPACE_ID, runtimeId: record.runtimeId, pid: process.pid, host: '127.0.0.1', port, executableDigest: digest(fs.readFileSync(TEST_SERVICE_ENTRY)), startedAt: null, status: 'healthy' },
+  )
+  const status = await callService(record, 'GET', '/status')
+  assert.deepEqual([status.statusCode, status.body.service.runtimeId, status.body.freshness.scopes.map((scope) => scope.scopeId)], [200, record.runtimeId, ['scope-whole']])
+  if (EXCHANGE_HERE) assert.deepEqual([status.body.freshness.scopes[0].heldNoteCount, 'heldNotes' in status.body.freshness.scopes[0]], [1, false], 'held notes are counted, not named')
+  const ticked = await tickService(record)
+  assertNothingSensitive(world, { health: health.text, status: JSON.stringify(status.body), tick: JSON.stringify(ticked.body) }, record.ext.bearer)
+  assert.equal(JSON.stringify(status.body).includes(record.ext.bearer), false)
+
+  // The record: the contract's shape, owner-only, in private state, outside the project and every vault.
+  const file = servicePaths(world.workspaceRoot()).record
+  assert.deepEqual([record.schema, record.host, record.serviceName, record.stateLocation, record.consent.actor, record.executable.path], ['atelier-obsidian-service-state/v1', '127.0.0.1', serviceNameFor(WORKSPACE_ID), path.join(world.workspaceRoot(), 'state'), CONSENT.actor, fs.realpathSync(TEST_SERVICE_ENTRY)])
+  assert.match(record.ext.bearer, /^[A-Za-z0-9_-]{43}$/)
+  assert.equal(file.startsWith(world.projectDir) || file.startsWith(path.join(world.workspaceRoot(), 'vaults')), false)
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700)
+  }
+})
+
+test('mutation control: a health answer that names a path fails the disclosure oracle', (t) => {
+  const world = makeWorld(t)
+  assert.throws(() => assertNothingSensitive(world, { health: JSON.stringify({ stateLocation: world.workspaceRoot() }) }, 'unused'), assert.AssertionError)
+  assert.throws(() => assertNothingSensitive(world, { health: '{}', status: JSON.stringify({ heldNotes: ['notes/Tide log--0123456789ab.md'] }) }, 'unused'), assert.AssertionError)
+})
+
+test('unauthorised requests to the running service change nothing: no tick, no stop, no file', async (t) => {
+  const world = makeWorld(t)
+  const { service, port, record } = await inProcessService(t, world, { engineOptions: { seams: { publishView: async () => REFUSED_PUBLICATION } } })
+  await service.tickNow()
+  const Host = authorityOf('127.0.0.1', port)
+  const named = JSON.stringify({ runtimeId: record.runtimeId })
+  const before = { files: listing(world.dir), ticks: (await callService(record, 'GET', '/status')).body.loop.ticks }
+  const attempts = [
+    { method: 'POST', route: '/stop', headers: { Host }, body: named },
+    { method: 'POST', route: '/tick', headers: { Host, Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }, body: named },
+    { method: 'GET', route: '/stop', headers: { Host, Authorization: `Bearer ${record.ext.bearer}` } },
+    { method: 'POST', route: '/stop', headers: { Host, Authorization: `Bearer ${record.ext.bearer}` }, body: JSON.stringify({ runtimeId: record.runtimeId, padding: 'x'.repeat(MAX_REQUEST_BYTES) }) },
+    { method: 'POST', route: '/stop', headers: { Host: `maintenance.invalid:${port}`, Authorization: `Bearer ${record.ext.bearer}` }, body: named },
+    { method: 'POST', route: '/tick', headers: { Host, Authorization: `Bearer ${record.ext.bearer}`, Origin: 'http://maintenance.invalid' }, body: named },
+  ]
+  for (const attempt of attempts) assert.ok((await raw({ port, ...attempt })).statusCode >= 400, JSON.stringify(attempt.route))
+  const status = await callService(record, 'GET', '/status')
+  assert.deepEqual([status.body.service.status, status.body.loop.ticks, status.body.loop.stopped], ['healthy', before.ticks, false])
+  assert.deepEqual(listing(world.dir), before.files, 'nothing was created, changed or removed')
+})
+
+async function assertTickErrorIsSurvived(t, world, createEngine) {
+  const failing = { on: true }
+  const seams = { buildGraph: (input) => { if (failing.on) throw Object.assign(new Error(`ENOSPC: no space left on device, write '${path.join(world.dir, 'somewhere')}'`), { code: 'ENOSPC' }); return DEFAULT.buildGraph(input) }, publishView: async () => REFUSED_PUBLICATION }
+  const lines = []
+  const { service, record } = await inProcessService(t, world, { engineOptions: { seams }, log: (entry) => lines.push(entry), ...(createEngine ? { createEngine } : {}) })
+  const failed = await waitFor(async () => { const { body } = await callService(record, 'GET', '/status'); return body.lastTick?.state === 'failed' ? body : null }, { label: 'the failed tick' })
+  assert.deepEqual([failed.service.status, failed.lastError.code, failed.lastError.consecutiveFailures, failed.lastError.resolvedAt, failed.loop.stopped], ['degraded', 'ENOSPC', 1, null, false])
+  const persisted = readLastServiceError({ workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID })
+  assert.deepEqual([persisted.code, persisted.name, persisted.runtimeId, persisted.totalFailures], ['ENOSPC', 'Error', record.runtimeId, 1], 'the last error is persisted in private state')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(servicePaths(world.workspaceRoot()).lastError).mode & 0o777, 0o600)
+  assert.equal(JSON.stringify([failed, persisted]).includes(world.dir), false, 'the message, which carries a path, goes to the private log only')
+  assert.ok(lines.some((line) => line.event === 'tick-failed' && line.message.includes('ENOSPC')))
+
+  failing.on = false
+  world.advance(1000)
+  const next = await tickService(record)
+  assert.deepEqual([next.statusCode, next.body.ok, next.body.state], [200, true, 'ticked'], 'the next tick proceeds')
+  const after = (await callService(record, 'GET', '/status')).body
+  assert.deepEqual([after.service.status, after.lastError.code, after.lastError.consecutiveFailures, after.lastError.resolvedAt !== null], ['healthy', 'ENOSPC', 0, true])
+  return service
+}
+
+test('a tick error nobody typed (ENOSPC inside a seam) is recorded in private state and the next tick proceeds', async (t) => {
+  await assertTickErrorIsSurvived(t, makeWorld(t))
+})
+
+test('mutation control: an engine that a thrown error poisons fails the tick-error oracle', async (t) => {
+  const poisonable = (options) => {
+    const engine = createMaintenanceEngine(options)
+    let poisoned = false
+    return { stop: () => engine.stop(), tick: async () => { if (poisoned) throw new Error('still broken'); try { return await engine.tick() } catch (error) { poisoned = true; throw error } } }
+  }
+  await assert.rejects(assertTickErrorIsSurvived(t, makeWorld(t), poisonable), assert.AssertionError)
+})
+
+test('the service refuses without its adapter, without settings, under a startup it has no consent for, and beside a running runtime', async (t) => {
+  const world = makeWorld(t)
+  const base = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL }
+  await assert.rejects(runMaintenanceService(base), /adapterFactory/, 'no default adapter: only whoever starts the service may point it at a running app')
+  await assert.rejects(runMaintenanceService({ ...base, adapterFactory: absentAdapter }), (error) => error.code === 'service-settings-absent')
+  const port = await freePort()
+  writeSettings(world, port, 'service')
+  await assert.rejects(runMaintenanceService({ ...base, adapterFactory: absentAdapter, startup: true }), (error) => error.code === 'startup-consent-absent')
+  assert.equal((await probeHealth({ host: '127.0.0.1', port })).kind, 'refused', 'a refused service never listened')
+  assert.equal(recordOf(world), null)
+
+  const running = await inProcessService(t, world, { engineOptions: { seams: { publishView: async () => REFUSED_PUBLICATION } } })
+  await assert.rejects(runMaintenanceService({ ...base, adapterFactory: absentAdapter }), (error) => error.code === 'service-already-running')
+  assert.equal(recordOf(world).runtimeId, running.record.runtimeId, 'the running runtime keeps its record')
+
+  // The production entry, started the only way a test ever starts it: without an adapter. It refuses before it listens or ticks.
+  const other = makeWorld(t)
+  const before = listing(other.dir)
+  for (const extra of [[], ['--adapter=anything-else']]) {
+    const result = childProcess.spawnSync(process.execPath, [SERVICE_ENTRY_PATH, `--project=${other.configPath}`, `--data-root=${other.dataRoot}`, ...extra], { env: other.env, encoding: 'utf8', windowsHide: true })
+    assert.deepEqual([result.status, /service-adapter-not-selected/.test(result.stdout)], [2, true])
+  }
+  assert.deepEqual(listing(other.dir), before)
+})
+
+// ---------------------------------------------------------------------------
+// 19. Lifecycle: start / status / stop with real processes
+// ---------------------------------------------------------------------------
+
+// A world whose services are real children. Every PID is recorded the moment it exists and killed in teardown, pass or fail.
+function serviceWorld(t, options) {
+  const pids = new Set()
+  t.after(() => { for (const pid of pids) hardKill(pid) })
+  const world = makeWorld(t, options)
+  const spawned = []
+  const spawn = (...args) => { const child = childProcess.spawn(...args); pids.add(child.pid); SPAWNED.add(child.pid); spawned.push(child.pid); return child }
+  const base = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, probeTimeoutMs: 1500, spawn }
+  const kills = []
+  return Object.assign(world, {
+    spawned, kills,
+    track(pid) { pids.add(pid); SPAWNED.add(pid) },
+    start: (extra = {}, rules) => startService({ ...base, consent: CONSENT, ...extra }, rules),
+    status: (extra = {}, rules) => serviceStatus({ ...base, ...extra }, rules),
+    stop: (extra = {}, rules) => stopService({ ...base, stopTimeoutMs: 20000, kill: (...args) => { kills.push(args) }, ...extra }, rules),
+    areas: () => ({ staging: listing(path.join(world.workspaceRoot(), 'staging')), recovery: listing(path.join(world.workspaceRoot(), 'recovery')) }),
+    async settled(record) { return waitFor(async () => { const { body } = await callService(record, 'GET', '/status'); return body && body.loop.ticks >= 1 && !body.loop.ticking ? body : null }, { label: 'the first tick of the service' }) },
+    // A record nobody's service wrote, for a PID and a port the test chooses.
+    plantRecord({ port, pid, runtimeId = 'rt-planted' }) {
+      writeSettings(world, port)
+      return writeServiceRecord({
+        workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID,
+        record: {
+          schema: 'atelier-obsidian-service-state/v1', contractVersion: '1.0.0', workspaceId: WORKSPACE_ID, serviceName: serviceNameFor(WORKSPACE_ID), host: '127.0.0.1', port, runtimeId, pid,
+          executable: { path: fs.realpathSync(TEST_SERVICE_ENTRY), digest: digest(fs.readFileSync(TEST_SERVICE_ENTRY)) }, stateLocation: path.join(world.workspaceRoot(), 'state'),
+          health: { status: 'healthy', checkedAt: iso(START) }, consent: { grantedAt: iso(START), ...CONSENT }, ext: { bearer: randomBytes(32).toString('base64url') },
+        },
+      })
+    },
+  })
+}
+
+const healthFor = (record, overrides = {}) => ({ schema: HEALTH_SCHEMA, serviceName: record.serviceName, workspaceId: record.workspaceId, runtimeId: record.runtimeId, pid: record.pid, host: record.host, port: record.port, executableDigest: record.executable.digest, startedAt: iso(START), status: 'healthy', ...overrides })
+
+async function assertStartIsIdempotent(t, rules) {
+  const world = serviceWorld(t)
+  const [first, concurrent] = await Promise.all([world.start({}, rules), world.start({}, rules)])
+  assert.deepEqual([first.state, concurrent.state, [first.started, concurrent.started].sort(), world.spawned.length], ['healthy', 'healthy', [false, true], 1], 'two starts at once create one service')
+  assert.equal(first.record.runtimeId, concurrent.record.runtimeId)
+  const again = await world.start({}, rules)
+  assert.deepEqual([again.started, again.alreadyRunning, again.record.runtimeId, again.record.pid, world.spawned.length], [false, true, first.record.runtimeId, first.record.pid, 1], 'a later start reports the running service and creates nothing')
+  assert.equal((await world.stop()).stopped, true)
+}
+
+test('start is idempotent: two starts at once and a later start all end with one service', async (t) => {
+  await assertStartIsIdempotent(t, LIFECYCLE_PRIMITIVES)
+})
+
+test('mutation control: a start that does not recognise its own running service fails the idempotence oracle', async (t) => {
+  await assert.rejects(assertStartIsIdempotent(t, { ...LIFECYCLE_PRIMITIVES, isOurs: () => false }), assert.AssertionError)
+})
+
+test('start needs consent and a literal loopback address, the record is owner-only, a second service process refuses, and stop removes only the generated record', async (t) => {
+  const world = serviceWorld(t)
+  await assert.rejects(world.start({ consent: undefined }), (error) => error.code === 'startup-consent-required', 'the first start needs an explicit consent')
+  await assert.rejects(world.start({ host: 'localhost' }), (error) => error.code === 'service-address-not-loopback')
+  await assert.rejects(world.start({ host: '0.0.0.0' }), (error) => error.code === 'service-address-not-loopback')
+  assert.deepEqual([(await world.status()).state, world.spawned.length], ['stopped', 0])
+
+  const first = await world.start()
+  const again = await world.status()
+  assert.equal(JSON.stringify([first, again]).includes(recordOf(world).ext.bearer), false, 'what start and status return never carries the bearer')
+
+  const record = recordOf(world)
+  const settings = readServiceSettings({ workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID })
+  assert.deepEqual([record.host, record.port, record.pid, settings.consent.actor], ['127.0.0.1', settings.port, world.spawned[0], CONSENT.actor])
+  assert.deepEqual([(await world.status()).state, (await world.status()).health.runtimeId], ['healthy', record.runtimeId])
+  if (process.platform !== 'win32') for (const file of [servicePaths(world.workspaceRoot()).record, servicePaths(world.workspaceRoot()).settings, servicePaths(world.workspaceRoot()).log]) assert.equal(fs.statSync(file).mode & 0o777, 0o600, file)
+
+  // A second service process for the same workspace, started by hand, refuses; the running one keeps its record.
+  const intruder = childProcess.spawnSync(process.execPath, [TEST_SERVICE_ENTRY, `--project=${world.configPath}`, `--data-root=${world.dataRoot}`, '--runtime-id=rt-intruder'], { env: world.env, encoding: 'utf8', windowsHide: true })
+  assert.deepEqual([intruder.status, /service-already-running/.test(intruder.stdout), recordOf(world).runtimeId], [2, true, record.runtimeId])
+
+  await world.settled(record)
+  if (EXCHANGE_HERE) {
+    fs.appendFileSync(world.noteFile('west-wing:tide'), EDITED_TAIL)
+    assert.equal((await tickService(record)).body.ok, true)
+    assert.equal(world.state('pending-edits.json').edits.length, 1, 'a draft is pending when the service stops')
+  }
+  const kept = () => ({ ...world.areas(), vaults: listing(path.join(world.workspaceRoot(), 'vaults')), maintenance: listing(path.join(world.workspaceRoot(), 'state', 'maintenance')), service: listing(servicePaths(world.workspaceRoot()).directory) })
+  const before = kept()
+  const stopped = await world.stop()
+  assert.deepEqual([stopped.state, stopped.stopped, stopped.refused, stopped.pid], ['stopped', true, false, record.pid])
+  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to be gone' })
+  const after = kept()
+  const { 'runtime.json': _record, ...serviceWithoutRecord } = before.service
+  // The log gains the two lines of the shutdown; everything else is byte-identical.
+  assert.deepEqual({ ...after, service: { ...after.service, 'service.log': null } }, { ...before, service: { ...serviceWithoutRecord, 'service.log': null } }, 'stop removed the generated record and nothing else: drafts, pending edits, recovery and staging are intact')
+  assert.deepEqual(world.kills, [], 'a clean stop signals nothing')
+  assert.deepEqual([(await world.status()).state, (await world.stop()).stopped, (await world.stop()).refused], ['stopped', false, false])
+
+  const restarted = await world.start({ consent: undefined })
+  assert.deepEqual([restarted.started, restarted.record.port, restarted.record.runtimeId !== record.runtimeId], [true, record.port, true], 'the recorded port and consent are reused')
+  assert.equal((await world.stop()).stopped, true)
+})
+
+async function assertServiceOutlivesItsLauncher(t, launcherArgs = []) {
+  const world = serviceWorld(t)
+  const launcher = childProcess.spawn(process.execPath, [TEST_LAUNCHER, `--project=${world.configPath}`, `--data-root=${world.dataRoot}`, ...launcherArgs], { env: world.env, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true })
+  world.track(launcher.pid)
+  let output = ''
+  launcher.stdout.on('data', (chunk) => { output += chunk })
+  const code = await new Promise((resolve) => { launcher.once('exit', resolve) })
+  const reported = JSON.parse(output)
+  if (reported.pid) world.track(reported.pid)
+  assert.deepEqual([code, reported.state, reported.started], [0, 'healthy', true])
+  assert.equal(isAlive(launcher.pid), false, 'the launching command is gone')
+  const status = await world.status()
+  assert.equal(status.state, 'healthy', 'the service outlived the command that started it')
+  assert.deepEqual([status.health.pid, status.health.runtimeId, isAlive(reported.pid)], [reported.pid, reported.runtimeId, true])
+  assert.equal((await world.start()).alreadyRunning, true, 'and another command finds it, idempotently')
+  assert.equal((await world.stop()).stopped, true)
+  await waitFor(() => !isAlive(reported.pid), { label: 'the detached service to be gone' })
+}
+
+test('start survives the launching command: the launcher exits and the service stays healthy', async (t) => {
+  await assertServiceOutlivesItsLauncher(t)
+})
+
+test('mutation control: a service that ends with its launcher fails the survival oracle', async (t) => {
+  await assert.rejects(assertServiceOutlivesItsLauncher(t, ['--stop-before-exit']), assert.AssertionError)
+})
+
+async function assertUnownedListenerIsLeftAlone(t, rules) {
+  const world = serviceWorld(t)
+  for (const [label, handler, answer] of [['a plain web server', (request, response) => { response.end('hello') }, 'foreign'], ['a listener that accepts and never answers', () => {}, 'timeout']]) {
+    const port = await freePort()
+    writeSettings(world, port)
+    const requests = []
+    const server = await listenOn(t, port, (request, response) => { requests.push(`${request.method} ${request.url}`); handler(request, response) })
+    const status = await world.status({ probeTimeoutMs: 400 }, rules)
+    assert.deepEqual([status.state, status.reason, status.answer], ['occupied', 'a-listener-without-a-record', answer], label)
+    await assert.rejects(world.start({ probeTimeoutMs: 400, startTimeoutMs: 8000 }, rules), (error) => error.code === 'service-port-occupied', label)
+    const stopped = await world.stop({ probeTimeoutMs: 400 }, rules)
+    assert.deepEqual([stopped.state, stopped.stopped, stopped.refused], ['occupied', false, true], label)
+    assert.deepEqual([world.spawned.length, world.kills.length, server.listening, recordOf(world)], [0, 0, true, null], `${label}: nothing was started, signalled or recorded`)
+    assert.equal(requests.every((line) => line === 'GET /health'), true, 'only health was ever asked of it')
+  }
+}
+
+test('an unowned listener on the port is occupied: status does not adopt it, start does not take it over, stop does not touch it', async (t) => {
+  await assertUnownedListenerIsLeftAlone(t, LIFECYCLE_PRIMITIVES)
+})
+
+test('mutation control: a start that goes ahead on an occupied port fails the unowned-listener oracle', async (t) => {
+  await assert.rejects(assertUnownedListenerIsLeftAlone(t, { ...LIFECYCLE_PRIMITIVES, refusesOccupied: () => false }), assert.AssertionError)
+})
+
+async function assertWrongIdentityIsNeverOurs(t, rules) {
+  const variants = { runtimeId: 'rt-somebody-else', pid: 1, workspaceId: 'ws-another', serviceName: 'atelier-obsidian-ws-another', executableDigest: digest('another executable'), host: '::1', port: 1 }
+  for (const [field, value] of Object.entries(variants)) {
+    const world = serviceWorld(t)
+    const port = await freePort()
+    const record = world.plantRecord({ port, pid: process.pid })
+    const requests = []
+    await listenOn(t, port, (request, response) => { requests.push(`${request.method} ${request.url}`); healthOf(healthFor(record, { [field]: value }))(request, response) })
+    const status = await world.status({}, rules)
+    assert.deepEqual([status.state, status.reason, status.disagreements], ['occupied', 'health-identity-differs', [field]], field)
+    const stopped = await world.stop({}, rules)
+    assert.deepEqual([stopped.stopped, stopped.refused], [false, true], field)
+    await assert.rejects(world.start({}, rules), (error) => error.code === 'service-port-occupied', field)
+    assert.deepEqual([requests.filter((line) => line !== 'GET /health'), world.kills, world.spawned.length, recordOf(world).runtimeId], [[], [], 0, record.runtimeId], `${field}: only health was asked, nothing signalled, nothing started, the record untouched`)
+  }
+}
+
+test('a health answer with another runtime identifier, PID, workspace, service, executable or address is occupied, and stop refuses', async (t) => {
+  await assertWrongIdentityIsNeverOurs(t, LIFECYCLE_PRIMITIVES)
+})
+
+test('mutation control: a status that compares nothing fails the identity oracle', async (t) => {
+  await assert.rejects(assertWrongIdentityIsNeverOurs(t, { ...LIFECYCLE_PRIMITIVES, disagreements: () => [] }), assert.AssertionError)
+})
+
+test('mutation control: a stop that does not insist on a healthy status fails the identity oracle', async (t) => {
+  await assert.rejects(assertWrongIdentityIsNeverOurs(t, { ...LIFECYCLE_PRIMITIVES, mayStop: () => true }), assert.AssertionError)
+})
+
+async function assertUnrelatedPidSurvives(t, stopWith) {
+  const world = serviceWorld(t)
+  const unrelated = sleeper(t)
+  const record = world.plantRecord({ port: await freePort(), pid: unrelated.pid })
+  const status = await world.status()
+  assert.deepEqual([status.state, status.reason], ['pid-not-ours', 'recorded-pid-is-alive-but-nothing-listens'])
+  const stopped = await stopWith(world, record)
+  assert.deepEqual([stopped.stopped, stopped.refused, stopped.state], [false, true, 'pid-not-ours'])
+  assert.deepEqual(world.kills, [], 'nothing was signalled')
+  // Start replaces the record of a runtime that provably is not serving, and still never touches that PID.
+  const started = await world.start()
+  assert.deepEqual([started.started, started.record.pid !== unrelated.pid, started.record.runtimeId !== record.runtimeId], [true, true, true])
+  assert.equal((await world.stop()).stopped, true)
+  await new Promise((resolve) => { setTimeout(resolve, 200) })
+  assert.equal(isAlive(unrelated.pid), true, 'the unrelated process that happens to have the recorded PID is still running')
+}
+
+test('PID reuse: a record that points at a live unrelated process is not ours; stop refuses and kills nothing', async (t) => {
+  await assertUnrelatedPidSurvives(t, (world) => world.stop())
+})
+
+test('mutation control: a stop that signals the recorded PID fails the PID-reuse oracle', async (t) => {
+  await assert.rejects(assertUnrelatedPidSurvives(t, async (world, record) => { process.kill(record.pid, 'SIGKILL'); return world.stop() }), assert.AssertionError)
+})
+
+function assertRecordRefuses(world, read) {
+  const good = world.plantRecord({ port: 4100, pid: process.pid })
+  const { ext: _ext, ...withoutPrivatePart } = good
+  const broken = [
+    { ...good, surprise: 1 }, { ...good, host: 'localhost' }, { ...good, host: '0.0.0.0' }, { ...good, port: 80 }, { ...good, workspaceId: 'ws-another' }, { ...good, serviceName: 'some-other-service' },
+    { ...good, stateLocation: path.join(world.dir, 'elsewhere') }, { ...good, executable: { ...good.executable, path: 'relative/entry.mjs' } }, withoutPrivatePart, { ...good, ext: { bearer: 'short' } }, { ...good, ext: { ...good.ext, extra: 1 } },
+    { ...good, pid: 0 }, { ...good, runtimeId: 'has spaces' }, { ...good, schema: 'atelier-obsidian-service-state/v2' },
+  ]
+  for (const document of broken) assert.throws(() => read(document), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'invalid-service-record', JSON.stringify(document).slice(0, 120))
+  return broken
+}
+
+test('a malformed or foreign record refuses start, status and stop; it is never repaired, adopted or removed', async (t) => {
+  const world = serviceWorld(t)
+  const file = servicePaths(world.workspaceRoot()).record
+  const read = (document) => { fs.writeFileSync(file, JSON.stringify(document)); return recordOf(world) }
+  const broken = assertRecordRefuses(world, read)
+  for (const bytes of ['not json', JSON.stringify(broken[1]), JSON.stringify(broken[4])]) {
+    fs.writeFileSync(file, bytes)
+    for (const operation of [() => world.status(), () => world.start(), () => world.stop()]) await assert.rejects(operation(), (error) => error.code === 'invalid-service-record')
+    assert.equal(fs.readFileSync(file, 'utf8'), bytes, 'the record is exactly as it was found')
+  }
+  assert.deepEqual([world.spawned.length, world.kills.length], [0, 0])
+})
+
+test('mutation control: a reader that accepts whatever parses fails the record oracle', (t) => {
+  const world = serviceWorld(t)
+  assert.throws(() => assertRecordRefuses(world, (document) => document), assert.AssertionError)
+})
+
+// ---------------------------------------------------------------------------
+// 20. Hard ends: nothing under staging or recovery is ever swept
+// ---------------------------------------------------------------------------
+
+test('a stale record whose PID is gone: status says so, start recovers, and staging and recovery are untouched', async (t) => {
+  const world = serviceWorld(t)
+  const first = await world.start()
+  await world.settled(recordOf(world))
+  hardKill(first.record.pid)
+  await waitFor(() => !isAlive(first.record.pid), { label: 'the killed service to be gone' })
+  const before = { areas: world.areas(), vaults: vaultContent(world) }
+  const status = await world.status()
+  assert.deepEqual([status.state, status.reason, status.record.runtimeId], ['stale-record', 'recorded-pid-is-gone', first.record.runtimeId])
+  const stopped = await world.stop()
+  assert.deepEqual([stopped.stopped, stopped.refused, world.kills.length], [false, true, 0], 'there is nothing proven to stop')
+  const second = await world.start()
+  assert.deepEqual([second.started, second.state, second.record.runtimeId !== first.record.runtimeId, second.record.port], [true, 'healthy', true, first.record.port])
+  await world.settled(recordOf(world))
+  assert.deepEqual({ areas: world.areas(), vaults: vaultContent(world) }, before, 'recovering from a stale record changed no vault, no staging and no recovery entry')
+  assert.equal((await world.stop()).stopped, true)
+})
+
+// What a vault holds for a person: everything but the publisher's own lock bookkeeping, which every publication renews.
+const vaultContent = (world) => Object.fromEntries(Object.entries(listing(path.join(world.workspaceRoot(), 'vaults'))).filter(([name]) => !name.includes('.atelier-publication')))
+
+const digestsUnder = (...directories) => new Map(directories.flatMap((directory) => Object.entries(listing(directory)).filter(([name, value]) => value !== 'directory' && !name.includes('.atelier-publication')).map(([name, value]) => [value, name])))
+
+async function assertHardKillConverges(t, { beforeRestart = () => {} } = {}) {
+  const world = serviceWorld(t)
+  const first = await world.start({ entryArgs: ['--crash-on-publication=2', '--crash-at=before-manifest-commit'] })
+  const record = recordOf(world)
+  assert.equal((await world.settled(record)).freshness.scopes[0].state, 'current')
+  const root = world.workspaceRoot()
+  const notesBefore = vaultContent(world)
+  const generationBefore = world.manifest().generationId
+  const tideBefore = fs.readFileSync(world.noteFile('west-wing:tide'))
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nWritten just before the power went.\n')
+  // This tick publishes, and the process kills itself with the notes exchanged and the manifest not yet committed: the request dies with it.
+  assert.notEqual((await tickService(record)).kind, 'response')
+  await waitFor(() => !isAlive(first.record.pid), { label: 'the service to die mid-publication' })
+  const dead = world.areas()
+  const bytesAtDeath = digestsUnder(world.vault(), path.join(root, 'recovery'))
+  assert.equal(world.manifest().generationId, generationBefore, 'the publication was cut before its manifest was committed')
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /Written just before the power went/, 'with the new note already in the vault')
+  assert.deepEqual([Object.values(dead.recovery).includes(digest(tideBefore)), Object.values(vaultContent(world)).includes(digest(tideBefore))], [true, false], 'and the bytes it displaced in recovery only')
+  assert.equal((await world.status()).state, 'stale-record')
+
+  await beforeRestart(world)
+  const second = await world.start()
+  assert.equal(second.started, true)
+  const settled = await world.settled(recordOf(world))
+  assert.deepEqual([settled.freshness.scopes[0].state, settled.freshness.scopes[0].verified], ['current', true], 'the restarted service converged through the publisher')
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /Written just before the power went/)
+  const notesAfter = vaultContent(world)
+  for (const [name, value] of Object.entries(notesBefore)) if (!name.endsWith(world.notePath('west-wing:tide'))) assert.equal(notesAfter[name], value, `${name} is byte-identical`)
+  const bytesNow = digestsUnder(world.vault(), path.join(root, 'recovery'))
+  for (const [value, name] of bytesAtDeath) assert.ok(bytesNow.has(value), `the bytes of ${name}, in the vault or in recovery at the kill, are still there`)
+  for (const [name, value] of Object.entries(dead.recovery)) if (name.startsWith('objects/')) assert.equal(listing(path.join(root, 'recovery'))[name], value, `${name} is unchanged`)
+  assert.equal((await world.stop()).stopped, true)
+}
+
+test('a hard kill in the middle of a publication, then a restart: the publisher\'s restart recovery converges and no byte is lost', needsExchange, async (t) => {
+  await assertHardKillConverges(t)
+})
+
+test('mutation control: a restart that first clears what the killed publication left fails the hard-kill oracle', needsExchange, async (t) => {
+  await assert.rejects(assertHardKillConverges(t, { beforeRestart: (world) => { for (const area of ['staging', 'recovery']) fs.rmSync(path.join(world.workspaceRoot(), area), { recursive: true, force: true }) } }), assert.AssertionError)
+})
+
+// An unfinished journal with candidates in staging and recovery, and the note it was going to replace edited, so no
+// tick publishes. Across start, ticks, stop, a hard kill, a stale record and another start, not one entry may go.
+async function assertLifecycleLeavesStagingAndRecoveryAlone(world, { afterStop = () => {} } = {}) {
+  await assertUnfinishedJournalIsLeftAlone(world, (options) => world.engine(options), (engine) => () => engine.tick())
+  const before = world.areas()
+  assert.ok(Object.keys(before.staging).length > 0, 'there is something in staging to lose')
+  const check = (label) => {
+    const now = world.areas()
+    assert.deepEqual(now.staging, before.staging, `staging after ${label}`)
+    for (const [name, value] of Object.entries(before.recovery)) assert.equal(now.recovery[name], value, `recovery entry ${name} after ${label}`)
+    const added = Object.keys(now.recovery).filter((name) => !(name in before.recovery))
+    assert.ok(added.every((name) => /^objects\/[0-9a-f]{64}\.bin$/.test(name)), `only immutable objects were added after ${label}: ${added}`)
+  }
+  const first = await world.start()
+  check('start')
+  const record = recordOf(world)
+  await world.settled(record)
+  for (let round = 0; round < 2; round += 1) assert.equal((await tickService(record)).body.scopes[0].state, 'held-for-your-edit')
+  check('ticks')
+  assert.equal((await world.stop()).stopped, true)
+  await afterStop()
+  check('stop')
+  const second = await world.start()
+  await world.settled(recordOf(world))
+  hardKill(second.record.pid)
+  await waitFor(() => !isAlive(second.record.pid), { label: 'the killed service to be gone' })
+  check('a hard kill')
+  assert.equal((await world.status()).state, 'stale-record')
+  check('status of a stale record')
+  await world.start()
+  await world.settled(recordOf(world))
+  check('start over a stale record')
+  assert.equal((await world.stop()).stopped, true)
+  check('the last stop')
+  assert.notEqual(first.record.runtimeId, second.record.runtimeId)
+}
+
+test('the service never sweeps staging or recovery: not at start, on ticks, at stop, after a hard kill or over a stale record', needsExchange, async (t) => {
+  await assertLifecycleLeavesStagingAndRecoveryAlone(serviceWorld(t))
+})
+
+test('mutation control: a shutdown that tidies staging fails the lifecycle oracle', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  await assert.rejects(assertLifecycleLeavesStagingAndRecoveryAlone(world, { afterStop: () => fs.rmSync(path.join(world.workspaceRoot(), 'staging'), { recursive: true, force: true }) }), /staging after stop/)
+})
+
+// ---------------------------------------------------------------------------
+// 21. The operating-system startup adapter builder
+// ---------------------------------------------------------------------------
+
+const STARTUP_INPUT = { label: 'ai.mnstry.atelier.obsidian.ws-synthetic', nodePath: '/opt/synthetic/bin/node', entryPath: '/opt/synthetic/lib/service-main.mjs', args: ['--project=/srv/synthetic/atelier.project.json', '--adapter=obsidian-cli'], logPath: '/srv/synthetic/state/service.log' }
+
+// Every effect a builder could have is counted while it runs; none may happen.
+function effectsDuring(run) {
+  const effects = []
+  const patched = []
+  const patch = (module, names) => { for (const name of names) { const original = module[name]; patched.push([module, name, original]); module[name] = (...args) => { effects.push(name); return original.apply(module, args) } } }
+  patch(fs, ['writeFileSync', 'appendFileSync', 'mkdirSync', 'openSync', 'renameSync', 'unlinkSync', 'rmSync', 'readFileSync', 'readdirSync', 'statSync', 'lstatSync', 'realpathSync', 'existsSync', 'writeFile', 'mkdir'])
+  patch(childProcess, ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'])
+  patch(os, ['homedir', 'userInfo', 'tmpdir'])
+  syncBuiltinESMExports()
+  try { return { value: run(), effects } } finally { for (const [module, name, original] of patched) module[name] = original; syncBuiltinESMExports() }
+}
+
+function assertBuilderIsPure(build) {
+  for (const platform of ['darwin', 'linux']) {
+    const { value, effects } = effectsDuring(() => build({ platform, ...STARTUP_INPUT }))
+    assert.deepEqual(effects, [], `${platform}: the builder read and wrote no file, started no process and asked for no home directory`)
+    assert.deepEqual(build({ platform, ...STARTUP_INPUT }), value, 'the same input gives the same text')
+    // Every absolute path in the text is one the caller gave; nothing of this machine is baked in.
+    const given = [STARTUP_INPUT.nodePath, STARTUP_INPUT.entryPath, STARTUP_INPUT.logPath, '/srv/synthetic/atelier.project.json']
+    const found = value.text.split('\n').filter((line) => !line.startsWith('<!DOCTYPE')).join('\n').replaceAll('</', '<').match(/(?<![A-Za-z0-9.<])\/[A-Za-z0-9._/-]+/g) ?? []
+    assert.deepEqual(found.filter((item) => !given.includes(item)), [], `${platform}: ${found}`)
+    for (const machine of [os.homedir(), process.cwd(), process.execPath, TMP, REPOSITORY_ROOT, os.userInfo().username]) assert.equal(value.text.includes(machine), false, `${platform}: carries ${machine}`)
+  }
+}
+
+test('the startup adapter builder returns the text of a launchd agent and a systemd user unit, purely, and refuses Windows typed', () => {
+  assertBuilderIsPure(buildStartupAdapter)
+  const agent = buildStartupAdapter({ platform: 'darwin', ...STARTUP_INPUT })
+  assert.deepEqual([agent.kind, agent.fileName, Object.keys(agent).sort()], ['launchd-user-agent', `${STARTUP_INPUT.label}.plist`, ['fileName', 'kind', 'platform', 'text']])
+  for (const expected of [`<string>${STARTUP_INPUT.label}</string>`, `<string>${STARTUP_INPUT.nodePath}</string>`, `<string>${STARTUP_INPUT.entryPath}</string>`, '<string>--startup</string>', '<string>--adapter=obsidian-cli</string>', '<key>RunAtLoad</key>', `<string>${STARTUP_INPUT.logPath}</string>`]) assert.ok(agent.text.includes(expected), expected)
+  const unit = buildStartupAdapter({ platform: 'linux', ...STARTUP_INPUT })
+  assert.deepEqual([unit.kind, unit.fileName], ['systemd-user-unit', `${STARTUP_INPUT.label}.service`])
+  assert.ok(unit.text.includes(`ExecStart="${STARTUP_INPUT.nodePath}" "${STARTUP_INPUT.entryPath}" "--startup" "--project=/srv/synthetic/atelier.project.json" "--adapter=obsidian-cli"\n`))
+  assert.ok(unit.text.includes('RestartPreventExitStatus=2') && unit.text.includes('WantedBy=default.target'))
+  // Values are escaped for their format, not pasted.
+  assert.ok(buildStartupAdapter({ platform: 'darwin', ...STARTUP_INPUT, args: ['--project=/srv/a&b/<c>.json'] }).text.includes('<string>--project=/srv/a&amp;b/&lt;c&gt;.json</string>'))
+  assert.ok(buildStartupAdapter({ platform: 'linux', ...STARTUP_INPUT, args: ['--project=/srv/100%/$HOME/"q".json'] }).text.includes('"--project=/srv/100%%/$$HOME/\\"q\\".json"'))
+
+  assert.throws(() => buildStartupAdapter({ platform: 'win32', ...STARTUP_INPUT }), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'startup-platform-unqualified')
+  assert.throws(() => buildStartupAdapter({ platform: 'freebsd', ...STARTUP_INPUT }), (error) => error.code === 'startup-platform-unsupported')
+  for (const invalid of [{ nodePath: 'node' }, { entryPath: './service-main.mjs' }, { logPath: '~/service.log' }, { label: 'has spaces' }, { label: '../escape' }, { args: ['--startup'] }, { args: ['two\nlines'] }, { args: [7] }, { workingDirectory: 'relative' }]) {
+    for (const platform of ['darwin', 'linux']) assert.throws(() => buildStartupAdapter({ platform, ...STARTUP_INPUT, ...invalid }), (error) => error.code === 'startup-adapter-input-invalid', JSON.stringify(invalid))
+  }
+})
+
+test('mutation control: a builder that looks up this machine, or writes the unit itself, fails the purity oracle', (t) => {
+  const scratch = fs.mkdtempSync(path.join(TMP, 'atelier-maintenance-unit-'))
+  t.after(() => fs.rmSync(scratch, { recursive: true, force: true }))
+  assert.throws(() => assertBuilderIsPure((input) => { const built = buildStartupAdapter(input); fs.writeFileSync(path.join(scratch, built.fileName), built.text); return built }), assert.AssertionError)
+  assert.throws(() => assertBuilderIsPure((input) => buildStartupAdapter({ ...input, workingDirectory: os.homedir() })), assert.AssertionError)
+  assert.throws(() => assertBuilderIsPure((input) => buildStartupAdapter({ ...input, nodePath: process.execPath })), assert.AssertionError)
+})
+
+// ---------------------------------------------------------------------------
+// 22. Nothing is left running
+// ---------------------------------------------------------------------------
+
+test('no process this suite started is left behind', async () => {
+  assert.ok(SPAWNED.size > 0, 'this suite does start processes')
+  await waitFor(() => [...SPAWNED].every((pid) => !isAlive(pid)), { timeoutMs: 10000, label: `every spawned process to be gone: ${[...SPAWNED].filter(isAlive)}` })
+  if (process.platform !== 'win32') {
+    const children = childProcess.spawnSync('pgrep', ['-P', String(process.pid)], { encoding: 'utf8' })
+    if (!children.error) assert.deepEqual(children.stdout.split('\n').filter((line) => line.trim() !== '' && isAlive(Number(line))), [], 'the test process has no child left')
+  }
 })
