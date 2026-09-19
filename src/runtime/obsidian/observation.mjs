@@ -61,16 +61,28 @@ function sourceClass(relative, names) {
 // the census (it does not apply ignore rules): observing one file too many
 // costs a rebuild that produces the same generation, observing one too few
 // would leave a view stale.
-export function listSourceFiles(project) {
+export function listSourceFiles(project, { assets = [] } = {}) {
   const files = []
+  const roots = new Map()
   for (const repo of project.repos ?? []) {
     if (repo.external || typeof repo.path !== 'string' || typeof repo.name !== 'string') continue
+    roots.set(repo.name, repo.path)
     const relatives = walk(repo.path, '', [])
     const names = new Set(relatives)
     for (const relative of relatives) {
       const changeClass = sourceClass(relative, names)
       if (changeClass) files.push({ key: sourceKey(repo.name, relative), changeClass, absolute: path.join(repo.path, relative), repoId: repo.name, relative })
     }
+  }
+  // Embedded assets of the last built graph. The resolver accepts a file in a
+  // dot-directory, which the walk skips, and an image has no sidecar, so these
+  // are listed by name. Only assets a view may copy are passed in.
+  const listed = new Set(files.map((file) => file.key))
+  for (const asset of assets) {
+    const key = sourceKey(asset.repo, asset.path)
+    if (!roots.has(asset.repo) || listed.has(key)) continue
+    listed.add(key)
+    files.push({ key, changeClass: 'asset', absolute: path.join(roots.get(asset.repo), ...asset.path.split('/')), repoId: asset.repo, relative: asset.path })
   }
   return files
 }

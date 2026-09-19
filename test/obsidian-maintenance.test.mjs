@@ -11,7 +11,8 @@ import { resolveProjectConfig, validateProjectConfigDoc, writeJson } from '../sr
 import { createEditorAdapter, publishView, resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publication/test-seam.mjs'
 import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src/runtime/obsidian/engine.mjs'
-import { createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
+import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
+import { withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import {
   FRESHNESS_STATES, ObsidianMaintenanceRefusal, UNAVAILABLE_APPLY_OPERATION, authorizeAutomaticApply, createFsWatcherFactory, createMaintenanceEngine,
   createMaintenanceExtensions, createMaintenanceStateStore, defaultDataRoot, ensureWorkspaceIdentity, installApplyPolicy, localPointerPath, protectedRoots,
@@ -106,6 +107,7 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
     clock: () => new Date(nowMs),
     advance: (ms) => { nowMs += ms },
     calls: { buildGraph: 0, prepareView: 0, publishView: [] },
+    snapshots: [],
     watchers: [],
     source: (relative) => path.join(projectDir, relative),
     writeExt: (next) => writeJson(configPath, projectDocument(next)),
@@ -140,10 +142,11 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
     // Counting wrappers over the production seams; `seams` replaces single members.
     engine({ primitives = ENGINE_PRIMITIVES, seams = {}, ...options } = {}) {
       const counted = {
+        ...seams,
         buildGraph: (input) => { world.calls.buildGraph += 1; return (seams.buildGraph ?? DEFAULT.buildGraph)(input) },
         prepareView: (input) => { world.calls.prepareView += 1; return (seams.prepareView ?? DEFAULT.prepareView)(input) },
         publishView: async (input) => { world.calls.publishView.push(input.recoveryStore.scopeId); return (seams.publishView ?? DEFAULT.publishView)(input) },
-        ...(seams.recheckDisplacedFiles ? { recheckDisplacedFiles: seams.recheckDisplacedFiles } : {}),
+        captureSnapshot: (input) => { const snapshot = (seams.captureSnapshot ?? DEFAULT.captureSnapshot)(input); world.snapshots.push(snapshot.document); return snapshot },
       }
       const engine = createMaintenanceEngineForOracleTests({
         loadProject, dataRoot, adapterFactory: absentAdapter, clock: world.clock, randomBytes: fixedRandom, quietPeriodMs: 0, seams: counted,
@@ -414,6 +417,170 @@ test('a scope change republishes that view only; a source change republishes eve
   assert.deepEqual(world.calls.publishView, ['scope-whole', 'scope-east'])
   assert.deepEqual(report.scopes.map((entry) => entry.state), ['current', 'current'])
   for (const scopeId of ['scope-whole', 'scope-east']) assert.match(fs.readFileSync(world.noteFile('east-wing:lantern', scopeId), 'utf8'), /cleaned weekly/)
+})
+
+// ---------------------------------------------------------------------------
+// 4b. Eligibility fails closed; embedded assets
+// ---------------------------------------------------------------------------
+
+const IMAGE = Buffer.from('89504e470d0a1a0a73796e746865746963', 'hex')
+const embeddedAttachment = (world, scopeId) => world.manifest(scopeId).attachments.find((item) => item.ext?.[EXT]?.kind === 'embedded-asset')
+
+// Writes an invented image and embeds it in a note, before the first tick.
+function embedImage(world, { image = 'east-wing/media/beacon.png', from = 'east-wing/notes/lantern.md', href = '../media/beacon.png' } = {}) {
+  fs.mkdirSync(path.dirname(world.source(image)), { recursive: true })
+  fs.writeFileSync(world.source(image), IMAGE)
+  fs.appendFileSync(world.source(from), `\n![beacon](${href})\n`)
+  return world.source(image)
+}
+
+function assertOnlyClassifiedIsEligible(eligibility) {
+  const nodes = [{ id: 'a:classified', classification: 'classified' }, { id: 'a:unclassified', classification: 'unclassified' }, { id: 'a:no-field' }, { id: 'a:odd', classification: true }]
+  assert.deepEqual(nodes.map((node) => eligibility.isEligible(node) === true), [true, false, false, false], 'a node with no classification is not eligible')
+  const asset = (name) => ({ id: `a:asset:${name}`, repo: 'a', path: name, extension: 'png' })
+  const graph = { nodes, edges: [], links: [], assets: ['seen.png', 'unseen.png', 'orphan.png'].map(asset), embeds: [
+    { source: 'a:classified', asset: asset('seen.png') }, { source: 'a:unclassified', asset: asset('seen.png') },
+    { source: 'a:unclassified', asset: asset('unseen.png') }, { source: 'a:no-field', asset: asset('unseen.png') },
+  ] }
+  const decided = withEligibility(graph, eligibility.isEligible, assetEligibilityFor({ graph, eligibility }))
+  assert.deepEqual(decided.assets.map((item) => [item.path, item.eligible]), [['seen.png', true], ['unseen.png', false], ['orphan.png', false]], 'an asset is eligible only through an eligible note that embeds it')
+}
+
+test('default eligibility fails closed: only a classified node, and only an asset an eligible note embeds', () => {
+  assertOnlyClassifiedIsEligible(DEFAULT_ELIGIBILITY)
+  assert.match(DEFAULT_ELIGIBILITY.revision(), /v2.*assets/)
+  // An override replaces the asset rule, and anything but exactly true withholds.
+  const graph = { nodes: [{ id: 'a:n', classification: 'classified' }], embeds: [], assets: [] }
+  for (const [answer, expected] of [[true, true], ['yes', false], [1, false], [undefined, false]]) {
+    assert.equal(assetEligibilityFor({ graph, eligibility: { ...DEFAULT_ELIGIBILITY, isAssetEligible: () => answer } })({ id: 'a:asset:x.png' }), expected)
+  }
+})
+
+test('mutation control: a rule that only excludes the word unclassified fails the eligibility oracle', () => {
+  assert.throws(() => assertOnlyClassifiedIsEligible({ ...DEFAULT_ELIGIBILITY, isEligible: (node) => node.classification !== 'unclassified' }), /a node with no classification is not eligible/)
+})
+
+async function assertImageChangeRepublishes(world, engine, image) {
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  const before = embeddedAttachment(world)
+  assert.deepEqual([before.digest, before.ext[EXT].assetPath], [digest(IMAGE), path.relative(world.source('east-wing'), image).split(path.sep).join('/')])
+  assert.deepEqual(fs.readFileSync(path.join(world.vault(), before.path)), IMAGE)
+  assert.deepEqual((await engine.tick()).changes, [])
+  const next = Buffer.concat([IMAGE, Buffer.from('repainted')])
+  fs.writeFileSync(image, next)
+  world.advance(1000)
+  const report = await engine.tick()
+  assert.ok(report.changes.some((change) => change.changeClass === 'asset'), `an embedded image is observed: ${JSON.stringify(report.changes)}`)
+  assert.equal(world.scope(report).state, 'current')
+  const after = embeddedAttachment(world)
+  assert.equal(after.digest, digest(next), 'the attachment carries the new digest')
+  assert.deepEqual(fs.readFileSync(path.join(world.vault(), after.path)), next)
+}
+
+for (const [label, options] of [['in an ordinary directory', {}], ['in a dot-directory the walk skips', { image: 'east-wing/.media/beacon.png', href: '../.media/beacon.png' }]]) {
+  test(`an embedded image ${label}: a change to its bytes republishes the view with the new attachment digest`, needsExchange, async (t) => {
+    const world = makeWorld(t)
+    await assertImageChangeRepublishes(world, world.engine(), embedImage(world, options))
+  })
+
+  test(`mutation control: an engine that observes only what the walk finds fails the image oracle (${label})`, needsExchange, async (t) => {
+    const world = makeWorld(t)
+    const image = embedImage(world, options)
+    await assert.rejects(assertImageChangeRepublishes(world, world.engine({ primitives: { observedAssetsOf: () => [] } }), image), /an embedded image is observed/)
+  })
+}
+
+// A file embedded only by a note the census could not classify. Its name and
+// its digest must be in no snapshot and in nothing the engine persists.
+async function assertWithheldAssetLeavesNoTrace(world, engine) {
+  const sentinel = 'zqw-sealed-sketch'
+  const image = world.source(`east-wing/media/${sentinel}.png`)
+  fs.mkdirSync(path.dirname(image), { recursive: true })
+  fs.writeFileSync(image, IMAGE)
+  fs.mkdirSync(world.source('east-wing/drafts'), { recursive: true })
+  fs.writeFileSync(world.source('east-wing/drafts/scratch.md'), `# Scratch\n\nNo front matter, so unclassified.\n\n![sketch](../media/${sentinel}.png)\n`)
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  fs.appendFileSync(image, 'redrawn')
+  world.advance(FULL_INTERVAL)
+  const report = await engine.tick()
+  assert.equal(world.scope(report).state, 'current')
+  assert.ok(world.snapshots.length >= 1)
+  const needles = [sentinel, digest(IMAGE).slice(7), digest(fs.readFileSync(image)).slice(7)]
+  const haystacks = [JSON.stringify(world.snapshots), JSON.stringify(report), fs.readFileSync(localPointerPath(world.loadProject()), 'utf8')]
+  const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const absolute = path.join(directory, entry.name); if (entry.isDirectory()) walk(absolute); else haystacks.push(`${absolute}\n${fs.readFileSync(absolute, 'latin1')}`) } }
+  walk(world.dataRoot)
+  for (const needle of needles) assert.equal(haystacks.some((text) => text.includes(needle)), false, 'a withheld asset leaves no trace in a snapshot, a report, a vault or a state document')
+  assert.equal(embeddedAttachment(world), undefined)
+}
+
+test('an asset embedded only by an unclassified note is withheld: absent from every snapshot and every persisted document', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await assertWithheldAssetLeavesNoTrace(world, world.engine())
+})
+
+test('mutation control: an asset rule that admits everything fails the withheld-asset oracle', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const open = world.engine({ eligibility: { ...DEFAULT_ELIGIBILITY, isAssetEligible: () => true } })
+  await assert.rejects(assertWithheldAssetLeavesNoTrace(world, open), /a withheld asset leaves no trace/)
+})
+
+async function assertAssetDeletionConverges(world, engine, image) {
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  assert.ok(embeddedAttachment(world))
+  fs.rmSync(image)
+  world.advance(1000)
+  let report = await engine.tick()
+  assert.ok(report.changes.some((change) => change.changeClass === 'asset'))
+  assert.deepEqual([report.state, world.scope(report).state], ['ticked', 'current'], 'no refusal: the embed is simply unresolved now')
+  assert.equal(embeddedAttachment(world), undefined, 'the attachment is no longer prepared')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /!\[beacon\]\(\.\.\/media\/beacon\.png\)/, 'the embed is left as authored')
+  const published = world.calls.publishView.length
+  for (let round = 0; round < 3; round += 1) {
+    world.advance(round === 2 ? FULL_INTERVAL : 1000)
+    report = await engine.tick()
+    assert.deepEqual([report.changes, world.scope(report).state], [[], 'current'], 'and it stays settled')
+  }
+  assert.equal(world.calls.publishView.length, published, 'no rebuild loop')
+}
+
+test('an embedded asset deleted from disk converges without a refusal loop', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await assertAssetDeletionConverges(world, world.engine(), embedImage(world))
+})
+
+test('mutation control: a pipeline that keeps preparing from a graph that still names the deleted asset fails the deletion oracle', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const image = embedImage(world)
+  let first = null
+  const stale = world.engine({ seams: { buildGraph: (input) => (first ??= DEFAULT.buildGraph(input)) } })
+  await assert.rejects(assertAssetDeletionConverges(world, stale, image), /no refusal: the embed is simply unresolved now/)
+  assert.equal(world.state('freshness.json').scopes[0].reason, 'mixed-read')
+})
+
+function assertEmbedAloneChangesSnapshot(capture) {
+  const node = { id: 'a:n', repo: 'a', path: 'n.md', classification: 'classified', eligible: true }
+  const asset = { id: 'a:asset:x.png', repo: 'a', path: 'x.png', extension: 'png', eligible: true }
+  const facts = (text) => ({ digest: digest(text), byteLength: text.length })
+  const input = (embeds) => ({
+    project: { repos: [{ name: 'a', path: path.join(TMP, 'atelier-maintenance-absent') }] }, workspaceId: WORKSPACE_ID, configDigest: digest('config'), capturedAt: '2026-01-05T10:00:00.000Z',
+    index: new Map([['source\u0000a\u0000n.md', facts('note')], ['source\u0000a\u0000x.png', facts('image')]]), graph: { nodes: [node], edges: [], links: [], assets: [asset], embeds },
+  })
+  const embed = (byteStart) => ({ type: 'embeds_asset', source: 'a:n', asset, range: { byteStart, byteEnd: byteStart + 12 } })
+  const [one, again, moved] = [capture(input([embed(10)])), capture(input([embed(10)])), capture(input([embed(40)]))]
+  assert.equal(one.document.snapshotId, again.document.snapshotId, 'the same reading is the same snapshot')
+  assert.notEqual(one.document.snapshotId, moved.document.snapshotId, 'an embed that changes alone is another snapshot')
+  assert.deepEqual(one.document.repositories[0].files.map((file) => file.path), ['n.md', 'x.png'], 'an eligible asset is pinned beside the notes')
+  const withheld = capture({ ...input([embed(10)]), graph: { ...input([embed(10)]).graph, assets: [{ ...asset, eligible: false }] } })
+  assert.deepEqual(withheld.document.repositories[0].files.map((file) => file.path), ['n.md'], 'a withheld asset is never pinned')
+}
+
+test('the snapshot identity covers embeds and assets, pins eligible assets and never a withheld one', () => {
+  assertEmbedAloneChangesSnapshot(captureSnapshot)
+})
+
+test('mutation control: a snapshot that pins the graph without its embeds fails the snapshot oracle', () => {
+  const blindToEmbeds = (input) => captureSnapshot({ ...input, graph: { ...input.graph, embeds: [] } })
+  assert.throws(() => assertEmbedAloneChangesSnapshot(blindToEmbeds), /an embed that changes alone is another snapshot/)
 })
 
 // ---------------------------------------------------------------------------

@@ -18,11 +18,28 @@ import { readFileFacts, sha256Digest, sourceKey } from './observation.mjs'
 // canonical graph builder reads local ignore rules through the local git
 // executable and that is all.
 
-// An unclassified document has no declared audience; it is never eligible.
+// Fails closed twice. A document is eligible only when the census classified
+// it: an unclassified one, or one that carries no classification at all, is
+// withheld. An embedded asset has no audience of its own, so it is eligible
+// only when at least one note that embeds it is itself eligible; a file that
+// only withheld notes embed never reaches a view, a snapshot or a state
+// document. `isAssetEligible(asset, { embeds, isEligibleSource })` may be
+// supplied to replace the asset rule; only an exact `true` admits an asset, and
+// `revision()` must change whenever either rule does.
 export const DEFAULT_ELIGIBILITY = Object.freeze({
-  revision: () => 'classified-documents/v1',
-  isEligible: (node) => node.classification !== 'unclassified',
+  revision: () => 'classified-documents/v2+assets-embedded-by-eligible-documents/v1',
+  isEligible: (node) => node.classification === 'classified',
 })
+
+export function assetEligibilityFor({ graph, eligibility }) {
+  const eligibleSources = new Set(graph.nodes.filter((node) => eligibility.isEligible(node) === true).map((node) => node.id))
+  const embeds = Array.isArray(graph.embeds) ? graph.embeds : []
+  if (typeof eligibility.isAssetEligible === 'function') {
+    return (asset) => eligibility.isAssetEligible(asset, { embeds: embeds.filter((embed) => embed?.asset?.id === asset.id), isEligibleSource: (id) => eligibleSources.has(id) }) === true
+  }
+  const embedded = new Set(embeds.filter((embed) => eligibleSources.has(embed?.source)).map((embed) => embed?.asset?.id))
+  return (asset) => embedded.has(asset.id)
+}
 
 const posix = (value) => value.split(path.sep).join('/')
 
@@ -41,7 +58,7 @@ export function profileFor({ project, workspaceId, audienceAllow }) {
 export function buildGraph({ project, eligibility }) {
   const canonical = buildCanonicalGraph(project)
   if (!canonical.ok) refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
-  return withEligibility(canonical, eligibility.isEligible)
+  return withEligibility(canonical, eligibility.isEligible, assetEligibilityFor({ graph: canonical, eligibility }))
 }
 
 // A source snapshot pinned to the digests observation decided on. prepareView
@@ -55,18 +72,20 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
     if (!root) refuse('source-not-in-snapshot', 'a node names a repository the project does not enrol')
     return path.join(root, ...relative.split('/'))
   }
-  const byRepo = new Map([...roots.keys()].map((repoId) => [repoId, []]))
-  for (const node of graph.nodes) {
-    if (!byRepo.has(node.repo)) refuse('source-not-in-snapshot', 'a node names a repository the project does not enrol')
-    const file = absolute(node.repo, node.path)
-    const observed = index.get(sourceKey(node.repo, node.path))
-    const facts = observed?.digest ? observed : readFileFacts(file)
-    if (!facts) refuse('mixed-read', 'a source the graph read is no longer there')
-    byRepo.get(node.repo).push({ path: node.path, rawDigest: facts.digest, byteLength: facts.byteLength })
+  const byRepo = new Map([...roots.keys()].map((repoId) => [repoId, new Map()]))
+  // Every node, and every asset a view may copy. A withheld asset is never pinned: it is in no snapshot document.
+  const pinned = [...graph.nodes, ...(Array.isArray(graph.assets) ? graph.assets.filter((asset) => asset.eligible === true) : [])]
+  for (const item of pinned) {
+    if (!byRepo.has(item.repo)) refuse('source-not-in-snapshot', 'the graph names a repository the project does not enrol')
+    const observed = index.get(sourceKey(item.repo, item.path))
+    const facts = observed?.digest ? observed : readFileFacts(absolute(item.repo, item.path))
+    if (!facts) refuse('mixed-read', 'a file the graph read is no longer there')
+    byRepo.get(item.repo).set(item.path, { path: item.path, rawDigest: facts.digest, byteLength: facts.byteLength })
   }
   const repositories = [...byRepo].sort(([left], [right]) => compareText(left, right))
-    .map(([repoId, files]) => ({ repoId, head: null, dirty: true, files: files.sort((left, right) => compareText(left.path, right.path)) }))
-  const graphDigest = sha256Digest(Buffer.from(JSON.stringify([graph.nodes, graph.edges])))
+    .map(([repoId, files]) => ({ repoId, head: null, dirty: true, files: [...files.values()].sort((left, right) => compareText(left.path, right.path)) }))
+  // Embeds and assets are part of what was read: an embed that changes alone yields another snapshot.
+  const graphDigest = sha256Digest(Buffer.from(JSON.stringify([graph.nodes, graph.edges, graph.embeds ?? [], graph.assets ?? []])))
   const identity = createHash('sha256').update(JSON.stringify([workspaceId, graphDigest, configDigest, repositories])).digest('hex').slice(0, 32)
   return {
     document: {

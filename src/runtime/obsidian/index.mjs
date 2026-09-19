@@ -14,5 +14,5 @@ export {
 } from './state-store.mjs'
 export { listConfigFiles, listSourceFiles, listVaultNotes, reconcile } from './observation.mjs'
 export { createFsWatcherFactory, createNullWatcherFactory } from './watchers.mjs'
-export { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
+export { DEFAULT_ELIGIBILITY, assetEligibilityFor, createProductionSeams } from './pipeline.mjs'
 export { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, DEFAULT_LATE_WRITER_WINDOW_MS, DEFAULT_RETRY_INTERVAL_MS, createMaintenanceEngine } from './engine.mjs'

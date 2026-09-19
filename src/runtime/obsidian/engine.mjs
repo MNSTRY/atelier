@@ -47,6 +47,8 @@ export const LATE_WRITER_EVERY_TICK_WINDOW_MS = 60 * 60 * 1000
 const CONFLICT_REFUSALS = new Set(['publication-in-progress', 'generation-mismatch', 'editor-uncoordinated', 'state-mismatch'])
 const EDIT_OUTCOMES = new Set(['disk-changed', 'editor-edit'])
 const RETRIED_STATES = new Set(['stale', 'updating', 'publisher-conflict'])
+// A file changed or went away under a tick: everything is hashed again on the next one.
+const REREAD_CODES = new Set(['mixed-read', 'source-not-in-snapshot'])
 const SOURCE_PREFIX = 'source\u0000'
 const CONFIG_PREFIX = configKey('')
 
@@ -63,6 +65,8 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   dispatchAllowed: (maintenanceMode) => maintenanceMode === 'automatic',
   // Every file is hashed, whatever its stat says, at least this often.
   isFullReconciliationDue: ({ nowMs, lastFullMs, intervalMs }) => lastFullMs === null || nowMs - lastFullMs >= intervalMs,
+  // The embedded assets observed beside the walk: those the last built graph lets a view copy, and no withheld one.
+  observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // Held notes that this prepared view would replace, create over or remove.
   publicationConflicts({ prepared, held, bases }) {
     const candidates = new Map(prepared.files.map((file) => [file.path, file.digest]))
@@ -110,6 +114,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   const hintedPrefixes = new Set()
   const stores = new Map()
   let project = null
+  let observedAssets = []
   let semantic = null
   let lastFullMs = null
   let forceFull = false
@@ -285,7 +290,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     }
 
     // 6. Sources, settings, scopes, eligibility.
-    const sources = reconcile({ index, files: listSourceFiles(project), prefix: SOURCE_PREFIX, full, hinted, lstat })
+    const sources = reconcile({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full, hinted, lstat })
     for (const change of sources.changes) changes.push({ changeClass: change.changeClass })
     const { scopes: _declared, ...settingsWithoutScopes } = enablement.settings
     // What the configuration says apart from this integration's own member: a change to the member alone is an
@@ -334,6 +339,14 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       let built = null
       try {
         const graph = seams.buildGraph({ project, eligibility })
+        // The assets this graph lets a view copy are observed from now on, and hashed now so the snapshot pins
+        // what observation saw. A withheld asset is not observed: its bytes can change no view.
+        const formerAssetKeys = new Set(observedAssets.map((asset) => sourceKey(asset.repo, asset.path)))
+        observedAssets = rules.observedAssetsOf(graph)
+        const assetKeys = new Set(observedAssets.map((asset) => sourceKey(asset.repo, asset.path)))
+        const settled = reconcile({ index, files: listSourceFiles(project, { assets: observedAssets }), prefix: SOURCE_PREFIX, full: false, lstat })
+        // An asset newly observed, or one no longer embedded, is the list changing. Anything else that moved since this tick looked at the sources moved while the graph was being read.
+        if (settled.changes.some((change) => !(change.kind === 'added' && assetKeys.has(change.key)) && !(change.kind === 'removed' && formerAssetKeys.has(change.key) && !assetKeys.has(change.key)))) throw new ObsidianMaintenanceRefusal('mixed-read', 'a source changed while the canonical graph was being built')
         const configDigest = digestOfJson([...index].filter(([key]) => key.startsWith(CONFIG_PREFIX)).map(([key, entry]) => [path.basename(key.slice(CONFIG_PREFIX.length)), entry.digest]))
         built = {
           snapshot: seams.captureSnapshot({ project, graph, workspaceId, index, configDigest, capturedAt: now }),
@@ -342,7 +355,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       } catch (error) {
         if (!isTypedRefusal(error)) throw error
         for (const scopeId of attempt.keys()) entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now))
-        if (error.code === 'mixed-read') forceFull = true
+        if (REREAD_CODES.has(error.code)) forceFull = true
       }
       for (const { scope, store } of built ? scopes.filter((item) => attempt.has(item.scope.scopeId)) : []) {
         const { scopeId } = scope
@@ -394,7 +407,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         } catch (error) {
           if (!isTypedRefusal(error)) { settle('stale', 'publisher-error'); persist(); throw error }
           settle('stale', error.code)
-          if (error.code === 'mixed-read') forceFull = true
+          if (REREAD_CODES.has(error.code)) forceFull = true
         }
       }
     }
