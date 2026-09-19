@@ -1215,7 +1215,9 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
           const notePath = await seed(`i04r${round}`)
           const typed = `RACE${round}X`
           await instance.stimulus('focusAt', notePath, { anchor: 'brown' })
-          const typing = sleep((round * 7) % 90).then(() => instance.typeText(typed, notePath))
+          // The publisher writes durable records before its critical section, so the stimulus is spread
+          // across 0–1.4 s to land on both sides of it.
+          const typing = sleep((round * 173) % 1400).then(() => instance.typeText(typed, notePath))
           const result = await publish({ [notePath]: CANDIDATE })
           await typing
           const outcome = noteResult(result, notePath).outcome
@@ -1254,7 +1256,7 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
         for (let round = 0; round < races; round += 1) {
           const notePath = await seed(`i06r${round}`, { open: round % 2 === 0 })
           const external = `${BASE}EXTERNAL${round}\n`
-          const writer = spawn(process.execPath, ['-e', `const fs=require('fs');setTimeout(()=>{fs.writeFileSync(process.argv[1]+'.ext~',process.argv[2]);fs.renameSync(process.argv[1]+'.ext~',process.argv[1]);},${(round * 11) % 120})`, full(notePath), external], { stdio: 'ignore' })
+          const writer = spawn(process.execPath, ['-e', `const fs=require('fs');setTimeout(()=>{fs.writeFileSync(process.argv[1]+'.ext~',process.argv[2]);fs.renameSync(process.argv[1]+'.ext~',process.argv[1]);},${(round * 157) % 1200})`, full(notePath), external], { stdio: 'ignore' })
           const exited = new Promise((resolve) => writer.on('exit', resolve))
           const result = await publish({ [notePath]: CANDIDATE })
           await exited
