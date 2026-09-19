@@ -457,8 +457,18 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       const seam = (step, detail) => { try { crash(step, detail) } catch (error) { crashed = true; throw error } }
       try {
         if (edit.identity.workspaceId !== workspace.workspaceId) refuse('foreign-workspace')
-        const resolved = resolveEdit(workspace, edit)
         const identity = { repoId: edit.identity.repoId, nodeId: edit.identity.nodeId }
+
+        // Whether this machine may see the object is asked first, of the canonical graph as it is now, before the
+        // manifest, the record of the object or the source path is looked at. An object that is withheld and one that
+        // is absent get this one answer, with nothing read and nothing recorded, so no later answer (a moved or
+        // deleted source, an earlier apply, a missing manifest) can tell a caller which of the two it is.
+        const { graph, profile } = currentCorpus(workspace)
+        const decideWith = (editClass, attempts) => rules.decide({ request, workspace: { workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId }, graph, profile, object: identity, editClass, attempts })
+        const visibility = decideWith('body-replacement', [])
+        if (!visibility.allowed && visibility.code === 'object-not-visible') refuse('object-not-visible')
+
+        const resolved = resolveEdit(workspace, edit)
         const key = resolved.idempotencyKey
 
         // A repeated request, or a retry after a lost reply, is answered from the record and writes nothing.
@@ -476,15 +486,13 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         if (!OPEN_EDIT_STATES.includes(edit.state) && before.intent === null) refuse('edit-not-open', { state: edit.state })
         const attemptsIn = (state) => state.applyOutcomes.filter((outcome) => outcome.status === 'refused' && outcome.idempotencyKey === key && outcome.policy?.mode === 'automatic').map((outcome) => ({ policyDigest: outcome.policy.policyDigest }))
 
-        // The source, now.
-        const { graph, profile } = currentCorpus(workspace)
+        // The source, now. A visible object is in the graph; the first check stands for a decision that says otherwise.
         const node = graph.nodes.find((item) => item.repo === identity.repoId && item.id === identity.nodeId)
         if (!node) refuse('source-not-in-graph')
         if (node.path !== resolved.recorded.path) refuse('source-moved')
-        // Two answers are known before anything is read or recorded: an object this machine may not see, and a retry
-        // budget that the record says is spent. Both refuse here, so they append nothing at all.
-        const early = rules.decide({ request, workspace: { workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId }, graph, profile, object: identity, editClass: 'body-replacement', attempts: attemptsIn(before) })
-        if (!early.allowed && ['object-not-visible', 'retry-budget-exhausted'].includes(early.code)) refuse(early.code, early.detail)
+        // A retry budget that the record says is spent is known before anything is read: it appends nothing at all.
+        const early = decideWith('body-replacement', attemptsIn(before))
+        if (!early.allowed && early.code === 'retry-budget-exhausted') refuse(early.code, early.detail)
         const vaultRoots = workspace.enablement.scopes.map((scope) => workspace.storeOf(scope.scopeId).vaultRoot)
         const located = locateSource({ project: workspace.project, repoId: identity.repoId, relative: node.path, managedRoots: [workspace.workspaceRoot, ...vaultRoots, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, env })
         let source
@@ -517,7 +525,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         }
 
         const attempts = attemptsIn(state)
-        const decideNow = () => rules.decide({ request, workspace: { workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId }, graph, profile, object: identity, editClass: observed.operation.kind, attempts })
+        const decideNow = () => decideWith(observed.operation.kind, attempts)
         let decision = null
         // Recorded under the lease. A manual request that would only repeat the last recorded refusal records nothing
         // more; an automatic one is counted every time, and its count is bounded by the retry budget.

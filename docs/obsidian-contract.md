@@ -286,7 +286,11 @@ the one git call asks whether the path is ignored.
 
 In both modes the object must be visible in the canonical graph as it is now
 (eligible, enrolled, audience allowed). An absent object and a withheld one get
-the same answer. There is no ambient agent mode: an automatic request with no
+the same answer, `object-not-visible`, and they get it first: before the
+manifest, the record of the object or the source path is looked at, with
+nothing recorded, so a moved or deleted source, an earlier apply or a missing
+manifest never tells the two apart. A source deleted from the corpus is
+therefore answered `object-not-visible` as well. There is no ambient agent mode: an automatic request with no
 matching active policy is refused.
 
 The digest of a policy is `sha256:` and the hex SHA-256 of its canonical form:
@@ -301,9 +305,10 @@ nothing a policy says overrides a stale source.
 
 ### Order of one apply
 
-1. Resolve the workspace, the pending edit, its view and the immutable manifest
-   of the generation the edit was observed under.
-2. Build the canonical graph now. The identity must still name the path the
+1. Resolve the workspace and the pending edit. Build the canonical graph now
+   and ask whether this machine may see the object. Then resolve the view and
+   the immutable manifest of the generation the edit was observed under.
+2. The identity must still name the path the
    manifest recorded, in an enrolled repository. That path must be a regular
    file with one name, reached through no symbolic link, inside the repository,
    outside every managed root and the git directory, and not git-ignored.
@@ -351,7 +356,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | --- | --- |
 | `integration-disabled`, `workspace-not-prepared`, `unknown-edit`, `foreign-workspace`, `unknown-scope`, `edit-not-open` | the request cannot be resolved |
 | `manifest-unavailable`, `published-note-unavailable` | the generation's manifest, or the note as it was published, cannot be established |
-| `repository-not-enrolled`, `source-not-in-graph`, `source-moved` | the identity no longer names that path: a deleted, renamed or moved source |
+| `repository-not-enrolled`, `source-not-in-graph`, `source-moved` | the identity of a visible object no longer names that path: a renamed or moved source (a deleted one is `object-not-visible`) |
 | `source-missing`, `source-symlink`, `source-not-regular-file`, `source-hard-linked`, `source-outside-repository`, `source-inside-managed-root`, `source-inside-git-directory`, `source-git-ignored`, `source-ignore-state-unknown` | the path is not one this operation writes |
 | `object-not-visible`, `edit-class-not-allowed`, `maintenance-mode-manual`, `no-apply-policy-installed`, `apply-policy-revoked`, `apply-policy-paused`, `apply-policy-invalid`, `apply-policy-reference-mismatch`, `policy-digest-mismatch`, `policy-changed-since-dispatch`, `policy-selector-invalid`, `outside-policy-selection`, `retry-budget-exhausted`, `batch-bound-reached` | the decision |
 | `stale-source`, `object-conflicted`, `sibling-edit-unobservable`, `lease-held` | arbitration; the operation stays conflicted or pending with its bytes |

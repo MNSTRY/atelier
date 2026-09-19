@@ -1958,13 +1958,13 @@ test('policy: the canonical digest excludes the digest member and ignores key or
 // One world, one note per case. No publisher is needed to refuse, so the view is written directly and this table
 // runs on every platform.
 const REFUSAL_CASES = Object.freeze(['disabled', 'stale', 'renamed', 'deleted', 'symlinked', 'symlinked-directory', 'hard-linked', 'ignored', 'ignore-unknown', 'managed-root', 'not-visible', 'lens', 'conflicted',
-  'exchange', 'volume', 'unknown-scope', 'no-policy', 'manual-mode', 'revoked', 'revoked-by-command', 'paused', 'outside-selection', 'digest-mismatch', 'changed-since-dispatch', 'budget', 'batch-a', 'batch-b', 'revoked-late', 'no-change'])
+  'exchange', 'volume', 'unknown-scope', 'no-policy', 'manual-mode', 'revoked', 'revoked-by-command', 'paused', 'outside-selection', 'digest-mismatch', 'changed-since-dispatch', 'budget', 'batch-a', 'batch-b', 'revoked-late', 'no-change', 'withheld-renamed', 'withheld-deleted'])
 const caseFile = (name) => `east-wing/cases/${name === 'symlinked-directory' ? 'linked/' : ''}${name}.md`
 const caseNode = (name) => `east-wing:case-${name}`
 function refusalWorld(t) {
   const files = { ...APPLY_FILES, 'east-wing/charts/table.pdf': Buffer.from('255044462d312e340a73796e7468657469630a', 'hex'),
     'east-wing/charts/table.pdf.kg.json': `${JSON.stringify({ schema: 'mnstry.source-sidecar@v1', asset: 'table.pdf', title: 'Reference table', summary: 'Invented figures.', tags: ['chart'], kg: { id: 'east-wing:table', type: 'evidence', domain: 'sample', lifecycle: 'source', status: 'active', audience: 'team', relations: { evidences: ['east-wing:lantern'] } } }, null, 2)}\n` }
-  for (const name of REFUSAL_CASES) files[caseFile(name)] = noteText({ id: caseNode(name), title: `Case ${name}`, body: 'Original sentence.', audience: name === 'not-visible' ? 'private' : 'team' })
+  for (const name of REFUSAL_CASES) files[caseFile(name)] = noteText({ id: caseNode(name), title: `Case ${name}`, body: 'Original sentence.', audience: name === 'not-visible' || name.startsWith('withheld-') ? 'private' : 'team' })
   files[caseFile('no-change')] = files[caseFile('no-change')].replace('  audience: "team"\n', '  audience: "team"\n  relations:\n    supports:\n      - "east-wing:compass"\n')
   const world = applyWorld(t, { files, audienceAllow: ['team', 'private'] })
   for (const scope of [WHOLE, EAST]) world.publishDirectly(scope.scopeId)
@@ -2009,13 +2009,16 @@ test('apply refusals, manual and automatic: every refusal is typed, keeps the ed
   await refuses('disabled', ['refused', 'integration-disabled'], { setup: () => { world.setEnabled(false); return () => world.setEnabled(true) } })
   await refuses('unknown-edit', ['refused', 'unknown-edit'], { nodeId: caseNode('stale'), request: { editId: `edit-${'0'.repeat(32)}` } })
   await refuses('renamed', ['refused', 'source-moved'], { setup: () => { fs.renameSync(source('renamed'), `${source('renamed')}.moved.md`); return () => fs.renameSync(`${source('renamed')}.moved.md`, source('renamed')) } })
-  await refuses('deleted', ['refused', 'source-not-in-graph'], { setup: swap('deleted', () => fs.rmSync(source('deleted'))) })
+  // A source that is gone from the corpus is an object this machine cannot see: the answer a withheld object gets.
+  await refuses('deleted', ['refused', 'object-not-visible'], { setup: swap('deleted', () => fs.rmSync(source('deleted'))) })
+  // The check of the graph stands behind the decision: a decision that allowed everything would still not find it.
+  await refuses('deleted', ['refused', 'source-not-in-graph'], { setup: swap('deleted', () => fs.rmSync(source('deleted'))), primitives: { decide: () => ({ allowed: true, actor: 'person-synthetic', policy: { mode: 'manual' }, retryBudget: null }) } })
   if (process.platform !== 'win32') {
     const elsewhere = path.join(world.dir, 'elsewhere.md')
     fs.writeFileSync(elsewhere, fs.readFileSync(source('symlinked')))
     // A census never follows a link, so a source that became one is no longer in the graph at all.
     const toLink = () => { fs.rmSync(source('symlinked')); fs.symlinkSync(elsewhere, source('symlinked')) }
-    await refuses('symlinked', ['refused', 'source-not-in-graph'], { setup: swap('symlinked', toLink) })
+    await refuses('symlinked', ['refused', 'object-not-visible'], { setup: swap('symlinked', toLink) })
     // The path check does not rely on that: a link that appears after the graph was read refuses too.
     const production = createProductionSeams()
     const afterGraph = (change) => (rebase) => ({ seams: { buildGraph: (input) => { const graph = production.buildGraph(input); change(); rebase(); return graph } } })
@@ -2082,6 +2085,33 @@ test('apply refusals, manual and automatic: every refusal is typed, keeps the ed
   assert.deepEqual(batch.map((result) => result.code), ['exchange-unavailable', 'batch-bound-reached'])
   assertNothingWritten(world, batchBefore, 'batch')
 
+  // Absent and withheld are one answer through the whole apply, not only in the decision: a withheld object whose
+  // source was renamed, one whose source was deleted, one that never existed and one that is simply withheld answer
+  // with the same document, and none of them leaves an event behind.
+  {
+    const withhold = () => { world.configureMachine({ audienceAllow: ['team'] }); return () => world.configureMachine({ audienceAllow: ['team', 'private'] }) }
+    const pendingStore = world.stateStore()
+    const pending = pendingStore.readPendingEdits()
+    const never = { ...world.editOf(caseNode('not-visible')), editId: `edit-${'e'.repeat(32)}`, identity: { ...world.editOf(caseNode('not-visible')).identity, nodeId: caseNode('never-existed') } }
+    pendingStore.writePendingEdits({ ...pending, edits: [...pending.edits, never] })
+    const both = (first, second) => () => { const undoFirst = first(); const undoSecond = second(); return () => { undoSecond(); undoFirst() } }
+    const answers = []
+    for (const [name, setup] of [
+      ['not-visible', withhold],
+      ['withheld-renamed', both(withhold, () => { fs.renameSync(source('withheld-renamed'), `${source('withheld-renamed')}.moved.md`); return () => fs.renameSync(`${source('withheld-renamed')}.moved.md`, source('withheld-renamed')) })],
+      ['withheld-deleted', both(withhold, swap('withheld-deleted', () => fs.rmSync(source('withheld-deleted'))))],
+      ['never-existed', withhold],
+    ]) {
+      for (const mode of ['manual', 'automatic']) {
+        const result = await refuses(name, ['refused', 'object-not-visible'], { mode, setup: mode === 'automatic' ? both(() => { automatic(); return () => world.configureMachine({ maintenanceMode: 'manual' }) }, setup) : setup })
+        answers.push(JSON.stringify({ ...result, editId: 'EDIT', nodeId: 'NODE' }))
+        assert.equal(objects().stateOf({ repoId: 'east-wing', nodeId: caseNode(name) }).sequence, 0, `${name}, ${mode}: nothing is recorded for an object this machine may not see`)
+      }
+    }
+    assert.deepEqual([...new Set(answers)], [answers[0]], 'one answer, whatever became of the withheld source')
+    // The same sources, visible: the answers that a withheld object must never give.
+    await refuses('withheld-renamed', ['refused', 'source-moved'], { setup: () => { fs.renameSync(source('withheld-renamed'), `${source('withheld-renamed')}.moved.md`); return () => fs.renameSync(`${source('withheld-renamed')}.moved.md`, source('withheld-renamed')) } })
+  }
   assert.equal(installed.digest, applyPolicyDigest(installed))
   for (const code of ['integration-disabled', 'source-moved', 'source-not-in-graph', 'source-hard-linked', 'source-git-ignored', 'source-inside-managed-root', 'object-not-visible', 'edit-not-applicable', 'object-conflicted', 'exchange-unavailable', 'stale-source', 'apply-policy-revoked', 'apply-policy-paused', 'outside-policy-selection', 'policy-digest-mismatch', 'retry-budget-exhausted']) assert.ok(seen.has(code), code)
 })
