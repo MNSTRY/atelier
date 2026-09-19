@@ -80,7 +80,9 @@ generation behind until its editor is clean.
 macOS (Darwin 25, arm64) with Obsidian 1.13.7 (installer 1.12.7), CLI enabled,
 no community plugin. Sixteen interleavings, 25 rounds for each racing case, in
 four complete clean runs of the prototype in `experiments/obsidian-publication/`
-at commits `5930f85` and `93303ff`. Receipt SHA-256 digests:
+at commits `34f5fab` and `c5142e7`. The receipts record those same trees under their
+pre-sign-off identities `5930f85` and `93303ff`; the branch was rewritten only to add
+sign-off trailers, with identical content. Receipt SHA-256 digests:
 
 - `379992a6cc0e6c95581459412e8cab68d9b260a631fa891089613f120b40a67a`
 - `63a5b69b203125b6099f2398d1ebddd0e4f3265a0401becbddff5e6d72fee16e`
