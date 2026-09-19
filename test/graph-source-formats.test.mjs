@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { BOUNDARY_POLICY_SCHEMA, checkBoundaryPolicy } from '../src/boundary/policy.mjs'
-import { buildGraph, ignoredSidecarWarnings } from '../src/graph/graph.mjs'
+import { buildCanonicalGraph, buildGraph, canonicalGraphOptions, ignoredSidecarWarnings } from '../src/graph/graph.mjs'
 import { REPO_ACCESS_SCHEMA, SOURCE_SIDECAR_SCHEMA, buildKnowledgeGraph } from '../src/graph/knowledge-graph.mjs'
 import { commandProject, resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { projectGraph } from '../src/projection/policy.mjs'
@@ -422,4 +422,78 @@ test('the workspace builder refuses git-ignored sidecars in both directions', (t
     ['project-app/assets/data.json.kg.json', 'project-app/assets/page.html.kg.json'],
   )
   assert.equal(JSON.stringify(result.workspaceGraph).includes('Injected title'), false)
+})
+
+// ---------------------------------------------------------------------------
+// Project-to-canonical-graph seam. Invented two-repository project.
+// ---------------------------------------------------------------------------
+
+function makeLinkedProject(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-linked-project-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const doc = (id, title, extra, body) =>
+    `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n${extra}---\n\n# ${title}\n\n${body}\n`
+  for (const name of ['field-notes', 'lab-notes']) fs.mkdirSync(path.join(dir, name, '.git'), { recursive: true })
+  writeFile(
+    path.join(dir, 'field-notes'),
+    'survey.md',
+    doc('field-notes:survey', 'Survey', '  relations:\n    supports:\n      - "lab-notes:assay"\n', 'Twice: [assay](../lab-notes/assay.md) and [again](../lab-notes/assay.md#method). Gone: [x](../lab-notes/none.md).'),
+  )
+  writeFile(path.join(dir, 'lab-notes'), 'assay.md', doc('lab-notes:assay', 'Assay', '', 'From [[Survey]].'))
+  writeJson(path.join(dir, 'atelier.project.json'), {
+    schema: 'mnstry.atelier-project-config@v1',
+    name: 'linked-project-fixture',
+    roots: { workspace: '.', repoOps: '.' },
+    graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' },
+    projection: { outputRoot: 'atelier-output', readinessPath: 'atelier-output/atelier-readiness.json' },
+    repos: [
+      { name: 'field-notes', path: 'field-notes', readBoundary: 'team' },
+      { name: 'lab-notes', path: 'lab-notes', readBoundary: 'team' },
+    ],
+  })
+  writeJson(path.join(dir, 'repo-access.v1.json'), {
+    schema: 'mnstry.atelier-repo-access@v1',
+    defaultReadBoundary: 'team',
+    repos: { 'field-notes': { readBoundary: 'team' }, 'lab-notes': { readBoundary: 'team' } },
+  })
+  return fixtureProject({ dir, config: path.join(dir, 'atelier.project.json') })
+}
+
+test('the canonical graph seam serves resolved cross-repository edges with their source occurrences', (t) => {
+  const project = makeLinkedProject(t)
+  const canonical = buildCanonicalGraph(project)
+  assert.equal(canonical.ok, true, canonical.errors.join('\n'))
+  assert.deepEqual(
+    canonical.edges.map((edge) => [edge.id, edge.origin, edge.occurrences?.length ?? null]),
+    [
+      ['["field-notes:survey","links_to","lab-notes:assay"]', 'ordinary-link', 2],
+      ['["field-notes:survey","supports","lab-notes:assay"]', 'declared', null],
+      ['["lab-notes:assay","links_to","field-notes:survey"]', 'ordinary-link', 1],
+    ],
+  )
+  const [first, second] = canonical.edges[0].occurrences
+  assert.equal(first.crossRepository, true)
+  assert.ok(first.range.byteStart < second.range.byteStart)
+  assert.equal(second.fragment, '#method')
+  assert.deepEqual(canonical.linkDiagnostics.map((item) => item.code), ['link-target-unresolved'])
+
+  // One authority: the seam adds nothing the canonical builder did not produce.
+  const direct = buildKnowledgeGraph(canonicalGraphOptions(project).options)
+  assert.deepEqual(canonical.nodes, direct.workspaceGraph.nodes)
+  assert.deepEqual(canonical.links, direct.resolvedLinks)
+  assert.deepEqual(canonical.edges.map(({ source, target, type }) => ({ source, target, type })), direct.workspaceGraph.edges.map(({ source, target, type }) => ({ source, target, type })))
+
+  const narrowed = buildCanonicalGraph(project, { isLinkTargetEligible: (node) => node.id !== 'lab-notes:assay' })
+  assert.deepEqual(narrowed.edges.filter((edge) => edge.origin !== 'declared'), [])
+})
+
+test('the compatibility graph is unchanged by link resolution: declared edges only, no offsets, no link findings', (t) => {
+  const project = makeLinkedProject(t)
+  const graph = buildGraph(project)
+  assert.deepEqual(graph.errors, [])
+  assert.deepEqual(graph.edges, [{ source: 'field-notes:survey', target: 'lab-notes:assay', type: 'supports', declared: true }])
+  assert.deepEqual(Object.keys(graph), ['schema', 'generatedAt', 'project', 'counts', 'nodes', 'edges', 'diagnostics', 'external', 'errors'])
+  assert.deepEqual(graph.diagnostics, [])
+  assert.ok(!JSON.stringify(graph).includes('links_to'))
+  assert.ok(!JSON.stringify(graph).includes('byteStart'))
 })
