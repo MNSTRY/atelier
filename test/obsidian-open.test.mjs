@@ -1044,7 +1044,7 @@ test('a contribution is a module in a directory: found without editing any dispa
   const result = await world.run(['echo', 'hello', '--json'], { contributions: null, contributionsDirectory: directory })
   assert.deepEqual([result.exit, result.json.said], [EXIT.ok, ['hello']])
   assert.deepEqual(await loadContributions({ directory: path.join(world.dir, 'nowhere') }), [])
-  assert.deepEqual(await loadContributions(), [], 'this track ships no contribution of its own')
+  assert.deepEqual((await loadContributions()).map((item) => item.id), ['atelier.source-apply'], 'the shipped directory holds the source apply contribution and nothing else')
   const run = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/cli/run.mjs'), 'utf8')
   assert.deepEqual([(run.match(/obsidian\.mjs/g) ?? []).length, run.includes("'echo'")], [1, false], 'the dispatch table names the command once and no sub-operation')
 
