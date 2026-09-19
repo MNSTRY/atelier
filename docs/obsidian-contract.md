@@ -364,7 +364,10 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 
 An `apply-intent` with no outcome is never guessed. `atelier obsidian apply
 recover`, and the next apply of the same object, decide from digests on disk.
-Only bytes with the recorded candidate digest are ours to delete.
+Only bytes with the recorded candidate digest are ours to delete. Every
+interrupted apply is settled on its own: an object whose record cannot be read
+is reported with its code, left exactly as it is, and delays no other. `apply
+list`, `show`, `run` and `recover` answer such a record as a typed refusal.
 
 | At the candidate path | Source | Decision |
 | --- | --- | --- |

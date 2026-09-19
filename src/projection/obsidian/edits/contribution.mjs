@@ -1,7 +1,9 @@
 import path from 'node:path'
 import { firstString, parseArgs, resolveProjectConfig } from '../../../project/config.mjs'
 import { refuse } from '../../../runtime/obsidian/errors.mjs'
+import { PublicationRefusal } from '../recovery/store.mjs'
 import { SOURCE_APPLY_OPERATION_ID, SourceApplyRefusal, createSourceApply } from './apply.mjs'
+import { EditArbitrationRefusal } from './arbitrate.mjs'
 
 // Binds source apply to the two places that call it: the maintenance engine,
 // which dispatches queued edits in automatic mode, and `atelier obsidian
@@ -52,9 +54,13 @@ export function createApplyCommandOperation({ create = createSourceApply } = {})
     async run({ args, flags, loadProject, dataRoot, env, platform, clock }) {
       const [sub = 'list', editId, ...extra] = args
       const sourceApply = create({ loadProject, ...(dataRoot === undefined ? {} : { dataRoot }), env, platform, clock })
+      // The refusals of the apply operation, of the object store and of the store of a view are typed refusals of
+      // this command too: an object log that cannot be read is an answer with a code, never an internal error.
       const typed = async (operation) => {
         try { return await operation() } catch (error) {
           if (error instanceof SourceApplyRefusal) refuse(error.code, 'the apply operation refused', error.detail)
+          if (error instanceof EditArbitrationRefusal) refuse(error.code, 'the record of this object cannot be read; nothing was changed')
+          if (error instanceof PublicationRefusal) refuse(error.code, 'the store of this view refused; nothing was changed')
           throw error
         }
       }
@@ -75,12 +81,12 @@ export function createApplyCommandOperation({ create = createSourceApply } = {})
         if (extra.length > 0) refuse('usage', 'run takes one edit; name the actor with --actor ID')
         const { actor } = flags
         if (actor !== undefined && !ACTOR.test(actor)) refuse('usage', 'the actor must be an identifier')
-        const result = await sourceApply.apply({ editId, mode: 'manual', ...(actor === undefined ? {} : { actor }) })
+        const result = await typed(() => sourceApply.apply({ editId, mode: 'manual', ...(actor === undefined ? {} : { actor }) }))
         const applied = result.status === 'applied'
         return { exit: applied ? EXIT.ok : EXIT.notSuccess, document: { result }, human: [`${result.status}: ${result.code}`, ...(applied ? ['The source file changed; nothing was staged or committed.'] : ['Nothing was written to the source file.'])] }
       }
       if (sub === 'recover') {
-        const report = await sourceApply.recover()
+        const report = await typed(() => sourceApply.recover())
         if (report.refusal) refuse(report.refusal.code, 'interrupted applies could not be looked at')
         return { exit: EXIT.ok, document: report, human: report.recovered.length === 0 ? ['no interrupted apply'] : report.recovered.map((item) => `${item.applyId}\t${item.status}\t${item.code}`) }
       }

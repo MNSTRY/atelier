@@ -683,12 +683,21 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
           for (const { record, settled } of listRecords(opened)) {
             if (settled) continue
             const identity = { repoId: record.repoId, nodeId: record.nodeId }
-            const acquired = await opened.objects.acquireLease(identity, leasePid === undefined ? {} : { pid: leasePid })
-            if (!acquired.acquired) { report.push({ applyId: record.applyId, editId: record.editId, status: 'refused', code: 'lease-held' }); continue }
+            // Every record is settled on its own: an object whose log or store cannot be read is reported by its
+            // code, left exactly as it is, and keeps no other interrupted apply waiting.
+            let lease = null
             try {
-              const outcome = settleInterrupted(opened, acquired.lease, record, acquired.object)
+              const acquired = await opened.objects.acquireLease(identity, leasePid === undefined ? {} : { pid: leasePid })
+              if (!acquired.acquired) { report.push({ applyId: record.applyId, editId: record.editId, status: 'refused', code: 'lease-held' }); continue }
+              lease = acquired.lease
+              const outcome = settleInterrupted(opened, lease, record, acquired.object)
               report.push({ applyId: record.applyId, editId: record.editId, repoId: record.repoId, nodeId: record.nodeId, ...outcome })
-            } finally { opened.objects.releaseLease(acquired.lease) }
+            } catch (error) {
+              if (!isTyped(error)) throw error
+              report.push({ applyId: record.applyId, editId: record.editId, repoId: record.repoId, nodeId: record.nodeId, status: 'refused', code: error.code })
+            } finally {
+              if (lease !== null) try { opened.objects.releaseLease(lease) } catch (error) { if (!isTyped(error)) throw error }
+            }
           }
           return report
         })

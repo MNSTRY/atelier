@@ -41,7 +41,7 @@ import {
 } from '../src/projection/obsidian/edits/index.mjs'
 import { ObsidianContractRefusal, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import { sha256Digest } from '../src/projection/obsidian/materialize/index.mjs'
-import { createRecoveryStore } from '../src/projection/obsidian/recovery/index.mjs'
+import { PublicationRefusal, createRecoveryStore } from '../src/projection/obsidian/recovery/index.mjs'
 import { observeVaultEdits } from '../src/runtime/obsidian/pending-edits.mjs'
 import { createAbandonmentProof, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
 import { RACE_MODES, digestOf, makeOperation, raceIdentity, raceOperation, resultOf, stormIdentity, stormOperation } from './support/obsidian-edits/operations.mjs'
@@ -2374,11 +2374,11 @@ test('apply without an atomic exchange (Windows today) refuses exchange-unavaila
   assert.deepEqual(world.pendingEdits().filter((edit) => edit.closedAt === null).length, 2, 'both edits stay pending')
 })
 
-async function runApplyCommand(world, argv, options = {}) {
+async function runApplyCommand(world, argv, { wrap = (operation) => operation, ...options } = {}) {
   const { runObsidianCommand } = await import('../src/commands/obsidian.mjs')
   const out = []
   const exit = await runObsidianCommand({ argv, seams: {}, loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock, stdout: (text) => out.push(text), stderr: (text) => out.push(text),
-    contributions: [createSourceApplyContribution({ create: (context) => world.sourceApply({ ...context, ...options }) })] })
+    contributions: [createSourceApplyContribution({ create: (context) => wrap(world.sourceApply({ ...context, ...options })) })] })
   const text = out.join('\n')
   return { exit, text, json: argv.includes('--json') ? JSON.parse(text) : null }
 }
@@ -2408,6 +2408,44 @@ test('apply command: list, show, run and recover answer one JSON document with t
     const answer = await runApplyCommand(world, argv)
     assert.deepEqual([answer.exit, answer.json.error.code], [2, code], argv.join(' '))
   }
+})
+
+test('apply command beside a damaged object log: recover settles the healthy interrupted apply and reports the damaged object by its code, show answers a typed refusal, and nothing is repaired or deleted', needsExchange, async (t) => {
+  const world = raceWorld(t, 2)
+  const [healthy, damaged] = [0, 1].map((index) => world.editOf(`race-room:round-${index}`))
+  for (const edit of [healthy, damaged]) {
+    await assert.rejects(world.sourceApply({ leasePid: exitedPid(), crash: (step) => { if (step === 'intent-recorded') throw new Error(`crash at ${step}`) } }).apply({ editId: edit.editId, mode: 'manual' }), /crash at/)
+  }
+  // Another program wrote over an event of the second object. Its log can no longer be read.
+  const directory = objectDirectory(world.workspaceRoot(), { repoId: 'race-room', nodeId: 'race-room:round-1' })
+  fs.writeFileSync(path.join(directory, eventFile(1)), '{"half":')
+  const before = { object: snapshotTree(directory), sources: treeListing(world.repo('race-room'), { skip: (relative) => relative.startsWith('.git/') }) }
+  const candidatesOf = () => filesUnder(world.recovery()).filter((file) => /\.candidate$/.test(file)).length
+  assert.equal(candidatesOf(), 2)
+
+  const recovered = await runApplyCommand(world, ['apply', 'recover', '--json'], { leasePid: exitedPid() })
+  assert.equal(recovered.exit, 0, recovered.text)
+  assert.deepEqual(recovered.json.recovered.map((item) => [item.editId, item.status, item.code]).sort(), [[healthy.editId, 'refused', 'interrupted-before-exchange'], [damaged.editId, 'refused', 'object-event-malformed']].sort())
+  assert.equal((await world.sourceApply().show(healthy.editId)).object.outcomeUnknown, false, 'the healthy apply is settled')
+  assert.equal(candidatesOf(), 1, 'the candidate of the damaged object stays where it is')
+  assert.deepEqual({ object: snapshotTree(directory), sources: treeListing(world.repo('race-room'), { skip: (relative) => relative.startsWith('.git/') }) }, before, 'the damaged log is not repaired or deleted, and no source changed')
+
+  for (const argv of [['apply', 'show', damaged.editId, '--json'], ['apply', 'run', damaged.editId, '--json']]) {
+    const answer = await runApplyCommand(world, argv)
+    const code = answer.json.error?.code ?? answer.json.result?.code
+    assert.deepEqual([answer.exit === 2 || answer.exit === 3, code], [true, 'object-event-malformed'], `${argv[1]}: ${answer.text}`)
+    assert.ok(!answer.text.includes('internal-error'), argv[1])
+  }
+  const listed = await runApplyCommand(world, ['apply', 'list', '--json'])
+  assert.equal(listed.exit, 0, listed.text)
+  assert.deepEqual(listed.json.edits.map((edit) => edit.editId).sort(), [healthy.editId, damaged.editId].sort(), 'a damaged object hides no other edit from the listing')
+  // Mutation control: a recovery that stops at the first unreadable object settles nothing else, and even then the
+  // command answers with the code.
+  const stopsAtFirst = await runApplyCommand(world, ['apply', 'recover', '--json'], { wrap: (operation) => ({ ...operation, recover: async () => { throw new EditArbitrationRefusal('object-event-malformed', 'synthetic') } }) })
+  assert.deepEqual([stopsAtFirst.exit, stopsAtFirst.json.error.code], [2, 'object-event-malformed'], stopsAtFirst.text)
+  // The store of the view refusing is typed at the same boundary.
+  const storeRefuses = await runApplyCommand(world, ['apply', 'show', healthy.editId, '--json'], { seams: { createRecoveryStore: () => { throw new PublicationRefusal('recovery-object-corrupt', 'synthetic') } } })
+  assert.deepEqual([storeRefuses.exit, storeRefuses.json.error.code], [2, 'recovery-object-corrupt'], storeRefuses.text)
 })
 
 test('apply disclosure: results, listings, recovery reports, command output, events and apply errors hold no note text, source text, title or machine path', needsExchange, async (t) => {
