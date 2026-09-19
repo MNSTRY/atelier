@@ -1866,7 +1866,8 @@ async function assertServiceOutlivesItsLauncher(t, launcherArgs = []) {
   world.track(launcher.pid)
   let output = ''
   launcher.stdout.on('data', (chunk) => { output += chunk })
-  const code = await new Promise((resolve) => { launcher.once('exit', resolve) })
+  // `close`, not `exit`: the launcher's output is complete only once its pipe has closed.
+  const code = await new Promise((resolve) => { launcher.once('close', resolve) })
   const reported = JSON.parse(output)
   if (reported.pid) world.track(reported.pid)
   assert.deepEqual([code, reported.state, reported.started], [0, 'healthy', true])
@@ -2176,6 +2177,9 @@ test('mutation control: a builder that looks up this machine, or writes the unit
   const scratch = fs.mkdtempSync(path.join(TMP, 'atelier-maintenance-unit-'))
   t.after(() => fs.rmSync(scratch, { recursive: true, force: true }))
   assert.throws(() => assertBuilderIsPure((input) => { const built = buildStartupAdapter(input); fs.writeFileSync(path.join(scratch, built.fileName), built.text); return built }), assert.AssertionError)
+  // The units are POSIX text, so the builder refuses this host's own paths on Windows before the oracle sees them:
+  // there the two controls below cannot be expressed, and the one above stands alone.
+  if (process.platform === 'win32') return
   assert.throws(() => assertBuilderIsPure((input) => buildStartupAdapter({ ...input, workingDirectory: os.homedir() })), assert.AssertionError)
   assert.throws(() => assertBuilderIsPure((input) => buildStartupAdapter({ ...input, nodePath: process.execPath })), assert.AssertionError)
 })
