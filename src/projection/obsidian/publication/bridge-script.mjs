@@ -152,6 +152,10 @@ export function criticalSection(P, host) {
   const call = host.exchange.calls[`${host.process.platform}/${host.process.arch}`]
   const perl = host.exchange.perlCandidates.find((candidatePath) => fs.existsSync(candidatePath))
   if (!call || !perl) return done('exchange-unavailable', { wrote: false })
+  // The interpreter runs inside the app: only a root-owned binary that neither group nor others can write.
+  let perlStat = null
+  try { perlStat = fs.statSync(perl) } catch (error) { perlStat = null }
+  if (!perlStat || perlStat.uid !== 0 || (perlStat.mode & 0o022) !== 0) return done('exchange-interpreter-untrusted', { wrote: false })
   // Atomic exchange: whatever occupied the note path at this instant lands at
   // the staged path, so no concurrent replacement of the note can be lost.
   let exitStatus = 0

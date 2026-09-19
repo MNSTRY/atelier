@@ -415,8 +415,48 @@ test('atomic exchange swaps two files, fails without changing anything, and refu
   assert.equal(probeExchange({ directory: dir, platform: 'linux', arch: 'riscv64' }).code, 'exchange-unsupported-architecture')
   assert.equal(probeExchange({ directory: dir, perlPath: path.join(dir, 'no-perl') }).code, 'exchange-interpreter-missing')
   fs.writeFileSync(path.join(dir, 'false-perl'), '#!/bin/sh\nexit 45\n', { mode: 0o755 })
-  assert.equal(probeExchange({ directory: dir, perlPath: path.join(dir, 'false-perl') }).code, 'exchange-unsupported-filesystem')
+  const rootOwned = () => ({ uid: 0, mode: 0o100755 })
+  assert.equal(probeExchange({ directory: dir, perlPath: path.join(dir, 'false-perl'), statSync: rootOwned }).code, 'exchange-unsupported-filesystem')
+  // The same stand-in as it really is, owned by this user: refused before it is ever run.
+  resetExchangeProbeCache()
+  assert.equal(probeExchange({ directory: dir, perlPath: path.join(dir, 'false-perl') }).code, 'exchange-interpreter-untrusted')
   assert.deepEqual(fs.readdirSync(dir).sort(), ['a', 'b', 'false-perl'], 'the probe leaves no scratch files')
+})
+
+test('the exchange interpreter is used only when root owns it and neither group nor others can write it', needsExchange, async (t) => {
+  const stats = { 'owned by a user': { uid: 501, mode: 0o100755 }, 'group-writable': { uid: 0, mode: 0o100775 }, 'world-writable': { uid: 0, mode: 0o100757 } }
+  for (const [label, stat] of Object.entries(stats)) {
+    assert.throws(() => resolveExchange({ statSync: () => stat }), (error) => error.code === 'exchange-interpreter-untrusted', label)
+  }
+  assert.throws(() => resolveExchange({ statSync: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }) } }), (error) => error.code === 'exchange-interpreter-untrusted')
+  assert.doesNotThrow(() => resolveExchange({ statSync: () => ({ uid: 0, mode: 0o100755 }) }))
+  assert.doesNotThrow(() => resolveExchange({}), 'the system perl on this host passes as it is')
+
+  // The publisher refuses the whole publication and touches nothing.
+  const world = await seeded(t)
+  resetExchangeProbeCache()
+  const before = snapshotTree(world)
+  const refused = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), absentAdapter(), { exchangeOptions: { statSync: () => stats['group-writable'] } })
+  assert.equal(refused.refusal.code, 'exchange-interpreter-untrusted')
+  assert.deepEqual(snapshotTree(world), before)
+  resetExchangeProbeCache()
+
+  // The fixed script makes the same check where it runs, which may be inside the app.
+  for (const [label, stat] of Object.entries(stats)) {
+    const host = createInProcessHost()
+    const realRequire = host.require
+    const realFs = realRequire('fs')
+    host.require = (name) => (name !== 'fs' ? realRequire(name) : new Proxy(realFs, { get: (target, key) => (key !== 'statSync' ? target[key] : (file, ...rest) => (/perl$/.test(file) ? stat : realFs.statSync(file, ...rest))) }))
+    const staged = path.join(world.root, 'manual', `${stat.mode}-${stat.uid}.candidate`)
+    fs.mkdirSync(path.dirname(staged), { recursive: true })
+    fs.writeFileSync(staged, CANDIDATE)
+    const reply = runInProcess({ op: 'publish', mode: 'replace', vaultRoot: world.vault, path: NOTE, operationId: 'manual:9', baseSha256: hex(BASE), candidateSha256: hex(CANDIDATE), stagedPath: staged, recoveryPath: path.join(world.root, 'recovery', 'untrusted.displaced') }, host)
+    assert.deepEqual([reply.status, reply.wrote], ['exchange-interpreter-untrusted', false], label)
+    assert.equal(world.read(NOTE), BASE)
+    assert.equal(fs.readFileSync(staged, 'utf8'), CANDIDATE)
+  }
+  const code = buildEvalCode({ op: 'inspect', vaultRoot: '/vault', path: NOTE })
+  assert.ok(code.includes('exchange-interpreter-untrusted'), 'the check travels in the code sent to an app')
 })
 
 test('an unsupported platform refuses the whole publication and touches nothing', needsExchange, async (t) => {

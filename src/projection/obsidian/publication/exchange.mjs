@@ -13,6 +13,8 @@ import path from 'node:path'
 // module, no compiler and no package dependency.
 //   macOS: renameatx_np(AT_FDCWD, from, AT_FDCWD, to, RENAME_SWAP)
 //   Linux: renameat2(AT_FDCWD, from, AT_FDCWD, to, RENAME_EXCHANGE)
+// The perl binary must be owned by uid 0 and writable by neither group nor
+// others, here and inside the app; otherwise the caller refuses.
 // Link-then-rename is not a substitute and is not offered. Where the exchange
 // is unavailable the caller refuses and publishes nothing.
 
@@ -37,7 +39,12 @@ export class ExchangeRefusal extends Error {
   }
 }
 
-export function resolveExchange({ platform = process.platform, arch = process.arch, perlPath, existsSync = fs.existsSync } = {}) {
+// The interpreter runs inside the publisher and, through the fixed script,
+// inside the app. It is used only when it belongs to the system: owned by
+// uid 0 and writable by neither group nor others.
+export const isTrustedInterpreter = (stat) => Boolean(stat) && stat.uid === 0 && (stat.mode & 0o022) === 0
+
+export function resolveExchange({ platform = process.platform, arch = process.arch, perlPath, existsSync = fs.existsSync, statSync = fs.statSync } = {}) {
   if (platform !== 'darwin' && platform !== 'linux') {
     throw new ExchangeRefusal('exchange-unsupported-platform', 'no atomic exchange is known for this platform; nothing is published', { platform })
   }
@@ -45,6 +52,11 @@ export function resolveExchange({ platform = process.platform, arch = process.ar
   if (!call) throw new ExchangeRefusal('exchange-unsupported-architecture', 'the exchange syscall number is not known for this architecture', { platform, arch })
   const perl = perlPath ?? EXCHANGE_CONSTANTS.perlCandidates.find((candidate) => existsSync(candidate))
   if (!perl || !existsSync(perl)) throw new ExchangeRefusal('exchange-interpreter-missing', 'the system perl used to reach the exchange syscall is absent', { platform })
+  let stat = null
+  try { stat = statSync(perl) } catch { /* unreadable is untrusted */ }
+  if (!isTrustedInterpreter(stat)) {
+    throw new ExchangeRefusal('exchange-interpreter-untrusted', 'the perl used to reach the exchange syscall is not owned by root, or is writable by group or others; nothing is published', { perl })
+  }
   return { perl, number: call.number, cwd: call.cwd }
 }
 
