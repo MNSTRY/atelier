@@ -1,5 +1,6 @@
 import childProcess from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveProjectConfig } from '../../../src/project/config.mjs'
@@ -11,8 +12,8 @@ import { defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMa
 import { isProcessAlive } from '../../../src/runtime/obsidian/private-lock.mjs'
 import { probeHealth } from '../../../src/runtime/obsidian/service-client.mjs'
 import { SERVICE_ENTRY_PATH } from '../../../src/runtime/obsidian/service-main.mjs'
-import { resolveServiceWorkspace } from '../../../src/runtime/obsidian/service.mjs'
-import { readServiceRecord, servicePaths } from '../../../src/runtime/obsidian/service-record.mjs'
+import { resolveServiceWorkspace, runMaintenanceService } from '../../../src/runtime/obsidian/service.mjs'
+import { SERVICE_SETTINGS_SCHEMA, readServiceRecord, readServiceSettings, servicePaths, writeServiceSettings } from '../../../src/runtime/obsidian/service-record.mjs'
 import { createMaintenanceStateStore } from '../../../src/runtime/obsidian/state-store.mjs'
 import { isoNow, sha256Digest, walkFiles } from './common.mjs'
 import { waitUntil } from './measure.mjs'
@@ -186,6 +187,71 @@ export function createServiceRuntime({
       return { launcher: { pid: child.pid, throughShell: launchThroughShell, exit, alive: alive(child.pid), stdout, stderr: stderr.slice(0, 4000) }, reported }
     },
   }
+}
+
+// The maintenance service of one workspace inside this process: the same
+// service body (`runMaintenanceService`: loopback listener, owner-only record,
+// tick loop) with an adapter factory the caller chooses. AP-05 needs it: one
+// service maintains two vaults that two isolated apps hold, and each app is
+// reached through its own private HOME, which one detached process with one
+// environment cannot do. Ownership, status and ticks go through the same
+// lifecycle API as for a detached service; a stop is the service's own
+// shutdown, awaited.
+export function createInProcessServiceRuntime({ loadProject, dataRoot, env, consent, adapterFactory, extensions, intervalMs = 60 * 60 * 1000, probeTimeoutMs, startTimeoutMs = 120 * 1000, entryPath = SERVICE_ENTRY_PATH, clock = () => new Date(), log = () => {} }) {
+  const lifecycle = { loadProject, dataRoot, env, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
+  const workspace = () => resolveServiceWorkspace({ project: loadProject(), dataRoot, env, create: true })
+  let service = null
+  const logLines = []
+  const record = () => { const found = workspace(); return found?.workspaceRoot ? readServiceRecord({ workspaceRoot: found.workspaceRoot, workspaceId: found.workspaceId }) : null }
+  return {
+    kind: 'in-process-service',
+    entryPath,
+    logLines,
+    async start() {
+      if (service !== null) { const status = await serviceStatus(lifecycle); return { ...status, started: false, alreadyRunning: true } }
+      const { workspaceRoot, workspaceId } = workspace()
+      const current = readServiceSettings({ workspaceRoot, workspaceId })
+      if (current === null) {
+        const port = await new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => { const { port: chosen } = server.address(); server.close(() => resolve(chosen)) }) })
+        writeServiceSettings({ workspaceRoot, workspaceId, settings: { schema: SERVICE_SETTINGS_SCHEMA, workspaceId, host: '127.0.0.1', port, consent: { grantedAt: clock().toISOString(), actor: consent.actor, coverage: consent.coverage ?? 'service' }, updatedAt: clock().toISOString() } })
+      }
+      service = await runMaintenanceService({ loadProject, dataRoot, env, adapterFactory, entryPath, intervalMs, clock, log: (entry) => { logLines.push(entry); log(entry) }, engineOptions: { ...(extensions ? { extensions } : {}), quietPeriodMs: 0 } })
+      // The first tick runs in this process the moment the loop starts and holds the event loop through its synchronous
+      // parts, so health may not answer at once. A detached service in that state reads `busy` (its command line
+      // names the entry); this process's does not, so the status is asked again until the tick has let go.
+      let status = null
+      const settled = await waitUntil(async () => { status = await serviceStatus(lifecycle); return status.state === 'healthy' }, { timeoutMs: startTimeoutMs, intervalMs: 200 })
+      return { ...status, started: true, alreadyRunning: false, firstTickWaitMs: settled.elapsedMs }
+    },
+    status: () => serviceStatus(lifecycle),
+    statusDocument: () => readServiceStatusDocument(lifecycle),
+    tick: (options = {}) => requestServiceTick({ ...lifecycle, ...options }),
+    async stop() {
+      if (service === null) return { state: 'stopped', stopped: false, refused: false, reason: 'not-running-in-this-process' }
+      const { identity } = service
+      await service.shutdown('stop-requested')
+      await service.done
+      service = null
+      return { state: 'stopped', stopped: true, refused: false, reason: 'stopped-the-in-process-runtime', runtimeId: identity.runtimeId, pid: identity.pid }
+    },
+    record,
+    alive: isProcessAlive,
+  }
+}
+
+// One adapter factory for several isolated apps: the vault a publication is
+// for selects the app that holds it, reached through that app's private
+// HOME. Each app is qualified on its own (version floor, running process).
+export function createPerVaultAdapterFactory(apps, { createQualifiedAdapterFactory, createProductionAppProbe, createObsidianCliAdapter }) {
+  const factories = apps.map(({ vaultRoot, env }) => ({ vaultRoot: fs.realpathSync(vaultRoot), factory: createQualifiedAdapterFactory({ appProbe: createProductionAppProbe({ env }), createAdapter: () => createObsidianCliAdapter({ env }) }) }))
+  const factory = (input) => {
+    const vaultRoot = input?.store?.vaultRoot
+    const match = factories.find((item) => item.vaultRoot === vaultRoot)
+    if (!match) throw new Error(`no isolated app holds the vault ${String(vaultRoot)}`)
+    return match.factory(input)
+  }
+  factory.lastQualification = () => factories.map((item) => item.factory.lastQualification())
+  return factory
 }
 
 // ---------------------------------------------------------------------------

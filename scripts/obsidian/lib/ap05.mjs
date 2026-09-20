@@ -197,8 +197,13 @@ export function createAp05RunnerForOracleTests(primitives = AP05_PRIMITIVES) {
   const eligibleAfter = fs.readFileSync(eligibleFile)
   automatic.eligible.after = { sourceDigest: sha256Digest(eligibleAfter), exactlyAsTyped: sha256Digest(eligibleAfter) === automatic.eligible.before.expectedDigest, dispatched: automatic.eligible.tick.tick?.dispatched ?? null }
   automatic.eligible.edits = await listEdits()
+  // The service's tick answer carries no dispatch list; the closed record of the edit and its object say what happened.
+  const appliedRecord = world.stateStore().readPendingEdits().edits.filter((edit) => edit.identity.nodeId === edits.eligible.nodeId && edit.closedAt !== null).map(({ editId, state, attempts, lastResult, closedAt }) => ({ editId, state, attempts, lastCode: lastResult?.code ?? null, operationId: lastResult?.operationId ?? null, policyDigest: lastResult?.policyDigest ?? null, closedAt }))
+  automatic.eligible.appliedRecord = appliedRecord
+  automatic.eligible.show = appliedRecord.length === 1 ? await run('apply', 'show', appliedRecord[0].editId) : null
   automatic.eligible.prompt = 'none: the tick is a loopback request answered by the service; no stdin was read and no question was asked'
-  check('automatic', automatic.eligible.after.exactlyAsTyped, `the eligible edit was not applied exactly on the tick (${JSON.stringify(automatic.eligible.after.dispatched)})`)
+  check('automatic', automatic.eligible.after.exactlyAsTyped, 'the eligible edit was not applied exactly on the tick')
+  check('automatic', appliedRecord.length === 1 && appliedRecord[0].state === 'applied' && appliedRecord[0].lastCode === 'applied' && appliedRecord[0].policyDigest === automatic.policy.create.answer?.policy?.digest, `the edit record does not show one automatic apply under the installed policy (${JSON.stringify(appliedRecord)})`)
   check('automatic', editsOf(automatic.eligible.edits, edits.eligible.nodeId).length === 0, 'the applied edit is still open')
 
   const pendingKinds = {}

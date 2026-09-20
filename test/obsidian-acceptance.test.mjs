@@ -59,7 +59,7 @@ const { dispatchAutomaticApply } = await import('../src/runtime/obsidian/pending
 const { OutputRefusal, assertExternalOutput, repositoryContaining } = await import('../scripts/obsidian/lib/common.mjs')
 const { PROPOSED_TARGETS, createResourceSampler, createWarmChangeSummaryForOracleTests, percentile, waitUntil, warmChangeSummary } = await import('../scripts/obsidian/lib/measure.mjs')
 const { absentAdapter, deriveWorkspace, materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
-const { bindLayoutToVault, createCommandRunner, createServiceRuntime, fileDigest, initialiseRepositories, noteFile, prepareWorkspace, stripProjectEnv } = await import('../scripts/obsidian/lib/service-world.mjs')
+const { bindLayoutToVault, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, fileDigest, initialiseRepositories, noteFile, prepareWorkspace, stripProjectEnv } = await import('../scripts/obsidian/lib/service-world.mjs')
 const { runAp03 } = await import('../scripts/obsidian/lib/ap03.mjs')
 const { AP05_EDITS, AP05_SCOPES, createAp05RunnerForOracleTests, prepareAp05Workspace, runAp05 } = await import('../scripts/obsidian/lib/ap05.mjs')
 const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
@@ -1174,7 +1174,8 @@ test('AP-03 runner: source refresh, dropped event with the null watcher, kills a
   const { steps } = run
   assert.ok(steps['source-refresh'].fileUpdate.met && steps['source-refresh'].appReadback.met && steps['source-refresh'].after.sourceDigest !== steps['source-refresh'].before.sourceDigest)
   assert.ok(typeof run.timings.sourceToFileMs === 'number' && typeof run.timings.sourceToAppMs === 'number', 'both latencies are recorded, separately')
-  assert.deepEqual(steps['dropped-event'].trials.map((trial) => [trial.label, trial.caught, trial.tick.full, trial.tick.changes.some((change) => change.changeClass === 'source-body')]), [['stat-and-digest', true, false, true], ['full-hash-pass', true, true, true]])
+  // The first trial's tick is full only when the short test interval elapsed during the trial, so its `full` is not pinned.
+  assert.deepEqual(steps['dropped-event'].trials.map((trial) => [trial.label, trial.caught, trial.label === 'full-hash-pass' ? trial.tick.full : null, trial.tick.changes.some((change) => change.changeClass === 'source-body')]), [['stat-and-digest', true, null, true], ['full-hash-pass', true, true, true]])
   assert.deepEqual(steps.interruption.points.map((point) => [point.point, point.afterKill.state, point.restart.state, point.restart.pid !== point.before.pid, point.retained.pendingEditsUnchanged, point.retained.journalsRetained, point.retained.objectsPresent]), [['idle-between-ticks', 'stale-record', 'healthy', true, true, true, true], ['during-a-tick', 'stale-record', 'healthy', true, true, true, true]])
   assert.ok(steps.interruption.reference.pendingEdits.length >= 1 && steps.interruption.reference.retainedObjects.every((item) => item.present))
   const launcher = steps['launcher-exit']
@@ -1206,26 +1207,36 @@ function engineRuntime(world, env, { onTick = () => {} } = {}) {
 // The editor of a fake instance: the same bytes real typing leaves on disk after the app saved.
 const fileEditor = (world, scopeId) => ({ async typeAt({ notePath, anchor, text }) { const file = noteFile(world.vaultRootFor(scopeId), notePath); const held = fs.readFileSync(file, 'utf8'); const at = held.indexOf(anchor); if (at < 0) throw new Error(`no anchor "${anchor}" in ${notePath}`); fs.writeFileSync(file, held.slice(0, at + anchor.length) + text + held.slice(at + anchor.length)); return { notePath, anchor, text, typedAt: new Date().toISOString(), noteDigest: fileDigest(file) } } })
 
-async function ap05World(t, label, { onTick } = {}) {
+// The production shape of the AP-05 runtime: the service body in this process, with the same contributions and an
+// adapter factory that reports no app for either vault.
+function inProcessRuntime(t, world, env) {
+  const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
+  const contributions = [createSourceApplyContribution({ context }), createProposalAdapterContribution(), createSelectionContribution()]
+  const runtime = createInProcessServiceRuntime({ ...context, consent: { actor: 'op-synthetic', coverage: 'service' }, probeTimeoutMs: 2000, adapterFactory: () => absentAdapter(), extensions: createObsidianRegistry({ contributions }).extensions })
+  t.after(async () => { try { await runtime.stop() } catch { /* already stopped */ } })
+  return Object.assign(runtime, { contributions })
+}
+
+async function ap05World(t, label, { onTick, inProcess = false } = {}) {
   const { world, env, fixture } = serviceWorld(t, label, { scoped: true })
-  const runtime = engineRuntime(world, env, { onTick })
+  const runtime = inProcess ? inProcessRuntime(t, world, env) : engineRuntime(world, env, { onTick })
   const command = await createCommandRunner({ projectFile: fixture.projectFile, dataRoot: world.dataRoot, env, contributions: runtime.contributions })
   const views = { full: { scopeId: AP05_SCOPES.full, editor: fileEditor(world, AP05_SCOPES.full) }, scoped: { scopeId: AP05_SCOPES.scoped, editor: fileEditor(world, AP05_SCOPES.scoped) } }
   return { world, runtime, command, views, fixture }
 }
 
 test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and automatic apply, pending kinds, idempotent restart, proposal store and retention', async (t) => {
-  const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05')
+  const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05', { inProcess: true })
   assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md'])
   const run = await runAp05({ world, views, runtime, command, operator: 'op-synthetic' })
+  assert.deepEqual({ start: [run.steps.baseline.start.state, run.steps.baseline.start.started, run.steps.baseline.start.record.pid], restart: [run.steps.automatic.restart.stop.stopped, run.steps.automatic.restart.start.state, run.steps.automatic.restart.start.record.runtimeId !== run.steps.baseline.start.record.runtimeId], stopped: run.steps.retention.uninstall.serviceStatus.state, log: runtime.logLines.filter((entry) => entry.event === 'started').length }, { start: ['healthy', true, process.pid], restart: [true, 'healthy', true], stopped: 'stopped', log: 2 }, 'the in-process service body was started twice, proven by health, and stopped')
   assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => item.role) }, { passed: true, failures: [], roles: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention', null] })
   const { steps } = run
   assert.deepEqual({ identical: [steps['multi-vault'].identical.object.state, steps['multi-vault'].identical.object.operations.length, steps['multi-vault'].identical.object.pendingEdits.length], divergent: [steps['multi-vault'].divergent.object.state, steps['multi-vault'].divergent.object.conflictedOperations.length] }, { identical: ['pending', 1, 2], divergent: ['conflicted', 2] })
   assert.deepEqual({ ticks: steps.manual.ticks.map((item) => item.sourceChanges.length), applied: steps.manual.apply.answer.result.status, exact: steps.manual.after.exactlyAsTyped, others: steps.manual.after.otherSourceChanges }, { ticks: [0, 0, 0], applied: 'applied', exact: true, others: [] })
   assert.ok(fs.readFileSync(path.join(world.workspaceDir, 'south-desk', 'tables', 'tide-table.md'), 'utf8').includes(AP05_EDITS.identical.text), 'the explicit apply wrote exactly the typed text into the source')
-  // The dispatch of that tick also offered the two conflicted harbor-plan edits; each was refused as a conflict, and only the eligible one was applied.
-  assert.deepEqual({ eligible: [steps.automatic.eligible.after.exactlyAsTyped, steps.automatic.eligible.after.dispatched.map((item) => item.status).sort()], pending: Object.fromEntries(Object.entries(steps.automatic.pendingSummary).map(([kind, list]) => [kind, list.map((edit) => [edit.state, edit.lastCode, edit.objectState])])) }, {
-    eligible: [true, ['applied', 'conflict', 'conflict']],
+  assert.deepEqual({ eligible: [steps.automatic.eligible.after.exactlyAsTyped, steps.automatic.eligible.appliedRecord.map((item) => [item.state, item.lastCode, item.attempts]), steps.automatic.eligible.show.answer.edit.object.state], pending: Object.fromEntries(Object.entries(steps.automatic.pendingSummary).map(([kind, list]) => [kind, list.map((edit) => [edit.state, edit.lastCode, edit.objectState])])) }, {
+    eligible: [true, [['applied', 'applied', 1]], 'settled'],
     pending: {
       outOfScope: [['retry-exhausted', 'outside-policy-selection', 'pending']],
       stale: [['retry-exhausted', 'stale-source', 'conflicted']],
@@ -1262,6 +1273,19 @@ test('mutation control: a warm summary that reads the app series from the file m
   const wrongSeries = createWarmChangeSummaryForOracleTests({ appOf: (sample) => sample.sourceToFileMs })(changes)
   assert.notEqual(wrongSeries.sourceToApp.p95Ms, 9000, 'the app p95 computed over the file series is not the app p95')
   assert.throws(() => assert.deepEqual({ file: wrongSeries.sourceToFile.p95Ms, app: wrongSeries.sourceToApp.p95Ms }, { file: 380, app: 9000 }), assert.AssertionError)
+})
+
+test('the per-vault adapter factory reaches the app that holds the vault through that app\'s HOME and refuses a vault nobody holds', (t) => {
+  const dir = tempDir(t, 'per-vault')
+  const vaults = ['full', 'scoped'].map((name) => { const vault = path.join(dir, name); fs.mkdirSync(vault); return vault })
+  const made = []
+  const factory = createPerVaultAdapterFactory(vaults.map((vaultRoot, index) => ({ vaultRoot, env: { HOME: `/private/home-${index}` } })), {
+    createQualifiedAdapterFactory: ({ appProbe, createAdapter }) => Object.assign((input) => { appProbe.inspectSync(); return createAdapter(input) }, { lastQualification: () => 'q' }),
+    createProductionAppProbe: ({ env }) => ({ inspectSync: () => made.push(`probe ${env.HOME}`) }),
+    createObsidianCliAdapter: ({ env }) => ({ kind: 'cli', home: env.HOME }),
+  })
+  assert.deepEqual([factory({ store: { vaultRoot: vaults[1] } }).home, factory({ store: { vaultRoot: vaults[0] } }).home, made, factory.lastQualification()], ['/private/home-1', '/private/home-0', ['probe /private/home-1', 'probe /private/home-0'], ['q', 'q']])
+  assert.throws(() => factory({ store: { vaultRoot: path.join(dir, 'other') } }), /no isolated app holds the vault/)
 })
 
 test('service world seams: the profile is bound to the engine vault, repositories ignore the proposal store, the audience is set, the launcher is spawned without a shell in tests', (t) => {

@@ -39,7 +39,7 @@ import { AP05_SCOPES, AP05_SCOPE_DOCUMENTS, prepareAp05Workspace, runAp05 } from
 import { FULL_SCOPE, absentAdapter, deriveWorkspace, materializeFixtureWorkspace } from './lib/derive.mjs'
 import { PROPOSED_TARGETS, waitUntil, warmChangeSummary } from './lib/measure.mjs'
 import { evidenceFileName, writeGateReceipt } from './lib/receipts.mjs'
-import { bindLayoutToVault, createAppEditor, createCommandRunner, createServiceRuntime, initialiseRepositories, prepareWorkspace, stripProjectEnv } from './lib/service-world.mjs'
+import { bindLayoutToVault, createAppEditor, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, initialiseRepositories, prepareWorkspace, stripProjectEnv } from './lib/service-world.mjs'
 
 export const DEFAULT_RECEIPT_DIR = path.join(REPOSITORY_ROOT, '.artifacts', 'obsidian', 'desktop')
 // The sentinels the production eligibility rule keeps out of a view the real service maintains (see the fixture's description).
@@ -495,8 +495,21 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       const bound = { full: bindLayoutToVault(layouts.full, world.vaultRootFor(AP05_SCOPES.full)), ...(scoped ? { scoped: bindLayoutToVault(layouts.scoped, world.vaultRootFor(AP05_SCOPES.scoped)) } : {}) }
       const full = await launch(bound.full)
       capabilities = await discoverCapabilities(full.app)
-      const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot, env, consent: { actor: operator, coverage: 'service' }, intervalMs: PROCEDURE_TICK_INTERVAL_MS, probeTimeoutMs: 5000 })
-      const [{ createQualifiedAdapterFactory }, { createProductionAppProbe }] = await Promise.all([import('../../src/runtime/obsidian/app-capability.mjs'), import('../../src/runtime/obsidian/app-production-seams.mjs')])
+      const [{ createQualifiedAdapterFactory }, { createProductionAppProbe }, { createObsidianRegistry }, { createSourceApplyContribution }, { createProposalAdapterContribution }] = await Promise.all([
+        import('../../src/runtime/obsidian/app-capability.mjs'), import('../../src/runtime/obsidian/app-production-seams.mjs'), import('../../src/runtime/obsidian/extension-points.mjs'),
+        import('../../src/projection/obsidian/edits/contribution.mjs'), import('../../src/projection/obsidian/proposals/contribution.mjs'),
+      ])
+      const consent = { actor: operator, coverage: 'service' }
+      // AP-03 runs the production service entry as a detached process (its kills and its exiting launcher need one).
+      // AP-05 hosts the same service body in this process, because one service maintains two vaults held by two
+      // isolated apps, each reached through its own private HOME: the vault selects the app.
+      const runtime = scoped
+        ? createInProcessServiceRuntime({
+          loadProject: world.loadProject, dataRoot, env, consent, intervalMs: PROCEDURE_TICK_INTERVAL_MS, probeTimeoutMs: 5000,
+          adapterFactory: createPerVaultAdapterFactory([{ vaultRoot: bound.full.vault, env }, { vaultRoot: bound.scoped.vault, env: { ...env, HOME: layouts.scoped.home } }], { createQualifiedAdapterFactory, createProductionAppProbe, createObsidianCliAdapter }),
+          extensions: createObsidianRegistry({ contributions: [createSourceApplyContribution({ context: { loadProject: world.loadProject, dataRoot, env, platform: process.platform } }), createProposalAdapterContribution()] }).extensions,
+        })
+        : createServiceRuntime({ loadProject: world.loadProject, dataRoot, env, consent, intervalMs: PROCEDURE_TICK_INTERVAL_MS, probeTimeoutMs: 5000 })
       try {
         if (!scoped) {
           const appSeam = { openNote: (notePath) => full.app.stimulus('open', notePath), readIncludes: async ({ path: notePath, needle }) => (await evalValue(full.app, PROBES.readIncludes, { path: notePath, needle })) === 'true' }
@@ -523,6 +536,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       } finally {
         // The service is the disposable one this run started; its record names it, and only it is stopped.
         try { const status = await runtime.status(); if (status.state === 'healthy') await runtime.stop({ stopTimeoutMs: 20000 }) } catch { /* recorded in the service log */ }
+        if (runtime.logLines) for (const gate of plan.gates) (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-service-in-process.log`, bytes: Buffer.from(`${runtime.logLines.map((entry) => JSON.stringify(entry)).join('\n')}\n`) })
       }
       plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layouts.full.home, isolatedProfile: layouts.full.profile, workspaceDir, dataRoot })
     } else if (plan.app === 'scale-vault') {
