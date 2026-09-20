@@ -1,0 +1,63 @@
+{
+  "schema": "atelier-obsidian-acceptance-receipt/v1",
+  "receiptId": "acceptance-g07-0001",
+  "gate": "G07",
+  "procedureId": "AP-01",
+  "candidate": {
+    "commit": "88c5f21dc6ad6620e41490763d7e852d384d7b1a",
+    "treeDigest": "sha256:dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622"
+  },
+  "environment": {
+    "os": {
+      "name": "example-os",
+      "version": "14.2"
+    },
+    "app": {
+      "name": "example-editor",
+      "version": "1.4.2"
+    },
+    "cli": {
+      "version": "0.9.0"
+    }
+  },
+  "evidenceType": "real-app",
+  "evidence": [
+    {
+      "name": "cli-link-inspection.txt",
+      "digest": "sha256:b951a9615dd32830a5f0a4a682fbc68393e2a0980441bfd177ae2eb35c868812",
+      "byteLength": 119
+    },
+    {
+      "name": "app-observation.txt",
+      "digest": "sha256:636bba87c343bea76ae07ecccd2b6199ff4fb20163fa36871bfab6b19004ad82",
+      "byteLength": 115
+    },
+    {
+      "name": "acceptance-record.txt",
+      "digest": "sha256:6027417560b81d01e1646ab2bfb2cf307c3e77afe5b5369d699addd8ed58579d",
+      "byteLength": 512
+    }
+  ],
+  "outcome": "passed",
+  "recordedAt": "2026-02-01T12:45:00Z",
+  "ext": {
+    "mnstry.atelier.obsidian": {
+      "host": {
+        "id": "host-synthetic-desk-01"
+      },
+      "operator": {
+        "id": "operator-synthetic"
+      },
+      "evidenceRoles": {
+        "cli-link-inspection": "cli-link-inspection.txt",
+        "app-observation": "app-observation.txt"
+      },
+      "acceptance": {
+        "kind": "human",
+        "actor": "reviewer-synthetic",
+        "recordedAt": "2026-02-01T12:30:00Z",
+        "evidenceName": "acceptance-record.txt"
+      }
+    }
+  }
+}

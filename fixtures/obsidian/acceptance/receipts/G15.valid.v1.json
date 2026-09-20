@@ -1,0 +1,56 @@
+{
+  "schema": "atelier-obsidian-acceptance-receipt/v1",
+  "receiptId": "acceptance-g15-0001",
+  "gate": "G15",
+  "procedureId": "AP-03",
+  "candidate": {
+    "commit": "88c5f21dc6ad6620e41490763d7e852d384d7b1a",
+    "treeDigest": "sha256:dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622"
+  },
+  "environment": {
+    "os": {
+      "name": "example-os",
+      "version": "14.2"
+    },
+    "app": {
+      "name": "example-editor",
+      "version": "1.4.2"
+    },
+    "cli": {
+      "version": "0.9.0"
+    }
+  },
+  "evidenceType": "host",
+  "evidence": [
+    {
+      "name": "ownership-health.txt",
+      "digest": "sha256:78bb8c31d5c2a680f79cd8cfc45698b28383ad97bbeb8f8c601c052e3f8ecd45",
+      "byteLength": 116
+    },
+    {
+      "name": "terminal-closure.txt",
+      "digest": "sha256:9eabf443b648a1706bfc5efb6ea77b22ef7d49a8fe2cbacdb89a730bd5deaddf",
+      "byteLength": 116
+    }
+  ],
+  "outcome": "passed",
+  "recordedAt": "2026-02-01T12:45:00Z",
+  "ext": {
+    "mnstry.atelier.obsidian": {
+      "host": {
+        "id": "host-synthetic-desk-01"
+      },
+      "operator": {
+        "id": "operator-synthetic"
+      },
+      "evidenceRoles": {
+        "ownership-health": "ownership-health.txt",
+        "terminal-closure": "terminal-closure.txt"
+      },
+      "wallClock": {
+        "startedAt": "2026-02-01T11:00:00Z",
+        "endedAt": "2026-02-01T12:00:00Z"
+      }
+    }
+  }
+}

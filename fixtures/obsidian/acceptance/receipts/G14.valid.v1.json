@@ -1,0 +1,62 @@
+{
+  "schema": "atelier-obsidian-acceptance-receipt/v1",
+  "receiptId": "acceptance-g14-0001",
+  "gate": "G14",
+  "procedureId": "AP-03",
+  "candidate": {
+    "commit": "88c5f21dc6ad6620e41490763d7e852d384d7b1a",
+    "treeDigest": "sha256:dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622"
+  },
+  "environment": {
+    "os": {
+      "name": "example-os",
+      "version": "14.2"
+    },
+    "app": {
+      "name": "example-editor",
+      "version": "1.4.2"
+    },
+    "cli": {
+      "version": "0.9.0"
+    }
+  },
+  "evidenceType": "host",
+  "evidence": [
+    {
+      "name": "source-refresh-trace.txt",
+      "digest": "sha256:0d5b5a8c04af66b7d36bf4cb64151f29ece8ea5faae550789f984589c2ce5ea2",
+      "byteLength": 120
+    },
+    {
+      "name": "dropped-event-recovery.txt",
+      "digest": "sha256:a97f6c7ce262aa0672c1704ab40e3375ab0c4e7b6f9ee196a4b9dea7e2b9da37",
+      "byteLength": 122
+    },
+    {
+      "name": "sleep-wake-clock.txt",
+      "digest": "sha256:6ccfac8701276f4d0575527168e4995f1395b905ba88ddd74b03ff41b0e51691",
+      "byteLength": 116
+    }
+  ],
+  "outcome": "passed",
+  "recordedAt": "2026-02-01T12:45:00Z",
+  "ext": {
+    "mnstry.atelier.obsidian": {
+      "host": {
+        "id": "host-synthetic-desk-01"
+      },
+      "operator": {
+        "id": "operator-synthetic"
+      },
+      "evidenceRoles": {
+        "source-refresh-trace": "source-refresh-trace.txt",
+        "dropped-event-recovery": "dropped-event-recovery.txt",
+        "sleep-wake-clock": "sleep-wake-clock.txt"
+      },
+      "wallClock": {
+        "startedAt": "2026-02-01T11:00:00Z",
+        "endedAt": "2026-02-01T12:00:00Z"
+      }
+    }
+  }
+}
