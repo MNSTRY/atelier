@@ -259,3 +259,300 @@ test('identity: the adapter operation record is written to private state before 
   // The adapter state may not be kept inside an enrolled repository.
   refuses(() => openProposalQueue({ stateRoot: path.join(repository, 'state'), workspaceId: WORKSPACE_ID, repositoryRoots: [repository], clock }), 'state-root-overlaps-repository')
 })
+
+// ---------------------------------------------------------------------------
+// Phase 2: one logical proposal across append and acknowledgement
+// ---------------------------------------------------------------------------
+
+import childProcess from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { assertObsidianContract } from '../src/projection/obsidian/contracts.mjs'
+import {
+  PROPOSAL_ADAPTER_CRASH_STEPS, PROPOSAL_ADAPTER_ID, PROPOSAL_ADAPTER_PRIMITIVES, PROPOSAL_PAYLOAD_KIND, PROPOSAL_PAYLOAD_SCHEMA, createProposalAdapter, createProposalAdapterForOracleTests,
+} from '../src/projection/obsidian/proposals/index.mjs'
+import { PRIVATE_TITLE, WEST_TITLE, crashAt, holderIsGoneProof } from './support/obsidian-proposals/world.mjs'
+
+const RACE_CHILD = fileURLToPath(new URL('./support/obsidian-proposals/race-child.mjs', import.meta.url))
+const adapterFor = (world, options = {}, primitives = PROPOSAL_ADAPTER_PRIMITIVES) => createProposalAdapterForOracleTests(primitives)({ clock: world.clock, env: world.env, ...options })
+// Everything the adapter may write outside private state: the stores of both repositories, file by file.
+const storeState = (world) => Object.fromEntries(REPOSITORIES.map((name) => [name, fs.existsSync(world.storeDir(name)) ? treeListing(world.storeDir(name)) : null]))
+const queueState = (world) => (fs.existsSync(world.queueDir()) ? treeListing(world.queueDir()) : null)
+const operationIdsIn = (world, name) => world.adapterProposals(name).map((record) => record.payload.adapter.operationId).sort()
+// A store opened through this one counts what is asked of it.
+function countingStore(counts) {
+  return (options) => {
+    const store = createProposalStore(options)
+    counts.opened += 1
+    const counted = (object, name, key) => (...args) => { counts[key] += 1; return object[name](...args) }
+    return { ...store, listProposals: counted(store, 'listProposals', 'reads'), readProposal: counted(store, 'readProposal', 'reads'), createProposal: counted(store, 'createProposal', 'writes'), eventLedger: { ...store.eventLedger, readAll: counted(store.eventLedger, 'readAll', 'reads') } }
+  }
+}
+
+test('dedupe: a structural edit observed through the real path becomes exactly one copy-only proposal with a receipt in the store of its repository, and unchanged ticks append zero ledger events and write nothing at all', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:second')
+  world.editFrontMatter('west-wing:guide', WEST_TITLE, 'Tide tables')
+  world.editNote('east-wing:plain', 'Only the body', 'Nothing but the body')
+  await world.observe()
+  // Whatever became of the body edit (applied where an atomic exchange exists, refused where none does), it is not a proposal.
+  const before = sourceState(world)
+  const counts = { opened: 0, reads: 0, writes: 0 }
+  const adapter = adapterFor(world, { openStore: countingStore(counts) })
+  const report = await adapter.propose(world.context())
+  assert.deepEqual(report.outcomes.map((item) => [item.repoId, item.status, item.dedupe, item.state]), [['east-wing', 'acknowledged', 'new', 'acknowledged'], ['west-wing', 'acknowledged', 'new', 'acknowledged']])
+  assert.deepEqual(report.repositories, [])
+  assert.deepEqual(counts.writes, 2, 'one creation per operation')
+
+  for (const [name, nodeId, code, reason] of [['east-wing', 'east-wing:guide', 'unsupported-structural-edit', 'vault-link-changed'], ['west-wing', 'west-wing:guide', 'unsupported-frontmatter-edit', null]]) {
+    const proposals = world.adapterProposals(name)
+    assert.equal(proposals.length, 1, `${name}: one proposal`)
+    const [record] = proposals
+    const edit = world.editOf(nodeId)
+    const outcome = report.outcomes.find((item) => item.repoId === name)
+    assert.deepEqual([record.proposal.status, record.proposal.path, record.proposal.action, record.proposal.viewId, record.diff], ['proposed', 'notes/guide.md', 'copy.agentPrompt', 'scope-whole', ''])
+    assert.deepEqual(record.proposal.authority, { action: 'copy.agentPrompt', capability: 'proposal.copy-only', copyOnly: true, directWrite: false, applyEndpoint: null })
+    const { payload } = record
+    assert.deepEqual([payload.schema, payload.kind, payload.adapter.id, payload.adapter.operationId], [PROPOSAL_PAYLOAD_SCHEMA, PROPOSAL_PAYLOAD_KIND, PROPOSAL_ADAPTER_ID, outcome.adapterOperationId])
+    assert.deepEqual(payload.identity, { workspaceId: WORKSPACE_ID, repoId: name, nodeId })
+    assert.deepEqual([payload.sourcePath, payload.editId, payload.change.code, payload.change.reason], ['notes/guide.md', edit.editId, code, reason])
+    assert.deepEqual(payload.references.observed, { digest: edit.observedDigest, byteLength: fs.statSync(path.join(world.workspaceRoot(), edit.objectRef)).size, recoveryRef: edit.objectRef })
+    assert.equal(payload.references.baseSourceDigest, `sha256:${createHash('sha256').update(fs.readFileSync(world.source(`${name}/notes/guide.md`))).digest('hex')}`, 'the base is the source as it is: nothing was written to it')
+    if (code === 'unsupported-structural-edit') {
+      assert.equal(payload.change.occurrenceCount, 1)
+      const [{ noteStart, noteEnd }] = payload.change.occurrences
+      assert.equal(fs.readFileSync(world.noteFile(nodeId)).subarray(noteStart, noteEnd).toString('utf8'), `[[${world.wikiOf('east-wing:second')}]]`, 'the offsets are where the link is in the edited note')
+    } else assert.ok(Number.isInteger(payload.change.firstDifference))
+
+    // The receipt binds the edit operation to the proposal, and is persisted with the record that acknowledges it.
+    assertObsidianContract('proposal-receipt', outcome.receipt)
+    assert.deepEqual([outcome.receipt.repoId, outcome.receipt.editId, outcome.receipt.proposalId, outcome.receipt.adapterOperationId, outcome.receipt.dedupe, outcome.receipt.backpressure], [name, edit.editId, record.proposal.id, outcome.adapterOperationId, 'new', 'accepted'])
+    const persisted = adapter.show(world.context(), { adapterOperationId: outcome.adapterOperationId })
+    assert.deepEqual(persisted.operation.receipt, outcome.receipt)
+    assert.deepEqual([persisted.operation.state, persisted.operation.proposalId, persisted.review.status], ['acknowledged', record.proposal.id, 'proposed'])
+  }
+  assert.deepEqual(adapter.list(world.context()).map((item) => [item.repoId, item.state]), [['east-wing', 'acknowledged'], ['west-wing', 'acknowledged']])
+
+  // The oracle over many ticks: the bytes of every ledger and of every file of both stores, the adapter queue, the
+  // sources and what git says. The clock moves past every retry interval there is.
+  async function manyTicks(ticking, ticks = 30) {
+    const start = { stores: storeState(world), ledgers: REPOSITORIES.map((name) => digestOf(world.ledgerBytes(name))), queue: queueState(world), asked: { ...counts } }
+    for (let tick = 0; tick < ticks; tick += 1) { world.advance(2 * 60 * 60 * 1000); await ticking.propose(world.context()) }
+    return { start, end: { stores: storeState(world), ledgers: REPOSITORIES.map((name) => digestOf(world.ledgerBytes(name))), queue: queueState(world), asked: { ...counts } } }
+  }
+  const quiet = await manyTicks(adapter)
+  assert.deepEqual(quiet.end, quiet.start, 'thirty unchanged ticks: zero ledger events, zero store writes, zero store reads, and no adapter record')
+  const restarted = await manyTicks(adapterFor(world, { openStore: countingStore(counts) }))
+  assert.deepEqual(restarted.end, restarted.start, 'and the same for an adapter that has just started and remembers nothing')
+  assert.deepEqual(sourceState(world), before, 'no source byte and no git state changed, in either repository')
+
+  // Mutation control: an adapter that hands every operation over again on every tick, and does not look first,
+  // appends a proposal event per tick; the oracle above cannot pass for it.
+  const chatty = await manyTicks(adapterFor(world, {}, { ...PROPOSAL_ADAPTER_PRIMITIVES, handOver: () => true, isSettled: () => false, lookBeforeCreate: false }), 3)
+  assert.notDeepEqual(chatty.end.ledgers, chatty.start.ledgers)
+  assert.equal(world.adapterProposals('east-wing').length, 4, 'one more per tick')
+})
+
+// What a restart finds after a crash at each step, and what it does. `proposals` is how many proposals carry the
+// operation identity in the real store when the crashed process is gone; there is exactly one after the restart.
+const CRASH_TABLE = Object.freeze([
+  { step: 'queued', node: 'east-wing:guide', proposals: 0, queue: 'queued', dedupe: 'new' },
+  { step: 'before-append', node: 'east-wing:second', proposals: 0, queue: 'queued', dedupe: 'new' },
+  { step: 'appended', node: 'east-wing:third', proposals: 1, queue: 'queued', dedupe: 'recovered' },
+  { step: 'submitted', node: 'west-wing:guide', proposals: 1, queue: 'submitted', dedupe: 'new' },
+  { step: 'acknowledged', node: 'west-wing:second', proposals: 1, queue: 'acknowledged', dedupe: 'new' },
+])
+
+test('crash and replay: a crash before the append, after the append and before the acknowledgement, and after it, each leave exactly one logical proposal; the lock of a crashed holder is taken over only with proof, never because time passed', async (t) => {
+  assert.deepEqual(CRASH_TABLE.map((row) => row.step), [...PROPOSAL_ADAPTER_CRASH_STEPS])
+  const world = makeProposalWorld(t)
+  for (const row of CRASH_TABLE) world.addLink(row.node, row.node.startsWith('east') ? 'east-wing:plain' : 'west-wing:guide' === row.node ? 'west-wing:second' : 'west-wing:guide')
+  await world.observe()
+  const before = sourceState(world)
+  const table = []
+  for (const row of CRASH_TABLE) {
+    const [repoId] = row.node.split(':')
+    const edit = world.editOf(row.node)
+    const context = () => world.context({ edits: world.pendingEdits().filter((item) => item.editId === edit.editId) })
+    const mine = () => world.adapterProposals(repoId).filter((record) => record.payload.editId === edit.editId)
+    await assert.rejects(adapterFor(world, { crash: crashAt(row.step) }).propose(context()), /crashed at/, row.step)
+    const [head] = adapterFor(world).list(context()).filter((item) => item.editId === edit.editId)
+    assert.deepEqual([mine().length, head.state], [row.proposals, row.queue], `${row.step}: what the crash left`)
+
+    // The crashed process released nothing. Its lock is this process, which is alive: without proof nothing is taken,
+    // however long ago that was, and nothing is written.
+    const held = { stores: storeState(world), queue: queueState(world) }
+    world.advance(400 * 24 * 60 * 60 * 1000)
+    const waiting = await adapterFor(world).propose(context())
+    if (row.step === 'acknowledged') assert.deepEqual(waiting, { adapterId: PROPOSAL_ADAPTER_ID, examined: 0, outcomes: [], repositories: [] }, 'an acknowledged operation is not handed over at all')
+    else assert.deepEqual([waiting.outcomes, waiting.repositories], [[], [{ repoId, code: 'adapter-lock-held', reason: 'held-by-this-process' }]], `${row.step}: no takeover on a timeout`)
+    assert.deepEqual({ stores: storeState(world), queue: queueState(world) }, held)
+
+    // The restart, with the proof that the holder is gone.
+    const restarted = adapterFor(world, { proveAbandoned: holderIsGoneProof() })
+    const replay = await restarted.propose(context())
+    if (row.step === 'acknowledged') assert.deepEqual(replay.outcomes, [])
+    else assert.deepEqual(replay.outcomes.map((item) => [item.status, item.dedupe]), [['acknowledged', row.dedupe]], row.step)
+    assert.equal(mine().length, 1, `${row.step}: exactly one logical proposal`)
+    const shown = restarted.show(context(), { adapterOperationId: head.adapterOperationId })
+    assert.deepEqual([shown.operation.state, shown.operation.proposalId, shown.operation.receipt.dedupe, shown.operation.receipt.backpressure], ['acknowledged', mine()[0].proposal.id, row.dedupe, 'accepted'], row.step)
+    // Offered again, by the tick and directly: answered from the record, nothing created.
+    const settled = { stores: storeState(world), queue: queueState(world) }
+    assert.deepEqual((await restarted.propose(context())).outcomes, [])
+    assert.deepEqual({ stores: storeState(world), queue: queueState(world) }, settled)
+    table.push({ step: row.step, proposalsAfterCrash: row.proposals, queueAfterCrash: row.queue, proposalsAfterReplay: mine().length, dedupe: shown.operation.receipt.dedupe })
+  }
+  assert.deepEqual(REPOSITORIES.map((name) => world.adapterProposals(name).length), [3, 2])
+  assert.deepEqual(sourceState(world), before)
+  t.diagnostic(`crash table: ${JSON.stringify(table)}`)
+})
+
+test('mutation controls for dedupe: an adapter that retries without looking, and one that takes the proposal identifier or its timestamp for the dedupe authority, both create a second proposal after a lost acknowledgement', async (t) => {
+  const world = makeProposalWorld(t)
+  for (const node of ['east-wing:guide', 'east-wing:second', 'east-wing:third']) world.addLink(node, 'east-wing:plain')
+  await world.observe()
+  const run = async (node, primitives) => {
+    const edit = world.editOf(node)
+    const context = () => world.context({ edits: world.pendingEdits().filter((item) => item.editId === edit.editId) })
+    await assert.rejects(adapterFor(world, { crash: crashAt('appended') }).propose(context()), /crashed at/)
+    await adapterFor(world, { proveAbandoned: holderIsGoneProof() }, primitives).propose(context())
+    return world.adapterProposals('east-wing').filter((record) => record.payload.editId === edit.editId).length
+  }
+  assert.equal(await run('east-wing:guide', PROPOSAL_ADAPTER_PRIMITIVES), 1, 'production: one')
+  assert.equal(await run('east-wing:second', { ...PROPOSAL_ADAPTER_PRIMITIVES, lookBeforeCreate: false }), 2, 'retrying without looking: two')
+  // The identifier a store would give the same body now is not the one it gave then: it is seeded with the time.
+  const byTimestamp = ({ proposals, item }) => proposals.filter((record) => record.proposal.id === `proposal-${createHash('sha256').update([new Date().toISOString(), item.editId].join('\u0000')).digest('hex').slice(0, 32)}`)
+  assert.equal(await run('east-wing:third', { ...PROPOSAL_ADAPTER_PRIMITIVES, existingFor: byTimestamp }), 2, 'looking for a proposal identifier: two')
+})
+
+// Two real processes. Children are tracked by handle and their exit is awaited; a survivor is named by the test.
+const liveChildren = new Set()
+test.after(() => { for (const child of liveChildren) { child.kill('SIGKILL'); process.stderr.write(`obsidian-proposals: killed a surviving race-child ${child.pid}\n`) } })
+function runRaceChild(input) {
+  return new Promise((resolve, reject) => {
+    const child = childProcess.spawn(process.execPath, [RACE_CHILD, JSON.stringify(input)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    liveChildren.add(child)
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => { out += chunk })
+    child.stderr.on('data', (chunk) => { err += chunk })
+    child.on('error', reject)
+    child.on('exit', (code, signal) => {
+      liveChildren.delete(child)
+      if (code !== 0) reject(new Error(`race-child ${input.role} exited ${code ?? signal}: ${err.slice(0, 2000)}`))
+      else resolve(JSON.parse(out))
+    })
+  })
+}
+async function race(t, { unlocked }) {
+  const world = makeProposalWorld(t)
+  const nodes = ['east-wing:guide', 'east-wing:second', 'east-wing:third', 'west-wing:guide', 'west-wing:second']
+  for (const node of nodes) world.addLink(node, node.startsWith('east') ? 'east-wing:plain' : node === 'west-wing:guide' ? 'west-wing:second' : 'west-wing:guide')
+  await world.observe()
+  const before = sourceState(world)
+  const startAt = Date.now() + 2500
+  const input = { configPath: world.configPath, projectDir: world.projectDir, workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID, startAt, passes: 40, spinMs: unlocked ? 400 : 150, unlocked, fixedNow: '2026-01-05T10:00:00.000Z' }
+  const reports = await Promise.all(['left', 'right'].map((role) => runRaceChild({ ...input, role })))
+  assert.equal(liveChildren.size, 0, 'both children have exited')
+  const perOperation = REPOSITORIES.flatMap((name) => Object.values(Object.groupBy(world.adapterProposals(name), (record) => record.payload.adapter.operationId)).map((records) => records.length))
+  const tally = Object.fromEntries(reports.map((report) => [report.role, {
+    created: report.seen.flatMap((pass) => pass.outcomes).filter((item) => item.status === 'acknowledged' && item.dedupe === 'new').length,
+    lockHeld: report.seen.flatMap((pass) => pass.repositories).filter((item) => item.code === 'adapter-lock-held').length,
+    failed: report.seen.flatMap((pass) => pass.outcomes).filter((item) => item.status === 'failed').map((item) => item.code),
+  }]))
+  return { world, before, perOperation, tally, nodes }
+}
+
+// Two processes that start at one instant usually meet, and now and then one is done before the other has loaded.
+// A race in which they did not meet proves nothing either way, so it is run again, a bounded number of times.
+async function raceUntil(t, options, met) {
+  let last
+  for (let attempt = 0; attempt < 4; attempt += 1) { last = await race(t, options); if (met(last)) break }
+  return last
+}
+
+test('dedupe between two real processes: both offer the same structural edits to the same stores at the same instant, and every operation has exactly one proposal', async (t) => {
+  const { world, before, perOperation, tally, nodes } = await raceUntil(t, { unlocked: false }, (result) => result.tally.left.lockHeld + result.tally.right.lockHeld > 0)
+  assert.deepEqual(perOperation, nodes.map(() => 1), 'one proposal per operation, in the persisted stores')
+  assert.equal(tally.left.created + tally.right.created, nodes.length, 'every proposal was created by exactly one of the two')
+  assert.deepEqual([tally.left.failed, tally.right.failed], [[], []])
+  assert.ok(tally.left.lockHeld + tally.right.lockHeld > 0, 'the two met: at least once one of them found the lock of a repository held')
+  assert.deepEqual(adapterFor(world).list(world.context()).map((item) => item.state), nodes.map(() => 'acknowledged'))
+  assert.deepEqual(sourceState(world), before)
+  t.diagnostic(`two processes: ${JSON.stringify(tally)}`)
+})
+
+test('mutation control for the two-process dedupe: without the lock the same two processes both look, both find nothing and both create', async (t) => {
+  const { perOperation, tally } = await raceUntil(t, { unlocked: true }, (result) => result.perOperation.some((count) => count > 1))
+  assert.ok(perOperation.some((count) => count > 1), `without the lock an operation has two proposals: ${JSON.stringify(perOperation)}`)
+  t.diagnostic(`two processes, no lock: ${JSON.stringify({ perOperation, tally })}`)
+})
+
+test('replay of an accepted proposal: accepting a proposal the adapter created changes no source byte, grants nothing, and the adapter never reads acceptance as authority', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:second')
+  await world.observe()
+  const before = sourceState(world)
+  const adapter = adapterFor(world)
+  const [outcome] = (await adapter.propose(world.context())).outcomes
+  const store = world.store('east-wing')
+  assert.equal(store.reviewProposal(outcome.proposalId, { status: 'reviewed', reviewer: 'synthetic reviewer' }).ok, true)
+  const accepted = store.reviewProposal(outcome.proposalId, { status: 'accepted', reviewer: 'synthetic reviewer', notes: 'go ahead' })
+  assert.deepEqual([accepted.ok, accepted.record.proposal.status, accepted.record.copyable.directWrite, accepted.record.copyable.applyEndpoint, accepted.record.copyable.targetPath], [true, 'accepted', false, null, 'notes/guide.md'])
+  assert.deepEqual(sourceState(world), before, 'acceptance in the store applies nothing')
+
+  const ledger = digestOf(world.ledgerBytes('east-wing'))
+  for (let tick = 0; tick < 5; tick += 1) { world.advance(60 * 60 * 1000); assert.deepEqual((await adapter.propose(world.context())).outcomes, []) }
+  const shown = adapter.show(world.context(), { adapterOperationId: outcome.adapterOperationId })
+  assert.deepEqual([shown.review.status, shown.operation.state], ['accepted', 'acknowledged'], 'the acceptance is shown')
+  const again = await adapter.offer(world.context(), { operation: { ...proposedOperation({ repoId: 'east-wing', nodeId: 'east-wing:guide', edited: 'unused' }) }, sourcePath: 'notes/guide.md' })
+  assert.equal(again.status, 'acknowledged', 'another operation of the same document is another proposal, and still only that')
+  assert.deepEqual(sourceState(world), before, 'and changes nothing: no source byte, no git state')
+  assert.notEqual(digestOf(world.ledgerBytes('east-wing')), ledger)
+  assert.equal(world.pendingEdits().find((item) => item.editId === outcome.editId).state, 'queued', 'the pending edit is still what it was: a proposal never closes or applies it')
+
+  // Mutation control: an adapter that takes an accepted proposal for permission writes the source, and the oracle sees it.
+  const obedient = adapterFor(world, {}, { ...PROPOSAL_ADAPTER_PRIMITIVES, onReviewStatus: ({ status, head, repositoryRoot }) => { if (status === 'accepted') fs.appendFileSync(path.join(repositoryRoot, head.sourcePath), '\nApplied because a reviewer accepted.\n') } })
+  obedient.show(world.context(), { adapterOperationId: outcome.adapterOperationId })
+  assert.notDeepEqual(sourceState(world), before)
+})
+
+test('dedupe and disclosure: a proposal, its ledger, the adapter records and every report hold no text of any note, no title of another identity, no vault file name and no path of this machine; a withheld object refuses and creates no store', async (t) => {
+  const world = makeProposalWorld(t)
+  // A link to a document of ANOTHER repository, and one to a document that is about to be withheld: the text a person
+  // typed carries the titles of both.
+  world.editNote('east-wing:guide', 'Closing words.', `Closing words, typed by hand: [[${world.wikiOf('west-wing:guide')}]] and [[${world.wikiOf('east-wing:ledger')}]].`)
+  world.editNote('east-wing:ledger', 'Kept for the keeper only.', `Kept for the keeper only, see [[${world.wikiOf('east-wing:guide')}]].`)
+  await world.observe()
+  world.configureMachine({ audienceAllow: ['team'] })
+  const before = sourceState(world)
+  const adapter = adapterFor(world)
+  const report = await adapter.propose(world.context())
+  assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.code]).sort(), [['east-wing:guide', 'acknowledged', null], ['east-wing:ledger', 'refused', 'route-withheld']])
+  const refused = report.outcomes.find((item) => item.status === 'refused')
+  assertObsidianContract('proposal-receipt', refused.receipt)
+  assert.deepEqual([refused.receipt.proposalId, refused.receipt.backpressure], [null, 'refused'])
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), world.editOf('east-wing:ledger').objectRef)), true, 'the preserved bytes of the refused edit stay')
+  assert.equal(world.adapterProposals('east-wing').length, 1, 'nothing about the withheld document reached the store')
+  assert.deepEqual((await adapter.propose(world.context())).outcomes, [], 'a refused operation is not handed over again')
+
+  const forbidden = [WEST_TITLE, PRIVATE_TITLE, 'Lantern guide', 'typed by hand', 'Closing words', world.wikiOf('west-wing:guide'), world.wikiOf('east-wing:ledger'), world.wikiOf('east-wing:guide'), path.basename(world.dir)]
+  const disclosed = (documents) => stringsOf(documents).filter((value) => path.isAbsolute(value) || value.includes('vaults/') || /--[0-9a-f]{8,}/.test(value) || forbidden.some((text) => value.includes(text)))
+  const ledgerEvents = world.ledgerBytes('east-wing').toString('utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  const snapshots = fs.readdirSync(world.storeDir('east-wing')).filter((name) => name.endsWith('.json')).map((name) => JSON.parse(fs.readFileSync(path.join(world.storeDir('east-wing'), name), 'utf8')))
+  const queueRecords = Object.keys(treeListing(world.queueDir())).filter((name) => name.endsWith('.json') && name.includes('/operations/')).map((name) => JSON.parse(fs.readFileSync(path.join(world.queueDir(), name), 'utf8')))
+  assert.ok(ledgerEvents.length === 1 && snapshots.length === 1 && queueRecords.length >= 3)
+  const everything = [ledgerEvents, snapshots, queueRecords, report, adapter.status(world.context()), adapter.list(world.context()), world.adapterProposals('east-wing')]
+  assert.deepEqual(disclosed(everything), [], 'nothing of any note, of another identity or of this machine')
+  const [record] = world.adapterProposals('east-wing')
+  assert.deepEqual(Object.keys(record.payload).sort(), ['adapter', 'change', 'editId', 'idempotencyKey', 'identity', 'kind', 'origin', 'references', 'schema', 'sourcePath', 'summary'])
+  assert.equal(record.payload.change.occurrenceCount, 2, 'both links are counted, by offset only')
+  assert.equal(fs.existsSync(world.storeDir('west-wing')), false, 'the repository the link points INTO got nothing: the request belongs to the document that was edited')
+  assert.deepEqual(sourceState(world), before)
+
+  // Mutation control: an adapter that quotes what the person typed puts the title of another identity into the store.
+  const quoting = adapterFor(world, {}, { ...PROPOSAL_ADAPTER_PRIMITIVES, content: (input) => { const body = PROPOSAL_ADAPTER_PRIMITIVES.content(input); return { ...body, proposal: { ...body.proposal, excerpt: fs.readFileSync(path.join(world.workspaceRoot(), input.item.observed.recoveryRef), 'utf8') } } } })
+  world.addLink('east-wing:second', 'west-wing:guide')
+  await world.observe()
+  await quoting.propose(world.context())
+  assert.ok(disclosed(world.adapterProposals('east-wing')).length > 0, 'the control discloses, and the oracle sees it')
+})
