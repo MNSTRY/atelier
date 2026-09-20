@@ -510,3 +510,103 @@ list`, `show`, `run` and `recover` answer such a record as a typed refusal.
   usage error and does nothing.
 - Proven on macOS arm64 on APFS with a real second process. Linux, x86_64 and
   other filesystems carry the open obligations of the exchange listed above.
+
+## Proposal adapter for structural edits
+
+An edit the byte lens cannot turn into source bytes (a new or changed link to
+another note of the vault, an edited front matter) is recorded as an edit
+operation of kind `semantic-proposal`, state `proposed`. It is never applied.
+The proposal adapter (`src/projection/obsidian/proposals/`) turns each such
+operation into exactly one copy-only proposal in the existing proposal store of
+the repository that owns the source, so that a reviewer of that repository sees
+one durable request. It writes no source file and no vault, it never accepts or
+applies a proposal, and no status of a proposal is an instruction to it.
+
+The adapter is a contribution (`src/runtime/obsidian/contributions/`). On a
+tick, after the automatic dispatch, the engine hands it a copy of the pending
+edits once. An operation exists once apply has looked at the edit: on the
+dispatch of that same tick in automatic mode, and after `atelier obsidian apply
+run EDIT` in manual mode, where nothing on a tick looks at an edit.
+
+### Routing
+
+The routing key is the whole identity `(workspaceId, repoId, nodeId)`. The store
+is the one every other writer of proposals uses for a root:
+`<repository root>/.atelier-proposals`. Two repositories that hold the same
+relative path and the same local node id have different stores and different
+operation identities. A route that cannot be resolved refuses, writes nothing,
+and leaves the preserved bytes and the record of the object as they were:
+
+| Code | Meaning |
+| --- | --- |
+| `invalid-operation`, `foreign-workspace` | the identity is malformed or belongs to another workspace |
+| `repository-not-enrolled`, `repository-external`, `repository-root-unreadable` | the project does not enrol the repository on this machine |
+| `route-withheld` | this machine may not see the object now (the rule source apply asks); `route-visibility-unknown` waits instead |
+| `source-path-invalid`, `source-path-not-preservable` | the repository-relative path is unusable, or the store would trim or cut it (500 characters) |
+| `proposal-store-unsafe`, `proposal-store-inside-managed-root` | the store directory is a link or a file, or overlaps private state or a vault |
+| `proposal-store-not-ignored`, `proposal-store-ignore-unknown` | the store does not exist yet and git would report it; nothing is created that changes `git status` |
+
+### Operation identity and deduplication
+
+The adapter operation identity is `pa-` and the SHA-256 of the identity and the
+idempotency key of the edit operation, joined by a character no identifier can
+hold: 67 lower-case characters. It is carried in `payload.adapter.operationId`
+of the proposal, a member the store persists as JSON without normalising it.
+The identifier the store gives a proposal is seeded with the time and decides
+nothing here.
+
+Per operation, under a private lock per repository (the generation lock of the
+maintenance engine; taken over only with proof that its holder is gone, never
+because time passed):
+
+1. the operation is recorded in the adapter queue,
+   `<state>/state/proposals/<repo>/operations/<operation>--NNNNNN.json`:
+   immutable, owner-only, canonical files, each naming the digest of the one
+   before it;
+2. the ledger of the store is read and its room judged;
+3. the persisted store is searched for a proposal that carries the operation
+   identity, and one is created only when there is none;
+4. `submitted` is recorded, the proposal is read back, and `acknowledged` is
+   recorded with an `atelier-obsidian-proposal-receipt/v1` that binds the edit
+   to the proposal (`dedupe`: `new`, `recovered` after a lost acknowledgement,
+   `duplicate` when an acknowledged operation is offered again).
+
+A crash before the append leaves a queued record and no proposal; after it, a
+proposal that step 3 finds. An unchanged tick reads the queue and nothing else:
+no store is opened and nothing is written. An operation whose edit was withdrawn
+or superseded while it waited is refused `edit-withdrawn` or `edit-superseded`.
+
+### What a proposal holds
+
+Identifiers, the repository-relative source path, the lens code and reason,
+byte offsets into the edited note, digests and recovery references of the
+preserved bytes, and sentences made from those codes. It holds no text of any
+note: what a person typed can carry the title of another document, and a
+reviewer of one repository must not learn a title of another repository, or of
+a withheld document, from a proposal. The preserved bytes stay in private state.
+
+### Ledger limits and backpressure
+
+The limits are those of the existing ledger and are not widened: 256 KiB a
+line, 16 MiB, 10,000 events, and an unreadable line refuses every append.
+
+| Code | Outcome |
+| --- | --- |
+| `proposal-too-large` | refused before anything is appended; nothing is cut to fit |
+| `ledger-full` | fewer than 1 + 32 events or less than the line + 512 KiB of room (the reserve is the reviewers'); the operation waits as `backpressure` with its edit retained |
+| `ledger-corrupt` | refused, for that repository only; other repositories progress in the same tick |
+| `store-unavailable` | the store cannot be read or is locked now; waits like a full one |
+
+A waiting operation is tried at most 8 times, 60 seconds after the first attempt
+and twice as long after each, up to an hour. At most 8 operations per repository
+and 64 unexamined edits are looked at per tick. A repository holds at most 4096
+operations, 256 of them open, 64 records of 16 KiB each; a full queue refuses
+`queue-full` and records nothing. Nothing is compacted, rotated or deleted, in
+the ledger or in the queue. A refused or exhausted operation is final until the
+adapter's `requeue` is called for it, which is a person's decision after making
+room or fixing the route; it is an exported function, and no command binds it
+yet.
+
+`atelier obsidian proposals list` and `show OPERATION` are read-only: per
+repository the counts by state, the codes of the waiting and the refused, and
+the events and bytes the ledger has left; never note or source text.
