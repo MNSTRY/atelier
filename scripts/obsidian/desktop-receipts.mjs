@@ -12,10 +12,13 @@
 // schema, and says `closes: false` with `humanAcceptance: null`: the closing
 // owner inspects and signs afterwards (sign-receipt.mjs).
 //
-// AP-03 and AP-05 run the owned maintenance service for real (a detached
-// process started through the runtime's own lifecycle API, with the isolated
-// HOME so its editor adapter reaches only the isolated app) and read every
-// decision through the shipped command. What no script can do is listed per
+// AP-03 and AP-05 run the owned maintenance service for real and read every
+// decision through the shipped command. AP-03 starts the production service
+// entry as a detached process through the runtime's own lifecycle API, with
+// the isolated HOME so its editor adapter reaches only the isolated app.
+// AP-05 hosts the same service body in this process, because one service
+// maintains two vaults held by two isolated apps and each app is reached
+// through its own private HOME (lib/service-world.mjs). What no script can do is listed per
 // gate as `manualStepsRequired` with the exact commands, and that gate's
 // receipt stays `incomplete`: the host's actual sleep/wake of AP-03 (G14).
 //

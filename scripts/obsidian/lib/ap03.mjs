@@ -5,7 +5,7 @@ import { createNullWatcherFactory } from '../../../src/runtime/obsidian/watchers
 import { isoNow, sha256Digest } from './common.mjs'
 import { PROPOSED_TARGETS, waitUntil } from './measure.mjs'
 import { evidenceFileName } from './receipts.mjs'
-import { digestDifferences, fileDigest, noteFile, openEdits, privateStateSnapshot, sourceDigests } from './service-world.mjs'
+import { fileDigest, noteFile, openEdits, privateStateSnapshot, sourceDigests } from './service-world.mjs'
 
 // AP-03 (G14, G15): maintenance and host lifecycle against the owned
 // service and an isolated app. Every step below is what a person would do at
@@ -202,5 +202,5 @@ export async function runAp03({
     droppedEventRecoveryMs: dropped.trials?.map((trial) => trial.recoveryMs) ?? null, interruptions: interruption.points.map(({ point, processGone, retained }) => ({ point, processGoneMs: processGone.elapsedMs, retained: retained.pendingEditsUnchanged && retained.journalsRetained && retained.objectsPresent })),
     launcherExit: launcher.launcher?.exit ?? null,
   }
-  return { steps, evidence, timings, failures, passed: failures.length === 0, sourceDigestChanges: digestDifferences({}, sources).length, digestOfSteps: sha256Digest(Buffer.from(JSON.stringify(steps))) }
+  return { steps, evidence, timings, failures, passed: failures.length === 0, sourceFiles: Object.keys(sources).length, digestOfSteps: sha256Digest(Buffer.from(JSON.stringify(steps))) }
 }
