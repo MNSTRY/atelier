@@ -899,9 +899,14 @@ test('an asset the view does not copy is a forbidden identity in generated text'
 
 test('a census record with an empty repository or identity neither joins a view nor aborts it', (t) => {
   const snapshot = makeWorkspace(t)
-  // Nodes are validated at the snapshot boundary; asset records are not, and an
-  // empty identity there must be skipped exactly as visibleAssets skips it.
-  snapshot.graph.assets = [...(snapshot.graph.assets ?? []), { id: '', repo: 'north-desk', path: 'ghost.bin', eligible: false }]
+  // The snapshot boundary requires string id and repo on a node but not that
+  // they are non-empty; asset records are not validated there at all. Each
+  // half of the guard is load-bearing: an empty id and an empty repo, on a
+  // node and on an asset, must each be skipped exactly as visibleAssets skips them.
+  snapshot.graph.nodes.push({ id: 'north-desk:ghost', repo: '', path: 'ghost.md', title: 'Ghost', eligible: false })
+  snapshot.graph.assets = [...(snapshot.graph.assets ?? []),
+    { id: '', repo: 'north-desk', path: 'ghost.bin', eligible: false },
+    { id: 'north-desk:asset:ghost2.bin', repo: '', path: 'ghost2.bin', eligible: false }]
   const prepared = prepare(snapshot, fullScope)
   assert.ok(prepared.manifest.notes.length > 0)
   assertNothingWithheld(prepared)

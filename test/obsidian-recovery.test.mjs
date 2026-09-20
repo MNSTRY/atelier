@@ -1885,6 +1885,23 @@ test('a keep unit whose note vanished refuses staging-failed instead of throwing
   assert.equal(refused.refusal.code, 'invalid-prepared-view')
 })
 
+test('a late candidate that fails after its file exists is removed before staging-failed is reported', needsExchange, async (t) => {
+  const world = await seeded(t)
+  fs.rmSync(world.full(NOTE))
+  // A throwing halt at the seam stands in for a write or fsync failure after
+  // the exclusive create succeeded: the file exists and nothing names it yet.
+  const seam = { at: 'after-late-candidate-open', halt: () => { throw Object.assign(new Error('write failed'), { code: 'EIO' }) } }
+  const result = await publishView({ preparedView: viewOf('gen-0002', { notes: { [NOTE]: BASE } }), protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: world.store, adapter: absentAdapter(), quietPeriodMs: 0, [CRASH_INJECTION_TEST_SEAM]: seam })
+  assert.equal(result.state, 'updating', JSON.stringify(result))
+  const unit = noteResult(result)
+  assert.equal(unit.outcome, 'staging-failed')
+  assert.equal(unit.errorCode, 'EIO')
+  const strays = filesUnder(world.store.stagingRoot).filter((file) => file.endsWith('.late.candidate'))
+  assert.deepEqual(strays, [], 'the partial late candidate was removed')
+  assertStagingNeverHoldsDisplacedBytes(world.store)
+  assert.equal(fs.existsSync(world.full(NOTE)), false)
+})
+
 test('the serialized script runs on its own, and a body that reaches for a module binding is caught', needsExchange, () => {
   const vault = fs.mkdtempSync(path.join(TMP, 'atelier-standalone-'))
   try {

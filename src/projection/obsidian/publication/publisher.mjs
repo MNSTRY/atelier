@@ -103,10 +103,11 @@ function ensureParents(vaultRoot, relativePath) {
 }
 
 // `created` receives the path once this call has created the file, and not before: cleanup removes only those.
-function stageCandidate(file, bytes, mode, created = []) {
+function stageCandidate(file, bytes, mode, created = [], crash = () => {}) {
   const descriptor = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, mode)
   created.push(file)
   try {
+    crash('after-late-candidate-open')
     fs.writeFileSync(descriptor, bytes)
     fs.fchmodSync(descriptor, mode)
     fs.fsyncSync(descriptor)
@@ -478,7 +479,7 @@ function retire(plan, { store, journalId, crash }) {
 function stageLate(plan, { store, journal, journalId, crash, updating }) {
   const preparedPath = store.preparedPath(journalId, plan.unit, { late: true })
   const created = []
-  try { stageCandidate(preparedPath, plan.bytes, plan.mode ?? 0o644, created) } catch (error) {
+  try { stageCandidate(preparedPath, plan.bytes, plan.mode ?? 0o644, created, crash) } catch (error) {
     for (const file of created) fs.rmSync(file, { force: true })
     throw error
   }
