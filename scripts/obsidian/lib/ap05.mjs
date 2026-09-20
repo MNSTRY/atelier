@@ -47,7 +47,8 @@ export const AP05_EDITS = Object.freeze({
   identical: Object.freeze({ nodeId: 'south-desk:tide-table', repoId: 'south-desk', source: 'tables/tide-table.md', anchor: '# Tide table', text: ' (identical line typed in both vaults)' }),
   divergent: Object.freeze({ nodeId: 'north-desk:harbor-plan', repoId: 'north-desk', source: 'plans/harbor-plan.md', anchor: 'byte offsets and character offsets differ.', texts: Object.freeze({ full: ' Typed in the full vault.', scoped: ' Typed in the scoped vault.' }) }),
   eligible: Object.freeze({ nodeId: 'north-desk:shared-b', repoId: 'north-desk', source: 'plans/shared-b.md', anchor: 'Second note with the same title', text: ' (applied automatically)' }),
-  outOfScope: Object.freeze({ nodeId: 'north-desk:shared-a', repoId: 'north-desk', source: 'plans/shared-a.md', anchor: 'First of two notes with one title.', text: ' Outside the policy selection.' }),
+  // An LF note: a CRLF source (shared-a) cannot be body-edited from the vault, see docs/obsidian-contract.md.
+  outOfScope: Object.freeze({ nodeId: 'north-desk:mooring-notes', repoId: 'north-desk', source: 'plans/mooring-notes.md', anchor: 'before the tide turns.', text: ' Outside the policy selection.' }),
   stale: Object.freeze({ nodeId: 'north-desk:quay-notes', repoId: 'north-desk', source: 'plans/quay-notes.md', anchor: 'Moorings are checked at first light.', text: ' Typed before the source moved.' }),
   structural: Object.freeze({ nodeId: 'north-desk:lantern-log', repoId: 'north-desk', source: 'plans/lantern-log.md', anchor: 'checked twice.', text: ' See [[{{note:south-desk:tide-table}}]].', linksTo: 'south-desk:tide-table' }),
   revoked: Object.freeze({ nodeId: 'north-desk:shared-b', repoId: 'north-desk', source: 'plans/shared-b.md', anchor: '(applied automatically)', text: ' Typed after the revocation.' }),

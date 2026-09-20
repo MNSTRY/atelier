@@ -6,6 +6,9 @@
     },
     "north-desk/plans/lantern-log.md": {
       "text": "---\ntitle: \"Lantern log\"\nkg:\n  id: \"north-desk:lantern-log\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Lantern log\n\nThe lantern is lit at dusk and checked twice.\n"
+    },
+    "north-desk/plans/mooring-notes.md": {
+      "text": "---\ntitle: \"Mooring notes\"\nkg:\n  id: \"north-desk:mooring-notes\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Mooring notes\n\nLines are inspected before the tide turns.\nNothing here is selected by any policy.\n"
     }
   }
 }
