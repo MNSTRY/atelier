@@ -1,0 +1,11 @@
+{
+  "ledgerLimits": { "maxLineBytes": 262144, "maxBytes": 16777216, "maxEvents": 10000 },
+  "reserve": { "events": 32, "bytes": 524288 },
+  "bounds": { "maxBatchPerRepository": 8, "maxExaminedPerTick": 64, "maxAttempts": 8, "retryIntervalMs": 60000, "maxRetryIntervalMs": 3600000, "lineMarginBytes": 1024 },
+  "payloadKeys": ["adapter", "change", "editId", "idempotencyKey", "identity", "kind", "origin", "references", "schema", "sourcePath", "summary"],
+  "changeKeys": ["code", "firstDifference", "occurrenceCount", "occurrences", "publishedEnd", "publishedStart", "reason"],
+  "statusRepositoryKeys": ["acknowledged", "backpressure", "backpressureCodes", "enrolled", "exhausted", "ledger", "queued", "refused", "refusedCodes", "repoId", "storeId", "submitted"],
+  "listKeys": ["adapterOperationId", "attempts", "code", "editId", "exhausted", "nextAttemptAt", "nodeId", "proposalId", "recordedAt", "repoId", "state"],
+  "backpressureCodes": ["ledger-full", "store-unavailable", "route-visibility-unknown"],
+  "storeRefusalCodes": ["proposal-too-large", "ledger-corrupt", "store-refused", "identity-not-preserved"]
+}

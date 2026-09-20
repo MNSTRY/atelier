@@ -556,3 +556,302 @@ test('dedupe and disclosure: a proposal, its ledger, the adapter records and eve
   await quoting.propose(world.context())
   assert.ok(disclosed(world.adapterProposals('east-wing')).length > 0, 'the control discloses, and the oracle sees it')
 })
+
+// ---------------------------------------------------------------------------
+// Phase 3: ledger refusal and backpressure
+// ---------------------------------------------------------------------------
+
+import { COLLABORATION_LEDGER_LIMITS } from '../src/collaboration/event-ledger.mjs'
+import { runObsidianCommand } from '../src/commands/obsidian.mjs'
+import {
+  BACKPRESSURE_CODES, PROPOSAL_BACKPRESSURE, PROPOSAL_LEDGER_LIMITS, STORE_REFUSAL_CODES, classifyLedgerRead, createProposalAdapterContribution, estimateEventLineBytes, nextAttemptAt, preflightAppend,
+} from '../src/projection/obsidian/proposals/index.mjs'
+import { createObsidianRegistry } from '../src/runtime/obsidian/extension-points.mjs'
+import { writeLedger } from './support/obsidian-proposals/world.mjs'
+
+const SHAPES = JSON.parse(fs.readFileSync(new URL('../fixtures/obsidian/proposals/expected-shapes.json', import.meta.url), 'utf8'))
+const KIB = 1024
+const MIB = 1024 * 1024
+const onlyEdit = (world, nodeId) => world.context({ edits: world.pendingEdits().filter((item) => item.identity.nodeId === nodeId) })
+
+test('ledger limits are the limits of the existing ledger, and the preflight says what an append would meet before anything is appended', async () => {
+  assert.deepEqual(PROPOSAL_LEDGER_LIMITS, { maxLineBytes: COLLABORATION_LEDGER_LIMITS.maxLineBytes, maxBytes: COLLABORATION_LEDGER_LIMITS.maxBytes, maxEvents: COLLABORATION_LEDGER_LIMITS.maxEvents })
+  assert.deepEqual(PROPOSAL_LEDGER_LIMITS, SHAPES.ledgerLimits, '256 KiB a line, 16 MiB, 10,000 events: not widened here')
+  assert.deepEqual([{ events: PROPOSAL_BACKPRESSURE.reserveEvents, bytes: PROPOSAL_BACKPRESSURE.reserveBytes }, [...BACKPRESSURE_CODES], [...STORE_REFUSAL_CODES]], [SHAPES.reserve, SHAPES.backpressureCodes, SHAPES.storeRefusalCodes])
+  const { reserveEvents: _events, reserveBytes: _bytes, ...bounds } = PROPOSAL_BACKPRESSURE
+  assert.deepEqual(bounds, SHAPES.bounds)
+  const readable = (events, bytes) => classifyLedgerRead({ ok: true, status: 200, stats: { eventCount: events, bytes } })
+  assert.deepEqual(preflightAppend({ ledger: readable(0, 0), lineBytes: 256 * KIB }), { ok: true })
+  assert.equal(preflightAppend({ ledger: readable(0, 0), lineBytes: 256 * KIB + 1 }).code, 'proposal-too-large')
+  assert.deepEqual(preflightAppend({ ledger: readable(10_000 - 33, 0), lineBytes: 3000 }), { ok: true })
+  assert.equal(preflightAppend({ ledger: readable(10_000 - 32, 0), lineBytes: 3000 }).code, 'ledger-full')
+  assert.deepEqual(preflightAppend({ ledger: readable(1, 16 * MIB - 512 * KIB - 3000), lineBytes: 3000 }), { ok: true })
+  assert.equal(preflightAppend({ ledger: readable(1, 16 * MIB - 512 * KIB - 2999), lineBytes: 3000 }).code, 'ledger-full')
+  assert.deepEqual([classifyLedgerRead({ ok: false, status: 413, stats: { bytes: 16 * MIB + 1, eventCount: 0 } }).code, classifyLedgerRead({ ok: false, status: 422, diagnostics: [{ code: 'ledger-json-invalid' }], stats: {} }).code,
+    classifyLedgerRead({ ok: false, status: 422, diagnostics: [{ code: 'ledger-event-limit' }], stats: { eventCount: 10_000 } }).code, classifyLedgerRead({ ok: false, status: 500 }).code], ['ledger-full', 'ledger-corrupt', 'ledger-full', 'store-unavailable'])
+  // Later each time, up to the maximum, and never sooner than the interval.
+  const waits = [1, 2, 3, 4, 8, 20].map((attempts) => Date.parse(nextAttemptAt({ attempts, nowMs: 0 })))
+  assert.deepEqual(waits, [60_000, 120_000, 240_000, 480_000, 3_600_000, 3_600_000])
+})
+
+test('the 256 KiB line limit with generated content: an event that would be too long is refused proposal-too-large before anything is appended, nothing is cut to fit, and a proposal that refers to the preserved bytes fits', async (t) => {
+  const world = makeProposalWorld(t)
+  for (const node of ['east-wing:guide', 'east-wing:second', 'east-wing:third']) world.addLink(node, 'east-wing:plain')
+  await world.observe()
+  const before = sourceState(world)
+  // An adapter that embeds bytes instead of referring to them, with as many bytes as it takes to reach `target`.
+  const embedding = (target) => ({ ...PROPOSAL_ADAPTER_PRIMITIVES, content: (input) => {
+    const body = PROPOSAL_ADAPTER_PRIMITIVES.content(input)
+    const bare = estimateEventLineBytes({ body: { ...body, proposal: { ...body.proposal, embedded: '' } }, workspaceId: WORKSPACE_ID })
+    return { ...body, proposal: { ...body.proposal, embedded: 'e'.repeat(target - bare) } }
+  } })
+  const tooLong = await adapterFor(world, {}, embedding(256 * KIB + 1)).propose(onlyEdit(world, 'east-wing:guide'))
+  assert.deepEqual(tooLong.outcomes.map((item) => [item.status, item.code, item.receipt.backpressure, item.receipt.proposalId]), [['refused', 'proposal-too-large', 'refused', null]])
+  assert.equal(world.ledgerBytes('east-wing').length, 0, 'nothing was appended, whole or cut')
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), world.editOf('east-wing:guide').objectRef)), true)
+
+  // The estimate is the line the real store writes, never less and at most the margin more; at the limit it still fits.
+  const atLimit = await adapterFor(world, {}, embedding(256 * KIB)).propose(onlyEdit(world, 'east-wing:second'))
+  assert.deepEqual(atLimit.outcomes.map((item) => [item.status, item.code]), [['acknowledged', null]])
+  const written = world.ledgerBytes('east-wing').length
+  assert.ok(written <= 256 * KIB && written >= 256 * KIB - PROPOSAL_BACKPRESSURE.lineMarginBytes - 64, `the line is ${written} bytes for an estimate of ${256 * KIB}`)
+  // And the real store refuses the same length plus the margin: the threshold is its own.
+  const body = embedding(256 * KIB + PROPOSAL_BACKPRESSURE.lineMarginBytes + 64).content({ item: { adapterOperationId: `pa-${'0'.repeat(64)}`, workspaceId: WORKSPACE_ID, repoId: 'east-wing', nodeId: 'east-wing:x', editId: `edit-${'0'.repeat(32)}`, idempotencyKey: 'k'.repeat(16), scopeId: 'scope-whole', generationId: 'gen-x', observed: { digest: digestOf('x'), byteLength: 1, recoveryRef: 'recovery/objects/x.bin' }, baseSourceDigest: digestOf('y') }, route: { sourcePath: 'notes/x.md' }, change: { code: 'unclassified', reason: null } })
+  const direct = world.store('east-wing').createProposal(body)
+  assert.deepEqual([direct.ok, direct.status], [false, 413])
+
+  // Production refers to the preserved bytes, so its line is a few KiB whatever the size of the edit.
+  const production = await adapterFor(world).propose(onlyEdit(world, 'east-wing:third'))
+  assert.deepEqual(production.outcomes.map((item) => item.status), ['acknowledged'])
+  assert.ok(world.ledgerBytes('east-wing').length - written < 8 * KIB)
+  assert.deepEqual(sourceState(world), before)
+})
+
+// A ledger at a limit, generated in the on-disk format of the store, which must itself read it as valid.
+function fillLedger(world, name, shape) {
+  const made = writeLedger(world.storeDir(name), shape)
+  const read = world.store(name).eventLedger.readAll()
+  assert.deepEqual([read.ok, read.stats.eventCount, read.stats.bytes], [true, made.events, made.bytes], 'the real store reads the generated ledger as valid')
+  return made
+}
+
+test('the 16 MiB and 10,000 event limits and an invalid line, with generated ledgers: a ledger with room takes the proposal, one at or near a limit defers ledger-full with the edit retained, a corrupt one refuses for that repository only, and nothing is ever compacted', async (t) => {
+  const world = makeProposalWorld(t)
+  for (const node of ['east-wing:guide', 'east-wing:second', 'east-wing:third', 'west-wing:guide', 'west-wing:second']) world.addLink(node, node.startsWith('east') ? 'east-wing:plain' : node === 'west-wing:guide' ? 'west-wing:second' : 'west-wing:guide')
+  await world.observe()
+  const before = sourceState(world)
+  const started = Date.now()
+  const timings = {}
+  const timed = async (label, operate) => { const at = Date.now(); const value = await operate(); timings[label] = Date.now() - at; return value }
+  const statusOf = (name) => adapterFor(world).status(world.context()).repositories.find((item) => item.repoId === name)
+  const deferredFull = (report, label) => {
+    assert.deepEqual(report.outcomes.map((item) => [item.status, item.code, item.state, item.receipt.backpressure, item.receipt.proposalId]), [['deferred', 'ledger-full', 'backpressure', 'deferred', null]], label)
+    assertObsidianContract('proposal-receipt', report.outcomes[0].receipt)
+  }
+
+  // --- bytes. Just under the limit with the reserve free: accepted.
+  await timed('16MiB-with-room', async () => {
+    fillLedger(world, 'east-wing', { events: 90, bytes: 16 * MIB - PROPOSAL_BACKPRESSURE.reserveBytes - 8 * KIB })
+    assert.deepEqual((await adapterFor(world).propose(onlyEdit(world, 'east-wing:guide'))).outcomes.map((item) => item.status), ['acknowledged'])
+  })
+  // Near the limit: the room left is the reviewers', and the adapter waits.
+  await timed('16MiB-near', async () => {
+    fillLedger(world, 'east-wing', { events: 90, bytes: 16 * MIB - 100 * KIB })
+    const ledger = digestOf(world.ledgerBytes('east-wing'))
+    deferredFull(await adapterFor(world).propose(onlyEdit(world, 'east-wing:second')), 'near 16 MiB')
+    assert.equal(digestOf(world.ledgerBytes('east-wing')), ledger)
+    assert.deepEqual([statusOf('east-wing').ledger.state, statusOf('east-wing').ledger.headroom.bytes, statusOf('east-wing').backpressureCodes], ['readable', 100 * KIB, { 'ledger-full': 1 }])
+  })
+  // Exactly at the limit: the real store refuses an append of its own, and the adapter never gets that far.
+  await timed('16MiB-at', async () => {
+    fillLedger(world, 'east-wing', { events: 90, bytes: 16 * MIB })
+    const own = world.store('east-wing').createProposal({ path: 'notes/guide.md' })
+    assert.deepEqual([own.ok, own.status], [false, 413], 'the threshold is the one of the store')
+    const ledger = digestOf(world.ledgerBytes('east-wing'))
+    deferredFull(await adapterFor(world).propose(onlyEdit(world, 'east-wing:third')), 'at 16 MiB')
+    assert.equal(digestOf(world.ledgerBytes('east-wing')), ledger)
+    // One byte over: the store cannot even be read, and that is still a full ledger, not a repair job.
+    fs.appendFileSync(world.ledgerFile('east-wing'), '\n')
+    assert.deepEqual([statusOf('east-wing').ledger.state, statusOf('east-wing').ledger.headroom], ['full', { events: 0, bytes: 0 }])
+  })
+
+  // --- events. 10,000 less the reserve and one: accepted, and that was the last the adapter takes.
+  await timed('10000-events', async () => {
+    fillLedger(world, 'west-wing', { events: 10_000 - PROPOSAL_BACKPRESSURE.reserveEvents - 1 })
+    assert.deepEqual((await adapterFor(world).propose(onlyEdit(world, 'west-wing:guide'))).outcomes.map((item) => item.status), ['acknowledged'])
+    assert.equal(statusOf('west-wing').ledger.headroom.events, PROPOSAL_BACKPRESSURE.reserveEvents)
+    const ledger = digestOf(world.ledgerBytes('west-wing'))
+    deferredFull(await adapterFor(world).propose(onlyEdit(world, 'west-wing:second')), 'near 10,000 events')
+    assert.equal(digestOf(world.ledgerBytes('west-wing')), ledger)
+    fillLedger(world, 'west-wing', { events: 10_000 })
+    const own = world.store('west-wing').createProposal({ path: 'notes/guide.md' })
+    assert.deepEqual([own.ok, own.status], [false, 413], 'at 10,000 events the real store refuses an append of its own')
+    assert.deepEqual([statusOf('west-wing').ledger.state, statusOf('west-wing').ledger.headroom.events], ['readable', 0])
+  })
+
+  // Every deferred edit is retained: open, its bytes kept, its operation waiting in the queue.
+  const waiting = adapterFor(world).list(world.context()).filter((item) => item.state === 'backpressure')
+  assert.deepEqual(waiting.map((item) => [item.nodeId, item.code, item.attempts]).sort(), [['east-wing:second', 'ledger-full', 1], ['east-wing:third', 'ledger-full', 1], ['west-wing:second', 'ledger-full', 1]])
+  for (const item of waiting) {
+    const edit = world.pendingEdits().find((candidate) => candidate.editId === item.editId)
+    assert.deepEqual([edit.closedAt, fs.existsSync(path.join(world.workspaceRoot(), edit.objectRef))], [null, true])
+  }
+
+  // Mutation control: an adapter that makes room by compacting rewrites the ledger of somebody else's store.
+  const full = digestOf(world.ledgerBytes('west-wing'))
+  world.advance(2 * 60 * 60 * 1000)
+  await adapterFor(world).propose(onlyEdit(world, 'west-wing:second'))
+  assert.equal(digestOf(world.ledgerBytes('west-wing')), full, 'production leaves a full ledger exactly as it is')
+  world.advance(2 * 60 * 60 * 1000)
+  await adapterFor(world, {}, { ...PROPOSAL_ADAPTER_PRIMITIVES, relieve: ({ store }) => store.eventLedger.compact() }).propose(onlyEdit(world, 'west-wing:second'))
+  assert.notEqual(digestOf(world.ledgerBytes('west-wing')), full, 'the control rewrote it, and the oracle sees that')
+
+  // --- an invalid line. The repository whose ledger cannot be read refuses; the other one goes on in the same tick.
+  await timed('invalid-line', async () => {
+    fs.rmSync(world.ledgerFile('east-wing'))
+    fs.rmSync(world.ledgerFile('west-wing'))
+    assert.equal(world.store('west-wing').createProposal({ path: 'notes/guide.md', intent: 'somebody else uses this store too' }).ok, true)
+    fs.writeFileSync(world.ledgerFile('east-wing'), '{"not":"an event"}\n')
+    const corrupt = digestOf(world.ledgerBytes('east-wing'))
+    assert.equal(world.store('east-wing').createProposal({ path: 'notes/guide.md' }).status, 422, 'the real store refuses every append to it')
+    world.advance(2 * 60 * 60 * 1000)
+    const report = await adapterFor(world).propose(world.context())
+    assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.code]).sort(), [['east-wing:second', 'refused', 'ledger-corrupt'], ['east-wing:third', 'refused', 'ledger-corrupt'], ['west-wing:second', 'acknowledged', null]])
+    assert.equal(digestOf(world.ledgerBytes('east-wing')), corrupt, 'a corrupt ledger is not repaired, rotated or removed')
+    assert.deepEqual([statusOf('east-wing').ledger.state, statusOf('east-wing').refusedCodes, statusOf('west-wing').acknowledged], ['corrupt', { 'ledger-corrupt': 2 }, 2])
+  })
+  assert.deepEqual(sourceState(world), before)
+  timings.total = Date.now() - started
+  t.diagnostic(`threshold exercise, milliseconds: ${JSON.stringify(timings)}`)
+})
+
+test('backpressure: a waiting operation is retried a bounded number of times at growing intervals with every attempt recorded, ticks in between read and write nothing, a healthy repository keeps progressing, batches are bounded, and a person can ask again once there is room', async (t) => {
+  const world = makeProposalWorld(t)
+  for (const node of ['east-wing:guide', 'east-wing:second', 'east-wing:third', 'west-wing:guide']) world.addLink(node, node.startsWith('east') ? 'east-wing:plain' : 'west-wing:second')
+  await world.observe()
+  const before = sourceState(world)
+  // The real limits are exercised above with ledgers of their size. What is looked at here is what the adapter does
+  // while it waits, over hundreds of ticks, so the ledger is a small one and the event limit it is held to is lowered
+  // to match: thirty events of forty leave less than the reserve.
+  const limits = { ...PROPOSAL_LEDGER_LIMITS, maxEvents: 40 }
+  writeLedger(world.storeDir('east-wing'), { events: 30 })
+  const fullLedger = digestOf(world.ledgerBytes('east-wing'))
+  const counts = { opened: 0, reads: 0, writes: 0 }
+  const bounds = { maxBatchPerRepository: 2 }
+  const adapter = adapterFor(world, { openStore: countingStore(counts), bounds, limits })
+
+  // Tick one: two of the three east operations (the batch bound) wait; the healthy repository is served in the same tick.
+  const first = await adapter.propose(world.context())
+  assert.deepEqual(first.outcomes.map((item) => [item.repoId, item.status, item.code]), [['east-wing', 'deferred', 'ledger-full'], ['east-wing', 'deferred', 'ledger-full'], ['west-wing', 'acknowledged', null]])
+  assert.deepEqual(adapter.list(world.context()).map((item) => [item.repoId, item.state, item.attempts]), [['east-wing', 'backpressure', 1], ['east-wing', 'backpressure', 1], ['west-wing', 'acknowledged', 1]])
+  // Tick two takes the third; it is not starved by the two that wait.
+  assert.deepEqual((await adapter.propose(world.context())).outcomes.map((item) => [item.repoId, item.status]), [['east-wing', 'deferred']])
+
+  // No busy loop. Twenty ticks inside the retry interval: nothing is asked of any store and nothing is written anywhere.
+  const still = { asked: { ...counts }, queue: queueState(world), stores: storeState(world) }
+  // The project and the pending edits do not change while the adapter waits, so they are read once for the loops.
+  const unchanged = world.context()
+  for (let tick = 0; tick < 20; tick += 1) { world.advance(2000); assert.deepEqual((await adapter.propose(unchanged)).outcomes, []) }
+  assert.deepEqual({ asked: { ...counts }, queue: queueState(world), stores: storeState(world) }, still)
+
+  // Four hundred ticks, a minute apart: every operation is tried at most maxAttempts times in all, then never again.
+  const ticks = 400
+  for (let tick = 0; tick < ticks; tick += 1) { world.advance(60 * 1000); await adapter.propose(unchanged) }
+  const waiting = adapter.list(world.context()).filter((item) => item.repoId === 'east-wing')
+  assert.deepEqual(waiting.map((item) => [item.state, item.code, item.attempts, item.exhausted]), [1, 2, 3].map(() => ['backpressure', 'ledger-full', PROPOSAL_BACKPRESSURE.maxAttempts, true]))
+  const attempts = 3 * PROPOSAL_BACKPRESSURE.maxAttempts
+  // An attempt reads the ledger once to see what room it has and, when it can be read, once more to look for the proposal.
+  assert.ok(counts.reads - still.asked.reads <= 2 * attempts && counts.writes === 1, `${counts.reads - still.asked.reads} store reads for ${ticks} ticks is bounded by twice the attempts (${attempts}), and the only creation is the healthy one`)
+  const spent = { ...counts }
+  for (let tick = 0; tick < 50; tick += 1) { world.advance(24 * 60 * 60 * 1000); await adapter.propose(unchanged) }
+  assert.deepEqual(counts, spent, 'an exhausted operation is never tried again by itself')
+  assert.equal(digestOf(world.ledgerBytes('east-wing')), fullLedger)
+  const status = adapter.status(world.context()).repositories.find((item) => item.repoId === 'east-wing')
+  assert.deepEqual([status.backpressure, status.exhausted, status.backpressureCodes, status.ledger.headroom.events], [3, 3, { 'ledger-full': 3 }, 10])
+  // The attempts are in the record: eight waits each, each later than the one before.
+  const history = openProposalQueue({ stateRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID, repositoryRoots: protectedRoots(world.loadProject()), clock: world.clock }).read('east-wing', waiting[0].adapterOperationId).records
+  assert.deepEqual(history.map((record) => record.state), ['queued', ...Array.from({ length: PROPOSAL_BACKPRESSURE.maxAttempts }, () => 'backpressure')])
+  const gaps = history.slice(1).map((record) => Date.parse(record.nextAttemptAt) - Date.parse(record.lastAttemptAt))
+  assert.deepEqual(gaps, [60, 120, 240, 480, 960, 1920, 3600, 3600].map((seconds) => seconds * 1000))
+  for (const item of waiting) assert.equal(world.pendingEdits().find((edit) => edit.editId === item.editId).closedAt, null, 'the edit is retained throughout')
+
+  // Mutation control: an adapter that hands a waiting operation over on every tick asks the store on every tick.
+  const eager = { opened: 0, reads: 0, writes: 0 }
+  const busy = adapterFor(world, { openStore: countingStore(eager), bounds: { ...bounds, maxAttempts: 1000 }, limits }, { ...PROPOSAL_ADAPTER_PRIMITIVES, handOver: () => true })
+  await busy.requeue(world.context(), { repoId: 'east-wing', adapterOperationId: waiting[2].adapterOperationId })
+  const third = onlyEdit(world, waiting[2].nodeId)
+  for (let tick = 0; tick < 40; tick += 1) { world.advance(1000); await busy.propose(third) }
+  assert.ok(eager.reads >= 40, 'the control reads the full ledger on every tick, which the bound above would refuse')
+
+  // A person makes room (the adapter never does), and asks for the waiting operations again.
+  assert.deepEqual(await adapter.requeue(world.context(), { repoId: 'east-wing', adapterOperationId: adapterFor(world).list(world.context()).find((item) => item.state === 'acknowledged').adapterOperationId }), { requeued: false, code: 'unknown-operation' })
+  fs.rmSync(world.ledgerFile('east-wing'))
+  for (const item of waiting.slice(0, 2)) assert.equal((await adapter.requeue(world.context(), { repoId: 'east-wing', adapterOperationId: item.adapterOperationId })).requeued, true)
+  world.advance(24 * 60 * 60 * 1000)
+  const served = await adapter.propose(world.context())
+  assert.deepEqual(served.outcomes.map((item) => [item.repoId, item.status, item.dedupe]), [['east-wing', 'acknowledged', 'new'], ['east-wing', 'acknowledged', 'new']])
+  assert.equal(world.adapterProposals('east-wing').length, 2)
+  assert.deepEqual(sourceState(world), before)
+})
+
+test('status for a person or an agent: a read-only structured listing per repository through the contribution and the obsidian command, with counts, codes and ledger headroom and no note or source text', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'west-wing:guide')
+  await world.observe()
+  const registry = createObsidianRegistry({ contributions: [createProposalAdapterContribution()] })
+  assert.deepEqual([registry.extensions.get('proposal-adapter').id, registry.operations.describe().map((item) => item.name), registry.contributions], [PROPOSAL_ADAPTER_ID, ['proposals'], ['atelier.proposal-adapter']])
+  const run = async (argv) => {
+    const out = []
+    const exit = await runObsidianCommand({ argv: [...argv, '--json'], seams: {}, loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock, stdout: (text) => out.push(text), stderr: (text) => out.push(text), contributions: [createProposalAdapterContribution()] })
+    return { exit, json: JSON.parse(out.join('\n')) }
+  }
+  // Before anything was routed: asking makes nothing, neither a store nor adapter state.
+  const untouched = { project: treeListing(world.projectDir), data: treeListing(world.dataRoot) }
+  const empty = await run(['proposals', 'list'])
+  assert.deepEqual([empty.exit, empty.json.operations, empty.json.status.repositories.map((item) => [item.repoId, item.ledger.state, item.ledger.headroom])], [0, [], REPOSITORIES.map((name) => [name, 'absent', { events: 10_000, bytes: 16 * MIB }])])
+  assert.deepEqual({ project: treeListing(world.projectDir), data: treeListing(world.dataRoot) }, untouched, 'the listing is read-only')
+
+  await adapterFor(world).propose(world.context())
+  const before = { project: treeListing(world.projectDir), data: treeListing(world.dataRoot) }
+  const listed = await run(['proposals', 'list'])
+  assert.equal(listed.exit, 0)
+  const [east, west] = listed.json.status.repositories
+  assert.deepEqual(Object.keys(east).sort(), SHAPES.statusRepositoryKeys)
+  assert.deepEqual([east.repoId, east.enrolled, east.acknowledged, east.queued + east.submitted + east.backpressure + east.refused, east.ledger.state, east.ledger.events, east.ledger.headroom.events], ['east-wing', true, 1, 0, 'readable', 1, 9_999])
+  assert.deepEqual([west.repoId, west.acknowledged, west.ledger.state], ['west-wing', 0, 'absent'])
+  assert.deepEqual(listed.json.operations.map((item) => Object.keys(item).sort()), [SHAPES.listKeys])
+  const shown = await run(['proposals', 'show', listed.json.operations[0].adapterOperationId])
+  assert.deepEqual([shown.exit, shown.json.operation.state, shown.json.review.status, shown.json.operation.receipt.backpressure], [0, 'acknowledged', 'proposed', 'accepted'])
+  assert.deepEqual({ project: treeListing(world.projectDir), data: treeListing(world.dataRoot) }, before, 'list and show write nothing')
+  const forbidden = [WEST_TITLE, 'Lantern guide', 'Closing words', world.wikiOf('west-wing:guide'), path.basename(world.dir)]
+  assert.deepEqual(stringsOf([listed.json, shown.json]).filter((value) => path.isAbsolute(value) || forbidden.some((text) => value.includes(text))), [])
+  // The payload shape the disclosure oracle pins, from the data fixture.
+  const [record] = world.adapterProposals('east-wing')
+  assert.deepEqual(Object.keys(record.payload).sort(), SHAPES.payloadKeys)
+  assert.ok(Object.keys(record.payload.change).every((key) => SHAPES.changeKeys.includes(key)))
+
+  for (const [argv, code] of [[['proposals', 'show', 'not-an-operation'], 'usage'], [['proposals', 'show', `pa-${'0'.repeat(64)}`], 'unknown-operation'], [['proposals', 'accept'], 'usage'], [['proposals', 'list', 'extra'], 'usage']]) {
+    const refused = await run(argv)
+    assert.deepEqual([refused.exit !== 0, refused.json.error.code], [true, code], argv.join(' '))
+  }
+})
+
+test('backpressure and a change of mind: an edit the person took back, or wrote over, while its operation waited is refused as withdrawn or superseded and never becomes a proposal', async (t) => {
+  const world = makeProposalWorld(t)
+  const original = fs.readFileSync(world.noteFile('east-wing:guide'))
+  world.addLink('east-wing:guide', 'east-wing:plain')
+  world.addLink('east-wing:second', 'east-wing:plain')
+  await world.observe()
+  writeLedger(world.storeDir('east-wing'), { events: 90, bytes: 16 * MIB })
+  const adapter = adapterFor(world)
+  assert.deepEqual((await adapter.propose(world.context())).outcomes.map((item) => [item.status, item.code]), [['deferred', 'ledger-full'], ['deferred', 'ledger-full']])
+  // The first note goes back to what it was generated as; the second is edited again.
+  fs.writeFileSync(world.noteFile('east-wing:guide'), original)
+  world.editNote('east-wing:second', 'A second sheet.', 'A second sheet, reworded.')
+  world.queueDirectly()
+  fs.rmSync(world.ledgerFile('east-wing'))
+  world.advance(2 * 60 * 60 * 1000)
+  const report = await adapter.propose(world.context())
+  assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.code]).sort(), [['east-wing:guide', 'refused', 'edit-withdrawn'], ['east-wing:second', 'refused', 'edit-superseded']])
+  assert.deepEqual(world.adapterProposals('east-wing'), [], 'there was room by then, and still nothing was proposed for an edit nobody stands behind')
+})

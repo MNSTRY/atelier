@@ -174,6 +174,7 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
     const clock = () => (options.clock ?? callerClock ?? (() => new Date()))()
     const seams = { ...createProductionSeams(), ...(options.seams ?? {}) }
     let cursor = 0
+    const queues = new Map()
     // Edits whose operation is known not to be a proposal. A cache: losing it costs one read of an object.
     const notProposals = new Set()
 
@@ -204,11 +205,16 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         return decision.allowed === true || decision.code !== 'object-not-visible'
       }
       let objects = null
-      let queue = null
+      // Records are immutable, so the queue of a workspace, and what it has verified, is kept from one tick to the next.
+      const queueKey = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots])
+      const queue = () => {
+        if (queues.get(queueKey) === undefined) { queues.clear(); queues.set(queueKey, openProposalQueue({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock, crash: queueCrash })) }
+        return queues.get(queueKey)
+      }
       return {
         ...context, recoveryOf, visible,
         objects: () => (objects ??= objectStore({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock })),
-        queue: () => (queue ??= openProposalQueue({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock, crash: queueCrash })),
+        queue,
         managedRoots: () => [workspaceRoot, ...[...stores.values()].map((store) => store.vaultRoot)],
       }
     }
@@ -452,7 +458,9 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         for (const head of [...heads].sort((left, right) => compareText(left.recordedAt, right.recordedAt) || compareText(left.adapterOperationId, right.adapterOperationId))) {
           if (!rules.handOver({ head, nowMs, bounds })) continue
           const edit = byEdit.get(head.editId) ?? null
-          const editState = edit === null ? 'unknown' : edit.closedAt === null ? 'open' : ['withdrawn', 'superseded'].includes(edit.state) ? edit.state : 'closed'
+          // An operation whose edit this caller did not hand over is not this caller's to decide: it waits as it is.
+          if (edit === null && head.state !== 'submitted') continue
+          const editState = edit === null || edit.closedAt === null ? 'open' : ['withdrawn', 'superseded'].includes(edit.state) ? edit.state : 'closed'
           let item = itemOfHead(head, edit)
           if (edit !== null && head.state !== 'submitted') {
             try { item = { ...item, ...(describe(workspace, edit) ?? {}) } } catch (error) { if (!isTyped(error)) throw error; report.outcomes.push({ status: 'failed', code: error.code, editId: head.editId, repoId: head.repoId, nodeId: head.nodeId, adapterOperationId: head.adapterOperationId, state: head.state, proposalId: null }); continue }
