@@ -1232,7 +1232,7 @@ async function ap05World(t, label, { onTick, inProcess = false } = {}) {
 
 test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and automatic apply, pending kinds, idempotent restart, proposal store and retention', needsExchange, async (t) => {
   const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05', { inProcess: true })
-  assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md'])
+  assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md', 'north-desk/plans/mooring-notes.md'])
   const run = await runAp05({ world, views, runtime, command, operator: 'op-synthetic' })
   assert.deepEqual({ start: [run.steps.baseline.start.state, run.steps.baseline.start.started, run.steps.baseline.start.record.pid], restart: [run.steps.automatic.restart.stop.stopped, run.steps.automatic.restart.start.state, run.steps.automatic.restart.start.record.runtimeId !== run.steps.baseline.start.record.runtimeId], stopped: run.steps.retention.uninstall.serviceStatus.state, log: runtime.logLines.filter((entry) => entry.event === 'started').length }, { start: ['healthy', true, process.pid], restart: [true, 'healthy', true], stopped: 'stopped', log: 2 }, 'the in-process service body was started twice, proven by health, and stopped')
   assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => item.role) }, { passed: true, failures: [], roles: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention', null] })
