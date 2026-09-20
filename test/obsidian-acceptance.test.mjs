@@ -54,6 +54,19 @@ const { COMMAND_SCHEMA, EXIT, runObsidianCommandForOracleTests } = await import(
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readInstalledApplyPolicy, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { dispatchAutomaticApply } = await import('../src/runtime/obsidian/pending-edits.mjs')
+// AOP-4 phase 2 proof tooling (scripts/obsidian, unshipped). Imported after
+// the guard: none of it may start the app, and its drivers never run on import.
+const { OutputRefusal, assertExternalOutput, repositoryContaining } = await import('../scripts/obsidian/lib/common.mjs')
+const { PROPOSED_TARGETS, createResourceSampler, percentile, waitUntil, warmChangeSummary } = await import('../scripts/obsidian/lib/measure.mjs')
+const { deriveWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
+const { DESKTOP_EXT_KEY, ReceiptRefusal, buildReceipt, evidenceFileName, writeGateReceipt } = await import('../scripts/obsidian/lib/receipts.mjs')
+const { DEFAULT_SEED, PROFILES, generateScaleDataset, planDataset } = await import('../scripts/obsidian/generate-scale.mjs')
+const {
+  DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
+  planProcedure, recordProcedureReceipts, runAp01, runAp02Membership, runAp04App,
+} = await import('../scripts/obsidian/desktop-receipts.mjs')
+const { SIGNED_NOTE, UNSIGNED_NOTE, createReceiptVerifierForOracleTests, formatTable, verifyReceiptSet } = await import('../scripts/obsidian/verify-receipts.mjs')
+const { signReceipt } = await import('../scripts/obsidian/sign-receipt.mjs')
 
 // AOP-4 phase 1: selection binding, focus queries, apply policy setup, the
 // conflict view and acceptance receipt validation. Invented, synthetic
@@ -747,5 +760,350 @@ test('apply-policy and conflicts through the command: create, show, revoke and t
   const narrowed = await world.run(['conflicts', 'view-harbor'])
   assert.deepEqual({ scopeId: narrowed.json.scopeId, objects: narrowed.json.objects }, { scopeId: 'view-harbor', objects: [] })
   assert.equal((await world.run(['conflicts', 'view-elsewhere'])).json.error.code, 'unknown-scope')
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+// ---------------------------------------------------------------------------
+// 7. AOP-4 phase 2 proof tooling: scale generator, measurement helpers,
+// desktop planner and runners against a fake instance, receipt writer,
+// signer and verifier. Nothing here starts the app; the fake instance answers
+// scripted text and the spawn guard stays silent.
+// ---------------------------------------------------------------------------
+
+const TINY_FIXTURE_DIGEST = 'sha256:f29cd4f5f97f7e01958125af2d94fc75775b8d4880b94c91b2614abf60a804a3'
+const CANDIDATE = { commit: '1'.repeat(40), treeDigest: `sha256:${'2'.repeat(64)}`, ext: { dirty: false } }
+const CAPABILITIES = { discoveredAt: NOW, qualified: true, app: { name: 'Obsidian', version: '1.13.7', installerVersion: '1.12.7', raw: 'Obsidian 1.13.7 (installer 1.12.7)' }, cli: { version: 'Obsidian 1.13.7 (installer 1.12.7)', commands: { vaults: true, eval: true, links: true, backlinks: true, unresolved: true } }, lastSavedData: { present: true }, errors: [] }
+const WALL = { startedAt: '2026-01-05T10:00:00.000Z', endedAt: '2026-01-05T10:20:00.000Z' }
+const HOST = { id: 'host-synthetic-desk-02' }
+
+// A scripted instance: `answers` maps a substring of the CLI arguments to the
+// text the CLI would print. `eval` scripts are matched by their probe text.
+function fakeInstance(t, { vaults, home, answers = {} } = {}) {
+  const root = tempDir(t, 'instance')
+  const layout = { root, home: home ?? path.join(root, 'home'), profile: path.join(root, 'profile'), vault: path.join(root, 'vault') }
+  fs.mkdirSync(layout.vault, { recursive: true })
+  const calls = []
+  return {
+    layout,
+    env: { HOME: layout.home },
+    calls,
+    async cli(...args) {
+      calls.push(args)
+      const joined = args.join(' ')
+      if (args[0] === 'vaults') return (vaults ?? [`atelierg00synthetic\t${layout.vault}`]).join('\n')
+      for (const [needle, answer] of Object.entries(answers)) if (joined.includes(needle)) return typeof answer === 'function' ? answer(args) : answer
+      throw new Error(`fake instance has no answer for ${joined.slice(0, 80)}`)
+    },
+  }
+}
+
+test('scale generator: same seed, same fixture digest; another seed differs; writes only outside repositories and fixtures', (t) => {
+  const dir = tempDir(t, 'scale')
+  const first = generateScaleDataset({ outDir: path.join(dir, 'a'), profile: 'tiny' })
+  const second = generateScaleDataset({ outDir: path.join(dir, 'b'), profile: 'tiny', seed: DEFAULT_SEED })
+  assert.equal(first.manifest.fixtureDigest, TINY_FIXTURE_DIGEST, 'the tiny profile digest is pinned')
+  assert.equal(second.manifest.fixtureDigest, first.manifest.fixtureDigest)
+  assert.deepEqual(first.manifest.counts, { nodes: 50, edges: 100, repositories: 2, files: 50, bytes: first.manifest.counts.bytes })
+  assert.deepEqual({ schema: first.manifest.schema, generatorVersion: first.manifest.generatorVersion, seed: first.manifest.seed, profile: first.manifest.profile, derivation: first.manifest.derivation }, { schema: 'atelier-obsidian-scale-dataset/v1', generatorVersion: '1.0.0', seed: DEFAULT_SEED, profile: 'tiny', derivation: null })
+  assert.notEqual(generateScaleDataset({ outDir: path.join(dir, 'c'), profile: 'tiny', seed: 7 }).manifest.fixtureDigest, TINY_FIXTURE_DIGEST)
+  // Edge planning is exact: 100 declared relations over 50 nodes, none to self, none repeated.
+  const plan = planDataset({ nodes: 50, edges: 100, repositories: 2 })
+  const declared = plan.records.flatMap((record) => Object.values(record.relations).flat())
+  assert.equal(declared.length, 100)
+  assert.ok(plan.records.every((record) => new Set(Object.values(record.relations).flat()).size === Object.values(record.relations).flat().length && !Object.values(record.relations).flat().includes(record.nodeId)))
+  assert.deepEqual(PROFILES.standard, { nodes: 10000, edges: 50000, repositories: 4 })
+  assert.deepEqual(PROFILES.stress, { nodes: 100000, edges: 500000, repositories: 8 })
+  // Refusals: inside this repository, under any fixtures path, inside another repository, a relative path, a non-empty target.
+  const refusal = (options, code) => { try { generateScaleDataset(options) } catch (error) { assert.ok(error instanceof OutputRefusal, error.stack); return error.code } return null }
+  assert.equal(refusal({ outDir: path.join(REPOSITORY_ROOT, '.artifacts', 'scale'), profile: 'tiny' }, 'output-inside-repository'), 'output-inside-repository')
+  assert.equal(refusal({ outDir: path.join(dir, 'fixtures', 'scale'), profile: 'tiny' }, 'output-inside-fixtures'), 'output-inside-fixtures')
+  fs.mkdirSync(path.join(dir, 'repo', '.git'), { recursive: true })
+  assert.equal(repositoryContaining(path.join(dir, 'repo', 'deep', 'er')), path.join(dir, 'repo'))
+  assert.equal(refusal({ outDir: path.join(dir, 'repo', 'deep'), profile: 'tiny' }, 'output-inside-repository'), 'output-inside-repository')
+  assert.equal(refusal({ outDir: 'relative/scale', profile: 'tiny' }, 'output-not-absolute'), 'output-not-absolute')
+  assert.equal(refusal({ outDir: path.join(dir, 'a'), profile: 'tiny' }, 'output-not-empty'), 'output-not-empty')
+  assert.equal(refusal({ outDir: path.join(dir, 'd'), profile: 'huge' }, 'unknown-profile'), 'unknown-profile')
+  assert.ok(!fs.existsSync(path.join(REPOSITORY_ROOT, '.artifacts', 'scale')), 'nothing was written inside the repository')
+  assert.equal(assertExternalOutput(path.join(dir, 'ok')), path.join(dir, 'ok'))
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('cold derivation of the tiny dataset: the real pipeline publishes every note into a temporary vault with no app', async (t) => {
+  const dir = tempDir(t, 'derive')
+  const { manifest } = generateScaleDataset({ outDir: path.join(dir, 'data'), profile: 'tiny' })
+  const vaultRoot = path.join(dir, 'vault')
+  const result = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot: path.join(dir, 'state'), vaultRoot })
+  assert.deepEqual({ state: result.state, mode: result.mode, graph: result.graph, notes: result.manifest.notes.length }, { state: 'committed', mode: 'direct', graph: { nodes: 50, edges: 100 }, notes: 50 })
+  assert.equal(result.manifest.links.length, 100, 'every declared relation is a manifest link')
+  for (const key of ['loadProjectMs', 'buildGraphMs', 'captureSnapshotMs', 'prepareViewMs', 'publishViewMs', 'totalMs']) assert.ok(typeof result.timings[key] === 'number' && result.timings[key] >= 0, key)
+  assert.ok(result.written.files >= 50 && result.written.bytes > 0)
+  // Warm path: one source change, the same store, a replace of exactly that note.
+  const source = fs.readdirSync(path.join(manifest.workspaceDir, 'scale-1', 'notes', '000')).sort()[0]
+  fs.appendFileSync(path.join(manifest.workspaceDir, 'scale-1', 'notes', '000', source), '\nWarm change 1.\n')
+  const warm = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot: path.join(dir, 'state'), vaultRoot })
+  assert.deepEqual({ state: warm.state, expected: warm.expectedGeneration }, { state: 'committed', expected: result.generationId })
+  const changed = warm.files.filter((file) => file.kind === 'note' && fs.readFileSync(path.join(vaultRoot, file.path), 'utf8').includes('Warm change 1.'))
+  assert.equal(changed.length, 1)
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('AP-04 measurement helpers: p95 pinned on a literal sample, file and app series independent, no app target substituted', () => {
+  const sample = [120, 340, 90, 5000, 410, 260, 275, 310, 4900, 150]
+  assert.equal(percentile(sample, 95), 5000, 'nearest rank: ceil(0.95 * 10) = 10th value')
+  assert.equal(percentile(sample, 50), 275)
+  assert.equal(percentile(sample, 0), 90)
+  assert.equal(percentile([], 95), null)
+  assert.equal(percentile(Array.from({ length: 30 }, (_, index) => index + 1), 95), 29, 'ceil(0.95 * 30) = 29th value')
+  const changes = Array.from({ length: 30 }, (_, index) => ({ change: index + 1, sourceToFileMs: 100 + index * 10, sourceToAppMs: null }))
+  const summary = warmChangeSummary(changes)
+  assert.deepEqual({ count: summary.count, complete: summary.complete, file: summary.sourceToFile, app: summary.sourceToApp }, {
+    count: 30, complete: true,
+    file: { samples: 30, p50Ms: 240, p95Ms: 380, maxMs: 390, targetP95Ms: 5000, withinTarget: true, status: 'measured' },
+    app: { samples: 0, p50Ms: null, p95Ms: null, maxMs: null, targetP95Ms: null, withinTarget: null, status: 'not-measured' },
+  })
+  const withApp = warmChangeSummary(changes.map((change) => ({ ...change, sourceToAppMs: 9000 })))
+  assert.deepEqual({ fileP95: withApp.sourceToFile.p95Ms, appP95: withApp.sourceToApp.p95Ms, appWithin: withApp.sourceToApp.withinTarget }, { fileP95: 380, appP95: 9000, appWithin: null }, 'a slow app never fails the file target and has no substituted target')
+  assert.deepEqual({ file: PROPOSED_TARGETS.fileUpdate.p95Ms, recovery: PROPOSED_TARGETS.droppedEventRecovery.maxMs, app: PROPOSED_TARGETS.appUsableOpen.budgetMs }, { file: 5000, recovery: 60000, app: null })
+  assert.equal(warmChangeSummary(changes.slice(0, 12)).complete, false)
+  // Resource sampler with an injected reader and clock.
+  let tick = 0
+  const timers = []
+  const sampler = createResourceSampler({ intervalMs: 100, now: () => tick, read: () => ({ rssBytes: 1000 + tick, heapUsedBytes: 1, cpuUserMicros: tick * 2, cpuSystemMicros: tick }), setInterval: (callback) => { timers.push(callback); return 1 }, clearInterval: () => {} }).start()
+  tick = 100; timers[0]()
+  tick = 250; sampler.sample('phase')
+  tick = 400
+  const samples = sampler.stop()
+  assert.deepEqual(samples.map(({ atMs, label, rssBytes }) => [atMs, label, rssBytes]), [[0, 'start', 1000], [100, null, 1100], [250, 'phase', 1250], [400, 'stop', 1400]])
+  assert.deepEqual(sampler.summary(), { samples: 4, intervalMs: 100, rssPeakBytes: 1400, rssEndBytes: 1400, cpuUserMicros: 800, cpuSystemMicros: 400, wallMs: 400 })
+})
+
+test('waitUntil records a met condition and a timeout without throwing', async () => {
+  let clock = 0
+  let answers = 0
+  const met = await waitUntil(async () => { answers += 1; return answers === 3 }, { timeoutMs: 1000, intervalMs: 10, now: () => clock, sleep: async () => { clock += 10 } })
+  assert.deepEqual(met, { met: true, elapsedMs: 20, attempts: 3, error: null })
+  const late = await waitUntil(async () => { throw new Error('not yet') }, { timeoutMs: 30, intervalMs: 10, now: () => clock, sleep: async () => { clock += 10 } })
+  assert.deepEqual(late, { met: false, elapsedMs: 30, attempts: 4, error: 'not yet' })
+})
+
+test('desktop planner: every gate role is automated or an exact manual step; the plan closes nothing', () => {
+  assert.deepEqual(PROCEDURE_IDS, ['AP-01', 'AP-02', 'AP-03', 'AP-04', 'AP-05'])
+  const manual = {}
+  for (const id of PROCEDURE_IDS) {
+    const plan = planProcedure(id, { receiptDir: '/tmp/receipts', operator: 'op-synthetic', isolatedHome: '/tmp/iso/home', workspaceDir: '/tmp/ws' })
+    assert.deepEqual({ gates: plan.gates, closes: plan.closes }, { gates: [...DESKTOP_PROCEDURES[id].gates], closes: false })
+    manual[id] = plan.manualStepsRequired.map((step) => `${step.gate}:${step.role}`)
+    for (const step of plan.manualStepsRequired) assert.ok(step.instructions.length > 0 && step.instructions.every((line) => !line.includes('<ISOLATED_HOME>') && !line.includes('<SYNTHETIC_WORKSPACE>') && !line.includes('<OPERATOR>')), 'placeholders are filled')
+  }
+  assert.deepEqual(manual, {
+    'AP-01': ['G07:app-observation'],
+    'AP-02': ['G13:graph-filter-observation'],
+    'AP-03': ['G14:source-refresh-trace', 'G14:dropped-event-recovery', 'G14:sleep-wake-clock', 'G15:ownership-health', 'G15:terminal-closure'],
+    'AP-04': [],
+    'AP-05': ['G17:multi-vault-edit-trace', 'G17:manual-apply-trace', 'G17:automatic-apply-trace', 'G17:uninstall-retention'],
+  })
+  assert.deepEqual(planProcedure('AP-04', {}).receipts.map((item) => [item.gate, item.status]), [['G16', 'complete']])
+  assert.deepEqual(planProcedure('AP-03', {}).receipts.map((item) => [item.gate, item.status]), [['G14', 'incomplete'], ['G15', 'incomplete']])
+  const sleep = planProcedure('AP-03', { isolatedHome: '/tmp/iso/home', workspaceDir: '/tmp/ws', operator: 'op-x' }).manualStepsRequired.find((step) => step.role === 'sleep-wake-clock')
+  assert.ok(sleep.instructions[0].includes('HOME=/tmp/iso/home node bin/atelier.mjs obsidian service status --project /tmp/ws/atelier.project.json --json'))
+  assert.throws(() => planProcedure('AP-09'), (error) => error instanceof OutputRefusal && error.code === 'unknown-procedure')
+})
+
+test('desktop runner refuses anything but the isolated instance: two vaults, a foreign vault, a shared HOME', async (t) => {
+  const refusal = async (instance, options) => { try { await assertIsolatedInstance(instance, options) } catch (error) { assert.ok(error instanceof IsolationRefusal, error.stack); return error.code } return null }
+  const two = fakeInstance(t)
+  two.cli = async () => `atelierg00synthetic\t${two.layout.vault}\nreal-vault\t${path.join(os.homedir(), 'Documents', 'Notes')}`
+  assert.equal(await refusal(two), 'unexpected-vaults-visible')
+  const foreign = fakeInstance(t, { vaults: ['other\t/somewhere/else/vault'] })
+  assert.equal(await refusal(foreign), 'unexpected-vaults-visible')
+  const shared = fakeInstance(t, { home: os.homedir() })
+  assert.equal(await refusal(shared), 'instance-home-not-private')
+  const elsewhere = fakeInstance(t)
+  elsewhere.env = { HOME: elsewhere.layout.home }
+  elsewhere.layout = { ...elsewhere.layout, home: path.join(tempDir(t, 'other'), 'home') }
+  assert.equal(await refusal(elsewhere), 'instance-home-not-private')
+  assert.equal(await refusal({}), 'instance-not-isolated')
+  const good = fakeInstance(t)
+  assert.deepEqual(await assertIsolatedInstance(good), { vaultRoot: good.layout.vault, vaultsOutput: `atelierg00synthetic\t${good.layout.vault}` })
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('capability discovery records versions, CLI commands and lastSavedData from raw output; an unsupported CLI fails qualification', async (t) => {
+  assert.deepEqual(parseVersionOutput('Obsidian 1.13.7 (installer 1.12.7)'), { appVersion: '1.13.7', installerVersion: '1.12.7' })
+  assert.deepEqual(parseVersionOutput('garbage'), { appVersion: null, installerVersion: null })
+  const help = 'Commands:\n  vaults [verbose]\n  eval code=...\n  links file=...\n  backlinks file=...\n  unresolved\n  dev:cdp method=...\n  version\n  help\n'
+  assert.deepEqual(parseHelpOutput(help), { version: true, help: true, vaults: true, eval: true, links: true, backlinks: true, unresolved: true, file: true, 'dev:cdp': true })
+  const qualified = fakeInstance(t, { answers: { version: 'Obsidian 1.13.7 (installer 1.12.7)', help, 'openFile': '=> ok', 'lastSavedData': '=> {"views":[{"path":"notes/a.md","hasLastSavedData":true}]}', 'detach': '=> ok' } })
+  const record = await discoverCapabilities(qualified, { now: () => NOW })
+  assert.deepEqual({ qualified: record.qualified, app: record.app.version, installer: record.app.installerVersion, cli: record.cli.version, last: record.lastSavedData.present, errors: record.errors }, { qualified: true, app: '1.13.7', installer: '1.12.7', cli: 'Obsidian 1.13.7 (installer 1.12.7)', last: true, errors: [] })
+  const unsupported = fakeInstance(t, { answers: { version: 'Obsidian 1.13.7 (installer 1.12.7)', help: 'Commands:\n  vaults\n  eval\n', 'openFile': '=> ok', 'lastSavedData': '=> {"views":[{"path":"notes/a.md","hasLastSavedData":false}]}', 'detach': '=> ok' } })
+  const failed = await discoverCapabilities(unsupported, { now: () => NOW })
+  assert.deepEqual({ qualified: failed.qualified, links: failed.cli.commands.links, last: failed.lastSavedData.present }, { qualified: false, links: false, last: false })
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('AP-01 and AP-02 runners record raw app output and compare it with the generation manifest through a fake instance', async (t) => {
+  const dir = tempDir(t, 'ap01')
+  const { materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
+  const fixture = materializeFixtureWorkspace(path.join(dir, 'workspace'))
+  const vaultRoot = path.join(dir, 'vault')
+  const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(dir, 'state'), vaultRoot })
+  assert.equal(derived.state, 'committed')
+  const expected = expectedLinkPairs(derived.manifest)
+  assert.ok(expected.length > 0)
+  const resolved = {}
+  for (const pair of expected) { const [source, target] = pair.split(' -> '); (resolved[source] ??= {})[target] = 1 }
+  const instance = fakeInstance(t, { answers: {
+    'metadataCache.initialized': '=> true',
+    'resolvedLinks': `=> ${JSON.stringify({ resolved, unresolved: {} })}`,
+    'getMarkdownFiles().map': `=> ${JSON.stringify(derived.manifest.notes.map((note) => note.path).sort())}`,
+    unresolved: 'no unresolved links',
+    links: (args) => `links of ${args[1]}`,
+    backlinks: (args) => `backlinks of ${args[1]}`,
+  } })
+  const run = await runAp01({ instance, manifest: derived.manifest })
+  assert.deepEqual({ passed: run.passed, roles: run.evidence.map((item) => item.role), matches: run.comparison.matches, missing: run.comparison.missing, unexpected: run.comparison.unexpected }, { passed: true, roles: ['cli-link-inspection'], matches: true, missing: [], unexpected: [] })
+  const raw = run.evidence[0].bytes.toString('utf8')
+  assert.ok(raw.includes('indexReady: true') && raw.includes('## obsidian-cli unresolved\nno unresolved links') && raw.includes('## obsidian-cli backlinks file=') && raw.includes('links of file='))
+  // A destination the app did not resolve is a recorded mismatch, never averaged away.
+  const short = compareResolvedLinks({ resolved: {}, expected })
+  assert.deepEqual({ matches: short.matches, missing: short.missing.length, resolved: short.resolved }, { matches: false, missing: expected.length, resolved: 0 })
+  const membership = await runAp02Membership({ instance, label: 'full', vaultRoot, manifest: derived.manifest })
+  assert.deepEqual({ passed: membership.passed, disk: membership.disk.matches, app: membership.app.matches, expected: membership.expected.length }, { passed: true, disk: true, app: true, expected: derived.manifest.notes.length })
+  assert.deepEqual(compareMembership(['a.md', 'b.md'], ['b.md', 'c.md']), { actual: 2, expected: 2, missing: ['c.md'], unexpected: ['a.md'], matches: false })
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('AP-04 app runner measures usable-open, indexing and source-to-file/source-to-app independently through a fake instance', async (t) => {
+  const dir = tempDir(t, 'ap04')
+  const workspaceDir = path.join(dir, 'workspace')
+  const vaultRoot = path.join(dir, 'vault')
+  fs.mkdirSync(workspaceDir, { recursive: true })
+  fs.mkdirSync(vaultRoot, { recursive: true })
+  fs.writeFileSync(path.join(workspaceDir, 'note.md'), '# Note\n')
+  let appSees = true
+  const instance = fakeInstance(t, { answers: { 'layoutReady': '=> true', 'metadataCache.initialized': '=> true', 'adapter.read': () => (appSees ? '=> true' : '=> false') } })
+  // The fake derivation copies the edited source into the vault, as the pipeline would.
+  const derive = async () => { fs.writeFileSync(path.join(vaultRoot, 'note.md'), fs.readFileSync(path.join(workspaceDir, 'note.md'))); return { state: 'committed', mode: 'in-app', files: [{ kind: 'note', path: 'note.md' }], store: { vaultRoot } } }
+  const run = await runAp04App({ instance, launchedAtMs: Date.now() - 50, scaleManifest: { workspaceDir }, derive, warm: 3, sampleAppRss: async () => 4096, random: () => 0 })
+  assert.deepEqual({ passed: run.passed, count: run.summary.count, complete: run.summary.complete, fileStatus: run.summary.sourceToFile.status, appStatus: run.summary.sourceToApp.status, budget: run.timings.budget.budgetMs }, { passed: true, count: 3, complete: true, fileStatus: 'measured', appStatus: 'measured', budget: null })
+  assert.ok(run.timings.usableOpen.met && run.timings.appIndexing.met && run.timings.usableOpen.sinceLaunchMs >= 50)
+  assert.ok(run.samples.every((sample) => sample.sourceToFileMs !== null && sample.sourceToAppMs !== null && sample.sourceToAppMs >= sample.sourceToFileMs))
+  assert.deepEqual(run.appSamples.map((sample) => sample.label), ['after-index', 'end'])
+  appSees = false
+  const unseen = await runAp04App({ instance, launchedAtMs: Date.now(), scaleManifest: { workspaceDir }, derive, warm: 1, appTimeoutMs: 250, random: () => 0 })
+  assert.deepEqual({ passed: unseen.passed, file: unseen.samples[0].sourceToFileMs !== null, app: unseen.samples[0].sourceToAppMs }, { passed: false, file: true, app: null }, 'an app that never shows the change fails the run; the file measurement stands on its own')
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+// Writes an AP-01 receipt set (G07) and an AP-04 receipt (G16) into `dir`.
+function writeDesktopSet(t, dir, { candidate = CANDIDATE } = {}) {
+  const g07 = recordProcedureReceipts({ plan: planProcedure('AP-01', { receiptDir: dir, operator: 'op-synthetic' }), receiptDir: dir, candidate, capabilities: CAPABILITIES, operator: 'op-synthetic', host: HOST, evidenceByGate: { G07: [{ role: 'cli-link-inspection', name: evidenceFileName('G07', 'cli-link-inspection'), bytes: Buffer.from('indexReady: true\nlinks\n') }] }, passedByGate: { G07: true }, wallClock: WALL, recordedAt: NOW })
+  const g16 = recordProcedureReceipts({ plan: planProcedure('AP-04', { receiptDir: dir, operator: 'op-synthetic' }), receiptDir: dir, candidate, capabilities: CAPABILITIES, operator: 'op-synthetic', host: HOST, evidenceByGate: { G16: ['dataset-manifest', 'resource-samples', 'app-indexing-timings', 'warm-update-latencies'].map((role) => ({ role, name: evidenceFileName('G16', role, 'json'), bytes: Buffer.from(`{"role":"${role}"}\n`) })) }, passedByGate: { G16: true }, wallClock: WALL, dataset: { nodes: 10000, edges: 50000, fixtureDigest: TINY_FIXTURE_DIGEST }, recordedAt: NOW })
+  return { g07: g07[0], g16: g16[0] }
+}
+
+test('receipt writer: schema-valid, closes false, human acceptance null; manual roles leave the receipt incomplete and blocked', (t) => {
+  const dir = tempDir(t, 'write')
+  const { g07, g16 } = writeDesktopSet(t, dir)
+  for (const written of [g07, g16]) {
+    assert.deepEqual(validateObsidianContract('acceptance-receipt', written.receipt), [])
+    assert.deepEqual({ schemaValid: written.validation.schemaValid, label: written.validation.label, gateClosed: written.validation.gateClosed }, { schemaValid: true, label: RECEIPT_VALIDATION_LABEL, gateClosed: false })
+    const desktop = written.receipt.ext[DESKTOP_EXT_KEY]
+    assert.deepEqual({ closes: desktop.closes, human: desktop.humanAcceptance, signature: desktop.signature }, { closes: false, human: null, signature: null })
+    assert.ok(fs.existsSync(written.receiptPath))
+    for (const item of written.receipt.evidence) assert.equal(sha(fs.readFileSync(path.join(dir, item.name))), item.digest, `${item.name} is hashed as written`)
+  }
+  assert.deepEqual({ status: g07.receipt.ext[DESKTOP_EXT_KEY].status, outcome: g07.receipt.outcome, pending: g07.receipt.ext[DESKTOP_EXT_KEY].pendingRoles, missing: g07.validation.missing.map((item) => item.code) }, { status: 'incomplete', outcome: 'blocked', pending: ['app-observation'], missing: ['evidence-role-missing', 'acceptance-missing'] })
+  assert.deepEqual({ status: g16.receipt.ext[DESKTOP_EXT_KEY].status, outcome: g16.receipt.outcome, met: g16.validation.requirementsMet, dataset: g16.receipt.ext[RECEIPT_EXT_KEY].dataset }, { status: 'complete', outcome: 'passed', met: true, dataset: { nodes: 10000, edges: 50000, fixtureDigest: TINY_FIXTURE_DIGEST } })
+  assert.equal(g07.receipt.environment.app.ext.installerVersion, '1.12.7')
+  // A failed automated check or an unqualified CLI is a failed receipt, never a skipped pass.
+  const failed = recordProcedureReceipts({ plan: planProcedure('AP-04', { receiptDir: dir }), receiptDir: path.join(dir, 'failed'), candidate: CANDIDATE, capabilities: { ...CAPABILITIES, qualified: false }, operator: 'op-synthetic', host: HOST, evidenceByGate: { G16: ['dataset-manifest', 'resource-samples', 'app-indexing-timings', 'warm-update-latencies'].map((role) => ({ role, name: evidenceFileName('G16', role, 'json'), bytes: Buffer.from('{}\n') })) }, passedByGate: { G16: true }, wallClock: WALL, dataset: { nodes: 10, edges: 5, fixtureDigest: TINY_FIXTURE_DIGEST }, recordedAt: NOW })
+  assert.equal(failed[0].receipt.outcome, 'failed')
+  // The writer refuses what a receipt cannot carry.
+  const refusal = (input, code) => { try { buildReceipt(input) } catch (error) { assert.ok(error instanceof ReceiptRefusal, error.stack); return error.code } return null }
+  const base = { gate: 'G16', candidate: CANDIDATE, environment: g16.receipt.environment, host: HOST, operator: 'op-synthetic', evidence: [{ role: null, name: 'x.txt', bytes: Buffer.from('x') }], recordedAt: NOW, outcome: 'passed', wallClock: WALL, dataset: { nodes: 1, edges: 0, fixtureDigest: TINY_FIXTURE_DIGEST } }
+  assert.equal(refusal({ ...base, evidence: [{ role: null, name: 'x.txt', bytes: Buffer.alloc(0) }] }), 'evidence-empty')
+  assert.equal(refusal({ ...base, evidence: [{ role: 'app-observation', name: 'x.txt', bytes: Buffer.from('x') }] }), 'evidence-role-unknown')
+  assert.equal(refusal({ ...base, evidence: [{ role: null, name: '../x.txt', bytes: Buffer.from('x') }] }), 'evidence-name-invalid')
+  assert.equal(refusal({ ...base, candidate: { commit: '0'.repeat(40) } }), 'candidate-missing')
+  assert.equal(refusal({ ...base, wallClock: null }), 'wall-clock-missing')
+  assert.equal(refusal({ ...base, dataset: null }), 'dataset-missing')
+  assert.equal(refusal({ ...base, gate: 'G18' }), 'gate-not-owned', 'the adopter gate is never written by the desktop tooling')
+  assert.throws(() => writeGateReceipt({ ...base, receiptDir: 'relative' }), (error) => error.code === 'receipt-dir-not-absolute')
+})
+
+test('verifier: a complete signed set passes; missing, hash mismatch, incomplete, unsigned and wrong candidate each fail; a hash-blind verifier accepts tampering', (t) => {
+  const dir = tempDir(t, 'verify')
+  writeDesktopSet(t, dir)
+  const statuses = (result) => Object.fromEntries(result.rows.map((row) => [row.gate, row.status]))
+  // Fresh from the writer: G07 incomplete (a manual role outstanding), G16 complete but unsigned.
+  const fresh = verifyReceiptSet({ receiptDir: dir, required: ['G07', 'G16'] })
+  assert.deepEqual({ ok: fresh.ok, closes: fresh.closes, statuses: statuses(fresh), note16: fresh.rows[1].note }, { ok: false, closes: false, statuses: { G07: 'incomplete', G16: 'unsigned' }, note16: UNSIGNED_NOTE })
+  // Signing refuses while manual steps are outstanding, then attaches the human evidence and signs.
+  const signRefusal = (input) => { try { signReceipt(input) } catch (error) { assert.ok(error instanceof ReceiptRefusal, error.stack); return error.code } return null }
+  assert.equal(signRefusal({ receiptDir: dir, gate: 'G07', actor: 'owner-synthetic', note: 'looked' }), 'manual-steps-outstanding')
+  fs.writeFileSync(path.join(dir, 'observation.txt'), 'graph readable; both Shared concept notes distinct; links opened\n')
+  assert.equal(signRefusal({ receiptDir: dir, gate: 'G07', actor: 'owner-synthetic', note: 'looked', attach: [{ role: 'app-observation', file: path.join(dir, 'observation.txt') }] }), 'outcome-required')
+  const signed07 = signReceipt({ receiptDir: dir, gate: 'G07', actor: 'owner-synthetic', note: 'inspected the graph and the CLI inspection', attach: [{ role: 'app-observation', file: path.join(dir, 'observation.txt') }], outcome: 'passed', signedAt: NOW })
+  assert.deepEqual({ met: signed07.validation.requirementsMet, closes: signed07.closes, acceptance: signed07.receipt.ext[RECEIPT_EXT_KEY].acceptance, human: signed07.receipt.ext[DESKTOP_EXT_KEY].humanAcceptance.actor, outcome: signed07.receipt.outcome }, { met: true, closes: false, acceptance: { kind: 'human', actor: 'owner-synthetic', recordedAt: NOW, evidenceName: 'G07-acceptance-record.txt' }, human: 'owner-synthetic', outcome: 'passed' })
+  assert.equal(signRefusal({ receiptDir: dir, gate: 'G07', actor: 'owner-synthetic', note: 'again' }), 'already-signed')
+  assert.equal(signRefusal({ receiptDir: dir, gate: 'G16', actor: 'owner-synthetic', note: 'x', outcome: 'failed' }), 'outcome-fixed')
+  assert.equal(signRefusal({ receiptDir: dir, gate: 'G18', actor: 'owner-synthetic', note: 'x' }), 'adopter-acceptance-separate')
+  const signed16 = signReceipt({ receiptDir: dir, gate: 'G16', actor: 'owner-synthetic', note: 'inspected the dataset manifest, samples and latencies', signedAt: NOW })
+  assert.deepEqual({ met: signed16.validation.requirementsMet, human: signed16.receipt.ext[DESKTOP_EXT_KEY].humanAcceptance, signature: signed16.receipt.ext[DESKTOP_EXT_KEY].signature.actor }, { met: true, human: null, signature: 'owner-synthetic' })
+  // Complete, hashed, signed: exit-zero territory, and still not a closed gate.
+  const complete = verifyReceiptSet({ receiptDir: dir, required: ['G07', 'G16'] })
+  assert.deepEqual({ ok: complete.ok, closes: complete.closes, statuses: statuses(complete), notes: complete.rows.map((row) => row.note), signed: complete.rows.map((row) => row.signedBy) }, { ok: true, closes: false, statuses: { G07: 'ok', G16: 'ok' }, notes: [SIGNED_NOTE, SIGNED_NOTE], signed: ['owner-synthetic', 'owner-synthetic'] })
+  const table = formatTable(complete)
+  assert.ok(table.includes('G07   ok') && table.includes(SIGNED_NOTE) && !/\bclosed\b/.test(table))
+  // Missing gate.
+  const missing = verifyReceiptSet({ receiptDir: dir, required: ['G07', 'G13', 'G16'] })
+  assert.deepEqual({ ok: missing.ok, G13: statuses(missing).G13 }, { ok: false, G13: 'missing' })
+  // Wrong candidate: against an explicit commit, and a set whose receipts disagree.
+  const wrong = verifyReceiptSet({ receiptDir: dir, required: ['G07', 'G16'], candidateCommit: '3'.repeat(40) })
+  assert.deepEqual({ ok: wrong.ok, statuses: statuses(wrong) }, { ok: false, statuses: { G07: 'wrong-candidate', G16: 'wrong-candidate' } })
+  const mixed = tempDir(t, 'verify-mixed')
+  writeDesktopSet(t, mixed)
+  signReceipt({ receiptDir: mixed, gate: 'G16', actor: 'owner-synthetic', note: 'ok', signedAt: NOW })
+  const other = path.join(mixed, 'G07.json')
+  const otherCandidate = JSON.parse(fs.readFileSync(path.join(dir, 'G07.json'), 'utf8'))
+  otherCandidate.candidate.commit = '4'.repeat(40)
+  fs.writeFileSync(other, JSON.stringify(otherCandidate))
+  for (const name of otherCandidate.evidence.map((item) => item.name)) fs.copyFileSync(path.join(dir, name), path.join(mixed, name))
+  assert.deepEqual(statuses(verifyReceiptSet({ receiptDir: mixed, required: ['G16', 'G07'] })), { G16: 'ok', G07: 'wrong-candidate' })
+  // Hash mismatch: tampered evidence beside a signed receipt; the hash-blind mutation control accepts it.
+  fs.appendFileSync(path.join(dir, 'G16-warm-update-latencies.json'), 'tampered\n')
+  const tampered = verifyReceiptSet({ receiptDir: dir, required: ['G16'] })
+  assert.deepEqual({ ok: tampered.ok, status: tampered.rows[0].status, detail: tampered.rows[0].detail }, { ok: false, status: 'hash-mismatch', detail: ['evidence-length-mismatch: G16-warm-update-latencies.json', 'evidence-digest-mismatch: G16-warm-update-latencies.json'] })
+  const blind = createReceiptVerifierForOracleTests({ checkHashes: false })({ receiptDir: dir, required: ['G16'] })
+  assert.deepEqual({ ok: blind.ok, status: blind.rows[0].status }, { ok: true, status: 'ok' }, 'mutation control: without the hash check the tampered receipt passes, so the check is load-bearing')
+  fs.rmSync(path.join(dir, 'G16-dataset-manifest.json'))
+  assert.equal(verifyReceiptSet({ receiptDir: dir, required: ['G16'] }).rows[0].detail[0], 'evidence-file-missing: G16-dataset-manifest.json')
+  // Schema-invalid and unparseable receipts.
+  fs.writeFileSync(path.join(dir, 'G13.json'), JSON.stringify({ schema: 'atelier-obsidian-acceptance-receipt/v1', gate: 'G13' }))
+  fs.writeFileSync(path.join(dir, 'G14.json'), '{not json')
+  assert.deepEqual(statuses(verifyReceiptSet({ receiptDir: dir, required: ['G13', 'G14'] })), { G13: 'schema-invalid', G14: 'schema-invalid' })
+  assert.throws(() => verifyReceiptSet({ receiptDir: dir, required: ['G99'] }), (error) => error instanceof OutputRefusal && error.code === 'usage')
+  assert.throws(() => verifyReceiptSet({ receiptDir: 'relative', required: ['G07'] }), (error) => error.code === 'usage')
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('verify-receipts and generate-scale command lines: exit codes on a complete set, an incomplete set and a refused output', async (t) => {
+  const dir = tempDir(t, 'cli')
+  writeDesktopSet(t, dir)
+  signReceipt({ receiptDir: dir, gate: 'G16', actor: 'owner-synthetic', note: 'ok', signedAt: NOW })
+  const run = (script, args) => new Promise((resolve) => childProcess.execFile(process.execPath, [path.join(REPOSITORY_ROOT, 'scripts', 'obsidian', script), ...args], { encoding: 'utf8' }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr })))
+  const ok = await run('verify-receipts.mjs', ['--required', 'G16', '--receipt-dir', dir])
+  assert.deepEqual({ code: ok.code, signed: ok.stdout.includes(SIGNED_NOTE), closed: /\bclosed\b/.test(ok.stdout) }, { code: 0, signed: true, closed: false }, ok.stdout + ok.stderr)
+  const incomplete = await run('verify-receipts.mjs', ['--required', 'G07,G16', '--receipt-dir', dir])
+  assert.deepEqual({ code: incomplete.code, status: incomplete.stdout.includes('G07   incomplete') }, { code: 1, status: true }, incomplete.stdout + incomplete.stderr)
+  const usage = await run('verify-receipts.mjs', ['--receipt-dir', dir])
+  assert.equal(usage.code, 2)
+  const refused = await run('generate-scale.mjs', ['--out', path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'acceptance', 'scale'), '--profile', 'tiny'])
+  assert.deepEqual({ code: refused.code, message: refused.stderr.includes('output-inside-fixtures') }, { code: 2, message: true })
+  assert.ok(!fs.existsSync(path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'acceptance', 'scale')))
+  const planOnly = await run('desktop-receipts.mjs', ['--procedure', 'AP-03', '--receipt-dir', path.join(dir, 'receipts')])
+  assert.deepEqual({ code: planOnly.code, plan: planOnly.stdout.includes('plan only'), sleep: planOnly.stdout.includes('sleep-wake-clock'), nothingWritten: !fs.existsSync(path.join(dir, 'receipts')) }, { code: 0, plan: true, sleep: true, nothingWritten: true })
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
