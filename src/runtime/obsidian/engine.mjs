@@ -144,6 +144,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   const hintedKeys = new Set()
   const hintedPrefixes = new Set()
   const stores = new Map()
+  // One preparation cache per scope, kept for the engine's lifetime. Derived state only: prepareView proves a cached
+  // note equal to a fresh one before reusing it, and a dropped cache costs a full preparation, never a wrong one.
+  const preparationCaches = new Map()
+  const preparationCacheFor = (scopeId) => {
+    if (!preparationCaches.has(scopeId)) preparationCaches.set(scopeId, seams.createPreparationCache?.() ?? null)
+    return preparationCaches.get(scopeId)
+  }
   let project = null
   let observedAssets = []
   let semantic = null
@@ -435,7 +442,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         try {
           const prepared = seams.prepareView({
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
-            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'),
+            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId),
           })
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
           const preparedGenerationId = prepared.manifest.generationId

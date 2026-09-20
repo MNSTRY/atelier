@@ -437,6 +437,35 @@ test('a scope change republishes that view only; a source change republishes eve
   for (const scopeId of ['scope-whole', 'scope-east']) assert.match(fs.readFileSync(world.noteFile('east-wing:lantern', scopeId), 'utf8'), /cleaned weekly/)
 })
 
+test('a one-note source change prepares one note; the rest of the view is reused through the engine\'s preparation cache', needsExchange, async (t) => {
+  const preparations = []
+  const recording = (input) => { const prepared = DEFAULT.prepareView(input); preparations.push({ scopeId: input.scope.scopeId, ...prepared.preparation }); return prepared }
+  const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, EAST_SCOPE]) })
+  const engine = world.engine({ seams: { prepareView: recording } })
+  assert.deepEqual((await engine.tick()).scopes.map((entry) => entry.state), ['current', 'current'])
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 4, reused: 0 }, { scopeId: 'scope-east', emitted: 3, reused: 0 }], 'the engine\'s first preparation of a view emits every note')
+  fs.appendFileSync(world.source('east-wing/notes/compass.md'), '\nSouth is painted white.\n')
+  world.advance(1000)
+  const report = await engine.tick()
+  assert.deepEqual(report.scopes.map((entry) => entry.state), ['current', 'current'])
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 1, reused: 3 }, { scopeId: 'scope-east', emitted: 1, reused: 2 }], 'one note is emitted per view; every other note is reused')
+  for (const scopeId of ['scope-whole', 'scope-east']) assert.match(fs.readFileSync(world.noteFile('east-wing:compass', scopeId), 'utf8'), /South is painted white/)
+  // A retitled note keeps its path; the notes whose relation rows name it are emitted again, and nothing else is.
+  fs.writeFileSync(world.source('west-wing/logs/tide.md'), FILES['west-wing/logs/tide.md'].replace('title: "Tide log"', 'title: "Tide ledger"'))
+  world.advance(1000)
+  await engine.tick()
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 2, reused: 2 }, { scopeId: 'scope-east', emitted: 0, reused: 3 }], 'the retitled note and the note that supports it, in the view that holds both; the east view only counts that relation as leading outside, so nothing in it changed')
+  // Control: an engine whose cache seam yields nothing prepares every view in full, and publishes the same bytes.
+  const control = makeWorld(t)
+  const uncached = control.engine({ seams: { createPreparationCache: () => null, prepareView: recording } })
+  assert.equal(control.scope(await uncached.tick()).state, 'current')
+  fs.appendFileSync(control.source('east-wing/notes/compass.md'), '\nSouth is painted white.\n')
+  control.advance(1000)
+  assert.equal(control.scope(await uncached.tick()).state, 'current')
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 4, reused: 0 }, { scopeId: 'scope-whole', emitted: 4, reused: 0 }])
+  assert.equal(fs.readFileSync(control.noteFile('east-wing:compass'), 'utf8'), fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'))
+})
+
 // ---------------------------------------------------------------------------
 // 4b. Eligibility fails closed; embedded assets
 // ---------------------------------------------------------------------------

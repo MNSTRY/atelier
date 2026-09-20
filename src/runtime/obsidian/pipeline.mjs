@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { buildCanonicalGraph } from '../../graph/graph.mjs'
-import { EMITTER_VERSION, prepareView, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
+import { EMITTER_VERSION, createPreparationCache, prepareView, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
 import { createRecoveryStore, readFileBytes } from '../../projection/obsidian/recovery/store.mjs'
@@ -104,6 +104,10 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
   }
 }
 
+// The engine keeps one preparation cache per scope for as long as it runs and
+// hands it to prepareView on every tick, so a tick after a one-note change
+// emits that note and reuses the rest. The cache is derived, in-memory state:
+// a test may replace this seam with `() => null` to prepare every view in full.
 export function createProductionSeams() {
-  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles }
+  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles, createPreparationCache }
 }
