@@ -2750,6 +2750,29 @@ test('apply: a file this process may not read refuses corpus-unreadable or sourc
   const third = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
   walk.restore()
   assert.deepEqual([third.status, third.code, walk.failed()], ['refused', 'source-unreadable', 1], JSON.stringify(third))
+  // Denied only AFTER the source was read, while the note is prepared again: that is not another program writing.
+  const originalOpen = fs.openSync
+  let sourceOpens = 0
+  let deniedLater = 0
+  fs.openSync = function patched(file, flags, ...rest) {
+    if (typeof file === 'string' && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && path.resolve(file) === path.resolve(sourceFile) && (sourceOpens += 1) >= 2) { deniedLater += 1; throw Object.assign(new Error('EACCES: synthetic'), { code: 'EACCES' }) }
+    return originalOpen.call(this, file, flags, ...rest)
+  }
+  t.after(() => { fs.openSync = originalOpen })
+  const fourth = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  fs.openSync = originalOpen
+  assert.ok(deniedLater >= 1, 'every open of the source after the first was denied')
+  assert.notEqual(fourth.code, 'stale-source', JSON.stringify(fourth))
+  assert.deepEqual([fourth.status, fourth.code], ['refused', 'source-unreadable'], JSON.stringify(fourth))
+  // The candidate read back after it is written (its second no-follow open; the first writes it): a denial there is
+  // reported as a denial, not as a byte difference.
+  let candidateOpens = 0
+  const readBack = failOnce(t, 'openSync', (file, flags) => typeof file === 'string' && file.endsWith('.candidate') && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && (candidateOpens += 1) === 2, 'EIO')
+  const fifth = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  readBack.restore()
+  assert.equal(readBack.failed(), 1)
+  assert.deepEqual([fifth.status, fifth.code, fifth.detail?.cause], ['refused', 'recovery-state-unreadable', 'candidate-read-back'], JSON.stringify(fifth))
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'the candidate was retired')
   assert.deepEqual(fs.readFileSync(sourceFile), before, 'the source is as it was')
   assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was written')
 })

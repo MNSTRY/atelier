@@ -386,7 +386,12 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       } else {
         const publishedNoteBytes = publishedNoteOf(workspace, resolved)
         // Preparing the note reads the source again: a source that changed since it was read here is a stale source.
-        if (publishedNoteBytes === null && sourceFile !== null && digestOrNull(sourceFile) !== sha256Digest(sourceBytes)) refuse('stale-source', { cause: 'changed-while-reading' })
+        if (publishedNoteBytes === null && sourceFile !== null) {
+          // A read this process is denied is not another program writing: it is the source being unreadable.
+          const present = digestOrNull(sourceFile)
+          if (present === 'denied') refuse('source-unreadable', { cause: 'denied-while-reading' })
+          if (present !== sha256Digest(sourceBytes)) refuse('stale-source', { cause: 'changed-while-reading' })
+        }
         if (publishedNoteBytes === null) refuse('published-note-unavailable')
         observed = observeEdit({ edit, manifest: resolved.manifest, publishedNoteBytes, baseSourceBytes: sourceBytes, store: reading })
       }
@@ -630,7 +635,10 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         const descriptor = openRegularFileNoFollow(candidatePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, sourceMode)
         try { fs.writeFileSync(descriptor, newSourceBytes); fs.fchmodSync(descriptor, sourceMode); fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
         syncPrivateDirectory(unitDir)
-        if (digestOrNull(candidatePath) !== newSourceDigest) throw new Error('the candidate read back differs from the bytes written')
+        const readBack = digestOrNull(candidatePath)
+        // Before the intent exists the candidate is only ours: a denied read back is reported as that, and the file is retired.
+        if (readBack === 'denied') { retireCandidate(workspace, record); refuse('recovery-state-unreadable', { cause: 'candidate-read-back' }) }
+        if (readBack !== newSourceDigest) throw new Error('the candidate read back differs from the bytes written')
         seam('candidate-written', { applyId })
 
         workspace.objects.recordIntent(lease, { idempotencyKey: key, expectedSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId })
