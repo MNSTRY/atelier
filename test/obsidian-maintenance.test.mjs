@@ -17,7 +17,7 @@ import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../src
 import { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
 import { withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } from '../src/runtime/obsidian/lifecycle.mjs'
-import { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
+import { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock, isProcessAlive, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
 import { HEALTH_SCHEMA, authorityOf, probeHealth, requestLoopback } from '../src/runtime/obsidian/service-client.mjs'
 import { SERVICE_ENTRY_PATH } from '../src/runtime/obsidian/service-main.mjs'
 import { readLastServiceError, readServiceRecord, readServiceSettings, serviceNameFor, servicePaths, writeServiceRecord, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
@@ -857,6 +857,78 @@ test('mutation control: an engine that publishes over a held note fails the hold
   assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /somebody typed in the vault/, 'defence in depth: the publisher refused the replacement')
 })
 
+// A source apply writes the person's edit into the source. The next prepared note is then byte for byte the note the
+// person already has, and a hold against it would never lift.
+async function assertAppliedEditLiftsTheHold(world, engine) {
+  await engine.tick()
+  const file = world.noteFile('west-wing:tide')
+  const edited = Buffer.from(fs.readFileSync(file, 'utf8').replace('High water at noon.', 'High water at one.'))
+  fs.writeFileSync(file, edited)
+  world.advance(1000)
+  assert.equal(world.scope(await engine.tick()).state, 'held-for-your-edit')
+  // What an apply does to the source, without one: the same replacement in the authored body.
+  fs.writeFileSync(world.source('west-wing/logs/tide.md'), fs.readFileSync(world.source('west-wing/logs/tide.md'), 'utf8').replace('High water at noon.', 'High water at one.'))
+  world.advance(1000)
+  const published = world.scope(await engine.tick())
+  assert.equal(published.generationId, published.preparedGenerationId, 'the view that holds the applied edit is published')
+  world.advance(1000)
+  const settled = world.scope(await engine.tick())
+  assert.deepEqual([settled.state, settled.heldNotes], ['current', []])
+  assert.deepEqual(fs.readFileSync(file), edited, 'the note the person edited was never rewritten')
+  const [edit] = world.state('pending-edits.json').edits
+  assert.deepEqual([edit.state, edit.closedAt !== null], ['withdrawn', true], 'the note is at the bytes it was generated with, so the record closes')
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), edit.objectRef)), edited, 'the preserved bytes stay')
+}
+
+test('an edited note that already holds what the next view would publish is not held against it: the hold lifts and the record closes', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await assertAppliedEditLiftsTheHold(world, world.engine())
+})
+
+test('mutation control: an engine that ignores what the held note holds now never lifts the hold after the edit reached the source', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const blind = world.engine({ primitives: { publicationConflicts: ({ prepared, held, bases }) => ENGINE_PRIMITIVES.publicationConflicts({ prepared, held, bases }) } })
+  await assert.rejects(assertAppliedEditLiftsTheHold(world, blind), assert.AssertionError)
+})
+
+// The hold is lifted on what the note holds at the moment of the decision. The person types again after the tick
+// looked at the vault and before it decides, in a way no stat can show: same size, same time.
+async function assertLateEditKeepsTheHold(world, primitives) {
+  let editAgain = null
+  const engine = world.engine({ primitives, seams: { prepareView: (input) => { const prepared = createProductionSeams().prepareView(input); editAgain?.(); return prepared } } })
+  await engine.tick()
+  const file = world.noteFile('west-wing:tide')
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('High water at noon.', 'High water at one.'))
+  world.advance(1000)
+  assert.equal(world.scope(await engine.tick()).state, 'held-for-your-edit')
+  fs.writeFileSync(world.source('west-wing/logs/tide.md'), fs.readFileSync(world.source('west-wing/logs/tide.md'), 'utf8').replace('High water at noon.', 'High water at one.'))
+  world.advance(1000)
+  const again = Buffer.from(fs.readFileSync(file, 'utf8').replace('High water at one.', 'High water at two.'))
+  let typedAgain = false
+  editAgain = () => {
+    if (typedAgain) return
+    typedAgain = true
+    const { atime, mtime, size } = fs.statSync(file)
+    assert.equal(again.length, size)
+    fs.writeFileSync(file, again)
+    fs.utimesSync(file, atime, mtime)
+  }
+  world.calls.publishView.length = 0
+  const entry = world.scope(await engine.tick())
+  assert.equal(typedAgain, true, 'the person typed between the look at the vault and the decision')
+  assert.deepEqual([entry.state, entry.reason], ['held-for-your-edit', 'publication-withheld-for-your-edit'])
+  assert.deepEqual(world.calls.publishView.filter((scopeId) => scopeId === entry.scopeId), [], 'the publisher is not called for a view whose held note changed again')
+  assert.deepEqual(fs.readFileSync(file), again, 'what the person typed last is what the note holds')
+}
+
+test('the hold is decided on what the held note holds at that moment: a second edit made after the tick looked at the vault, with the same size and time, keeps the hold and the publisher is not called', needsExchange, async (t) => {
+  await assertLateEditKeepsTheHold(makeWorld(t), ENGINE_PRIMITIVES)
+})
+
+test('mutation control: an engine that lifts the hold on the digest of its observation index publishes over the second edit', needsExchange, async (t) => {
+  await assert.rejects(assertLateEditKeepsTheHold(makeWorld(t), { heldNoteDigest: ({ indexed }) => indexed }), assert.AssertionError)
+})
+
 test('an edit to a note the next view does not change still publishes the rest, and the view stays held', needsExchange, async (t) => {
   const world = makeWorld(t)
   const engine = world.engine()
@@ -1479,13 +1551,30 @@ test('the engine lock: one holder, released and pruned, and taken from a dead ho
   assert.deepEqual(fs.readdirSync(lock.directory).sort(), ['000000000006.json', '000000000006.released'], 'a lock taken on every tick does not grow')
   if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(lock.directory, '000000000006.json')).mode & 0o777, 0o600)
 
-  // A holder that never released and whose process is gone.
-  lock.plant(9, lock.ticket({ pid: exitedPid() }))
-  const inspected = await inspectPrivateGenerationLock({ directory: lock.directory, workspaceId: 'ws-lock' })
+  // A holder that never released and whose process is gone. That this one PID is not alive is injected: the PID of a
+  // real child that exited can be another live process a moment later, and the lock is then, correctly, kept.
+  const gonePid = 2 ** 31 - 2
+  const proveAbandoned = createAbandonmentProof({ alive: (pid) => pid !== gonePid && isProcessAlive(pid) })
+  lock.plant(9, lock.ticket({ pid: gonePid }))
+  const inspected = await inspectPrivateGenerationLock({ directory: lock.directory, workspaceId: 'ws-lock', proveAbandoned })
   assert.deepEqual([inspected.available, inspected.reason], [true, 'holder-process-gone'])
-  const taken = await lock.acquire()
+  const taken = await lock.acquire(proveAbandoned)
   assert.deepEqual([taken.acquired, taken.generation], [true, 10])
   taken.release()
+})
+
+test('the engine lock left by a real process that exited is taken under the production proof; a PID that is already somebody else keeps it', async (t) => {
+  // The one lock test that asks the operating system about a real exited child, and expects PID reuse.
+  const reasons = []
+  for (let round = 0; round < 8 && !reasons.includes('holder-process-gone'); round += 1) {
+    const lock = lockWorld(t)
+    lock.plant(1, lock.ticket({ pid: exitedPid() }))
+    const inspected = await inspectPrivateGenerationLock({ directory: lock.directory, workspaceId: 'ws-lock' })
+    assert.ok(['holder-process-gone', 'live-process-unproven'].includes(inspected.reason), inspected.reason)
+    assert.equal(inspected.available, inspected.reason === 'holder-process-gone')
+    reasons.push(inspected.reason)
+  }
+  assert.ok(reasons.includes('holder-process-gone'), `eight PIDs of exited children were all live again: ${reasons.join(', ')}`)
 })
 
 async function assertLiveHoldersKeepTheLock(t, acquireWith) {

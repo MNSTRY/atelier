@@ -184,12 +184,20 @@ export function writeMachineSettings({ workspaceRoot, workspaceId, settings, rep
 // Installed apply policy
 // ---------------------------------------------------------------------------
 
-export function installApplyPolicy({ workspaceRoot, workspaceId, policy, repositoryRoots, updatedAt }) {
+// `digestOf` is the canonical digest of a policy, handed in by the caller that installs for a person (the command):
+// the decision that reads the policy recomputes that digest on every apply, so a policy that carries another one
+// could be installed and would then refuse every automatic apply. With it, such a policy is refused here, naming the
+// digest it has to carry. A digest is not a secret. The file of the person is never rewritten.
+export function installApplyPolicy({ workspaceRoot, workspaceId, policy, repositoryRoots, updatedAt, digestOf = null }) {
   try { assertObsidianContract('apply-policy', policy) } catch (error) {
     if (error instanceof ObsidianContractRefusal) refuse('invalid-apply-policy', 'the apply policy does not satisfy its contract', { errors: error.detail?.errors ?? [] })
     throw error
   }
   if (policy.workspaceId !== workspaceId) refuse('invalid-apply-policy', 'the apply policy belongs to another workspace')
+  if (digestOf !== null) {
+    const expected = digestOf(policy)
+    if (policy.digest !== expected) refuse('policy-digest-mismatch', `the policy does not carry the digest of its content; it has to carry ${expected}`, { expected, carried: policy.digest })
+  }
   const current = readMachineSettings({ workspaceRoot, workspaceId }) ?? defaultMachineSettings({ workspaceId, updatedAt })
   assertOutsideRepositories({ managedRoot: workspaceRoot, repositoryRoots })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
