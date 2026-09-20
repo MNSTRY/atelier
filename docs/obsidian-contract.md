@@ -383,10 +383,13 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `concurrent-source-writer`, `source-changed-during-apply` | another program wrote the source during the apply; every byte is retained |
 | `interrupted-before-exchange`, `apply-interrupted-needs-person` | what restart recovery decided for an interrupted apply |
 | `recovery-state-unreadable` | a candidate or backup path of an interrupted apply may not be looked at; that record is reported and every other one is still settled |
+| `apply-outcome-unknown` | the source was exchanged and the settlement from digests could not be carried out; the source may have been changed, the intent stays open and `apply recover` decides |
 
 A path that another program removes or replaces between two steps, before the
 intent is recorded, answers one of these refusals (`source-missing`,
-`source-not-regular-file`, `workspace-not-prepared`), never an exception. The
+`source-not-regular-file`, `workspace-not-prepared`), never an exception; one
+that this process may not look at or read answers `corpus-unreadable` while the
+graph is built and `source-unreadable` from then on. The
 mode of the source is read from the descriptor its bytes were read from.
 
 ### Restart recovery
@@ -421,11 +424,21 @@ list`, `show`, `run` and `recover` answer such a record as a typed refusal.
   exchange is not detected; what contains it is the commit rule: unless the
   file the exchange displaced holds exactly the bytes that were read, the files
   are exchanged back and everything is retained.
-- When the exchange back itself fails, or the displaced file cannot be retained
-  first, nothing is guessed: the apply is settled from the digests on disk by
-  the restart table above. The source path then keeps the candidate, whole, the
-  other program's bytes stay where recovery references name them, and the
-  answer is `apply-interrupted-needs-person`.
+- When the exchange back reports a failure, or the displaced file cannot be
+  retained first, nothing is guessed and the report is not believed either way:
+  the apply is settled from the digests on disk by the restart table above.
+  If the exchange back did not take place, the source path keeps the candidate,
+  whole, the other program's bytes stay where recovery references name them,
+  and the answer is `apply-interrupted-needs-person`. If it did take place
+  before it reported the failure, the source path holds the other program's
+  bytes, the candidate is retired, and the answer is
+  `interrupted-before-exchange`. If the digests show that the first exchange
+  displaced the base after all, the apply happened and is answered as applied.
+- A refusal says that nothing was written. Once the source has been exchanged,
+  a failure is therefore never returned as a plain refusal with the intent
+  open: it is settled from the digests on disk, and only when that settlement
+  itself cannot be carried out is the answer `apply-outcome-unknown`, which
+  says that the source may have been changed and that `apply recover` decides.
 - An enrolled file this process may not read while the canonical graph is built
   refuses `corpus-unreadable`, naming no file. A source that cannot be read at
   the moment of the apply refuses `source-unreadable`. Both carry the system's

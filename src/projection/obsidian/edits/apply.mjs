@@ -90,7 +90,7 @@ export const SOURCE_APPLY_REFUSALS = Object.freeze([
   'corpus-unreadable', 'repository-not-enrolled', 'source-not-in-graph', 'source-moved', 'source-missing', 'source-symlink', 'source-not-regular-file', 'source-unreadable', 'source-hard-linked', 'source-outside-repository',
   'source-inside-managed-root', 'source-inside-git-directory', 'source-git-ignored', 'source-ignore-state-unknown', 'sibling-edit-unobservable', 'lease-held', 'object-conflicted',
   'stale-source', 'edit-not-applicable', 'change-outside-authored-body', 'no-source-change', 'exchange-unavailable', 'apply-volume-mismatch', 'batch-bound-reached',
-  'concurrent-source-writer', 'source-changed-during-apply', 'interrupted-before-exchange', 'apply-interrupted-needs-person', 'recovery-state-unreadable', 'source-changed-after-apply',
+  'concurrent-source-writer', 'source-changed-during-apply', 'interrupted-before-exchange', 'apply-interrupted-needs-person', 'recovery-state-unreadable', 'apply-outcome-unknown', 'source-changed-after-apply',
 ])
 
 // Refusals that say the source or the object is contested, not that this machine or this request cannot apply.
@@ -115,10 +115,10 @@ const inside = (parent, child) => { const relative = path.relative(parent, child
 const GONE = new Set(['ENOENT', 'ENOTDIR', 'ELOOP'])
 // A path this process may not look at is not "nothing there": null would let a caller rename over it. It is a typed
 // refusal, so one unsearchable directory is reported for its own record and delays no other.
-const lstatOrNull = (file) => {
+const lstatOrNull = (file, unreadable = 'recovery-state-unreadable') => {
   try { return fs.lstatSync(file, { throwIfNoEntry: false }) ?? null } catch (error) {
     if (GONE.has(error.code)) return null
-    if (UNREADABLE.has(error.code)) refuse('recovery-state-unreadable', { cause: error.code })
+    if (UNREADABLE.has(error.code)) refuse(unreadable, { cause: error.code })
     throw error
   }
 }
@@ -219,7 +219,8 @@ export function locateSource({ project, repoId, relative, managedRoots, isGitIgn
   let current = repositoryRoot
   parts.forEach((part, index) => {
     current = path.join(current, part)
-    const stat = lstatOrNull(current)
+    // A component of the source path that may not be looked at is the source being unreadable, not recovery state.
+    const stat = lstatOrNull(current, 'source-unreadable')
     if (stat === null) refuse('source-missing')
     if (stat.isSymbolicLink()) refuse('source-symlink')
     if (index < parts.length - 1 ? !stat.isDirectory() : !stat.isFile()) refuse(index < parts.length - 1 ? 'source-missing' : 'source-not-regular-file')
@@ -496,6 +497,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       if (!edit) return resultOf(null, 'refused', 'unknown-edit', { editId: typeof request.editId === 'string' ? request.editId.slice(0, 64) : null })
       let lease = null
       let crashed = false
+      // Set once the first exchange has taken place: from then on a typed failure is settled, never returned open.
+      let settleAfterExchange = null
       const seam = (step, detail) => { try { crash(step, detail) } catch (error) { crashed = true; throw error } }
       try {
         if (edit.identity.workspaceId !== workspace.workspaceId) refuse('foreign-workspace')
@@ -644,6 +647,24 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
           if (settled.status !== 'applied') refuse(settled.code, { applyId, cause: error.code, ...((settled.recoveryRefs ?? []).length > 0 ? { recoveryRefs: settled.recoveryRefs } : {}) })
           return resultOf(edit, 'applied', settled.code, { replayed: false, idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef: settled.backupRef })
         }
+        const appliedAnswer = (settled) => resultOf(edit, 'applied', settled.code, { replayed: false, idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef: settled.backupRef })
+        // The source has been exchanged. A refusal is an answer that nothing was written, so from here a typed failure
+        // that leaves the intent open is settled from the digests on disk exactly as restart recovery would, and an
+        // apply that did happen is answered as applied. If even that cannot be done the answer says so.
+        settleAfterExchange = (error) => {
+          let state
+          try { state = workspace.objects.stateOf(identity) } catch (again) { if (!isTyped(again)) throw again; state = null }
+          if (state !== null && state.intent === null) return refusalResult(edit, error)
+          try {
+            if (state === null) throw error
+            const settled = settleInterrupted(workspace, lease, record, state)
+            if (settled.status === 'applied') return appliedAnswer(settled)
+            return refusalResult(edit, new ApplyRefusal(settled.code, { applyId, cause: error.code, ...((settled.recoveryRefs ?? []).length > 0 ? { recoveryRefs: settled.recoveryRefs } : {}) }))
+          } catch (again) {
+            if (!isTyped(again)) throw again
+            return resultOf(edit, 'conflict', 'apply-outcome-unknown', { applyId, detail: { cause: again.code ?? error.code } })
+          }
+        }
         seam('exchanged', { applyId })
 
         // What the exchange displaced is the truth about what the source was at that instant.
@@ -687,6 +708,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
           if (!isTyped(error) && error?.name !== 'ExchangeRefusal' && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error
           // The files could not be exchanged back. Nothing is guessed: what is on disk is kept and settled from digests.
           const settled = settleInterrupted(workspace, lease, record, workspace.objects.stateOf(identity))
+          // Read from disk, the first exchange may turn out to have displaced the base after all: that is an apply.
+          if (settled.status === 'applied') return appliedAnswer(settled)
           refuse(settled.code, { applyId, recoveryRefs: [...(settled.recoveryRefs ?? []), ...(theirs ? [theirs] : [])] })
         }
         seam('exchanged-back', { applyId })
@@ -694,7 +717,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         return abandon('concurrent-source-writer', { disposition: 'conflicted', presentSourceDigest: presentOf(digestOrNull(located.absolute)), recoveryRefs: theirs ? [theirs] : [] })
       } catch (error) {
         if (crashed || !isTyped(error)) throw error
-        return refusalResult(edit, error)
+        return settleAfterExchange ? settleAfterExchange(error) : refusalResult(edit, error)
       } finally {
         // A crashed process releases nothing.
         if (lease !== null && !crashed) try { workspace.objects.releaseLease(lease) } catch { /* the next holder proves this one gone */ }
