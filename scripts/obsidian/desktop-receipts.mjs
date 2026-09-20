@@ -12,16 +12,20 @@
 // schema, and says `closes: false` with `humanAcceptance: null`: the closing
 // owner inspects and signs afterwards (sign-receipt.mjs).
 //
-// What no script can do is listed per gate as `manualStepsRequired` with the
-// exact commands, and those gates' receipts stay `incomplete`: AP-03's host
-// sleep/wake and terminal closure, and AP-05's real edits in two vaults.
+// AP-03 and AP-05 run the owned maintenance service for real (a detached
+// process started through the runtime's own lifecycle API, with the isolated
+// HOME so its editor adapter reaches only the isolated app) and read every
+// decision through the shipped command. What no script can do is listed per
+// gate as `manualStepsRequired` with the exact commands, and that gate's
+// receipt stays `incomplete`: the host's actual sleep/wake of AP-03 (G14).
 //
 // Usage:
 //   node scripts/obsidian/desktop-receipts.mjs --procedure AP-01|AP-02|AP-03|AP-04|AP-05|all
 //       [--receipt-dir DIR] [--operator ID] [--scale-dir DIR] [--warm N] [--keep] [--json]
 //       [--run-isolated-app]
 // Without --run-isolated-app the plan and manual steps are printed and no
-// application starts.
+// application starts. --keep leaves the synthetic workspace, the data root and
+// the isolated instance roots in place, which the manual sleep/wake step needs.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -30,19 +34,28 @@ import { pathToFileURL } from 'node:url'
 import { buildFocusQuery, focusBookmarkPayload } from '../../src/projection/obsidian/selection-ui/focus.mjs'
 import { RECEIPT_GATES } from '../../src/projection/obsidian/selection-ui/receipt.mjs'
 import { OutputRefusal, REPOSITORY_ROOT, assertExternalOutput, candidateIdentity, hardwareProfile, hostIdentity, isoNow, osEnvironment, parseArgs, sha256Digest, toIdentifier, walkFiles } from './lib/common.mjs'
-import { absentAdapter, deriveWorkspace, materializeFixtureWorkspace } from './lib/derive.mjs'
+import { runAp03 } from './lib/ap03.mjs'
+import { AP05_SCOPES, AP05_SCOPE_DOCUMENTS, prepareAp05Workspace, runAp05 } from './lib/ap05.mjs'
+import { FULL_SCOPE, absentAdapter, deriveWorkspace, materializeFixtureWorkspace } from './lib/derive.mjs'
 import { PROPOSED_TARGETS, waitUntil, warmChangeSummary } from './lib/measure.mjs'
 import { evidenceFileName, writeGateReceipt } from './lib/receipts.mjs'
+import { bindLayoutToVault, createAppEditor, createCommandRunner, createServiceRuntime, initialiseRepositories, prepareWorkspace, stripProjectEnv } from './lib/service-world.mjs'
 
 export const DEFAULT_RECEIPT_DIR = path.join(REPOSITORY_ROOT, '.artifacts', 'obsidian', 'desktop')
+// The sentinels the production eligibility rule keeps out of a view the real service maintains (see the fixture's description).
+export const SERVICE_SENTINELS = path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'acceptance', 'service-sentinels.json')
 export const INDEX_TIMEOUT_MS = 10 * 60 * 1000
 export const WARM_CHANGES = 30
 export const SCOPED_IDS = Object.freeze(['north-desk:harbor-plan', 'south-desk:tide-table'])
 export const SCOPED_SCOPE = Object.freeze({ schema: 'atelier-obsidian-scope/v1', scopeId: 'scope-harbor', mode: 'scoped', selector: Object.freeze({ ids: SCOPED_IDS }) })
 
 const HOME_PLACEHOLDER = '<ISOLATED_HOME>'
+const PROFILE_PLACEHOLDER = '<ISOLATED_PROFILE>'
 const WORKSPACE_PLACEHOLDER = '<SYNTHETIC_WORKSPACE>'
-const cli = (operation) => `HOME=${HOME_PLACEHOLDER} node bin/atelier.mjs obsidian ${operation} --project ${WORKSPACE_PLACEHOLDER}/atelier.project.json --json`
+const DATA_ROOT_PLACEHOLDER = '<DATA_ROOT>'
+const cli = (operation) => `HOME=${HOME_PLACEHOLDER} node bin/atelier.mjs obsidian ${operation} --project ${WORKSPACE_PLACEHOLDER}/atelier.project.json --data-root ${DATA_ROOT_PLACEHOLDER} --json`
+// The service interval of the AP-03 and AP-05 runs: every tick is requested explicitly and recorded, so the loop never ticks between two recorded steps.
+export const PROCEDURE_TICK_INTERVAL_MS = 60 * 60 * 1000
 
 // Every step a person performs, with the exact command where one exists.
 // The receipts of these gates stay incomplete until the closing owner records
@@ -66,52 +79,13 @@ export const MANUAL_STEPS = Object.freeze({
     ] },
   ],
   G14: [
-    { role: 'source-refresh-trace', instructions: [
-      `Start maintenance against the synthetic workspace with the isolated instance running: ${cli('open --scope scope-full --consent-actor <OPERATOR> --adapter=obsidian-cli')}`,
-      'Edit one canonical source file under the synthetic workspace while the note is open in the app; record the source digest and wall clock before the edit.',
-      `Poll ${cli('status')} until the view reports the new generation; record the file update time from the vault file mtime and the app readback time from the note view.`,
-      'Attach the trace (digests, timestamps, status output) as source-refresh-trace.',
-    ] },
-    { role: 'dropped-event-recovery', instructions: [
-      'Stop the watcher only through the owned test hook (createNullWatcherFactory in the service configuration, or the service option that disables watchers), so a change produces no event.',
-      'Change a source file; record the wall clock. Wait for the full reconciliation interval and record when the digest reconciliation published the change.',
-      'Attach the trace as dropped-event-recovery; the proposed recovery target is <= 60 s and is recorded, not asserted, here.',
-    ] },
     { role: 'sleep-wake-clock', instructions: [
-      `Record ${cli('service status')} and the wall clock; put the host to sleep for at least two minutes; wake it.`,
-      `Record the wall clock and ${cli('service status')} again, then confirm a source change after wake is published.`,
-      'Attach both clock readings and both status documents as sleep-wake-clock. A mocked resume event is not this evidence.',
-    ] },
-  ],
-  G15: [
-    { role: 'ownership-health', instructions: [
-      `From a fresh terminal run ${cli('open --scope scope-full --consent-actor <OPERATOR> --adapter=obsidian-cli')} and record the runtime ID and PID from ${cli('service status')}.`,
-      'Attach the status document and the health probe output as ownership-health.',
-    ] },
-    { role: 'terminal-closure', instructions: [
-      'Close the terminal that launched the service (close the window, do not stop the service).',
-      `From another terminal run ${cli('service status')}: the same runtime ID and PID must still be healthy. Attach the output as terminal-closure.`,
-    ] },
-  ],
-  G17: [
-    { role: 'multi-vault-edit-trace', instructions: [
-      'Open the full and the scoped vault in two isolated instances (two runs of AP-02 kept with --keep) and edit the same canonical object in both.',
-      'Make one identical edit and one divergent edit; record that identical edits coalesce and divergent edits stay preserved and conflicted (`conflicts` operation output).',
-      'Attach the trace as multi-vault-edit-trace.',
-    ] },
-    { role: 'manual-apply-trace', instructions: [
-      `With ${cli('mode set manual')}, record that maintenance never writes a source (source digests unchanged over two ticks), then apply one eligible edit explicitly and record the source digest change.`,
-      'Attach the trace as manual-apply-trace.',
-    ] },
-    { role: 'automatic-apply-trace', instructions: [
-      `Install a scoped automatic policy (${cli('policy install FILE')}), then ${cli('mode set automatic')}; edit eligible content and record application without a prompt.`,
-      'Record that out-of-scope, stale, revoked, unsupported and conflicting edits remain pending; restart the service between journal steps and record idempotent replay.',
-      'Attach the trace as automatic-apply-trace.',
-    ] },
-    { role: 'uninstall-retention', instructions: [
-      'Follow one semantic change into the copy-only proposal store; accept it and record that no source changed.',
-      'Disable and uninstall the projection; record that both vault edits and the recovery bytes remain on disk.',
-      'Attach the trace as uninstall-retention.',
+      `Run AP-03 with --keep, then start the isolated app on the kept profile: HOME=${HOME_PLACEHOLDER} /Applications/Obsidian.app/Contents/MacOS/Obsidian --user-data-dir=${PROFILE_PLACEHOLDER} --use-mock-keychain --password-store=basic`,
+      `Start the service against the kept workspace: ${cli('service start --consent-actor <OPERATOR> --adapter=obsidian-cli')}`,
+      `Record ${cli('service status')} and the wall clock (date -u); put the host to sleep for at least two minutes; wake it.`,
+      `Record the wall clock and ${cli('service status')} again: the same runtime ID and PID must answer healthy.`,
+      `Append a line to ${WORKSPACE_PLACEHOLDER}/north-desk/plans/harbor-plan.md, wait one service interval or run ${cli('status')} until the view reports current, and confirm the note in the app shows the line.`,
+      'Attach both clock readings, both status documents and the post-wake confirmation as sleep-wake-clock. A mocked resume event is not this evidence.',
     ] },
   ],
 })
@@ -119,9 +93,9 @@ export const MANUAL_STEPS = Object.freeze({
 export const DESKTOP_PROCEDURES = Object.freeze({
   'AP-01': Object.freeze({ title: 'Readable notes and navigation', gates: ['G07'], automated: { G07: ['cli-link-inspection'] }, app: 'small-fixture' }),
   'AP-02': Object.freeze({ title: 'Scope and focus', gates: ['G13'], automated: { G13: ['on-disk-membership', 'app-index-membership'] }, app: 'small-fixture-full-and-scoped' }),
-  'AP-03': Object.freeze({ title: 'Maintenance and host lifecycle', gates: ['G14', 'G15'], automated: {}, app: 'capabilities-only' }),
+  'AP-03': Object.freeze({ title: 'Maintenance and host lifecycle', gates: ['G14', 'G15'], automated: { G14: ['source-refresh-trace', 'dropped-event-recovery'], G15: ['ownership-health', 'terminal-closure'] }, app: 'service-full' }),
   'AP-04': Object.freeze({ title: 'Scale', gates: ['G16'], automated: { G16: ['dataset-manifest', 'resource-samples', 'app-indexing-timings', 'warm-update-latencies'] }, app: 'scale-vault' }),
-  'AP-05': Object.freeze({ title: 'Editing and agentic application', gates: ['G17'], automated: {}, app: 'capabilities-only' }),
+  'AP-05': Object.freeze({ title: 'Editing and agentic application', gates: ['G17'], automated: { G17: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention'] }, app: 'service-full-and-scoped' }),
 })
 export const PROCEDURE_IDS = Object.freeze(Object.keys(DESKTOP_PROCEDURES))
 
@@ -138,16 +112,16 @@ export class IsolationRefusal extends Error {
 // Planning (pure)
 // ---------------------------------------------------------------------------
 
-function fill(text, { isolatedHome, workspaceDir, operator }) {
-  return text.replaceAll(HOME_PLACEHOLDER, isolatedHome ?? HOME_PLACEHOLDER).replaceAll(WORKSPACE_PLACEHOLDER, workspaceDir ?? WORKSPACE_PLACEHOLDER).replaceAll('<OPERATOR>', operator ?? '<OPERATOR>')
+function fill(text, { isolatedHome, isolatedProfile, workspaceDir, dataRoot, operator }) {
+  return text.replaceAll(HOME_PLACEHOLDER, isolatedHome ?? HOME_PLACEHOLDER).replaceAll(PROFILE_PLACEHOLDER, isolatedProfile ?? PROFILE_PLACEHOLDER).replaceAll(WORKSPACE_PLACEHOLDER, workspaceDir ?? WORKSPACE_PLACEHOLDER).replaceAll(DATA_ROOT_PLACEHOLDER, dataRoot ?? DATA_ROOT_PLACEHOLDER).replaceAll('<OPERATOR>', operator ?? '<OPERATOR>')
 }
 
-export function planProcedure(procedureId, { receiptDir = DEFAULT_RECEIPT_DIR, operator = null, isolatedHome = null, workspaceDir = null, scaleDir = null } = {}) {
+export function planProcedure(procedureId, { receiptDir = DEFAULT_RECEIPT_DIR, operator = null, isolatedHome = null, isolatedProfile = null, workspaceDir = null, dataRoot = null, scaleDir = null } = {}) {
   const procedure = DESKTOP_PROCEDURES[procedureId]
   if (!procedure) throw new OutputRefusal('unknown-procedure', `procedures: ${PROCEDURE_IDS.join(', ')}`)
   const manualStepsRequired = []
   for (const gate of procedure.gates) {
-    for (const step of MANUAL_STEPS[gate] ?? []) manualStepsRequired.push({ gate, role: step.role, instructions: step.instructions.map((line) => fill(line, { isolatedHome, workspaceDir, operator })) })
+    for (const step of MANUAL_STEPS[gate] ?? []) manualStepsRequired.push({ gate, role: step.role, instructions: step.instructions.map((line) => fill(line, { isolatedHome, isolatedProfile, workspaceDir, dataRoot, operator })) })
   }
   const automatedRoles = Object.fromEntries(procedure.gates.map((gate) => [gate, [...(procedure.automated[gate] ?? [])]]))
   const uncovered = procedure.gates.flatMap((gate) => RECEIPT_GATES[gate].roles.filter((role) => !automatedRoles[gate].includes(role) && !manualStepsRequired.some((step) => step.gate === gate && step.role === role)).map((role) => `${gate}:${role}`))
@@ -370,6 +344,7 @@ export async function runAp04App({ instance, launchedAtMs, scaleManifest, derive
   const index = await waitForIndex(instance, { timeoutMs })
   timings.appIndexing = { met: index.met, sinceLaunchMs: now() - launchedAtMs, waitMs: index.elapsedMs, probe: 'app.metadataCache.initialized' }
   timings.budget = PROPOSED_TARGETS.appUsableOpen
+  timings.usability = { claimed: false, reason: 'usable-open and indexing are recorded against a budget that is set from G00 before G16 closes; nothing here claims the app is usable at this scale' }
   const appSamples = []
   const sampleApp = async (label) => { if (sampleAppRss) { try { appSamples.push({ label, atMs: now() - launchedAtMs, rssBytes: await sampleAppRss() }) } catch (error) { appSamples.push({ label, error: error.message }) } } }
   await sampleApp('after-index')
@@ -500,14 +475,56 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
         timingsByGate.G13 = { ...timingsByGate.G13, memberships: memberships.map(({ label, index, disk, app: appIndex }) => ({ label, index, diskMatches: disk.matches, appMatches: appIndex.matches })) }
       }
       plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: full.home, workspaceDir })
-    } else if (plan.app === 'capabilities-only') {
+    } else if (plan.app === 'service-full' || plan.app === 'service-full-and-scoped') {
+      // The owned service maintains the vault(s) the isolated app(s) open: every instance's private profile is bound to
+      // the vault directory the engine publishes into, and the service runs with the isolated HOME so its editor
+      // adapter can reach nothing but the isolated app. Each view is derived once before launch (no app yet), so the
+      // app opens a populated vault and capability discovery has a note to open.
       const workspaceDir = path.join(temp, 'workspace')
-      const fixture = materializeFixtureWorkspace(workspaceDir)
-      const layout = shortLayout(createLayout)
-      await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state'), vaultRoot: layout.vault , withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
-      const { app } = await launch(layout)
-      capabilities = await discoverCapabilities(app)
-      plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layout.home, workspaceDir })
+      const dataRoot = path.join(temp, 'data')
+      const scoped = plan.app === 'service-full-and-scoped'
+      const fixture = scoped ? prepareAp05Workspace(workspaceDir) : materializeFixtureWorkspace(workspaceDir, { scopes: [FULL_SCOPE] })
+      if (!scoped) initialiseRepositories(fixture.repositories.map((repoId) => path.join(workspaceDir, repoId)))
+      const layouts = { full: shortLayout(createLayout), ...(scoped ? { scoped: shortLayout(createLayout) } : {}) }
+      const env = { ...stripProjectEnv(process.env), HOME: layouts.full.home }
+      const world = prepareWorkspace({ projectFile: fixture.projectFile, dataRoot, env })
+      const scopeDocuments = scoped ? AP05_SCOPE_DOCUMENTS : [FULL_SCOPE]
+      const derivations = {}
+      const serviceSentinels = JSON.parse(fs.readFileSync(SERVICE_SENTINELS, 'utf8')).sentinels
+      for (const scope of scopeDocuments) derivations[scope.scopeId] = (await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: world.workspaceRoot, workspaceId: world.workspaceId, vaultRoot: world.vaultRootFor(scope.scopeId), scope, sentinels: serviceSentinels })).timings
+      const bound = { full: bindLayoutToVault(layouts.full, world.vaultRootFor(AP05_SCOPES.full)), ...(scoped ? { scoped: bindLayoutToVault(layouts.scoped, world.vaultRootFor(AP05_SCOPES.scoped)) } : {}) }
+      const full = await launch(bound.full)
+      capabilities = await discoverCapabilities(full.app)
+      const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot, env, consent: { actor: operator, coverage: 'service' }, intervalMs: PROCEDURE_TICK_INTERVAL_MS, probeTimeoutMs: 5000 })
+      const [{ createQualifiedAdapterFactory }, { createProductionAppProbe }] = await Promise.all([import('../../src/runtime/obsidian/app-capability.mjs'), import('../../src/runtime/obsidian/app-production-seams.mjs')])
+      try {
+        if (!scoped) {
+          const appSeam = { openNote: (notePath) => full.app.stimulus('open', notePath), readIncludes: async ({ path: notePath, needle }) => (await evalValue(full.app, PROBES.readIncludes, { path: notePath, needle })) === 'true' }
+          const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe({ env }), createAdapter: () => createObsidianCliAdapter({ env }) })
+          const run = await runAp03({ world, runtime, app: appSeam, adapterFactory })
+          evidenceByGate.G14 = run.evidence.filter((item) => item.name.startsWith('G14'))
+          evidenceByGate.G15 = run.evidence.filter((item) => item.name.startsWith('G15'))
+          passedByGate.G14 = run.passed
+          passedByGate.G15 = run.passed
+          timingsByGate.G14 = { launchedAt: new Date(full.launchedAtMs).toISOString(), derivation: derivations, ...run.timings, failures: run.failures }
+          timingsByGate.G15 = { launchedAt: new Date(full.launchedAtMs).toISOString(), ...run.timings, failures: run.failures }
+        } else {
+          const second = await launch(bound.scoped)
+          const command = await createCommandRunner({ projectFile: fixture.projectFile, dataRoot, env })
+          const views = {
+            full: { scopeId: AP05_SCOPES.full, editor: createAppEditor(full.app, { vaultRoot: bound.full.vault }) },
+            scoped: { scopeId: AP05_SCOPES.scoped, editor: createAppEditor(second.app, { vaultRoot: bound.scoped.vault }) },
+          }
+          const run = await runAp05({ world, views, runtime, command, operator })
+          evidenceByGate.G17 = run.evidence
+          passedByGate.G17 = run.passed
+          timingsByGate.G17 = { launchedAt: new Date(full.launchedAtMs).toISOString(), derivation: derivations, ...run.timings, failures: run.failures }
+        }
+      } finally {
+        // The service is the disposable one this run started; its record names it, and only it is stopped.
+        try { const status = await runtime.status(); if (status.state === 'healthy') await runtime.stop({ stopTimeoutMs: 20000 }) } catch { /* recorded in the service log */ }
+      }
+      plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layouts.full.home, isolatedProfile: layouts.full.profile, workspaceDir, dataRoot })
     } else if (plan.app === 'scale-vault') {
       const manifestPath = path.join(args['scale-dir'], 'atelier-scale-dataset.json')
       if (!fs.existsSync(manifestPath)) throw new OutputRefusal('scale-dataset-missing', `no dataset manifest at ${manifestPath}; run generate-scale.mjs --out DIR --derive --warm 30 first`)
@@ -527,7 +544,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
     for (const app of instances) await app.quit()
     for (const app of instances) { const log = path.join(app.layout.root, 'app.log'); if (fs.existsSync(log)) for (const gate of plan.gates) (evidenceByGate[gate] ??= []).push({ role: null, name: `${gate}-app-${toIdentifier(path.basename(app.layout.root))}.log`, bytes: Buffer.concat([Buffer.from(`# app.log of ${app.layout.root}\n`), fs.readFileSync(log)]) }) }
     const wallClock = { startedAt, endedAt: isoNow() }
-    return recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, dataset })
+    return { written: recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, dataset }), plan }
   } finally {
     for (const app of instances) await app.quit().catch(() => {})
     if (!args.keep) {
@@ -557,13 +574,14 @@ async function main(argv) {
   for (const id of procedures) {
     const plan = planProcedure(id, { receiptDir, operator, scaleDir: args['scale-dir'] ?? null })
     if (plan.requiresScaleDir && !args['scale-dir']) throw new OutputRefusal('usage', 'AP-04 needs --scale-dir DIR (a generate-scale.mjs output with --derive)')
-    const written = await runIsolated({ plan, args, candidate, operator, host, receiptDir })
+    const { written, plan: filled } = await runIsolated({ plan, args, candidate, operator, host, receiptDir })
     for (const { receiptPath, receipt, validation } of written) {
       const desktop = receipt.ext['mnstry.atelier.obsidian.desktop-receipts']
       console.log(`[desktop-receipts] ${receipt.gate} ${receiptPath}: outcome ${receipt.outcome}, status ${desktop.status}, closes false, schemaValid ${validation.schemaValid}, missing ${validation.missing.map((item) => item.code).join(',') || 'none'}`)
       if (args.json) console.log(JSON.stringify(receipt, null, 2))
     }
-    printPlan(planProcedure(id, { receiptDir, operator }))
+    // With --keep the manual steps name the kept workspace, data root and instance; without it they keep their placeholders.
+    printPlan(args.keep ? filled : planProcedure(id, { receiptDir, operator }))
   }
   return 0
 }

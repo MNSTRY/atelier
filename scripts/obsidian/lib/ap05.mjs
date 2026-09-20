@@ -79,7 +79,15 @@ const insertAfter = (bytes, anchor, inserted) => {
   return Buffer.from(source.slice(0, end) + inserted + source.slice(end), 'utf8')
 }
 
-export async function runAp05({ world, views, runtime, command, operator, now = Date.now, clock = isoNow, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), manualTicks = 3, edits = AP05_EDITS }) {
+// The observations the run's verdict rests on. The mutation control of the
+// test suite substitutes a digest reader that sees nothing and proves the
+// manual-mode oracle then accepts a tick that wrote a source.
+export const AP05_PRIMITIVES = Object.freeze({ sourceDigests, fileDigest })
+
+export function createAp05RunnerForOracleTests(primitives = AP05_PRIMITIVES) {
+  const { sourceDigests, fileDigest } = { ...AP05_PRIMITIVES, ...primitives }
+  return runAp05With
+  async function runAp05With({ world, views, runtime, command, operator, clock = isoNow, manualTicks = 3, edits = AP05_EDITS }) {
   const steps = {}
   const failures = []
   const check = (step, condition, message) => { if (!condition) failures.push(`${step}: ${message}`); return condition }
@@ -293,4 +301,7 @@ export async function runAp05({ world, views, runtime, command, operator, now = 
     { role: null, name: 'G17-command-log.json', bytes: text(command.calls ?? []) },
   ]
   return { steps, evidence, failures, passed: failures.length === 0, timings: { manualTicks, sourceChangesSinceBaseline: retention.sourceChangesSinceBaseline.map((item) => item.key) } }
+  }
 }
+
+export const runAp05 = createAp05RunnerForOracleTests()

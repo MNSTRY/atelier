@@ -57,8 +57,16 @@ const { dispatchAutomaticApply } = await import('../src/runtime/obsidian/pending
 // AOP-4 phase 2 proof tooling (scripts/obsidian, unshipped). Imported after
 // the guard: none of it may start the app, and its drivers never run on import.
 const { OutputRefusal, assertExternalOutput, repositoryContaining } = await import('../scripts/obsidian/lib/common.mjs')
-const { PROPOSED_TARGETS, createResourceSampler, percentile, waitUntil, warmChangeSummary } = await import('../scripts/obsidian/lib/measure.mjs')
-const { deriveWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
+const { PROPOSED_TARGETS, createResourceSampler, createWarmChangeSummaryForOracleTests, percentile, waitUntil, warmChangeSummary } = await import('../scripts/obsidian/lib/measure.mjs')
+const { absentAdapter, deriveWorkspace, materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
+const { bindLayoutToVault, createCommandRunner, createServiceRuntime, fileDigest, initialiseRepositories, noteFile, prepareWorkspace, stripProjectEnv } = await import('../scripts/obsidian/lib/service-world.mjs')
+const { runAp03 } = await import('../scripts/obsidian/lib/ap03.mjs')
+const { AP05_EDITS, AP05_SCOPES, createAp05RunnerForOracleTests, prepareAp05Workspace, runAp05 } = await import('../scripts/obsidian/lib/ap05.mjs')
+const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
+const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
+const { createNullWatcherFactory } = await import('../src/runtime/obsidian/watchers.mjs')
+const { createSourceApplyContribution } = await import('../src/projection/obsidian/edits/contribution.mjs')
+const { createProposalAdapterContribution } = await import('../src/projection/obsidian/proposals/contribution.mjs')
 const { DESKTOP_EXT_KEY, ReceiptRefusal, buildReceipt, evidenceFileName, writeGateReceipt } = await import('../scripts/obsidian/lib/receipts.mjs')
 const { DEFAULT_SEED, PROFILES, generateScaleDataset, planDataset } = await import('../scripts/obsidian/generate-scale.mjs')
 const {
@@ -898,14 +906,21 @@ test('desktop planner: every gate role is automated or an exact manual step; the
   assert.deepEqual(manual, {
     'AP-01': ['G07:app-observation'],
     'AP-02': ['G13:graph-filter-observation'],
-    'AP-03': ['G14:source-refresh-trace', 'G14:dropped-event-recovery', 'G14:sleep-wake-clock', 'G15:ownership-health', 'G15:terminal-closure'],
+    'AP-03': ['G14:sleep-wake-clock'],
     'AP-04': [],
-    'AP-05': ['G17:multi-vault-edit-trace', 'G17:manual-apply-trace', 'G17:automatic-apply-trace', 'G17:uninstall-retention'],
+    'AP-05': [],
+  })
+  assert.deepEqual({ ap03: planProcedure('AP-03', {}).automatedRoles, ap05: planProcedure('AP-05', {}).automatedRoles }, {
+    ap03: { G14: ['source-refresh-trace', 'dropped-event-recovery'], G15: ['ownership-health', 'terminal-closure'] },
+    ap05: { G17: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention'] },
   })
   assert.deepEqual(planProcedure('AP-04', {}).receipts.map((item) => [item.gate, item.status]), [['G16', 'complete']])
-  assert.deepEqual(planProcedure('AP-03', {}).receipts.map((item) => [item.gate, item.status]), [['G14', 'incomplete'], ['G15', 'incomplete']])
-  const sleep = planProcedure('AP-03', { isolatedHome: '/tmp/iso/home', workspaceDir: '/tmp/ws', operator: 'op-x' }).manualStepsRequired.find((step) => step.role === 'sleep-wake-clock')
-  assert.ok(sleep.instructions[0].includes('HOME=/tmp/iso/home node bin/atelier.mjs obsidian service status --project /tmp/ws/atelier.project.json --json'))
+  assert.deepEqual(planProcedure('AP-03', {}).receipts.map((item) => [item.gate, item.status]), [['G14', 'incomplete'], ['G15', 'complete']])
+  assert.deepEqual(planProcedure('AP-05', {}).receipts.map((item) => [item.gate, item.status]), [['G17', 'complete']])
+  const sleep = planProcedure('AP-03', { isolatedHome: '/tmp/iso/home', isolatedProfile: '/tmp/iso/profile', workspaceDir: '/tmp/ws', dataRoot: '/tmp/data', operator: 'op-x' }).manualStepsRequired.find((step) => step.role === 'sleep-wake-clock')
+  assert.ok(sleep.instructions[0].includes('HOME=/tmp/iso/home /Applications/Obsidian.app/Contents/MacOS/Obsidian --user-data-dir=/tmp/iso/profile'), sleep.instructions[0])
+  assert.ok(sleep.instructions[2].includes('HOME=/tmp/iso/home node bin/atelier.mjs obsidian service status --project /tmp/ws/atelier.project.json --data-root /tmp/data --json'), sleep.instructions[2])
+  assert.ok(sleep.instructions.every((line) => !line.includes('<DATA_ROOT>') && !line.includes('<ISOLATED_PROFILE>')))
   assert.throws(() => planProcedure('AP-09'), (error) => error instanceof OutputRefusal && error.code === 'unknown-procedure')
 })
 
@@ -1121,4 +1136,162 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
   for (const sentinel of fixture.sentinels) assert.ok(!names.some((name) => name.includes(sentinel)), `${sentinel} must not name a note`)
   // Control: without the withheld list the sentinel reaches the vault and the derivation refuses to be evidence.
   await assert.rejects(() => deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-2'), vaultRoot: path.join(temp, 'vault-2'), sentinels: fixture.sentinels }), /withheld sentinel/)
+})
+
+// ---------------------------------------------------------------------------
+// 8. AOP-4 phase 2, AP-03 and AP-05: the lifecycle and editing procedures run
+// against the real runtime (a service process of the test entry for AP-03,
+// an in-process engine with the real apply and proposal contributions for
+// AP-05), a fake app that reads the vault from disk, and the shipped command.
+// The spawn guard stays silent: the test entry's adapter reports no app.
+// ---------------------------------------------------------------------------
+
+const TEST_SERVICE_ENTRY = path.join(REPOSITORY_ROOT, 'test', 'support', 'obsidian-maintenance', 'service-entry.mjs')
+const FULL_ONLY = [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }]
+const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+
+// A synthetic workspace with real (empty) git repositories, its private state under a data root of its own.
+function serviceWorld(t, label, { scoped = false } = {}) {
+  const dir = tempDir(t, label)
+  const workspaceDir = path.join(dir, 'workspace')
+  const fixture = scoped ? prepareAp05Workspace(workspaceDir) : materializeFixtureWorkspace(workspaceDir, { scopes: FULL_ONLY })
+  if (!scoped) initialiseRepositories(fixture.repositories.map((repoId) => path.join(workspaceDir, repoId)))
+  const env = stripProjectEnv(process.env)
+  const world = prepareWorkspace({ projectFile: fixture.projectFile, dataRoot: path.join(dir, 'data'), env, randomBytes: fixedRandom })
+  return { dir, fixture, env, world }
+}
+
+// The app of AP-03, faked: it "opens" any note and reads the vault file from disk, as the real probe reads app.vault.
+const diskApp = (vaultRoot) => ({ openNote: async (notePath) => `opened ${notePath}`, readIncludes: ({ path: notePath, needle }) => { try { return fs.readFileSync(noteFile(vaultRoot, notePath), 'utf8').includes(needle) } catch { return false } } })
+
+test('AP-03 runner: source refresh, dropped event with the null watcher, kills at owned points and a start from an exiting launcher, against a real service process', async (t) => {
+  const { world, env } = serviceWorld(t, 'ap03')
+  const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
+  // Registered after tempDir's removal hook, so by the time it runs the workspace may be gone: every step tolerates that.
+  t.after(async () => { try { await runtime.stop({ stopTimeoutMs: 5000 }) } catch { /* ended below */ } try { const record = runtime.record(); if (record && isAlive(record.pid)) process.kill(record.pid, 'SIGKILL') } catch { /* gone, or the workspace already removed */ } })
+  const run = await runAp03({ world, runtime, app: diskApp(world.vaultRootFor('scope-full')), adapterFactory: () => absentAdapter(), recoveryIntervalMs: 400, settleMs: 300, midTickDelayMs: 5 })
+  assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => [item.role, item.name]) }, { passed: true, failures: [], roles: [['source-refresh-trace', 'G14-source-refresh-trace.json'], ['dropped-event-recovery', 'G14-dropped-event-recovery.json'], ['ownership-health', 'G15-ownership-health.json'], ['terminal-closure', 'G15-terminal-closure.json']] })
+  const { steps } = run
+  assert.ok(steps['source-refresh'].fileUpdate.met && steps['source-refresh'].appReadback.met && steps['source-refresh'].after.sourceDigest !== steps['source-refresh'].before.sourceDigest)
+  assert.ok(typeof run.timings.sourceToFileMs === 'number' && typeof run.timings.sourceToAppMs === 'number', 'both latencies are recorded, separately')
+  assert.deepEqual(steps['dropped-event'].trials.map((trial) => [trial.label, trial.caught, trial.tick.full, trial.tick.changes.some((change) => change.changeClass === 'source-body')]), [['stat-and-digest', true, false, true], ['full-hash-pass', true, true, true]])
+  assert.deepEqual(steps.interruption.points.map((point) => [point.point, point.afterKill.state, point.restart.state, point.restart.pid !== point.before.pid, point.retained.pendingEditsUnchanged, point.retained.journalsRetained, point.retained.objectsPresent]), [['idle-between-ticks', 'stale-record', 'healthy', true, true, true, true], ['during-a-tick', 'stale-record', 'healthy', true, true, true, true]])
+  assert.ok(steps.interruption.reference.pendingEdits.length >= 1 && steps.interruption.reference.retainedObjects.every((item) => item.present))
+  const launcher = steps['launcher-exit']
+  assert.deepEqual({ exit: launcher.launcher.exit, alive: launcher.launcher.alive, reported: launcher.reported.state, sameRuntime: launcher.statusLater.runtimeId === launcher.reported.runtimeId && launcher.statusLater.pid === launcher.reported.pid, health: launcher.healthAfterExit.answer.kind }, { exit: { code: 0, signal: null }, alive: false, reported: 'healthy', sameRuntime: true, health: 'health' })
+  assert.equal(launcher.finalStop.stopped, true)
+  // The evidence is what the receipt hashes: every role carries the wall clock of its step and the source digests.
+  const refresh = JSON.parse(run.evidence[0].bytes.toString('utf8'))
+  assert.ok(refresh.step.startedAt && refresh.step.endedAt && refresh.host.sourceDigests['north-desk/plans/harbor-plan.md'].startsWith('sha256:'))
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+// The AP-05 runtime for tests: the real engine with the real apply operation and proposal adapter, in this process.
+// `start` creates a fresh engine (what a restarted service does: everything it knows comes from disk).
+function engineRuntime(world, env, { onTick = () => {} } = {}) {
+  const context = { loadProject: world.loadProject, dataRoot: world.dataRoot, env, platform: process.platform }
+  const contributions = [createSourceApplyContribution({ context }), createProposalAdapterContribution(), createSelectionContribution()]
+  let engine = null
+  let generation = 0
+  let ticks = 0
+  return {
+    contributions,
+    async start() { generation += 1; engine = createMaintenanceEngine({ ...context, adapterFactory: () => absentAdapter(), clock: () => new Date(), extensions: createObsidianRegistry({ contributions }).extensions, watcherFactory: createNullWatcherFactory(), quietPeriodMs: 0 }); return { state: 'healthy', started: true, record: { runtimeId: `rt-engine-${generation}`, pid: process.pid } } },
+    async tick() { ticks += 1; onTick(ticks); const report = await engine.tick(); return { requested: true, state: 'healthy', reason: 'tick-ran', tick: { ok: report.state !== 'refused', state: report.state, reason: report.reason ?? report.refusal?.code ?? null, scopes: (report.scopes ?? []).map(({ scopeId, state, reason }) => ({ scopeId, state, reason })), dispatched: report.dispatched ?? [] } } },
+    async stop() { engine?.stop(); engine = null; return { stopped: true } },
+    async status() { return { state: engine ? 'healthy' : 'stopped' } },
+  }
+}
+
+// The editor of a fake instance: the same bytes real typing leaves on disk after the app saved.
+const fileEditor = (world, scopeId) => ({ async typeAt({ notePath, anchor, text }) { const file = noteFile(world.vaultRootFor(scopeId), notePath); const held = fs.readFileSync(file, 'utf8'); const at = held.indexOf(anchor); if (at < 0) throw new Error(`no anchor "${anchor}" in ${notePath}`); fs.writeFileSync(file, held.slice(0, at + anchor.length) + text + held.slice(at + anchor.length)); return { notePath, anchor, text, typedAt: new Date().toISOString(), noteDigest: fileDigest(file) } } })
+
+async function ap05World(t, label, { onTick } = {}) {
+  const { world, env, fixture } = serviceWorld(t, label, { scoped: true })
+  const runtime = engineRuntime(world, env, { onTick })
+  const command = await createCommandRunner({ projectFile: fixture.projectFile, dataRoot: world.dataRoot, env, contributions: runtime.contributions })
+  const views = { full: { scopeId: AP05_SCOPES.full, editor: fileEditor(world, AP05_SCOPES.full) }, scoped: { scopeId: AP05_SCOPES.scoped, editor: fileEditor(world, AP05_SCOPES.scoped) } }
+  return { world, runtime, command, views, fixture }
+}
+
+test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and automatic apply, pending kinds, idempotent restart, proposal store and retention', async (t) => {
+  const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05')
+  assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md'])
+  const run = await runAp05({ world, views, runtime, command, operator: 'op-synthetic' })
+  assert.deepEqual({ passed: run.passed, failures: run.failures, roles: run.evidence.map((item) => item.role) }, { passed: true, failures: [], roles: ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention', null] })
+  const { steps } = run
+  assert.deepEqual({ identical: [steps['multi-vault'].identical.object.state, steps['multi-vault'].identical.object.operations.length, steps['multi-vault'].identical.object.pendingEdits.length], divergent: [steps['multi-vault'].divergent.object.state, steps['multi-vault'].divergent.object.conflictedOperations.length] }, { identical: ['pending', 1, 2], divergent: ['conflicted', 2] })
+  assert.deepEqual({ ticks: steps.manual.ticks.map((item) => item.sourceChanges.length), applied: steps.manual.apply.answer.result.status, exact: steps.manual.after.exactlyAsTyped, others: steps.manual.after.otherSourceChanges }, { ticks: [0, 0, 0], applied: 'applied', exact: true, others: [] })
+  assert.ok(fs.readFileSync(path.join(world.workspaceDir, 'south-desk', 'tables', 'tide-table.md'), 'utf8').includes(AP05_EDITS.identical.text), 'the explicit apply wrote exactly the typed text into the source')
+  // The dispatch of that tick also offered the two conflicted harbor-plan edits; each was refused as a conflict, and only the eligible one was applied.
+  assert.deepEqual({ eligible: [steps.automatic.eligible.after.exactlyAsTyped, steps.automatic.eligible.after.dispatched.map((item) => item.status).sort()], pending: Object.fromEntries(Object.entries(steps.automatic.pendingSummary).map(([kind, list]) => [kind, list.map((edit) => [edit.state, edit.lastCode, edit.objectState])])) }, {
+    eligible: [true, ['applied', 'conflict', 'conflict']],
+    pending: {
+      outOfScope: [['retry-exhausted', 'outside-policy-selection', 'pending']],
+      stale: [['retry-exhausted', 'stale-source', 'conflicted']],
+      unsupported: [['retry-exhausted', 'edit-not-applicable', 'settled']],
+      conflicting: [['retry-exhausted', 'object-conflicted', 'conflicted'], ['retry-exhausted', 'object-conflicted', 'conflicted']],
+      revoked: [['queued', null, 'pending']],
+    },
+  })
+  assert.deepEqual({ same: steps.automatic.restart.idempotent.sameOpenEdits, sourceChanges: steps.automatic.restart.idempotent.sourceChanges, journals: steps.automatic.restart.idempotent.journalsRetained }, { same: true, sourceChanges: [], journals: true })
+  assert.ok(steps.retention.ledger.exists && steps.retention.ledger.lines >= 1 && steps.retention.structuralSource.unchangedSinceTyped, 'the structural edit reached the copy-only store and the source stayed')
+  assert.ok(steps.retention.retained.vaultHolds.length >= 8 && steps.retention.retained.vaultHolds.every((item) => item.present) && steps.retention.retained.recoveryObjects.every((item) => item.present))
+  assert.deepEqual(run.timings.sourceChangesSinceBaseline, ['north-desk/plans/quay-notes.md', 'north-desk/plans/shared-b.md', 'south-desk/tables/tide-table.md'], 'exactly the moved stale source, the automatic apply and the manual apply changed a source')
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('mutation control: a recorder blind to source digests accepts a manual-mode tick that wrote a source; the real recorder refuses it', async (t) => {
+  // A runtime whose fourth tick (the first manual-mode tick after the two multi-vault ticks) writes a source, as a broken engine would.
+  const sabotage = (world) => (count) => { if (count === 4) fs.appendFileSync(path.join(world.workspaceDir, 'north-desk', 'plans', 'lantern-log.md'), '\nWritten by a tick.\n') }
+  const honest = await ap05World(t, 'ap05-honest')
+  honest.runtime = engineRuntime(honest.world, honest.world.env, { onTick: sabotage(honest.world) })
+  const real = await runAp05({ ...honest, operator: 'op-synthetic', manualTicks: 1 })
+  assert.ok(real.failures.includes('manual: a tick in manual mode changed a source'), real.failures.join('\n'))
+  const blind = await ap05World(t, 'ap05-blind')
+  blind.runtime = engineRuntime(blind.world, blind.world.env, { onTick: sabotage(blind.world) })
+  const blindRun = await createAp05RunnerForOracleTests({ sourceDigests: () => ({}) })({ ...blind, operator: 'op-synthetic', manualTicks: 1 })
+  assert.ok(!blindRun.failures.includes('manual: a tick in manual mode changed a source'), 'the blind recorder cannot see the written source')
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('mutation control: a warm summary that reads the app series from the file member fails the pinned p95', () => {
+  const changes = Array.from({ length: 30 }, (_, index) => ({ change: index + 1, sourceToFileMs: 100 + index * 10, sourceToAppMs: 9000 }))
+  const real = warmChangeSummary(changes)
+  assert.deepEqual({ file: real.sourceToFile.p95Ms, app: real.sourceToApp.p95Ms, met: real.targetsMet, claimed: real.usability.claimed }, { file: 380, app: 9000, met: { fileUpdateP95: true, sourceToAppP95: null }, claimed: false })
+  const wrongSeries = createWarmChangeSummaryForOracleTests({ appOf: (sample) => sample.sourceToFileMs })(changes)
+  assert.notEqual(wrongSeries.sourceToApp.p95Ms, 9000, 'the app p95 computed over the file series is not the app p95')
+  assert.throws(() => assert.deepEqual({ file: wrongSeries.sourceToFile.p95Ms, app: wrongSeries.sourceToApp.p95Ms }, { file: 380, app: 9000 }), assert.AssertionError)
+})
+
+test('service world seams: the profile is bound to the engine vault, repositories ignore the proposal store, the audience is set, the launcher is spawned without a shell in tests', (t) => {
+  const dir = tempDir(t, 'seams')
+  const layout = { root: dir, home: path.join(dir, 'home'), profile: path.join(dir, 'profile'), vault: path.join(dir, 'vault') }
+  fs.mkdirSync(layout.profile, { recursive: true })
+  fs.writeFileSync(path.join(layout.profile, 'obsidian.json'), JSON.stringify({ vaults: { atelierg00synthetic: { path: layout.vault, ts: 1, open: true } }, cli: true, updateDisabled: true }))
+  const bound = bindLayoutToVault(layout, path.join(dir, 'engine-vault'))
+  const profile = JSON.parse(fs.readFileSync(path.join(layout.profile, 'obsidian.json'), 'utf8'))
+  assert.deepEqual({ vault: bound.vault, registered: Object.values(profile.vaults).map((item) => item.path), cli: profile.cli, exists: fs.existsSync(bound.vault) }, { vault: path.join(dir, 'engine-vault'), registered: [path.join(dir, 'engine-vault')], cli: true, exists: true })
+  const repo = path.join(dir, 'repo')
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true })
+  const ran = []
+  initialiseRepositories([repo], { run: (command, args, options) => { ran.push([command, ...args, options.cwd]); fs.mkdirSync(path.join(options.cwd, '.git'), { recursive: true }) } })
+  assert.deepEqual({ ran, ignore: fs.readFileSync(path.join(repo, '.gitignore'), 'utf8') }, { ran: [['git', 'init', '-q', repo]], ignore: '.atelier-proposals/\n' })
+  const { world } = serviceWorld(t, 'seams-world')
+  assert.deepEqual({ audience: readMachineSettings({ workspaceRoot: world.workspaceRoot, workspaceId: world.workspaceId }).audienceAllow, workspaceId: world.workspaceId, vault: path.relative(world.workspaceRoot, world.vaultRootFor('scope-full')).split(path.sep) }, { audience: ['team'], workspaceId: WORKSPACE_ID, vault: ['vaults', 'scope-full'] })
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('AP-03 and AP-05 receipts: G14 stays incomplete for the host sleep/wake, G15 and G17 are complete from automated roles alone; a failed run is a failed receipt', (t) => {
+  const dir = tempDir(t, 'lifecycle-receipts')
+  const roles = (gate, names) => names.map((role) => ({ role, name: evidenceFileName(gate, role, 'json'), bytes: Buffer.from(`{"role":"${role}"}\n`) }))
+  const ap03 = recordProcedureReceipts({ plan: planProcedure('AP-03', { receiptDir: dir, operator: 'op-synthetic' }), receiptDir: dir, candidate: CANDIDATE, capabilities: CAPABILITIES, operator: 'op-synthetic', host: HOST, evidenceByGate: { G14: roles('G14', ['source-refresh-trace', 'dropped-event-recovery']), G15: roles('G15', ['ownership-health', 'terminal-closure']) }, passedByGate: { G14: true, G15: true }, wallClock: WALL, recordedAt: NOW })
+  assert.deepEqual(ap03.map(({ receipt, validation }) => [receipt.gate, receipt.outcome, receipt.ext[DESKTOP_EXT_KEY].status, receipt.ext[DESKTOP_EXT_KEY].pendingRoles, validation.schemaValid, validation.missing.map((item) => item.code)]), [
+    ['G14', 'blocked', 'incomplete', ['sleep-wake-clock'], true, ['evidence-role-missing']],
+    ['G15', 'passed', 'complete', [], true, []],
+  ])
+  const ap05 = recordProcedureReceipts({ plan: planProcedure('AP-05', { receiptDir: dir, operator: 'op-synthetic' }), receiptDir: dir, candidate: CANDIDATE, capabilities: CAPABILITIES, operator: 'op-synthetic', host: HOST, evidenceByGate: { G17: roles('G17', ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention']) }, passedByGate: { G17: true }, wallClock: WALL, recordedAt: NOW })
+  assert.deepEqual(ap05.map(({ receipt, validation }) => [receipt.gate, receipt.outcome, receipt.ext[DESKTOP_EXT_KEY].status, receipt.ext[DESKTOP_EXT_KEY].closes, receipt.ext[DESKTOP_EXT_KEY].humanAcceptance, validation.schemaValid, validation.missing.map((item) => item.code)]), [['G17', 'passed', 'complete', false, null, true, ['acceptance-missing']]], 'complete from automation; the human acceptance is recorded separately by the closing owner')
+  const failed = recordProcedureReceipts({ plan: planProcedure('AP-05', { receiptDir: path.join(dir, 'failed'), operator: 'op-synthetic' }), receiptDir: path.join(dir, 'failed'), candidate: CANDIDATE, capabilities: CAPABILITIES, operator: 'op-synthetic', host: HOST, evidenceByGate: { G17: roles('G17', ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention']) }, passedByGate: { G17: false }, wallClock: WALL, recordedAt: NOW })
+  assert.equal(failed[0].receipt.outcome, 'failed')
 })

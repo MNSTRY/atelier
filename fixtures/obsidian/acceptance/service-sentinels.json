@@ -1,0 +1,10 @@
+{
+  "description": "The sentinels of the materialization fixture that the production eligibility rule keeps out of every view (the sealed audit note is unclassified). AP-03 and AP-05 run the real maintenance service, which applies only that rule, so the fixture's additionally withheld node (north-desk:sealed-ledger, sentinels ZQX*) is published there as it would be in any real run; its sentinels are not checked by those procedures.",
+  "sentinels": [
+    "ZQYWITHHELD",
+    "ZQYBODY",
+    "zqy-hidden-tag",
+    "north-desk:sealed-audit",
+    "sealed/audit"
+  ]
+}

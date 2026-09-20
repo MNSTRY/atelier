@@ -42,17 +42,35 @@ function series(values, targetP95Ms) {
 // source edit to the vault file holding the candidate bytes, and separately
 // the time from the same edit to the app reading those bytes. The two are
 // summarized independently; an absent app measurement stays absent.
-export function warmChangeSummary(samples, { targets = PROPOSED_TARGETS, expectedSamples = 30 } = {}) {
-  const list = Array.isArray(samples) ? samples : []
-  return {
-    expectedSamples,
-    count: list.length,
-    complete: list.length >= expectedSamples,
-    sourceToFile: series(list.map((sample) => sample?.sourceToFileMs), targets.fileUpdate.p95Ms),
-    sourceToApp: series(list.map((sample) => sample?.sourceToAppMs), targets.sourceToApp.p95Ms),
-    targets,
+// Which member of a sample each series reads. The mutation control of the
+// test suite substitutes a table that reads the app series from the file
+// member and proves the pinned p95 then fails.
+export const WARM_SERIES = Object.freeze({
+  fileOf: (sample) => sample?.sourceToFileMs,
+  appOf: (sample) => sample?.sourceToAppMs,
+})
+
+export function createWarmChangeSummaryForOracleTests(primitives = WARM_SERIES) {
+  const { fileOf, appOf } = { ...WARM_SERIES, ...primitives }
+  return function warmChangeSummary(samples, { targets = PROPOSED_TARGETS, expectedSamples = 30 } = {}) {
+    const list = Array.isArray(samples) ? samples : []
+    const sourceToFile = series(list.map(fileOf), targets.fileUpdate.p95Ms)
+    const sourceToApp = series(list.map(appOf), targets.sourceToApp.p95Ms)
+    return {
+      expectedSamples,
+      count: list.length,
+      complete: list.length >= expectedSamples,
+      sourceToFile,
+      sourceToApp,
+      targets,
+      // The proposed targets and whether each was met, series by series; a series without a target is never "met".
+      targetsMet: { fileUpdateP95: sourceToFile.withinTarget, sourceToAppP95: sourceToApp.withinTarget },
+      usability: { claimed: false, reason: 'latencies are measured and recorded; whether the app is usable at this scale is judged by a person against the budget set from G00, never by these numbers' },
+    }
   }
 }
+
+export const warmChangeSummary = createWarmChangeSummaryForOracleTests()
 
 export function defaultResourceReader() {
   const memory = process.memoryUsage()
