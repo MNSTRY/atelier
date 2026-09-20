@@ -60,6 +60,7 @@ const { OutputRefusal, assertExternalOutput, repositoryContaining } = await impo
 const { PROPOSED_TARGETS, createResourceSampler, createWarmChangeSummaryForOracleTests, percentile, waitUntil, warmChangeSummary } = await import('../scripts/obsidian/lib/measure.mjs')
 const { absentAdapter, deriveWorkspace, materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
 const { bindLayoutToVault, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, fileDigest, initialiseRepositories, noteFile, prepareWorkspace, stripProjectEnv } = await import('../scripts/obsidian/lib/service-world.mjs')
+const { resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { runAp03 } = await import('../scripts/obsidian/lib/ap03.mjs')
 const { AP05_EDITS, AP05_SCOPES, createAp05RunnerForOracleTests, prepareAp05Workspace, runAp05 } = await import('../scripts/obsidian/lib/ap05.mjs')
 const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
@@ -94,6 +95,10 @@ const PROFILE = readJson(path.join(CORPUS_ROOT, ORACLES.profileFixture))
 const SNAPSHOT = { nodes: ORACLES.nodes, edges: ORACLES.edges }
 const FIXTURES = path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'acceptance', 'receipts')
 const NOW = '2026-01-05T10:00:00.000Z'
+// Tests that publish into a vault need this platform's atomic exchange; where there is none the publisher refuses,
+// which test/obsidian-recovery.test.mjs asserts. Planning, recording and validation tests stay unguarded.
+const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
+const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which is asserted separately' }
 const sha = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`
 const fixedRandom = (size) => Buffer.alloc(size, 9)
 const WORKSPACE_ID = `ws-${'09'.repeat(12)}`
@@ -836,7 +841,7 @@ test('scale generator: same seed, same fixture digest; another seed differs; wri
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 
-test('cold derivation of the tiny dataset: the real pipeline publishes every note into a temporary vault with no app', async (t) => {
+test('cold derivation of the tiny dataset: the real pipeline publishes every note into a temporary vault with no app', needsExchange, async (t) => {
   const dir = tempDir(t, 'derive')
   const { manifest } = generateScaleDataset({ outDir: path.join(dir, 'data'), profile: 'tiny' })
   const vaultRoot = path.join(dir, 'vault')
@@ -957,7 +962,7 @@ test('capability discovery records versions, CLI commands and lastSavedData from
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 
-test('AP-01 and AP-02 runners record raw app output and compare it with the generation manifest through a fake instance', async (t) => {
+test('AP-01 and AP-02 runners record raw app output and compare it with the generation manifest through a fake instance', needsExchange, async (t) => {
   const dir = tempDir(t, 'ap01')
   const { materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
   const fixture = materializeFixtureWorkspace(path.join(dir, 'workspace'))
@@ -1123,7 +1128,7 @@ test('verify-receipts and generate-scale command lines: exit codes on a complete
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 
-test('the desktop derivation applies the fixture\'s withheld list and refuses a vault that carries a sentinel', async (t) => {
+test('the desktop derivation applies the fixture\'s withheld list and refuses a vault that carries a sentinel', needsExchange, async (t) => {
   const { deriveWorkspace, materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-derive-withheld-'))
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }))
@@ -1164,7 +1169,7 @@ function serviceWorld(t, label, { scoped = false } = {}) {
 // The app of AP-03, faked: it "opens" any note and reads the vault file from disk, as the real probe reads app.vault.
 const diskApp = (vaultRoot) => ({ openNote: async (notePath) => `opened ${notePath}`, readIncludes: ({ path: notePath, needle }) => { try { return fs.readFileSync(noteFile(vaultRoot, notePath), 'utf8').includes(needle) } catch { return false } } })
 
-test('AP-03 runner: source refresh, dropped event with the null watcher, kills at owned points and a start from an exiting launcher, against a real service process', async (t) => {
+test('AP-03 runner: source refresh, dropped event with the null watcher, kills at owned points and a start from an exiting launcher, against a real service process', needsExchange, async (t) => {
   const { world, env } = serviceWorld(t, 'ap03')
   const runtime = createServiceRuntime({ loadProject: world.loadProject, dataRoot: world.dataRoot, env, consent: { actor: 'op-synthetic', coverage: 'service' }, intervalMs: 3_600_000, entryPath: TEST_SERVICE_ENTRY, entryArgs: [], launchThroughShell: false, probeTimeoutMs: 2000 })
   // Registered after tempDir's removal hook, so by the time it runs the workspace may be gone: every step tolerates that.
@@ -1225,7 +1230,7 @@ async function ap05World(t, label, { onTick, inProcess = false } = {}) {
   return { world, runtime, command, views, fixture }
 }
 
-test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and automatic apply, pending kinds, idempotent restart, proposal store and retention', async (t) => {
+test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and automatic apply, pending kinds, idempotent restart, proposal store and retention', needsExchange, async (t) => {
   const { world, runtime, command, views, fixture } = await ap05World(t, 'ap05', { inProcess: true })
   assert.deepEqual(fixture.extraNotes, ['north-desk/plans/quay-notes.md', 'north-desk/plans/lantern-log.md'])
   const run = await runAp05({ world, views, runtime, command, operator: 'op-synthetic' })
@@ -1252,7 +1257,7 @@ test('AP-05 runner: coalesced and conflicted edits across two vaults, manual and
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 
-test('mutation control: a recorder blind to source digests accepts a manual-mode tick that wrote a source; the real recorder refuses it', async (t) => {
+test('mutation control: a recorder blind to source digests accepts a manual-mode tick that wrote a source; the real recorder refuses it', needsExchange, async (t) => {
   // A runtime whose fourth tick (the first manual-mode tick after the two multi-vault ticks) writes a source, as a broken engine would.
   const sabotage = (world) => (count) => { if (count === 4) fs.appendFileSync(path.join(world.workspaceDir, 'north-desk', 'plans', 'lantern-log.md'), '\nWritten by a tick.\n') }
   const honest = await ap05World(t, 'ap05-honest')
