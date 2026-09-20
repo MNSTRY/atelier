@@ -382,7 +382,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `exchange-unavailable`, `apply-volume-mismatch` | this machine cannot write conditionally here |
 | `concurrent-source-writer`, `source-changed-during-apply` | another program wrote the source during the apply; every byte is retained |
 | `interrupted-before-exchange`, `apply-interrupted-needs-person` | what restart recovery decided for an interrupted apply |
-| `recovery-state-unreadable` | a candidate or backup path of an interrupted apply may not be looked at; that record is reported and every other one is still settled |
+| `recovery-state-unreadable` | a candidate, backup or source path of an interrupted apply may not be looked at or read; nothing is settled from a read this process was denied, that record is reported with its intent still open, and every other one is still settled |
 | `apply-outcome-unknown` | the source was exchanged and the settlement from digests could not be carried out; the source may have been changed, the intent stays open and `apply recover` decides |
 
 A path that another program removes or replaces between two steps, before the
@@ -434,11 +434,20 @@ list`, `show`, `run` and `recover` answer such a record as a typed refusal.
   bytes, the candidate is retired, and the answer is
   `interrupted-before-exchange`. If the digests show that the first exchange
   displaced the base after all, the apply happened and is answered as applied.
-- A refusal says that nothing was written. Once the source has been exchanged,
-  a failure is therefore never returned as a plain refusal with the intent
-  open: it is settled from the digests on disk, and only when that settlement
-  itself cannot be carried out is the answer `apply-outcome-unknown`, which
-  says that the source may have been changed and that `apply recover` decides.
+- A refusal says that nothing was written. From the moment the first exchange
+  may have taken place (a clean exchange, or one that reported a failure while
+  the digests no longer show the untouched state), a failure is therefore never
+  returned as a plain refusal with the intent open: it is settled from the
+  digests on disk, and only when that settlement itself cannot be carried out
+  is the answer `apply-outcome-unknown`, which says that the source may have
+  been changed and that `apply recover` decides. Once the outcome is durable
+  that answer is no longer given.
+- A read that this process is denied (a permission or I/O error) proves
+  nothing about a file, unlike a path that is no longer a regular file. It is
+  never taken as evidence that the source changed or that another program
+  wrote: the apply is settled again from digests when the path can be read.
+  A typed failure of the late-writer check after a durable apply leaves the
+  answer applied; the engine repeats that check.
 - An enrolled file this process may not read while the canonical graph is built
   refuses `corpus-unreadable`, naming no file. A source that cannot be read at
   the moment of the apply refuses `source-unreadable`. Both carry the system's

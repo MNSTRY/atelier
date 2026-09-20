@@ -2640,6 +2640,76 @@ test('apply: when the settlement after an exchange cannot be carried out either,
   assert.ok(filesUnder(world.recovery()).some((file) => fs.readFileSync(file).equals(base)), 'the old source is retained')
 })
 
+test('apply: the settlement is armed from the first exchange that reports a failure, a read this process is denied decides nothing, and a settled apply is never answered as unknown', needsExchange, async (t) => {
+  const failure = () => Object.assign(new Error('synthetic exchange failure'), { name: 'ExchangeRefusal', code: 'exchange-failed' })
+  const denyLstat = (suffix) => { const original = fs.lstatSync; let denied = 0; fs.lstatSync = function patched(file, ...rest) { if (typeof file === 'string' && file.endsWith(suffix)) { denied += 1; throw Object.assign(new Error('EIO: synthetic'), { code: 'EIO' }) } return original.call(this, file, ...rest) }; const restore = () => { fs.lstatSync = original }; t.after(restore); return { restore, denied: () => denied } }
+  const denyOpen = (when) => { const original = fs.openSync; let denied = 0; fs.openSync = function patched(file, flags, ...rest) { if (typeof file === 'string' && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && when(file)) { denied += 1; throw Object.assign(new Error('EIO: synthetic'), { code: 'EIO' }) } return original.call(this, file, flags, ...rest) }; const restore = () => { fs.openSync = original }; t.after(restore); return { restore, denied: () => denied } }
+  function world(index) {
+    const w = raceWorld(t, 1)
+    const sourceFile = w.source('race-room/rounds/round-0.md')
+    const base = fs.readFileSync(sourceFile)
+    return { w, sourceFile, base, candidate: replaceNth(base, 'Original sentence 0.', 'Edited sentence 0.'), edit: w.editOf('race-room:round-0') }
+  }
+
+  // 1. The first exchange swaps and then reports a failure; the settlement it runs meets a path it cannot look at.
+  {
+    const { w, sourceFile, base, candidate, edit } = world()
+    const deny = denyLstat('displaced.bin')
+    const result = await w.sourceApply({}, { ...SOURCE_APPLY_PRIMITIVES, commit: ({ candidatePath, sourcePath, exchange }) => { exchange(candidatePath, sourcePath); throw failure() } }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    const during = await w.sourceApply().show(edit.editId)
+    deny.restore()
+    assert.ok(deny.denied() >= 1)
+    assert.deepEqual([result.status, result.code], ['conflict', 'apply-outcome-unknown'], JSON.stringify(result))
+    assert.equal(during.object.outcomeUnknown, true, 'the intent is open and the answer says so')
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate)
+    const recovered = (await w.sourceApply().recover()).recovered
+    assert.deepEqual(recovered.map((item) => [item.status, item.code]), [['applied', 'applied-after-restart']], JSON.stringify(recovered))
+    assert.ok(filesUnder(w.recovery()).some((file) => fs.readFileSync(file).equals(base)), 'the old source is retained')
+  }
+
+  // 2. A good exchange, then the source cannot be read to verify it: that is not a change of the source.
+  {
+    const { w, sourceFile, candidate, edit } = world()
+    let armed = false
+    const deny = denyOpen((file) => armed && path.resolve(file) === path.resolve(sourceFile))
+    const result = await w.sourceApply({ beforeExchange: async () => { armed = true } }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    const during = await w.sourceApply().show(edit.editId)
+    deny.restore()
+    assert.ok(deny.denied() >= 1)
+    assert.notEqual(result.code, 'source-changed-during-apply', JSON.stringify(result))
+    assert.notEqual(result.code, 'concurrent-source-writer', JSON.stringify(result))
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate, 'the good apply was not undone')
+    if (result.status !== 'applied') {
+      assert.deepEqual([result.status, result.code, during.object.outcomeUnknown], ['conflict', 'apply-outcome-unknown', true], JSON.stringify(result))
+      const recovered = (await w.sourceApply().recover()).recovered
+      assert.deepEqual(recovered.map((item) => [item.status, item.code]), [['applied', 'applied-after-restart']], JSON.stringify(recovered))
+    }
+    assert.equal((await w.sourceApply().show(edit.editId)).operation.state, 'applied')
+  }
+
+  // 3. The same denial of the displaced file's digest with a good exchange back available: not a fabricated writer.
+  {
+    const { w, sourceFile, candidate, edit } = world()
+    let opens = 0
+    const deny = denyOpen((file) => file.endsWith('.candidate') && (opens += 1) === 3)
+    const result = await w.sourceApply().apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    deny.restore()
+    assert.equal(deny.denied(), 1)
+    assert.notEqual(result.code, 'concurrent-source-writer', JSON.stringify(result))
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate, 'the good apply was not undone by an exchange back')
+    assert.equal((await w.sourceApply().show(edit.editId)).operation.state, 'applied', JSON.stringify(result))
+  }
+
+  // 4. Once the apply is settled, a typed failure of the late-writer check never turns the answer into a refusal.
+  {
+    const { w, sourceFile, candidate, edit } = world()
+    const result = await w.sourceApply({}, { ...SOURCE_APPLY_PRIMITIVES, lateWriterCheck: () => { throw new PublicationRefusal('recovery-object-corrupt', 'synthetic') } }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    assert.deepEqual([result.status, result.code, result.lateWriterCheck?.status], ['applied', 'applied', 'unavailable'], JSON.stringify(result))
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate)
+    assert.equal((await w.sourceApply().show(edit.editId)).object.outcomeUnknown, false)
+  }
+})
+
 test('apply recovery: a candidate path that may not be looked at is reported for its own record and delays no other interrupted apply', needsExchange, async (t) => {
   const world = raceWorld(t, 2)
   const crashAt = (index) => world.sourceApply({ leasePid: GONE_HOLDER_PID, crash: (step) => { if (step === 'exchanged') throw new Error('crash at exchanged') } }).apply({ editId: world.editOf(`race-room:round-${index}`).editId, mode: 'manual' })

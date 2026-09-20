@@ -145,11 +145,13 @@ function digestOrNull(file) {
   try { return sha256Digest(readNoFollow(file)) } catch (error) {
     if (error.code === 'ENOENT') return null
     // A file this process may not read is not bytes this module knows either: it is kept and never judged ours.
-    if (NOT_A_FILE.has(error.code) || error.code === 'ELOOP' || UNREADABLE.has(error.code)) return 'unreadable'
+    if (NOT_A_FILE.has(error.code) || error.code === 'ELOOP') return 'unreadable'
+    // Permission or I/O: this process could not look. That proves nothing about the file, unlike the values above.
+    if (UNREADABLE.has(error.code)) return 'denied'
     throw error
   }
 }
-const presentOf = (digest) => (digest === 'unreadable' ? null : digest)
+const presentOf = (digest) => (digest === 'unreadable' || digest === 'denied' ? null : digest)
 
 // No GIT_* variable of the caller reaches a git that is asked about a repository.
 const gitEnvironment = (env) => ({ ...Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith('GIT_'))), GIT_OPTIONAL_LOCKS: '0' })
@@ -171,6 +173,8 @@ export const SOURCE_APPLY_PRIMITIVES = Object.freeze({
   commit: ({ candidatePath, sourcePath, exchange }) => exchange(candidatePath, sourcePath),
   // A concurrent writer's bytes go back to the source path.
   exchangeBack: ({ candidatePath, sourcePath, exchange }) => exchange(candidatePath, sourcePath),
+  // The late-writer check after a durable apply; a test may make it fail to prove the answer stays applied.
+  lateWriterCheck: (run) => run(),
   // The displaced source is moved to its recovery name, never removed.
   keepDisplaced: ({ from, to }) => { fs.renameSync(from, to); syncPrivateDirectory(path.dirname(to)) },
   // Whether git ignores the path: true, false, or null when git cannot say.
@@ -461,7 +465,12 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       try {
         const located = locateSource({ project: workspace.project, repoId: record.repoId, relative: record.sourcePath, managedRoots: [workspace.workspaceRoot, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, gitDirectory: rules.gitDirectory, env })
         sourceDigest = digestOrNull(located.absolute)
-      } catch (error) { if (!(error instanceof ApplyRefusal)) throw error }
+      } catch (error) {
+        if (!(error instanceof ApplyRefusal)) throw error
+        // Not being allowed to look at the source is not a state of the source: nothing is settled from it.
+        if (error.code === 'source-unreadable' || error.code === 'recovery-state-unreadable') refuse('recovery-state-unreadable', { cause: error.detail?.cause ?? 'source' })
+      }
+      if (sourceDigest === 'denied') refuse('recovery-state-unreadable', { cause: 'source' })
       const refused = (code, disposition, recoveryRefs = []) => {
         workspace.objects.recordRefused(lease, { idempotencyKey: record.idempotencyKey, code, presentSourceDigest: presentOf(sourceDigest), disposition, applyId: record.applyId, policy: intent.policy, ...(recoveryRefs.length > 0 ? { recoveryRefs } : {}) })
         return finish({ status: CONFLICT_CODES.has(code) ? 'conflict' : 'refused', code, recoveryRefs })
@@ -475,6 +484,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       if (atCandidate === 'displaced-bytes') {
         // The exchange happened and the move to the recovery name did not.
         const digestAtMove = digestOrNull(candidatePath)
+        if (digestAtMove === 'denied') refuse('recovery-state-unreadable', { cause: 'displaced' })
         const backupRef = keepBackup(workspace, record, { from: candidatePath, digestAtMove })
         return digestAtMove === record.baseSourceDigest && sourceDigest === record.newSourceDigest ? applied(backupRef) : refused('apply-interrupted-needs-person', 'conflicted', [backupRef])
       }
@@ -483,6 +493,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       if (receipt || lstatOrNull(displaced) !== null) {
         const backupRef = receipt?.displacedRef ?? recordDisplaced({ store, journalId: record.applyId, unit: UNIT, notePath: null, displacedPath: displaced, baseDigest: record.baseSourceDigest, at: isoTime(clock) }).displacedRef
         const digestAtMove = receipt?.digestAtMove ?? digestOrNull(displaced)
+        if (digestAtMove === 'denied') refuse('recovery-state-unreadable', { cause: 'backup' })
         return digestAtMove === record.baseSourceDigest && sourceDigest === record.newSourceDigest ? applied(backupRef) : refused('apply-interrupted-needs-person', 'conflicted', [backupRef])
       }
       const refs = retireCandidate(workspace, record)
@@ -628,6 +639,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
           const refs = [...retireCandidate(workspace, record), ...(options.recoveryRefs ?? [])]
           workspace.objects.recordRefused(lease, { idempotencyKey: key, code, presentSourceDigest: options.presentSourceDigest ?? null, disposition: options.disposition ?? 'retained', applyId, policy: decision.policy, ...(refs.length > 0 ? { recoveryRefs: refs } : {}) })
           settleRecord(workspace, applyId, { status: CONFLICT_CODES.has(code) ? 'conflict' : 'refused', code, recoveryRefs: refs })
+          settleAfterExchange = null
           return refuse(code, { ...detail, applyId, ...(refs.length > 0 ? { recoveryRefs: refs } : {}) })
         }
 
@@ -635,23 +647,12 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         // Revoked, paused or replaced since it was decided: nothing is written.
         if (rules.decideAgain) { const again = decideNow(); if (!again.allowed) abandon(again.code, {}, again.detail) }
 
-        try { rules.commit({ candidatePath, sourcePath: located.absolute, exchange }) } catch (error) {
-          if (!isTyped(error) && error?.name !== 'ExchangeRefusal') throw error
-          // An exchange that says it failed is not believed either way: the files are read. Only the candidate still
-          // at its path beside the source as it was read says that nothing was exchanged. Anything else is decided
-          // exactly as restart recovery decides it, from digests on disk, so an exchange that did take place is
-          // recorded as applied, with its backup, and never as a refusal.
-          const presentSourceDigest = digestOrNull(located.absolute)
-          if (digestOrNull(candidatePath) === newSourceDigest && presentSourceDigest === sourceDigest) abandon('exchange-unavailable', { presentSourceDigest }, { cause: error.code })
-          const settled = settleInterrupted(workspace, lease, record, workspace.objects.stateOf(identity))
-          if (settled.status !== 'applied') refuse(settled.code, { applyId, cause: error.code, ...((settled.recoveryRefs ?? []).length > 0 ? { recoveryRefs: settled.recoveryRefs } : {}) })
-          return resultOf(edit, 'applied', settled.code, { replayed: false, idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef: settled.backupRef })
-        }
         const appliedAnswer = (settled) => resultOf(edit, 'applied', settled.code, { replayed: false, idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef: settled.backupRef })
-        // The source has been exchanged. A refusal is an answer that nothing was written, so from here a typed failure
-        // that leaves the intent open is settled from the digests on disk exactly as restart recovery would, and an
-        // apply that did happen is answered as applied. If even that cannot be done the answer says so.
-        settleAfterExchange = (error) => {
+        // Once the source may have been exchanged, a refusal (an answer that nothing was written) is no longer honest:
+        // a typed failure that leaves the intent open is settled from the digests on disk exactly as restart recovery
+        // would, an apply that did happen is answered as applied, and if even that cannot be done the answer says so.
+        // Armed from the first exchange until the outcome is durable, so it never speaks of a settled record.
+        const settleFromDisk = (error) => {
           let state
           try { state = workspace.objects.stateOf(identity) } catch (again) { if (!isTyped(again)) throw again; state = null }
           if (state !== null && state.intent === null) return refusalResult(edit, error)
@@ -665,30 +666,54 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
             return resultOf(edit, 'conflict', 'apply-outcome-unknown', { applyId, detail: { cause: again.code ?? error.code } })
           }
         }
+        try { rules.commit({ candidatePath, sourcePath: located.absolute, exchange }) } catch (error) {
+          if (!isTyped(error) && error?.name !== 'ExchangeRefusal') throw error
+          // An exchange that says it failed is not believed either way: the files are read. Only the candidate still
+          // at its path beside the source as it was read says that nothing was exchanged. Anything else is decided
+          // exactly as restart recovery decides it, from digests on disk, so an exchange that did take place is
+          // recorded as applied, with its backup, and never as a refusal.
+          const presentSourceDigest = digestOrNull(located.absolute)
+          if (digestOrNull(candidatePath) === newSourceDigest && presentSourceDigest === sourceDigest) abandon('exchange-unavailable', { presentSourceDigest }, { cause: error.code })
+          // The digests did not show the clean state: from here the exchange may have taken place.
+          settleAfterExchange = settleFromDisk
+          return settleAfterExchange(error)
+        }
+        settleAfterExchange = settleFromDisk
         seam('exchanged', { applyId })
 
         // What the exchange displaced is the truth about what the source was at that instant.
         const displacedDigest = digestOrNull(candidatePath)
+        // Not being able to look is not evidence of a change: nothing is decided from it. The settlement reads again.
+        if (displacedDigest === 'denied') return settleAfterExchange(new ApplyRefusal('recovery-state-unreadable', { cause: 'displaced-unreadable' }))
         if (displacedDigest === sourceDigest) {
           syncPrivateDirectory(path.dirname(located.absolute))
           const backupRef = keepBackup(workspace, record, { from: candidatePath, digestAtMove: displacedDigest })
           seam('backup-recorded', { applyId })
           const written = digestOrNull(located.absolute)
+          if (written === 'denied') return settleAfterExchange(new ApplyRefusal('source-unreadable', { cause: 'source-unreadable-after-exchange' }))
           if (written !== newSourceDigest) {
             // Somebody wrote the source again already. The old source and the candidate are both retained.
             const kept = store.retainObject(newSourceBytes).ref
             workspace.objects.recordRefused(lease, { idempotencyKey: key, code: 'source-changed-during-apply', presentSourceDigest: presentOf(written), disposition: 'conflicted', applyId, policy: decision.policy, recoveryRefs: [backupRef, kept] })
             settleRecord(workspace, applyId, { status: 'conflict', code: 'source-changed-during-apply', recoveryRefs: [backupRef, kept] })
+            settleAfterExchange = null
             refuse('source-changed-during-apply', { applyId, recoveryRefs: [backupRef, kept] })
           }
           workspace.objects.recordApplied(lease, { idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef })
           seam('applied-recorded', { applyId })
           settleRecord(workspace, applyId, { status: 'applied', code: 'applied', backupRef })
+          settleAfterExchange = null
           seam('settled', { applyId })
           workspace.objects.releaseLease(lease)
           lease = null
           if (quietPeriodMs > 0) await sleep(quietPeriodMs)
-          const lateWriters = recheckBackups(workspace, [record])
+          // The apply is durable. A typed failure of the late-writer check does not turn it into a refusal: the answer
+          // is applied, and the check is repeated by the engine on later ticks.
+          let lateWriters
+          try { lateWriters = rules.lateWriterCheck(() => recheckBackups(workspace, [record])) } catch (error) {
+            if (!isTyped(error)) throw error
+            return resultOf(edit, 'applied', 'applied', { replayed: false, idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef, lateWriterCheck: { status: 'unavailable', code: error.code } })
+          }
           return resultOf(edit, 'applied', lateWriters.length > 0 ? 'source-changed-after-apply' : 'applied', {
             replayed: false, idempotencyKey: key, oldSourceDigest: sourceDigest, newSourceDigest, actor: decision.actor, policy: decision.policy, applyId, backupRef,
             ...(lateWriters.length > 0 ? { lateWriters } : {}),
@@ -702,7 +727,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         // settled from what is on disk; anything else (a crash, a programming error) propagates.
         let theirs = null
         try {
-          theirs = displacedDigest !== null && displacedDigest !== 'unreadable' ? store.retainObject(readNoFollow(candidatePath)).ref : null
+          theirs = displacedDigest !== null && displacedDigest !== 'unreadable' && displacedDigest !== 'denied' ? store.retainObject(readNoFollow(candidatePath)).ref : null
           rules.exchangeBack({ candidatePath, sourcePath: located.absolute, exchange })
         } catch (error) {
           if (!isTyped(error) && error?.name !== 'ExchangeRefusal' && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error
