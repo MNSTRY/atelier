@@ -479,7 +479,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       const workspaceDir = path.join(temp, 'workspace')
       const fixture = materializeFixtureWorkspace(workspaceDir, { scopes: plan.app === 'small-fixture' ? undefined : [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }, SCOPED_SCOPE] })
       const full = shortLayout(createLayout)
-      const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-full'), vaultRoot: full.vault })
+      const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-full'), vaultRoot: full.vault , withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
       const { app, launchedAtMs } = await launch(full)
       capabilities = await discoverCapabilities(app)
       timingsByGate[plan.gates[0]] = { launchedAt: new Date(launchedAtMs).toISOString(), derivation: derived.timings }
@@ -492,7 +492,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
         const memberships = [await runAp02Membership({ instance: app, label: 'full', vaultRoot: full.vault, manifest: derived.manifest })]
         await app.quit()
         const scopedLayout = shortLayout(createLayout)
-        const scoped = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-scoped'), vaultRoot: scopedLayout.vault, scope: SCOPED_SCOPE })
+        const scoped = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-scoped'), vaultRoot: scopedLayout.vault, scope: SCOPED_SCOPE , withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
         const second = await launch(scopedLayout)
         memberships.push(await runAp02Membership({ instance: second.app, label: 'scoped', vaultRoot: scopedLayout.vault, manifest: scoped.manifest }))
         evidenceByGate.G13 = ap02Evidence(memberships, focusRecord({ fullManifest: derived.manifest }))
@@ -504,7 +504,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       const workspaceDir = path.join(temp, 'workspace')
       const fixture = materializeFixtureWorkspace(workspaceDir)
       const layout = shortLayout(createLayout)
-      await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state'), vaultRoot: layout.vault })
+      await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state'), vaultRoot: layout.vault , withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
       const { app } = await launch(layout)
       capabilities = await discoverCapabilities(app)
       plan = planProcedure(plan.procedureId, { receiptDir, operator, isolatedHome: layout.home, workspaceDir })

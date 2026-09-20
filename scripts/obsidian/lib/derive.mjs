@@ -67,11 +67,17 @@ export function loadProject(projectFile) {
 // generation and what was written. Repeated calls continue the same recovery
 // store, so a second call is the warm path: prior manifest, expected
 // generation, replace units only where bytes changed.
-export async function deriveWorkspace({ projectFile, stateRoot, vaultRoot, scope = FULL_SCOPE, workspaceId = DEFAULT_WORKSPACE_ID, audienceAllow = ['team'], adapter = absentAdapter(), quietPeriodMs = 0, clock = () => new Date(), seams = createProductionSeams(), sampler = null } = {}) {
+// `withheld` lists node identities the fixture withholds by eligibility, on
+// top of the production rule; `sentinels` are strings that must not appear in
+// any vault byte afterwards, so a derivation that leaked a withheld node can
+// never become evidence.
+export async function deriveWorkspace({ projectFile, stateRoot, vaultRoot, scope = FULL_SCOPE, workspaceId = DEFAULT_WORKSPACE_ID, audienceAllow = ['team'], adapter = absentAdapter(), quietPeriodMs = 0, clock = () => new Date(), seams = createProductionSeams(), sampler = null, withheld = [], sentinels = [] } = {}) {
   const timings = {}
   sampler?.sample('derive-start')
   const project = await timed(timings, 'loadProjectMs', () => loadProject(projectFile))
-  const graph = await timed(timings, 'buildGraphMs', () => seams.buildGraph({ project, eligibility: DEFAULT_ELIGIBILITY }))
+  const withheldIds = new Set(withheld)
+  const eligibility = { ...DEFAULT_ELIGIBILITY, isEligible: (node) => !withheldIds.has(node?.id) && DEFAULT_ELIGIBILITY.isEligible(node) === true }
+  const graph = await timed(timings, 'buildGraphMs', () => seams.buildGraph({ project, eligibility }))
   sampler?.sample('graph-built')
   const configDigest = sha256Digest(fs.readFileSync(projectFile))
   const snapshot = await timed(timings, 'captureSnapshotMs', () => seams.captureSnapshot({ project, graph, workspaceId, index: new Map(), configDigest, capturedAt: clock().toISOString() }))
@@ -86,6 +92,15 @@ export async function deriveWorkspace({ projectFile, stateRoot, vaultRoot, scope
   sampler?.sample('view-published')
   timings.totalMs = Math.round(Object.values(timings).reduce((sum, value) => sum + value, 0) * 1000) / 1000
   const written = bytesUnder(vaultRoot)
+  // A derivation that carries any withheld sentinel into the vault is not
+  // evidence of anything and is refused here, before a receipt can name it.
+  if (sentinels.length > 0) {
+    for (const file of walkVault(vaultRoot)) {
+      const text = fs.readFileSync(file).toString('latin1')
+      for (const sentinel of sentinels) if (text.includes(sentinel)) throw new Error(`withheld sentinel reached the vault: ${path.relative(vaultRoot, file)}`)
+      if (sentinels.some((sentinel) => path.relative(vaultRoot, file).includes(sentinel))) throw new Error(`withheld sentinel names a vault path: ${path.relative(vaultRoot, file)}`)
+    }
+  }
   return {
     timings,
     quietPeriodMs,
@@ -102,3 +117,10 @@ export async function deriveWorkspace({ projectFile, stateRoot, vaultRoot, scope
 }
 
 export { PROTOCOL_ID, createRecoveryStore }
+
+function walkVault(root) {
+  const found = []
+  const walk = (dir) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, entry.name); if (entry.isDirectory()) walk(full); else if (entry.isFile()) found.push(full) } }
+  walk(root)
+  return found
+}

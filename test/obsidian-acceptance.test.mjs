@@ -1107,3 +1107,18 @@ test('verify-receipts and generate-scale command lines: exit codes on a complete
   assert.deepEqual({ code: planOnly.code, plan: planOnly.stdout.includes('plan only'), sleep: planOnly.stdout.includes('sleep-wake-clock'), nothingWritten: !fs.existsSync(path.join(dir, 'receipts')) }, { code: 0, plan: true, sleep: true, nothingWritten: true })
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
+
+test('the desktop derivation applies the fixture\'s withheld list and refuses a vault that carries a sentinel', async (t) => {
+  const { deriveWorkspace, materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-derive-withheld-'))
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }))
+  const fixture = materializeFixtureWorkspace(path.join(temp, 'workspace'))
+  assert.ok(fixture.withheldByEligibility.length > 0 && fixture.sentinels.length > 0)
+  const vault = path.join(temp, 'vault')
+  const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state'), vaultRoot: vault, withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
+  assert.equal(derived.state, 'committed')
+  const names = fs.readdirSync(path.join(vault, 'notes'))
+  for (const sentinel of fixture.sentinels) assert.ok(!names.some((name) => name.includes(sentinel)), `${sentinel} must not name a note`)
+  // Control: without the withheld list the sentinel reaches the vault and the derivation refuses to be evidence.
+  await assert.rejects(() => deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-2'), vaultRoot: path.join(temp, 'vault-2'), sentinels: fixture.sentinels }), /withheld sentinel/)
+})
