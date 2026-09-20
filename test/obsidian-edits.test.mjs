@@ -2534,6 +2534,249 @@ test('an exchange that reports a failure is not believed: the outcome is read fr
   }
 })
 
+test('apply: nothing between the first exchange and the exchange back can return with the outcome left unknown: a typed failure of the exchange back, or the displaced file vanishing before it is retained, is settled from the digests on disk', needsExchange, async (t) => {
+  const theirs = Buffer.from('another program wrote this between the read and the exchange\n')
+  async function round(name, arrange) {
+    const world = raceWorld(t, 1)
+    const sourceFile = world.source('race-room/rounds/round-0.md')
+    const base = fs.readFileSync(sourceFile)
+    const candidate = replaceNth(base, 'Original sentence 0.', 'Edited sentence 0.')
+    const edit = world.editOf('race-room:round-0')
+    const { primitives = {}, after = () => {} } = arrange(t)
+    const result = await world.sourceApply({ beforeExchange: async () => { fs.writeFileSync(sourceFile, theirs) } }, { ...SOURCE_APPLY_PRIMITIVES, ...primitives }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    after()
+    const shown = await world.sourceApply().show(edit.editId)
+    const kept = filesUnder(world.recovery()).filter((file) => fs.readFileSync(file).equals(theirs))
+    return { name, result, shown, kept, atSource: fs.readFileSync(sourceFile), base, candidate }
+  }
+  const typedFailure = () => ({ primitives: { exchangeBack: () => { throw new PublicationRefusal('exchange-failed', 'synthetic typed failure of the second exchange') } } })
+  const typed = await round('typed failure of the exchange back', typedFailure)
+  assert.deepEqual([typed.result.status, typed.result.code], ['conflict', 'apply-interrupted-needs-person'], JSON.stringify(typed.result))
+  assert.equal(typed.shown.object.outcomeUnknown, false, 'the intent is settled, not left for a later call to find')
+  // The documented consequence: the exchange back did not happen, so the source path keeps the candidate, whole, and
+  // the other program's bytes are retained with the recovery references the person is given.
+  assert.deepEqual(typed.atSource, typed.candidate, 'the source is one whole version: the candidate')
+  assert.ok(typed.kept.length >= 1, 'the bytes the other program wrote are retained')
+  assert.ok((typed.result.detail?.recoveryRefs ?? typed.result.recoveryRefs ?? []).length >= 1, 'and the person is told where')
+
+  // The candidate path is opened without following a link four times: to write it, to verify what was written, after
+  // the exchange for the digest of what was displaced, and once more to retain those bytes. The fourth finds it gone.
+  const vanished = await round('the displaced file gone before it is retained', (context) => {
+    let opens = 0
+    const gone = failOnce(context, 'openSync', (file, flags) => typeof file === 'string' && file.endsWith('.candidate') && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && (opens += 1) === 4, 'ENOENT')
+    return { after: () => { assert.equal(gone.failed(), 1, 'the injected failure fired'); gone.restore() } }
+  })
+  assert.equal(vanished.result.status === 'refused' || vanished.result.status === 'conflict', true, JSON.stringify(vanished.result))
+  assert.ok(SOURCE_APPLY_REFUSALS.includes(vanished.result.code), `${vanished.result.code} is a declared code`)
+  assert.equal(vanished.shown.object.outcomeUnknown, false, 'settled from disk, not thrown with the intent open')
+  assert.ok(vanished.atSource.equals(vanished.candidate) || vanished.atSource.equals(theirs) || vanished.atSource.equals(vanished.base), 'the source is one whole version')
+  assert.ok(vanished.kept.length >= 1 || vanished.atSource.equals(theirs), 'the other program\'s bytes are in the source or retained')
+})
+
+test('apply: once the source has been exchanged no typed failure returns a plain refusal with the intent open: the outcome is settled from the digests on disk, and an apply that did happen is answered as applied', needsExchange, async (t) => {
+  const typedFailure = () => { throw new PublicationRefusal('exchange-failed', 'synthetic typed failure of the second exchange') }
+  const noFollowOpenOf = (suffix) => (file, flags) => typeof file === 'string' && file.endsWith(suffix) && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0
+  async function round({ writer, primitives = {}, inject }) {
+    const world = raceWorld(t, 1)
+    const sourceFile = world.source('race-room/rounds/round-0.md')
+    const base = fs.readFileSync(sourceFile)
+    const candidate = replaceNth(base, 'Original sentence 0.', 'Edited sentence 0.')
+    const theirs = Buffer.from('another program wrote this between the read and the exchange\n')
+    const edit = world.editOf('race-room:round-0')
+    const injected = inject(t)
+    const result = await world.sourceApply({ beforeExchange: async () => { if (writer) fs.writeFileSync(sourceFile, theirs) } }, { ...SOURCE_APPLY_PRIMITIVES, ...primitives }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    injected.restore()
+    assert.equal(injected.failed(), 1, 'the injected failure fired')
+    const shown = await world.sourceApply().show(edit.editId)
+    return { result, shown, atSource: fs.readFileSync(sourceFile), base, candidate, theirs, world }
+  }
+
+  // No other writer at all. The read of what the exchange displaced fails once, so the run takes the concurrent-writer
+  // branch, and the exchange back fails too. On disk the apply happened: that is the answer.
+  let opens = 0
+  const blindThenFailed = await round({ writer: false, primitives: { exchangeBack: typedFailure }, inject: (context) => failOnce(context, 'openSync', (file, flags) => noFollowOpenOf('.candidate')(file, flags) && (opens += 1) === 3, 'EACCES') })
+  assert.deepEqual([blindThenFailed.result.status, blindThenFailed.result.code], ['applied', 'applied-after-restart'], JSON.stringify(blindThenFailed.result))
+  assert.deepEqual(blindThenFailed.atSource, blindThenFailed.candidate)
+  assert.deepEqual(fs.readFileSync(path.join(blindThenFailed.world.workspaceRoot(), blindThenFailed.result.backupRef)), blindThenFailed.base, 'the old source is the retained backup')
+  assert.deepEqual([blindThenFailed.shown.object.outcomeUnknown, blindThenFailed.shown.operation.state], [false, 'applied'])
+
+  // The apply is good, and keeping its backup meets a path it may not look at, once. Not a refusal with the intent open.
+  const backupDenied = await round({ writer: false, inject: (context) => failOnce(context, 'lstatSync', (file) => typeof file === 'string' && file.endsWith('displaced.bin'), 'EIO') })
+  assert.equal(backupDenied.shown.object.outcomeUnknown, false, `settled, not returned open: ${JSON.stringify(backupDenied.result)}`)
+  assert.deepEqual([backupDenied.result.status, backupDenied.result.code], ['applied', 'applied-after-restart'], JSON.stringify(backupDenied.result))
+  assert.deepEqual(backupDenied.atSource, backupDenied.candidate)
+
+  // An exchange back that took place and then reported a failure: the other program's bytes are back at the source,
+  // the candidate is retired, and that is what the person is told.
+  const swappedThenFailed = await round({ writer: true, primitives: { exchangeBack: ({ candidatePath, sourcePath, exchange }) => { exchange(candidatePath, sourcePath); typedFailure() } }, inject: () => ({ restore() {}, failed: () => 1 }) })
+  assert.deepEqual([swappedThenFailed.result.status, swappedThenFailed.result.code], ['refused', 'interrupted-before-exchange'], JSON.stringify(swappedThenFailed.result))
+  assert.deepEqual(swappedThenFailed.atSource, swappedThenFailed.theirs, 'the source holds what the other program wrote')
+  assert.deepEqual(filesUnder(swappedThenFailed.world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'the candidate was retired')
+  assert.equal(swappedThenFailed.shown.object.outcomeUnknown, false)
+  for (const item of [blindThenFailed, backupDenied, swappedThenFailed]) assert.ok(item.result.status === 'applied' || SOURCE_APPLY_REFUSALS.includes(item.result.code), `${item.result.code} is a declared code`)
+})
+
+test('apply: when the settlement after an exchange cannot be carried out either, the answer is apply-outcome-unknown, the intent stays open, and recover decides once the path can be looked at', needsExchange, async (t) => {
+  const world = raceWorld(t, 1)
+  const sourceFile = world.source('race-room/rounds/round-0.md')
+  const base = fs.readFileSync(sourceFile)
+  const candidate = replaceNth(base, 'Original sentence 0.', 'Edited sentence 0.')
+  const edit = world.editOf('race-room:round-0')
+  const original = fs.lstatSync
+  let denied = 0
+  fs.lstatSync = function patched(file, ...rest) { if (typeof file === 'string' && file.endsWith('displaced.bin')) { denied += 1; throw Object.assign(new Error('EIO: synthetic'), { code: 'EIO' }) } return original.call(this, file, ...rest) }
+  const restore = () => { fs.lstatSync = original }
+  t.after(restore)
+  const result = await world.sourceApply().apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+  const during = await world.sourceApply().show(edit.editId)
+  restore()
+  assert.ok(denied >= 2, 'the apply and its settlement both met the path')
+  assert.deepEqual([result.status, result.code, SOURCE_APPLY_REFUSALS.includes(result.code)], ['conflict', 'apply-outcome-unknown', true], JSON.stringify(result))
+  assert.equal(during.object.outcomeUnknown, true, 'nothing was guessed: the intent is open and says so')
+  assert.deepEqual(fs.readFileSync(sourceFile), candidate, 'the source was exchanged')
+  const recovered = (await world.sourceApply().recover()).recovered
+  assert.deepEqual(recovered.map((item) => [item.status, item.code]), [['applied', 'applied-after-restart']], JSON.stringify(recovered))
+  assert.deepEqual([(await world.sourceApply().show(edit.editId)).operation.state, fs.readFileSync(sourceFile).equals(candidate)], ['applied', true])
+  assert.ok(filesUnder(world.recovery()).some((file) => fs.readFileSync(file).equals(base)), 'the old source is retained')
+})
+
+test('apply: the settlement is armed from the first exchange that reports a failure, a read this process is denied decides nothing, and a settled apply is never answered as unknown', needsExchange, async (t) => {
+  const failure = () => Object.assign(new Error('synthetic exchange failure'), { name: 'ExchangeRefusal', code: 'exchange-failed' })
+  const denyLstat = (suffix) => { const original = fs.lstatSync; let denied = 0; fs.lstatSync = function patched(file, ...rest) { if (typeof file === 'string' && file.endsWith(suffix)) { denied += 1; throw Object.assign(new Error('EIO: synthetic'), { code: 'EIO' }) } return original.call(this, file, ...rest) }; const restore = () => { fs.lstatSync = original }; t.after(restore); return { restore, denied: () => denied } }
+  const denyOpen = (when) => { const original = fs.openSync; let denied = 0; fs.openSync = function patched(file, flags, ...rest) { if (typeof file === 'string' && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && when(file)) { denied += 1; throw Object.assign(new Error('EIO: synthetic'), { code: 'EIO' }) } return original.call(this, file, flags, ...rest) }; const restore = () => { fs.openSync = original }; t.after(restore); return { restore, denied: () => denied } }
+  function world(index) {
+    const w = raceWorld(t, 1)
+    const sourceFile = w.source('race-room/rounds/round-0.md')
+    const base = fs.readFileSync(sourceFile)
+    return { w, sourceFile, base, candidate: replaceNth(base, 'Original sentence 0.', 'Edited sentence 0.'), edit: w.editOf('race-room:round-0') }
+  }
+
+  // 1. The first exchange swaps and then reports a failure; the settlement it runs meets a path it cannot look at.
+  {
+    const { w, sourceFile, base, candidate, edit } = world()
+    const deny = denyLstat('displaced.bin')
+    const result = await w.sourceApply({}, { ...SOURCE_APPLY_PRIMITIVES, commit: ({ candidatePath, sourcePath, exchange }) => { exchange(candidatePath, sourcePath); throw failure() } }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    const during = await w.sourceApply().show(edit.editId)
+    deny.restore()
+    assert.ok(deny.denied() >= 1)
+    assert.deepEqual([result.status, result.code], ['conflict', 'apply-outcome-unknown'], JSON.stringify(result))
+    assert.equal(during.object.outcomeUnknown, true, 'the intent is open and the answer says so')
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate)
+    const recovered = (await w.sourceApply().recover()).recovered
+    assert.deepEqual(recovered.map((item) => [item.status, item.code]), [['applied', 'applied-after-restart']], JSON.stringify(recovered))
+    assert.ok(filesUnder(w.recovery()).some((file) => fs.readFileSync(file).equals(base)), 'the old source is retained')
+  }
+
+  // 2. A good exchange, then the source cannot be read to verify it: that is not a change of the source.
+  {
+    const { w, sourceFile, candidate, edit } = world()
+    let armed = false
+    const deny = denyOpen((file) => armed && path.resolve(file) === path.resolve(sourceFile))
+    const result = await w.sourceApply({ beforeExchange: async () => { armed = true } }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    const during = await w.sourceApply().show(edit.editId)
+    deny.restore()
+    assert.ok(deny.denied() >= 1)
+    assert.notEqual(result.code, 'source-changed-during-apply', JSON.stringify(result))
+    assert.notEqual(result.code, 'concurrent-source-writer', JSON.stringify(result))
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate, 'the good apply was not undone')
+    if (result.status !== 'applied') {
+      assert.deepEqual([result.status, result.code, during.object.outcomeUnknown], ['conflict', 'apply-outcome-unknown', true], JSON.stringify(result))
+      const recovered = (await w.sourceApply().recover()).recovered
+      assert.deepEqual(recovered.map((item) => [item.status, item.code]), [['applied', 'applied-after-restart']], JSON.stringify(recovered))
+    }
+    assert.equal((await w.sourceApply().show(edit.editId)).operation.state, 'applied')
+  }
+
+  // 3. The same denial of the displaced file's digest with a good exchange back available: not a fabricated writer.
+  {
+    const { w, sourceFile, candidate, edit } = world()
+    let opens = 0
+    const deny = denyOpen((file) => file.endsWith('.candidate') && (opens += 1) === 3)
+    const result = await w.sourceApply().apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    deny.restore()
+    assert.equal(deny.denied(), 1)
+    assert.notEqual(result.code, 'concurrent-source-writer', JSON.stringify(result))
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate, 'the good apply was not undone by an exchange back')
+    assert.equal((await w.sourceApply().show(edit.editId)).operation.state, 'applied', JSON.stringify(result))
+  }
+
+  // 4. Once the apply is settled, a typed failure of the late-writer check never turns the answer into a refusal.
+  {
+    const { w, sourceFile, candidate, edit } = world()
+    const result = await w.sourceApply({}, { ...SOURCE_APPLY_PRIMITIVES, lateWriterCheck: () => { throw new PublicationRefusal('recovery-object-corrupt', 'synthetic') } }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    assert.deepEqual([result.status, result.code, result.lateWriterCheck?.status], ['applied', 'applied', 'unavailable'], JSON.stringify(result))
+    assert.deepEqual(fs.readFileSync(sourceFile), candidate)
+    assert.equal((await w.sourceApply().show(edit.editId)).object.outcomeUnknown, false)
+  }
+})
+
+test('apply recovery: a candidate path that may not be looked at is reported for its own record and delays no other interrupted apply', needsExchange, async (t) => {
+  const world = raceWorld(t, 2)
+  const crashAt = (index) => world.sourceApply({ leasePid: GONE_HOLDER_PID, crash: (step) => { if (step === 'exchanged') throw new Error('crash at exchanged') } }).apply({ editId: world.editOf(`race-room:round-${index}`).editId, mode: 'manual' })
+  await assert.rejects(crashAt(0), /crash at/)
+  await assert.rejects(crashAt(1), /crash at/)
+  // The first candidate path whose directory is looked at answers EACCES once, as an unsearchable directory would.
+  const denied = failOnce(t, 'lstatSync', (file) => typeof file === 'string' && file.endsWith('exchange.candidate'), 'EACCES')
+  const first = (await world.sourceApply().recover()).recovered
+  denied.restore()
+  assert.equal(denied.failed(), 1, 'the injected failure fired')
+  assert.deepEqual(first.map((item) => [item.status, item.code]).sort(), [['applied', 'applied-after-restart'], ['refused', 'recovery-state-unreadable']], JSON.stringify(first))
+  // Nothing was guessed for the unreadable one: once it can be looked at, it settles from its digests like the other.
+  const second = (await world.sourceApply().recover()).recovered
+  assert.deepEqual(second.map((item) => [item.status, item.code]), [['applied', 'applied-after-restart']], JSON.stringify(second))
+  for (const index of [0, 1]) assert.ok(fs.readFileSync(world.source(`race-room/rounds/round-${index}.md`)).includes(`Edited sentence ${index}.`), 'both sources hold their applied edit')
+})
+
+test('apply: a file this process may not read refuses corpus-unreadable or source-unreadable with the cause, names no file, and writes nothing', { skip: process.platform === 'win32' || process.getuid?.() === 0 ? 'permission bits do not deny a read here' : needsExchange.skip }, async (t) => {
+  const world = raceWorld(t, 1)
+  const sourceFile = world.source('race-room/rounds/round-0.md')
+  const before = fs.readFileSync(sourceFile)
+  fs.chmodSync(sourceFile, 0o000)
+  t.after(() => { try { fs.chmodSync(sourceFile, 0o644) } catch { /* the world is removed anyway */ } })
+  const result = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  fs.chmodSync(sourceFile, 0o644)
+  assert.deepEqual([result.status, result.code, result.detail?.cause, SOURCE_APPLY_REFUSALS.includes(result.code)], ['refused', 'corpus-unreadable', 'EACCES', true], JSON.stringify(result))
+  assert.equal(/rounds|\.md/.test(JSON.stringify(result)), false, 'the refusal names no file')
+  // Readable while the graph is built, not at the moment of the apply: the source read has its own code.
+  // The apply opens the source without following a link; the graph's own read of the same file does not pass that flag.
+  const late = failOnce(t, 'openSync', (file, flags) => typeof file === 'string' && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && path.resolve(file) === path.resolve(sourceFile), 'EACCES')
+  fs.chmodSync(sourceFile, 0o644)
+  const second = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  late.restore()
+  assert.deepEqual([second.status, second.code, late.failed()], ['refused', 'source-unreadable', 1], JSON.stringify(second))
+  // A directory on the way to the source that may not be looked at, after the graph was built: the same answer, and
+  // not the code that speaks of recovery state.
+  const walk = failOnce(t, 'lstatSync', (file, options) => typeof file === 'string' && options?.throwIfNoEntry === false && path.resolve(file) === path.dirname(path.resolve(sourceFile)), 'EACCES')
+  const third = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  walk.restore()
+  assert.deepEqual([third.status, third.code, walk.failed()], ['refused', 'source-unreadable', 1], JSON.stringify(third))
+  // Denied only AFTER the source was read, while the note is prepared again: that is not another program writing.
+  const originalOpen = fs.openSync
+  let sourceOpens = 0
+  let deniedLater = 0
+  fs.openSync = function patched(file, flags, ...rest) {
+    if (typeof file === 'string' && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && path.resolve(file) === path.resolve(sourceFile) && (sourceOpens += 1) >= 2) { deniedLater += 1; throw Object.assign(new Error('EACCES: synthetic'), { code: 'EACCES' }) }
+    return originalOpen.call(this, file, flags, ...rest)
+  }
+  t.after(() => { fs.openSync = originalOpen })
+  const fourth = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  fs.openSync = originalOpen
+  assert.ok(deniedLater >= 1, 'every open of the source after the first was denied')
+  assert.notEqual(fourth.code, 'stale-source', JSON.stringify(fourth))
+  assert.deepEqual([fourth.status, fourth.code], ['refused', 'source-unreadable'], JSON.stringify(fourth))
+  // The candidate read back after it is written (its second no-follow open; the first writes it): a denial there is
+  // reported as a denial, not as a byte difference.
+  let candidateOpens = 0
+  const readBack = failOnce(t, 'openSync', (file, flags) => typeof file === 'string' && file.endsWith('.candidate') && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && (candidateOpens += 1) === 2, 'EIO')
+  const fifth = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  readBack.restore()
+  assert.equal(readBack.failed(), 1)
+  assert.deepEqual([fifth.status, fifth.code, fifth.detail?.cause], ['refused', 'recovery-state-unreadable', 'candidate-read-back'], JSON.stringify(fifth))
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'the candidate was retired')
+  assert.deepEqual(fs.readFileSync(sourceFile), before, 'the source is as it was')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was written')
+})
+
 // A file system call that fails once, for one path, the way it fails when another program removes or replaces what
 // was there a moment ago. `when` sees the arguments of the call.
 function failOnce(t, method, when, code) {
