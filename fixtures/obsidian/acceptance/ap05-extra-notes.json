@@ -1,0 +1,11 @@
+{
+  "description": "Two plain notes added to the materialization fixture for AP-05 only, so the stale and the structural edit each have an object of their own in the full view and outside the scoped view. Written by scripts/obsidian/lib/ap05.mjs into the synthetic workspace; never derived from a real corpus.",
+  "files": {
+    "north-desk/plans/quay-notes.md": {
+      "text": "---\ntitle: \"Quay notes\"\nkg:\n  id: \"north-desk:quay-notes\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Quay notes\n\nMoorings are checked at first light.\nThe log is kept in the [lantern log](lantern-log.md).\n"
+    },
+    "north-desk/plans/lantern-log.md": {
+      "text": "---\ntitle: \"Lantern log\"\nkg:\n  id: \"north-desk:lantern-log\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Lantern log\n\nThe lantern is lit at dusk and checked twice.\n"
+    }
+  }
+}

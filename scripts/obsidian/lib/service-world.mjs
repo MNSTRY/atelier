@@ -68,6 +68,23 @@ export function prepareWorkspace({ projectFile, dataRoot, env = stripProjectEnv(
   }
 }
 
+// Source apply and the proposal router ask git about each enrolled repository
+// (whether a source or the copy-only store is ignored), so a synthetic
+// workspace whose repositories are bare `.git` directories gives them no
+// answer. Each repository becomes a real, empty git repository that ignores
+// the proposal store; nothing is committed and no remote exists.
+export function initialiseRepositories(repositories, { run = childProcess.execFileSync } = {}) {
+  const initialised = []
+  for (const repo of repositories) {
+    const directory = typeof repo === 'string' ? repo : repo.path
+    fs.rmSync(path.join(directory, '.git'), { recursive: true, force: true })
+    run('git', ['init', '-q'], { cwd: directory, stdio: 'ignore' })
+    fs.writeFileSync(path.join(directory, '.gitignore'), '.atelier-proposals/\n')
+    initialised.push(directory)
+  }
+  return initialised
+}
+
 // Points an isolated instance's private profile at the vault the engine
 // maintains, so the app opens exactly that directory. The layout's own
 // synthetic vault directory is left where it is and never registered.
