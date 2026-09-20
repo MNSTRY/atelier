@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { buildCanonicalGraph } from '../../graph/graph.mjs'
+import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
 import { EMITTER_VERSION, createPreparationCache, prepareView, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
@@ -55,8 +55,9 @@ export function profileFor({ project, workspaceId, audienceAllow }) {
   return { schema: 'atelier-obsidian-corpus-profile/v1', workspaceId, repositories, audience: { allow: [...audienceAllow] } }
 }
 
-export function buildGraph({ project, eligibility }) {
-  const canonical = buildCanonicalGraph(project)
+// `cache` (createGraphFileCache) is the engine's per-file census cache; without it every source is parsed again.
+export function buildGraph({ project, eligibility, cache = null }) {
+  const canonical = buildCanonicalGraph(project, { fileCache: cache })
   if (!canonical.ok) refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
   return withEligibility(canonical, eligibility.isEligible, assetEligibilityFor({ graph: canonical, eligibility }))
 }
@@ -104,10 +105,11 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
   }
 }
 
-// The engine keeps one preparation cache per scope for as long as it runs and
-// hands it to prepareView on every tick, so a tick after a one-note change
-// emits that note and reuses the rest. The cache is derived, in-memory state:
-// a test may replace this seam with `() => null` to prepare every view in full.
+// The engine keeps one graph file cache and one preparation cache per scope
+// for as long as it runs, and hands them to buildGraph and prepareView on
+// every tick, so a tick after a one-note change parses that source and emits
+// that note and reuses the rest. Both caches are derived, in-memory state: a
+// test may replace either seam with `() => null` to build or prepare in full.
 export function createProductionSeams() {
-  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles, createPreparationCache }
+  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
 }

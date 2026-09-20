@@ -6,8 +6,11 @@ import {
   REPO_ACCESS_SCHEMA,
   VALID_RELATION_TYPES,
   buildKnowledgeGraph,
+  createGraphFileCache,
   parseYamlSubset,
 } from './knowledge-graph.mjs'
+
+export { createGraphFileCache }
 
 // Compatibility exports. Parsing, census, validation, and diagnostics all live
 // in knowledge-graph.mjs; this module only projects its canonical result into
@@ -123,10 +126,14 @@ const canonicalEdgeId = (edge) => JSON.stringify([edge.source, edge.type, edge.t
 // reported beside the graph, like link occurrences: `embeds` holds one record
 // per embed occurrence and `assets` each embedded file once. Neither adds a
 // node or an edge.
-export function buildCanonicalGraph(project, { isLinkTargetEligible, isAssetEligible } = {}) {
+// `fileCache` (createGraphFileCache) lets repeated builds of one workspace
+// reuse the per-file census and link scan of every Markdown source whose
+// bytes did not change; the result is the same as without it.
+export function buildCanonicalGraph(project, { isLinkTargetEligible, isAssetEligible, fileCache = null } = {}) {
   const { input, result } = canonicalBuild(project, {
     ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}),
     ...(isAssetEligible ? { isAssetEligible } : {}),
+    ...(fileCache ? { fileCache } : {}),
   })
   const canonical = result.workspaceGraph ?? { nodes: [], edges: [], diagnostics: [] }
   const occurrences = new Map()
@@ -154,6 +161,7 @@ export function buildCanonicalGraph(project, { isLinkTargetEligible, isAssetElig
     embeds,
     assets,
     linkDiagnostics: result.linkDiagnostics ?? [],
+    ...(result.fileCensus ? { fileCensus: result.fileCensus } : {}),
   }
 }
 

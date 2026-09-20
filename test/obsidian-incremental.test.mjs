@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { buildCanonicalGraph } from '../src/graph/graph.mjs'
+import { buildCanonicalGraph, createGraphFileCache } from '../src/graph/graph.mjs'
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { createPreparationCache, prepareView, sha256Digest, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 
@@ -330,7 +330,69 @@ for (const seed of [1, 2, 3]) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. The cache's own contract
+// 3. The graph stage: a per-file census cache keyed by content digest
+// ---------------------------------------------------------------------------
+
+const comparableGraph = (graph) => { const { fileCensus, ...rest } = graph; return rest }
+
+test('graph file cache: every cached canonical graph equals the uncached one over a random change sequence, and only changed sources are parsed', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-incremental-graph-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const corpus = new Corpus(11)
+  const cache = createGraphFileCache()
+  const project = () => resolveProjectConfig({ argv: [`--project=${path.join(dir, 'atelier.project.json')}`], cwd: dir })
+  let previousDigests = null
+  const run = (label) => {
+    corpus.write(dir)
+    const full = buildCanonicalGraph(project())
+    const cached = buildCanonicalGraph(project(), { fileCache: cache })
+    assert.deepEqual(comparableGraph(cached), comparableGraph(full), label)
+    assert.equal(cached.fileCensus.reused + cached.fileCensus.derived, full.nodes.filter((node) => node.extension === 'md').length, label)
+    // Exactly the Markdown sources whose bytes changed (or appeared) are derived again.
+    const digests = new Map(full.nodes.filter((node) => node.extension === 'md').map((node) => [`${node.repo}/${node.path}`, sha256Digest(fs.readFileSync(path.join(dir, node.repo, node.path)))]))
+    if (previousDigests) {
+      const changed = [...digests].filter(([key, digest]) => previousDigests.get(key) !== digest).length
+      assert.equal(cached.fileCensus.derived, changed, `${label}: derived exactly the changed sources`)
+    }
+    assert.deepEqual([...cache.files.keys()].sort(), [...digests.keys()].map((key) => key.replace('/', '\u0000')).sort(), `${label}: the cache holds exactly the census`)
+    previousDigests = digests
+    return cached
+  }
+  run('initial')
+  const same = run('same inputs')
+  assert.equal(same.fileCensus.derived, 0)
+  for (let step = 0; step < 25; step += 1) run(corpus.mutate())
+  // A changed read boundary is an input outside the bytes: every entry is derived again, under the same digests.
+  writeJson(path.join(dir, 'repo-access.v1.json'), { schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'team', repos: Object.fromEntries(REPOSITORIES.map((repoId) => [repoId, { readBoundary: 'private' }])) })
+  const rebound = buildCanonicalGraph(project(), { fileCache: cache })
+  assert.deepEqual(comparableGraph(rebound), comparableGraph(buildCanonicalGraph(project())))
+  assert.equal(rebound.fileCensus.reused, 0)
+  // The result never aliases the cache.
+  const handed = buildCanonicalGraph(project(), { fileCache: cache })
+  handed.nodes[0].title = 'defaced'
+  handed.links[0].range.byteStart = -1
+  assert.deepEqual(comparableGraph(buildCanonicalGraph(project(), { fileCache: cache })), comparableGraph(rebound))
+  for (const broken of [{}, { files: [] }, 'cache']) assert.throws(() => buildCanonicalGraph(project(), { fileCache: broken }), /fileCache/)
+})
+
+test('mutation control: a graph cache entry whose node or scan is wrong under a matching digest fails the graph equality oracle', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-incremental-graph-control-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  new Corpus(12).write(dir)
+  const project = () => resolveProjectConfig({ argv: [`--project=${path.join(dir, 'atelier.project.json')}`], cwd: dir })
+  const full = buildCanonicalGraph(project())
+  const primed = () => { const cache = createGraphFileCache(); buildCanonicalGraph(project(), { fileCache: cache }); return cache }
+  const wrongNode = primed()
+  wrongNode.files.get('alpha-desk\u0000notes/n-000.md').node.title = 'not the title'
+  assert.throws(() => assert.deepEqual(comparableGraph(buildCanonicalGraph(project(), { fileCache: wrongNode })), comparableGraph(full)), assert.AssertionError)
+  const wrongScan = primed()
+  const withLinks = [...wrongScan.files.values()].find((entry) => entry.scan.occurrences.length > 0)
+  withLinks.scan.occurrences.length = 0
+  assert.throws(() => assert.deepEqual(comparableGraph(buildCanonicalGraph(project(), { fileCache: wrongScan })), comparableGraph(full)), assert.AssertionError)
+})
+
+// ---------------------------------------------------------------------------
+// 4. The preparation cache's own contract
 // ---------------------------------------------------------------------------
 
 test('the cache is derived state: a reused note never aliases the result, and a foreign cache refuses', (t) => {
