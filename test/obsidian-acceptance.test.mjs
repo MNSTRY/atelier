@@ -1324,3 +1324,8 @@ test('AP-03 and AP-05 receipts: G14 stays incomplete for the host sleep/wake, G1
   const failed = recordProcedureReceipts({ plan: planProcedure('AP-05', { receiptDir: path.join(dir, 'failed'), operator: 'op-synthetic' }), receiptDir: path.join(dir, 'failed'), candidate: CANDIDATE, capabilities: CAPABILITIES, operator: 'op-synthetic', host: HOST, evidenceByGate: { G17: roles('G17', ['multi-vault-edit-trace', 'manual-apply-trace', 'automatic-apply-trace', 'uninstall-retention']) }, passedByGate: { G17: false }, wallClock: WALL, recordedAt: NOW })
   assert.equal(failed[0].receipt.outcome, 'failed')
 })
+
+test('the AP-05 scope documents are valid scope contracts, so the real derivation accepts them', async () => {
+  const { AP05_SCOPE_DOCUMENTS } = await import('../scripts/obsidian/lib/ap05.mjs')
+  for (const scope of AP05_SCOPE_DOCUMENTS) assert.deepEqual(validateObsidianContract('scope', scope), [], scope.scopeId)
+})

@@ -34,8 +34,8 @@ import { digestDifferences, fileDigest, initialiseRepositories, noteFile, openEd
 
 export const AP05_SCOPES = Object.freeze({ full: 'scope-full', scoped: 'scope-harbor' })
 export const AP05_SCOPE_DOCUMENTS = Object.freeze([
-  Object.freeze({ scopeId: AP05_SCOPES.full, mode: 'full', selector: Object.freeze({ all: true }) }),
-  Object.freeze({ scopeId: AP05_SCOPES.scoped, mode: 'scoped', selector: Object.freeze({ ids: Object.freeze(['north-desk:harbor-plan', 'south-desk:tide-table']) }) }),
+  Object.freeze({ schema: 'atelier-obsidian-scope/v1', scopeId: AP05_SCOPES.full, mode: 'full', selector: Object.freeze({ all: true }) }),
+  Object.freeze({ schema: 'atelier-obsidian-scope/v1', scopeId: AP05_SCOPES.scoped, mode: 'scoped', selector: Object.freeze({ ids: Object.freeze(['north-desk:harbor-plan', 'south-desk:tide-table']) }) }),
 ])
 export const AP05_EXTRA_NOTES = path.join(REPOSITORY_ROOT, 'fixtures', 'obsidian', 'acceptance', 'ap05-extra-notes.json')
 // The objects each step edits. The identical edit needs a note whose bytes
