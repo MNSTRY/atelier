@@ -836,3 +836,36 @@ test('mutation control: a missing, misplaced or mismatched closing fence fails t
   // A diagnostic that is dropped fails too.
   assert.throws(() => assertFenceClosed({ ...prepared, diagnostics: [] }, snapshot, target.nodeId, item), assert.AssertionError)
 })
+
+// Review finding (brokered review of the merged range): the redaction guard must not
+// mistake an author's own hex-suffixed names for allocated identities.
+function makeWorkspaceVariant(t, extraFiles) {
+  const saved = workspace.files
+  workspace.files = { ...saved, ...extraFiles }
+  try { return makeWorkspace(t) } finally { workspace.files = saved }
+}
+
+test('author text that merely looks like an identity suffix is not a redaction failure', (t) => {
+  const asset = 'north-desk/assets/app--0f1e2d3c4b5a.css'
+  const snapshot = makeWorkspaceVariant(t, {
+    [asset]: { text: 'body { color: teal }\n' },
+    [`${asset}.kg.json`]: { text: JSON.stringify({ schema: 'mnstry.source-sidecar@v1', asset: 'app--0f1e2d3c4b5a.css', title: 'Build asset--0f1e2d3c4b5a', summary: 'Invented content-hashed asset.', tags: ['build--0f1e2d3c4b5a'],
+      kg: { id: 'north-desk:build-asset', type: 'evidence', domain: 'sample', lifecycle: 'source', status: 'active', audience: 'team', relations: { evidences: ['north-desk:harbor-plan'] } } }) },
+  })
+  const prepared = prepare(snapshot, fullScope)
+  const wrapper = prepared.manifest.notes.find((note) => note.ext[EXT].source.path === 'assets/app--0f1e2d3c4b5a.css')
+  assert.ok(wrapper, 'the asset has a wrapper note in the full view')
+  assert.ok(fileOf(prepared, wrapper.path).bytes.toString('utf8').includes('app--0f1e2d3c4b5a'), 'the author name is shown as written')
+  assertNothingWithheld(prepared)
+})
+
+test('generated text that names a census identity outside the view is still refused', (t) => {
+  // An author title that literally carries the withheld node's suffix reaches the
+  // relations region, and the guard must refuse it: this is the mutation the
+  // benign case above must not have disabled.
+  const sealed = identitySuffix('north-desk', 'north-desk:sealed-ledger', 64)
+  const snapshot = makeWorkspaceVariant(t, {
+    'north-desk/notes/naming.md': { text: `---\ntitle: "Names it--${sealed.slice(0, 12)}"\nkg:\n  id: "north-desk:naming"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Names it\n\nBody.\n` },
+  })
+  assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
+})

@@ -1826,3 +1826,70 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
       else t.diagnostic(`evidence kept at ${layout.root}`)
     }
   })
+
+// ---------------------------------------------------------------------------
+// Brokered review of the merged range: symlinked settings, throw paths, script standalone
+// ---------------------------------------------------------------------------
+
+test('a symlinked .obsidian reports the settings unit and lets every note converge; the probe still sees the app', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const outside = fs.mkdtempSync(path.join(TMP, 'atelier-elsewhere-'))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.rmSync(path.join(world.vault, '.obsidian'), { recursive: true, force: true })
+  fs.symlinkSync(outside, path.join(world.vault, '.obsidian'), 'dir')
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE }, settings: true }), absentAdapter())
+  assert.equal(result.state, 'committed', JSON.stringify(result))
+  const settings = result.notes.find((entry) => entry.kind === 'settings')
+  assert.equal(settings.outcome, 'path-unsafe')
+  assert.equal(settings.blocking, false)
+  assert.equal(noteResult(result).outcome, 'published')
+  assert.equal(world.read(NOTE), CANDIDATE)
+  assert.deepEqual(fs.readdirSync(outside), [], 'nothing is written through the link')
+
+  const app = new ModelApp(world.vault)
+  const probe = await modelAdapter(app).probe({ vaultRoot: world.vault })
+  assert.equal(probe.state, 'coordinated', JSON.stringify(probe))
+})
+
+test('a keep unit whose note vanished refuses staging-failed instead of throwing; malformed manifest bytes refuse', needsExchange, async (t) => {
+  const world = await seeded(t)
+  fs.rmSync(world.full(NOTE))
+  const staging = world.store.stagingRoot
+  fs.mkdirSync(staging, { recursive: true })
+  fs.chmodSync(staging, 0o500)
+  t.after(() => { if (fs.existsSync(staging)) fs.chmodSync(staging, 0o700) })
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: BASE } }), absentAdapter())
+  fs.chmodSync(staging, 0o700)
+  assert.notEqual(result.state, 'committed', JSON.stringify(result))
+  const unit = (result.notes ?? []).find((entry) => entry.path === NOTE)
+  const code = unit ? unit.outcome : result.refusal?.code
+  assert.equal(code, 'staging-failed', JSON.stringify(result))
+  assert.equal(fs.existsSync(world.full(NOTE)), false, 'nothing was created')
+
+  const view = viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } })
+  view.manifestBytes = Buffer.from('{ not json', 'utf8')
+  const refused = await world.publish(view, absentAdapter())
+  assert.equal(refused.state, 'refused')
+  assert.equal(refused.refusal.code, 'invalid-prepared-view')
+})
+
+test('the serialized script runs on its own, and a body that reaches for a module binding is caught', needsExchange, () => {
+  const vault = fs.mkdtempSync(path.join(TMP, 'atelier-standalone-'))
+  try {
+    fs.mkdirSync(path.join(vault, 'notes'))
+    fs.writeFileSync(path.join(vault, NOTE), BASE)
+    const payload = { op: 'inspect', vaultRoot: fs.realpathSync(vault), path: NOTE }
+    const code = buildEvalCode(payload)
+    const body = code.slice(0, code.lastIndexOf(')(JSON.parse')).slice(1)
+    // Executed, not merely parsed: the only names in scope are the host's.
+    const run = (source) => new Function(`return (${source})`)()(JSON.parse(JSON.stringify(payload)), createInProcessHost({ app: null }))
+    const reply = JSON.parse(run(body))
+    assert.equal(reply.status, 'inspected')
+    assert.equal(reply.diskSha256, hex(BASE))
+    const mutated = body.replace('const done = ', 'const leak = PROTOCOL_ID; const done = ')
+    assert.notEqual(mutated, body)
+    assert.throws(() => run(mutated), ReferenceError, 'a body that references a module-level binding cannot run in the app')
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true })
+  }
+})

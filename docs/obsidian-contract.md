@@ -70,6 +70,28 @@ titles are allowed; duplicate canonical identities refuse; a title-only link
 that matches more than one visible note refuses. Paths are allocated once per
 workspace and reused by every view.
 
+## Graph behaviour changes since the shared link resolver
+
+The resolver that produces `links_to` edges changed in these ways, each pinned by a
+test in `test/graph-knowledge-graph.test.mjs`. Repository artifacts committed by a
+consumer may differ after upgrading in exactly these classes and no others:
+
+1. Links inside fenced code (backtick or tilde, any info string, up to three
+   spaces of indent, CRLF, CommonMark fence-length rules), inside inline code
+   (including two stray backticks that happen to pair across a link) and inside
+   front matter no longer produce edges. Links after an unbalanced fence that
+   runs to the end of the file are inside code.
+2. A link to a directory resolves to that directory's `README.md`, then
+   `index.md`, testing eligibility per candidate; a link to a parent directory
+   now resolves where the earlier reader missed it.
+3. A link that climbs above its own repository root and re-enters through the
+   checkout's directory name is reported as leaving the enrolled roots, as it
+   always was; it is never turned into a repository-local edge.
+4. Malformed percent-encoding in a link is a `link-href-malformed` finding;
+   it no longer throws out of the graph build.
+5. The workspace graph (not repository artifacts) additionally carries
+   wikilink edges and cross-repository Markdown-link edges, de-duplicated.
+
 ## Embedded assets
 
 An embed (`![](file)` or `![[file]]`) whose target is not a document of the
