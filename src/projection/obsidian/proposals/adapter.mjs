@@ -165,10 +165,12 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
   // two questions asked of the machine; `proveAbandoned` is the proof a held lock is passed over with.
   return function createProposalAdapter(options = {}) {
     const {
-      env = process.env, crash = () => {}, bounds: boundsInput = {}, limits = PROPOSAL_LEDGER_LIMITS, eligibility = DEFAULT_ELIGIBILITY,
+      crash = () => {}, bounds: boundsInput = {}, limits = PROPOSAL_LEDGER_LIMITS, eligibility = DEFAULT_ELIGIBILITY,
       openStore = createProposalStore, objectStore = openObjectStore, isGitIgnored = SOURCE_APPLY_PRIMITIVES.isGitIgnored, proveAbandoned = createAbandonmentProof(), queueCrash = () => {},
     } = options
     const bounds = { ...PROPOSAL_BACKPRESSURE, ...boundsInput }
+    // The environment git is asked under: the one given when the adapter was made, else the one of the engine that calls it.
+    const env = options.env
     // The clock given when the adapter was made; else the one of the engine that calls it; else the time of day.
     let callerClock = null
     const clock = () => (options.clock ?? callerClock ?? (() => new Date()))()
@@ -319,7 +321,7 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         if (requireOpenEdit && editState !== 'open') return known ? refused(`edit-${editState}`) : outcome('skipped', null, { code: `edit-${editState}` })
         // The object store no longer says this is a proposed structural edit, so there is nothing to describe.
         if (item.observed === null) return refused('operation-not-proposed')
-        const resolved = resolveProposalRoute({ project: workspace.project, workspaceId: workspace.workspaceId, identity: item, sourcePath: item.sourcePath, managedRoots: workspace.managedRoots(), isVisible: workspace.visible, isGitIgnored, env })
+        const resolved = resolveProposalRoute({ project: workspace.project, workspaceId: workspace.workspaceId, identity: item, sourcePath: item.sourcePath, managedRoots: workspace.managedRoots(), isVisible: workspace.visible, isGitIgnored, env: env ?? workspace.env ?? process.env })
         if (!resolved.ok && !resolved.transient) return refused(resolved.code)
         // Recorded before anything is asked of the store.
         if (!known) write({ ...identityFields(item, storeId), state: 'queued', code: null, proposalId: null, dedupe: null, receipt: null, nextAttemptAt: null })

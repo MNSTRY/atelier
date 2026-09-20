@@ -2355,7 +2355,8 @@ const { createMaintenanceExtensions: extensionsForProposals } = await import('..
 const { REPOSITORIES: PROPOSAL_REPOSITORIES, makeProposalWorld, sourceState: proposalSourceState } = await import('./support/obsidian-proposals/world.mjs')
 const { treeListing: proposalTree } = await import('./support/obsidian-edits/apply-world.mjs')
 
-function proposalEngine(world, { adapter = createProposalAdapter({ env: world.env }), apply = true } = {}) {
+// The adapter is made with nothing: the clock and the environment it works under are the ones the engine hands it.
+function proposalEngine(world, { adapter = createProposalAdapter(), apply = true } = {}) {
   const extensions = extensionsForProposals()
   if (apply) extensions.register('apply-operation', createEngineApplyOperation({ context: { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock } }))
   if (adapter) extensions.register('proposal-adapter', adapter)
