@@ -2340,6 +2340,171 @@ test('mutation control: a builder that looks up this machine, or writes the unit
 // 22. Nothing is left running
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The proposal adapter on a tick
+// ---------------------------------------------------------------------------
+//
+// The engine lets the registered proposal adapter observe the open edits the
+// object store does not know yet, and hands it the pending edits once per
+// tick, after the automatic dispatch. The worlds below are the invented git
+// repositories of the proposal tests; a view is written directly, so no
+// publisher and no atomic exchange is needed and these run on every platform.
+
+const { createEngineApplyOperation, openObjectStore: openObjectStoreForProposals } = await import('../src/projection/obsidian/edits/index.mjs')
+const { PROPOSAL_ADAPTER_ID, PROPOSAL_ADAPTER_PRIMITIVES, createProposalAdapter, createProposalAdapterForOracleTests, recordedOperationOf } = await import('../src/projection/obsidian/proposals/index.mjs')
+const { createMaintenanceExtensions: extensionsForProposals } = await import('../src/runtime/obsidian/extension-points.mjs')
+const { REPOSITORIES: PROPOSAL_REPOSITORIES, makeProposalWorld, sourceState: proposalSourceState } = await import('./support/obsidian-proposals/world.mjs')
+const { treeListing: proposalTree } = await import('./support/obsidian-edits/apply-world.mjs')
+
+// The adapter is made with nothing: the clock and the environment it works under are the ones the engine hands it.
+function proposalEngine(world, { adapter = createProposalAdapter(), apply = true, primitives = null } = {}) {
+  const extensions = extensionsForProposals()
+  if (apply) extensions.register('apply-operation', createEngineApplyOperation({ context: { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock } }))
+  if (adapter) extensions.register('proposal-adapter', adapter)
+  return primitives === null ? world.engine({ extensions }) : world.oracleEngine({ extensions, primitives })
+}
+const byNode = (left, right) => (left.nodeId < right.nodeId ? -1 : left.nodeId > right.nodeId ? 1 : 0)
+const storesOf = (world) => Object.fromEntries(PROPOSAL_REPOSITORIES.map((name) => [name, fs.existsSync(world.storeDir(name)) ? proposalTree(world.storeDir(name)) : null]))
+const adapterStateOf = (world) => (fs.existsSync(world.queueDir()) ? proposalTree(world.queueDir()) : null)
+
+test('proposal adapter binding: a tick hands the pending edits to the registered adapter once, after the automatic dispatch, with the workspace it needs; without one nothing is handed anywhere, and an adapter that throws changes nothing else of the tick', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:second')
+  const calls = []
+  const recording = { id: 'test.recording-adapter', async propose(context) { calls.push(context); return { adapterId: 'test.recording-adapter', examined: 0, outcomes: [], repositories: [] } } }
+  const first = await proposalEngine(world, { adapter: recording }).tick()
+  assert.equal(first.state, 'ticked')
+  assert.equal(calls.length, 1, 'once per tick')
+  const [context] = calls
+  assert.deepEqual([context.workspaceId, context.workspaceRoot, typeof context.clock, context.project.repos.map((repo) => repo.name)], [world.context().workspaceId, world.workspaceRoot(), 'function', [...PROPOSAL_REPOSITORIES]])
+  assert.deepEqual(context.edits.map((edit) => [edit.identity.nodeId, edit.state]), [['east-wing:guide', 'queued']], 'the edit this very tick preserved and queued is among them')
+  assert.deepEqual(first.proposals, { adapterId: 'test.recording-adapter', examined: 0, outcomes: [], repositories: [] })
+  // Handed a copy: an adapter cannot change the pending edits of the engine.
+  context.edits[0].state = 'applied'
+  assert.equal(world.editOf('east-wing:guide').state, 'queued')
+
+  const without = await proposalEngine(world, { adapter: null }).tick()
+  assert.deepEqual([without.state, Object.hasOwn(without, 'proposals'), calls.length], ['ticked', false, 1])
+  const throwing = await proposalEngine(world, { adapter: { id: 'test.throwing-adapter', async propose() { throw new Error('synthetic failure') } } }).tick()
+  assert.deepEqual([throwing.state, throwing.proposals, throwing.pendingEdits.map((edit) => edit.state)], ['ticked', { adapterId: 'test.throwing-adapter', failed: 'proposal-adapter-threw' }, ['queued']])
+})
+
+test('proposal adapter on the engine, manual and automatic: a structural edit becomes one proposal on the tick that observed it, unchanged ticks append zero ledger events and write nothing, apply behaves as it did, and no source byte or git state ever changes', async (t) => {
+  for (const mode of ['manual', 'automatic']) {
+    const world = makeProposalWorld(t)
+    // The same world without an adapter: what apply and the pending edits do there is what they must do here.
+    const control = makeProposalWorld(t)
+    for (const each of [world, control]) {
+      if (mode === 'automatic') { each.configureMachine({ maintenanceMode: 'automatic' }); each.installPolicy() }
+      each.addLink('east-wing:guide', 'west-wing:guide')
+      each.editFrontMatter('west-wing:second', 'Western second sheet', 'Second sheet of the west')
+    }
+    const before = proposalSourceState(world)
+    const engine = proposalEngine(world)
+    const bare = proposalEngine(control, { adapter: null })
+    const [tick, controlTick] = [await engine.tick(), await bare.tick()]
+    assert.deepEqual([tick.state, tick.maintenanceMode], ['ticked', mode])
+    assert.deepEqual([tick.dispatched.map(({ status, code, state }) => [status, code, state]), tick.pendingEdits.map((edit) => edit.state)], [controlTick.dispatched.map(({ status, code, state }) => [status, code, state]), controlTick.pendingEdits.map((edit) => edit.state)], `${mode}: dispatch and the pending edits are what they are without an adapter`)
+    // The observation of this tick recorded both operations as proposed, in either mode, and the adapter routed them in the same tick.
+    assert.deepEqual([...tick.observed.observed].sort(byNode).map(({ nodeId, status, code, kind, operationState }) => [nodeId, status, code, kind, operationState]),
+      [['east-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'], ['west-wing:second', 'observed', 'observed', 'semantic-proposal', 'proposed']])
+    assert.deepEqual(tick.proposals.outcomes.map((item) => [item.repoId, item.status, item.dedupe]), [['east-wing', 'acknowledged', 'new'], ['west-wing', 'acknowledged', 'new']])
+    if (mode === 'automatic') {
+      assert.deepEqual(tick.dispatched.map(({ status, code }) => [status, code]), [['refused', 'edit-not-applicable'], ['refused', 'edit-not-applicable']])
+    } else {
+      // Manual: nothing on a tick applies. A person who asks apply to look afterwards gets the answer apply always gave.
+      assert.deepEqual(tick.dispatched, [])
+      for (const edit of world.pendingEdits()) assert.deepEqual((({ status, code }) => [status, code])(await world.sourceApply().apply({ editId: edit.editId, mode: 'manual' })), ['refused', 'edit-not-applicable'])
+    }
+    assert.deepEqual(PROPOSAL_REPOSITORIES.map((name) => world.adapterProposals(name).map((record) => [record.proposal.path, record.payload.adapter.id])), [[['notes/guide.md', PROPOSAL_ADAPTER_ID]], [['notes/second.md', PROPOSAL_ADAPTER_ID]]])
+
+    // Many unchanged ticks, across full reconciliations and every retry interval: not one ledger byte, store file or adapter record.
+    const settled = { stores: storesOf(world), queue: adapterStateOf(world), edits: world.pendingEdits() }
+    for (let index = 0; index < 25; index += 1) {
+      world.advance(7 * 60 * 1000)
+      const again = await engine.tick()
+      assert.deepEqual([again.state, again.proposals.outcomes, again.proposals.repositories], ['ticked', [], []])
+    }
+    assert.deepEqual({ stores: storesOf(world), queue: adapterStateOf(world), edits: world.pendingEdits().map((edit, index) => ({ ...edit, attempts: settled.edits[index].attempts, lastAttemptAt: settled.edits[index].lastAttemptAt, lastResult: settled.edits[index].lastResult, state: settled.edits[index].state })) },
+      settled, `${mode}: twenty-five unchanged ticks append zero ledger events and write nothing of the adapter's`)
+    assert.ok(world.pendingEdits().every((edit) => edit.closedAt === null), 'a proposal closes no pending edit: the note is still held for the person')
+    assert.deepEqual(proposalSourceState(world), before, `${mode}: no source byte and no git state changed`)
+
+    // Mutation control: an adapter that hands everything over again and does not look appends an event per tick.
+    const chatty = proposalEngine(world, { adapter: createProposalAdapterForOracleTests({ ...PROPOSAL_ADAPTER_PRIMITIVES, handOver: () => true, isSettled: () => false, lookBeforeCreate: false })({ env: world.env }) })
+    world.advance(1000)
+    await chatty.tick()
+    assert.notDeepEqual(storesOf(world), settled.stores, 'the control grows the ledger on a tick where nothing changed')
+  }
+})
+
+// Manual mode, one structural edit, many ticks and no apply: exactly one proposal, from the observation of a tick.
+// Beside it a body edit, which only apply may write, and an edit the lens refuses, which is recorded once. The
+// scenario is a function of the engine primitives so that the mutation control below runs it unchanged.
+async function assertTickObservationProposes(world, primitives) {
+  world.addLink('east-wing:guide', 'east-wing:second')
+  world.editNote('east-wing:plain', 'Only the body', 'Nothing but the body')
+  fs.appendFileSync(world.noteFile('east-wing:third'), Buffer.from([0xff, 0xfe]))
+  const sources = world.sourceDigests()
+  const before = proposalSourceState(world)
+  const engine = proposalEngine(world, { primitives })
+  const first = await engine.tick()
+  assert.deepEqual([first.state, first.maintenanceMode, first.dispatched], ['ticked', 'manual', []], 'manual: nothing on a tick applies')
+  const classified = (tick) => [...(tick.observed?.observed ?? [])].sort(byNode).map(({ nodeId, status, code, kind, operationState }) => [nodeId, status, code, kind, operationState])
+  assert.deepEqual(classified(first), [
+    ['east-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+    ['east-wing:plain', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['east-wing:third', 'observed', 'observed', 'body-replacement', 'refused'],
+  ], 'the tick observed every open edit from its preserved bytes and recorded what each is')
+  assert.deepEqual(first.proposals.outcomes.map((item) => [item.nodeId, item.status, item.dedupe]), [['east-wing:guide', 'acknowledged', 'new']], 'the structural edit was routed in the same tick; the body replacement and the refused edit were not')
+  assert.deepEqual(PROPOSAL_REPOSITORIES.map((name) => world.adapterProposals(name).map((record) => [record.proposal.path, record.payload.editId])), [[['notes/guide.md', world.editOf('east-wing:guide').editId]], []], 'exactly one proposal, in the store of the repository that owns the source')
+  // The object store says what each edit is, as an apply would have recorded it, and the pending edits are untouched.
+  const objects = openObjectStoreForProposals({ stateRoot: world.workspaceRoot(), workspaceId: world.context().workspaceId, repositoryRoots: world.context().repositoryRoots, clock: world.clock })
+  const recordedAs = (nodeId) => (({ kind, state }) => [kind, state])(recordedOperationOf(objects, world.editOf(nodeId)))
+  assert.deepEqual(['east-wing:guide', 'east-wing:plain', 'east-wing:third'].map(recordedAs), [['semantic-proposal', 'proposed'], ['body-replacement', 'pending'], ['body-replacement', 'refused']])
+  assert.deepEqual(world.pendingEdits().map((edit) => [edit.state, edit.closedAt]), [['queued', null], ['queued', null], ['queued', null]], 'every edit is still queued for the person: a tick in manual mode applies nothing and closes nothing')
+
+  // Many later ticks, across full reconciliations: nothing is observed again, nothing is routed again, and not one
+  // byte of any ledger, adapter record or object event log changes. The refused edit is never retried.
+  const settled = { stores: storesOf(world), queue: adapterStateOf(world), logs: world.objectLogs() }
+  for (let index = 0; index < 12; index += 1) {
+    world.advance(7 * 60 * 1000)
+    const again = await engine.tick()
+    assert.deepEqual([again.state, again.observed.observed, again.proposals.outcomes], ['ticked', [], []], `tick ${index + 2} is quiet`)
+  }
+  assert.deepEqual({ stores: storesOf(world), queue: adapterStateOf(world), logs: world.objectLogs() }, settled, 'twelve later ticks: zero ledger events, zero adapter records, zero object events')
+  // An engine and an adapter that have just started and remember nothing find everything recorded and append nothing.
+  world.advance(1000)
+  const restarted = await proposalEngine(world, { primitives }).tick()
+  assert.deepEqual([restarted.observed.observed.map((item) => item.code), restarted.proposals.outcomes], [['already-observed', 'already-observed', 'already-observed'], []])
+  assert.deepEqual({ stores: storesOf(world), queue: adapterStateOf(world), logs: world.objectLogs() }, settled)
+  assert.equal(world.adapterProposals('east-wing').length, 1, 'still exactly one proposal')
+  assert.deepEqual(world.sourceDigests(), sources, 'no source byte changed, in either repository')
+  assert.deepEqual(proposalSourceState(world), before, 'and no git state')
+
+  // The body replacement was left for apply: asked by a person, apply finds it recorded as pending and treats it as
+  // its own (applied where an atomic exchange exists, refused where none does), and never as a proposal.
+  const applied = await world.sourceApply().apply({ editId: world.editOf('east-wing:plain').editId, mode: 'manual' })
+  assert.notEqual(applied.code, 'edit-not-applicable', `the body replacement is apply's to write: ${applied.status} ${applied.code}`)
+  world.advance(1000)
+  await engine.tick()
+  assert.equal(world.adapterProposals('east-wing').length, 1, 'a body replacement never becomes a proposal')
+}
+
+test('tick observation in manual mode: one structural edit, many ticks and no apply give exactly one proposal in the store of its repository, later ticks append nothing anywhere, a body replacement stays queued for apply, a lens refusal is recorded once and never retried, and no source byte changes', async (t) => {
+  await assertTickObservationProposes(makeProposalWorld(t), ENGINE_PRIMITIVES)
+})
+
+test('mutation control for tick observation: an engine that never lets the adapter observe records nothing and proposes nothing in manual mode, and the oracle above fails for it', async (t) => {
+  const blind = { ...ENGINE_PRIMITIVES, observeEdits: () => false }
+  await assert.rejects(assertTickObservationProposes(makeProposalWorld(t), blind), assert.AssertionError)
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:second')
+  const engine = proposalEngine(world, { primitives: blind })
+  for (let index = 0; index < 5; index += 1) { world.advance(7 * 60 * 1000); await engine.tick() }
+  assert.deepEqual([storesOf(world), world.pendingEdits().map((edit) => edit.state)], [{ 'east-wing': null, 'west-wing': null }, ['queued']], 'without the observation of a tick, manual mode has no proposal until somebody runs apply')
+})
+
 test('no process this suite started is left behind', async () => {
   assert.ok(SPAWNED.length > 0, 'this suite does start processes')
   // Anything its own test did not see gone is ended here as a last resort, and then named: the guard fails either way.
