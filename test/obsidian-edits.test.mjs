@@ -2534,24 +2534,60 @@ test('an exchange that reports a failure is not believed: the outcome is read fr
   }
 })
 
-test('apply: an exchange back that fails with any typed refusal is settled from the digests on disk like the first exchange, never passed through with the outcome left unknown', needsExchange, async (t) => {
-  async function round(primitives) {
+test('apply: nothing between the first exchange and the exchange back can return with the outcome left unknown: a typed failure of the exchange back, or the displaced file vanishing before it is retained, is settled from the digests on disk', needsExchange, async (t) => {
+  const theirs = Buffer.from('another program wrote this between the read and the exchange\n')
+  async function round(name, arrange) {
     const world = raceWorld(t, 1)
     const sourceFile = world.source('race-room/rounds/round-0.md')
-    const theirs = Buffer.from('another program wrote this between the read and the exchange\n')
+    const base = fs.readFileSync(sourceFile)
+    const candidate = replaceNth(base, 'Original sentence 0.', 'Edited sentence 0.')
     const edit = world.editOf('race-room:round-0')
-    const typedFailure = () => { throw new PublicationRefusal('exchange-failed', 'synthetic typed failure of the second exchange') }
-    const result = await world.sourceApply({ beforeExchange: async () => { fs.writeFileSync(sourceFile, theirs) } }, { ...SOURCE_APPLY_PRIMITIVES, exchangeBack: typedFailure, ...primitives }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    const { primitives = {}, after = () => {} } = arrange(t)
+    const result = await world.sourceApply({ beforeExchange: async () => { fs.writeFileSync(sourceFile, theirs) } }, { ...SOURCE_APPLY_PRIMITIVES, ...primitives }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    after()
     const shown = await world.sourceApply().show(edit.editId)
-    const retained = filesUnder(world.recovery()).some((file) => fs.statSync(file).isFile() && fs.readFileSync(file).equals(theirs))
-    return { result, shown, retained }
+    const kept = filesUnder(world.recovery()).filter((file) => fs.readFileSync(file).equals(theirs))
+    return { name, result, shown, kept, atSource: fs.readFileSync(sourceFile), base, candidate }
   }
-  const { result, shown, retained } = await round({})
-  assert.ok(['refused', 'conflict'].includes(result.status), result.status)
-  assert.notEqual(result.code, 'exchange-failed', 'the failure of the second exchange is not what the person is told; the state on disk is')
-  assert.ok(SOURCE_APPLY_REFUSALS.includes(result.code), `${result.code} is a declared code`)
-  assert.equal(shown.object.outcomeUnknown, false, 'the intent is settled, not left for a later call to find')
-  assert.equal(retained, true, 'the bytes the other program wrote are retained')
+  const typedFailure = () => ({ primitives: { exchangeBack: () => { throw new PublicationRefusal('exchange-failed', 'synthetic typed failure of the second exchange') } } })
+  const typed = await round('typed failure of the exchange back', typedFailure)
+  assert.deepEqual([typed.result.status, typed.result.code], ['conflict', 'apply-interrupted-needs-person'], JSON.stringify(typed.result))
+  assert.equal(typed.shown.object.outcomeUnknown, false, 'the intent is settled, not left for a later call to find')
+  // The documented consequence: the exchange back did not happen, so the source path keeps the candidate, whole, and
+  // the other program's bytes are retained with the recovery references the person is given.
+  assert.deepEqual(typed.atSource, typed.candidate, 'the source is one whole version: the candidate')
+  assert.ok(typed.kept.length >= 1, 'the bytes the other program wrote are retained')
+  assert.ok((typed.result.detail?.recoveryRefs ?? typed.result.recoveryRefs ?? []).length >= 1, 'and the person is told where')
+
+  // The candidate path is opened without following a link four times: to write it, to verify what was written, after
+  // the exchange for the digest of what was displaced, and once more to retain those bytes. The fourth finds it gone.
+  const vanished = await round('the displaced file gone before it is retained', (context) => {
+    let opens = 0
+    const gone = failOnce(context, 'openSync', (file, flags) => typeof file === 'string' && file.endsWith('.candidate') && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && (opens += 1) === 4, 'ENOENT')
+    return { after: () => { assert.equal(gone.failed(), 1, 'the injected failure fired'); gone.restore() } }
+  })
+  assert.equal(vanished.result.status === 'refused' || vanished.result.status === 'conflict', true, JSON.stringify(vanished.result))
+  assert.ok(SOURCE_APPLY_REFUSALS.includes(vanished.result.code), `${vanished.result.code} is a declared code`)
+  assert.equal(vanished.shown.object.outcomeUnknown, false, 'settled from disk, not thrown with the intent open')
+  assert.ok(vanished.atSource.equals(vanished.candidate) || vanished.atSource.equals(theirs) || vanished.atSource.equals(vanished.base), 'the source is one whole version')
+  assert.ok(vanished.kept.length >= 1 || vanished.atSource.equals(theirs), 'the other program\'s bytes are in the source or retained')
+})
+
+test('apply recovery: a candidate path that may not be looked at is reported for its own record and delays no other interrupted apply', needsExchange, async (t) => {
+  const world = raceWorld(t, 2)
+  const crashAt = (index) => world.sourceApply({ leasePid: GONE_HOLDER_PID, crash: (step) => { if (step === 'exchanged') throw new Error('crash at exchanged') } }).apply({ editId: world.editOf(`race-room:round-${index}`).editId, mode: 'manual' })
+  await assert.rejects(crashAt(0), /crash at/)
+  await assert.rejects(crashAt(1), /crash at/)
+  // The first candidate path whose directory is looked at answers EACCES once, as an unsearchable directory would.
+  const denied = failOnce(t, 'lstatSync', (file) => typeof file === 'string' && file.endsWith('exchange.candidate'), 'EACCES')
+  const first = (await world.sourceApply().recover()).recovered
+  denied.restore()
+  assert.equal(denied.failed(), 1, 'the injected failure fired')
+  assert.deepEqual(first.map((item) => [item.status, item.code]).sort(), [['applied', 'applied-after-restart'], ['refused', 'recovery-state-unreadable']], JSON.stringify(first))
+  // Nothing was guessed for the unreadable one: once it can be looked at, it settles from its digests like the other.
+  const second = (await world.sourceApply().recover()).recovered
+  assert.deepEqual(second.map((item) => [item.status, item.code]), [['applied', 'applied-after-restart']], JSON.stringify(second))
+  for (const index of [0, 1]) assert.ok(fs.readFileSync(world.source(`race-room/rounds/round-${index}.md`)).includes(`Edited sentence ${index}.`), 'both sources hold their applied edit')
 })
 
 test('apply: a file this process may not read refuses corpus-unreadable or source-unreadable with the cause, names no file, and writes nothing', { skip: process.platform === 'win32' || process.getuid?.() === 0 ? 'permission bits do not deny a read here' : needsExchange.skip }, async (t) => {

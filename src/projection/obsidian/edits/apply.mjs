@@ -90,7 +90,7 @@ export const SOURCE_APPLY_REFUSALS = Object.freeze([
   'corpus-unreadable', 'repository-not-enrolled', 'source-not-in-graph', 'source-moved', 'source-missing', 'source-symlink', 'source-not-regular-file', 'source-unreadable', 'source-hard-linked', 'source-outside-repository',
   'source-inside-managed-root', 'source-inside-git-directory', 'source-git-ignored', 'source-ignore-state-unknown', 'sibling-edit-unobservable', 'lease-held', 'object-conflicted',
   'stale-source', 'edit-not-applicable', 'change-outside-authored-body', 'no-source-change', 'exchange-unavailable', 'apply-volume-mismatch', 'batch-bound-reached',
-  'concurrent-source-writer', 'source-changed-during-apply', 'interrupted-before-exchange', 'apply-interrupted-needs-person', 'source-changed-after-apply',
+  'concurrent-source-writer', 'source-changed-during-apply', 'interrupted-before-exchange', 'apply-interrupted-needs-person', 'recovery-state-unreadable', 'source-changed-after-apply',
 ])
 
 // Refusals that say the source or the object is contested, not that this machine or this request cannot apply.
@@ -113,7 +113,15 @@ const inside = (parent, child) => { const relative = path.relative(parent, child
 // What a path answers when another program removed or replaced it, or a directory on the way to it, since it was last
 // looked at. Between the check of a path and the intent every such answer is a typed refusal, never an exception.
 const GONE = new Set(['ENOENT', 'ENOTDIR', 'ELOOP'])
-const lstatOrNull = (file) => { try { return fs.lstatSync(file, { throwIfNoEntry: false }) ?? null } catch (error) { if (GONE.has(error.code)) return null; throw error } }
+// A path this process may not look at is not "nothing there": null would let a caller rename over it. It is a typed
+// refusal, so one unsearchable directory is reported for its own record and delays no other.
+const lstatOrNull = (file) => {
+  try { return fs.lstatSync(file, { throwIfNoEntry: false }) ?? null } catch (error) {
+    if (GONE.has(error.code)) return null
+    if (UNREADABLE.has(error.code)) refuse('recovery-state-unreadable', { cause: error.code })
+    throw error
+  }
+}
 
 // One open, never through a symbolic link, and only of a regular file. A source can be replaced by another program
 // at any moment, so nothing is assumed about the file between two calls: the mode comes from the same descriptor as
@@ -337,7 +345,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
           const { graph, profile } = currentCorpus(workspace)
           const snapshot = seams.captureSnapshot({ project: workspace.project, graph, workspaceId: workspace.workspaceId, index: new Map(), configDigest: manifest.ext?.[EXT]?.configDigest ?? `sha256:${'0'.repeat(64)}`, capturedAt: isoTime(clock) })
           files = seams.prepareView({ snapshot, profile, scope, persistentPathRegistry: workspace.stateStore.readPathRegistry(), priorManifest: manifest, existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8') }).files
-        } catch (error) { if (!isTyped(error) && !GONE.has(error?.code)) throw error }
+        } catch (error) { if (!isTyped(error) && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error }
         workspace.prepared.set(scope.scopeId, files)
       }
       const file = workspace.prepared.get(scope.scopeId).find((item) => item.path === noteEntry.path && item.digest === noteEntry.noteDigest)
@@ -668,10 +676,15 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
 
         // A writer got in between the read and the exchange. Its bytes are at the candidate path: they go back.
         // An immutable copy is kept first, so the bytes have a receipt whatever happens to the file next.
-        const theirs = displacedDigest !== null && displacedDigest !== 'unreadable' ? store.retainObject(readNoFollow(candidatePath)).ref : null
-        try { rules.exchangeBack({ candidatePath, sourcePath: located.absolute, exchange }) } catch (error) {
-          // The same rule as the first exchange: any typed failure is settled from what is on disk.
-          if (!isTyped(error) && error?.name !== 'ExchangeRefusal') throw error
+        // Nothing between the two exchanges may return while the intent is open: retaining their bytes and the exchange
+        // back share one rule with the first exchange. A typed failure, or a file that is gone or cannot be read, is
+        // settled from what is on disk; anything else (a crash, a programming error) propagates.
+        let theirs = null
+        try {
+          theirs = displacedDigest !== null && displacedDigest !== 'unreadable' ? store.retainObject(readNoFollow(candidatePath)).ref : null
+          rules.exchangeBack({ candidatePath, sourcePath: located.absolute, exchange })
+        } catch (error) {
+          if (!isTyped(error) && error?.name !== 'ExchangeRefusal' && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error
           // The files could not be exchanged back. Nothing is guessed: what is on disk is kept and settled from digests.
           const settled = settleInterrupted(workspace, lease, record, workspace.objects.stateOf(identity))
           refuse(settled.code, { applyId, recoveryRefs: [...(settled.recoveryRefs ?? []), ...(theirs ? [theirs] : [])] })

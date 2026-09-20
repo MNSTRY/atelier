@@ -372,6 +372,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | Code | When |
 | --- | --- |
 | `integration-disabled`, `workspace-not-prepared`, `unknown-edit`, `foreign-workspace`, `unknown-scope`, `edit-not-open` | the request cannot be resolved |
+| `corpus-unreadable` | the canonical graph cannot be built on this machine: an enrolled file may not be read; no file is named |
 | `manifest-unavailable`, `published-note-unavailable` | the generation's manifest, or the note as it was published, cannot be established |
 | `repository-not-enrolled`, `source-not-in-graph`, `source-moved` | the identity of a visible object no longer names that path: a renamed or moved source (a deleted one is `object-not-visible`) |
 | `source-missing`, `source-symlink`, `source-not-regular-file`, `source-unreadable`, `source-hard-linked`, `source-outside-repository`, `source-inside-managed-root`, `source-inside-git-directory`, `source-git-ignored`, `source-ignore-state-unknown` | the path is not one this operation writes |
@@ -381,6 +382,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `exchange-unavailable`, `apply-volume-mismatch` | this machine cannot write conditionally here |
 | `concurrent-source-writer`, `source-changed-during-apply` | another program wrote the source during the apply; every byte is retained |
 | `interrupted-before-exchange`, `apply-interrupted-needs-person` | what restart recovery decided for an interrupted apply |
+| `recovery-state-unreadable` | a candidate or backup path of an interrupted apply may not be looked at; that record is reported and every other one is still settled |
 
 A path that another program removes or replaces between two steps, before the
 intent is recorded, answers one of these refusals (`source-missing`,
@@ -419,11 +421,17 @@ list`, `show`, `run` and `recover` answer such a record as a typed refusal.
   exchange is not detected; what contains it is the commit rule: unless the
   file the exchange displaced holds exactly the bytes that were read, the files
   are exchanged back and everything is retained.
+- When the exchange back itself fails, or the displaced file cannot be retained
+  first, nothing is guessed: the apply is settled from the digests on disk by
+  the restart table above. The source path then keeps the candidate, whole, the
+  other program's bytes stay where recovery references name them, and the
+  answer is `apply-interrupted-needs-person`.
 - An enrolled file this process may not read while the canonical graph is built
   refuses `corpus-unreadable`, naming no file. A source that cannot be read at
   the moment of the apply refuses `source-unreadable`. Both carry the system's
-  error code as the cause, and a file at a candidate path that cannot
-  be read is never judged to be a generated candidate: it is kept.
+  error code as the cause. Only bytes with the recorded candidate digest are
+  ours to delete, so a file that cannot be read is never retired as a generated
+  candidate.
 - Where no atomic exchange exists the whole apply half of the test suite is
   skipped: on such a platform the only executed evidence is that apply refuses
   `exchange-unavailable` and writes nothing.
