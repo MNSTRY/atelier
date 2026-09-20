@@ -102,13 +102,15 @@ export function buildReceipt({ gate, candidate, environment, host, operator, evi
   return receipt
 }
 
-// Writes the evidence files beside the receipt, then the receipt. The
-// validator's answer is returned so a caller can show what is still missing.
+// Writes the evidence files beside the receipt first, then the receipt: a
+// receipt refused after a long desktop run still leaves its raw evidence on
+// disk. The validator's answer is returned so a caller can show what is
+// still missing.
 export function writeGateReceipt({ receiptDir, ...input }) {
   if (typeof receiptDir !== 'string' || !path.isAbsolute(receiptDir)) throw new ReceiptRefusal('receipt-dir-not-absolute', 'the receipt directory is an absolute path')
-  const receipt = buildReceipt(input)
   fs.mkdirSync(receiptDir, { recursive: true })
-  for (const item of input.evidence) fs.writeFileSync(path.join(receiptDir, item.name), item.bytes)
+  for (const item of input.evidence ?? []) if (Buffer.isBuffer(item.bytes) && EVIDENCE_NAME.test(String(item.name))) fs.writeFileSync(path.join(receiptDir, item.name), item.bytes)
+  const receipt = buildReceipt(input)
   const receiptPath = path.join(receiptDir, receiptFileName(input.gate))
   writeJson(receiptPath, receipt)
   return { receiptPath, receipt, validation: validateAcceptanceReceipt(receipt, { gate: input.gate }) }
