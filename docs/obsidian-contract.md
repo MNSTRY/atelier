@@ -523,10 +523,37 @@ one durable request. It writes no source file and no vault, it never accepts or
 applies a proposal, and no status of a proposal is an instruction to it.
 
 The adapter is a contribution (`src/runtime/obsidian/contributions/`). On a
-tick, after the automatic dispatch, the engine hands it a copy of the pending
-edits once. An operation exists once apply has looked at the edit: on the
-dispatch of that same tick in automatic mode, and after `atelier obsidian apply
-run EDIT` in manual mode, where nothing on a tick looks at an edit.
+tick the engine first lets it observe the open pending edits (below), then,
+after the automatic dispatch, hands it a copy of the pending edits once.
+
+### Observation on a tick
+
+An operation exists once the edit has been observed: the source is read now,
+the lens runs over the PRESERVED edit bytes (never the live note) against it,
+and the resulting edit operation is recorded in the object store. Source apply
+does this before it takes its lease. The adapter does the same on every tick
+(`src/projection/obsidian/proposals/observation.mjs`), through the same
+observer and the same store, for every open pending edit the object store does
+not know yet, in manual and in automatic mode alike, so that a structural edit
+becomes `proposed`, and is routed in the same tick, without anybody running
+`atelier obsidian apply run EDIT`. What it records is what an apply would have
+recorded: a body replacement `pending`, which stays queued and is written only
+by apply; a structural edit `proposed`; a lens refusal `refused`; a base source
+that moved on `conflicted`. It writes no source file and no vault, and takes no
+lease.
+
+Ticks stay quiet. The object store answers the same for an origin it already
+holds and appends nothing, and an edit whose operation is recorded is not
+offered again: the record of the object is the authority, and an adapter that
+has just started finds it there. A refusal that comes before anything can be
+recorded (`object-not-visible`, `source-not-in-graph`, `source-moved`, the
+`source-*` codes of locating the file, `manifest-unavailable`,
+`published-note-unavailable`, `stale-source`) is remembered in memory with its
+code and offered again only at the full reconciliation cadence of the engine,
+never on every tick. At most 16 edits are observed per tick, in the order they
+were observed, starting where the last tick stopped. The tick reports
+`observed`: for each edit looked at, its identifiers, `observed` or `refused`,
+a code, and for a recorded one the kind and state of the operation.
 
 ### Routing
 
