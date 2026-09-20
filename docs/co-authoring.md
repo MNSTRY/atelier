@@ -2,30 +2,36 @@
 
 A body of work is authored together, in the structure of the work itself
 rather than in a document tool or an email thread. People read and question
-the pages. Agents draft from the graph and the questions. Every change, by a
-person or an agent, passes the same checks and carries its receipt, and that
-is what makes the agentic process (an agent acting inside a governed workflow)
-reliable.
+the pages. Agents draft from the graph and the questions. Where the checks
+run in the commit path, every change, by a person or an agent, passes the
+same checks and carries its receipt, and that is what makes the agentic
+process (an agent acting inside a governed workflow) reliable.
 
 This page describes the loop, the record it leaves, and what has to be in
-place for it to hold. The package supplies the files, the graph, the checks
-and the collaboration records. The harness supplies the agent. Nothing here
-changes the boundary stated in the README's will-not-do block.
+place for it to hold. The files are yours. The package supplies the graph,
+the checks and the collaboration records. The harness supplies the agent.
+Nothing here changes the boundary stated in the README's will-not-do block,
+and this page does not restate it.
 
 ## The loop
 
+Three actors take part: a person, an agent running in the harness, and the
+package. The package never edits a source and never commits; it records,
+checks and refuses.
+
 1. **A person asks on the page.** A reader selects the sentence they mean on
-   the projected page and leaves a question, a correction or a discussion. The
-   note is receipted and pinned to that passage and that revision of the
-   source.
+   the projected page and leaves a question, a correction or a discussion. A
+   consumer adapter built on the collaboration ledger receipts the note and
+   pins it to that passage and that revision of the source.
 2. **An agent drafts from the graph.** In the harness it reads the open
    questions on the file, follows the graph to every file declared to depend
-   on it, and revises those files. The graph check and the contracts run
-   against its work as they would against anyone's.
-3. **A person decides, and the change lands.** The decision carries a reason
-   and is refused if a newer question has arrived on the same passage.
-   Accepted, the change is committed with its receipt, the graph is rebuilt,
-   and the pages built from it follow.
+   on it, and edits those files in the working tree. The graph check and the
+   contracts run against its work as they would against anyone's.
+3. **A person decides, and the change lands.** The decision carries a reason,
+   and the ledger refuses it if a newer question has arrived on the same
+   passage. Accepted, the person or the agent commits the change through the
+   boundary guard, the receipt travels with it, the graph is rebuilt, and the
+   pages built from it follow.
 
 The next question starts from the updated source.
 
@@ -51,17 +57,15 @@ agent's instructions (its skill and the harness's permissions, not a package
 gate) specify which records it may use, what it may change and when approval
 is required.
 
-What changes for a team is less repeated briefing and coordination. The team
-defines a goal and reviews a proposed plan before the agent starts, then
-reviews the outputs and approves consequential actions. Accepted changes
+The team defines a goal and reviews a proposed plan before the agent starts,
+then reviews the outputs and approves consequential actions. Accepted changes
 update the shared knowledge, so the next task starts from the latest agreed
-material. Measure the value through time to an approved result and the amount
-of rework.
+material rather than from a fresh briefing.
 
 What has to be connected: the agent, access to the relevant files, and
-whatever website, email, booking or practice tools the chosen workflow uses,
+whatever website, email, scheduling or other tools the chosen workflow uses,
 plus agreed review responsibilities and action permissions. The package
-organises source material and review contributions; agent execution and
+organizes source material and review contributions; agent execution and
 external delivery are integrations you configure in the harness.
 
 ## What the loop rests on
@@ -81,7 +85,8 @@ external delivery are integrations you configure in the harness.
   agent in the harness does, and the checks run against it.
 - **Examples with expected results.** Each round of authoring adds reviewed
   examples, and those become the evals an agent runs against its own drafts.
-  The agents improve as the record does, and the record shows it.
+  An agent's work is measured against them, and the record shows whether it
+  improved.
 
 ## What the package does not do here
 

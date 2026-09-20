@@ -118,12 +118,14 @@ method/scoring/practice-patterns-v3.json.kg.json
     "status": "active",
     "audience": "team",
     "relations": {
-      "implements": ["example:assessment:practice-patterns"],
-      "evidences": ["example:examples:practice-patterns-v3"]
+      "implements": ["example:assessment:practice-patterns"]
     }
   }
 }
 ```
+
+A sidecar carries `lifecycle` as well as `status` because the sidecar
+contract requires both; Markdown headers carry `status` alone.
 
 The worked examples are a third source, a table of sample answers with the
 scores and readings they produce, declared as evidence for the scoring rules:
@@ -149,20 +151,24 @@ kg:
 | Q07 missing | none | reading marked partial |
 ```
 
-From those headers the builder compiles edges: the assessment depends on the
-scoring rules, the rules implement the assessment, and the worked examples
-evidence the rules. Ask an agent to revise Q07 and it follows those edges to
+From those headers the builder compiles three edges: the assessment depends
+on the scoring rules, the rules implement the assessment, and the worked
+examples evidence the rules. Ask an agent to revise Q07 and it follows those edges to
 the rules and the examples that depend on the question, then revises the
 affected files and runs the graph check against the result. The graph check
 refuses a header that names a node which does not exist, and the audience on
 each file decides what an export may include.
 
-To try it, drop the four files under `content/` in a copy of
-`fixtures/projects/sample-workspace` and run `atelier graph --check`. The
-sidecar without its asset is refused (`sidecar has no matching source
-asset`); a `depends_on` pointing at an id that does not exist is refused
-(`declared depends_on target ... was not found`); with all four files present
-the graph builds with no diagnostics.
+To try it: the first line inside each fence above is the file's path relative
+to the workspace's `content/` directory, not part of the file. Copy a
+`fixtures/projects/sample-workspace`, save the lines after each path line as
+that file under `content/` (so the assessment lands at
+`content/method/assessments/practice-patterns.md`), then run
+`atelier graph --check --project ./atelier.project.json` from the copy. With
+all four files present the graph builds with no diagnostics. Remove the
+scoring `.json` and the sidecar is refused (`sidecar has no matching source
+asset`). Point the assessment's `depends_on` at an id that does not exist and
+the check is refused (`declared depends_on target ... was not found`).
 
 ## Census Rules
 

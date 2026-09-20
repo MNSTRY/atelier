@@ -30,17 +30,21 @@ package copy.
 
 The agent is never in the package. The harness (Claude Code, Codex or another
 coding harness) supplies the agent that edits authored files. The package
-supplies context, checks and collaboration records. Its collaboration
-endpoints apply no source change. Separately enrolled Atelier Sync can
-reconcile Git state and perform explicitly confirmed commit and publish
-operations. The package never applies definitions to a managed runtime.
+supplies context, checks and collaboration records. What the package will and
+will not do over the network, to a runtime, or to a source is stated once, in
+the README's will-not-do and claims blocks. Embed those blocks or point to
+them; do not restate them, because a looser restatement of a boundary is the
+failure the public-source rules single out.
 
-Say what that makes true: every change, by a person or an agent, passes the
-same checks and carries its receipt. That is what makes an agentic process
-(one where an agent acts inside a governed workflow) reliable. Do not describe
-agents as only proposing while an owner types the edit. That is neither the
-design nor the practice. Do not describe the package as an autonomous editor
-either. State the boundary from the will-not-do block.
+Two sentences about agents are both true and must not be confused. About the
+workflow: where the checks run in the commit path, every change, by a person
+or an agent in the harness, passes the same checks and carries its receipt,
+and that is what makes an agentic process (one where an agent acts inside a
+governed workflow) reliable. Do not describe that workflow as agents only
+proposing while an owner types the edit; that is neither the design nor the
+practice. About the package: its collaboration surface assembles context and
+proposals and applies none of them, and the README says so. Do not describe
+the package as an editor, autonomous or otherwise.
 
 ## Skills guide, gates enforce
 
@@ -75,17 +79,17 @@ Three different things get called "validated". Keep them apart.
   published format, every reference resolves to a declared source, and no
   reference reaches outside the audience the export declares. It does not
   prove that referenced content is packaged, and it does not prove that every
-  necessary rule was written down. `atelier export --dry-run <artifact>`
+  necessary rule was written down. `atelier dry-run <artifact>`
   reports `accepted`, and separately whether the artifact is `importable`.
 - **Coverage.** The readiness protocols prove what a record covers against
   an agreed inventory of a complete definition, answer by answer with a
   citation per answer, every gap listed by name. The responsible people review
   that coverage, and an attestation records the review bound to the exact
   bytes it judged. `atelier readiness` lists what each protocol still needs.
-- **Behaviour.** Representative inputs and expected results beside each rule
+- **Behavior.** Representative inputs and expected results beside each rule
   prove that the documented rules do what the record says.
 
-Completeness is coverage plus behaviour. No sentence lets one proof stand for
+Completeness is coverage plus behavior. No sentence lets one proof stand for
 another. "Passes the validator" never means "enough to rebuild from".
 
 ## What a universal may claim
@@ -132,7 +136,7 @@ never a feature list of the package.
 ## Wording
 
 - "Your local computer or virtual machine", never "this computer".
-- American "artifact" and "license".
+- American spelling throughout, as the README uses: "artifact", "license", "behavior".
 - The public category noun is "local governance toolkit for file-based bodies
   of work".
 - Counts are stated by the command that lists them, not by number.
