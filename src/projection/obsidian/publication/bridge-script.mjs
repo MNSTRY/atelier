@@ -113,7 +113,8 @@ export function criticalSection(P, host) {
   }
 
   if (vaultBasePath === null || vaultBasePath !== P.vaultRoot) return done('vault-mismatch', { vaultBasePath, wrote: false })
-  if (unsafe()) return done('path-unsafe', { wrote: false })
+  // The app answered for this vault; the path itself is the problem.
+  if (unsafe()) return done('path-unsafe', { vaultBasePath, wrote: false })
   if (P.op === 'inspect') return done('inspected', snapshot())
   if (P.op === 'collect') return JSON.stringify({ status: 'collected', ...(store[P.path] || { missing: true }), ...snapshot() })
 

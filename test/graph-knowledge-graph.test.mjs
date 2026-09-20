@@ -785,3 +785,21 @@ test('unclosedFenceAtEnd reports the open fence exactly when the scanner stops r
   const anyRunCloses = (text) => (unclosedFenceAtEnd(text) && /\n(```|~~~)[^\n]*\n(```|~~~)/.test(text) ? null : unclosedFenceAtEnd(text))
   assert.throws(() => { for (const [text, expected] of cases) assertAgreesWithScanner(text, expected, anyRunCloses) }, assert.AssertionError)
 })
+
+test('a link that leaves its repository and re-enters through the checkout directory name is not a repository-local edge', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-reenter-'))
+  try {
+    const root = path.join(base, 'alpha')
+    fs.mkdirSync(root)
+    fs.writeFileSync(path.join(root, 'a.md'), '# A\n\n[b](../alpha/b.md) and [c](b.md)\n')
+    fs.writeFileSync(path.join(root, 'b.md'), '# B\n')
+    const nodesByPath = new Map([['a.md', { id: 'n:a', path: 'a.md' }], ['b.md', { id: 'n:b', path: 'b.md' }]])
+    // Unchanged from the earlier reader, which never resolved a target above the root.
+    assert.deepEqual(markdownLinkEdges(root, nodesByPath), [{ source: 'n:a', target: 'n:b', type: 'links_to' }])
+    const { links, diagnostics } = resolveWorkspaceLinks({ repos: [{ name: 'alpha', root, nodesByPath }] })
+    assert.deepEqual(links.map((link) => link.href), ['b.md'])
+    assert.deepEqual(diagnostics.map((finding) => [finding.code, finding.href]), [['link-target-outside-enrolled-roots', '../alpha/b.md']])
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true })
+  }
+})
