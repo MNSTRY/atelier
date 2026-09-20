@@ -446,6 +446,15 @@ function printPlan(plan) {
 
 async function runIsolated({ plan, args, candidate, operator, host, receiptDir }) {
   const { createLayout, Instance } = await import('../../experiments/obsidian-publication/lib/instance.mjs')
+  // The CLI socket lives at <layout>/home/.obsidian-cli.sock and a Unix socket
+  // path is limited to 104 bytes on macOS, so every instance gets its own short
+  // root directly under the system temp directory, never a nested one.
+  const shortLayout = (make) => {
+    const layout = make()
+    const socket = path.join(layout.home, '.obsidian-cli.sock')
+    if (Buffer.byteLength(socket) > 100) throw new OutputRefusal(`isolated instance socket path is too long (${Buffer.byteLength(socket)} bytes): ${socket}`)
+    return layout
+  }
   const { createObsidianCliAdapter } = await import('../../src/projection/obsidian/publication/transport.mjs')
   const { execFile } = await import('node:child_process')
   const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-desktop-'))
@@ -469,7 +478,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
     if (plan.app === 'small-fixture' || plan.app === 'small-fixture-full-and-scoped') {
       const workspaceDir = path.join(temp, 'workspace')
       const fixture = materializeFixtureWorkspace(workspaceDir, { scopes: plan.app === 'small-fixture' ? undefined : [{ scopeId: 'scope-full', mode: 'full', selector: { all: true } }, SCOPED_SCOPE] })
-      const full = createLayout(path.join(temp, 'instance-full'))
+      const full = shortLayout(createLayout)
       const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-full'), vaultRoot: full.vault })
       const { app, launchedAtMs } = await launch(full)
       capabilities = await discoverCapabilities(app)
@@ -482,7 +491,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       } else {
         const memberships = [await runAp02Membership({ instance: app, label: 'full', vaultRoot: full.vault, manifest: derived.manifest })]
         await app.quit()
-        const scopedLayout = createLayout(path.join(temp, 'instance-scoped'))
+        const scopedLayout = shortLayout(createLayout)
         const scoped = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-scoped'), vaultRoot: scopedLayout.vault, scope: SCOPED_SCOPE })
         const second = await launch(scopedLayout)
         memberships.push(await runAp02Membership({ instance: second.app, label: 'scoped', vaultRoot: scopedLayout.vault, manifest: scoped.manifest }))
@@ -494,7 +503,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
     } else if (plan.app === 'capabilities-only') {
       const workspaceDir = path.join(temp, 'workspace')
       const fixture = materializeFixtureWorkspace(workspaceDir)
-      const layout = createLayout(path.join(temp, 'instance'))
+      const layout = shortLayout(createLayout)
       await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state'), vaultRoot: layout.vault })
       const { app } = await launch(layout)
       capabilities = await discoverCapabilities(app)
@@ -521,7 +530,10 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
     return recordProcedureReceipts({ plan, receiptDir, candidate, capabilities, operator, host, evidenceByGate, passedByGate, timingsByGate, wallClock, dataset })
   } finally {
     for (const app of instances) await app.quit().catch(() => {})
-    if (!args.keep) fs.rmSync(temp, { recursive: true, force: true }); else console.log(`[desktop-receipts] kept ${temp}`)
+    if (!args.keep) {
+      fs.rmSync(temp, { recursive: true, force: true })
+      for (const app of instances) fs.rmSync(app.layout.root, { recursive: true, force: true })
+    } else console.log(`[desktop-receipts] kept ${temp}${instances.map((app) => ` ${app.layout.root}`).join('')}`)
   }
 }
 
