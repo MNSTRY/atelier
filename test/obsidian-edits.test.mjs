@@ -2534,6 +2534,47 @@ test('an exchange that reports a failure is not believed: the outcome is read fr
   }
 })
 
+test('apply: an exchange back that fails with any typed refusal is settled from the digests on disk like the first exchange, never passed through with the outcome left unknown', needsExchange, async (t) => {
+  async function round(primitives) {
+    const world = raceWorld(t, 1)
+    const sourceFile = world.source('race-room/rounds/round-0.md')
+    const theirs = Buffer.from('another program wrote this between the read and the exchange\n')
+    const edit = world.editOf('race-room:round-0')
+    const typedFailure = () => { throw new PublicationRefusal('exchange-failed', 'synthetic typed failure of the second exchange') }
+    const result = await world.sourceApply({ beforeExchange: async () => { fs.writeFileSync(sourceFile, theirs) } }, { ...SOURCE_APPLY_PRIMITIVES, exchangeBack: typedFailure, ...primitives }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+    const shown = await world.sourceApply().show(edit.editId)
+    const retained = filesUnder(world.recovery()).some((file) => fs.statSync(file).isFile() && fs.readFileSync(file).equals(theirs))
+    return { result, shown, retained }
+  }
+  const { result, shown, retained } = await round({})
+  assert.ok(['refused', 'conflict'].includes(result.status), result.status)
+  assert.notEqual(result.code, 'exchange-failed', 'the failure of the second exchange is not what the person is told; the state on disk is')
+  assert.ok(SOURCE_APPLY_REFUSALS.includes(result.code), `${result.code} is a declared code`)
+  assert.equal(shown.object.outcomeUnknown, false, 'the intent is settled, not left for a later call to find')
+  assert.equal(retained, true, 'the bytes the other program wrote are retained')
+})
+
+test('apply: a file this process may not read refuses corpus-unreadable or source-unreadable with the cause, names no file, and writes nothing', { skip: process.platform === 'win32' || process.getuid?.() === 0 ? 'permission bits do not deny a read here' : needsExchange.skip }, async (t) => {
+  const world = raceWorld(t, 1)
+  const sourceFile = world.source('race-room/rounds/round-0.md')
+  const before = fs.readFileSync(sourceFile)
+  fs.chmodSync(sourceFile, 0o000)
+  t.after(() => { try { fs.chmodSync(sourceFile, 0o644) } catch { /* the world is removed anyway */ } })
+  const result = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  fs.chmodSync(sourceFile, 0o644)
+  assert.deepEqual([result.status, result.code, result.detail?.cause, SOURCE_APPLY_REFUSALS.includes(result.code)], ['refused', 'corpus-unreadable', 'EACCES', true], JSON.stringify(result))
+  assert.equal(/rounds|\.md/.test(JSON.stringify(result)), false, 'the refusal names no file')
+  // Readable while the graph is built, not at the moment of the apply: the source read has its own code.
+  // The apply opens the source without following a link; the graph's own read of the same file does not pass that flag.
+  const late = failOnce(t, 'openSync', (file, flags) => typeof file === 'string' && typeof flags === 'number' && (flags & fs.constants.O_NOFOLLOW) !== 0 && path.resolve(file) === path.resolve(sourceFile), 'EACCES')
+  fs.chmodSync(sourceFile, 0o644)
+  const second = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  late.restore()
+  assert.deepEqual([second.status, second.code, late.failed()], ['refused', 'source-unreadable', 1], JSON.stringify(second))
+  assert.deepEqual(fs.readFileSync(sourceFile), before, 'the source is as it was')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was written')
+})
+
 // A file system call that fails once, for one path, the way it fails when another program removes or replaces what
 // was there a moment ago. `when` sees the arguments of the call.
 function failOnce(t, method, when, code) {

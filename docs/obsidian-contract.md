@@ -374,7 +374,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `integration-disabled`, `workspace-not-prepared`, `unknown-edit`, `foreign-workspace`, `unknown-scope`, `edit-not-open` | the request cannot be resolved |
 | `manifest-unavailable`, `published-note-unavailable` | the generation's manifest, or the note as it was published, cannot be established |
 | `repository-not-enrolled`, `source-not-in-graph`, `source-moved` | the identity of a visible object no longer names that path: a renamed or moved source (a deleted one is `object-not-visible`) |
-| `source-missing`, `source-symlink`, `source-not-regular-file`, `source-hard-linked`, `source-outside-repository`, `source-inside-managed-root`, `source-inside-git-directory`, `source-git-ignored`, `source-ignore-state-unknown` | the path is not one this operation writes |
+| `source-missing`, `source-symlink`, `source-not-regular-file`, `source-unreadable`, `source-hard-linked`, `source-outside-repository`, `source-inside-managed-root`, `source-inside-git-directory`, `source-git-ignored`, `source-ignore-state-unknown` | the path is not one this operation writes |
 | `invalid-apply-request`, `object-not-visible`, `edit-class-not-allowed`, `conflict-disposition-unsupported`, `maintenance-mode-manual`, `no-apply-policy-installed`, `apply-policy-revoked`, `apply-policy-paused`, `apply-policy-invalid`, `apply-policy-reference-mismatch`, `policy-digest-mismatch`, `policy-changed-since-dispatch`, `policy-selector-invalid`, `outside-policy-selection`, `retry-budget-exhausted`, `batch-bound-reached` | the decision |
 | `stale-source`, `object-conflicted`, `sibling-edit-unobservable`, `lease-held` | arbitration; the operation stays conflicted or pending with its bytes |
 | `edit-not-applicable`, `change-outside-authored-body`, `no-source-change` | the lens result is not an applicable body replacement |
@@ -413,6 +413,17 @@ list`, `show`, `run` and `recover` answer such a record as a typed refusal.
   creates on the source after that check and before the exchange keeps the old
   bytes under its other name; the source path itself ends as the applied file,
   and nothing detects the second name.
+- Every component of the source path is checked for a symbolic link, and the
+  file itself is opened without following one. A directory component that
+  another program replaces with a symbolic link after that check and before the
+  exchange is not detected; what contains it is the commit rule: unless the
+  file the exchange displaced holds exactly the bytes that were read, the files
+  are exchanged back and everything is retained.
+- An enrolled file this process may not read while the canonical graph is built
+  refuses `corpus-unreadable`, naming no file. A source that cannot be read at
+  the moment of the apply refuses `source-unreadable`. Both carry the system's
+  error code as the cause, and a file at a candidate path that cannot
+  be read is never judged to be a generated candidate: it is kept.
 - Where no atomic exchange exists the whole apply half of the test suite is
   skipped: on such a platform the only executed evidence is that apply refuses
   `exchange-unavailable` and writes nothing.

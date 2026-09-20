@@ -87,7 +87,7 @@ export const SOURCE_APPLY_STEPS = Object.freeze(['apply-record-written', 'candid
 
 export const SOURCE_APPLY_REFUSALS = Object.freeze([
   'integration-disabled', 'workspace-not-prepared', 'unknown-edit', 'foreign-workspace', 'edit-not-open', 'unknown-scope', 'manifest-unavailable', 'published-note-unavailable',
-  'repository-not-enrolled', 'source-not-in-graph', 'source-moved', 'source-missing', 'source-symlink', 'source-not-regular-file', 'source-hard-linked', 'source-outside-repository',
+  'corpus-unreadable', 'repository-not-enrolled', 'source-not-in-graph', 'source-moved', 'source-missing', 'source-symlink', 'source-not-regular-file', 'source-unreadable', 'source-hard-linked', 'source-outside-repository',
   'source-inside-managed-root', 'source-inside-git-directory', 'source-git-ignored', 'source-ignore-state-unknown', 'sibling-edit-unobservable', 'lease-held', 'object-conflicted',
   'stale-source', 'edit-not-applicable', 'change-outside-authored-body', 'no-source-change', 'exchange-unavailable', 'apply-volume-mismatch', 'batch-bound-reached',
   'concurrent-source-writer', 'source-changed-during-apply', 'interrupted-before-exchange', 'apply-interrupted-needs-person', 'source-changed-after-apply',
@@ -128,12 +128,16 @@ function readNoFollow(file, { withMode = false } = {}) {
   } finally { fs.closeSync(descriptor) }
 }
 
+const NOT_A_FILE = new Set(['EISDIR', 'EINVAL', 'ENOTDIR', 'EMLINK'])
+const UNREADABLE = new Set(['EACCES', 'EPERM', 'EIO'])
+
 // The digest of the file, null when nothing is there, 'unreadable' when what is there is not a regular file: whatever
 // that is, it is not bytes this module knows.
 function digestOrNull(file) {
   try { return sha256Digest(readNoFollow(file)) } catch (error) {
     if (error.code === 'ENOENT') return null
-    if (['ELOOP', 'EISDIR', 'EINVAL', 'ENOTDIR', 'EMLINK'].includes(error.code)) return 'unreadable'
+    // A file this process may not read is not bytes this module knows either: it is kept and never judged ours.
+    if (NOT_A_FILE.has(error.code) || error.code === 'ELOOP' || UNREADABLE.has(error.code)) return 'unreadable'
     throw error
   }
 }
@@ -288,9 +292,15 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
 
     // The canonical graph as it is now, and the corpus profile of this machine. Built once per call.
     function currentCorpus(workspace) {
-      workspace.corpus ??= {
-        graph: seams.buildGraph({ project: workspace.project, eligibility }),
-        profile: seams.profileFor({ project: workspace.project, workspaceId: workspace.workspaceId, audienceAllow: workspace.machine.audienceAllow }),
+      // The graph reads every enrolled source. A file this process may not read is a refusal that names no file.
+      try {
+        workspace.corpus ??= {
+          graph: seams.buildGraph({ project: workspace.project, eligibility }),
+          profile: seams.profileFor({ project: workspace.project, workspaceId: workspace.workspaceId, audienceAllow: workspace.machine.audienceAllow }),
+        }
+      } catch (error) {
+        if (isTyped(error) || !UNREADABLE.has(error?.code)) throw error
+        refuse('corpus-unreadable', { cause: error.code })
       }
       return workspace.corpus
     }
@@ -520,7 +530,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         const vaultRoots = workspace.enablement.scopes.map((scope) => workspace.storeOf(scope.scopeId).vaultRoot)
         const located = locateSource({ project: workspace.project, repoId: identity.repoId, relative: node.path, managedRoots: [workspace.workspaceRoot, ...vaultRoots, ...extraManagedRoots], isGitIgnored: rules.isGitIgnored, gitDirectory: rules.gitDirectory, env })
         let source
-        try { source = readNoFollow(located.absolute, { withMode: true }) } catch (error) { refuse(error.code === 'ENOENT' ? 'source-missing' : error.code === 'ELOOP' ? 'source-symlink' : 'source-not-regular-file') }
+        try { source = readNoFollow(located.absolute, { withMode: true }) } catch (error) { refuse(error.code === 'ENOENT' ? 'source-missing' : error.code === 'ELOOP' ? 'source-symlink' : NOT_A_FILE.has(error.code) ? 'source-not-regular-file' : 'source-unreadable', { cause: error.code ?? 'unknown' }) }
         const { bytes: sourceBytes, mode: sourceMode } = source
         const sourceDigest = sha256Digest(sourceBytes)
 
@@ -660,7 +670,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         // An immutable copy is kept first, so the bytes have a receipt whatever happens to the file next.
         const theirs = displacedDigest !== null && displacedDigest !== 'unreadable' ? store.retainObject(readNoFollow(candidatePath)).ref : null
         try { rules.exchangeBack({ candidatePath, sourcePath: located.absolute, exchange }) } catch (error) {
-          if (error?.name !== 'ExchangeRefusal') throw error
+          // The same rule as the first exchange: any typed failure is settled from what is on disk.
+          if (!isTyped(error) && error?.name !== 'ExchangeRefusal') throw error
           // The files could not be exchanged back. Nothing is guessed: what is on disk is kept and settled from digests.
           const settled = settleInterrupted(workspace, lease, record, workspace.objects.stateOf(identity))
           refuse(settled.code, { applyId, recoveryRefs: [...(settled.recoveryRefs ?? []), ...(theirs ? [theirs] : [])] })
