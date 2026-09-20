@@ -69,7 +69,8 @@ export function createEditorAdapter({ call, processProbe, kind = 'custom' }) {
       if (processes === 'absent') return { state: 'absent', reason: 'no Obsidian process is running' }
       try {
         const reply = await readOnly({ op: 'inspect', vaultRoot, path: POLICY_SETTINGS_PATH })
-        if (reply.status === 'inspected' && reply.vaultBasePath === vaultRoot) return { state: 'coordinated', reason: 'the app answered for this vault' }
+        // `path-unsafe` for the probe path still proves the app answered for this vault; the settings unit reports the path.
+        if (['inspected', 'path-unsafe'].includes(reply.status) && reply.vaultBasePath === vaultRoot) return { state: 'coordinated', reason: 'the app answered for this vault' }
         return { state: 'uncoordinated', reason: reply.status === 'vault-mismatch' ? 'the app answered for another vault' : `the app answered ${reply.status}` }
       } catch (error) {
         return { state: 'uncoordinated', reason: `an Obsidian process may be running and the bridge did not answer: ${String(error.message || error).slice(0, 200)}` }

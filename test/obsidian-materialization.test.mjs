@@ -836,3 +836,96 @@ test('mutation control: a missing, misplaced or mismatched closing fence fails t
   // A diagnostic that is dropped fails too.
   assert.throws(() => assertFenceClosed({ ...prepared, diagnostics: [] }, snapshot, target.nodeId, item), assert.AssertionError)
 })
+
+// Review finding (brokered review of the merged range): the redaction guard must not
+// mistake an author's own hex-suffixed names for allocated identities.
+function makeWorkspaceVariant(t, extraFiles) {
+  const saved = workspace.files
+  workspace.files = { ...saved, ...extraFiles }
+  try { return makeWorkspace(t) } finally { workspace.files = saved }
+}
+
+test('author text that merely looks like an identity suffix is not a redaction failure', (t) => {
+  const asset = 'north-desk/assets/app--0f1e2d3c4b5a.css'
+  const snapshot = makeWorkspaceVariant(t, {
+    [asset]: { text: 'body { color: teal }\n' },
+    [`${asset}.kg.json`]: { text: JSON.stringify({ schema: 'mnstry.source-sidecar@v1', asset: 'app--0f1e2d3c4b5a.css', title: 'Build asset--0f1e2d3c4b5a', summary: 'Invented content-hashed asset.', tags: ['build--0f1e2d3c4b5a'],
+      kg: { id: 'north-desk:build-asset', type: 'evidence', domain: 'sample', lifecycle: 'source', status: 'active', audience: 'team', relations: { evidences: ['north-desk:harbor-plan'] } } }) },
+  })
+  const prepared = prepare(snapshot, fullScope)
+  const wrapper = prepared.manifest.notes.find((note) => note.ext[EXT].source.path === 'assets/app--0f1e2d3c4b5a.css')
+  assert.ok(wrapper, 'the asset has a wrapper note in the full view')
+  assert.ok(fileOf(prepared, wrapper.path).bytes.toString('utf8').includes('app--0f1e2d3c4b5a'), 'the author name is shown as written')
+  assertNothingWithheld(prepared)
+})
+
+test('generated text that names a census identity outside the view is still refused', (t) => {
+  // An author title that literally carries the withheld node's suffix reaches the
+  // relations region, and the guard must refuse it: this is the mutation the
+  // benign case above must not have disabled.
+  const sealed = identitySuffix('north-desk', 'north-desk:sealed-ledger', 64)
+  const snapshot = makeWorkspaceVariant(t, {
+    'north-desk/notes/naming.md': { text: `---\ntitle: "Names it--${sealed.slice(0, 12)}"\nkg:\n  id: "north-desk:naming"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Names it\n\nBody.\n` },
+  })
+  assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
+})
+
+test('a wikilink whose author-chosen words look like an identity suffix is not a redaction failure', (t) => {
+  // The rewrite appends `|<what the author wrote>` so the editor shows those words;
+  // that tail is the author's, not an emitted path.
+  const snapshot = makeWorkspaceVariant(t, {
+    'north-desk/notes/weekly--202401151230.md': { text: '---\ntitle: "Weekly"\nkg:\n  id: "north-desk:weekly"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# Weekly\n' },
+    'north-desk/notes/log.md': { text: '---\ntitle: "Log"\nkg:\n  id: "north-desk:log"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# Log\n\nSee [[weekly--202401151230]].\n' },
+  })
+  const prepared = prepare(snapshot, fullScope)
+  const log = fileOf(prepared, noteOf(prepared, 'north-desk:log').path).bytes.toString('utf8')
+  assert.ok(log.includes('|weekly--202401151230]]'), log)
+  assertNothingWithheld(prepared)
+})
+
+test('an asset the view does not copy is a forbidden identity in generated text', (t) => {
+  // A real asset (id `<repo>:asset:<path>`), not a census node: only the asset
+  // branch of the deny-list can catch its suffix, so this is a control for it.
+  const swell = identitySuffix('west-desk', 'west-desk:asset:charts/swell.svg', 64)
+  const files = assetFiles()
+  files['east-desk/notes/naming.md'] = doc('east-desk:naming', `Names it--${swell.slice(0, 12)}`, '# Names it\n')
+  const snapshot = makeAssetSnapshot(t, { files })
+  // The full view copies the swell asset (the logbook embeds it): allowed there...
+  const full = prepare(snapshot, assetScope, { profile: assetProfile })
+  assert.ok(full.manifest.attachments.some((attachment) => attachment.ext[EXT].assetPath === 'charts/swell.svg'))
+  // ...and forbidden in a view that does not copy it.
+  assert.throws(() => prepare(snapshot, { ...assetScope, scopeId: 'scope-naming', mode: 'scoped', selector: { ids: ['east-desk:naming'] } }, { profile: assetProfile }), /redaction-failure/)
+})
+
+test('a census record with an empty repository or identity neither joins a view nor aborts it', (t) => {
+  const snapshot = makeWorkspace(t)
+  // The snapshot boundary requires string id and repo on a node but not that
+  // they are non-empty; asset records are not validated there at all. Each
+  // half of the guard is load-bearing: an empty id and an empty repo, on a
+  // node and on an asset, must each be skipped exactly as visibleAssets skips them.
+  snapshot.graph.nodes.push({ id: 'north-desk:ghost', repo: '', path: 'ghost.md', title: 'Ghost', eligible: false })
+  snapshot.graph.assets = [...(snapshot.graph.assets ?? []),
+    { id: '', repo: 'north-desk', path: 'ghost.bin', eligible: false },
+    { id: 'north-desk:asset:ghost2.bin', repo: '', path: 'ghost2.bin', eligible: false }]
+  const prepared = prepare(snapshot, fullScope)
+  assert.ok(prepared.manifest.notes.length > 0)
+  assertNothingWithheld(prepared)
+})
+
+test('a withheld identity that reaches only a relations row (never a path) is still refused', (t) => {
+  // A title longer than the basename budget is truncated in the allocated path,
+  // so the withheld suffix it carries appears only in the generated relations
+  // region of the notes that relate to it. Only the free-text scan can catch it.
+  const sealed = identitySuffix('north-desk', 'north-desk:sealed-ledger', 64).slice(0, 12)
+  const title = `${'Long name '.repeat(14)}--${sealed}`
+  const snapshot = makeWorkspaceVariant(t, {
+    'north-desk/notes/long.md': { text: `---\ntitle: "${title}"\nkg:\n  id: "north-desk:long"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Long\n` },
+  })
+  assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
+  // Control: the same title without the withheld suffix prepares, and its path does not carry the title's tail.
+  const benign = makeWorkspaceVariant(t, {
+    'north-desk/notes/long.md': { text: `---\ntitle: "${'Long name '.repeat(14)}--ffffffffffff"\nkg:\n  id: "north-desk:long"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Long\n` },
+  })
+  const prepared = prepare(benign, fullScope)
+  assert.ok(!noteOf(prepared, 'north-desk:long').path.includes('ffffffffffff'), 'the long title is truncated before the allocated suffix')
+})

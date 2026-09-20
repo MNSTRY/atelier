@@ -1826,3 +1826,114 @@ test('G04 real isolated Obsidian: production publisher through the CLI transport
       else t.diagnostic(`evidence kept at ${layout.root}`)
     }
   })
+
+// ---------------------------------------------------------------------------
+// Brokered review of the merged range: symlinked settings, throw paths, script standalone
+// ---------------------------------------------------------------------------
+
+test('a symlinked .obsidian reports the settings unit and lets every note converge; the probe still sees the app', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const outside = fs.mkdtempSync(path.join(TMP, 'atelier-elsewhere-'))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  fs.rmSync(path.join(world.vault, '.obsidian'), { recursive: true, force: true })
+  fs.symlinkSync(outside, path.join(world.vault, '.obsidian'), 'dir')
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE }, settings: true }), absentAdapter())
+  assert.equal(result.state, 'committed', JSON.stringify(result))
+  const settings = result.notes.find((entry) => entry.kind === 'settings')
+  assert.equal(settings.outcome, 'path-unsafe')
+  assert.equal(settings.blocking, false)
+  assert.equal(noteResult(result).outcome, 'published')
+  assert.equal(world.read(NOTE), CANDIDATE)
+  assert.deepEqual(fs.readdirSync(outside), [], 'nothing is written through the link')
+
+  const app = new ModelApp(world.vault)
+  const probe = await modelAdapter(app).probe({ vaultRoot: world.vault })
+  assert.equal(probe.state, 'coordinated', JSON.stringify(probe))
+})
+
+test('a keep unit whose note vanished refuses staging-failed instead of throwing; malformed manifest bytes refuse', needsExchange, async (t) => {
+  const world = await seeded(t)
+  fs.rmSync(world.full(NOTE))
+  // The pre-flight creates the journal's staging directory; make it unwritable
+  // only after that, so the late staging on the keep -> create path is what fails.
+  // The pre-flight creates the journal's staging directory; occupy the late
+  // candidate's name only after that, so the exclusive create on the
+  // keep -> create path is what fails (EEXIST), with nothing else in the way.
+  const staging = world.store.stagingRoot
+  const seam = { at: 'after-staging', halt: () => {
+    for (const dir of fs.readdirSync(staging).map((name) => path.join(staging, name)).filter((entry) => fs.statSync(entry).isDirectory())) {
+      for (const unit of [0, 1]) fs.writeFileSync(path.join(dir, `${String(unit).padStart(6, '0')}.late.candidate`), 'occupied')
+    }
+  } }
+  // Called directly: the world's staging oracle would rightly object to the occupied name.
+  const result = await publishView({ preparedView: viewOf('gen-0002', { notes: { [NOTE]: BASE } }), protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: world.store, adapter: absentAdapter(), quietPeriodMs: 0, [CRASH_INJECTION_TEST_SEAM]: seam })
+  for (const dir of fs.readdirSync(staging).map((name) => path.join(staging, name)).filter((entry) => fs.statSync(entry).isDirectory())) {
+    for (const name of fs.readdirSync(dir)) if (name.endsWith('.late.candidate') && fs.readFileSync(path.join(dir, name), 'utf8') === 'occupied') fs.rmSync(path.join(dir, name))
+  }
+  assert.equal(result.state, 'updating', JSON.stringify(result))
+  const unit = noteResult(result)
+  assert.equal(unit.outcome, 'staging-failed')
+  assert.equal(unit.blocking, true)
+  assert.equal(unit.errorCode, 'EEXIST')
+  assert.equal(fs.existsSync(world.full(NOTE)), false, 'nothing was created')
+  assertStagingNeverHoldsDisplacedBytes(world.store)
+
+  const view = viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } })
+  view.manifestBytes = Buffer.from('{ not json', 'utf8')
+  const refused = await world.publish(view, absentAdapter())
+  assert.equal(refused.state, 'refused')
+  assert.equal(refused.refusal.code, 'invalid-prepared-view')
+})
+
+test('a late candidate that fails after its file exists is removed before staging-failed is reported', needsExchange, async (t) => {
+  const world = await seeded(t)
+  fs.rmSync(world.full(NOTE))
+  // A throwing halt at the seam stands in for a write or fsync failure after
+  // the exclusive create succeeded: the file exists and nothing names it yet.
+  const seam = { at: 'after-late-candidate-open', halt: () => { throw Object.assign(new Error('write failed'), { code: 'EIO' }) } }
+  const result = await publishView({ preparedView: viewOf('gen-0002', { notes: { [NOTE]: BASE } }), protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: world.store, adapter: absentAdapter(), quietPeriodMs: 0, [CRASH_INJECTION_TEST_SEAM]: seam })
+  assert.equal(result.state, 'updating', JSON.stringify(result))
+  const unit = noteResult(result)
+  assert.equal(unit.outcome, 'staging-failed')
+  assert.equal(unit.errorCode, 'EIO')
+  const strays = filesUnder(world.store.stagingRoot).filter((file) => file.endsWith('.late.candidate'))
+  assert.deepEqual(strays, [], 'the partial late candidate was removed')
+  assertStagingNeverHoldsDisplacedBytes(world.store)
+  assert.equal(fs.existsSync(world.full(NOTE)), false)
+})
+
+test('the serialized script runs on its own, and a body that reaches for a module binding is caught', needsExchange, () => {
+  const vault = fs.mkdtempSync(path.join(TMP, 'atelier-standalone-'))
+  try {
+    fs.mkdirSync(path.join(vault, 'notes'))
+    fs.writeFileSync(path.join(vault, NOTE), BASE)
+    const payload = { op: 'inspect', vaultRoot: fs.realpathSync(vault), path: NOTE }
+    const code = buildEvalCode(payload)
+    const body = code.slice(0, code.lastIndexOf(')(JSON.parse')).slice(1)
+    // Executed, not merely parsed: the only names in scope are the host's.
+    const run = (source) => new Function(`return (${source})`)()(JSON.parse(JSON.stringify(payload)), createInProcessHost({ app: null }))
+    const reply = JSON.parse(run(body))
+    assert.equal(reply.status, 'inspected')
+    assert.equal(reply.diskSha256, hex(BASE))
+    const mutated = body.replace('const done = ', 'const leak = PROTOCOL_ID; const done = ')
+    assert.notEqual(mutated, body)
+    assert.throws(() => run(mutated), ReferenceError, 'a body that references a module-level binding cannot run in the app')
+
+    // The publish branches too: a conditional removal runs standalone, and a
+    // module binding referenced inside that branch is caught.
+    const recoveryPath = path.join(vault, 'displaced.bin')
+    const removal = { op: 'publish', mode: 'remove', vaultRoot: fs.realpathSync(vault), path: NOTE, operationId: 'standalone:1', baseSha256: hex(BASE), recoveryPath }
+    const removeBody = buildEvalCode(removal)
+    const removeSource = removeBody.slice(0, removeBody.lastIndexOf(')(JSON.parse')).slice(1)
+    // Injected outside the branch's own try/catch, which would otherwise swallow the reference error.
+    const inRemoveBranch = removeSource.replace("if (P.mode === 'remove') {", "if (P.mode === 'remove') { PROTOCOL_ID;")
+    assert.notEqual(inRemoveBranch, removeSource)
+    assert.throws(() => new Function(`return (${inRemoveBranch})`)()(JSON.parse(JSON.stringify(removal)), createInProcessHost({ app: null })), ReferenceError)
+    assert.equal(fs.readFileSync(path.join(vault, NOTE), 'utf8'), BASE, 'the failed mutant moved nothing')
+    const removed = JSON.parse(new Function(`return (${removeSource})`)()(JSON.parse(JSON.stringify(removal)), createInProcessHost({ app: null })))
+    assert.equal(removed.status, 'removed', JSON.stringify(removed))
+    assert.equal(fs.readFileSync(recoveryPath, 'utf8'), BASE, 'the removal is a move to recovery')
+  } finally {
+    fs.rmSync(vault, { recursive: true, force: true })
+  }
+})

@@ -1058,6 +1058,16 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
             finding('link-target-outside-enrolled-roots', occurrence, `link ${shown} leaves every enrolled repository`)
             continue
           }
+          // A link that climbs above its own repository and comes back in
+          // through the checkout's directory name depends on where the
+          // repository happens to be checked out. It is not a repository-local
+          // link and never was one; only a link into ANOTHER enrolled
+          // repository may leave the root.
+          const lexical = path.posix.normalize(posixJoin(path.posix.dirname(rel), decoded.split(path.sep).join('/')))
+          if (owner === repo && (lexical === '..' || lexical.startsWith('../'))) {
+            finding('link-target-outside-enrolled-roots', occurrence, `link ${shown} leaves its repository and re-enters through the checkout path`)
+            continue
+          }
           const target = relPath(owner.root, abs)
           // Eligibility is tested per candidate, before choosing: a withheld
           // candidate is skipped exactly as an absent one, so it can never

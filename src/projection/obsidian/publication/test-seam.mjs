@@ -9,7 +9,8 @@
 // before-candidate-move (the journal header is written, the exchange
 // candidates are still in staging), after-staging, after-late-write-ahead (a
 // late exchange candidate is named by the journal and still in staging),
-// after-capture, after-publish, before-manifest-commit,
+// after-late-candidate-open (a late candidate file exists and is still
+// empty), after-capture, after-publish, before-manifest-commit,
 // after-manifest-pointer. Inside the retirement of a staged file, between its
 // move to the unit's recovery directory and the judgement: after-retire-move.
 export const CRASH_INJECTION_TEST_SEAM = Symbol('atelier.obsidian.crash-injection-test-seam')
