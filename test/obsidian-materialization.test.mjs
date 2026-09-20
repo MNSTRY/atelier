@@ -884,12 +884,15 @@ test('a wikilink whose author-chosen words look like an identity suffix is not a
 })
 
 test('an asset the view does not copy is a forbidden identity in generated text', (t) => {
-  // Defence in depth: the deny-list covers assets too, not only census nodes.
-  const snapshot = makeWorkspaceVariant(t, {
-    'north-desk/notes/naming.md': { text: `---\ntitle: "Names it--${identitySuffix('north-desk', 'north-desk:depth-chart', 64).slice(0, 12)}"\nkg:\n  id: "north-desk:naming"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Names it\n` },
-  })
-  // depth-chart is copied by the full view, so its suffix is allowed there...
-  prepare(snapshot, fullScope)
-  // ...and forbidden in a scoped view that does not carry it.
-  assert.throws(() => prepare(snapshot, { ...scopedScope, scopeId: 'scope-naming', selector: { ids: ['north-desk:harbor-plan', 'north-desk:naming'] } }), /redaction-failure/)
+  // A real asset (id `<repo>:asset:<path>`), not a census node: only the asset
+  // branch of the deny-list can catch its suffix, so this is a control for it.
+  const swell = identitySuffix('west-desk', 'west-desk:asset:charts/swell.svg', 64)
+  const files = assetFiles()
+  files['east-desk/notes/naming.md'] = doc('east-desk:naming', `Names it--${swell.slice(0, 12)}`, '# Names it\n')
+  const snapshot = makeAssetSnapshot(t, { files })
+  // The full view copies the swell asset (the logbook embeds it): allowed there...
+  const full = prepare(snapshot, assetScope, { profile: assetProfile })
+  assert.ok(full.manifest.attachments.some((attachment) => attachment.ext[EXT].assetPath === 'charts/swell.svg'))
+  // ...and forbidden in a view that does not copy it.
+  assert.throws(() => prepare(snapshot, { ...assetScope, scopeId: 'scope-naming', mode: 'scoped', selector: { ids: ['east-desk:naming'] } }, { profile: assetProfile }), /redaction-failure/)
 })

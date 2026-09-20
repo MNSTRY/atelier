@@ -1876,6 +1876,7 @@ test('a keep unit whose note vanished refuses staging-failed instead of throwing
   assert.equal(unit.blocking, true)
   assert.equal(unit.errorCode, 'EEXIST')
   assert.equal(fs.existsSync(world.full(NOTE)), false, 'nothing was created')
+  assertStagingNeverHoldsDisplacedBytes(world.store)
 
   const view = viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } })
   view.manifestBytes = Buffer.from('{ not json', 'utf8')

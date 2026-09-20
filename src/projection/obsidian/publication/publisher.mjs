@@ -473,9 +473,15 @@ function retire(plan, { store, journalId, crash }) {
 // recovery directory like any other, and because the header could not name
 // it, a write-ahead entry names its path and digest before it is moved there:
 // restart recovery can then tell this generated file from displaced bytes.
+// A late candidate that fails part-way is removed before the failure is
+// reported: nothing names it, so nothing would ever clean it up.
 function stageLate(plan, { store, journal, journalId, crash, updating }) {
   const preparedPath = store.preparedPath(journalId, plan.unit, { late: true })
-  stageCandidate(preparedPath, plan.bytes, plan.mode ?? 0o644)
+  const created = []
+  try { stageCandidate(preparedPath, plan.bytes, plan.mode ?? 0o644, created) } catch (error) {
+    for (const file of created) fs.rmSync(file, { force: true })
+    throw error
+  }
   if (plan.op !== 'replace') return preparedPath
   const unit = { unit: plan.unit, preparedPath, stagedPath: store.exchangeCandidatePath(journalId, plan.unit, { late: true }) }
   journal.append({ step: 'capture', outcome: 'ok', state: updating ? 'updating' : 'captured', notePath: plan.path, afterDigest: plan.candidateDigest,
