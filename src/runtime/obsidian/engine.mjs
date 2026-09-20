@@ -27,7 +27,8 @@ import { createNullWatcherFactory } from './watchers.mjs'
 //
 //   1. load the project when its configuration changed; read typed enablement
 //   2. look at every vault note; preserve and queue what somebody edited
-//   3. automatic mode only: dispatch queued edits through the apply operation
+//   3. automatic mode only: dispatch queued edits through the apply operation;
+//      then hand the pending edits to the proposal adapter, when one is registered
 //   4. look at displaced files again for writes that arrived late
 //   5. look at sources, configuration, scopes and eligibility; decide by digest
 //   6. for each invalidated view: canonical graph -> source snapshot ->
@@ -314,6 +315,15 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       stateStore.writePendingEdits({ ...pending, edits })
     }
 
+    // Structural edits. The registered proposal adapter is handed the pending edits once per tick and decides by its
+    // own record which of them it has not settled; it creates copy-only proposals and writes no source and no vault.
+    // Without one registered nothing is handed anywhere, and an adapter that throws changes nothing else of the tick.
+    let proposals = null
+    const proposalAdapter = extensions.get('proposal-adapter')
+    if (proposalAdapter !== null) {
+      try { proposals = await proposalAdapter.propose({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env }) } catch { proposals = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
+    }
+
     // 5. Late writers. The publisher looks twice per publication; a holder can write later still.
     const lateWriters = []
     const lateDocument = stateStore.readLateWriters()
@@ -464,7 +474,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       state: 'ticked', full, workspaceId, maintenanceMode: machine.maintenanceMode,
       changes: changes.map((change) => ({ ...change })), scopes: [...entries.values()].sort((left, right) => compareText(left.scopeId, right.scopeId)),
       pendingEdits: edits.filter((edit) => edit.closedAt === null).map(({ editId, scopeId, path: notePath, state }) => ({ editId, scopeId, path: notePath, state })),
-      dispatched, lateWriters,
+      dispatched, lateWriters, ...(proposals === null ? {} : { proposals }),
     }
   }
 

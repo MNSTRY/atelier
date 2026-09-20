@@ -2340,6 +2340,101 @@ test('mutation control: a builder that looks up this machine, or writes the unit
 // 22. Nothing is left running
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The proposal adapter on a tick
+// ---------------------------------------------------------------------------
+//
+// The engine hands the pending edits to the registered proposal adapter once
+// per tick, after the automatic dispatch. The worlds below are the invented
+// git repositories of the proposal tests; a view is written directly, so no
+// publisher and no atomic exchange is needed and these run on every platform.
+
+const { createEngineApplyOperation } = await import('../src/projection/obsidian/edits/index.mjs')
+const { PROPOSAL_ADAPTER_ID, PROPOSAL_ADAPTER_PRIMITIVES, createProposalAdapter, createProposalAdapterForOracleTests } = await import('../src/projection/obsidian/proposals/index.mjs')
+const { createMaintenanceExtensions: extensionsForProposals } = await import('../src/runtime/obsidian/extension-points.mjs')
+const { REPOSITORIES: PROPOSAL_REPOSITORIES, makeProposalWorld, sourceState: proposalSourceState } = await import('./support/obsidian-proposals/world.mjs')
+const { treeListing: proposalTree } = await import('./support/obsidian-edits/apply-world.mjs')
+
+function proposalEngine(world, { adapter = createProposalAdapter({ env: world.env }), apply = true } = {}) {
+  const extensions = extensionsForProposals()
+  if (apply) extensions.register('apply-operation', createEngineApplyOperation({ context: { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock } }))
+  if (adapter) extensions.register('proposal-adapter', adapter)
+  return world.engine({ extensions })
+}
+const storesOf = (world) => Object.fromEntries(PROPOSAL_REPOSITORIES.map((name) => [name, fs.existsSync(world.storeDir(name)) ? proposalTree(world.storeDir(name)) : null]))
+const adapterStateOf = (world) => (fs.existsSync(world.queueDir()) ? proposalTree(world.queueDir()) : null)
+
+test('proposal adapter binding: a tick hands the pending edits to the registered adapter once, after the automatic dispatch, with the workspace it needs; without one nothing is handed anywhere, and an adapter that throws changes nothing else of the tick', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:second')
+  const calls = []
+  const recording = { id: 'test.recording-adapter', async propose(context) { calls.push(context); return { adapterId: 'test.recording-adapter', examined: 0, outcomes: [], repositories: [] } } }
+  const first = await proposalEngine(world, { adapter: recording }).tick()
+  assert.equal(first.state, 'ticked')
+  assert.equal(calls.length, 1, 'once per tick')
+  const [context] = calls
+  assert.deepEqual([context.workspaceId, context.workspaceRoot, typeof context.clock, context.project.repos.map((repo) => repo.name)], [world.context().workspaceId, world.workspaceRoot(), 'function', [...PROPOSAL_REPOSITORIES]])
+  assert.deepEqual(context.edits.map((edit) => [edit.identity.nodeId, edit.state]), [['east-wing:guide', 'queued']], 'the edit this very tick preserved and queued is among them')
+  assert.deepEqual(first.proposals, { adapterId: 'test.recording-adapter', examined: 0, outcomes: [], repositories: [] })
+  // Handed a copy: an adapter cannot change the pending edits of the engine.
+  context.edits[0].state = 'applied'
+  assert.equal(world.editOf('east-wing:guide').state, 'queued')
+
+  const without = await proposalEngine(world, { adapter: null }).tick()
+  assert.deepEqual([without.state, Object.hasOwn(without, 'proposals'), calls.length], ['ticked', false, 1])
+  const throwing = await proposalEngine(world, { adapter: { id: 'test.throwing-adapter', async propose() { throw new Error('synthetic failure') } } }).tick()
+  assert.deepEqual([throwing.state, throwing.proposals, throwing.pendingEdits.map((edit) => edit.state)], ['ticked', { adapterId: 'test.throwing-adapter', failed: 'proposal-adapter-threw' }, ['queued']])
+})
+
+test('proposal adapter on the engine, manual and automatic: a structural edit becomes one proposal on the tick after it was recorded as proposed, unchanged ticks append zero ledger events and write nothing, apply behaves as it did, and no source byte or git state ever changes', async (t) => {
+  for (const mode of ['manual', 'automatic']) {
+    const world = makeProposalWorld(t)
+    // The same world without an adapter: what apply and the pending edits do there is what they must do here.
+    const control = makeProposalWorld(t)
+    for (const each of [world, control]) {
+      if (mode === 'automatic') { each.configureMachine({ maintenanceMode: 'automatic' }); each.installPolicy() }
+      each.addLink('east-wing:guide', 'west-wing:guide')
+      each.editFrontMatter('west-wing:second', 'Western second sheet', 'Second sheet of the west')
+    }
+    const before = proposalSourceState(world)
+    const engine = proposalEngine(world)
+    const bare = proposalEngine(control, { adapter: null })
+    const [tick, controlTick] = [await engine.tick(), await bare.tick()]
+    assert.deepEqual([tick.state, tick.maintenanceMode], ['ticked', mode])
+    assert.deepEqual([tick.dispatched.map(({ status, code, state }) => [status, code, state]), tick.pendingEdits.map((edit) => edit.state)], [controlTick.dispatched.map(({ status, code, state }) => [status, code, state]), controlTick.pendingEdits.map((edit) => edit.state)], `${mode}: dispatch and the pending edits are what they are without an adapter`)
+    if (mode === 'automatic') {
+      // The dispatch of this tick recorded both operations as proposed, and the adapter, which runs after it, routed them.
+      assert.deepEqual(tick.dispatched.map(({ status, code }) => [status, code]), [['refused', 'edit-not-applicable'], ['refused', 'edit-not-applicable']])
+      assert.deepEqual(tick.proposals.outcomes.map((item) => [item.repoId, item.status, item.dedupe]), [['east-wing', 'acknowledged', 'new'], ['west-wing', 'acknowledged', 'new']])
+    } else {
+      // Manual: nothing on a tick applies, so nothing is recorded as proposed until a person asks apply to look.
+      assert.deepEqual([tick.dispatched, tick.proposals.outcomes, storesOf(world)], [[], [], { 'east-wing': null, 'west-wing': null }])
+      for (const edit of world.pendingEdits()) assert.deepEqual((({ status, code }) => [status, code])(await world.sourceApply().apply({ editId: edit.editId, mode: 'manual' })), ['refused', 'edit-not-applicable'])
+      world.advance(1000)
+      assert.deepEqual((await engine.tick()).proposals.outcomes.map((item) => [item.repoId, item.status, item.dedupe]), [['east-wing', 'acknowledged', 'new'], ['west-wing', 'acknowledged', 'new']])
+    }
+    assert.deepEqual(PROPOSAL_REPOSITORIES.map((name) => world.adapterProposals(name).map((record) => [record.proposal.path, record.payload.adapter.id])), [[['notes/guide.md', PROPOSAL_ADAPTER_ID]], [['notes/second.md', PROPOSAL_ADAPTER_ID]]])
+
+    // Many unchanged ticks, across full reconciliations and every retry interval: not one ledger byte, store file or adapter record.
+    const settled = { stores: storesOf(world), queue: adapterStateOf(world), edits: world.pendingEdits() }
+    for (let index = 0; index < 25; index += 1) {
+      world.advance(7 * 60 * 1000)
+      const again = await engine.tick()
+      assert.deepEqual([again.state, again.proposals.outcomes, again.proposals.repositories], ['ticked', [], []])
+    }
+    assert.deepEqual({ stores: storesOf(world), queue: adapterStateOf(world), edits: world.pendingEdits().map((edit, index) => ({ ...edit, attempts: settled.edits[index].attempts, lastAttemptAt: settled.edits[index].lastAttemptAt, lastResult: settled.edits[index].lastResult, state: settled.edits[index].state })) },
+      settled, `${mode}: twenty-five unchanged ticks append zero ledger events and write nothing of the adapter's`)
+    assert.ok(world.pendingEdits().every((edit) => edit.closedAt === null), 'a proposal closes no pending edit: the note is still held for the person')
+    assert.deepEqual(proposalSourceState(world), before, `${mode}: no source byte and no git state changed`)
+
+    // Mutation control: an adapter that hands everything over again and does not look appends an event per tick.
+    const chatty = proposalEngine(world, { adapter: createProposalAdapterForOracleTests({ ...PROPOSAL_ADAPTER_PRIMITIVES, handOver: () => true, isSettled: () => false, lookBeforeCreate: false })({ env: world.env }) })
+    world.advance(1000)
+    await chatty.tick()
+    assert.notDeepEqual(storesOf(world), settled.stores, 'the control grows the ledger on a tick where nothing changed')
+  }
+})
+
 test('no process this suite started is left behind', async () => {
   assert.ok(SPAWNED.length > 0, 'this suite does start processes')
   // Anything its own test did not see gone is ended here as a last resort, and then named: the guard fails either way.
