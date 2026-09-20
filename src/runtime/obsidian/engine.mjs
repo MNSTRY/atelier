@@ -27,8 +27,11 @@ import { createNullWatcherFactory } from './watchers.mjs'
 //
 //   1. load the project when its configuration changed; read typed enablement
 //   2. look at every vault note; preserve and queue what somebody edited
-//   3. automatic mode only: dispatch queued edits through the apply operation;
-//      then hand the pending edits to the proposal adapter, when one is registered
+//   3. when a proposal adapter is registered: it observes the open edits the
+//      object store does not know yet and records what each is, in manual and
+//      in automatic mode alike, writing no source; automatic mode only:
+//      dispatch queued edits through the apply operation; then hand the
+//      pending edits to the proposal adapter
 //   4. look at displaced files again for writes that arrived late
 //   5. look at sources, configuration, scopes and eligibility; decide by digest
 //   6. for each invalidated view: canonical graph -> source snapshot ->
@@ -77,6 +80,9 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // One engine per workspace at a time, across processes.
   acquireEngineLock: acquirePrivateGenerationLock,
+  // The registered proposal adapter observes the open edits on every tick, so a structural edit is recorded as
+  // proposed and routed without anybody asking apply to look at it.
+  observeEdits: (proposalAdapter) => typeof proposalAdapter.observe === 'function',
   // Held notes that this prepared view would replace, create over or remove. A held note that already holds exactly
   // the bytes this view would publish is none of those: its edit reached the source, the source was prepared again,
   // and publishing changes nothing of the person's. The publisher reads the note again and settles it as already
@@ -303,6 +309,17 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     }
     stateStore.writePendingEdits({ ...pending, edits })
 
+    // Observation. The registered proposal adapter is handed a copy of the pending edits and observes the open ones
+    // the object store does not know yet, a bounded number per tick: each is classified from its preserved bytes
+    // against the source as it is now and recorded as what it is, in manual and in automatic mode alike, and no
+    // source is written. What refused before anything was recorded is offered again on a full reconciliation only.
+    const proposalAdapter = extensions.get('proposal-adapter')
+    const adapterContext = () => ({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env })
+    let observed = null
+    if (proposalAdapter !== null && rules.observeEdits(proposalAdapter)) {
+      try { observed = await proposalAdapter.observe(adapterContext(), { retryRefused: full }) } catch { observed = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
+    }
+
     // 4. Automatic apply, through the registered operation only.
     let dispatched = []
     if (rules.dispatchAllowed(machine.maintenanceMode)) {
@@ -319,9 +336,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // own record which of them it has not settled; it creates copy-only proposals and writes no source and no vault.
     // Without one registered nothing is handed anywhere, and an adapter that throws changes nothing else of the tick.
     let proposals = null
-    const proposalAdapter = extensions.get('proposal-adapter')
     if (proposalAdapter !== null) {
-      try { proposals = await proposalAdapter.propose({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env }) } catch { proposals = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
+      try { proposals = await proposalAdapter.propose(adapterContext()) } catch { proposals = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
     }
 
     // 5. Late writers. The publisher looks twice per publication; a holder can write later still.
@@ -474,7 +490,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       state: 'ticked', full, workspaceId, maintenanceMode: machine.maintenanceMode,
       changes: changes.map((change) => ({ ...change })), scopes: [...entries.values()].sort((left, right) => compareText(left.scopeId, right.scopeId)),
       pendingEdits: edits.filter((edit) => edit.closedAt === null).map(({ editId, scopeId, path: notePath, state }) => ({ editId, scopeId, path: notePath, state })),
-      dispatched, lateWriters, ...(proposals === null ? {} : { proposals }),
+      dispatched, lateWriters, ...(observed === null ? {} : { observed }), ...(proposals === null ? {} : { proposals }),
     }
   }
 

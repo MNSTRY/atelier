@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { canonicalize } from '../../../src/attestation/jcs.mjs'
 import { createProposalStore } from '../../../src/collaboration/proposals.mjs'
+import { createEditorAdapter } from '../../../src/projection/obsidian/publication/index.mjs'
+import { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } from '../../../src/runtime/obsidian/engine.mjs'
 import { createAbandonmentProof, isProcessAlive } from '../../../src/runtime/obsidian/private-lock.mjs'
 import { protectedRoots } from '../../../src/runtime/obsidian/machine-settings.mjs'
 import { APPLY_WORKSPACE_ID, git, makeApplyWorld, noteText, treeListing } from '../obsidian-edits/apply-world.mjs'
@@ -58,6 +60,20 @@ export function makeProposalWorld(t, { files = PROPOSAL_FILES, audienceAllow = [
       for (const edit of world.pendingEdits().filter((item) => item.closedAt === null)) results.push(await world.sourceApply().apply({ editId: edit.editId, mode: 'manual' }))
       return results
     },
+    // The engine with substituted primitives, wired exactly as `engine` wires the production one: for the mutation
+    // controls of the engine oracles, which a shipped engine cannot produce.
+    oracleEngine({ primitives = ENGINE_PRIMITIVES, extensions, ...options } = {}) {
+      const engine = createMaintenanceEngineForOracleTests({
+        loadProject: world.loadProject, dataRoot: world.dataRoot, clock: world.clock, env: world.env, extensions, quietPeriodMs: 0, randomBytes: (size) => Buffer.alloc(size, 0x0b),
+        adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' }), ...options,
+      }, primitives)
+      t.after(() => engine.stop())
+      return engine
+    },
+    // Every source file of every repository, by digest: the oracle that no source byte changed.
+    sourceDigests: () => Object.fromEntries(REPOSITORIES.flatMap((name) => fs.readdirSync(path.join(world.repo(name), 'notes')).sort().map((file) => [`${name}/notes/${file}`, `sha256:${createHash('sha256').update(fs.readFileSync(path.join(world.repo(name), 'notes', file))).digest('hex')}`]))),
+    // The per-object event logs of the arbitration store, file by file: what a tick appended to, or did not.
+    objectLogs: () => (fs.existsSync(path.join(world.workspaceRoot(), 'state', 'objects')) ? treeListing(path.join(world.workspaceRoot(), 'state', 'objects')) : null),
     store: (name) => createProposalStore({ workspaceRoot: world.repo(name), workspaceId: WORKSPACE_ID }),
     storeDir: (name) => path.join(world.repo(name), STORE_DIRECTORY),
     ledgerFile: (name) => path.join(world.repo(name), STORE_DIRECTORY, 'events.ndjson'),
