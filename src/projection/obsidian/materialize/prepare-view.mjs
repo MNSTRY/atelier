@@ -525,10 +525,11 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     // Every census identity that is not part of this view: withheld, out of
     // the selection, or an asset this view does not copy.
     forbiddenSuffixes: new Set([
-      ...canonical.nodes.filter((node) => node && typeof node.repo === 'string' && typeof node.id === 'string').map((node) => identitySuffix(node.repo, node.id, 64)),
-      ...(Array.isArray(snapshot.graph.assets) ? snapshot.graph.assets : [])
-        .filter((asset) => asset && typeof asset.repo === 'string' && typeof asset.id === 'string')
-        .map((asset) => identitySuffix(asset.repo, asset.id, 64)),
+      // A record without a usable identity is not in any view and has no
+      // suffix to forbid; it must not abort the view either.
+      ...[...canonical.nodes, ...(Array.isArray(snapshot.graph.assets) ? snapshot.graph.assets : [])]
+        .filter((item) => item && typeof item.repo === 'string' && item.repo !== '' && typeof item.id === 'string' && item.id !== '')
+        .map((item) => identitySuffix(item.repo, item.id, 64)),
     ].filter((suffix) => !vaultSuffixes.has(suffix))),
   })
 

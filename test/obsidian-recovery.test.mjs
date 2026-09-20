@@ -1901,6 +1901,21 @@ test('the serialized script runs on its own, and a body that reaches for a modul
     const mutated = body.replace('const done = ', 'const leak = PROTOCOL_ID; const done = ')
     assert.notEqual(mutated, body)
     assert.throws(() => run(mutated), ReferenceError, 'a body that references a module-level binding cannot run in the app')
+
+    // The publish branches too: a conditional removal runs standalone, and a
+    // module binding referenced inside that branch is caught.
+    const recoveryPath = path.join(vault, 'displaced.bin')
+    const removal = { op: 'publish', mode: 'remove', vaultRoot: fs.realpathSync(vault), path: NOTE, operationId: 'standalone:1', baseSha256: hex(BASE), recoveryPath }
+    const removeBody = buildEvalCode(removal)
+    const removeSource = removeBody.slice(0, removeBody.lastIndexOf(')(JSON.parse')).slice(1)
+    // Injected outside the branch's own try/catch, which would otherwise swallow the reference error.
+    const inRemoveBranch = removeSource.replace("if (P.mode === 'remove') {", "if (P.mode === 'remove') { PROTOCOL_ID;")
+    assert.notEqual(inRemoveBranch, removeSource)
+    assert.throws(() => new Function(`return (${inRemoveBranch})`)()(JSON.parse(JSON.stringify(removal)), createInProcessHost({ app: null })), ReferenceError)
+    assert.equal(fs.readFileSync(path.join(vault, NOTE), 'utf8'), BASE, 'the failed mutant moved nothing')
+    const removed = JSON.parse(new Function(`return (${removeSource})`)()(JSON.parse(JSON.stringify(removal)), createInProcessHost({ app: null })))
+    assert.equal(removed.status, 'removed', JSON.stringify(removed))
+    assert.equal(fs.readFileSync(recoveryPath, 'utf8'), BASE, 'the removal is a move to recovery')
   } finally {
     fs.rmSync(vault, { recursive: true, force: true })
   }

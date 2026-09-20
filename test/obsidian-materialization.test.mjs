@@ -896,3 +896,31 @@ test('an asset the view does not copy is a forbidden identity in generated text'
   // ...and forbidden in a view that does not copy it.
   assert.throws(() => prepare(snapshot, { ...assetScope, scopeId: 'scope-naming', mode: 'scoped', selector: { ids: ['east-desk:naming'] } }, { profile: assetProfile }), /redaction-failure/)
 })
+
+test('a census record with an empty repository or identity neither joins a view nor aborts it', (t) => {
+  const snapshot = makeWorkspace(t)
+  // Nodes are validated at the snapshot boundary; asset records are not, and an
+  // empty identity there must be skipped exactly as visibleAssets skips it.
+  snapshot.graph.assets = [...(snapshot.graph.assets ?? []), { id: '', repo: 'north-desk', path: 'ghost.bin', eligible: false }]
+  const prepared = prepare(snapshot, fullScope)
+  assert.ok(prepared.manifest.notes.length > 0)
+  assertNothingWithheld(prepared)
+})
+
+test('a withheld identity that reaches only a relations row (never a path) is still refused', (t) => {
+  // A title longer than the basename budget is truncated in the allocated path,
+  // so the withheld suffix it carries appears only in the generated relations
+  // region of the notes that relate to it. Only the free-text scan can catch it.
+  const sealed = identitySuffix('north-desk', 'north-desk:sealed-ledger', 64).slice(0, 12)
+  const title = `${'Long name '.repeat(14)}--${sealed}`
+  const snapshot = makeWorkspaceVariant(t, {
+    'north-desk/notes/long.md': { text: `---\ntitle: "${title}"\nkg:\n  id: "north-desk:long"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Long\n` },
+  })
+  assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
+  // Control: the same title without the withheld suffix prepares, and its path does not carry the title's tail.
+  const benign = makeWorkspaceVariant(t, {
+    'north-desk/notes/long.md': { text: `---\ntitle: "${'Long name '.repeat(14)}--ffffffffffff"\nkg:\n  id: "north-desk:long"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Long\n` },
+  })
+  const prepared = prepare(benign, fullScope)
+  assert.ok(!noteOf(prepared, 'north-desk:long').path.includes('ffffffffffff'), 'the long title is truncated before the allocated suffix')
+})
