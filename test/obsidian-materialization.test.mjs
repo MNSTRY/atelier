@@ -869,3 +869,27 @@ test('generated text that names a census identity outside the view is still refu
   })
   assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
 })
+
+test('a wikilink whose author-chosen words look like an identity suffix is not a redaction failure', (t) => {
+  // The rewrite appends `|<what the author wrote>` so the editor shows those words;
+  // that tail is the author's, not an emitted path.
+  const snapshot = makeWorkspaceVariant(t, {
+    'north-desk/notes/weekly--202401151230.md': { text: '---\ntitle: "Weekly"\nkg:\n  id: "north-desk:weekly"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# Weekly\n' },
+    'north-desk/notes/log.md': { text: '---\ntitle: "Log"\nkg:\n  id: "north-desk:log"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# Log\n\nSee [[weekly--202401151230]].\n' },
+  })
+  const prepared = prepare(snapshot, fullScope)
+  const log = fileOf(prepared, noteOf(prepared, 'north-desk:log').path).bytes.toString('utf8')
+  assert.ok(log.includes('|weekly--202401151230]]'), log)
+  assertNothingWithheld(prepared)
+})
+
+test('an asset the view does not copy is a forbidden identity in generated text', (t) => {
+  // Defence in depth: the deny-list covers assets too, not only census nodes.
+  const snapshot = makeWorkspaceVariant(t, {
+    'north-desk/notes/naming.md': { text: `---\ntitle: "Names it--${identitySuffix('north-desk', 'north-desk:depth-chart', 64).slice(0, 12)}"\nkg:\n  id: "north-desk:naming"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Names it\n` },
+  })
+  // depth-chart is copied by the full view, so its suffix is allowed there...
+  prepare(snapshot, fullScope)
+  // ...and forbidden in a scoped view that does not carry it.
+  assert.throws(() => prepare(snapshot, { ...scopedScope, scopeId: 'scope-naming', selector: { ids: ['north-desk:harbor-plan', 'north-desk:naming'] } }), /redaction-failure/)
+})

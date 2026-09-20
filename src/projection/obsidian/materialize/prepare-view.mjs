@@ -524,7 +524,12 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     vaultSuffixes,
     // Every census identity that is not part of this view: withheld, out of
     // the selection, or an asset this view does not copy.
-    forbiddenSuffixes: new Set(canonical.nodes.map((node) => identitySuffix(node.repo, node.id, 64)).filter((suffix) => !vaultSuffixes.has(suffix))),
+    forbiddenSuffixes: new Set([
+      ...canonical.nodes.map((node) => identitySuffix(node.repo, node.id, 64)),
+      ...(Array.isArray(snapshot.graph.assets) ? snapshot.graph.assets : [])
+        .filter((asset) => asset && typeof asset.repo === 'string' && typeof asset.id === 'string')
+        .map((asset) => identitySuffix(asset.repo, asset.id, 64)),
+    ].filter((suffix) => !vaultSuffixes.has(suffix))),
   })
 
   const prior = new Map((priorManifest?.notes ?? []).map((note) => [note.path, note.noteDigest]))
@@ -568,8 +573,10 @@ function assertOnlyVaultIdentities({ manifest, files, vaultSuffixes, forbiddenSu
   const suffixesIn = (text) => [...text.matchAll(/--([0-9a-f]{12,64})(?![0-9a-f])/g)].map((match) => match[1])
   // An emitted path ends in the allocated suffix (before the extension); the
   // readable part before it is the author's title and may look like anything.
+  // A wikilink rewrite may append `|<the author's own words>`; only the part
+  // before the first `|` is an emitted path.
   const checkEmitted = (text) => {
-    for (const segment of text.split('#')[0].split('/')) {
+    for (const segment of text.split('|')[0].split('#')[0].split('/')) {
       const trailing = /--([0-9a-f]{12,64})(?:\.[^./]+)?$/.exec(segment)
       if (trailing && !allowed(trailing[1])) refuse('redaction-failure', 'an emitted path names a note that is not part of this view')
     }

@@ -1854,16 +1854,27 @@ test('a symlinked .obsidian reports the settings unit and lets every note conver
 test('a keep unit whose note vanished refuses staging-failed instead of throwing; malformed manifest bytes refuse', needsExchange, async (t) => {
   const world = await seeded(t)
   fs.rmSync(world.full(NOTE))
+  // The pre-flight creates the journal's staging directory; make it unwritable
+  // only after that, so the late staging on the keep -> create path is what fails.
+  // The pre-flight creates the journal's staging directory; occupy the late
+  // candidate's name only after that, so the exclusive create on the
+  // keep -> create path is what fails (EEXIST), with nothing else in the way.
   const staging = world.store.stagingRoot
-  fs.mkdirSync(staging, { recursive: true })
-  fs.chmodSync(staging, 0o500)
-  t.after(() => { if (fs.existsSync(staging)) fs.chmodSync(staging, 0o700) })
-  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: BASE } }), absentAdapter())
-  fs.chmodSync(staging, 0o700)
-  assert.notEqual(result.state, 'committed', JSON.stringify(result))
-  const unit = (result.notes ?? []).find((entry) => entry.path === NOTE)
-  const code = unit ? unit.outcome : result.refusal?.code
-  assert.equal(code, 'staging-failed', JSON.stringify(result))
+  const seam = { at: 'after-staging', halt: () => {
+    for (const dir of fs.readdirSync(staging).map((name) => path.join(staging, name)).filter((entry) => fs.statSync(entry).isDirectory())) {
+      for (const unit of [0, 1]) fs.writeFileSync(path.join(dir, `${String(unit).padStart(6, '0')}.late.candidate`), 'occupied')
+    }
+  } }
+  // Called directly: the world's staging oracle would rightly object to the occupied name.
+  const result = await publishView({ preparedView: viewOf('gen-0002', { notes: { [NOTE]: BASE } }), protocolId: PROTOCOL_ID, expectedGeneration: 'gen-0001', recoveryStore: world.store, adapter: absentAdapter(), quietPeriodMs: 0, [CRASH_INJECTION_TEST_SEAM]: seam })
+  for (const dir of fs.readdirSync(staging).map((name) => path.join(staging, name)).filter((entry) => fs.statSync(entry).isDirectory())) {
+    for (const name of fs.readdirSync(dir)) if (name.endsWith('.late.candidate') && fs.readFileSync(path.join(dir, name), 'utf8') === 'occupied') fs.rmSync(path.join(dir, name))
+  }
+  assert.equal(result.state, 'updating', JSON.stringify(result))
+  const unit = noteResult(result)
+  assert.equal(unit.outcome, 'staging-failed')
+  assert.equal(unit.blocking, true)
+  assert.equal(unit.errorCode, 'EEXIST')
   assert.equal(fs.existsSync(world.full(NOTE)), false, 'nothing was created')
 
   const view = viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } })
