@@ -33,6 +33,8 @@ export const PROPOSAL_BACKPRESSURE = Object.freeze({
   maxBatchPerRepository: 8,
   // Pending edits looked at per tick to find new structural edits.
   maxExaminedPerTick: 64,
+  // Pending edits the object store does not know yet that one tick observes and records, never applies.
+  maxObservedPerTick: 16,
   // An operation under backpressure is tried at most this many times, each time later than the last.
   maxAttempts: 8,
   retryIntervalMs: 60 * 1000,

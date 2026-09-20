@@ -855,3 +855,71 @@ test('backpressure and a change of mind: an edit the person took back, or wrote 
   assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.code]).sort(), [['east-wing:guide', 'refused', 'edit-withdrawn'], ['east-wing:second', 'refused', 'edit-superseded']])
   assert.deepEqual(world.adapterProposals('east-wing'), [], 'there was room by then, and still nothing was proposed for an edit nobody stands behind')
 })
+
+// ---------------------------------------------------------------------------
+// Observation on a tick
+// ---------------------------------------------------------------------------
+
+import { recordedOperationOf } from '../src/projection/obsidian/proposals/index.mjs'
+
+const objectLogsOf = (world) => treeListing(path.join(world.workspaceRoot(), 'state', 'objects'))
+const classifiedOf = (report) => [...report.observed].sort((left, right) => (left.nodeId < right.nodeId ? -1 : 1)).map(({ nodeId, status, code, kind, operationState }) => [nodeId, status, code, kind, operationState])
+
+test('observation on a tick: the adapter observes the open edits the object store does not know, a bounded number per call and never twice, records each as apply records it, leaves body replacements for apply, and writes no source and no vault', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:guide', 'east-wing:plain')
+  world.editFrontMatter('west-wing:guide', WEST_TITLE, 'Tide tables')
+  world.editNote('east-wing:plain', 'Only the body', 'Nothing but the body')
+  world.editNote('east-wing:second', 'A second sheet.', 'A second sheet, reworded.')
+  world.queueDirectly()
+  const before = { sources: sourceState(world), vault: treeListing(world.vault()), edits: world.pendingEdits() }
+  const objects = openObjectStore({ stateRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID, repositoryRoots: protectedRoots(world.loadProject()), clock: world.clock })
+  assert.ok(world.pendingEdits().every((edit) => recordedOperationOf(objects, edit) === null), 'nothing is recorded before the observation')
+
+  const adapter = adapterFor(world, { bounds: { maxObservedPerTick: 3 } })
+  const first = await adapter.observe(world.context())
+  const second = await adapter.observe(world.context())
+  assert.deepEqual([first.adapterId, first.observed.length, second.observed.length], [PROPOSAL_ADAPTER_ID, 3, 1], 'bounded per call, and the rest on the next')
+  assert.deepEqual(classifiedOf({ observed: [...first.observed, ...second.observed] }), [
+    ['east-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+    ['east-wing:plain', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['east-wing:second', 'observed', 'observed', 'body-replacement', 'pending'],
+    ['west-wing:guide', 'observed', 'observed', 'semantic-proposal', 'proposed'],
+  ])
+  for (const edit of world.pendingEdits()) {
+    const entry = recordedOperationOf(objects, edit)
+    assert.equal(entry.idempotencyKey, [...first.observed, ...second.observed].find((item) => item.editId === edit.editId).idempotencyKey, 'recorded under the key of the same bytes over the same base')
+  }
+  const logs = objectLogsOf(world)
+  assert.deepEqual((await adapter.observe(world.context())).observed, [], 'nothing is left to observe')
+  // An adapter that has just started and remembers nothing is answered from the record and appends nothing.
+  const restarted = await adapterFor(world).observe(world.context())
+  assert.deepEqual(restarted.observed.map((item) => item.code), ['already-observed', 'already-observed', 'already-observed', 'already-observed'])
+  assert.deepEqual(objectLogsOf(world), logs, 'not one object event more')
+  assert.deepEqual({ sources: sourceState(world), vault: treeListing(world.vault()), edits: world.pendingEdits() }, before, 'no source byte, no vault byte and no pending edit changed')
+
+  // A body replacement is apply's: asked by a person, apply finds the record and treats the edit as its own.
+  const applied = await world.sourceApply().apply({ editId: world.editOf('east-wing:plain').editId, mode: 'manual' })
+  assert.notEqual(applied.code, 'edit-not-applicable', `${applied.status} ${applied.code}`)
+  const report = await adapter.propose(world.context())
+  assert.deepEqual(report.outcomes.map((item) => [item.nodeId, item.status, item.dedupe]).sort(), [['east-wing:guide', 'acknowledged', 'new'], ['west-wing:guide', 'acknowledged', 'new']], 'the two structural edits, and neither body replacement')
+})
+
+test('observation on a tick: an edit whose observation refuses before anything is recorded is remembered with its code and offered again only when asked, and then recorded', async (t) => {
+  const world = makeProposalWorld(t)
+  world.addLink('east-wing:third', 'east-wing:plain')
+  world.queueDirectly()
+  const objects = openObjectStore({ stateRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID, repositoryRoots: protectedRoots(world.loadProject()), clock: world.clock })
+  const source = world.source('east-wing/notes/third.md')
+  const bytes = fs.readFileSync(source)
+  fs.rmSync(source)
+  const adapter = adapterFor(world)
+  const refused = await adapter.observe(world.context())
+  // An absent source and a withheld one get the one answer apply gives, with nothing read and nothing recorded.
+  assert.deepEqual(refused.observed.map(({ nodeId, status, code }) => [nodeId, status, code]), [['east-wing:third', 'refused', 'object-not-visible']])
+  assert.equal(recordedOperationOf(objects, world.editOf('east-wing:third')), null, 'nothing was recorded for it')
+  fs.writeFileSync(source, bytes)
+  assert.deepEqual((await adapter.observe(world.context())).observed, [], 'not offered again on an ordinary call')
+  assert.deepEqual(classifiedOf(await adapter.observe(world.context(), { retryRefused: true })), [['east-wing:third', 'observed', 'observed', 'semantic-proposal', 'proposed']])
+  assert.deepEqual((({ kind, state }) => [kind, state])(recordedOperationOf(objects, world.editOf('east-wing:third'))), ['semantic-proposal', 'proposed'])
+})

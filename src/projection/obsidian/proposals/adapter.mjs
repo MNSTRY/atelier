@@ -15,10 +15,11 @@ import { isIdentifier } from '../edits/object-identity.mjs'
 import { openObjectStore } from '../edits/object-store.mjs'
 import { decideApply } from '../edits/policy.mjs'
 import { applyEditLens } from '../edits/regions.mjs'
-import { PublicationRefusal, readFileBytes, sha256Digest } from '../recovery/store.mjs'
+import { PublicationRefusal } from '../recovery/store.mjs'
 import {
   PROPOSAL_BACKPRESSURE, PROPOSAL_LEDGER_LIMITS, classifyLedgerRead, classifyStoreRefusal, estimateEventLineBytes, isDue, isExhausted, nextAttemptAt, preflightAppend,
 } from './backpressure.mjs'
+import { createTickObservation, manifestOf, recordedOperationOf, retained } from './observation.mjs'
 import { OPEN_QUEUE_STATES, ProposalQueueRefusal, openProposalQueue } from './queue.mjs'
 import { PROPOSAL_STORE_DIRECTORY, adapterOperationId, isAdapterOperationId, isRoutableSourcePath, proposalStoreId, resolveProposalRoute } from './router.mjs'
 
@@ -29,8 +30,11 @@ import { PROPOSAL_STORE_DIRECTORY, adapterOperationId, isAdapterOperationId, isR
 // An edit the byte lens cannot turn into source bytes (a new or changed link
 // to another note, an edited front matter) is recorded by the object store as
 // an operation of kind `semantic-proposal`, state `proposed`. On a tick the
-// adapter is handed the pending edits; for each such operation it has not
-// settled, in this order and under the private lock of that repository:
+// adapter first observes the open pending edits the object store does not know
+// yet (observation.mjs: the pre-lease part of an apply, which records what
+// each edit is and writes no source), then is handed the pending edits; for
+// each such operation it has not settled, in this order and under the private
+// lock of that repository:
 //
 //   1. records the operation in its queue (queue.mjs), before anything else;
 //   2. reads the ledger of the store and refuses or waits when it has no room
@@ -77,7 +81,6 @@ const CHANGE_SENTENCES = Object.freeze({
   'unsupported-frontmatter-edit': 'The front matter of the note was edited.',
   unclassified: 'The edit changes the structure of the note in a way that was not classified further.',
 })
-const segment = (identifier) => identifier.replaceAll(':', '_')
 const isTyped = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
   || error instanceof EditArbitrationRefusal || error instanceof ProposalQueueRefusal
 const hashOf = (parts) => createHash('sha256').update(parts.join('\u0000')).digest('hex')
@@ -177,6 +180,8 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
     const seams = { ...createProductionSeams(), ...(options.seams ?? {}) }
     let cursor = 0
     const queues = new Map()
+    // The observation of a tick keeps what it recorded and what it could not; one per workspace, like the queue.
+    let observation = { key: null, run: null }
     // Edits whose operation is known not to be a proposal. A cache: losing it costs one read of an object.
     const notProposals = new Set()
 
@@ -193,17 +198,18 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         if (!stores.has(scopeId)) stores.set(scopeId, seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId, repositoryRoots }))
         return stores.get(scopeId)
       }
-      let corpus
+      // The canonical graph as it is now and the corpus profile of this machine, built once per call. Throws typed.
+      let corpus = null
+      const currentCorpus = () => (corpus ??= {
+        graph: seams.buildGraph({ project, eligibility }),
+        profile: seams.profileFor({ project, workspaceId, audienceAllow: readMachineSettings({ workspaceRoot, workspaceId })?.audienceAllow ?? [] }),
+      })
       // true, false, or null when the canonical graph cannot be read now. The rule is the one source apply asks.
       const visible = options.isVisible ? (identity) => options.isVisible(identity, context) : ({ repoId, nodeId }) => {
-        try {
-          corpus ??= {
-            graph: seams.buildGraph({ project, eligibility }),
-            profile: seams.profileFor({ project, workspaceId, audienceAllow: readMachineSettings({ workspaceRoot, workspaceId })?.audienceAllow ?? [] }),
-          }
-        } catch (error) { if (isTyped(error)) return null; throw error }
-        if (!corpus.graph.nodes.some((node) => node.repo === repoId && node.id === nodeId)) return false
-        const decision = decideApply({ request: { mode: 'manual', editId: 'edit-route' }, workspace: { workspaceRoot, workspaceId }, graph: corpus.graph, profile: corpus.profile, object: { repoId, nodeId }, editClass: 'body-replacement' })
+        let built
+        try { built = currentCorpus() } catch (error) { if (isTyped(error)) return null; throw error }
+        if (!built.graph.nodes.some((node) => node.repo === repoId && node.id === nodeId)) return false
+        const decision = decideApply({ request: { mode: 'manual', editId: 'edit-route' }, workspace: { workspaceRoot, workspaceId }, graph: built.graph, profile: built.profile, object: { repoId, nodeId }, editClass: 'body-replacement' })
         return decision.allowed === true || decision.code !== 'object-not-visible'
       }
       let objects = null
@@ -213,36 +219,13 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         if (queues.get(queueKey) === undefined) { queues.clear(); queues.set(queueKey, openProposalQueue({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock, crash: queueCrash })) }
         return queues.get(queueKey)
       }
+      if (observation.key !== queueKey) observation = { key: queueKey, run: createTickObservation({ seams, isGitIgnored, bounds }) }
       return {
-        ...context, recoveryOf, visible,
+        ...context, recoveryOf, visible, clock, env: env ?? context.env ?? process.env,
+        corpus: currentCorpus,
         objects: () => (objects ??= objectStore({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock })),
         queue,
         managedRoots: () => [workspaceRoot, ...[...stores.values()].map((store) => store.vaultRoot)],
-      }
-    }
-
-    // The immutable manifest of one generation of one view.
-    function manifestOf(workspace, scopeId, generationId) {
-      const current = workspace.recoveryOf(scopeId).readCurrentManifest()
-      if (current?.generationId === generationId) return current
-      const directory = path.join(workspace.workspaceRoot, 'state', 'manifests', segment(scopeId))
-      let names = []
-      try { names = fs.readdirSync(directory) } catch (error) { if (error.code !== 'ENOENT') throw error }
-      for (const name of names.filter((item) => item.startsWith(`${segment(generationId)}--`) && item.endsWith('.json')).sort()) {
-        let bytes
-        try { bytes = readFileBytes(path.join(directory, name)) } catch (error) { if (error.code === 'ENOENT') continue; throw error }
-        if (name !== `${segment(generationId)}--${sha256Digest(bytes).slice(7, 19)}.json`) continue
-        const manifest = JSON.parse(bytes.toString('utf8'))
-        if (manifest.generationId === generationId && manifest.scopeId === scopeId) return manifest
-      }
-      return null
-    }
-
-    function retained(store, digest) {
-      if (typeof digest !== 'string') return null
-      try { const bytes = store.readObject(digest); return sha256Digest(bytes) === digest ? bytes : null } catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'recovery-object-corrupt') return null
-        throw error
       }
     }
 
@@ -250,7 +233,7 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
     // structural edit (or is not recorded yet). The live note is never read: only bytes that were preserved.
     function describe(workspace, edit) {
       const { workspaceId, repoId, nodeId } = edit.identity
-      const entry = workspace.objects().stateOf({ repoId, nodeId }).operations.find((operation) => operation.origins.some((origin) => origin.editId === edit.editId && origin.scopeId === edit.scopeId))
+      const entry = recordedOperationOf(workspace.objects(), edit)
       if (!entry) return null
       if (entry.kind !== 'semantic-proposal' || entry.state !== 'proposed') { notProposals.add(edit.editId); return null }
       const origin = entry.origins.find((item) => item.editId === edit.editId && item.scopeId === edit.scopeId)
@@ -441,6 +424,16 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
 
     return {
       id: PROPOSAL_ADAPTER_ID,
+
+      // The observation of a tick, before `propose`: every open pending edit the object store does not know yet is
+      // observed from its preserved bytes against the source as it is now and recorded as what it is, a bounded number
+      // per tick and never twice. `retryRefused` offers once more the edits whose observation refused before anything
+      // could be recorded. Writes no source and no vault. Returns codes and identifiers only.
+      async observe(context, { retryRefused = false } = {}) {
+        const workspace = open(context)
+        const edits = Array.isArray(context.edits) ? context.edits : []
+        return { adapterId: PROPOSAL_ADAPTER_ID, observed: observation.run(workspace, { edits, retryRefused }) }
+      },
 
       // The tick. `context` is { project, workspaceRoot, workspaceId, repositoryRoots, edits }: the pending edit
       // records of the engine, open and closed. Returns codes and identifiers only.

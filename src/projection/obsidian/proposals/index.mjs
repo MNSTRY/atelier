@@ -13,6 +13,7 @@ export {
   BACKPRESSURE_CODES, PROPOSAL_BACKPRESSURE, PROPOSAL_LEDGER_LIMITS, STORE_REFUSAL_CODES, classifyLedgerRead, classifyStoreRefusal, estimateEventLineBytes, isDue, isExhausted, nextAttemptAt, preflightAppend,
 } from './backpressure.mjs'
 export { PROPOSAL_ADAPTER_CONTRIBUTION_ID, createProposalAdapterContribution, createProposalsCommandOperation } from './contribution.mjs'
+export { createTickObservation, manifestOf, recordedOperationOf, retained } from './observation.mjs'
 export {
   OPEN_QUEUE_STATES, PROPOSAL_OPERATION_SCHEMA, PROPOSAL_QUEUE_CRASH_STEPS, PROPOSAL_QUEUE_DIRECTORY, PROPOSAL_QUEUE_LIMITS, PROPOSAL_QUEUE_STATES, ProposalQueueRefusal, isProposalOperationRecord, openProposalQueue,
 } from './queue.mjs'
