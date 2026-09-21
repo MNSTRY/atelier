@@ -1,0 +1,8 @@
+{
+  "schema": "mnstry.atelier-capability-notice@v1",
+  "id": "atelier.examples/evidence-review",
+  "digest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913",
+  "status": "withdrawn",
+  "evidenceDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "unexpectedAuthority": true
+}

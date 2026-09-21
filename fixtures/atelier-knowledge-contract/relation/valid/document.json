@@ -1,0 +1,24 @@
+{
+  "schema": "atelier-knowledge-record@v1",
+  "id": "justification",
+  "run": "workshop-knowledge",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "relation",
+  "data": {
+    "domain": {
+      "id": "workshop-knowledge",
+      "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+    },
+    "subject": {
+      "id": "observation",
+      "digest": "sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c"
+    },
+    "predicate": "justifies",
+    "object": {
+      "id": "trial-rationale",
+      "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+    },
+    "rationale": "The observation motivates a test; it does not prove the outcome."
+  }
+}

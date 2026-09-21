@@ -1,0 +1,1252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-capability.v1.schema.json",
+  "$comment": "contract revision 1.0.0",
+  "title": "Atelier capability publishing and stewardship",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/package"
+    },
+    {
+      "$ref": "#/$defs/release"
+    },
+    {
+      "$ref": "#/$defs/adoption"
+    },
+    {
+      "$ref": "#/$defs/state"
+    },
+    {
+      "$ref": "#/$defs/plan"
+    },
+    {
+      "$ref": "#/$defs/event"
+    },
+    {
+      "$ref": "#/$defs/journal"
+    },
+    {
+      "$ref": "#/$defs/notice"
+    }
+  ],
+  "$defs": {
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tools",
+        "effects"
+      ],
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "read-workspace",
+              "write-workspace",
+              "network",
+              "external-message",
+              "execute-code",
+              "credentials",
+              "spend",
+              "destructive",
+              "audience-change"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skill",
+        "host",
+        "alias"
+      ],
+      "properties": {
+        "skill": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "host": {
+          "enum": [
+            "codex-repo-v1",
+            "claude-repo-v1"
+          ]
+        },
+        "alias": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "version",
+        "title",
+        "summary",
+        "license",
+        "source",
+        "capabilities",
+        "skills",
+        "hosts",
+        "requirements",
+        "dependencies",
+        "evaluations",
+        "migrations",
+        "limitations"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-package@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[a-z0-9.-]+)?$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "revision"
+          ],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "ext": {
+              "type": "object"
+            }
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "description",
+              "inputs",
+              "outputs"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "minItems": 0,
+                "maxItems": 32,
+                "uniqueItems": true
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "minItems": 0,
+                "maxItems": 32,
+                "uniqueItems": true
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "path",
+              "capabilities"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                "maxLength": 64
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "maxLength": 512
+              },
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "codex-repo-v1",
+              "claude-repo-v1"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "requirements": {
+          "$ref": "#/$defs/requirements"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "digest",
+              "optional",
+              "capabilities"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+              },
+              "version": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[a-z0-9.-]+)?$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "optional": {
+                "type": "boolean"
+              },
+              "ext": {
+                "type": "object"
+              },
+              "capabilities": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+                }
+              }
+            }
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "evaluations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "kind",
+              "path",
+              "outcome"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+              },
+              "kind": {
+                "enum": [
+                  "positive",
+                  "negative",
+                  "boundary",
+                  "integration"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "maxLength": 512
+              },
+              "outcome": {
+                "enum": [
+                  "passed",
+                  "failed",
+                  "unknown"
+                ]
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "migrations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fromVersion",
+              "path"
+            ],
+            "properties": {
+              "fromVersion": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[a-z0-9.-]+)?$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "maxLength": 512
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "package",
+        "files",
+        "digest"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-release@v1"
+        },
+        "package": {
+          "$ref": "#/$defs/package"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "digest",
+              "bytes"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "maxLength": 512
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 8388608
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "adoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "packages"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-adoption@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "digest",
+              "mode",
+              "bindings",
+              "allowedTools",
+              "allowedEffects"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "mode": {
+                "enum": [
+                  "managed",
+                  "reference",
+                  "customized",
+                  "retired"
+                ]
+              },
+              "bindings": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/binding"
+                },
+                "minItems": 0,
+                "maxItems": 128,
+                "uniqueItems": true
+              },
+              "allowedTools": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+                },
+                "minItems": 0,
+                "maxItems": 32,
+                "uniqueItems": true
+              },
+              "allowedEffects": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "read-workspace",
+                    "write-workspace",
+                    "network",
+                    "external-message",
+                    "execute-code",
+                    "credentials",
+                    "spend",
+                    "destructive",
+                    "audience-change"
+                  ]
+                },
+                "minItems": 0,
+                "maxItems": 16,
+                "uniqueItems": true
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "installedBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skill",
+        "host",
+        "alias",
+        "target",
+        "digest",
+        "parentDigest"
+      ],
+      "properties": {
+        "skill": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "host": {
+          "enum": [
+            "codex-repo-v1",
+            "claude-repo-v1"
+          ]
+        },
+        "alias": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "maxLength": 64
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+          "maxLength": 512
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "parentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "installedPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "release",
+        "mode",
+        "bindings"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+        },
+        "release": {
+          "$ref": "#/$defs/release"
+        },
+        "mode": {
+          "enum": [
+            "managed",
+            "reference",
+            "customized",
+            "retired"
+          ]
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/installedBinding"
+          },
+          "minItems": 0,
+          "maxItems": 128,
+          "uniqueItems": true
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "workspace",
+        "enrollment",
+        "generation",
+        "policyDigest",
+        "packages",
+        "versions"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-state@v1"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "enrollment": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "generation": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "policyDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/installedPackage"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "digest"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+              },
+              "version": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[a-z0-9.-]+)?$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 0,
+          "maxItems": 4096,
+          "uniqueItems": true
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "package",
+        "target",
+        "currentDigest",
+        "nextDigest"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "add",
+            "update",
+            "retire",
+            "keep",
+            "customize"
+          ]
+        },
+        "package": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+          "maxLength": 512
+        },
+        "currentDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package",
+        "fromDigest",
+        "toDigest",
+        "fromMode",
+        "toMode",
+        "toolsAdded",
+        "effectsAdded"
+      ],
+      "properties": {
+        "package": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+        },
+        "fromDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "fromMode": {
+          "anyOf": [
+            {
+              "enum": [
+                "managed",
+                "reference",
+                "customized",
+                "retired"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toMode": {
+          "enum": [
+            "managed",
+            "reference",
+            "customized",
+            "retired"
+          ]
+        },
+        "toolsAdded": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "effectsAdded": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "read-workspace",
+              "write-workspace",
+              "network",
+              "external-message",
+              "execute-code",
+              "credentials",
+              "spend",
+              "destructive",
+              "audience-change"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "workspace",
+        "enrollment",
+        "policyDigest",
+        "stateDigest",
+        "sources",
+        "tools",
+        "actions",
+        "changes",
+        "blockers",
+        "applyAllowed",
+        "planDigest",
+        "notices"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-plan@v1"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "enrollment": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "policyDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "stateDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "digest"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "ext": {
+                "type": "object"
+              }
+            }
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/change"
+          },
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "minItems": 0,
+          "maxItems": 512,
+          "uniqueItems": true
+        },
+        "applyAllowed": {
+          "type": "boolean"
+        },
+        "planDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        },
+        "notices": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/notice"
+          }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "kind",
+        "package",
+        "releaseDigest",
+        "generation",
+        "binding",
+        "bindingDigest",
+        "host",
+        "session",
+        "observer",
+        "outcome",
+        "cause",
+        "evidenceDigest",
+        "at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-event@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "kind": {
+          "enum": [
+            "host-observed",
+            "exercise",
+            "feedback",
+            "evaluation"
+          ]
+        },
+        "package": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+        },
+        "releaseDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "generation": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "binding": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+          "maxLength": 512
+        },
+        "bindingDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "host": {
+          "enum": [
+            "codex-repo-v1",
+            "claude-repo-v1"
+          ]
+        },
+        "session": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "observer": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}$"
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "unknown"
+          ]
+        },
+        "cause": {
+          "enum": [
+            "skill",
+            "host",
+            "tool",
+            "configuration",
+            "unknown"
+          ]
+        },
+        "evidenceDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "workspace",
+        "planDigest",
+        "phase",
+        "before",
+        "after",
+        "actions"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-journal@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-f0-9-]{36}$"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "planDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "phase": {
+          "enum": [
+            "prepared",
+            "applying",
+            "committed",
+            "rolled-back",
+            "recovery-required"
+          ]
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/state"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "after": {
+          "$ref": "#/$defs/state"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          },
+          "minItems": 0,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    },
+    "notice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "digest",
+        "status",
+        "evidenceDigest"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-capability-notice@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,63}/[a-z][a-z0-9-]{0,63}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "status": {
+          "enum": [
+            "deprecated",
+            "withdrawn"
+          ]
+        },
+        "evidenceDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "atelier-knowledge-record@v1",
+  "id": "claim-evaluation",
+  "run": "workshop-knowledge",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "evaluation",
+  "data": {
+    "contribution": {
+      "id": "trial-rationale",
+      "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+    },
+    "judgment": "uncertain",
+    "rationale": "Retained for this synthetic scenario only.",
+    "limitations": [
+      "Invented evidence; no empirical or calibrated inference."
+    ],
+    "scope": "Invented workshop visitors"
+  }
+}

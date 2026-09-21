@@ -35,6 +35,9 @@ its definition or ceiling.
 
 For local-harness authoring, see [durable coauthor sessions](docs/coauthor-session.md)
 and [skill stewardship and managed installation](docs/skill-steward.md).
+The next-release [capability stewardship foundation](docs/capability-stewardship.md)
+adds portable packages, repository-owned adoption and version-bound evidence
+alongside existing skills and tools.
 [Immutable intake and guide contracts](docs/intake-and-guides.md) extend existing
 processing and hosted-tool adapters without adding remote execution or publication
 authority. These alpha capabilities require explicit consumer integration.
@@ -241,6 +244,55 @@ version and treat the package export map and shipped source modules as the
 executable API reference. [Distribution contracts](./docs/distributions.md) explain
 how a governed subset can be packaged for another surface without widening its
 audience.
+
+## Capabilities alongside your existing tools
+
+<!-- atelier:block:capability-stewardship:start -->
+Atelier's Skill Steward can govern portable capabilities alongside a person's
+existing skills and tools. A capability package describes the useful outcome,
+its procedures, requirements, evaluation evidence and limits. Each repository
+chooses exact release pins, aliases and whether to reference, manage, customize
+or retire it.
+
+The local foundation verifies complete package contents, prepares an exact
+adoption plan, preserves previous bundles, and refuses collisions and local
+drift. Repository host profiles keep placement explicit. Cross-repository status
+shows each adopter's own state; one repository's update never implies another's
+acceptance.
+
+Installation, host discovery and successful exercise are separate evidence.
+Content-free observations can guide improvement, and draft graph records keep
+provenance connected to adoption and outcomes. Publisher authentication, live
+host evaluation and human acceptance require their own evidence. This source
+capability is intended for the next release; alpha.7 does not expose its command.
+<!-- atelier:block:capability-stewardship:end -->
+
+See [capability stewardship](docs/capability-stewardship.md) for the operating guide.
+
+## Discovery and research
+
+<!-- atelier:block:inquiry-harnesses:start -->
+Discovery Harness and Research Harness share a local inquiry history. Discovery
+frames questions and competing explanations; Research returns source captures,
+verified assertions, contradictions and new questions. Immutable references keep
+each assessment and decision connected to the exact evidence it used.
+
+The open foundation includes qualitative assessments, explicit elicited odds,
+a simple Bayesian rate model, evidence-family checks, withdrawal tracking and
+reviewable graph proposals. Numerical results remain conditional on the declared
+model and evidence. They grant no execution or publication authority.
+
+Each harness is available as a portable capability package alongside existing
+skills. Skill Steward governs its version and repository adoption. Provider
+execution, hosted collaboration and specialized proprietary methods can use the
+same handoff and evidence contracts through separately authorized adapters.
+
+This is next-release source functionality. Published alpha.7 does not include
+the `inquiry` command. The bundled readiness title is now Discovery Harness;
+its existing `discovery-engine` identifiers remain compatible.
+<!-- atelier:block:inquiry-harnesses:end -->
+
+See [Discovery and Research Harnesses](docs/inquiry-harnesses.md) for the local workflow.
 
 ## Where the Atelier stops
 
@@ -451,3 +503,25 @@ the [contract](docs/obsidian-contract.md) and the
 [maintenance service](docs/local-services.md) before relying on it. The
 package subpaths are `@mnstry/atelier/obsidian` and
 `@mnstry/atelier/obsidian/*`.
+
+<!-- atelier:block:learning-harnesses:start -->
+## Knowledge and Build Harnesses
+
+Knowledge Harness supports establishing, developing, evaluating, curating and
+activating a body of knowledge. Ingestion is one entry point alongside original
+writing, observation, research and build results. Contributions retain their
+domain revision, provenance, uncertainty and owner-reported review history.
+
+Build Harness records bounded objectives, exact candidates, artifact dependencies,
+attempts and distinct verification gates. Its coordination proposal can be read
+by Fabric or another adapter. The shared harness contract connects these workflows
+to Discovery, Research and Skill Steward without replacing their domain records.
+
+These are local, provider-neutral source capabilities for the next release.
+Handoffs preserve exact pins, and explicit source snapshots reveal corrections
+that require downstream reconsideration. Graph outputs remain draft proposals.
+Recorded acceptance is not authenticated authority, and local checks do not prove
+research quality or recipient acceptance. Hosted execution remains adapter-owned.
+<!-- atelier:block:learning-harnesses:end -->
+
+Read the [Knowledge and Build Harness guide](docs/learning-harnesses.md) for the complete local learning cycle.

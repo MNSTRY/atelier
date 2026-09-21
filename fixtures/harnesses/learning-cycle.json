@@ -1,0 +1,780 @@
+{
+  "warning": "Invented fixtures and simulated approvals; no research, CI or delivery ran.",
+  "knowledge": [
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "workshop-knowledge",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "domain",
+      "data": {
+        "repository": "workshop-notes",
+        "purpose": "Synthetic learning-cycle demonstration.",
+        "scope": "Invented workshop visitors",
+        "owner": "synthetic-owner",
+        "audience": "private",
+        "questions": [
+          {
+            "id": "return",
+            "question": "What justifies a reversible reminder trial?",
+            "acceptance": "A reviewed rationale traces to a source and its limitations."
+          }
+        ],
+        "vocabulary": {
+          "types": [
+            {
+              "id": "material",
+              "meaning": "A source or interpreted contribution."
+            }
+          ],
+          "relations": [
+            {
+              "id": "justifies",
+              "meaning": "A limited evidential relationship.",
+              "graphPredicate": "supports"
+            }
+          ]
+        },
+        "identityRules": "Keep distinct observations distinct; propose matches for review.",
+        "sourcePolicy": "Invented material only; retain original bytes and provenance.",
+        "acceptancePolicy": "A simulated owner reviews each contribution after evaluation."
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "observation",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "contribution",
+      "data": {
+        "domain": {
+          "id": "workshop-knowledge",
+          "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+        },
+        "category": "source",
+        "term": "material",
+        "title": "Invented observation",
+        "body": "Synthetic observation: three of five fictional visitors noticed the reminder.",
+        "audience": "private",
+        "scope": "Invented workshop visitors",
+        "origin": {
+          "method": "captured",
+          "locator": "synthetic:observation",
+          "contentDigest": "sha256:55ba42208f7b1f3e1ec46a42f53be53e0ea11269142856bfc515960a7ea97f43",
+          "rightsBasis": "Invented fixture."
+        },
+        "basedOn": []
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "source-evaluation",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "evaluation",
+      "data": {
+        "contribution": {
+          "id": "observation",
+          "digest": "sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c"
+        },
+        "judgment": "uncertain",
+        "rationale": "Retained for this synthetic scenario only.",
+        "limitations": [
+          "Invented evidence; no empirical or calibrated inference."
+        ],
+        "scope": "Invented workshop visitors"
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "source-review",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "review",
+      "data": {
+        "target": {
+          "id": "observation",
+          "digest": "sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c"
+        },
+        "disposition": "accepted",
+        "basis": "Simulated owner acceptance for a disposable example.",
+        "evaluations": [
+          {
+            "id": "source-evaluation",
+            "digest": "sha256:7429fb727ac4a24d9798ef297d7562258cada07aaee33666d90114382c01f944"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "trial-rationale",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "contribution",
+      "data": {
+        "domain": {
+          "id": "workshop-knowledge",
+          "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+        },
+        "category": "decision-rationale",
+        "term": "material",
+        "title": "Reversible trial rationale",
+        "body": "A small follow-up trial may test whether notice leads to return visits.",
+        "audience": "private",
+        "scope": "Invented workshop visitors",
+        "origin": {
+          "method": "authored",
+          "reason": "Synthetic interpretation of limited evidence."
+        },
+        "basedOn": [
+          {
+            "contribution": {
+              "id": "observation",
+              "digest": "sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c"
+            },
+            "quote": "Synthetic observation: three of five fictional visitors noticed the reminder."
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "claim-evaluation",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "evaluation",
+      "data": {
+        "contribution": {
+          "id": "trial-rationale",
+          "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+        },
+        "judgment": "uncertain",
+        "rationale": "Retained for this synthetic scenario only.",
+        "limitations": [
+          "Invented evidence; no empirical or calibrated inference."
+        ],
+        "scope": "Invented workshop visitors"
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "claim-review",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "review",
+      "data": {
+        "target": {
+          "id": "trial-rationale",
+          "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+        },
+        "disposition": "accepted",
+        "basis": "Simulated owner acceptance for a disposable example.",
+        "evaluations": [
+          {
+            "id": "claim-evaluation",
+            "digest": "sha256:5021560b9d5468909153da655483de1a42aae3b56e5d220c347391c6b3006dae"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "justification",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "relation",
+      "data": {
+        "domain": {
+          "id": "workshop-knowledge",
+          "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+        },
+        "subject": {
+          "id": "observation",
+          "digest": "sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c"
+        },
+        "predicate": "justifies",
+        "object": {
+          "id": "trial-rationale",
+          "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+        },
+        "rationale": "The observation motivates a test; it does not prove the outcome."
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "relation-review",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "review",
+      "data": {
+        "target": {
+          "id": "justification",
+          "digest": "sha256:b2d1576ac3fa4d44241692f5ae032d3d8f6fa9ffce5b9c68ceadf0a9075789bf"
+        },
+        "disposition": "accepted",
+        "basis": "Simulated owner acceptance for a disposable example.",
+        "evaluations": []
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "graph-use",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "activation",
+      "data": {
+        "reviews": [
+          {
+            "id": "claim-review",
+            "digest": "sha256:9cfe99b751c2f9f0bb25efa09cdc9c9575d4d7326ca6675cbcd5ba37fe1bb882"
+          },
+          {
+            "id": "relation-review",
+            "digest": "sha256:56101efa09e227d109be1b4c5bdbe049b75e308d777fdc73ad1bb4771dd88f1e"
+          }
+        ],
+        "purpose": "Prepare a graph-backed trial decision.",
+        "destination": "synthetic workspace",
+        "questions": [
+          "return"
+        ]
+      }
+    }
+  ],
+  "build": [
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "reminder-build",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "objective",
+      "data": {
+        "repository": "workshop-product",
+        "owner": "synthetic-owner",
+        "purpose": "Build a synthetic reminder prototype.",
+        "scope": "Disposable local example only.",
+        "audience": "private",
+        "acceptance": [
+          "The prototype is a retained file with explicit synthetic verification."
+        ],
+        "gates": [
+          {
+            "id": "tests",
+            "kind": "source",
+            "required": true
+          },
+          {
+            "id": "review",
+            "kind": "review",
+            "required": true
+          },
+          {
+            "id": "ci",
+            "kind": "ci",
+            "required": true
+          }
+        ],
+        "dependencies": [
+          {
+            "id": "rationale",
+            "need": "Current accepted trial rationale.",
+            "handoff": {
+              "schema": "atelier-harness-handoff@v1",
+              "source": {
+                "repository": "workshop-notes",
+                "repositoryBinding": "establishment-record",
+                "profile": "knowledge",
+                "run": "workshop-knowledge",
+                "historyDigest": "sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22",
+                "subject": {
+                  "id": "trial-rationale",
+                  "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+                }
+              },
+              "target": {
+                "repository": "workshop-product",
+                "profile": "build",
+                "purpose": "Implement a disposable reminder prototype."
+              },
+              "audience": "private",
+              "payload": "{\"subject\":{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"trial-rationale\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"contribution\",\"data\":{\"domain\":{\"id\":\"workshop-knowledge\",\"digest\":\"sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331\"},\"category\":\"decision-rationale\",\"term\":\"material\",\"title\":\"Reversible trial rationale\",\"body\":\"A small follow-up trial may test whether notice leads to return visits.\",\"audience\":\"private\",\"scope\":\"Invented workshop visitors\",\"origin\":{\"method\":\"authored\",\"reason\":\"Synthetic interpretation of limited evidence.\"},\"basedOn\":[{\"contribution\":{\"id\":\"observation\",\"digest\":\"sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c\"},\"quote\":\"Synthetic observation: three of five fictional visitors noticed the reminder.\"}]}},\"context\":[{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"workshop-knowledge\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"domain\",\"data\":{\"repository\":\"workshop-notes\",\"purpose\":\"Synthetic learning-cycle demonstration.\",\"scope\":\"Invented workshop visitors\",\"owner\":\"synthetic-owner\",\"audience\":\"private\",\"questions\":[{\"id\":\"return\",\"question\":\"What justifies a reversible reminder trial?\",\"acceptance\":\"A reviewed rationale traces to a source and its limitations.\"}],\"vocabulary\":{\"types\":[{\"id\":\"material\",\"meaning\":\"A source or interpreted contribution.\"}],\"relations\":[{\"id\":\"justifies\",\"meaning\":\"A limited evidential relationship.\",\"graphPredicate\":\"supports\"}]},\"identityRules\":\"Keep distinct observations distinct; propose matches for review.\",\"sourcePolicy\":\"Invented material only; retain original bytes and provenance.\",\"acceptancePolicy\":\"A simulated owner reviews each contribution after evaluation.\"}},{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"claim-review\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"review\",\"data\":{\"target\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"},\"disposition\":\"accepted\",\"basis\":\"Simulated owner acceptance for a disposable example.\",\"evaluations\":[{\"id\":\"claim-evaluation\",\"digest\":\"sha256:5021560b9d5468909153da655483de1a42aae3b56e5d220c347391c6b3006dae\"}]}},{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"claim-evaluation\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"evaluation\",\"data\":{\"contribution\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"},\"judgment\":\"uncertain\",\"rationale\":\"Retained for this synthetic scenario only.\",\"limitations\":[\"Invented evidence; no empirical or calibrated inference.\"],\"scope\":\"Invented workshop visitors\"}}],\"assurance\":\"caller-reported; acceptance-is-not-truth-or-authority\"}",
+              "payloadDigest": "sha256:7aa31d9785d74039798b4943006bc103b93bb6e424a1f30f14b8766b0d944cf6",
+              "assurance": "caller-reported",
+              "authority": "none"
+            }
+          }
+        ],
+        "allowedEffects": [
+          "read-workspace",
+          "write-workspace",
+          "execute-local"
+        ],
+        "maxAttempts": 3,
+        "stoppingRule": "Stop on stale evidence, unsettled execution or failed required gates."
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "prototype",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "candidate",
+      "data": {
+        "objective": {
+          "id": "reminder-build",
+          "digest": "sha256:44b4dd92401cba041582b8b504af4e47902e73649e5a5b0de7b7b4868b0b3cf5"
+        },
+        "repository": "workshop-product",
+        "commit": "1111111111111111111111111111111111111111",
+        "tree": "2222222222222222222222222222222222222222",
+        "artifactDigest": "sha256:137e2ba6a83245723fcb82e55a5e1675c9bf64ea6018992f473af798354abc35",
+        "writer": {
+          "owner": "synthetic-owner",
+          "reservation": "disposable-writer",
+          "evidenceDigest": "sha256:ebdd6376092dae5143c7ee3566eab8941e582896c1dc8856716bc8169c084324"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "test-attempt",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "attempt",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+        },
+        "operation": "test",
+        "requestDigest": "sha256:886f5ca461607989f0265ce1f47cc21f48691f8cf5599b7222f9aa03bb9b5713",
+        "effects": [
+          "execute-local"
+        ]
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "test-uncertain",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "progress",
+      "data": {
+        "attempt": {
+          "id": "test-attempt",
+          "digest": "sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e"
+        },
+        "state": "uncertain",
+        "evidenceDigest": "sha256:5629b3a58ce4b8e796f7b85316a1ed54b48eba46679fe85a8d6f3c68d64509b1",
+        "reason": "Simulated uncertain transport; do not replay."
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "test-completion",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "progress",
+      "data": {
+        "attempt": {
+          "id": "test-attempt",
+          "digest": "sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e"
+        },
+        "state": "completed",
+        "evidenceDigest": "sha256:6eb8c0c9c0ec72660c39c2458757b8bd8f4f5fde8128510ecf899f29a8021cb4",
+        "reason": "Simulated reconciliation against the same attempt."
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "tests-gate",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "gate",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+        },
+        "gate": "tests",
+        "status": "passed",
+        "evidence": {
+          "digest": "sha256:609661757ec908d46e6658cfe228f34dd9c803c3fced0e67902010c9f0b4c868",
+          "locator": "synthetic:tests",
+          "verifier": "synthetic-fixture"
+        },
+        "attempt": {
+          "id": "test-attempt",
+          "digest": "sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "review-gate",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "gate",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+        },
+        "gate": "review",
+        "status": "passed",
+        "evidence": {
+          "digest": "sha256:f08c25d4b59377186d5cf0eb43fe8d316b0301a8f5074ac9aa3c2dc39ed290f8",
+          "locator": "synthetic:review",
+          "verifier": "synthetic-fixture"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "ci-gate",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "gate",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+        },
+        "gate": "ci",
+        "status": "passed",
+        "evidence": {
+          "digest": "sha256:b08431c7ef924beae08c9b090aacfc974ffe8d9286390320640572808779b81a",
+          "locator": "synthetic:ci",
+          "verifier": "synthetic-fixture"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "candidate-review",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "decision",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+        },
+        "disposition": "accepted",
+        "reason": "Simulated acceptance for contract testing only.",
+        "gates": [
+          {
+            "id": "tests-gate",
+            "digest": "sha256:a593d49d82d3df0d7dd17345df9f2f0de8054c4e369ce4cb53d62d267cae0ca6"
+          },
+          {
+            "id": "review-gate",
+            "digest": "sha256:cc5c0fd1cefe4e8a6140e5f4f8c48771d5a3fbd5d49973f8e194c9ba325020f8"
+          },
+          {
+            "id": "ci-gate",
+            "digest": "sha256:2b9b5926cf18441430ef76798644d3d45e86a599c0e30a30440aae4ff2618f22"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "delivery-report",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "delivery",
+      "data": {
+        "decision": {
+          "id": "candidate-review",
+          "digest": "sha256:8bb52412f9c4adba9382eb4dd2bdada6621af85f79d7cc9df94953fecca6f560"
+        },
+        "recipient": "synthetic-recipient",
+        "evidenceDigest": "sha256:bb7777d519c2d97f25e40e680308971a9504e4f2fe4977b956c93f8040b80a1b",
+        "acceptance": "Simulated recipient acceptance; no external delivery occurred."
+      }
+    }
+  ],
+  "lessons": [
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "workshop-lessons",
+      "run": "workshop-lessons",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "domain",
+      "data": {
+        "repository": "workshop-notes",
+        "purpose": "Synthetic learning-cycle demonstration.",
+        "scope": "Invented workshop visitors",
+        "owner": "synthetic-owner",
+        "audience": "private",
+        "questions": [
+          {
+            "id": "return",
+            "question": "What justifies a reversible reminder trial?",
+            "acceptance": "A reviewed rationale traces to a source and its limitations."
+          }
+        ],
+        "vocabulary": {
+          "types": [
+            {
+              "id": "material",
+              "meaning": "A source or interpreted contribution."
+            }
+          ],
+          "relations": [
+            {
+              "id": "justifies",
+              "meaning": "A limited evidential relationship.",
+              "graphPredicate": "supports"
+            }
+          ]
+        },
+        "identityRules": "Keep distinct observations distinct; propose matches for review.",
+        "sourcePolicy": "Invented material only; retain original bytes and provenance.",
+        "acceptancePolicy": "A simulated owner reviews each contribution after evaluation."
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "build-observation",
+      "run": "workshop-lessons",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "contribution",
+      "data": {
+        "domain": {
+          "id": "workshop-lessons",
+          "digest": "sha256:f3c608fdb8dfc246a05f0f455bd01a7ecd36873159e3d8f9f0aa511550060bd2"
+        },
+        "category": "observation",
+        "term": "material",
+        "title": "Synthetic build learning",
+        "body": "{\"subject\":{\"schema\":\"atelier-build-record@v1\",\"id\":\"prototype\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"candidate\",\"data\":{\"objective\":{\"id\":\"reminder-build\",\"digest\":\"sha256:44b4dd92401cba041582b8b504af4e47902e73649e5a5b0de7b7b4868b0b3cf5\"},\"repository\":\"workshop-product\",\"commit\":\"1111111111111111111111111111111111111111\",\"tree\":\"2222222222222222222222222222222222222222\",\"artifactDigest\":\"sha256:137e2ba6a83245723fcb82e55a5e1675c9bf64ea6018992f473af798354abc35\",\"writer\":{\"owner\":\"synthetic-owner\",\"reservation\":\"disposable-writer\",\"evidenceDigest\":\"sha256:ebdd6376092dae5143c7ee3566eab8941e582896c1dc8856716bc8169c084324\"}}},\"context\":[{\"schema\":\"atelier-build-record@v1\",\"id\":\"reminder-build\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"objective\",\"data\":{\"repository\":\"workshop-product\",\"owner\":\"synthetic-owner\",\"purpose\":\"Build a synthetic reminder prototype.\",\"scope\":\"Disposable local example only.\",\"audience\":\"private\",\"acceptance\":[\"The prototype is a retained file with explicit synthetic verification.\"],\"gates\":[{\"id\":\"tests\",\"kind\":\"source\",\"required\":true},{\"id\":\"review\",\"kind\":\"review\",\"required\":true},{\"id\":\"ci\",\"kind\":\"ci\",\"required\":true}],\"dependencies\":[{\"id\":\"rationale\",\"need\":\"Current accepted trial rationale.\",\"handoff\":{\"schema\":\"atelier-harness-handoff@v1\",\"source\":{\"repository\":\"workshop-notes\",\"repositoryBinding\":\"establishment-record\",\"profile\":\"knowledge\",\"run\":\"workshop-knowledge\",\"historyDigest\":\"sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22\",\"subject\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"}},\"target\":{\"repository\":\"workshop-product\",\"profile\":\"build\",\"purpose\":\"Implement a disposable reminder prototype.\"},\"audience\":\"private\",\"payload\":\"{\\\"subject\\\":{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"trial-rationale\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"contribution\\\",\\\"data\\\":{\\\"domain\\\":{\\\"id\\\":\\\"workshop-knowledge\\\",\\\"digest\\\":\\\"sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331\\\"},\\\"category\\\":\\\"decision-rationale\\\",\\\"term\\\":\\\"material\\\",\\\"title\\\":\\\"Reversible trial rationale\\\",\\\"body\\\":\\\"A small follow-up trial may test whether notice leads to return visits.\\\",\\\"audience\\\":\\\"private\\\",\\\"scope\\\":\\\"Invented workshop visitors\\\",\\\"origin\\\":{\\\"method\\\":\\\"authored\\\",\\\"reason\\\":\\\"Synthetic interpretation of limited evidence.\\\"},\\\"basedOn\\\":[{\\\"contribution\\\":{\\\"id\\\":\\\"observation\\\",\\\"digest\\\":\\\"sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c\\\"},\\\"quote\\\":\\\"Synthetic observation: three of five fictional visitors noticed the reminder.\\\"}]}},\\\"context\\\":[{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"workshop-knowledge\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"domain\\\",\\\"data\\\":{\\\"repository\\\":\\\"workshop-notes\\\",\\\"purpose\\\":\\\"Synthetic learning-cycle demonstration.\\\",\\\"scope\\\":\\\"Invented workshop visitors\\\",\\\"owner\\\":\\\"synthetic-owner\\\",\\\"audience\\\":\\\"private\\\",\\\"questions\\\":[{\\\"id\\\":\\\"return\\\",\\\"question\\\":\\\"What justifies a reversible reminder trial?\\\",\\\"acceptance\\\":\\\"A reviewed rationale traces to a source and its limitations.\\\"}],\\\"vocabulary\\\":{\\\"types\\\":[{\\\"id\\\":\\\"material\\\",\\\"meaning\\\":\\\"A source or interpreted contribution.\\\"}],\\\"relations\\\":[{\\\"id\\\":\\\"justifies\\\",\\\"meaning\\\":\\\"A limited evidential relationship.\\\",\\\"graphPredicate\\\":\\\"supports\\\"}]},\\\"identityRules\\\":\\\"Keep distinct observations distinct; propose matches for review.\\\",\\\"sourcePolicy\\\":\\\"Invented material only; retain original bytes and provenance.\\\",\\\"acceptancePolicy\\\":\\\"A simulated owner reviews each contribution after evaluation.\\\"}},{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"claim-review\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"review\\\",\\\"data\\\":{\\\"target\\\":{\\\"id\\\":\\\"trial-rationale\\\",\\\"digest\\\":\\\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\\\"},\\\"disposition\\\":\\\"accepted\\\",\\\"basis\\\":\\\"Simulated owner acceptance for a disposable example.\\\",\\\"evaluations\\\":[{\\\"id\\\":\\\"claim-evaluation\\\",\\\"digest\\\":\\\"sha256:5021560b9d5468909153da655483de1a42aae3b56e5d220c347391c6b3006dae\\\"}]}},{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"claim-evaluation\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"evaluation\\\",\\\"data\\\":{\\\"contribution\\\":{\\\"id\\\":\\\"trial-rationale\\\",\\\"digest\\\":\\\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\\\"},\\\"judgment\\\":\\\"uncertain\\\",\\\"rationale\\\":\\\"Retained for this synthetic scenario only.\\\",\\\"limitations\\\":[\\\"Invented evidence; no empirical or calibrated inference.\\\"],\\\"scope\\\":\\\"Invented workshop visitors\\\"}}],\\\"assurance\\\":\\\"caller-reported; acceptance-is-not-truth-or-authority\\\"}\",\"payloadDigest\":\"sha256:7aa31d9785d74039798b4943006bc103b93bb6e424a1f30f14b8766b0d944cf6\",\"assurance\":\"caller-reported\",\"authority\":\"none\"}}],\"allowedEffects\":[\"read-workspace\",\"write-workspace\",\"execute-local\"],\"maxAttempts\":3,\"stoppingRule\":\"Stop on stale evidence, unsettled execution or failed required gates.\"}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"candidate-review\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"decision\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"disposition\":\"accepted\",\"reason\":\"Simulated acceptance for contract testing only.\",\"gates\":[{\"id\":\"tests-gate\",\"digest\":\"sha256:a593d49d82d3df0d7dd17345df9f2f0de8054c4e369ce4cb53d62d267cae0ca6\"},{\"id\":\"review-gate\",\"digest\":\"sha256:cc5c0fd1cefe4e8a6140e5f4f8c48771d5a3fbd5d49973f8e194c9ba325020f8\"},{\"id\":\"ci-gate\",\"digest\":\"sha256:2b9b5926cf18441430ef76798644d3d45e86a599c0e30a30440aae4ff2618f22\"}]}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"tests-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"tests\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:609661757ec908d46e6658cfe228f34dd9c803c3fced0e67902010c9f0b4c868\",\"locator\":\"synthetic:tests\",\"verifier\":\"synthetic-fixture\"},\"attempt\":{\"id\":\"test-attempt\",\"digest\":\"sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e\"}}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"review-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"review\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:f08c25d4b59377186d5cf0eb43fe8d316b0301a8f5074ac9aa3c2dc39ed290f8\",\"locator\":\"synthetic:review\",\"verifier\":\"synthetic-fixture\"}}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"ci-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"ci\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:b08431c7ef924beae08c9b090aacfc974ffe8d9286390320640572808779b81a\",\"locator\":\"synthetic:ci\",\"verifier\":\"synthetic-fixture\"}}}],\"assurance\":\"caller-reported; acceptance-is-not-truth-or-authority\"}",
+        "audience": "private",
+        "scope": "Invented workshop visitors",
+        "origin": {
+          "method": "exchange",
+          "handoff": {
+            "schema": "atelier-harness-handoff@v1",
+            "source": {
+              "repository": "workshop-product",
+              "repositoryBinding": "establishment-record",
+              "profile": "build",
+              "run": "reminder-build",
+              "historyDigest": "sha256:098c4e635bd86e576b02125d9381e582def381e81831e27fe47d9cf431e5e40c",
+              "subject": {
+                "id": "prototype",
+                "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+              }
+            },
+            "target": {
+              "repository": "workshop-notes",
+              "profile": "knowledge",
+              "purpose": "Retain implementation learning with its original evidence."
+            },
+            "audience": "private",
+            "payload": "{\"subject\":{\"schema\":\"atelier-build-record@v1\",\"id\":\"prototype\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"candidate\",\"data\":{\"objective\":{\"id\":\"reminder-build\",\"digest\":\"sha256:44b4dd92401cba041582b8b504af4e47902e73649e5a5b0de7b7b4868b0b3cf5\"},\"repository\":\"workshop-product\",\"commit\":\"1111111111111111111111111111111111111111\",\"tree\":\"2222222222222222222222222222222222222222\",\"artifactDigest\":\"sha256:137e2ba6a83245723fcb82e55a5e1675c9bf64ea6018992f473af798354abc35\",\"writer\":{\"owner\":\"synthetic-owner\",\"reservation\":\"disposable-writer\",\"evidenceDigest\":\"sha256:ebdd6376092dae5143c7ee3566eab8941e582896c1dc8856716bc8169c084324\"}}},\"context\":[{\"schema\":\"atelier-build-record@v1\",\"id\":\"reminder-build\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"objective\",\"data\":{\"repository\":\"workshop-product\",\"owner\":\"synthetic-owner\",\"purpose\":\"Build a synthetic reminder prototype.\",\"scope\":\"Disposable local example only.\",\"audience\":\"private\",\"acceptance\":[\"The prototype is a retained file with explicit synthetic verification.\"],\"gates\":[{\"id\":\"tests\",\"kind\":\"source\",\"required\":true},{\"id\":\"review\",\"kind\":\"review\",\"required\":true},{\"id\":\"ci\",\"kind\":\"ci\",\"required\":true}],\"dependencies\":[{\"id\":\"rationale\",\"need\":\"Current accepted trial rationale.\",\"handoff\":{\"schema\":\"atelier-harness-handoff@v1\",\"source\":{\"repository\":\"workshop-notes\",\"repositoryBinding\":\"establishment-record\",\"profile\":\"knowledge\",\"run\":\"workshop-knowledge\",\"historyDigest\":\"sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22\",\"subject\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"}},\"target\":{\"repository\":\"workshop-product\",\"profile\":\"build\",\"purpose\":\"Implement a disposable reminder prototype.\"},\"audience\":\"private\",\"payload\":\"{\\\"subject\\\":{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"trial-rationale\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"contribution\\\",\\\"data\\\":{\\\"domain\\\":{\\\"id\\\":\\\"workshop-knowledge\\\",\\\"digest\\\":\\\"sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331\\\"},\\\"category\\\":\\\"decision-rationale\\\",\\\"term\\\":\\\"material\\\",\\\"title\\\":\\\"Reversible trial rationale\\\",\\\"body\\\":\\\"A small follow-up trial may test whether notice leads to return visits.\\\",\\\"audience\\\":\\\"private\\\",\\\"scope\\\":\\\"Invented workshop visitors\\\",\\\"origin\\\":{\\\"method\\\":\\\"authored\\\",\\\"reason\\\":\\\"Synthetic interpretation of limited evidence.\\\"},\\\"basedOn\\\":[{\\\"contribution\\\":{\\\"id\\\":\\\"observation\\\",\\\"digest\\\":\\\"sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c\\\"},\\\"quote\\\":\\\"Synthetic observation: three of five fictional visitors noticed the reminder.\\\"}]}},\\\"context\\\":[{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"workshop-knowledge\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"domain\\\",\\\"data\\\":{\\\"repository\\\":\\\"workshop-notes\\\",\\\"purpose\\\":\\\"Synthetic learning-cycle demonstration.\\\",\\\"scope\\\":\\\"Invented workshop visitors\\\",\\\"owner\\\":\\\"synthetic-owner\\\",\\\"audience\\\":\\\"private\\\",\\\"questions\\\":[{\\\"id\\\":\\\"return\\\",\\\"question\\\":\\\"What justifies a reversible reminder trial?\\\",\\\"acceptance\\\":\\\"A reviewed rationale traces to a source and its limitations.\\\"}],\\\"vocabulary\\\":{\\\"types\\\":[{\\\"id\\\":\\\"material\\\",\\\"meaning\\\":\\\"A source or interpreted contribution.\\\"}],\\\"relations\\\":[{\\\"id\\\":\\\"justifies\\\",\\\"meaning\\\":\\\"A limited evidential relationship.\\\",\\\"graphPredicate\\\":\\\"supports\\\"}]},\\\"identityRules\\\":\\\"Keep distinct observations distinct; propose matches for review.\\\",\\\"sourcePolicy\\\":\\\"Invented material only; retain original bytes and provenance.\\\",\\\"acceptancePolicy\\\":\\\"A simulated owner reviews each contribution after evaluation.\\\"}},{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"claim-review\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"review\\\",\\\"data\\\":{\\\"target\\\":{\\\"id\\\":\\\"trial-rationale\\\",\\\"digest\\\":\\\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\\\"},\\\"disposition\\\":\\\"accepted\\\",\\\"basis\\\":\\\"Simulated owner acceptance for a disposable example.\\\",\\\"evaluations\\\":[{\\\"id\\\":\\\"claim-evaluation\\\",\\\"digest\\\":\\\"sha256:5021560b9d5468909153da655483de1a42aae3b56e5d220c347391c6b3006dae\\\"}]}},{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"claim-evaluation\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"evaluation\\\",\\\"data\\\":{\\\"contribution\\\":{\\\"id\\\":\\\"trial-rationale\\\",\\\"digest\\\":\\\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\\\"},\\\"judgment\\\":\\\"uncertain\\\",\\\"rationale\\\":\\\"Retained for this synthetic scenario only.\\\",\\\"limitations\\\":[\\\"Invented evidence; no empirical or calibrated inference.\\\"],\\\"scope\\\":\\\"Invented workshop visitors\\\"}}],\\\"assurance\\\":\\\"caller-reported; acceptance-is-not-truth-or-authority\\\"}\",\"payloadDigest\":\"sha256:7aa31d9785d74039798b4943006bc103b93bb6e424a1f30f14b8766b0d944cf6\",\"assurance\":\"caller-reported\",\"authority\":\"none\"}}],\"allowedEffects\":[\"read-workspace\",\"write-workspace\",\"execute-local\"],\"maxAttempts\":3,\"stoppingRule\":\"Stop on stale evidence, unsettled execution or failed required gates.\"}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"candidate-review\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"decision\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"disposition\":\"accepted\",\"reason\":\"Simulated acceptance for contract testing only.\",\"gates\":[{\"id\":\"tests-gate\",\"digest\":\"sha256:a593d49d82d3df0d7dd17345df9f2f0de8054c4e369ce4cb53d62d267cae0ca6\"},{\"id\":\"review-gate\",\"digest\":\"sha256:cc5c0fd1cefe4e8a6140e5f4f8c48771d5a3fbd5d49973f8e194c9ba325020f8\"},{\"id\":\"ci-gate\",\"digest\":\"sha256:2b9b5926cf18441430ef76798644d3d45e86a599c0e30a30440aae4ff2618f22\"}]}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"tests-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"tests\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:609661757ec908d46e6658cfe228f34dd9c803c3fced0e67902010c9f0b4c868\",\"locator\":\"synthetic:tests\",\"verifier\":\"synthetic-fixture\"},\"attempt\":{\"id\":\"test-attempt\",\"digest\":\"sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e\"}}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"review-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"review\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:f08c25d4b59377186d5cf0eb43fe8d316b0301a8f5074ac9aa3c2dc39ed290f8\",\"locator\":\"synthetic:review\",\"verifier\":\"synthetic-fixture\"}}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"ci-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"ci\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:b08431c7ef924beae08c9b090aacfc974ffe8d9286390320640572808779b81a\",\"locator\":\"synthetic:ci\",\"verifier\":\"synthetic-fixture\"}}}],\"assurance\":\"caller-reported; acceptance-is-not-truth-or-authority\"}",
+            "payloadDigest": "sha256:0dbaa6472bca09f753797222ada850c905ccaddea3333ec6ed13fb7fe053b89f",
+            "assurance": "caller-reported",
+            "authority": "none"
+          }
+        },
+        "basedOn": []
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "lesson-evaluation",
+      "run": "workshop-lessons",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "evaluation",
+      "data": {
+        "contribution": {
+          "id": "build-observation",
+          "digest": "sha256:f17b37818df72bc0bab724c1f0377aeb2fa7e609e7f833f9f02441a81cf58f91"
+        },
+        "judgment": "uncertain",
+        "rationale": "Reported test success is distinct from usefulness.",
+        "limitations": [
+          "Simulated evidence only."
+        ],
+        "scope": "Invented workshop visitors"
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "lesson-review",
+      "run": "workshop-lessons",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "review",
+      "data": {
+        "target": {
+          "id": "build-observation",
+          "digest": "sha256:f17b37818df72bc0bab724c1f0377aeb2fa7e609e7f833f9f02441a81cf58f91"
+        },
+        "disposition": "accepted",
+        "basis": "Simulated curation of a build observation.",
+        "evaluations": [
+          {
+            "id": "lesson-evaluation",
+            "digest": "sha256:cd0d2c1e8053ddb79a22b076548fd8391bff8f6a271be6fe819f1886f7fffd11"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "lesson-use",
+      "run": "workshop-lessons",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "activation",
+      "data": {
+        "reviews": [
+          {
+            "id": "lesson-review",
+            "digest": "sha256:80754d84a9554ff777a58424f2fff21af488246b824ea03127e11c89cb3e7376"
+          }
+        ],
+        "purpose": "Prepare a lesson for another inquiry.",
+        "destination": "synthetic workspace",
+        "questions": [
+          "return"
+        ]
+      }
+    }
+  ],
+  "withdrawal": {
+    "schema": "atelier-knowledge-record@v1",
+    "id": "source-withdrawal",
+    "run": "workshop-knowledge",
+    "at": "2026-01-01T00:00:00Z",
+    "by": "synthetic-owner",
+    "kind": "withdrawal",
+    "data": {
+      "target": {
+        "id": "observation",
+        "digest": "sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c"
+      },
+      "reason": "Synthetic correction: the observation cannot be relied on."
+    }
+  },
+  "domainRevision": {
+    "schema": "atelier-knowledge-record@v1",
+    "id": "domain-next",
+    "run": "workshop-knowledge",
+    "at": "2026-01-01T00:00:00Z",
+    "by": "synthetic-owner",
+    "kind": "domain-revision",
+    "data": {
+      "repository": "workshop-notes",
+      "purpose": "Synthetic learning-cycle demonstration.",
+      "scope": "Invented workshop visitors",
+      "owner": "synthetic-owner",
+      "audience": "private",
+      "questions": [
+        {
+          "id": "return",
+          "question": "What justifies a reversible reminder trial?",
+          "acceptance": "A reviewed rationale traces to a source and its limitations."
+        }
+      ],
+      "vocabulary": {
+        "types": [
+          {
+            "id": "material",
+            "meaning": "A source or interpreted contribution."
+          }
+        ],
+        "relations": [
+          {
+            "id": "justifies",
+            "meaning": "A limited evidential relationship.",
+            "graphPredicate": "supports"
+          }
+        ]
+      },
+      "identityRules": "Keep distinct observations distinct; propose matches for review.",
+      "sourcePolicy": "Invented material only; retain original bytes and provenance.",
+      "acceptancePolicy": "A simulated owner reviews each contribution after evaluation.",
+      "supersedes": {
+        "id": "workshop-knowledge",
+        "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+      },
+      "migration": "Synthetic vocabulary revision requires reevaluation of dependent knowledge."
+    }
+  },
+  "handoff": {
+    "schema": "atelier-harness-handoff@v1",
+    "source": {
+      "repository": "workshop-notes",
+      "repositoryBinding": "establishment-record",
+      "profile": "knowledge",
+      "run": "workshop-knowledge",
+      "historyDigest": "sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22",
+      "subject": {
+        "id": "trial-rationale",
+        "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+      }
+    },
+    "target": {
+      "repository": "workshop-product",
+      "profile": "build",
+      "purpose": "Implement a disposable reminder prototype."
+    },
+    "audience": "private",
+    "payload": "{\"subject\":{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"trial-rationale\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"contribution\",\"data\":{\"domain\":{\"id\":\"workshop-knowledge\",\"digest\":\"sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331\"},\"category\":\"decision-rationale\",\"term\":\"material\",\"title\":\"Reversible trial rationale\",\"body\":\"A small follow-up trial may test whether notice leads to return visits.\",\"audience\":\"private\",\"scope\":\"Invented workshop visitors\",\"origin\":{\"method\":\"authored\",\"reason\":\"Synthetic interpretation of limited evidence.\"},\"basedOn\":[{\"contribution\":{\"id\":\"observation\",\"digest\":\"sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c\"},\"quote\":\"Synthetic observation: three of five fictional visitors noticed the reminder.\"}]}},\"context\":[{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"workshop-knowledge\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"domain\",\"data\":{\"repository\":\"workshop-notes\",\"purpose\":\"Synthetic learning-cycle demonstration.\",\"scope\":\"Invented workshop visitors\",\"owner\":\"synthetic-owner\",\"audience\":\"private\",\"questions\":[{\"id\":\"return\",\"question\":\"What justifies a reversible reminder trial?\",\"acceptance\":\"A reviewed rationale traces to a source and its limitations.\"}],\"vocabulary\":{\"types\":[{\"id\":\"material\",\"meaning\":\"A source or interpreted contribution.\"}],\"relations\":[{\"id\":\"justifies\",\"meaning\":\"A limited evidential relationship.\",\"graphPredicate\":\"supports\"}]},\"identityRules\":\"Keep distinct observations distinct; propose matches for review.\",\"sourcePolicy\":\"Invented material only; retain original bytes and provenance.\",\"acceptancePolicy\":\"A simulated owner reviews each contribution after evaluation.\"}},{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"claim-review\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"review\",\"data\":{\"target\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"},\"disposition\":\"accepted\",\"basis\":\"Simulated owner acceptance for a disposable example.\",\"evaluations\":[{\"id\":\"claim-evaluation\",\"digest\":\"sha256:5021560b9d5468909153da655483de1a42aae3b56e5d220c347391c6b3006dae\"}]}},{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"claim-evaluation\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"evaluation\",\"data\":{\"contribution\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"},\"judgment\":\"uncertain\",\"rationale\":\"Retained for this synthetic scenario only.\",\"limitations\":[\"Invented evidence; no empirical or calibrated inference.\"],\"scope\":\"Invented workshop visitors\"}}],\"assurance\":\"caller-reported; acceptance-is-not-truth-or-authority\"}",
+    "payloadDigest": "sha256:7aa31d9785d74039798b4943006bc103b93bb6e424a1f30f14b8766b0d944cf6",
+    "assurance": "caller-reported",
+    "authority": "none"
+  },
+  "buildHandoff": {
+    "schema": "atelier-harness-handoff@v1",
+    "source": {
+      "repository": "workshop-product",
+      "repositoryBinding": "establishment-record",
+      "profile": "build",
+      "run": "reminder-build",
+      "historyDigest": "sha256:098c4e635bd86e576b02125d9381e582def381e81831e27fe47d9cf431e5e40c",
+      "subject": {
+        "id": "prototype",
+        "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+      }
+    },
+    "target": {
+      "repository": "workshop-notes",
+      "profile": "knowledge",
+      "purpose": "Retain implementation learning with its original evidence."
+    },
+    "audience": "private",
+    "payload": "{\"subject\":{\"schema\":\"atelier-build-record@v1\",\"id\":\"prototype\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"candidate\",\"data\":{\"objective\":{\"id\":\"reminder-build\",\"digest\":\"sha256:44b4dd92401cba041582b8b504af4e47902e73649e5a5b0de7b7b4868b0b3cf5\"},\"repository\":\"workshop-product\",\"commit\":\"1111111111111111111111111111111111111111\",\"tree\":\"2222222222222222222222222222222222222222\",\"artifactDigest\":\"sha256:137e2ba6a83245723fcb82e55a5e1675c9bf64ea6018992f473af798354abc35\",\"writer\":{\"owner\":\"synthetic-owner\",\"reservation\":\"disposable-writer\",\"evidenceDigest\":\"sha256:ebdd6376092dae5143c7ee3566eab8941e582896c1dc8856716bc8169c084324\"}}},\"context\":[{\"schema\":\"atelier-build-record@v1\",\"id\":\"reminder-build\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"objective\",\"data\":{\"repository\":\"workshop-product\",\"owner\":\"synthetic-owner\",\"purpose\":\"Build a synthetic reminder prototype.\",\"scope\":\"Disposable local example only.\",\"audience\":\"private\",\"acceptance\":[\"The prototype is a retained file with explicit synthetic verification.\"],\"gates\":[{\"id\":\"tests\",\"kind\":\"source\",\"required\":true},{\"id\":\"review\",\"kind\":\"review\",\"required\":true},{\"id\":\"ci\",\"kind\":\"ci\",\"required\":true}],\"dependencies\":[{\"id\":\"rationale\",\"need\":\"Current accepted trial rationale.\",\"handoff\":{\"schema\":\"atelier-harness-handoff@v1\",\"source\":{\"repository\":\"workshop-notes\",\"repositoryBinding\":\"establishment-record\",\"profile\":\"knowledge\",\"run\":\"workshop-knowledge\",\"historyDigest\":\"sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22\",\"subject\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"}},\"target\":{\"repository\":\"workshop-product\",\"profile\":\"build\",\"purpose\":\"Implement a disposable reminder prototype.\"},\"audience\":\"private\",\"payload\":\"{\\\"subject\\\":{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"trial-rationale\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"contribution\\\",\\\"data\\\":{\\\"domain\\\":{\\\"id\\\":\\\"workshop-knowledge\\\",\\\"digest\\\":\\\"sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331\\\"},\\\"category\\\":\\\"decision-rationale\\\",\\\"term\\\":\\\"material\\\",\\\"title\\\":\\\"Reversible trial rationale\\\",\\\"body\\\":\\\"A small follow-up trial may test whether notice leads to return visits.\\\",\\\"audience\\\":\\\"private\\\",\\\"scope\\\":\\\"Invented workshop visitors\\\",\\\"origin\\\":{\\\"method\\\":\\\"authored\\\",\\\"reason\\\":\\\"Synthetic interpretation of limited evidence.\\\"},\\\"basedOn\\\":[{\\\"contribution\\\":{\\\"id\\\":\\\"observation\\\",\\\"digest\\\":\\\"sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c\\\"},\\\"quote\\\":\\\"Synthetic observation: three of five fictional visitors noticed the reminder.\\\"}]}},\\\"context\\\":[{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"workshop-knowledge\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"domain\\\",\\\"data\\\":{\\\"repository\\\":\\\"workshop-notes\\\",\\\"purpose\\\":\\\"Synthetic learning-cycle demonstration.\\\",\\\"scope\\\":\\\"Invented workshop visitors\\\",\\\"owner\\\":\\\"synthetic-owner\\\",\\\"audience\\\":\\\"private\\\",\\\"questions\\\":[{\\\"id\\\":\\\"return\\\",\\\"question\\\":\\\"What justifies a reversible reminder trial?\\\",\\\"acceptance\\\":\\\"A reviewed rationale traces to a source and its limitations.\\\"}],\\\"vocabulary\\\":{\\\"types\\\":[{\\\"id\\\":\\\"material\\\",\\\"meaning\\\":\\\"A source or interpreted contribution.\\\"}],\\\"relations\\\":[{\\\"id\\\":\\\"justifies\\\",\\\"meaning\\\":\\\"A limited evidential relationship.\\\",\\\"graphPredicate\\\":\\\"supports\\\"}]},\\\"identityRules\\\":\\\"Keep distinct observations distinct; propose matches for review.\\\",\\\"sourcePolicy\\\":\\\"Invented material only; retain original bytes and provenance.\\\",\\\"acceptancePolicy\\\":\\\"A simulated owner reviews each contribution after evaluation.\\\"}},{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"claim-review\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"review\\\",\\\"data\\\":{\\\"target\\\":{\\\"id\\\":\\\"trial-rationale\\\",\\\"digest\\\":\\\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\\\"},\\\"disposition\\\":\\\"accepted\\\",\\\"basis\\\":\\\"Simulated owner acceptance for a disposable example.\\\",\\\"evaluations\\\":[{\\\"id\\\":\\\"claim-evaluation\\\",\\\"digest\\\":\\\"sha256:5021560b9d5468909153da655483de1a42aae3b56e5d220c347391c6b3006dae\\\"}]}},{\\\"schema\\\":\\\"atelier-knowledge-record@v1\\\",\\\"id\\\":\\\"claim-evaluation\\\",\\\"run\\\":\\\"workshop-knowledge\\\",\\\"at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"by\\\":\\\"synthetic-owner\\\",\\\"kind\\\":\\\"evaluation\\\",\\\"data\\\":{\\\"contribution\\\":{\\\"id\\\":\\\"trial-rationale\\\",\\\"digest\\\":\\\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\\\"},\\\"judgment\\\":\\\"uncertain\\\",\\\"rationale\\\":\\\"Retained for this synthetic scenario only.\\\",\\\"limitations\\\":[\\\"Invented evidence; no empirical or calibrated inference.\\\"],\\\"scope\\\":\\\"Invented workshop visitors\\\"}}],\\\"assurance\\\":\\\"caller-reported; acceptance-is-not-truth-or-authority\\\"}\",\"payloadDigest\":\"sha256:7aa31d9785d74039798b4943006bc103b93bb6e424a1f30f14b8766b0d944cf6\",\"assurance\":\"caller-reported\",\"authority\":\"none\"}}],\"allowedEffects\":[\"read-workspace\",\"write-workspace\",\"execute-local\"],\"maxAttempts\":3,\"stoppingRule\":\"Stop on stale evidence, unsettled execution or failed required gates.\"}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"candidate-review\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"decision\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"disposition\":\"accepted\",\"reason\":\"Simulated acceptance for contract testing only.\",\"gates\":[{\"id\":\"tests-gate\",\"digest\":\"sha256:a593d49d82d3df0d7dd17345df9f2f0de8054c4e369ce4cb53d62d267cae0ca6\"},{\"id\":\"review-gate\",\"digest\":\"sha256:cc5c0fd1cefe4e8a6140e5f4f8c48771d5a3fbd5d49973f8e194c9ba325020f8\"},{\"id\":\"ci-gate\",\"digest\":\"sha256:2b9b5926cf18441430ef76798644d3d45e86a599c0e30a30440aae4ff2618f22\"}]}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"tests-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"tests\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:609661757ec908d46e6658cfe228f34dd9c803c3fced0e67902010c9f0b4c868\",\"locator\":\"synthetic:tests\",\"verifier\":\"synthetic-fixture\"},\"attempt\":{\"id\":\"test-attempt\",\"digest\":\"sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e\"}}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"review-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"review\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:f08c25d4b59377186d5cf0eb43fe8d316b0301a8f5074ac9aa3c2dc39ed290f8\",\"locator\":\"synthetic:review\",\"verifier\":\"synthetic-fixture\"}}},{\"schema\":\"atelier-build-record@v1\",\"id\":\"ci-gate\",\"run\":\"reminder-build\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"gate\",\"data\":{\"candidate\":{\"id\":\"prototype\",\"digest\":\"sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395\"},\"gate\":\"ci\",\"status\":\"passed\",\"evidence\":{\"digest\":\"sha256:b08431c7ef924beae08c9b090aacfc974ffe8d9286390320640572808779b81a\",\"locator\":\"synthetic:ci\",\"verifier\":\"synthetic-fixture\"}}}],\"assurance\":\"caller-reported; acceptance-is-not-truth-or-authority\"}",
+    "payloadDigest": "sha256:0dbaa6472bca09f753797222ada850c905ccaddea3333ec6ed13fb7fe053b89f",
+    "assurance": "caller-reported",
+    "authority": "none"
+  }
+}

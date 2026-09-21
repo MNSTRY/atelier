@@ -79,6 +79,14 @@
   5. The workspace graph, not repository artifacts, additionally carries
      wikilink edges and cross-repository Markdown-link edges, de-duplicated.
 
+- Add Knowledge Harness, Fabric-derived Build Harness and shared typed handoffs, with immutable local history, intake and inquiry bridges, graph activation, correction propagation and version-bound skill feedback.
+
+- Add local Discovery and Research Harnesses with versioned inquiry records,
+  portable research handoffs, reproducible basic belief calculations, evidence
+  dependence and withdrawal checks, and reviewable graph proposals. Add separate
+  capability packages and version-bound Skill Steward feedback. Rename the
+  discovery readiness display title while retaining all persisted identifiers.
+
 ## 0.2.0-alpha.7
 
 - Add a guided owner-agent upgrade skill and read-only `upgrade explain`

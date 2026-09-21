@@ -1,0 +1,20 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "hypothesis",
+  "id": "reminder",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "question": "Does a reminder improve return visits?",
+    "scope": "workshop-visitors",
+    "context": "A fictional workshop over one month.",
+    "alternatives": [
+      "A reminder helps recall.",
+      "Scheduling constraints dominate.",
+      "The apparent change is selection bias."
+    ],
+    "testPlan": "Plan a reversible trial before observing outcomes. Treat these examples as fictional arithmetic."
+  },
+  "unexpectedAuthority": true
+}

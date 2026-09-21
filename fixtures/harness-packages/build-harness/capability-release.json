@@ -1,0 +1,82 @@
+{
+  "schema": "mnstry.atelier-capability-release@v1",
+  "package": {
+    "schema": "mnstry.atelier-capability-package@v1",
+    "id": "mnstry.atelier/build-harness",
+    "version": "1.0.0",
+    "title": "Build Harness",
+    "summary": "Portable governed build development and stewardship.",
+    "license": "Apache-2.0",
+    "source": {
+      "repository": "https://github.com/MNSTRY/atelier",
+      "revision": "unreleased-learning-harness-v1"
+    },
+    "hosts": [
+      "codex-repo-v1",
+      "claude-repo-v1"
+    ],
+    "dependencies": [],
+    "evaluations": [
+      {
+        "id": "acceptance",
+        "kind": "integration",
+        "path": "evaluation.md",
+        "outcome": "unknown"
+      }
+    ],
+    "migrations": [],
+    "limitations": [
+      "Unreleased source package; digest integrity does not authenticate publisher identity.",
+      "Synthetic workflow verification does not establish host behavior, research quality, calibration or recipient acceptance."
+    ],
+    "capabilities": [
+      {
+        "id": "build-harness",
+        "description": "Develop build outcomes with traceable evidence and governance.",
+        "inputs": [
+          "Explicit purpose, sources, operating policy and existing tools"
+        ],
+        "outputs": [
+          "Typed harness records, evidence and reviewable handoffs"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "id": "harness",
+        "name": "atelier-build-harness",
+        "path": "skills/atelier-build-harness",
+        "capabilities": [
+          "build-harness"
+        ]
+      }
+    ],
+    "requirements": {
+      "tools": [
+        "atelier-harness-v1"
+      ],
+      "effects": [
+        "read-workspace",
+        "write-workspace"
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": "capability-package.json",
+      "digest": "sha256:5ce346512751f3149c11ae8b118c794ba9ee566d1cc4f92c475919f656a22475",
+      "bytes": 1545
+    },
+    {
+      "path": "evaluation.md",
+      "digest": "sha256:9b8998181bfd9997fa4803b043035908b06a639620cf0432ecdb139000bce0c0",
+      "bytes": 162
+    },
+    {
+      "path": "skills/atelier-build-harness/SKILL.md",
+      "digest": "sha256:ad8c8e9c4dbba56c7c9f17d67b1f98bf5a5e8b530674b7d94f4dfaa4c8d800e8",
+      "bytes": 3321
+    }
+  ],
+  "digest": "sha256:9cdeb3f058cf52db0825643d9dbbddea36368d061f24039a74dba20d63594a27"
+}

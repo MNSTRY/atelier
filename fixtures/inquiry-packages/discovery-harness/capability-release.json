@@ -1,0 +1,82 @@
+{
+  "schema": "mnstry.atelier-capability-release@v1",
+  "package": {
+    "schema": "mnstry.atelier-capability-package@v1",
+    "id": "mnstry.atelier/discovery-harness",
+    "version": "1.0.0",
+    "title": "Discovery Harness",
+    "summary": "Portable governed discovery harness.",
+    "license": "Apache-2.0",
+    "source": {
+      "repository": "https://github.com/MNSTRY/atelier",
+      "revision": "unreleased-inquiry-source-v1"
+    },
+    "hosts": [
+      "codex-repo-v1",
+      "claude-repo-v1"
+    ],
+    "dependencies": [],
+    "evaluations": [
+      {
+        "id": "acceptance",
+        "kind": "integration",
+        "path": "evaluation.md",
+        "outcome": "unknown"
+      }
+    ],
+    "migrations": [],
+    "limitations": [
+      "Unreleased source package. Digest integrity does not authenticate publisher identity.",
+      "Local synthetic workflow checks do not establish agent research quality or recipient acceptance."
+    ],
+    "capabilities": [
+      {
+        "id": "discovery-harness",
+        "description": "Run the discovery harness with explicit evidence and governance.",
+        "inputs": [
+          "Question or versioned inquiry request, local authority and tooling"
+        ],
+        "outputs": [
+          "Versioned inquiry records and reviewable proposals"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "id": "harness",
+        "name": "atelier-discovery-harness",
+        "path": "skills/atelier-discovery-harness",
+        "capabilities": [
+          "discovery-harness"
+        ]
+      }
+    ],
+    "requirements": {
+      "tools": [
+        "atelier-inquiry-v1"
+      ],
+      "effects": [
+        "read-workspace",
+        "write-workspace"
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": "capability-package.json",
+      "digest": "sha256:8f49dd8467723780bc75fa228a22ef823ab1a954f20884c8a4788b4919c460d5",
+      "bytes": 1528
+    },
+    {
+      "path": "evaluation.md",
+      "digest": "sha256:894c6d1ffb5771cb51a2e1f215b0ef750236f6763ff0471b626a5a311db02562",
+      "bytes": 212
+    },
+    {
+      "path": "skills/atelier-discovery-harness/SKILL.md",
+      "digest": "sha256:9badc01c2ccbd9952e95de0696a9746d8ba179041e5cd69417798f05408bec59",
+      "bytes": 2935
+    }
+  ],
+  "digest": "sha256:e3d4cb023d05144ef22cfd255312ab13ea35e02455ed040c7a36e012ebbd28bc"
+}

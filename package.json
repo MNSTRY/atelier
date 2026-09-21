@@ -30,6 +30,8 @@
     "./contracts/atelier-pane-presentation.v1.schema.json": "./contracts/atelier-pane-presentation.v1.schema.json",
     "./coauthor": "./src/coauthor/session.mjs",
     "./skills": "./src/skills/steward.mjs",
+    "./capabilities": "./src/capabilities/index.mjs",
+    "./contracts/atelier-capability.v1.schema.json": "./contracts/atelier-capability.v1.schema.json",
     "./intake": "./src/intake/store.mjs",
     "./contracts/atelier-intake.v1.schema.json": "./contracts/atelier-intake.v1.schema.json",
     "./guides": "./src/guides/contracts.mjs",
@@ -88,7 +90,15 @@
     "./contracts/atelier-obsidian-publication-journal.v1.schema.json": "./contracts/atelier-obsidian-publication-journal.v1.schema.json",
     "./contracts/atelier-obsidian-scope.v1.schema.json": "./contracts/atelier-obsidian-scope.v1.schema.json",
     "./contracts/atelier-obsidian-service-state.v1.schema.json": "./contracts/atelier-obsidian-service-state.v1.schema.json",
-    "./contracts/atelier-obsidian-source-snapshot.v1.schema.json": "./contracts/atelier-obsidian-source-snapshot.v1.schema.json"
+    "./contracts/atelier-obsidian-source-snapshot.v1.schema.json": "./contracts/atelier-obsidian-source-snapshot.v1.schema.json",
+    "./inquiry": "./src/inquiry/index.mjs",
+    "./contracts/atelier-inquiry.v1.schema.json": "./contracts/atelier-inquiry.v1.schema.json",
+    "./harnesses": "./src/harnesses/index.mjs",
+    "./knowledge": "./src/knowledge/index.mjs",
+    "./build": "./src/build/index.mjs",
+    "./contracts/atelier-harness.v1.schema.json": "./contracts/atelier-harness.v1.schema.json",
+    "./contracts/atelier-knowledge.v1.schema.json": "./contracts/atelier-knowledge.v1.schema.json",
+    "./contracts/atelier-build.v1.schema.json": "./contracts/atelier-build.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",
