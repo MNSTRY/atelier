@@ -6,6 +6,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { buildCanonicalGraph, createGraphFileCache } from '../src/graph/graph.mjs'
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
+import { identitySuffix } from '../src/projection/obsidian/contracts.mjs'
 import { createPreparationCache, prepareView, sha256Digest, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { listSourceFiles, reconcile, sourceKey } from '../src/runtime/obsidian/observation.mjs'
 
@@ -168,8 +169,21 @@ test('fixture: a cached preparation equals a full one under both scopes, before 
   run('retitle: the path stays, the rows of related notes change', exact)
   fs.writeFileSync(plan, fs.readFileSync(plan, 'utf8').replace('    related:\n      - "north-desk:sealed-ledger"\n', ''))
   run('relation removed', exact)
+  const beforeWithheld = { ...priors }
   withheld.add('south-desk:tide-table')
   run('a node withheld: every note that named it changes, the rest are reused', exact)
+  // The withheld note is gone from the cached view, and no generated text of the cached view names its identity.
+  const tideSuffix = identitySuffix('south-desk', 'south-desk:tide-table', 12)
+  for (const scope of [fullScope, scoped]) {
+    const cached = prepareView({ snapshot: snapshotOf({ dir, repositories: fixture.repositories, workspaceId, withheld }), profile, scope, clock, persistentPathRegistry: registry, priorManifest: beforeWithheld[scope.scopeId], cache: caches[scope.scopeId] })
+    assert.equal(cached.manifest.notes.some((note) => note.nodeId === 'south-desk:tide-table'), false)
+    assert.ok(cached.changes.removed.some((notePath) => notePath.includes(`--${tideSuffix}`)), 'its removal is reported')
+    for (const file of cached.files) assert.equal(file.path.includes(tideSuffix), false, file.path)
+    for (const note of cached.manifest.notes) {
+      const bytes = cached.files.find((file) => file.path === note.path).bytes
+      for (const region of note.regions.generated) assert.equal(bytes.subarray(region.range.start, region.range.end).toString('utf8').includes(tideSuffix), false, `${note.path}: generated text names the withheld note`)
+    }
+  }
   withheld.delete('south-desk:tide-table')
   run('the node returns', exact)
 })
