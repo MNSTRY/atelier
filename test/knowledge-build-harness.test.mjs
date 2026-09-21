@@ -251,6 +251,18 @@ test('CLI persists both workflows and preserves the existing build projection al
   assert.equal(spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: new URL('..', import.meta.url).pathname }).status, 0)
 })
 
+test('example command runs from an installed path with spaces, hashes, percent signs and Unicode', t => {
+  const root = workspace(t), installed = path.join(root, 'Atelier path # 100% café')
+  fs.mkdirSync(installed)
+  const source = new URL('..', import.meta.url)
+  for (const directory of ['src', 'bin', 'contracts']) fs.cpSync(new URL(`${directory}/`, source), path.join(installed, directory), { recursive: true })
+  fs.cpSync(new URL('fixtures/harnesses/', source), path.join(installed, 'fixtures/harnesses'), { recursive: true })
+  fs.copyFileSync(new URL('package.json', source), path.join(installed, 'package.json'))
+  fs.symlinkSync(fs.realpathSync(new URL('node_modules/', source)), path.join(installed, 'node_modules'))
+  const result = JSON.parse(execFileSync(process.execPath, [path.join(installed, 'bin/atelier.mjs'), 'harness', 'example'], { encoding: 'utf8' }))
+  assert.deepEqual(result.knowledge, K)
+})
+
 test('two host profiles adopt independent harness packages beside existing skills and retain exact feedback attribution', t => {
   const sources = ['knowledge-harness', 'build-harness'].map(n => new URL(`../fixtures/harness-packages/${n}`, import.meta.url).pathname)
   for (const [index, host] of ['codex-repo-v1', 'claude-repo-v1'].entries()) {

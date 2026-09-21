@@ -68,7 +68,7 @@ try {
       if (command === 'coordination') result = harness.buildCoordinationProposal(state.records, { dependencySnapshots })
       if (command === 'candidate') result = prepareGitCandidate({ workspaceRoot, records: state.records, artifact: need('artifact'), writer: read(need('writer')) })
     }
-  } else if (command === 'example') result = read(new URL('../../fixtures/harnesses/learning-cycle.json', import.meta.url).pathname)
+  } else if (command === 'example') result = JSON.parse(fs.readFileSync(new URL('../../fixtures/harnesses/learning-cycle.json', import.meta.url), 'utf8'))
   else if (command === 'validate') { const errors = harness.validateHarnessDocument(read(need('record')), need('profile')); result = { valid: !errors.length, errors, assurance: 'shape-only' }; if (errors.length) process.exitCode = 1 }
   else if (command === 'inspect') result = harness.inspectHarness(need('profile'), history(need('history'), options.profile))
   else if (command === 'handoff') result = harness.createHarnessHandoff({ profile: need('profile'), repository: need('repository'), records: history(need('history'), options.profile), subjectId: need('subject'), target: { repository: need('target-repository'), profile: need('target-profile'), purpose: need('purpose') }, dependencySnapshots })
