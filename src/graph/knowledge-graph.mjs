@@ -1298,8 +1298,16 @@ export function validateKnowledgeGraph(nodes, edges, orphanSidecars = [], { exte
 // are pure functions of those inputs, so an entry is reused only when a build
 // with no cache would compute the same values; a file whose bytes or inputs
 // differ is parsed again, and a file no longer in the census leaves the cache.
-// Every source is still read and hashed on every build: the cache never trusts
-// a digest it did not compute from the bytes. Derived, droppable state.
+// Without `observedDigest` every source is read and hashed on every build: the
+// cache never trusts a digest it did not compute from the bytes. A caller that
+// already observes the sources by digest (the maintenance engine's index: stat
+// hint between full reconciliations, every file hashed on a full one) may pass
+// `observedDigest(repoName, rel)`, returning `sha256:<hex>` or null. An entry
+// whose digest equals the observed one is then reused without opening the
+// file; the tradeoff is exactly the observer's: bytes that change under an
+// unchanged stat hint are not seen until the observer hashes the file again,
+// and until then no view is rebuilt for them either. Any other file is read
+// and hashed here as always. Derived, droppable state.
 export function createGraphFileCache() {
   return { files: new Map() }
 }
@@ -1313,20 +1321,25 @@ const sha256Hex = (bytes) => createHash('sha256').update(bytes).digest('hex')
 // The Markdown census entry for one file, from the cache under an equal digest
 // and equal inputs, or freshly derived. The returned node and scan are clones
 // so a caller's changes never reach the cache.
-function markdownCensus({ repoName, repoRoot, coverage, file, accessConfig, cache, next }) {
-  const buffer = fs.readFileSync(file.abs)
-  const digest = sha256Hex(buffer)
+function markdownCensus({ repoName, repoRoot, coverage, file, accessConfig, cache, next, observedDigest }) {
   const inputs = JSON.stringify([coverage.surfaced.has(file.rel), coverage.sections.get(file.rel) || null, repoReadBoundary(accessConfig, repoName)])
   const key = `${repoName}\u0000${file.rel}`
   const cached = cache?.files.get(key)
+  const observed = cached && observedDigest ? observedDigest(repoName, file.rel) : null
   let entry
-  if (cached && cached.digest === digest && cached.inputs === inputs) {
+  let read = false
+  if (cached && cached.inputs === inputs && typeof observed === 'string' && observed === `sha256:${cached.digest}`) {
     entry = cached
   } else {
-    entry = { digest, inputs, node: nodeForFile(repoName, repoRoot, coverage, file, accessConfig, buffer.toString('utf8')), scan: scanMarkdownSource(buffer) }
+    read = true
+    const buffer = fs.readFileSync(file.abs)
+    const digest = sha256Hex(buffer)
+    entry = cached && cached.digest === digest && cached.inputs === inputs
+      ? cached
+      : { digest, inputs, node: nodeForFile(repoName, repoRoot, coverage, file, accessConfig, buffer.toString('utf8')), scan: scanMarkdownSource(buffer) }
   }
   next?.set(key, entry)
-  return { node: structuredClone(entry.node), scan: structuredClone(entry.scan), reused: entry === cached }
+  return { node: structuredClone(entry.node), scan: structuredClone(entry.scan), reused: entry === cached, read }
 }
 
 export function buildKnowledgeGraph({
@@ -1341,9 +1354,11 @@ export function buildKnowledgeGraph({
   isLinkTargetEligible = undefined,
   isAssetEligible = undefined,
   fileCache = null,
+  observedDigest = null,
 } = {}) {
   if (!workspaceRoot) throw new Error('workspaceRoot is required')
   if (fileCache !== null && !isGraphFileCache(fileCache)) throw new Error('fileCache must come from createGraphFileCache')
+  if (observedDigest !== null && typeof observedDigest !== 'function') throw new Error('observedDigest must be a function')
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
   const external = new Set(externalRepos)
   const discoveredEntries = repoEntries
@@ -1378,7 +1393,7 @@ export function buildKnowledgeGraph({
   const census = []
   const scanned = new Map()
   const nextCache = fileCache ? new Map() : null
-  const reuse = { reused: 0, derived: 0 }
+  const reuse = { reused: 0, derived: 0, read: 0 }
 
   for (const entry of roots) {
     const repoRoot = entry.path
@@ -1396,10 +1411,11 @@ export function buildKnowledgeGraph({
       let node
       if (file.ext === '.md') {
         // One read per Markdown source: the census entry and the link scan come from the same bytes.
-        const entry = markdownCensus({ repoName, repoRoot, coverage, file, accessConfig, cache: fileCache, next: nextCache })
+        const entry = markdownCensus({ repoName, repoRoot, coverage, file, accessConfig, cache: fileCache, next: nextCache, observedDigest })
         node = entry.node
         scanned.set(node, entry.scan)
         reuse[entry.reused ? 'reused' : 'derived'] += 1
+        if (entry.read) reuse.read += 1
       } else {
         node = nodeForFile(repoName, repoRoot, coverage, file, accessConfig)
       }
@@ -1458,7 +1474,7 @@ export function buildKnowledgeGraph({
     resolvedLinks: resolved.links,
     resolvedEmbeds: resolved.embeds,
     linkDiagnostics: resolved.diagnostics,
-    // How many Markdown census entries this build derived and how many it reused from the file cache.
+    // How many Markdown census entries this build derived, how many it reused from the file cache, and how many sources it opened.
     fileCensus: reuse,
   }
 }

@@ -418,7 +418,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (attempt.size > 0) {
       let built = null
       try {
-        const graph = seams.buildGraph({ project, eligibility, cache: graphCache })
+        const graph = seams.buildGraph({ project, eligibility, cache: graphCache, index })
         // The assets this graph lets a view copy are observed from now on, and hashed now so the snapshot pins
         // what observation saw. A withheld asset is not observed: its bytes can change no view.
         const formerAssetKeys = new Set(observedAssets.map((asset) => sourceKey(asset.repo, asset.path)))

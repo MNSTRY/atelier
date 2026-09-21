@@ -56,8 +56,12 @@ export function profileFor({ project, workspaceId, audienceAllow }) {
 }
 
 // `cache` (createGraphFileCache) is the engine's per-file census cache; without it every source is parsed again.
-export function buildGraph({ project, eligibility, cache = null }) {
-  const canonical = buildCanonicalGraph(project, { fileCache: cache })
+// `index` is the engine's observation index. With both, a source whose observed digest is the cached one is not
+// opened: observation already decided by digest that it did not change, under the stat-hint bound observation
+// documents, and a full reconciliation hashes it again. Without an index every source is read and hashed here.
+export function buildGraph({ project, eligibility, cache = null, index = null }) {
+  const observedDigest = cache && index ? (repoId, relative) => index.get(sourceKey(repoId, relative))?.digest ?? null : null
+  const canonical = buildCanonicalGraph(project, { fileCache: cache, observedDigest })
   if (!canonical.ok) refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
   return withEligibility(canonical, eligibility.isEligible, assetEligibilityFor({ graph: canonical, eligibility }))
 }

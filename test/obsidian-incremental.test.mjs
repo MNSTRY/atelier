@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { buildCanonicalGraph, createGraphFileCache } from '../src/graph/graph.mjs'
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { createPreparationCache, prepareView, sha256Digest, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
+import { listSourceFiles, reconcile, sourceKey } from '../src/runtime/obsidian/observation.mjs'
 
 // Incremental preparation is proven equal to full preparation, not argued:
 // after every change, the view prepared through a cache is compared byte for
@@ -389,6 +390,74 @@ test('mutation control: a graph cache entry whose node or scan is wrong under a 
   const withLinks = [...wrongScan.files.values()].find((entry) => entry.scan.occurrences.length > 0)
   withLinks.scan.occurrences.length = 0
   assert.throws(() => assert.deepEqual(comparableGraph(buildCanonicalGraph(project(), { fileCache: wrongScan })), comparableGraph(full)), assert.AssertionError)
+})
+
+// An observation index like the engine's: reconciled by stat hint and digest before every build.
+function observedIndex(project) {
+  const index = new Map()
+  return { index, observe: ({ full = false } = {}) => reconcile({ index, files: listSourceFiles(project()), prefix: 'source\u0000', full }), digestOf: (repoId, relative) => index.get(sourceKey(repoId, relative))?.digest ?? null }
+}
+
+test('observed digests: a graph built through an observation index equals the uncached one, and only the sources whose observed digest moved are opened', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-incremental-observed-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const corpus = new Corpus(21)
+  const cache = createGraphFileCache()
+  const project = () => resolveProjectConfig({ argv: [`--project=${path.join(dir, 'atelier.project.json')}`], cwd: dir })
+  corpus.write(dir)
+  const observer = observedIndex(project)
+  let previousDigests = null
+  let spared = 0
+  const run = (label) => {
+    corpus.write(dir)
+    observer.observe()
+    const full = buildCanonicalGraph(project())
+    const cached = buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })
+    assert.deepEqual(comparableGraph(cached), comparableGraph(full), label)
+    const digests = new Map(full.nodes.filter((node) => node.extension === 'md').map((node) => [`${node.repo}/${node.path}`, sha256Digest(fs.readFileSync(path.join(dir, node.repo, node.path)))]))
+    if (previousDigests) {
+      const changed = [...digests].filter(([key, digest]) => previousDigests.get(key) !== digest).length
+      assert.deepEqual(cached.fileCensus, { reused: digests.size - changed, derived: changed, read: changed }, `${label}: opened and derived exactly the changed sources`)
+      spared += digests.size - changed
+    } else {
+      assert.deepEqual(cached.fileCensus, { reused: 0, derived: digests.size, read: digests.size }, `${label}: a first build opens everything`)
+    }
+    previousDigests = digests
+  }
+  run('initial')
+  for (let step = 0; step < 25; step += 1) run(corpus.mutate())
+  assert.ok(spared > 1000, 'most sources were never opened')
+  // Without an observer every source is opened, whatever the cache holds.
+  const unobserved = buildCanonicalGraph(project(), { fileCache: cache })
+  assert.equal(unobserved.fileCensus.read, unobserved.fileCensus.reused)
+  // An observer that knows nothing about a file, or reports a digest the cache does not hold, costs a read and nothing else.
+  for (const digestOf of [() => null, () => `sha256:${'0'.repeat(64)}`, () => 7]) {
+    const blind = buildCanonicalGraph(project(), { fileCache: cache, observedDigest: digestOf })
+    assert.deepEqual(comparableGraph(blind), comparableGraph(buildCanonicalGraph(project())))
+    assert.deepEqual(blind.fileCensus, { reused: previousDigests.size, derived: 0, read: previousDigests.size })
+  }
+  assert.throws(() => buildCanonicalGraph(project(), { fileCache: cache, observedDigest: 'index' }), /observedDigest/)
+})
+
+test('mutation control: an observer that reports the cached digest for a source that changed fails the graph equality oracle; a full reconciliation repairs it', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-incremental-observed-control-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const corpus = new Corpus(22)
+  corpus.write(dir)
+  const project = () => resolveProjectConfig({ argv: [`--project=${path.join(dir, 'atelier.project.json')}`], cwd: dir })
+  const cache = createGraphFileCache()
+  const observer = observedIndex(project)
+  observer.observe()
+  buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })
+  const note = [...corpus.notes.values()][0]
+  note.title = 'A title the stale observer never saw'
+  corpus.write(dir)
+  // The index is not reconciled: it still reports the digest the cache holds, so the stale census entry is served.
+  const stale = buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })
+  assert.throws(() => assert.deepEqual(comparableGraph(stale), comparableGraph(buildCanonicalGraph(project()))), assert.AssertionError)
+  // Observation by digest is what repairs it, exactly as it is what decides a rebuild at all.
+  observer.observe({ full: true })
+  assert.deepEqual(comparableGraph(buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })), comparableGraph(buildCanonicalGraph(project())))
 })
 
 // ---------------------------------------------------------------------------

@@ -128,12 +128,15 @@ const canonicalEdgeId = (edge) => JSON.stringify([edge.source, edge.type, edge.t
 // node or an edge.
 // `fileCache` (createGraphFileCache) lets repeated builds of one workspace
 // reuse the per-file census and link scan of every Markdown source whose
-// bytes did not change; the result is the same as without it.
-export function buildCanonicalGraph(project, { isLinkTargetEligible, isAssetEligible, fileCache = null } = {}) {
+// bytes did not change; the result is the same as without it. `observedDigest`
+// (see createGraphFileCache) lets a caller that observes sources by digest
+// spare the read of a source it knows unchanged.
+export function buildCanonicalGraph(project, { isLinkTargetEligible, isAssetEligible, fileCache = null, observedDigest = null } = {}) {
   const { input, result } = canonicalBuild(project, {
     ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}),
     ...(isAssetEligible ? { isAssetEligible } : {}),
     ...(fileCache ? { fileCache } : {}),
+    ...(observedDigest ? { observedDigest } : {}),
   })
   const canonical = result.workspaceGraph ?? { nodes: [], edges: [], diagnostics: [] }
   const occurrences = new Map()
