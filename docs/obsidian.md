@@ -275,9 +275,8 @@ test reported as a pass.
   is `app-version-unsupported`. There is a floor and no ceiling: a newer app
   is admitted although the protocol depends on the view's undocumented
   `lastSavedData` field, and the protocol cases have not been re-run on any
-  later release. The "App capability floor" row of
-  [obsidian-contract.md](obsidian-contract.md) predates the floor and still
-  says none is pinned.
+  later release. See the "App capability floor" row of
+  [obsidian-contract.md](obsidian-contract.md).
 - CRLF sources: the editor normalizes line endings when it saves, so a body
   edit made in the vault to a note whose source uses CRLF is more than a body
   replacement to the edit lens. It is preserved and becomes a proposal; it is
