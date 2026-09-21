@@ -8,7 +8,7 @@
   "data": {
     "candidate": {
       "id": "prototype",
-      "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+      "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
     },
     "gate": "ci",
     "status": "passed",

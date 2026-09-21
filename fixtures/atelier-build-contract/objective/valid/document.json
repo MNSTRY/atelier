@@ -39,6 +39,7 @@
           "schema": "atelier-harness-handoff@v1",
           "source": {
             "repository": "workshop-notes",
+            "repositoryBinding": "establishment-record",
             "profile": "knowledge",
             "run": "workshop-knowledge",
             "historyDigest": "sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22",

@@ -8,7 +8,7 @@
   "data": {
     "objective": {
       "id": "reminder-build",
-      "digest": "sha256:d28ba057711e4a3eca1c3bc8170545961a6943200912809b690acf0b7c099a42"
+      "digest": "sha256:44b4dd92401cba041582b8b504af4e47902e73649e5a5b0de7b7b4868b0b3cf5"
     },
     "repository": "workshop-product",
     "commit": "1111111111111111111111111111111111111111",

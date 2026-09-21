@@ -8,22 +8,22 @@
   "data": {
     "candidate": {
       "id": "prototype",
-      "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+      "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
     },
     "disposition": "accepted",
     "reason": "Simulated acceptance for contract testing only.",
     "gates": [
       {
         "id": "tests-gate",
-        "digest": "sha256:f876f7ca33cc2882108ecebbef68639548cc40c0251b80e91444554e9a7e96ae"
+        "digest": "sha256:a593d49d82d3df0d7dd17345df9f2f0de8054c4e369ce4cb53d62d267cae0ca6"
       },
       {
         "id": "review-gate",
-        "digest": "sha256:883c76e1c7eda7f930c34e64920c7cbb15036381e44c6e03c4a65ec7864c4e19"
+        "digest": "sha256:cc5c0fd1cefe4e8a6140e5f4f8c48771d5a3fbd5d49973f8e194c9ba325020f8"
       },
       {
         "id": "ci-gate",
-        "digest": "sha256:f8d42ffac9713fc4ee50e8e58184867cfa6fedf5b25fa197f409074e559411c9"
+        "digest": "sha256:2b9b5926cf18441430ef76798644d3d45e86a599c0e30a30440aae4ff2618f22"
       }
     ]
   },

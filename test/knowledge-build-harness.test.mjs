@@ -80,6 +80,9 @@ test('handoff remains valid after unrelated append but refuses divergence, chang
   assert.throws(() => harness.verifyHarnessHandoff({ handoff: bad, records: K }), /stale|differs/)
   const target = clone(example.buildHandoff); target.target.repository = 'other'
   assert.throws(() => knowledge.prepareKnowledgeImport({ records: [L[0]], handoff: target, sourceRecords: B, title: 'test', term: 'material', dependencySnapshots: dependencies }), /another receiver/)
+  for (const [profile, records, subjectId] of [['knowledge', K, 'trial-rationale'], ['build', B, 'prototype']]) {
+    assert.throws(() => harness.createHarnessHandoff({ profile, repository: 'wrong-origin', records, subjectId, target: example.handoff.target, dependencySnapshots: dependencies }), /repository differs/)
+  }
 })
 
 test('knowledge refuses invalid lineage, scope, audience, quote, vocabulary and unreviewed evidence', () => {
@@ -95,6 +98,60 @@ test('knowledge refuses invalid lineage, scope, audience, quote, vocabulary and 
     [r => { if (r.id === 'graph-use') r.data.questions = ['unknown'] }, /unknown domain question/],
   ]
   for (const [mutate, pattern] of cases) assert.throws(() => knowledge.inspectKnowledge(transform(K, mutate)), pattern)
+})
+
+test('exports retain the audience of included domain context even when source contributions are public', () => {
+  for (const audience of ['public', 'team', 'operator', 'staff', 'private', 'sensitive']) {
+    const records = transform(K, r => {
+      if (r.kind === 'domain') r.data.audience = audience
+      if (r.kind === 'contribution') r.data.audience = 'public'
+    })
+    const handoff = harness.createHarnessHandoff({ profile: 'knowledge', repository: records[0].data.repository, records, subjectId: 'trial-rationale', target: { ...example.handoff.target, profile: 'knowledge' } })
+    assert.equal(handoff.audience, audience)
+    assert.equal(handoff.source.repositoryBinding, 'establishment-record')
+    const proposal = knowledge.knowledgeGraphProposal(records, { namespace: 'corpus', activationId: 'graph-use' })
+    for (const file of proposal.files) assert.ok(file.content.includes(`  audience: "${audience}"`))
+    const receiver = clone(K[0]); receiver.data.repository = handoff.target.repository; receiver.data.audience = 'public'
+    if (audience !== 'public') assert.throws(() => knowledge.prepareKnowledgeImport({ records: [receiver], handoff, sourceRecords: records, title: 'Import', term: 'material' }), /audience/)
+  }
+  const sensitive = transform(K, r => { if (r.kind === 'contribution') r.data.audience = 'sensitive' })
+  assert.throws(() => knowledge.inspectKnowledge(sensitive), /audience/)
+})
+
+test('dependency fan-out reuses inspected histories and stops at a named finite work budget', () => {
+  const width = 8
+  function layer(source, level, snapshots) {
+    const domain = get(K, 'workshop-knowledge'); domain.id = domain.run = `layer-${level}`; domain.data.repository = domain.id
+    const make = (id, kind, data) => ({ ...domain, id, kind, data })
+    const subject = source.findLast(r => r.kind === 'contribution')
+    const handoff = harness.createHarnessHandoff({ profile: 'knowledge', repository: source[0].data.repository, records: source, subjectId: subject.id, target: { repository: domain.data.repository, profile: 'knowledge', purpose: 'Evaluate imported evidence.' }, dependencySnapshots: snapshots })
+    const data = knowledge.prepareKnowledgeImport({ records: [domain], handoff, sourceRecords: source, title: 'Imported evidence', term: 'material', dependencySnapshots: snapshots }).data
+    const records = [domain], imported = []
+    const evaluate = c => {
+      const evaluation = make(`${c.id}-evaluation`, 'evaluation', { ...get(K, 'source-evaluation').data, contribution: pin(c) })
+      records.push(c, evaluation, make(`${c.id}-review`, 'review', { ...get(K, 'source-review').data, target: pin(c), evaluations: [pin(evaluation)] }))
+    }
+    for (let i = 0; i < width; i++) { const c = make(`input-${i}`, 'contribution', clone(data)); imported.push(c); evaluate(c) }
+    evaluate(make('aggregate', 'contribution', { ...get(K, 'trial-rationale').data, domain: pin(domain), basedOn: imported.map(c => ({ contribution: pin(c), quote: '{"subject":' })) }))
+    return records
+  }
+  const first = layer(K, 1, dependencies), snapshots = [...dependencies, snapshot('knowledge', first)]
+  const second = layer(first, 2, snapshots)
+  const result = knowledge.reconcileKnowledge(second, { dependencySnapshots: snapshots })
+  assert.equal(result.reconsider.length, 0)
+  assert.ok(result.dependencyWork.historyReplays <= 3, 'each distinct history is inspected once')
+  assert.ok(result.dependencyWork.verificationCalls < width * width, 'shared upstream handoffs are memoized')
+  const bounded = knowledge.reconcileKnowledge(second, { dependencySnapshots: snapshots, verificationLimit: 5 })
+  assert.equal(bounded.dependencyWork.verificationCalls, 5)
+  assert.equal(bounded.dependencyWork.exhausted, true)
+  assert.ok(bounded.reconsider.some(r => r.id === 'aggregate' && r.reasons.includes('import-source-verification-budget-exhausted')))
+  const corrected = [snapshot('knowledge', [...K, example.withdrawal]), snapshot('knowledge', first)]
+  assert.ok(knowledge.reconcileKnowledge(second, { dependencySnapshots: corrected }).reconsider.some(r => r.id === 'aggregate'))
+  const build = transform(B, r => { if (r.kind === 'objective') r.data.dependencies = Array.from({ length: width }, (_, i) => ({ ...r.data.dependencies[0], id: `need-${i}` })) })
+  const readiness = harness.buildReadiness(build, { dependencySnapshots: dependencies, verificationLimit: 5 })
+  assert.equal(readiness.readyReported, false)
+  assert.ok(readiness.blockers.some(b => b.startsWith('dependency-verification-budget-exhausted:')))
+  assert.throws(() => harness.buildReadiness(B, { verificationLimit: harness.HARNESS_LIMITS.dependencyVerifications + 1 }), /verification limit/)
 })
 
 test('domain migration and contribution revision preserve history and invalidate prior meaning', () => {
@@ -191,6 +248,12 @@ test('real intake preserves original bytes and prepares a pinned source without 
 test('inquiry handoff preserves the conclusion and assumptions; importing does not accept it', () => {
   const inquiry = JSON.parse(fs.readFileSync(new URL('../fixtures/inquiry/workshop.json', import.meta.url)))
   const handoff = harness.createHarnessHandoff({ profile: 'inquiry', repository: 'research-notes', records: inquiry, subjectId: 'decision-after', target: { repository: K[0].data.repository, profile: 'knowledge', purpose: 'Review applicability to the knowledge domain.' } })
+  assert.equal(handoff.source.repositoryBinding, 'caller-declared')
+  const verification = harness.verifyHarnessHandoff({ handoff, records: inquiry })
+  assert.equal(verification.sourceRepositoryBinding, 'caller-declared')
+  assert.equal(verification.sourceAuthenticity, 'unverified')
+  const mislabeled = clone(handoff); mislabeled.source.repositoryBinding = 'establishment-record'
+  assert.throws(() => harness.verifyHarnessHandoff({ handoff: mislabeled, records: inquiry }), /stale|differs/)
   const proposal = knowledge.prepareKnowledgeImport({ records: [K[0]], handoff, sourceRecords: inquiry, title: 'Research conclusion', term: 'material' })
   assert.ok(proposal.data.body.includes('assumptions')); assert.equal(proposal.semanticAcceptance, 'pending')
   const records = add([K[0]], 'research-result', 'contribution', proposal.data)
@@ -213,8 +276,26 @@ test('graph proposal traverses source to rationale through the real graph after 
   }
   const built = buildKnowledgeGraph({ workspaceRoot: root, repoRoots: [repo], repoAccessConfig: { schema: REPO_ACCESS_SCHEMA, defaultReadBoundary: 'private', repos: { corpus: { readBoundary: 'private' } } } })
   assert.equal(built.ok, true, built.errors.join('\n'))
-  assert.ok(built.workspaceGraph.edges.some(e => JSON.stringify(e).includes('observation') && JSON.stringify(e).includes('trial-rationale')))
+  const sourceId = 'corpus:knowledge-workshop-knowledge-observation', rationaleId = 'corpus:knowledge-workshop-knowledge-trial-rationale'
+  assert.ok(built.workspaceGraph.edges.some(e => e.source === sourceId && e.type === 'evidences' && e.target === rationaleId))
+  assert.ok(!built.workspaceGraph.edges.some(e => e.source === rationaleId && e.target === sourceId))
   assert.throws(() => knowledge.knowledgeGraphProposal([...K, example.withdrawal], { namespace: 'corpus', activationId: 'graph-use' }), /current activation/)
+})
+
+test('graph export preserves relation rationale, review and domain alongside a deduplicated edge', () => {
+  const relation = get(K, 'justification'), review = K.find(r => r.kind === 'review' && r.data.target.id === relation.id)
+  const proposal = knowledge.knowledgeGraphProposal(K, { namespace: 'corpus', activationId: 'graph-use' })
+  const file = proposal.files.find(f => f.path === `${relation.id}.md`)
+  assert.ok(file, 'accepted relation needs a durable evidence document')
+  const evidence = JSON.parse(file.content.split(/`{3,}text\n/)[1].split(/\n`{3,}/)[0])
+  assert.deepEqual(evidence.relation, relation)
+  assert.deepEqual(evidence.review, review)
+  assert.deepEqual(evidence.domain, K[0])
+  const claim = proposal.claims.find(c => c.claimId === evidence.claimId)
+  assert.ok(claim.evidence.includes(harness.harnessDigest(relation)))
+  assert.ok(claim.evidence.includes(harness.harnessDigest(review)))
+  assert.equal(proposal.claims.filter(c => c.subject === claim.subject && c.predicate === claim.predicate && c.object === claim.object).length, 1)
+  assert.equal(claim.promoted, false)
 })
 
 test('local history refuses stale heads, tampering, interrupted replacement and redirected state', t => {

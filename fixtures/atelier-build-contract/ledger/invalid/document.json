@@ -43,6 +43,7 @@
               "schema": "atelier-harness-handoff@v1",
               "source": {
                 "repository": "workshop-notes",
+                "repositoryBinding": "establishment-record",
                 "profile": "knowledge",
                 "run": "workshop-knowledge",
                 "historyDigest": "sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22",
@@ -83,7 +84,7 @@
       "data": {
         "objective": {
           "id": "reminder-build",
-          "digest": "sha256:d28ba057711e4a3eca1c3bc8170545961a6943200912809b690acf0b7c099a42"
+          "digest": "sha256:44b4dd92401cba041582b8b504af4e47902e73649e5a5b0de7b7b4868b0b3cf5"
         },
         "repository": "workshop-product",
         "commit": "1111111111111111111111111111111111111111",
@@ -106,7 +107,7 @@
       "data": {
         "candidate": {
           "id": "prototype",
-          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
         },
         "operation": "test",
         "requestDigest": "sha256:886f5ca461607989f0265ce1f47cc21f48691f8cf5599b7222f9aa03bb9b5713",
@@ -125,7 +126,7 @@
       "data": {
         "attempt": {
           "id": "test-attempt",
-          "digest": "sha256:ff1a699758bd2010838a3a64eb2873feb1273ff1f1506a9d8f087cb1b2409bed"
+          "digest": "sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e"
         },
         "state": "uncertain",
         "evidenceDigest": "sha256:5629b3a58ce4b8e796f7b85316a1ed54b48eba46679fe85a8d6f3c68d64509b1",
@@ -142,7 +143,7 @@
       "data": {
         "attempt": {
           "id": "test-attempt",
-          "digest": "sha256:ff1a699758bd2010838a3a64eb2873feb1273ff1f1506a9d8f087cb1b2409bed"
+          "digest": "sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e"
         },
         "state": "completed",
         "evidenceDigest": "sha256:6eb8c0c9c0ec72660c39c2458757b8bd8f4f5fde8128510ecf899f29a8021cb4",
@@ -159,7 +160,7 @@
       "data": {
         "candidate": {
           "id": "prototype",
-          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
         },
         "gate": "tests",
         "status": "passed",
@@ -170,7 +171,7 @@
         },
         "attempt": {
           "id": "test-attempt",
-          "digest": "sha256:ff1a699758bd2010838a3a64eb2873feb1273ff1f1506a9d8f087cb1b2409bed"
+          "digest": "sha256:0c751266d7ebd837c5dcf6d1754e9835a81e39251c2aab779bd8ee04ee1b710e"
         }
       }
     },
@@ -184,7 +185,7 @@
       "data": {
         "candidate": {
           "id": "prototype",
-          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
         },
         "gate": "review",
         "status": "passed",
@@ -205,7 +206,7 @@
       "data": {
         "candidate": {
           "id": "prototype",
-          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
         },
         "gate": "ci",
         "status": "passed",
@@ -226,22 +227,22 @@
       "data": {
         "candidate": {
           "id": "prototype",
-          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+          "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
         },
         "disposition": "accepted",
         "reason": "Simulated acceptance for contract testing only.",
         "gates": [
           {
             "id": "tests-gate",
-            "digest": "sha256:f876f7ca33cc2882108ecebbef68639548cc40c0251b80e91444554e9a7e96ae"
+            "digest": "sha256:a593d49d82d3df0d7dd17345df9f2f0de8054c4e369ce4cb53d62d267cae0ca6"
           },
           {
             "id": "review-gate",
-            "digest": "sha256:883c76e1c7eda7f930c34e64920c7cbb15036381e44c6e03c4a65ec7864c4e19"
+            "digest": "sha256:cc5c0fd1cefe4e8a6140e5f4f8c48771d5a3fbd5d49973f8e194c9ba325020f8"
           },
           {
             "id": "ci-gate",
-            "digest": "sha256:f8d42ffac9713fc4ee50e8e58184867cfa6fedf5b25fa197f409074e559411c9"
+            "digest": "sha256:2b9b5926cf18441430ef76798644d3d45e86a599c0e30a30440aae4ff2618f22"
           }
         ]
       }
@@ -256,7 +257,7 @@
       "data": {
         "decision": {
           "id": "candidate-review",
-          "digest": "sha256:135c4bebd80082e604e777dd3426579bafcfb5fc1d1e84fc4b6ac7a2c17e46be"
+          "digest": "sha256:8bb52412f9c4adba9382eb4dd2bdada6621af85f79d7cc9df94953fecca6f560"
         },
         "recipient": "synthetic-recipient",
         "evidenceDigest": "sha256:bb7777d519c2d97f25e40e680308971a9504e4f2fe4977b956c93f8040b80a1b",
@@ -264,6 +265,6 @@
       }
     }
   ],
-  "head": "sha256:a4195ecb65f0cdeefb6ba81537b79e794fe9ee1037835d54319c326b7201cff3",
+  "head": "sha256:098c4e635bd86e576b02125d9381e582def381e81831e27fe47d9cf431e5e40c",
   "authorityGranted": true
 }

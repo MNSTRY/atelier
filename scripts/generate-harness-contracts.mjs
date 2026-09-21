@@ -15,7 +15,7 @@ const profile = enumeration('inquiry knowledge build')
 const binding = object({ package: text, releaseDigest: hash, generation: hash, binding: text, bindingDigest: hash, host: enumeration('codex-repo-v1 claude-repo-v1'), session: id })
 const pointer = object({ id, digest: hash })
 const handoff = document({ schema: { const: 'atelier-harness-handoff@v1' },
-  source: object({ repository: id, profile, run: id, historyDigest: hash, subject: pointer }),
+  source: object({ repository: id, repositoryBinding: enumeration('establishment-record caller-declared'), profile, run: id, historyDigest: hash, subject: pointer }),
   target: object({ repository: id, profile, purpose: text }), audience,
   payload: { type: 'string', minLength: 1, maxLength: 1048576 }, payloadDigest: hash,
   assurance: { const: 'caller-reported' }, authority: { const: 'none' } })

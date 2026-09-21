@@ -158,7 +158,12 @@ test('graph proposal excludes superseded conclusions and produces valid relation
   }
   const built = buildKnowledgeGraph({ workspaceRoot: root, repoRoots: [repo], repoAccessConfig: { schema: REPO_ACCESS_SCHEMA, defaultReadBoundary: 'private', repos: { corpus: { readBoundary: 'private' } } } })
   assert.equal(built.ok, true, built.errors.join('\n'))
-  assert.ok(built.workspaceGraph.edges.length >= 4, JSON.stringify({nodes: built.workspaceGraph.nodes.map(n => n.id), edges: built.workspaceGraph.edges}))
+  assert.deepEqual(built.workspaceGraph.edges.map(e => `${e.source}|${e.type}|${e.target}`).sort(), [
+    'corpus:inquiry-workshop-decision-after|depends_on|corpus:inquiry-workshop-revised-assessment',
+    'corpus:inquiry-workshop-revised-assessment|related|corpus:inquiry-workshop-reminder',
+    'corpus:inquiry-workshop-counterstudy|evidences|corpus:inquiry-workshop-revised-assessment',
+    'corpus:inquiry-workshop-counterstudy|contradicts|corpus:inquiry-workshop-reminder',
+  ].sort())
   assert.throws(() => inquiry.inquiryGraphProposal(specimen, { namespace: 'a.b' }), /namespace/)
 })
 

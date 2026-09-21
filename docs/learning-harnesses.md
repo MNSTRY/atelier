@@ -90,6 +90,11 @@ contributions use exact quoted passages from earlier contributions; scope and
 audience widening refuse. Missing passages, versions, references and vocabulary
 are failures. Source text cannot expand execution authority.
 
+A private container can hold public contributions. When an export includes domain
+context, its audience is at least as restrictive as both the domain and the
+contribution. Sensitive material requires a sensitive receiver. Team, staff and
+operator are separate audiences; combining them requires private containment.
+
 Evaluation records preserve judgment (`supported`, `contested`, `uncertain`,
 `unsupported`), rationale, applicability scope and limitations. Reviews separately
 record accepted, deferred or rejected dispositions. Accepted contributions require
@@ -110,6 +115,8 @@ requires current accepted endpoints. No entity merge is automatic. An activation
 names reviewed contributions/relations, purpose, destination and domain questions.
 `knowledgeGraphProposal` emits draft Markdown and unpromoted `atelier-claim@v1`
 edges, with selected evidence dependencies, reviews and limitations retained.
+Accepted relations also receive draft evidence documents containing their rationale,
+review and domain definition; the corresponding edge pins that relation and review.
 The receiver reviews/adopts the exact files through its existing authoring process,
 rebuilds the graph and verifies the meaningful source trace.
 
@@ -121,11 +128,16 @@ Revisit their source decisions and prepare a new authorized change.
 
 ## Handoffs and freshness
 
-`createHarnessHandoff` binds source repository, profile, run, history digest,
+`createHarnessHandoff` binds a source repository label, profile, run, history digest,
 subject reference, audience, exact payload, destination and purpose. Knowledge
 exports accepted contributions; inquiry exports accepted current decisions; build
 exports a current accepted candidate with resolved dependencies. An external
 destination remains subject to the host's disclosure and execution rules.
+
+`source.repositoryBinding` is `establishment-record` for knowledge/build, whose
+establishment records declare the repository. Existing inquiry campaigns have no
+repository field, so their handoffs explicitly use `caller-declared`; verification
+reports the same distinction. Neither value authenticates a repository or owner.
 
 `verifyHarnessHandoff` verifies a supplied producer history against those pins.
 The current history must contain the complete exact issued history as a prefix;
@@ -135,7 +147,12 @@ gate replacement or candidate replacement invalidates the relevant handoff.
 
 Snapshots are explicit `{repository, profile, records}` objects. Missing or
 ambiguous sources cannot clear freshness. Reconciliation can traverse knowledge,
-inquiry and build dependencies, bounded to 12 levels and 64 supplied snapshots.
+inquiry and build dependencies, bounded to 12 dependency hops, 64 supplied snapshots
+and 256 verification calls per operation. Inspected histories and successful
+verification results are cached within that operation. A verification budget
+failure is a named reconsideration reason or readiness blocker, never freshness.
+`verifyHarnessHandoff`, `reconcileKnowledge` and `buildReadiness` report
+`dependencyWork`; their optional `verificationLimit` can lower the ceiling.
 Freshness is relative to the supplied snapshot, not a live remote observation.
 The toolkit cannot detect a withheld update or authenticate the source owner.
 The receiver must obtain snapshots through its existing trusted process.
