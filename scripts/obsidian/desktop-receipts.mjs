@@ -39,7 +39,7 @@ import { RECEIPT_GATES } from '../../src/projection/obsidian/selection-ui/receip
 import { OutputRefusal, REPOSITORY_ROOT, assertExternalOutput, candidateIdentity, hardwareProfile, hostIdentity, isoNow, osEnvironment, parseArgs, sha256Digest, toIdentifier, walkFiles } from './lib/common.mjs'
 import { runAp03 } from './lib/ap03.mjs'
 import { AP05_SCOPES, AP05_SCOPE_DOCUMENTS, prepareAp05Workspace, runAp05 } from './lib/ap05.mjs'
-import { FULL_SCOPE, absentAdapter, deriveWorkspace, materializeFixtureWorkspace } from './lib/derive.mjs'
+import { FULL_SCOPE, absentAdapter, createEngineSeams, deriveWorkspace, loadProject, materializeFixtureWorkspace } from './lib/derive.mjs'
 import { PROPOSED_TARGETS, waitUntil, warmChangeSummary } from './lib/measure.mjs'
 import { evidenceFileName, writeGateReceipt } from './lib/receipts.mjs'
 import { bindLayoutToVault, createAppEditor, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, initialiseRepositories, prepareWorkspace, stripProjectEnv } from './lib/service-world.mjs'
@@ -438,10 +438,10 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
   const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-desktop-'))
   const startedAt = isoNow()
   const instances = []
-  const launch = async (layout) => {
+  const launch = async (layout, options = {}) => {
     const app = new Instance(layout)
     const launchedAtMs = Date.now()
-    await app.launch()
+    await app.launch(options)
     await assertIsolatedInstance(app)
     instances.push(app)
     return { app, launchedAtMs }
@@ -547,11 +547,20 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       if (!fs.existsSync(manifestPath)) throw new OutputRefusal('scale-dataset-missing', `no dataset manifest at ${manifestPath}; run generate-scale.mjs --out DIR --derive --warm 30 first`)
       const scaleManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
       if (!scaleManifest.derivation) throw new OutputRefusal('scale-not-derived', 'the dataset has no cold derivation; run generate-scale.mjs with --derive first')
-      const layout = createLayout(path.join(temp, 'instance-scale'), path.dirname(scaleManifest.derivation.vaultRoot))
-      const { app, launchedAtMs } = await launch(layout)
+      // Its own short root, like every other instance (the socket path bound), with the vault on the dataset's data root.
+      const layout = shortLayout(() => createLayout(undefined, path.dirname(scaleManifest.derivation.vaultRoot)))
+      // A 10k-note vault takes the app longer to open than a fixture vault; the readiness wait gets the index budget.
+      const { app, launchedAtMs } = await launch(layout, { readyTimeoutMs: INDEX_TIMEOUT_MS })
       capabilities = await discoverCapabilities(app)
       const adapter = createObsidianCliAdapter({ env: app.env })
-      const derive = () => deriveWorkspace({ projectFile: scaleManifest.projectFile, stateRoot: scaleManifest.derivation.stateRoot, vaultRoot: scaleManifest.derivation.vaultRoot, adapter })
+      // The warm changes take the engine's path, as measureDerivation's do: the caches and the observation index
+      // carried between derivations, every source hashed once here and by stat hint before each change.
+      const engine = createEngineSeams()
+      engine.observe(loadProject(scaleManifest.projectFile), { full: true })
+      const derive = () => {
+        engine.observe(loadProject(scaleManifest.projectFile), { full: false })
+        return deriveWorkspace({ projectFile: scaleManifest.projectFile, stateRoot: scaleManifest.derivation.stateRoot, vaultRoot: scaleManifest.derivation.vaultRoot, adapter, seams: engine.seams })
+      }
       const run = await runAp04App({ instance: app, launchedAtMs, scaleManifest, derive, warm: Number.parseInt(args.warm ?? String(WARM_CHANGES), 10), sampleAppRss: appRss(app) })
       evidenceByGate.G16 = ap04Evidence({ scaleManifest, run, derivationSamples: scaleManifest.derivation.cold.samples })
       passedByGate.G16 = run.passed

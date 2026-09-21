@@ -38,7 +38,9 @@ export class Instance {
 
   get socket() { return path.join(this.layout.home, '.obsidian-cli.sock'); }
 
-  async launch() {
+  // readyTimeoutMs bounds the wait for the CLI socket and the vault listing;
+  // a large vault takes the app longer to open than the 30 s default.
+  async launch({ readyTimeoutMs = 30000 } = {}) {
     fs.rmSync(this.socket, { force: true });
     const log = fs.openSync(path.join(this.layout.root, 'app.log'), 'a');
     this.child = spawn(path.join(APP_DIR, 'Obsidian'), [`--user-data-dir=${this.layout.profile}`, '--use-mock-keychain', '--password-store=basic',
@@ -46,12 +48,15 @@ export class Instance {
       // app's own save timers, which is not a condition a typing user can be in.
       '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows'], { env: this.env, detached: true, stdio: ['ignore', log, log] });
     this.child.unref();
-    for (let attempt = 0; attempt < 120; attempt += 1) {
+    const deadline = Date.now() + readyTimeoutMs;
+    while (Date.now() < deadline) {
       if (fs.existsSync(this.socket)) {
         try { if ((await this.cli('vaults', 'verbose')).includes(this.layout.vault)) { await sleep(1500); return this.assertIsolated(); } } catch { /* still starting */ }
       }
       await sleep(250);
     }
+    // The app was started detached; a launch that gives up must not leave it running.
+    try { process.kill(-this.child.pid, 'SIGKILL'); } catch { try { this.child.kill('SIGKILL'); } catch { /* already gone */ } }
     throw new Error('Isolated Obsidian instance did not become ready');
   }
 
