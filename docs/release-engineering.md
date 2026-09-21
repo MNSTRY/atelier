@@ -30,6 +30,9 @@ consumer smokes:
 - Version drift: `CHANGELOG.md` must contain a `## <version>` heading and
   `README.md` must mention the version. The expected version and tarball name
   are derived from `package.json`, never hardcoded.
+- Declared exports: every `exports` target in the packed `package.json` must
+  be a file the tarball carries.
+- Obsidian package contents: see [Obsidian package contents](#obsidian-package-contents).
 
 Exit codes: `0` clean, `1` findings, `2` configuration error (for example an
 unavailable denylist without explicit acknowledgment).
@@ -42,6 +45,78 @@ tarball, npm-pack metadata, and a machine-readable receipt. The trusted
 publishing workflow runs `prepublishOnly` explicitly with that output directory,
 re-verifies the retained digest, and publishes the retained tarball path rather
 than repacking the source checkout.
+
+### Obsidian package contents
+
+The Obsidian projection ships as runtime, contracts and documents, and its
+proof tooling does not ship. `release:audit` enforces both halves on the exact
+tarball.
+
+Shipped, and required by the audit:
+
+- The entry points behind the package subpaths `./obsidian` (maintenance
+  runtime, `src/runtime/obsidian/index.mjs`), `./obsidian/contracts`,
+  `./obsidian/materialize`, `./obsidian/publication`, `./obsidian/recovery`,
+  `./obsidian/edits`, `./obsidian/proposals` and `./obsidian/selection`, with
+  `src/commands/obsidian.mjs`, the service entry and the two contribution
+  modules under `src/runtime/obsidian/contributions/`.
+- Every `contracts/atelier-obsidian-<name>.v<n>.schema.json` present in the
+  source tree (lowercase name, versioned). Each must be packed and exported
+  under its own path, and the audit fails if it finds none.
+- `docs/obsidian.md` and `docs/obsidian-contract.md`.
+- `fixtures/obsidian/**`: small synthetic text only. Every packed fixture, in
+  any subtree and spelling under `fixtures/`, is at most 262,144 bytes. The
+  acceptance receipts under `fixtures/obsidian/acceptance/receipts/` are
+  synthetic shape fixtures whose host id matches `host-synthetic-*` and whose
+  operator id is `operator-synthetic`; the schema fixtures under
+  `fixtures/obsidian/contracts/` carry no identity block. Validating one closes
+  nothing.
+
+Never shipped, and refused by name in addition to the path allowlist:
+
+- `scripts/**` (including the `scripts/obsidian/` desktop harness, scale
+  generator and receipt verifier), `test/**`, `experiments/**`, `examples/**`.
+- Any `.artifacts/` directory, where acceptance receipts and their evidence
+  are written.
+- Any `.asar` file.
+- An acceptance receipt outside `fixtures/obsidian/`, one carrying the desktop
+  harness extension (`mnstry.atelier.obsidian.desktop-receipts`), or one whose
+  host or operator id is not the synthetic form above (or, outside the schema
+  fixtures, one with no identity block): that document records a real host,
+  even with the harness block removed.
+- Scale corpora and binary samples. They are generated in temporary storage at
+  test time and are never files of this repository.
+
+The path allowlist was not widened for the Obsidian projection. Every check
+above refuses more than the allowlist alone did.
+
+`test/obsidian-package.test.mjs` is the AP-06 package proof and runs with the
+ordinary test suite. It packs the package, extracts it into a bare consumer
+project, links the locked runtime dependencies from the checkout, and from a
+separate process imports every Obsidian subpath by package name, checks that
+an undeclared internal path stays closed, and runs the production pipeline
+(canonical graph, source snapshot, `prepareView`, `publishView`) over a
+synthetic workspace into a temporary vault that no application has open. A
+document the census did not classify must not reach the vault. It also packs
+a synthetic package containing each refused class and matches each audit
+refusal by message. It does not run `npm install`; `consumer:smoke` does, on
+the same tarball contents, and imports every declared export including these.
+
+Limits of this proof:
+
+- It is package proof only. Gate G18 also requires a separately recorded
+  adopter acceptance, and nothing in this repository produces or implies one.
+- It never starts the app. Behaviour inside a running app is acceptance
+  evidence from `scripts/obsidian/desktop-receipts.mjs` on a desktop host and
+  is not covered by any CI lane. No CI lane has a desktop session.
+- Publication is skipped where no atomic exchange exists. On Windows the
+  publisher refuses with `exchange-unsupported-platform`, so the Windows
+  portability lane runs the pack, import and `prepareView` cases and skips the
+  publish case.
+- The `*ForOracleTests` names exported by the Obsidian modules are mutation
+  controls for the test suite. They ship because the modules that define them
+  ship; they are not a supported API and carry no compatibility promise. They
+  should be excluded when the public API baseline is next regenerated.
 
 ### repo:check
 

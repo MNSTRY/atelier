@@ -1,0 +1,64 @@
+{
+  "schema": "atelier-obsidian-acceptance-receipt/v1",
+  "receiptId": "acceptance-g18-0001",
+  "gate": "G18",
+  "procedureId": "AP-06",
+  "candidate": {
+    "commit": "88c5f21dc6ad6620e41490763d7e852d384d7b1a",
+    "treeDigest": "sha256:dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622",
+    "tarballDigest": "sha256:db4b4d0d1cb480bf9aeea253771c00febe627f236765fa37d6a5614f079a3aa0"
+  },
+  "environment": {
+    "os": {
+      "name": "example-os",
+      "version": "14.2"
+    },
+    "app": {
+      "name": "example-editor",
+      "version": "1.4.2"
+    },
+    "cli": {
+      "version": "0.9.0"
+    }
+  },
+  "evidenceType": "human",
+  "evidence": [
+    {
+      "name": "tarball-audit.txt",
+      "digest": "sha256:1ce6a15ee91e104e38e824c844cdc5083722b9d04f28983e890f3a358077f9c7",
+      "byteLength": 113
+    },
+    {
+      "name": "adopter-acceptance.txt",
+      "digest": "sha256:340f630d906069fc7cc5f4bdc3b194d22dde9de5243a56617b2c40eac328c569",
+      "byteLength": 118
+    },
+    {
+      "name": "acceptance-record.txt",
+      "digest": "sha256:936138dae9df1f30cc105b74d8aa3b87a874be604e603a4dad17cb5cd58425b1",
+      "byteLength": 512
+    }
+  ],
+  "outcome": "passed",
+  "recordedAt": "2026-02-01T12:45:00Z",
+  "ext": {
+    "mnstry.atelier.obsidian": {
+      "host": {
+        "id": "host-synthetic-desk-01"
+      },
+      "operator": {
+        "id": "operator-synthetic"
+      },
+      "evidenceRoles": {
+        "tarball-audit": "tarball-audit.txt",
+        "adopter-acceptance": "adopter-acceptance.txt"
+      },
+      "acceptance": {
+        "kind": "adopter",
+        "actor": "adopter-synthetic",
+        "recordedAt": "2026-02-01T12:30:00Z",
+        "evidenceName": "acceptance-record.txt"
+      }
+    }
+  }
+}

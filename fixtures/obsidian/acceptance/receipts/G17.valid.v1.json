@@ -1,0 +1,75 @@
+{
+  "schema": "atelier-obsidian-acceptance-receipt/v1",
+  "receiptId": "acceptance-g17-0001",
+  "gate": "G17",
+  "procedureId": "AP-05",
+  "candidate": {
+    "commit": "88c5f21dc6ad6620e41490763d7e852d384d7b1a",
+    "treeDigest": "sha256:dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622"
+  },
+  "environment": {
+    "os": {
+      "name": "example-os",
+      "version": "14.2"
+    },
+    "app": {
+      "name": "example-editor",
+      "version": "1.4.2"
+    },
+    "cli": {
+      "version": "0.9.0"
+    }
+  },
+  "evidenceType": "real-app",
+  "evidence": [
+    {
+      "name": "multi-vault-edit-trace.txt",
+      "digest": "sha256:c2f4b1e591483882e19d5f1b7ae3c2a7c975f08c650d726410e8ad647040744d",
+      "byteLength": 122
+    },
+    {
+      "name": "manual-apply-trace.txt",
+      "digest": "sha256:dd1e8e1575cc10cc3ff9fe9d29f053de9bd171bac59fa153d8d0aece4e6ac6fa",
+      "byteLength": 118
+    },
+    {
+      "name": "automatic-apply-trace.txt",
+      "digest": "sha256:5eea0fbf6ae19fd6ebc8bc7be24bcb59fc69ff3e3923e644f0879123f3121cd0",
+      "byteLength": 121
+    },
+    {
+      "name": "uninstall-retention.txt",
+      "digest": "sha256:89a8e589892a8a68e2a46575552426603d3732e45e19f866892de103112efce3",
+      "byteLength": 119
+    },
+    {
+      "name": "acceptance-record.txt",
+      "digest": "sha256:867e5894bd3db086d9f38490e72e937ce4080de4a9bc73ab6a02fff770b8fd72",
+      "byteLength": 512
+    }
+  ],
+  "outcome": "passed",
+  "recordedAt": "2026-02-01T12:45:00Z",
+  "ext": {
+    "mnstry.atelier.obsidian": {
+      "host": {
+        "id": "host-synthetic-desk-01"
+      },
+      "operator": {
+        "id": "operator-synthetic"
+      },
+      "evidenceRoles": {
+        "multi-vault-edit-trace": "multi-vault-edit-trace.txt",
+        "manual-apply-trace": "manual-apply-trace.txt",
+        "automatic-apply-trace": "automatic-apply-trace.txt",
+        "uninstall-retention": "uninstall-retention.txt"
+      },
+      "acceptance": {
+        "kind": "human",
+        "actor": "reviewer-synthetic",
+        "recordedAt": "2026-02-01T12:30:00Z",
+        "evidenceName": "acceptance-record.txt"
+      }
+    }
+  }
+}

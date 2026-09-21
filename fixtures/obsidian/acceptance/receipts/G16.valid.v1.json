@@ -1,0 +1,73 @@
+{
+  "schema": "atelier-obsidian-acceptance-receipt/v1",
+  "receiptId": "acceptance-g16-0001",
+  "gate": "G16",
+  "procedureId": "AP-04",
+  "candidate": {
+    "commit": "88c5f21dc6ad6620e41490763d7e852d384d7b1a",
+    "treeDigest": "sha256:dc9c5edb8b2d479e697b4b0b8ab874f32b325138598ce9e7b759eb8292110622"
+  },
+  "environment": {
+    "os": {
+      "name": "example-os",
+      "version": "14.2"
+    },
+    "app": {
+      "name": "example-editor",
+      "version": "1.4.2"
+    },
+    "cli": {
+      "version": "0.9.0"
+    }
+  },
+  "evidenceType": "real-app",
+  "evidence": [
+    {
+      "name": "dataset-manifest.txt",
+      "digest": "sha256:e853c5ad0db2bd67e52eb423ca5d022af459fa581a043fd6071d0776d5b3e9a4",
+      "byteLength": 116
+    },
+    {
+      "name": "resource-samples.txt",
+      "digest": "sha256:2fbc04660946f1f8403511cf84c4b760763d04180ec2dc2d33000e19f27dfe91",
+      "byteLength": 116
+    },
+    {
+      "name": "app-indexing-timings.txt",
+      "digest": "sha256:c05784a1273922a960104bab65cefa9f7bceff2a9b2c1351afa40cac8126ca79",
+      "byteLength": 120
+    },
+    {
+      "name": "warm-update-latencies.txt",
+      "digest": "sha256:ef7bef346a63d56e728d60822604ebf5b613d8e16cf18ebbc844a10831c1482a",
+      "byteLength": 121
+    }
+  ],
+  "outcome": "passed",
+  "recordedAt": "2026-02-01T12:45:00Z",
+  "ext": {
+    "mnstry.atelier.obsidian": {
+      "host": {
+        "id": "host-synthetic-desk-01"
+      },
+      "operator": {
+        "id": "operator-synthetic"
+      },
+      "evidenceRoles": {
+        "dataset-manifest": "dataset-manifest.txt",
+        "resource-samples": "resource-samples.txt",
+        "app-indexing-timings": "app-indexing-timings.txt",
+        "warm-update-latencies": "warm-update-latencies.txt"
+      },
+      "wallClock": {
+        "startedAt": "2026-02-01T11:00:00Z",
+        "endedAt": "2026-02-01T12:00:00Z"
+      },
+      "dataset": {
+        "nodes": 10000,
+        "edges": 50000,
+        "fixtureDigest": "sha256:b277fd623676a525c29b9eb155afc8c9010681814ceafb2d7627f47b9a232576"
+      }
+    }
+  }
+}
