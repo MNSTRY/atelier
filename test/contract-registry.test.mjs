@@ -11,6 +11,8 @@ import { validateProjectConfigDoc } from '../src/project/config.mjs'
 // for its registered reason, not merely fail.
 const INVALID_EXPECTATIONS = new Map([
   ...['campaign', 'hypothesis', 'request', 'source', 'bundle', 'assessment', 'decision', 'withdrawal', 'feedback', 'legacy-assessment', 'ledger', 'handoff'].map(shape => [`atelier-inquiry-${shape}`, new Map([['document.json', /must NOT have additional properties/]])]),
+  ['atelier-ingestion', new Map([['authority.json', /must NOT have additional properties/]])],
+  ['atelier-learning', new Map([['authority.json', /must NOT have additional properties/]])],
   ['atelier-vault-publication', new Map([['publication.json', /expectedRevision.*must be >= 0/]])],
   ['atelier-guide', new Map([['authority.v1.json', /must NOT have additional properties/]])],
   ['atelier-intake', new Map([['authority.v1.json', /semanticAcceptance.*must be equal to constant/]])],

@@ -23,6 +23,14 @@
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
   "exports": {
+    "./ingestion": "./src/ingestion/store.mjs",
+    "./ingestion/processors": "./src/ingestion/processors.mjs",
+    "./ingestion/evaluation": "./src/ingestion/evaluation.mjs",
+    "./contracts/atelier-ingestion.v1.schema.json": "./contracts/atelier-ingestion.v1.schema.json",
+    "./learning": "./src/learning/store.mjs",
+    "./learning/assistance": "./src/learning/assistance.mjs",
+    "./learning/adapters": "./src/learning/adapters.mjs",
+    "./contracts/atelier-learning.v1.schema.json": "./contracts/atelier-learning.v1.schema.json",
     "./presentation": "./src/ui/presentation/index.mjs",
     "./presentation/browser": "./src/ui/presentation/browser.mjs",
     "./presentation/native": "./src/ui/presentation/native.mjs",
@@ -98,7 +106,12 @@
     "./build": "./src/build/index.mjs",
     "./contracts/atelier-harness.v1.schema.json": "./contracts/atelier-harness.v1.schema.json",
     "./contracts/atelier-knowledge.v1.schema.json": "./contracts/atelier-knowledge.v1.schema.json",
-    "./contracts/atelier-build.v1.schema.json": "./contracts/atelier-build.v1.schema.json"
+    "./contracts/atelier-build.v1.schema.json": "./contracts/atelier-build.v1.schema.json",
+    "./architecture": "./src/architecture/index.mjs",
+    "./contracts/atelier-architecture.v1.schema.json": "./contracts/atelier-architecture.v1.schema.json",
+    "./judgment": "./src/judgment/index.mjs",
+    "./contracts/atelier-judgment.v1.schema.json": "./contracts/atelier-judgment.v1.schema.json",
+    "./contracts/atelier-instruction-adoption.v1.schema.json": "./contracts/atelier-instruction-adoption.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

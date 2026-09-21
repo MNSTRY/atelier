@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reconcile eight responsibility names and typed consumer bindings; preserve historical aliases.
+- Connect durable ingestion to source-current knowledge context and graph proposals.
+- Add situated judgment and native ADR adapters, capability feedback, and recoverable scoped instruction adoption.
+- Include a provider-agnostic research starter and Practical Judgment operating skill.
+
 ### Added
 
 - Add an experimental, opt-in Obsidian projection. A project that enables
@@ -86,6 +91,19 @@
   dependence and withdrawal checks, and reviewable graph proposals. Add separate
   capability packages and version-bound Skill Steward feedback. Rename the
   discovery readiness display title while retaining all persisted identifiers.
+- Add an experimental progressive local ingestion runner with exact plans,
+  bounded deterministic text/CSV/JSON extraction, immutable intake reuse,
+  resumable attempt accounting and source-verified lexical queries. Add a
+  JSON stdin CLI and structural evaluation that retains missing cases and
+  unknown costs. No model dispatch, automatic semantic acceptance or native
+  desktop admission is provided by the portable runner.
+
+- Add a portable local learning lifecycle: Evidence, proposals, exact decisions,
+  explicit harness activation, withdrawal and retained history. Include a JSON
+  stdin CLI, private graph/export projections, bounded proposal-assistance
+  adapters and compatibility with existing skill observations. Local actor
+  assertions do not authenticate users; check artifacts remain inert and hosts
+  retain execution and access authority.
 
 ## 0.2.0-alpha.7
 

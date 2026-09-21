@@ -1,0 +1,19 @@
+{
+  "schema": "atelier-behavior-binding@v1",
+  "definition": {
+    "ref": "definitions/weekly-note.json",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "fields": [
+    {
+      "pointer": "/question",
+      "classification": "guidance",
+      "required": true,
+      "consumer": {
+        "id": "reference-note",
+        "profile": "note-v1",
+        "revision": "1"
+      }
+    }
+  ]
+}

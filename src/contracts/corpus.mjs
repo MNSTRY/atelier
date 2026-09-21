@@ -26,6 +26,9 @@ import { fileURLToPath } from 'node:url'
 // document, not a schema, and is deliberately absent.
 
 export const CONTRACT_CORPUS = [
+  ...['case', 'decision'].map(shape => ({ name: `atelier-judgment-${shape}`, contractFile: 'contracts/atelier-judgment.v1.schema.json', docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-judgment/${shape}`, registry: false })),
+  ...['state', 'plan', 'receipt', 'context-receipt'].map(shape => ({ name: `atelier-instruction-${shape}`, contractFile: 'contracts/atelier-instruction-adoption.v1.schema.json', docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-instruction-adoption/${shape}`, registry: false })),
+  ...['catalog', 'binding'].map(shape => ({ name: `atelier-architecture-${shape}`, contractFile: 'contracts/atelier-architecture.v1.schema.json', docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-architecture/${shape}`, registry: false })),
   ...Object.entries({ knowledge: ['domain', 'domain-revision', 'contribution', 'evaluation', 'relation', 'review', 'withdrawal', 'activation', 'ledger'], build: ['objective', 'candidate', 'attempt', 'progress', 'gate', 'decision', 'delivery', 'ledger'], harness: ['handoff'] }).flatMap(([profile, shapes]) => shapes.map(shape => ({
     name: `atelier-${profile}-${shape}`, contractFile: `contracts/atelier-${profile}.v1.schema.json`,
     docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-${profile}-contract/${shape}`, registry: false,
@@ -38,6 +41,8 @@ export const CONTRACT_CORPUS = [
     name: `atelier-capability-${shape}`, contractFile: 'contracts/atelier-capability.v1.schema.json',
     docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-capability-contract/${shape}`, registry: false,
   })),
+  { name: 'atelier-ingestion', contractFile: 'contracts/atelier-ingestion.v1.schema.json', fixtureRoot: 'fixtures/atelier-ingestion', registry: true },
+  { name: 'atelier-learning', contractFile: 'contracts/atelier-learning.v1.schema.json', fixtureRoot: 'fixtures/atelier-learning', registry: true },
   { name: 'atelier-adoption-policy-v1', contractFile: 'contracts/atelier-adoption-policy.v1.schema.json', fixtureRoot: 'fixtures/atelier-upgrade-transaction/adoption-policy', registry: false },
   { name: 'atelier-migration-v2', contractFile: 'contracts/atelier-migration.v2.schema.json', fixtureRoot: 'fixtures/atelier-upgrade-transaction/migration', registry: false },
   { name: 'atelier-upgrade-plan-v2', contractFile: 'contracts/atelier-upgrade-plan.v2.schema.json', fixtureRoot: 'fixtures/atelier-upgrade-transaction/upgrade-plan', registry: false },

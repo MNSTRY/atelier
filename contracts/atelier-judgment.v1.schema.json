@@ -1,0 +1,690 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-judgment.v1.schema.json",
+  "$comment": "contract revision 1.0.0",
+  "title": "Practical deliberation cases and native architecture decision snapshots",
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-judgment-case@v1"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "audience": {
+          "enum": [
+            "public",
+            "team",
+            "operator",
+            "staff",
+            "private",
+            "sensitive"
+          ]
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "context": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "attendTo": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "ref",
+              "digest"
+            ]
+          },
+          "maxItems": 64
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "action": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "benefits": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "maxItems": 64
+              },
+              "costs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "maxItems": 64
+              },
+              "exceptions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "maxItems": 64
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "benefits",
+              "costs",
+              "exceptions"
+            ]
+          },
+          "maxItems": 64
+        },
+        "voices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "author": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "position": {
+                "enum": [
+                  "support",
+                  "dissent",
+                  "uncertain"
+                ]
+              },
+              "contribution": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "source": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "ref",
+                  "digest"
+                ]
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "author",
+              "position",
+              "contribution",
+              "source"
+            ]
+          },
+          "maxItems": 64
+        },
+        "disposition": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "open",
+                "chosen",
+                "deferred",
+                "declined"
+              ]
+            },
+            "choice": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "responsible": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "status",
+            "choice",
+            "reason",
+            "responsible"
+          ]
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "cultivation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "exercise": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "contrast": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "reflectionQuestion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "exercise",
+              "contrast",
+              "reflectionQuestion"
+            ]
+          },
+          "maxItems": 64
+        },
+        "consequences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "observation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "evidence": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "ref",
+                  "digest"
+                ]
+              },
+              "interpretation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "observation",
+              "evidence",
+              "interpretation"
+            ]
+          },
+          "maxItems": 64
+        },
+        "reconsiderWhen": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "audience",
+        "purpose",
+        "context",
+        "values",
+        "attendTo",
+        "constraints",
+        "evidence",
+        "alternatives",
+        "voices",
+        "disposition",
+        "questions",
+        "cultivation",
+        "consequences",
+        "reconsiderWhen"
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-judgment-decision@v1"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "repository",
+            "id",
+            "ref",
+            "digest"
+          ]
+        },
+        "audience": {
+          "enum": [
+            "public",
+            "team",
+            "operator",
+            "staff",
+            "private",
+            "sensitive"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "context": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "proposed",
+                "accepted",
+                "rejected",
+                "deferred",
+                "superseded"
+              ]
+            },
+            "choice": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "authorityRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "status",
+            "choice",
+            "reason",
+            "authorityRef"
+          ]
+        },
+        "implementation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "unknown",
+                "planned",
+                "in-progress",
+                "implemented",
+                "verified",
+                "retired"
+              ]
+            },
+            "receipt": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 8192
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[a-f0-9]{64}$"
+                    },
+                    "ext": {
+                      "type": "object",
+                      "maxProperties": 0
+                    }
+                  },
+                  "required": [
+                    "ref",
+                    "digest"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ]
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "unknown",
+                "current",
+                "stale",
+                "withdrawn"
+              ]
+            },
+            "references": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "ref",
+                  "digest"
+                ]
+              },
+              "maxItems": 64
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "status",
+            "references"
+          ]
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "repository",
+                "id",
+                "digest"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consequences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "reconsiderWhen": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "maxItems": 64
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "required": [
+        "schema",
+        "native",
+        "audience",
+        "title",
+        "context",
+        "alternatives",
+        "decision",
+        "implementation",
+        "evidence",
+        "supersedes",
+        "consequences",
+        "reconsiderWhen"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/case"
+    },
+    {
+      "$ref": "#/$defs/decision"
+    }
+  ]
+}

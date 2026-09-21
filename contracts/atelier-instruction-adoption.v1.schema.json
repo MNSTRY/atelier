@@ -1,0 +1,490 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-instruction-adoption.v1.schema.json",
+  "$comment": "contract revision 1.0.0",
+  "title": "Scoped instruction adoption and consumption receipts",
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "activity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "project",
+        "activity"
+      ]
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lessonId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "lessonDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "artifactDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "activationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "decisionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "lessonId",
+        "lessonDigest",
+        "artifactDigest",
+        "activationId",
+        "decisionId"
+      ]
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "harnessId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "lessonId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9_-]+/)*(?:AGENTS|CLAUDE)\\.md$"
+        },
+        "slot": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "mode": {
+          "enum": [
+            "adopt",
+            "retire"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "workspaceId",
+        "scope",
+        "harnessId",
+        "lessonId",
+        "target",
+        "slot",
+        "mode"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "harnessId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "lessonId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "target": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9_-]+/)*(?:AGENTS|CLAUDE)\\.md$"
+        },
+        "slot": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "mode": {
+          "enum": [
+            "adopt",
+            "retire"
+          ]
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "block": {
+          "type": "string",
+          "maxLength": 131072
+        },
+        "blockDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "workspaceId",
+        "scope",
+        "harnessId",
+        "lessonId",
+        "target",
+        "slot",
+        "mode",
+        "pin",
+        "block",
+        "blockDigest"
+      ]
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-instruction-state@v1"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bindings": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/binding"
+          }
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "required": [
+        "schema",
+        "workspace",
+        "revision",
+        "bindings",
+        "digest"
+      ]
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-instruction-plan@v1"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "input": {
+          "$ref": "#/$defs/input"
+        },
+        "previousState": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "nextState": {
+          "$ref": "#/$defs/state"
+        },
+        "learningRevision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 131072
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "beforeDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "after": {
+          "type": "string",
+          "maxLength": 131072
+        },
+        "afterDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "effect": {
+          "const": "write-scoped-instruction-guidance"
+        },
+        "precedence": {
+          "const": "host-owned"
+        },
+        "authenticated": {
+          "const": false
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "required": [
+        "schema",
+        "workspace",
+        "input",
+        "previousState",
+        "nextState",
+        "learningRevision",
+        "pin",
+        "before",
+        "beforeDigest",
+        "after",
+        "afterDigest",
+        "effect",
+        "precedence",
+        "authenticated",
+        "digest"
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-instruction-receipt@v1"
+        },
+        "workspace": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "planDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "slot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "mode": {
+          "enum": [
+            "adopt",
+            "retire"
+          ]
+        },
+        "resultDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "stateDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "status": {
+          "const": "persisted-and-read-back"
+        },
+        "hostLoaded": {
+          "const": false
+        },
+        "behaviorVerified": {
+          "const": false
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "required": [
+        "schema",
+        "workspace",
+        "planDigest",
+        "target",
+        "slot",
+        "pin",
+        "mode",
+        "resultDigest",
+        "stateDigest",
+        "status",
+        "hostLoaded",
+        "behaviorVerified",
+        "digest"
+      ]
+    },
+    "context-receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-instruction-context-receipt@v1"
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "slot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "pin": {
+          "$ref": "#/$defs/pin"
+        },
+        "contextDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "delivery": {
+          "const": "returned-to-calling-consumer"
+        },
+        "behaviorVerified": {
+          "const": false
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "required": [
+        "schema",
+        "session",
+        "target",
+        "slot",
+        "pin",
+        "contextDigest",
+        "delivery",
+        "behaviorVerified",
+        "digest"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/state"
+    },
+    {
+      "$ref": "#/$defs/plan"
+    },
+    {
+      "$ref": "#/$defs/receipt"
+    },
+    {
+      "$ref": "#/$defs/context-receipt"
+    }
+  ]
+}
