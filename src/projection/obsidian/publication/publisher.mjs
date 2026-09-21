@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { acquirePrivateLock, publishPrivateFile, syncPrivateDirectory } from '../../../project/durable-state.mjs'
@@ -117,6 +118,57 @@ function stageCandidate(file, bytes, mode, created = [], crash = () => {}) {
   if (sha256Digest(readFileBytes(file)) !== sha256Digest(bytes)) throw Object.assign(new Error('staged bytes differ from the candidate'), { code: 'ESTAGE' })
 }
 
+// Keep units, compared ahead of the per-unit loop: each vault file is read
+// and hashed once, several at a time through the thread pool, and a unit whose
+// bytes are exactly the candidate's is settled as unchanged. Nothing else is
+// decided here. A keep unit that is absent, holds other bytes, sits under an
+// unsafe parent, is not a regular file or cannot be read goes through
+// publishUnit as before, which reads it again. The checks are the ones the
+// synchronous path makes (every parent a real directory, the leaf a regular
+// file opened without following a link and bound to the file that was
+// inspected); only the ordering and the concurrency differ, and a kept note
+// is never written, so its comparison needs no place in the unit order.
+const KEEP_COMPARISON_WIDTH = 16
+
+async function unchangedKeepUnits(units, store) {
+  const settled = new Set()
+  const pending = units.filter((unit) => unit.op === 'keep')
+  let next = 0
+  const worker = async () => {
+    while (next < pending.length) {
+      const unit = pending[next]
+      next += 1
+      if (await holdsCandidateBytes(store.vaultRoot, unit.path, unit.candidateDigest)) settled.add(unit.path)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(KEEP_COMPARISON_WIDTH, pending.length) }, worker))
+  return settled
+}
+
+async function holdsCandidateBytes(vaultRoot, relativePath, candidateDigest) {
+  try {
+    let current = vaultRoot
+    for (const part of relativePath.split('/').slice(0, -1)) {
+      current = path.join(current, part)
+      const stat = await fsp.lstat(current)
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return false
+    }
+    const file = path.join(vaultRoot, relativePath)
+    const before = await fsp.lstat(file)
+    if (before.isSymbolicLink() || !before.isFile()) return false
+    const handle = await fsp.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    try {
+      const opened = await handle.stat()
+      if (!opened.isFile() || (before.ino !== 0 && (before.dev !== opened.dev || before.ino !== opened.ino))) return false
+      return sha256Digest(await handle.readFile()) === candidateDigest
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    return false
+  }
+}
+
 function planUnits({ files, priorManifest, pointer, ledger }) {
   const trusted = new Map()
   for (const note of priorManifest?.notes ?? []) trusted.set(note.path, note.noteDigest)
@@ -216,7 +268,9 @@ export async function publishView(options = {}) {
       publishPrivateFile(manifestFile, manifestBytes)
       journal = createJournal(store, { journalId, protocolId, expectedGeneration, targetGeneration: manifest.generationId, clock,
         detail: { mode, manifestRef: store.ref(manifestFile), manifestDigest: sha256Digest(manifestBytes),
-          units: units.map(({ unit, path: unitPath, kind, op }) => ({ unit, path: unitPath, kind, op })),
+          // The units this run may write. A kept note is compared and never written; the one case that writes
+          // it after all (a kept note gone missing) is a late candidate with its own write-ahead entry.
+          units: units.filter((item) => item.op !== 'keep').map(({ unit, path: unitPath, kind, op }) => ({ unit, path: unitPath, kind, op })),
           staged: units.filter((item) => item.stagedPath).map((item) => ({ unit: item.unit, path: item.path, candidateDigest: item.candidateDigest, stagedRef: store.ref(item.stagedPath),
             ...(item.stagedPath === item.preparedPath ? {} : { preparedRef: store.ref(item.preparedPath) }) })) } })
       crash('before-candidate-move')
@@ -243,6 +297,8 @@ export async function publishView(options = {}) {
 
     const context = { store, journal, journalId, channel, clock, crash, mode }
     const results = []
+    // Kept notes are compared first, several at a time; one that holds exactly its candidate bytes is unchanged.
+    const unchanged = await unchangedKeepUnits(units, store)
     // The direct path has no editor coordination, so it is only right while no
     // Obsidian runs. Staging takes time and an app may have started since path
     // selection: the process table is read again immediately before the first
@@ -256,6 +312,10 @@ export async function publishView(options = {}) {
         lastProbe = Date.now()
         const again = await adapter.probe({ vaultRoot: store.vaultRoot })
         if (again.state !== 'absent') context.uncoordinated = again.reason
+      }
+      if (unit.op === 'keep' && unchanged.has(unit.path)) {
+        results.push({ path: unit.path, kind: unit.kind, op: unit.op, outcome: context.uncoordinated ? 'editor-uncoordinated' : 'unchanged', blocking: false })
+        continue
       }
       results.push(await publishUnit(unit, context))
     }

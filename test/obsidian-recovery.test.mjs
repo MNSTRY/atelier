@@ -1191,6 +1191,53 @@ test('I13 an outside in-place rewrite after publication is kept, and the next ge
   assert.equal(world.read(NOTE), external)
 })
 
+test('kept notes are settled by their bytes alone: equal bytes are unchanged, a same-size same-mtime edit is kept, a linked parent still refuses, and the journal header names no kept unit', needsExchange, async (t) => {
+  const many = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`notes/Kept ${index}--${String(index + 1).padStart(12, '0')}.md`, `${BASE}Note ${index}.\n`]))
+  const world = await seeded(t, { ...many, [NOTE]: BASE })
+  // One note changes; every other unit is kept. Each kept file is read and settled as unchanged, and the journal
+  // header names only the unit this run may write.
+  const next = await world.publish(viewOf('gen-0002', { notes: { ...many, [NOTE]: CANDIDATE } }), absentAdapter())
+  assert.equal(next.state, 'committed', JSON.stringify(next))
+  assert.equal(noteResult(next).outcome, 'published')
+  const kept = next.notes.filter((note) => note.op === 'keep')
+  assert.equal(kept.length, 40)
+  assert.ok(kept.every((note) => note.outcome === 'unchanged' && note.blocking === false), JSON.stringify(kept.filter((note) => note.outcome !== 'unchanged')))
+  const header = listJournals(world.store).map((journal) => journal.document()).find((document) => document.journalId === next.journalId).ext[EXT]
+  assert.deepEqual(header.units.map((unit) => [unit.path, unit.op]), [[NOTE, 'replace']], 'the header names the units this run may write, and no kept note')
+  assert.deepEqual(header.staged.map((item) => item.path), [NOTE])
+  // Mutation control for the comparison: an edit of the same length, with the modification time put back, is
+  // neither a size nor an mtime difference; only the bytes say it happened, and it is found and kept.
+  const editedPath = Object.keys(many)[3]
+  const stamp = new Date('2026-01-05T10:00:00.000Z')
+  fs.utimesSync(world.full(editedPath), stamp, stamp)
+  const before = fs.statSync(world.full(editedPath))
+  const edited = `${many[editedPath].slice(0, -8)}EDITED.\n`
+  assert.equal(Buffer.byteLength(edited), before.size)
+  fs.writeFileSync(world.full(editedPath), edited)
+  fs.utimesSync(world.full(editedPath), stamp, stamp)
+  const after = fs.statSync(world.full(editedPath))
+  assert.deepEqual([after.size, after.mtimeMs, after.ino], [before.size, before.mtimeMs, before.ino])
+  const third = await world.publish(viewOf('gen-0003', { notes: { ...many, [NOTE]: `${CANDIDATE}Third.\n` } }), absentAdapter())
+  assert.equal(third.state, 'committed', JSON.stringify(third))
+  assert.equal(noteResult(third, editedPath).outcome, 'edit-kept')
+  assert.equal(world.read(editedPath), edited)
+  assert.ok(keptTexts(world).includes(edited), 'the edited bytes are retained')
+  assert.equal(third.notes.filter((note) => note.op === 'keep' && note.outcome === 'unchanged').length, 39)
+  // Equality oracle: the vault holds, note for note, what a publication from nothing of the same views holds,
+  // except the note the person edited, which is theirs.
+  const fresh = makeWorld(t)
+  for (const [generationId, text] of [['gen-0001', BASE], ['gen-0002', CANDIDATE], ['gen-0003', `${CANDIDATE}Third.\n`]]) {
+    assert.equal((await fresh.publish(viewOf(generationId, { notes: { ...many, [NOTE]: text } }), absentAdapter())).state, 'committed')
+  }
+  for (const notePath of [...Object.keys(many), NOTE]) assert.equal(world.read(notePath), notePath === editedPath ? edited : fresh.read(notePath), notePath)
+  // A kept note whose parent became a link is refused as before, whatever its bytes: nothing is settled through it.
+  fs.renameSync(world.full('notes'), world.full('notes-elsewhere'))
+  fs.symlinkSync('notes-elsewhere', world.full('notes'))
+  const fourth = await world.publish(viewOf('gen-0004', { notes: { ...many, [NOTE]: `${CANDIDATE}Fourth.\n` } }), absentAdapter())
+  assert.equal(fourth.state, 'updating')
+  assert.ok(fourth.notes.every((note) => note.outcome === 'path-unsafe' && note.blocking === true), JSON.stringify(fourth.notes.filter((note) => note.outcome !== 'path-unsafe')))
+})
+
 test('an outside write that lands between publication and verification is reported and kept', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
