@@ -115,15 +115,15 @@ for (const point of ['reservation', 'before-output', 'output', 'completion', 'di
   test(`process interruption at ${point} resumes without a duplicate budget charge`, t => {
     const { store, root, options } = fixture(t, { 'notes.md': 'Basil at dawn.' }), p = plan(store, ['notes.md']);
     const module = new URL('../src/ingestion/store.mjs', import.meta.url).href;
-    const script = `import fs from 'node:fs'; import { createIngestionStore } from ${JSON.stringify(module)};
+    const script = `import fs from 'node:fs'; import path from 'node:path'; import { createIngestionStore } from ${JSON.stringify(module)};
       const store = createIngestionStore(JSON.parse(process.argv[1])); const link = fs.linkSync;
       const point = process.argv[3]; fs.linkSync = (from, to) => {
-        if (point === 'before-output' && to.endsWith('/output.txt')) process.exit(73);
+        if (point === 'before-output' && path.basename(to) === 'output.txt') process.exit(73);
         link(from, to);
-        if ((point === 'reservation' && to.endsWith('/events/0001.json')) ||
-            (point === 'output' && to.endsWith('/output.txt')) ||
-            (point === 'completion' && to.endsWith('/completion.json')) ||
-            (point === 'disposition' && to.endsWith('/events/0002.json'))) process.exit(73);
+        if ((point === 'reservation' && path.basename(to) === '0001.json' && path.basename(path.dirname(to)) === 'events') ||
+            (point === 'output' && path.basename(to) === 'output.txt') ||
+            (point === 'completion' && path.basename(to) === 'completion.json') ||
+            (point === 'disposition' && path.basename(to) === '0002.json' && path.basename(path.dirname(to)) === 'events')) process.exit(73);
       }; store.run(JSON.parse(process.argv[2]));`;
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(options), JSON.stringify(reference(p)), point]);
     assert.equal(child.status, 73, child.stderr.toString());
@@ -138,7 +138,7 @@ for (const point of ['reservation', 'before-output', 'output', 'completion', 'di
 test('a thrown output-publication failure keeps the reservation resumable', t => {
   const { store } = fixture(t, { 'notes.md': 'Water basil.' }), p = plan(store, ['notes.md']);
   const link = fs.linkSync;
-  fs.linkSync = (from, to) => { if (to.endsWith('/output.txt')) throw Object.assign(new Error('synthetic local write interruption'), { code: 'EIO' }); return link(from, to); };
+  fs.linkSync = (from, to) => { if (path.basename(to) === 'output.txt') throw Object.assign(new Error('synthetic local write interruption'), { code: 'EIO' }); return link(from, to); };
   try { assert.throws(() => store.run(reference(p)), { code: 'INGESTION_RETRY_REQUIRED' }); }
   finally { fs.linkSync = link; }
   const pending = store.status(reference(p)); assert.equal(pending.usage.attempts, 1); assert.equal(pending.usage.pendingAttempts, 1);
