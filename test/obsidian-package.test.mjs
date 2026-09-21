@@ -222,6 +222,7 @@ test('mutation control: the release audit refuses proof tooling, experiments, a 
       fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
       fs.copyFileSync(path.join(ROOT, rel), path.join(root, rel))
     }
+    const identity = (host, operator) => ({ 'mnstry.atelier.obsidian': { host: { id: host }, operator: { id: operator } } })
     const receipt = (ext) => `${JSON.stringify({ schema: 'atelier-obsidian-acceptance-receipt/v1', receiptId: 'acceptance-synthetic-0001', ext })}\n`
     const files = {
       'README.md': 'fixture 0.0.0-mutation.1\n',
@@ -236,9 +237,14 @@ test('mutation control: the release audit refuses proof tooling, experiments, a 
       'experiments/probe/notes.md': '# Probe\n',
       '.artifacts/obsidian/desktop/G07.json': receipt({}),
       'fixtures/app/synthetic.asar': 'not an archive\n',
-      'fixtures/obsidian/acceptance/receipts/harness.v1.json': receipt({ 'mnstry.atelier.obsidian.desktop-receipts': { closes: false } }),
-      'fixtures/elsewhere/receipt.v1.json': receipt({}),
+      'fixtures/obsidian/acceptance/receipts/harness.v1.json': receipt({ ...identity('host-synthetic-desk-01', 'operator-synthetic'), 'mnstry.atelier.obsidian.desktop-receipts': { closes: false } }),
+      'fixtures/obsidian/acceptance/receipts/stripped.v1.json': receipt(identity('host-Example-Laptop.local', 'code-1a')),
+      'fixtures/obsidian/acceptance/receipts/no-identity.v1.json': receipt({}),
+      'fixtures/obsidian/contracts/acceptance-receipt/valid/shape.v1.json': receipt({}),
+      'fixtures/obsidian/acceptance/receipts/synthetic.v1.json': receipt(identity('host-synthetic-desk-01', 'operator-synthetic')),
+      'fixtures/elsewhere/receipt.v1.json': receipt(identity('host-synthetic-desk-01', 'operator-synthetic')),
       'fixtures/obsidian/scale/corpus.json': `${JSON.stringify({ filler: 'a'.repeat(300_000) })}\n`,
+      'fixtures/scale/corpus.json': `${JSON.stringify({ filler: 'c'.repeat(300_000) })}\n`,
     }
     for (const [rel, content] of Object.entries(files)) {
       fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
@@ -265,12 +271,17 @@ test('mutation control: the release audit refuses proof tooling, experiments, a 
       /acceptance receipts and their evidence are not shipped: \.artifacts\/obsidian\/desktop\/G07\.json/,
       /an application archive is not shipped: fixtures\/app\/synthetic\.asar/,
       /packed acceptance receipt is not a synthetic fixture: fixtures\/obsidian\/acceptance\/receipts\/harness\.v1\.json/,
+      /packed acceptance receipt is not a synthetic fixture: fixtures\/obsidian\/acceptance\/receipts\/stripped\.v1\.json/,
+      /packed acceptance receipt is not a synthetic fixture: fixtures\/obsidian\/acceptance\/receipts\/no-identity\.v1\.json/,
       /packed acceptance receipt is not a synthetic fixture: fixtures\/elsewhere\/receipt\.v1\.json/,
-      /packed Obsidian fixture exceeds 262144 bytes: fixtures\/obsidian\/scale\/corpus\.json/,
+      /packed fixture exceeds 262144 bytes: fixtures\/obsidian\/scale\/corpus\.json/,
+      /packed fixture exceeds 262144 bytes: fixtures\/scale\/corpus\.json/,
       /package export \.\/obsidian names a file the tarball does not carry/,
       /tarball must include docs\/obsidian\.md/,
       /tarball must include src\/projection\/obsidian\/publication\/index\.mjs/,
     ]) assert.match(stderr, expected)
+    assert.doesNotMatch(stderr, /synthetic\.v1\.json/)
+    assert.doesNotMatch(stderr, /shape\.v1\.json/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

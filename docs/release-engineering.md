@@ -60,12 +60,17 @@ Shipped, and required by the audit:
   `./obsidian/edits`, `./obsidian/proposals` and `./obsidian/selection`, with
   `src/commands/obsidian.mjs`, the service entry and the two contribution
   modules under `src/runtime/obsidian/contributions/`.
-- Every `contracts/atelier-obsidian-*.schema.json` present in the source tree.
-  Each must be packed and exported under its own path.
+- Every `contracts/atelier-obsidian-<name>.v<n>.schema.json` present in the
+  source tree (lowercase name, versioned). Each must be packed and exported
+  under its own path, and the audit fails if it finds none.
 - `docs/obsidian.md` and `docs/obsidian-contract.md`.
-- `fixtures/obsidian/**`: small synthetic text only, at most 262,144 bytes per
-  file. The acceptance receipts under `fixtures/obsidian/acceptance/receipts/`
-  are synthetic shape fixtures; validating one closes nothing.
+- `fixtures/obsidian/**`: small synthetic text only. Every packed fixture, in
+  any subtree and spelling under `fixtures/`, is at most 262,144 bytes. The
+  acceptance receipts under `fixtures/obsidian/acceptance/receipts/` are
+  synthetic shape fixtures whose host id matches `host-synthetic-*` and whose
+  operator id is `operator-synthetic`; the schema fixtures under
+  `fixtures/obsidian/contracts/` carry no identity block. Validating one closes
+  nothing.
 
 Never shipped, and refused by name in addition to the path allowlist:
 
@@ -74,9 +79,11 @@ Never shipped, and refused by name in addition to the path allowlist:
 - Any `.artifacts/` directory, where acceptance receipts and their evidence
   are written.
 - Any `.asar` file.
-- An acceptance receipt outside `fixtures/obsidian/`, or one carrying the
-  desktop harness extension (`mnstry.atelier.obsidian.desktop-receipts`): that
-  document records a real host.
+- An acceptance receipt outside `fixtures/obsidian/`, one carrying the desktop
+  harness extension (`mnstry.atelier.obsidian.desktop-receipts`), or one whose
+  host or operator id is not the synthetic form above (or, outside the schema
+  fixtures, one with no identity block): that document records a real host,
+  even with the harness block removed.
 - Scale corpora and binary samples. They are generated in temporary storage at
   test time and are never files of this repository.
 

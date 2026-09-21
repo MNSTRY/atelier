@@ -201,9 +201,16 @@ for (const [subpath, target] of Object.entries(packedPackageJson.exports ?? {}))
 // The Obsidian projection ships as runtime, contracts and documents. Its
 // proof tooling (scripts/obsidian, the desktop harness and its receipts) and
 // the experiments never ship; see docs/release-engineering.md.
+const OBSIDIAN_SCHEMA_NAME = /^atelier-obsidian-[a-z0-9-]+\.v\d+\.schema\.json$/
 const obsidianSchemas = existsSync(join(packageRoot, 'contracts'))
-  ? readdirSync(join(packageRoot, 'contracts')).filter((name) => /^atelier-obsidian-[a-z0-9-]+\.v\d+\.schema\.json$/.test(name)).map((name) => `contracts/${name}`)
+  ? readdirSync(join(packageRoot, 'contracts')).filter((name) => OBSIDIAN_SCHEMA_NAME.test(name)).map((name) => `contracts/${name}`)
   : []
+// The list comes from the auditing checkout; an empty one would make the
+// schema checks vacuous, so it is a failure rather than a pass.
+if (obsidianSchemas.length === 0) {
+  console.error('[release:audit] no atelier-obsidian-*.v<n>.schema.json found under contracts/; the schema checks cannot run')
+  failures += 1
+}
 for (const requiredObsidianFile of [
   'docs/obsidian.md',
   'docs/obsidian-contract.md',
@@ -241,10 +248,18 @@ const neverPacked = [
   { pattern: /(^|\/)\.artifacts\//, label: 'acceptance receipts and their evidence are not shipped' },
   { pattern: /\.asar$/i, label: 'an application archive is not shipped' },
 ]
-// Packed Obsidian fixtures are small synthetic text. Scale corpora and binary
-// samples are generated in temporary storage at test time.
-const MAX_OBSIDIAN_FIXTURE_BYTES = 262_144
+// Packed fixtures are small synthetic text. Scale corpora and binary samples
+// are generated in temporary storage at test time. The cap covers every
+// fixture, whatever its subtree or spelling: the path allowlist admits any
+// case and any subdirectory under fixtures/.
+const MAX_FIXTURE_BYTES = 262_144
 const DESKTOP_RECEIPT_EXT_KEY = 'mnstry.atelier.obsidian.desktop-receipts'
+const OBSIDIAN_EXT_KEY = 'mnstry.atelier.obsidian'
+// A packed acceptance receipt names a synthetic host and operator. A receipt
+// the desktop harness wrote names the real host; stripping its tool block does
+// not make it a fixture.
+const SYNTHETIC_HOST_ID = /^host-synthetic-[A-Za-z0-9-]+$/
+const SYNTHETIC_OPERATOR_ID = /^operator-synthetic(-[A-Za-z0-9-]+)?$/
 
 if (!paths.includes('bin/atelier.mjs')) {
   console.error('[release:audit] tarball must include bin/atelier.mjs')
@@ -296,8 +311,8 @@ for (const filePath of paths) {
   // effectively unscanned (text can hide in compressed chunks). Nothing
   // binary is allowed to pack rather than allowing it past the scrub.
   const bytes = readFileSync(join(auditRoot, filePath))
-  if (filePath.startsWith('fixtures/obsidian/') && bytes.length > MAX_OBSIDIAN_FIXTURE_BYTES) {
-    console.error(`[release:audit] packed Obsidian fixture exceeds ${MAX_OBSIDIAN_FIXTURE_BYTES} bytes: ${filePath}`)
+  if (/^fixtures\//i.test(filePath) && bytes.length > MAX_FIXTURE_BYTES) {
+    console.error(`[release:audit] packed fixture exceeds ${MAX_FIXTURE_BYTES} bytes: ${filePath}`)
     failures += 1
   }
   if (bytes.includes(0)) {
@@ -355,10 +370,22 @@ for (const filePath of paths) {
     }
     // An acceptance receipt in the package is a synthetic shape fixture. One
     // written by the desktop harness records a real host and never ships.
-    if (doc?.schema === 'atelier-obsidian-acceptance-receipt/v1'
-      && (!filePath.startsWith('fixtures/obsidian/') || Object.hasOwn(doc.ext ?? {}, DESKTOP_RECEIPT_EXT_KEY))) {
-      console.error(`[release:audit] packed acceptance receipt is not a synthetic fixture: ${filePath}`)
-      failures += 1
+    if (doc?.schema === 'atelier-obsidian-acceptance-receipt/v1') {
+      // A contract fixture (fixtures/obsidian/contracts/) exercises the schema
+      // and carries no identity block; every other packed receipt must name a
+      // synthetic host and operator.
+      const identity = doc.ext?.[OBSIDIAN_EXT_KEY]
+      const syntheticIdentity = identity === undefined
+        ? filePath.startsWith('fixtures/obsidian/contracts/')
+        : typeof identity?.host?.id === 'string' && SYNTHETIC_HOST_ID.test(identity.host.id)
+          && typeof identity?.operator?.id === 'string' && SYNTHETIC_OPERATOR_ID.test(identity.operator.id)
+      const synthetic = filePath.startsWith('fixtures/obsidian/')
+        && !Object.hasOwn(doc.ext ?? {}, DESKTOP_RECEIPT_EXT_KEY)
+        && syntheticIdentity
+      if (!synthetic) {
+        console.error(`[release:audit] packed acceptance receipt is not a synthetic fixture: ${filePath}`)
+        failures += 1
+      }
     }
     if (carriesPrivateScalar(doc)) {
       console.error(`[release:audit] packed JSON document carries a private key member: ${filePath}`)

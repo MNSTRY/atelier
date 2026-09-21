@@ -44,7 +44,7 @@
 - `release:audit` now requires the Obsidian runtime, schemas and documents in
   the tarball, requires every declared export to name a packed file, and
   refuses scripts, tests, experiments, receipt directories, application
-  archives, harness-written receipts and Obsidian fixtures above 262,144
+  archives, receipts that name a real host or operator, and fixtures above 262,144
   bytes. The path allowlist is unchanged. A package proof packs the tarball,
   imports the subpaths from a bare consumer and publishes a synthetic
   workspace into a temporary vault with no app.
