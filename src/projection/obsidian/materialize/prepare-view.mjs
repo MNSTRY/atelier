@@ -219,21 +219,34 @@ function separatorAfter(bytes) {
   return bytes[bytes.length - 1] === 0x0a ? '\n' : '\n\n'
 }
 
-function relationRows({ node, outgoing, incoming, vaultNode, pathOf }) {
+// `titles` memoizes the two renderings of a title per node for one
+// preparation: a node's title is rendered once however many rows name it.
+function titleRenderings() {
+  const readable = new Map()
+  const plain = new Map()
+  return {
+    readableOf: (target) => { if (!readable.has(target.id)) readable.set(target.id, readableTitle(target.title)); return readable.get(target.id) },
+    plainOf: (origin) => { if (!plain.has(origin.id)) plain.set(origin.id, plainText(origin.title)); return plain.get(origin.id) },
+  }
+}
+
+function relationRows({ node, outgoing, incoming, vaultNode, pathOf, titles }) {
   const rows = []
   for (const type of RELATION_TYPES) {
-    for (const edge of outgoing.filter((item) => item.type === type)) {
+    for (const edge of outgoing) {
+      if (edge.type !== type) continue
       const target = vaultNode(edge.target)
       if (!target) continue
-      rows.push(`- ${type} → [[${noteBasename(pathOf(target))}|${readableTitle(target.title)}]]\n`)
+      rows.push(`- ${type} → [[${noteBasename(pathOf(target))}|${titles.readableOf(target)}]]\n`)
     }
     // An incoming row is plain text: a link here would give this note an
     // outgoing native link that the canonical graph does not hold.
     if (type === DERIVED_RELATION_TYPE) continue
-    for (const edge of incoming.filter((item) => item.type === type)) {
+    for (const edge of incoming) {
+      if (edge.type !== type) continue
       const origin = vaultNode(edge.source)
       if (!origin || origin.id === node.id) continue
-      rows.push(`- ${type} ← ${plainText(origin.title)}\n`)
+      rows.push(`- ${type} ← ${titles.plainOf(origin)}\n`)
     }
   }
   return rows
@@ -540,13 +553,14 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   const reusable = isPreparationCache(cache) ? cache.notes : null
   const nextCache = reusable ? new Map() : null
   const preparation = { emitted: 0, reused: 0 }
+  const titles = titleRenderings()
 
   for (const node of orderedNodes) {
     const notePathValue = pathOf(node)
     const pinned = read.pinned(node.repo, node.path)
     const outgoing = (outgoingBy.get(node.id) ?? []).slice().sort((left, right) => compare(left.target, right.target))
     const incoming = (incomingBy.get(node.id) ?? []).slice().sort((left, right) => compare(left.source, right.source))
-    const rows = relationRows({ node, outgoing, incoming, vaultNode, pathOf })
+    const rows = relationRows({ node, outgoing, incoming, vaultNode, pathOf, titles })
     const outsideCount = outsideCountBy.get(node.id) ?? 0
     const occurrences = occurrencesBySource.get(node.id) ?? []
     const key = reusable ? dependencyKey({ node, notePathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) : null
