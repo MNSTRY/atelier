@@ -141,6 +141,11 @@ Private state lives under `.atelier-local/learning`. Immutable events retain a
 content digest, previous digest, request, actor assertion and resulting record.
 Existing private-state helpers provide containment, no-follow regular-file
 checks, exclusive writer ownership and non-overwriting durable publication.
+On POSIX, directories and event files use restrictive `0700` and `0600` modes.
+Windows uses account ACLs; POSIX mode bits do not establish Windows access
+control. The hosting account or application must protect workspace access.
+Ignored Git state prevents accidental enrollment, not access by other local
+users.
 Replay verifies the chain and transitions; projections are rebuilt from it.
 
 There are explicit input, event-count and journal-byte ceilings. Unknown files,

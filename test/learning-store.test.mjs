@@ -73,6 +73,13 @@ test('correction, exact acceptance, rendering, activation, outcome feedback, wit
   assert.equal(archive.visibility, 'private'); assert.equal(archive.authority.importedActivation, false);
   const { digest, ...body } = archive; assert.equal(digest, learningDigest(body));
   assert.equal(archive.history.length, 6);
+});
+
+test('POSIX learning state permissions restrict directories and events', {
+  skip: process.platform === 'win32' ? 'Windows uses account ACLs; POSIX mode bits do not establish access control.' : false,
+}, t => {
+  const { root, store } = fixture(t);
+  run(store, 'capture', observation());
   assert.equal(fs.statSync(path.join(root, '.atelier-local', 'learning')).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.join(root, '.atelier-local', 'learning', 'events', '0000000001.json')).mode & 0o777, 0o600);
 });
@@ -210,9 +217,9 @@ test('interrupted publication has no partial event and resumes with the same req
   const { root, options } = fixture(t);
   const module = new URL('../src/learning/store.mjs', import.meta.url).href;
   const request = { requestId: 'interrupted', expectedRevision: 0, operation: 'capture', input: observation() };
-  const script = `import fs from 'node:fs'; import { createLearningStore } from ${JSON.stringify(module)};
+  const script = `import fs from 'node:fs'; import path from 'node:path'; import { createLearningStore } from ${JSON.stringify(module)};
     const store = createLearningStore(JSON.parse(process.argv[1])); const link = fs.linkSync;
-    fs.linkSync = (source, target) => target.includes('/events/') ? process.exit(73) : link(source, target);
+    fs.linkSync = (source, target) => path.basename(path.dirname(target)) === 'events' ? process.exit(73) : link(source, target);
     store.execute(JSON.parse(process.argv[2]), { actor: { id: 'owner', kind: 'human' } });`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(options), JSON.stringify(request)]);
   assert.equal(child.status, 73, child.stderr.toString());
@@ -251,9 +258,9 @@ test('lost reply after final publication retries the committed event without dup
   const { options } = fixture(t);
   const module = new URL('../src/learning/store.mjs', import.meta.url).href;
   const request = { requestId: 'committed-no-reply', expectedRevision: 0, operation: 'capture', input: observation() };
-  const script = `import fs from 'node:fs'; import { createLearningStore } from ${JSON.stringify(module)};
+  const script = `import fs from 'node:fs'; import path from 'node:path'; import { createLearningStore } from ${JSON.stringify(module)};
     const store = createLearningStore(JSON.parse(process.argv[1])); const link = fs.linkSync;
-    fs.linkSync = (source, target) => { link(source, target); if (target.includes('/events/')) process.exit(74); };
+    fs.linkSync = (source, target) => { link(source, target); if (path.basename(path.dirname(target)) === 'events') process.exit(74); };
     store.execute(JSON.parse(process.argv[2]), { actor: { id: 'owner', kind: 'human' } });`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(options), JSON.stringify(request)]);
   assert.equal(child.status, 74, child.stderr.toString());
