@@ -35,6 +35,8 @@ its definition or ceiling.
 
 For local-harness authoring, see [durable coauthor sessions](docs/coauthor-session.md)
 and [skill stewardship and managed installation](docs/skill-steward.md).
+[Learning from feedback](docs/learning.md) connects private observations to
+reviewed lessons and explicitly activated harness context, with a local CLI.
 [Immutable intake and guide contracts](docs/intake-and-guides.md) extend existing
 processing and hosted-tool adapters without adding remote execution or publication
 authority. These alpha capabilities require explicit consumer integration.

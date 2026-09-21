@@ -1,0 +1,14 @@
+{
+  "requestId": "capture-one",
+  "expectedRevision": 0,
+  "operation": "capture",
+  "input": {
+    "id": "observation-one",
+    "signal": "user-correction",
+    "text": "Put shortages first in the inventory summary.",
+    "interpretation": "explicit",
+    "scope": { "project": "sample-project", "activity": "inventory-summary" },
+    "source": { "ref": "manual-user-entry", "digest": null },
+    "accepted": true
+  }
+}

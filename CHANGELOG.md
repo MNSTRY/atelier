@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add a portable local learning lifecycle: Evidence, proposals, exact decisions,
+  explicit harness activation, withdrawal and retained history. Include a JSON
+  stdin CLI, private graph/export projections, bounded proposal-assistance
+  adapters and compatibility with existing skill observations. Local actor
+  assertions do not authenticate users; check artifacts remain inert and hosts
+  retain execution and access authority.
+
 ## 0.2.0-alpha.7
 
 - Add a guided owner-agent upgrade skill and read-only `upgrade explain`

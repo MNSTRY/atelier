@@ -23,6 +23,10 @@
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
   "exports": {
+    "./learning": "./src/learning/store.mjs",
+    "./learning/assistance": "./src/learning/assistance.mjs",
+    "./learning/adapters": "./src/learning/adapters.mjs",
+    "./contracts/atelier-learning.v1.schema.json": "./contracts/atelier-learning.v1.schema.json",
     "./presentation": "./src/ui/presentation/index.mjs",
     "./presentation/browser": "./src/ui/presentation/browser.mjs",
     "./presentation/native": "./src/ui/presentation/native.mjs",

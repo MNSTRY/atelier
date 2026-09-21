@@ -69,6 +69,7 @@ Core commands:
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
+  learn capture|propose|decide|activate|withdraw Manage scoped lessons and their evidence.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -105,7 +106,8 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
   assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
-  assert.equal(commandMap.size, 57)
+  assert.deepEqual(commandMap.get('learn'), ['src/commands/learn.mjs'])
+  assert.equal(commandMap.size, 58)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {
