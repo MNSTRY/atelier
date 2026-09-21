@@ -114,8 +114,8 @@ function isPreparationCache(cache) {
 
 // Everything the emitted bytes and the manifest entry of one note depend on,
 // in a canonical serialization. A cached note is reused only under an equal
-// key. The emitter version is part of the key so a cache never survives a
-// change of the emitter within one process.
+// key. The emitter version is part of the key so an entry states which emitter
+// produced it, should a cache ever outlive this module.
 function dependencyKey({ node, notePathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) {
   // A wrapper note serializes the record's summary and tags; a Markdown note never does.
   const wrapper = node.extension === 'md' ? null : JSON.stringify([String(node.summary ?? ''), Array.isArray(node.tags) ? node.tags : null])
@@ -131,7 +131,8 @@ function dependencyKey({ node, notePathValue, pinned, rows, outsideCount, occurr
       target.key, target.markdown, target.wikilink, target.alias,
     ]))
   }
-  return createHash('sha256').update(parts.join('\u0000')).digest('hex')
+  // JSON escapes every control character, so no field can shift into its neighbour.
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 }
 
 // ---------------------------------------------------------------------------
@@ -574,8 +575,8 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
       preparation.emitted += 1
     }
     if (nextCache) nextCache.set(notePathValue, entry)
-    // The result never aliases the cache: a caller may change what it was handed.
-    for (const file of entry.files) files.push({ ...file })
+    // The result never aliases the cache: a caller may change what it was handed, bytes included.
+    for (const file of entry.files) files.push({ ...file, bytes: Buffer.from(file.bytes) })
     if (entry.attachment) attachments.push(structuredClone(entry.attachment))
     notes.push(structuredClone(entry.note))
     for (const [edgeKey, inversions] of entry.edgeInversions) {

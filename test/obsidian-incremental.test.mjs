@@ -530,6 +530,11 @@ test('the cache is derived state: a reused note never aliases the result, and a 
   for (const link of second.manifest.links) for (const inversion of link.inversions ?? []) inversion.note.start = -1
   const third = prepareView({ snapshot, profile, scope: fullScope, clock, cache })
   assert.deepEqual(comparable(third), comparable(first))
+  // The bytes handed out are copies: writing into them changes no later preparation.
+  const handed = third.files.find((file) => file.kind === 'note')
+  handed.bytes.fill(0x58)
+  const fourth = prepareView({ snapshot, profile, scope: fullScope, clock, cache })
+  assert.deepEqual(comparable(fourth), comparable(first))
   for (const broken of [{}, { notes: [] }, 'cache', 7]) {
     assert.throws(() => prepareView({ snapshot, profile, scope: fullScope, clock, cache: broken }), { code: 'invalid-preparation-cache' })
   }
@@ -592,4 +597,29 @@ test('mutation control: a cache entry whose bytes or manifest entry are wrong un
   const emitted = prepareView({ snapshot, profile, scope: fullScope, clock, cache: neverMatching })
   assertEqualPreparations(emitted, full, 'never matching')
   assert.equal(emitted.preparation.reused, 0)
+})
+
+// Mutation control for the redaction guard over a reused note: the guard
+// judges the assembled result, so a cached entry whose generated region came
+// to name a withheld identity is refused, not served.
+test('the redaction guard judges a reused note: a forged cache entry naming a withheld identity refuses the view', (t) => {
+  const dir = fixtureWorkspace(t)
+  const workspaceId = 'ws-synthetic-0003'
+  const profile = profileFor(workspaceId, fixture.repositories)
+  const withheld = new Set(fixture.withheldByEligibility)
+  const snapshot = snapshotOf({ dir, repositories: fixture.repositories, workspaceId, withheld })
+  const cache = createPreparationCache()
+  const first = prepareView({ snapshot, profile, scope: fullScope, clock, cache })
+  assert.ok(withheld.size > 0)
+  const [withheldId] = withheld
+  const forbidden = identitySuffix(withheldId.split(':')[0], withheldId, 64).slice(0, 16)
+  // Forge: overwrite the first sixteen bytes of a generated region in one cached entry with the forbidden suffix.
+  const entry = [...cache.notes.values()].find((candidate) => candidate.note.regions.generated.some((region) => region.range.end - region.range.start > 16))
+  assert.ok(entry, 'a cached note with a generated region wide enough')
+  const region = entry.note.regions.generated.find((candidate) => candidate.range.end - candidate.range.start > 16)
+  const file = entry.files.find((candidate) => candidate.path === entry.note.path)
+  file.bytes.write(`--${forbidden}`.slice(0, 16), region.range.start, 16, 'utf8')
+  assert.throws(() => prepareView({ snapshot, profile, scope: fullScope, clock, cache }), { code: 'redaction-failure' })
+  // The same inputs without the forged entry prepare as before.
+  assert.deepEqual(comparable(prepareView({ snapshot, profile, scope: fullScope, clock, cache: createPreparationCache() })), comparable(first))
 })

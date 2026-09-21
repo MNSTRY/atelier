@@ -170,11 +170,17 @@ eligibility and scope changes), and shows with mutation controls that the
 oracle sees a wrong cached byte, entry, inversion, node or scan.
 
 Graph stage: `buildKnowledgeGraph` / `buildCanonicalGraph` take `fileCache`
-(`createGraphFileCache`). Every Markdown source is still read and hashed on
-every build; its census node and link scan are reused only under an equal
-sha256 of the bytes and equal per-file inputs outside the bytes (coverage and
-the repository's read boundary), and the cache is rebuilt to hold exactly the
-current census. The result reports `fileCensus: { reused, derived }`.
+(`createGraphFileCache`) and, optionally, `observedDigest`. A census node and
+link scan are reused only under an equal sha256 of the bytes and equal
+per-file inputs outside the bytes (coverage and the repository's read
+boundary), and the cache is rebuilt to hold exactly the current census.
+Without `observedDigest` every Markdown source is read and hashed on every
+build. The maintenance engine passes `observedDigest` from its observation
+index, and a source whose observed digest equals the cached one is then not
+opened: the bound is observation's own, a stat hint between full
+reconciliations, so bytes that change under an unchanged stat hint are not
+seen by the graph, the snapshot or the view until observation hashes the file
+again. The result reports `fileCensus: { reused, derived, read }`.
 
 Preparation stage: `prepareView` takes `cache` (`createPreparationCache`).
 Each note's bytes and manifest entry are a function of its pinned source

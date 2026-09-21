@@ -67,9 +67,12 @@ export function buildGraph({ project, eligibility, cache = null, index = null })
 }
 
 // A source snapshot pinned to the digests observation decided on. prepareView
-// reads every source again and refuses with `mixed-read` when the bytes it
-// gets are not the pinned ones, so a file that changed after observation can
-// never be emitted under a stale digest.
+// reads every source it emits again and refuses with `mixed-read` when the
+// bytes it gets are not the pinned ones, so an emitted note never carries a
+// stale digest. A note reused from the preparation cache is not read again:
+// its pinned digest is unchanged and the cached bytes are the ones that digest
+// describes, so bytes that drift under an unchanged pin are not consulted
+// until observation hashes the file again (the same bound as the graph stage).
 export function captureSnapshot({ project, graph, workspaceId, index, configDigest, capturedAt }) {
   const roots = new Map((project.repos ?? []).filter((repo) => !repo.external).map((repo) => [repo.name, repo.path]))
   const absolute = (repoId, relative) => {
