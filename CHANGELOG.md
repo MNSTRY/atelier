@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add local Discovery and Research Harnesses with versioned inquiry records,
+  portable research handoffs, reproducible basic belief calculations, evidence
+  dependence and withdrawal checks, and reviewable graph proposals. Add separate
+  capability packages and version-bound Skill Steward feedback. Rename the
+  discovery readiness display title while retaining all persisted identifiers.
+
 ## 0.2.0-alpha.7
 
 - Add a guided owner-agent upgrade skill and read-only `upgrade explain`

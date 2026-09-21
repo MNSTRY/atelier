@@ -26,6 +26,10 @@ import { fileURLToPath } from 'node:url'
 // document, not a schema, and is deliberately absent.
 
 export const CONTRACT_CORPUS = [
+  ...['campaign', 'hypothesis', 'request', 'source', 'bundle', 'assessment', 'decision', 'withdrawal', 'feedback', 'legacy-assessment', 'ledger', 'handoff'].map(shape => ({
+    name: `atelier-inquiry-${shape}`, contractFile: 'contracts/atelier-inquiry.v1.schema.json',
+    docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-inquiry-contract/${shape}`, registry: true,
+  })),
   ...['package', 'release', 'adoption', 'state', 'plan', 'event', 'journal', 'notice'].map(shape => ({
     name: `atelier-capability-${shape}`, contractFile: 'contracts/atelier-capability.v1.schema.json',
     docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-capability-contract/${shape}`, registry: false,

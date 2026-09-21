@@ -1,0 +1,680 @@
+{
+  "schema": "atelier-inquiry-ledger@v1",
+  "records": [
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "campaign",
+      "id": "workshop",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "title": "Fictional workshop inquiry",
+        "purpose": "Learn whether a reminder helps return visits.",
+        "scope": "Invented workshop; no real participants or study results.",
+        "owner": "synthetic-operator",
+        "audience": "private",
+        "stoppingRule": "Stop after checking the agreed evidence and naming remaining uncertainty."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "hypothesis",
+      "id": "reminder",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "question": "Does a reminder improve return visits?",
+        "scope": "workshop-visitors",
+        "context": "A fictional workshop over one month.",
+        "alternatives": [
+          "A reminder helps recall.",
+          "Scheduling constraints dominate.",
+          "The apparent change is selection bias."
+        ],
+        "testPlan": "Plan a reversible trial before observing outcomes. Treat these examples as fictional arithmetic."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "request",
+      "id": "research",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "hypothesis": {
+          "id": "reminder",
+          "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+        },
+        "question": "Does a reminder improve return visits?",
+        "context": "A fictional workshop over one month.",
+        "lenses": [
+          {
+            "id": "mechanism",
+            "question": "Which mechanisms could explain a change?",
+            "method": "Compare competing explanations.",
+            "exclusions": "Do not assume a causal effect."
+          },
+          {
+            "id": "counterevidence",
+            "question": "When does a reminder fail?",
+            "method": "Seek conflicting evidence and scope differences.",
+            "exclusions": "Do not count repeated citations as independent evidence."
+          }
+        ],
+        "sourceStandards": [
+          "Preserve complete captures and exact quotes.",
+          "Separate verified statements from interpretation."
+        ],
+        "maxReports": 4,
+        "budget": "Manual capture only; no provider spend.",
+        "allowedEffects": [
+          "read-workspace",
+          "write-workspace"
+        ],
+        "binding": {
+          "package": "mnstry.atelier/research-harness",
+          "releaseDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generation": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "binding": ".agents/skills/atelier-research-harness",
+          "bindingDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "host": "codex-repo-v1",
+          "session": "synthetic-session"
+        }
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "source",
+      "id": "study",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "locator": "invented:study",
+        "audience": "private",
+        "content": "Invented report: a reminder could help visitors return.",
+        "digest": "sha256:25a111ee27a136aa956de98a30914ec8a5e29e4053a46fa7b5a3c7d9078b9b55",
+        "family": "study-family",
+        "scope": "workshop-visitors",
+        "method": "Synthetic demonstration; not an empirical observation."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "source",
+      "id": "summary",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "locator": "invented:summary",
+        "audience": "private",
+        "content": "Invented summary of the same study: a reminder could help visitors return.",
+        "digest": "sha256:7da79e7173ed3127b37c2529f99171b48299b15b00919a323e8d4b574f2edd4e",
+        "family": "study-family",
+        "scope": "workshop-visitors",
+        "method": "Synthetic demonstration; not an empirical observation."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "source",
+      "id": "counterstudy",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "locator": "invented:counterstudy",
+        "audience": "private",
+        "content": "Invented counterevidence: scheduling barriers remain despite reminders.",
+        "digest": "sha256:9d031ab02c93a9d0344299f02581879c1b5c00a1f5642f66d9faf753fb132382",
+        "family": "counter-family",
+        "scope": "workshop-visitors",
+        "method": "Synthetic demonstration; not an empirical observation."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "source",
+      "id": "different-population",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "locator": "invented:different-population",
+        "audience": "private",
+        "content": "Invented finding in a different population.",
+        "digest": "sha256:583affa7afa5dd8a80605c0d956bac0fd36335f0470a0fa5df0c3b6c188e7b7b",
+        "family": "outside-family",
+        "scope": "other-visitors",
+        "method": "Synthetic demonstration; not an empirical observation."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "bundle",
+      "id": "report",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "request": {
+          "id": "research",
+          "digest": "sha256:308ed6d35eebb2f8815204853f4038c164e012523a4e94a33df607c23e5d8ff0"
+        },
+        "attempt": "report",
+        "provider": {
+          "tool": "manual-fixture",
+          "model": "unknown",
+          "runId": "unknown"
+        },
+        "prompt": "Synthetic standalone research prompt; no provider was executed.",
+        "reports": [
+          {
+            "id": "study",
+            "digest": "sha256:d4eee69e5278fb782e008cd56b9dd71e21f7436f222ade2865b518c834eafba9"
+          }
+        ],
+        "assertions": [
+          {
+            "id": "finding",
+            "statement": "Invented report: a reminder could help visitors return.",
+            "source": {
+              "id": "study",
+              "digest": "sha256:d4eee69e5278fb782e008cd56b9dd71e21f7436f222ade2865b518c834eafba9"
+            },
+            "quote": "Invented report: a reminder could help visitors return.",
+            "verification": "verified",
+            "stance": "supports"
+          }
+        ],
+        "synthesis": "Fictional evidence for a worked example.",
+        "conflicts": [
+          "Different mechanisms remain plausible."
+        ],
+        "gaps": [
+          "No real research has been performed."
+        ],
+        "newQuestions": [
+          "Which contextual factors would change this result?"
+        ]
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "bundle",
+      "id": "repeat-report",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "request": {
+          "id": "research",
+          "digest": "sha256:308ed6d35eebb2f8815204853f4038c164e012523a4e94a33df607c23e5d8ff0"
+        },
+        "attempt": "repeat-report",
+        "provider": {
+          "tool": "manual-fixture",
+          "model": "unknown",
+          "runId": "unknown"
+        },
+        "prompt": "Synthetic standalone research prompt; no provider was executed.",
+        "reports": [
+          {
+            "id": "summary",
+            "digest": "sha256:38a42be2334565399584d0f1a89606bda7a55e4265766b01c5808c67dd08ffbb"
+          }
+        ],
+        "assertions": [
+          {
+            "id": "finding",
+            "statement": "Invented summary of the same study: a reminder could help visitors return.",
+            "source": {
+              "id": "summary",
+              "digest": "sha256:38a42be2334565399584d0f1a89606bda7a55e4265766b01c5808c67dd08ffbb"
+            },
+            "quote": "Invented summary of the same study: a reminder could help visitors return.",
+            "verification": "verified",
+            "stance": "supports"
+          }
+        ],
+        "synthesis": "Fictional evidence for a worked example.",
+        "conflicts": [
+          "Different mechanisms remain plausible."
+        ],
+        "gaps": [
+          "No real research has been performed."
+        ],
+        "newQuestions": [
+          "Which contextual factors would change this result?"
+        ]
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "bundle",
+      "id": "counter-report",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "request": {
+          "id": "research",
+          "digest": "sha256:308ed6d35eebb2f8815204853f4038c164e012523a4e94a33df607c23e5d8ff0"
+        },
+        "attempt": "counter-report",
+        "provider": {
+          "tool": "manual-fixture",
+          "model": "unknown",
+          "runId": "unknown"
+        },
+        "prompt": "Synthetic standalone research prompt; no provider was executed.",
+        "reports": [
+          {
+            "id": "counterstudy",
+            "digest": "sha256:7454c4fb555b9ec17039d59811793466c98e48b53402494c0694a43810bce745"
+          }
+        ],
+        "assertions": [
+          {
+            "id": "finding",
+            "statement": "Invented counterevidence: scheduling barriers remain despite reminders.",
+            "source": {
+              "id": "counterstudy",
+              "digest": "sha256:7454c4fb555b9ec17039d59811793466c98e48b53402494c0694a43810bce745"
+            },
+            "quote": "Invented counterevidence: scheduling barriers remain despite reminders.",
+            "verification": "verified",
+            "stance": "contradicts"
+          }
+        ],
+        "synthesis": "Fictional evidence for a worked example.",
+        "conflicts": [
+          "Different mechanisms remain plausible."
+        ],
+        "gaps": [
+          "No real research has been performed."
+        ],
+        "newQuestions": [
+          "Which contextual factors would change this result?"
+        ]
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "bundle",
+      "id": "outside-report",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "request": {
+          "id": "research",
+          "digest": "sha256:308ed6d35eebb2f8815204853f4038c164e012523a4e94a33df607c23e5d8ff0"
+        },
+        "attempt": "outside-report",
+        "provider": {
+          "tool": "manual-fixture",
+          "model": "unknown",
+          "runId": "unknown"
+        },
+        "prompt": "Synthetic standalone research prompt; no provider was executed.",
+        "reports": [
+          {
+            "id": "different-population",
+            "digest": "sha256:9e0846b30b86e5121e49b9d6f8262d890642712030195603c79435e426c714e8"
+          }
+        ],
+        "assertions": [
+          {
+            "id": "finding",
+            "statement": "Invented finding in a different population.",
+            "source": {
+              "id": "different-population",
+              "digest": "sha256:9e0846b30b86e5121e49b9d6f8262d890642712030195603c79435e426c714e8"
+            },
+            "quote": "Invented finding in a different population.",
+            "verification": "verified",
+            "stance": "neutral"
+          }
+        ],
+        "synthesis": "Fictional evidence for a worked example.",
+        "conflicts": [
+          "Different mechanisms remain plausible."
+        ],
+        "gaps": [
+          "No real research has been performed."
+        ],
+        "newQuestions": [
+          "Which contextual factors would change this result?"
+        ]
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "assessment",
+      "id": "first-assessment",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "hypothesis": {
+          "id": "reminder",
+          "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+        },
+        "evidence": [
+          {
+            "bundle": {
+              "id": "report",
+              "digest": "sha256:adec2d78dae1d4ae261fe37c299b256246a79f6336903a6f9a68fab2d60631d3"
+            },
+            "assertion": "finding"
+          }
+        ],
+        "model": {
+          "kind": "elicited-odds",
+          "prior": 0.4,
+          "sensitivityPriors": [
+            0.2,
+            0.6
+          ],
+          "priorFamilies": [],
+          "assumptions": "Invented elicitation values. Independent families assumed conditional on H and not H; repeated family is one contribution.",
+          "likelihoods": [
+            {
+              "key": "report/finding",
+              "ratio": 3
+            }
+          ]
+        },
+        "rationale": "Arithmetic illustration only; neither likelihoods nor prior are empirically calibrated."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "assessment",
+      "id": "duplicate-assessment",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "hypothesis": {
+          "id": "reminder",
+          "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+        },
+        "evidence": [
+          {
+            "bundle": {
+              "id": "report",
+              "digest": "sha256:adec2d78dae1d4ae261fe37c299b256246a79f6336903a6f9a68fab2d60631d3"
+            },
+            "assertion": "finding"
+          },
+          {
+            "bundle": {
+              "id": "repeat-report",
+              "digest": "sha256:003983ff5ad27eeabac008c8ade505e1717278802623de32f08a03e0d78e2d27"
+            },
+            "assertion": "finding"
+          }
+        ],
+        "model": {
+          "kind": "elicited-odds",
+          "prior": 0.4,
+          "sensitivityPriors": [
+            0.2,
+            0.6
+          ],
+          "priorFamilies": [],
+          "assumptions": "Invented elicitation values. Independent families assumed conditional on H and not H; repeated family is one contribution.",
+          "likelihoods": [
+            {
+              "key": "report/finding",
+              "ratio": 3
+            },
+            {
+              "key": "repeat-report/finding",
+              "ratio": 3
+            }
+          ]
+        },
+        "rationale": "Arithmetic illustration only; neither likelihoods nor prior are empirically calibrated."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "assessment",
+      "id": "mixed-assessment",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "hypothesis": {
+          "id": "reminder",
+          "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+        },
+        "evidence": [
+          {
+            "bundle": {
+              "id": "report",
+              "digest": "sha256:adec2d78dae1d4ae261fe37c299b256246a79f6336903a6f9a68fab2d60631d3"
+            },
+            "assertion": "finding"
+          },
+          {
+            "bundle": {
+              "id": "repeat-report",
+              "digest": "sha256:003983ff5ad27eeabac008c8ade505e1717278802623de32f08a03e0d78e2d27"
+            },
+            "assertion": "finding"
+          },
+          {
+            "bundle": {
+              "id": "counter-report",
+              "digest": "sha256:97568506c341fb4729095a662bcd937baf45b52e8d13b9b30e83f7074fd93357"
+            },
+            "assertion": "finding"
+          }
+        ],
+        "model": {
+          "kind": "elicited-odds",
+          "prior": 0.4,
+          "sensitivityPriors": [
+            0.2,
+            0.6
+          ],
+          "priorFamilies": [],
+          "assumptions": "Invented elicitation values. Independent families assumed conditional on H and not H; repeated family is one contribution.",
+          "likelihoods": [
+            {
+              "key": "report/finding",
+              "ratio": 3
+            },
+            {
+              "key": "repeat-report/finding",
+              "ratio": 3
+            },
+            {
+              "key": "counter-report/finding",
+              "ratio": 0.5
+            }
+          ]
+        },
+        "rationale": "Arithmetic illustration only; neither likelihoods nor prior are empirically calibrated."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "assessment",
+      "id": "qualitative",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "hypothesis": {
+          "id": "reminder",
+          "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+        },
+        "evidence": [
+          {
+            "bundle": {
+              "id": "report",
+              "digest": "sha256:adec2d78dae1d4ae261fe37c299b256246a79f6336903a6f9a68fab2d60631d3"
+            },
+            "assertion": "finding"
+          },
+          {
+            "bundle": {
+              "id": "counter-report",
+              "digest": "sha256:97568506c341fb4729095a662bcd937baf45b52e8d13b9b30e83f7074fd93357"
+            },
+            "assertion": "finding"
+          }
+        ],
+        "model": {
+          "kind": "qualitative",
+          "judgment": "Competing explanations remain open."
+        },
+        "rationale": "No numerical confidence is needed for this interpretation."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "legacy-assessment",
+      "id": "old-score",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "hypothesis": {
+          "id": "reminder",
+          "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+        },
+        "value": 0.8,
+        "sourceDigest": "sha256:b48d0f19782c75d9d0c98a781182a008ba843195ee9a518c3355977c8a6e201c",
+        "method": "Historical weighted heuristic",
+        "limitations": "Not a calibrated probability and never used as an automatic prior."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "decision",
+      "id": "decision-before",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "assessment": {
+          "id": "mixed-assessment",
+          "digest": "sha256:aed15ee229d797e349bed60137bd5f47c11956e4817d4d0f5bb67b1dcfc61228"
+        },
+        "disposition": "accepted",
+        "conclusion": "Use this invented case to explain conditional reasoning; it establishes no real-world effect.",
+        "reason": "Synthetic acceptance fixture only.",
+        "reviewBasis": "Simulated owner review for software testing, not actual recipient acceptance.",
+        "nextQuestions": [
+          "Collect appropriate real evidence before any substantive decision."
+        ]
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "feedback",
+      "id": "research-feedback",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "request": {
+          "id": "research",
+          "digest": "sha256:308ed6d35eebb2f8815204853f4038c164e012523a4e94a33df607c23e5d8ff0"
+        },
+        "outcome": "unknown",
+        "cause": "unknown",
+        "evidenceDigest": "sha256:9b263d6852991b461575b3810b34fa2143e651fbf820f7da448509aed5ec4add",
+        "rationale": "No host research quality evaluation was executed."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "withdrawal",
+      "id": "withdraw-study",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "target": {
+          "id": "study",
+          "digest": "sha256:d4eee69e5278fb782e008cd56b9dd71e21f7436f222ade2865b518c834eafba9"
+        },
+        "reason": "Synthetic correction scenario: the underlying positive contribution is withdrawn."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "assessment",
+      "id": "revised-assessment",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "hypothesis": {
+          "id": "reminder",
+          "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+        },
+        "evidence": [
+          {
+            "bundle": {
+              "id": "counter-report",
+              "digest": "sha256:97568506c341fb4729095a662bcd937baf45b52e8d13b9b30e83f7074fd93357"
+            },
+            "assertion": "finding"
+          }
+        ],
+        "model": {
+          "kind": "elicited-odds",
+          "prior": 0.4,
+          "sensitivityPriors": [
+            0.2,
+            0.6
+          ],
+          "priorFamilies": [],
+          "assumptions": "Invented elicitation values. Independent families assumed conditional on H and not H; repeated family is one contribution.",
+          "likelihoods": [
+            {
+              "key": "counter-report/finding",
+              "ratio": 0.5
+            }
+          ]
+        },
+        "rationale": "Arithmetic illustration only; neither likelihoods nor prior are empirically calibrated."
+      }
+    },
+    {
+      "schema": "atelier-inquiry-record@v1",
+      "kind": "decision",
+      "id": "decision-after",
+      "campaign": "workshop",
+      "at": "2026-01-01T00:00:00.000Z",
+      "by": "synthetic-operator",
+      "data": {
+        "assessment": {
+          "id": "revised-assessment",
+          "digest": "sha256:f6a876aba4dc3637c23c7549a6ce60b032304aee59c6006f46adf7698f31aecd"
+        },
+        "disposition": "accepted",
+        "conclusion": "Use this invented case to explain conditional reasoning; it establishes no real-world effect.",
+        "reason": "Synthetic acceptance fixture only.",
+        "reviewBasis": "Simulated owner review for software testing, not actual recipient acceptance.",
+        "nextQuestions": [
+          "Collect appropriate real evidence before any substantive decision."
+        ]
+      }
+    }
+  ],
+  "head": "sha256:6eb3be56031288b94a17b97533b050dbdfe630027f4578f530db803506a3086f",
+  "unexpectedAuthority": true
+}

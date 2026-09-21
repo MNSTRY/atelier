@@ -71,7 +71,9 @@
     "./contracts/atelier-migration.v2.schema.json": "./contracts/atelier-migration.v2.schema.json",
     "./contracts/atelier-upgrade-plan.v2.schema.json": "./contracts/atelier-upgrade-plan.v2.schema.json",
     "./contracts/atelier-upgrade-receipt.v1.schema.json": "./contracts/atelier-upgrade-receipt.v1.schema.json",
-    "./local-state": "./src/project/durable-state.mjs"
+    "./local-state": "./src/project/durable-state.mjs",
+    "./inquiry": "./src/inquiry/index.mjs",
+    "./contracts/atelier-inquiry.v1.schema.json": "./contracts/atelier-inquiry.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

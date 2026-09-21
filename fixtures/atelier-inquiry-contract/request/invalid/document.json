@@ -1,0 +1,50 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "request",
+  "id": "research",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "hypothesis": {
+      "id": "reminder",
+      "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+    },
+    "question": "Does a reminder improve return visits?",
+    "context": "A fictional workshop over one month.",
+    "lenses": [
+      {
+        "id": "mechanism",
+        "question": "Which mechanisms could explain a change?",
+        "method": "Compare competing explanations.",
+        "exclusions": "Do not assume a causal effect."
+      },
+      {
+        "id": "counterevidence",
+        "question": "When does a reminder fail?",
+        "method": "Seek conflicting evidence and scope differences.",
+        "exclusions": "Do not count repeated citations as independent evidence."
+      }
+    ],
+    "sourceStandards": [
+      "Preserve complete captures and exact quotes.",
+      "Separate verified statements from interpretation."
+    ],
+    "maxReports": 4,
+    "budget": "Manual capture only; no provider spend.",
+    "allowedEffects": [
+      "read-workspace",
+      "write-workspace"
+    ],
+    "binding": {
+      "package": "mnstry.atelier/research-harness",
+      "releaseDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "generation": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "binding": ".agents/skills/atelier-research-harness",
+      "bindingDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "host": "codex-repo-v1",
+      "session": "synthetic-session"
+    }
+  },
+  "unexpectedAuthority": true
+}

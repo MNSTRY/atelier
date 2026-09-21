@@ -46,6 +46,14 @@ upgraded; do not invent missing commands.
 Use the existing catalog workflow below for unversioned local observations and
 one-source projections. Its candidates remain review proposals, not acceptance.
 
+Discovery Harness and Research Harness are independently adoptable packages.
+Resolve `atelier inquiry help` before declaring their required tool available.
+Use `inquiry feedback` to prepare a content-free event from a request's exact
+release, binding, generation and session. `capability observe` rechecks the actual
+installed binding before recording it. Private campaign content stays in its
+own ledger. Neither an unknown outcome nor repeated complaints establish skill
+quality; propose a representative evaluation before revising a package.
+
 ## Route the work
 
 - Audit the current catalog with `atelier skills audit --json`.

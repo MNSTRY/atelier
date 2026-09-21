@@ -1,0 +1,18 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "source",
+  "id": "different-population",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "locator": "invented:different-population",
+    "audience": "private",
+    "content": "Invented finding in a different population.",
+    "digest": "sha256:583affa7afa5dd8a80605c0d956bac0fd36335f0470a0fa5df0c3b6c188e7b7b",
+    "family": "outside-family",
+    "scope": "other-visitors",
+    "method": "Synthetic demonstration; not an empirical observation."
+  },
+  "unexpectedAuthority": true
+}
