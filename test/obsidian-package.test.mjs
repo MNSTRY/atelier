@@ -43,7 +43,8 @@ function packOnce() {
   const consumer = path.join(root, 'consumer')
   const installed = path.join(consumer, 'node_modules', '@mnstry', 'atelier')
   fs.mkdirSync(installed, { recursive: true })
-  execFileSync('tar', ['-xzf', path.join(root, pack.filename), '-C', installed, '--strip-components=1'], { stdio: ['ignore', 'pipe', 'pipe'] })
+  // Relative operands: a tar that reads `C:` as a remote host still extracts.
+  execFileSync('tar', ['-xzf', pack.filename, '-C', 'consumer/node_modules/@mnstry/atelier', '--strip-components=1'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] })
   fs.writeFileSync(path.join(consumer, 'package.json'), `${JSON.stringify({ name: 'atelier-obsidian-consumer', private: true, type: 'module' }, null, 2)}\n`)
   // The non-dev dependency closure, by name, from the lockfile. The consumer
   // resolves each through a link to this checkout's installed copy.
