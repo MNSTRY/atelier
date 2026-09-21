@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { buildCanonicalGraph } from '../../graph/graph.mjs'
-import { EMITTER_VERSION, prepareView, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
+import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
+import { EMITTER_VERSION, createPreparationCache, prepareView, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
 import { createRecoveryStore, readFileBytes } from '../../projection/obsidian/recovery/store.mjs'
@@ -55,16 +55,24 @@ export function profileFor({ project, workspaceId, audienceAllow }) {
   return { schema: 'atelier-obsidian-corpus-profile/v1', workspaceId, repositories, audience: { allow: [...audienceAllow] } }
 }
 
-export function buildGraph({ project, eligibility }) {
-  const canonical = buildCanonicalGraph(project)
+// `cache` (createGraphFileCache) is the engine's per-file census cache; without it every source is parsed again.
+// `index` is the engine's observation index. With both, a source whose observed digest is the cached one is not
+// opened: observation already decided by digest that it did not change, under the stat-hint bound observation
+// documents, and a full reconciliation hashes it again. Without an index every source is read and hashed here.
+export function buildGraph({ project, eligibility, cache = null, index = null }) {
+  const observedDigest = cache && index ? (repoId, relative) => index.get(sourceKey(repoId, relative))?.digest ?? null : null
+  const canonical = buildCanonicalGraph(project, { fileCache: cache, observedDigest })
   if (!canonical.ok) refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
   return withEligibility(canonical, eligibility.isEligible, assetEligibilityFor({ graph: canonical, eligibility }))
 }
 
 // A source snapshot pinned to the digests observation decided on. prepareView
-// reads every source again and refuses with `mixed-read` when the bytes it
-// gets are not the pinned ones, so a file that changed after observation can
-// never be emitted under a stale digest.
+// reads every source it emits again and refuses with `mixed-read` when the
+// bytes it gets are not the pinned ones, so an emitted note never carries a
+// stale digest. A note reused from the preparation cache is not read again:
+// its pinned digest is unchanged and the cached bytes are the ones that digest
+// describes, so bytes that drift under an unchanged pin are not consulted
+// until observation hashes the file again (the same bound as the graph stage).
 export function captureSnapshot({ project, graph, workspaceId, index, configDigest, capturedAt }) {
   const roots = new Map((project.repos ?? []).filter((repo) => !repo.external).map((repo) => [repo.name, repo.path]))
   const absolute = (repoId, relative) => {
@@ -104,6 +112,11 @@ export function captureSnapshot({ project, graph, workspaceId, index, configDige
   }
 }
 
+// The engine keeps one graph file cache and one preparation cache per scope
+// for as long as it runs, and hands them to buildGraph and prepareView on
+// every tick, so a tick after a one-note change parses that source and emits
+// that note and reuses the rest. Both caches are derived, in-memory state: a
+// test may replace either seam with `() => null` to build or prepare in full.
 export function createProductionSeams() {
-  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles }
+  return { buildGraph, captureSnapshot, profileFor, prepareView, publishView, createRecoveryStore, recheckDisplacedFiles, createGraphCache: createGraphFileCache, createPreparationCache }
 }

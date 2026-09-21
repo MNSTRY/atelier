@@ -191,8 +191,23 @@ function formatAjvError(error) {
   return `${location} ${error.message ?? 'failed schema validation'}`
 }
 
+// One compiled validator per schema object, for as long as the schema lives:
+// compilation is a pure function of the schema, and a registered contract is
+// validated many times per run (a large manifest, every journal entry).
+const compiledValidators = new WeakMap()
+
+function validatorFor(schema) {
+  if (schema === null || typeof schema !== 'object') return ajvForSchema().compile(schema)
+  let validate = compiledValidators.get(schema)
+  if (!validate) {
+    validate = ajvForSchema().compile(schema)
+    compiledValidators.set(schema, validate)
+  }
+  return validate
+}
+
 export function validateJsonSchema(schema, doc) {
-  const validate = ajvForSchema().compile(schema)
+  const validate = validatorFor(schema)
   if (validate(doc)) return []
   return asArray(validate.errors).map(formatAjvError)
 }

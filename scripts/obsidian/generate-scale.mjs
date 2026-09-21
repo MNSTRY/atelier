@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { OutputRefusal, assertExternalOutput, hardwareProfile, isoNow, parseArgs, sha256Digest, sha256Hex, writeJson } from './lib/common.mjs'
-import { FULL_SCOPE, deriveWorkspace, writeWorkspaceConfig } from './lib/derive.mjs'
+import { FULL_SCOPE, createEngineSeams, deriveWorkspace, loadProject, writeWorkspaceConfig } from './lib/derive.mjs'
 import { PROPOSED_TARGETS, createResourceSampler, warmChangeSummary } from './lib/measure.mjs'
 
 export const GENERATOR_VERSION = '1.0.0'
@@ -159,14 +159,21 @@ export function generateScaleDataset({ outDir, profile = 'standard', nodes, edge
 }
 
 // Cold derivation and warm single-note changes, no application. Appends the
-// measurements to the dataset manifest.
+// measurements to the dataset manifest. The warm changes go through the
+// engine's seams (createEngineSeams): sources observed by stat hint after the
+// cold pass hashed them all, the graph and preparation caches carried from one
+// change to the next. That is the path a running maintenance service takes
+// for one edited source; a derivation from bare production seams is the cold
+// path and is what `cold` records.
 export async function measureDerivation({ manifestPath, warm = 0, adapter, sampleIntervalMs = 500, clock = () => new Date() } = {}) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
   const root = path.dirname(manifestPath)
   const stateRoot = path.join(root, 'derived', 'state')
   const vaultRoot = path.join(root, 'derived', 'vault')
+  const engine = createEngineSeams()
   const sampler = createResourceSampler({ intervalMs: sampleIntervalMs }).start()
-  const cold = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot, vaultRoot, adapter, clock, sampler })
+  engine.observe(loadProject(manifest.projectFile), { full: true })
+  const cold = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot, vaultRoot, adapter, clock, sampler, seams: engine.seams })
   const coldSamples = sampler.stop()
   const coldSummary = sampler.summary()
   const warmSamples = []
@@ -177,17 +184,27 @@ export async function measureDerivation({ manifestPath, warm = 0, adapter, sampl
     const notes = listNotes(path.join(manifest.workspaceDir, repoId))
     const source = notes[Math.floor(random() * notes.length)]
     const editedAt = clock().toISOString()
+    const marker = `Warm change ${change + 1} at ${editedAt}.`
     const started = performance.now()
-    fs.appendFileSync(source, `\nWarm change ${change + 1} at ${editedAt}.\n`)
-    const result = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot, vaultRoot, adapter, clock })
-    const replaced = result.files.filter((file) => file.kind === 'note').find((file) => fs.existsSync(path.join(vaultRoot, file.path)) && sha256Digest(fs.readFileSync(path.join(vaultRoot, file.path))) === file.digest && fs.readFileSync(path.join(vaultRoot, file.path), 'utf8').includes(`Warm change ${change + 1} at ${editedAt}.`))
+    fs.appendFileSync(source, `\n${marker}\n`)
+    // The service observes the sources before it builds: by stat hint, the cold pass having hashed every file.
+    const observeStarted = performance.now()
+    const observed = engine.observe(loadProject(manifest.projectFile), { full: false })
+    const observeMs = Math.round((performance.now() - observeStarted) * 1000) / 1000
+    const result = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot, vaultRoot, adapter, clock, seams: engine.seams })
+    // The edited source's note, by the identity the generator gave it, read once: the sample ends when its bytes carry the marker.
+    const nodeId = `${repoId}:${path.basename(source, '.md')}`
+    const note = result.manifest.notes.find((entry) => entry.nodeId === nodeId)
+    const notePath = note ? path.join(vaultRoot, note.path) : null
+    const replaced = notePath && fs.existsSync(notePath) && fs.readFileSync(notePath, 'utf8').includes(marker) ? note : null
     const sourceToFileMs = replaced ? Math.round(performance.now() - started) : null
-    warmSamples.push({ change: change + 1, source: path.relative(manifest.workspaceDir, source), editedAt, sourceToFileMs, sourceToAppMs: null, state: result.state, timings: result.timings, fileFound: Boolean(replaced) })
+    warmSamples.push({ change: change + 1, source: path.relative(manifest.workspaceDir, source), editedAt, sourceToFileMs, sourceToAppMs: null, state: result.state, timings: { observeMs, ...result.timings }, observed: { changes: observed.changes.length, hashed: observed.hashed }, fileFound: Boolean(replaced) })
   }
   manifest.derivation = {
     measuredAt: clock().toISOString(),
     hardware: hardwareProfile(),
     mode: cold.mode,
+    warmPath: 'engine seams: graph file cache, preparation cache and an observation index reconciled by stat hint after a full cold pass',
     adapter: adapter ? 'caller-supplied' : 'absent (direct publication into a vault no application has open)',
     quietPeriodMs: cold.quietPeriodMs,
     cold: { timings: cold.timings, graph: cold.graph, generationId: cold.generationId, written: cold.written, notes: cold.manifest.notes.length, links: cold.manifest.links.length, resources: coldSummary, samples: coldSamples },

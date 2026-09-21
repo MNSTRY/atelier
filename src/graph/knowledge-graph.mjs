@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { VALID_AUDIENCES } from '../projection/policy.mjs'
@@ -586,7 +587,9 @@ export function generatedFrontmatter({ id, repoName, rel, title, summary, domain
   ].join('\n')
 }
 
-export function nodeForFile(repoName, repoRoot, coverage, file, repoAccessConfig) {
+// `sourceText`, when given, is the Markdown source already read as UTF-8 text,
+// so a caller that holds the bytes does not read the file again.
+export function nodeForFile(repoName, repoRoot, coverage, file, repoAccessConfig, sourceText = null) {
   const inferredLifecycle = inferLifecycle(file.rel)
   const inferredDomain = inferDomain(repoName, file.rel)
   const inferredStatus = inferStatus(inferredLifecycle, file.rel)
@@ -601,7 +604,7 @@ export function nodeForFile(repoName, repoRoot, coverage, file, repoAccessConfig
   let atelier = { section: coverage.sections.get(file.rel) || null, status: null, kind: null }
 
   if (file.ext === '.md') {
-    const raw = fs.readFileSync(file.abs, 'utf8')
+    const raw = typeof sourceText === 'string' ? sourceText : fs.readFileSync(file.abs, 'utf8')
     const frontmatter = markdownFrontmatterState(raw)
     metadata = frontmatter.metadata
     if (frontmatter.kind !== 'valid' || !isPlainObject(metadata.kg)) {
@@ -917,7 +920,20 @@ function isRegularFileInside(root, rel) {
 // identically and never inspected, so a finding cannot confirm that a withheld
 // target exists. `isAssetEligible({ repo, path })` gives embedded assets the
 // same rule: a refused asset reads exactly as an absent one.
-export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () => true, isAssetEligible = () => true } = {}) {
+// The link scan of one Markdown source: its occurrences, with byte offsets
+// when the bytes round-trip as UTF-8. A pure function of the bytes, which is
+// what lets a builder keep it under the source's content digest.
+export function scanMarkdownSource(buffer) {
+  const text = buffer.toString('utf8')
+  const occurrences = scanMarkdownLinks(text)
+  const utf8Exact = Buffer.from(text, 'utf8').equals(buffer)
+  if (utf8Exact) addByteOffsets(text, occurrences)
+  return { occurrences, utf8Exact }
+}
+
+// `scanned` maps a census node to the scan of its source (scanMarkdownSource)
+// when the caller already holds it; any other Markdown node is read here.
+export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () => true, isAssetEligible = () => true, scanned = null } = {}) {
   const links = []
   const embeds = []
   const diagnostics = []
@@ -994,9 +1010,7 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
   for (const repo of enrolled) {
     for (const [rel, node] of repo.nodesByPath) {
       if (!rel.endsWith('.md') || !isLinkTargetEligible(node)) continue
-      const buffer = fs.readFileSync(path.join(repo.root, rel))
-      const text = buffer.toString('utf8')
-      const occurrences = scanMarkdownLinks(text)
+      const { occurrences, utf8Exact } = scanned?.get(node) ?? scanMarkdownSource(fs.readFileSync(path.join(repo.root, rel)))
       const finding = (code, occurrence, detail, extra = {}) =>
         diagnostics.push({
           severity: 'warning',
@@ -1012,8 +1026,7 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
           message: `${repo.name}/${rel}: ${detail}`,
         })
 
-      if (Buffer.from(text, 'utf8').equals(buffer)) addByteOffsets(text, occurrences)
-      else if (occurrences.length) finding('link-source-not-utf8', null, 'source is not valid UTF-8; link byte offsets are withheld')
+      if (!utf8Exact && occurrences.length) finding('link-source-not-utf8', null, 'source is not valid UTF-8; link byte offsets are withheld')
 
       for (const occurrence of occurrences) {
         const shown = JSON.stringify(portableText(occurrence.href))
@@ -1278,6 +1291,57 @@ export function validateKnowledgeGraph(nodes, edges, orphanSidecars = [], { exte
   return errors
 }
 
+// A per-file cache for repeated builds of one workspace: the census node and
+// the link scan of every Markdown source, kept under the sha256 of the bytes
+// they were derived from together with the per-file inputs that are not in
+// the bytes (coverage and the repository's read boundary). Both derivations
+// are pure functions of those inputs, so an entry is reused only when a build
+// with no cache would compute the same values; a file whose bytes or inputs
+// differ is parsed again, and a file no longer in the census leaves the cache.
+// Without `observedDigest` every source is read and hashed on every build: the
+// cache never trusts a digest it did not compute from the bytes. A caller that
+// already observes the sources by digest (the maintenance engine's index: stat
+// hint between full reconciliations, every file hashed on a full one) may pass
+// `observedDigest(repoName, rel)`, returning `sha256:<hex>` or null. An entry
+// whose digest equals the observed one is then reused without opening the
+// file; the tradeoff is exactly the observer's: bytes that change under an
+// unchanged stat hint are not seen until the observer hashes the file again,
+// and until then no view is rebuilt for them either. Any other file is read
+// and hashed here as always. Derived, droppable state.
+export function createGraphFileCache() {
+  return { files: new Map() }
+}
+
+function isGraphFileCache(cache) {
+  return cache !== null && typeof cache === 'object' && cache.files instanceof Map
+}
+
+const sha256Hex = (bytes) => createHash('sha256').update(bytes).digest('hex')
+
+// The Markdown census entry for one file, from the cache under an equal digest
+// and equal inputs, or freshly derived. The returned node and scan are clones
+// so a caller's changes never reach the cache.
+function markdownCensus({ repoName, repoRoot, coverage, file, accessConfig, cache, next, observedDigest }) {
+  const inputs = JSON.stringify([coverage.surfaced.has(file.rel), coverage.sections.get(file.rel) || null, repoReadBoundary(accessConfig, repoName)])
+  const key = `${repoName}\u0000${file.rel}`
+  const cached = cache?.files.get(key)
+  const observed = cached && observedDigest ? observedDigest(repoName, file.rel) : null
+  let entry
+  let read = false
+  if (cached && cached.inputs === inputs && typeof observed === 'string' && observed === `sha256:${cached.digest}`) {
+    entry = cached
+  } else {
+    read = true
+    const buffer = fs.readFileSync(file.abs)
+    const digest = sha256Hex(buffer)
+    entry = cached && cached.digest === digest && cached.inputs === inputs
+      ? cached
+      : { digest, inputs, node: nodeForFile(repoName, repoRoot, coverage, file, accessConfig, buffer.toString('utf8')), scan: scanMarkdownSource(buffer) }
+  }
+  next?.set(key, entry)
+  return { node: structuredClone(entry.node), scan: structuredClone(entry.scan), reused: entry === cached, read }
+}
+
 export function buildKnowledgeGraph({
   workspaceRoot,
   repoAccessConfig,
@@ -1289,8 +1353,12 @@ export function buildKnowledgeGraph({
   externalRelationIds = [],
   isLinkTargetEligible = undefined,
   isAssetEligible = undefined,
+  fileCache = null,
+  observedDigest = null,
 } = {}) {
   if (!workspaceRoot) throw new Error('workspaceRoot is required')
+  if (fileCache !== null && !isGraphFileCache(fileCache)) throw new Error('fileCache must come from createGraphFileCache')
+  if (observedDigest !== null && typeof observedDigest !== 'function') throw new Error('observedDigest must be a function')
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
   const external = new Set(externalRepos)
   const discoveredEntries = repoEntries
@@ -1323,6 +1391,9 @@ export function buildKnowledgeGraph({
   const workspaceIgnoredSidecars = []
   const repoGraphs = []
   const census = []
+  const scanned = new Map()
+  const nextCache = fileCache ? new Map() : null
+  const reuse = { reused: 0, derived: 0, read: 0 }
 
   for (const entry of roots) {
     const repoRoot = entry.path
@@ -1337,16 +1408,28 @@ export function buildKnowledgeGraph({
     const nodesByPath = new Map()
 
     for (const file of files) {
-      const node = nodeForFile(repoName, repoRoot, coverage, file, accessConfig)
+      let node
+      if (file.ext === '.md') {
+        // One read per Markdown source: the census entry and the link scan come from the same bytes.
+        const entry = markdownCensus({ repoName, repoRoot, coverage, file, accessConfig, cache: fileCache, next: nextCache, observedDigest })
+        node = entry.node
+        scanned.set(node, entry.scan)
+        reuse[entry.reused ? 'reused' : 'derived'] += 1
+        if (entry.read) reuse.read += 1
+      } else {
+        node = nodeForFile(repoName, repoRoot, coverage, file, accessConfig)
+      }
       nodes.push(node)
       nodesByPath.set(file.rel, node)
     }
 
     census.push({ name: repoName, root: repoRoot, nodes, nodesByPath, isIgnored })
   }
+  // The cache holds exactly the Markdown sources of this census, each under the digest this build read.
+  if (nextCache) fileCache.files = nextCache
 
   // Links resolve once, against every enrolled repository together.
-  const resolved = resolveWorkspaceLinks({ repos: census, ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}), ...(isAssetEligible ? { isAssetEligible } : {}) })
+  const resolved = resolveWorkspaceLinks({ repos: census, scanned, ...(isLinkTargetEligible ? { isLinkTargetEligible } : {}), ...(isAssetEligible ? { isAssetEligible } : {}) })
 
   for (const { name: repoName, root: repoRoot, nodes } of census) {
     const localLinks = resolved.links.filter((link) => link.sourceRepo === repoName && repoLocalLink(link))
@@ -1391,6 +1474,8 @@ export function buildKnowledgeGraph({
     resolvedLinks: resolved.links,
     resolvedEmbeds: resolved.embeds,
     linkDiagnostics: resolved.diagnostics,
+    // How many Markdown census entries this build derived, how many it reused from the file cache, and how many sources it opened.
+    fileCensus: reuse,
   }
 }
 

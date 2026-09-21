@@ -16,6 +16,17 @@ import { isUserOwnedSettingsPath, prepareSettings } from './settings.mjs'
 // Redaction happens where bytes are made. Every title, path and identity that
 // reaches an output is looked up through `vault`, the set selectScope returned
 // for this view, so a node outside it cannot be serialized by any branch.
+//
+// Preparation is incremental when the caller passes a preparation cache (see
+// createPreparationCache). Every note's bytes and manifest entry are a pure
+// function of a small set of inputs: the pinned source digest, the node
+// record, the allocated path, the generated rows, the outside-selection count
+// and the rewritten occurrences with their emitted targets. Those inputs are
+// serialized into a dependency key per note; a note whose key matches the
+// cached one reuses the cached bytes and manifest entry instead of being
+// emitted again, so the result is byte-identical to a full preparation by
+// construction. The cache holds derived state only and can be dropped at any
+// time; the redaction guard still runs over the whole result.
 
 export const EMITTER_VERSION = '1.0.0'
 const EXT_KEY = 'mnstry.atelier.obsidian'
@@ -67,9 +78,13 @@ function sourceReader(snapshot) {
   for (const repo of snapshot.document.repositories) {
     for (const file of repo.files) expected.set(`${repo.repoId}\u0000${file.path}`, file)
   }
-  return (repoId, relativePath) => {
+  const pinnedFor = (repoId, relativePath) => {
     const pinned = expected.get(`${repoId}\u0000${relativePath}`)
     if (!pinned) refuse('source-not-in-snapshot', 'a selected source is not pinned by the source snapshot')
+    return pinned
+  }
+  const read = (repoId, relativePath) => {
+    const pinned = pinnedFor(repoId, relativePath)
     const bytes = snapshot.readSource(repoId, relativePath)
     if (!Buffer.isBuffer(bytes)) refuse('invalid-source', 'readSource must return a Buffer')
     if (bytes.length !== pinned.byteLength || sha256Digest(bytes) !== pinned.rawDigest) {
@@ -77,6 +92,47 @@ function sourceReader(snapshot) {
     }
     return { bytes, rawDigest: pinned.rawDigest }
   }
+  read.pinned = pinnedFor
+  return read
+}
+
+// ---------------------------------------------------------------------------
+// Preparation cache
+// ---------------------------------------------------------------------------
+
+// Derived, droppable state for incremental preparation: one entry per note
+// path holding the dependency key the note was emitted under and everything
+// the note contributed to the result. It is private to the process that made
+// it and is never written anywhere.
+export function createPreparationCache() {
+  return { notes: new Map() }
+}
+
+function isPreparationCache(cache) {
+  return cache !== null && typeof cache === 'object' && cache.notes instanceof Map
+}
+
+// Everything the emitted bytes and the manifest entry of one note depend on,
+// in a canonical serialization. A cached note is reused only under an equal
+// key. The emitter version is part of the key so an entry states which emitter
+// produced it, should a cache ever outlive this module.
+function dependencyKey({ node, notePathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) {
+  // A wrapper note serializes the record's summary and tags; a Markdown note never does.
+  const wrapper = node.extension === 'md' ? null : JSON.stringify([String(node.summary ?? ''), Array.isArray(node.tags) ? node.tags : null])
+  const parts = [
+    EMITTER_VERSION, notePathValue, node.repo, node.id, node.path, String(node.extension), String(node.title ?? ''), String(wrapper),
+    pinned.rawDigest, String(pinned.byteLength), String(outsideCount), rows.join(''),
+  ]
+  for (const occurrence of occurrences) {
+    const target = emittedTarget(occurrence)
+    parts.push(JSON.stringify([
+      occurrence.type ?? null, occurrence.syntax ?? null, occurrence.embed === true, occurrence.href ?? null, occurrence.target ?? null,
+      occurrence.range?.byteStart ?? null, occurrence.range?.byteEnd ?? null, occurrence.targetRange?.byteStart ?? null, occurrence.targetRange?.byteEnd ?? null,
+      target.key, target.markdown, target.wikilink, target.alias,
+    ]))
+  }
+  // JSON escapes every control character, so no field can shift into its neighbour.
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 }
 
 // ---------------------------------------------------------------------------
@@ -164,21 +220,34 @@ function separatorAfter(bytes) {
   return bytes[bytes.length - 1] === 0x0a ? '\n' : '\n\n'
 }
 
-function relationRows({ node, outgoing, incoming, vaultNode, pathOf }) {
+// `titles` memoizes the two renderings of a title per node for one
+// preparation: a node's title is rendered once however many rows name it.
+function titleRenderings() {
+  const readable = new Map()
+  const plain = new Map()
+  return {
+    readableOf: (target) => { if (!readable.has(target.id)) readable.set(target.id, readableTitle(target.title)); return readable.get(target.id) },
+    plainOf: (origin) => { if (!plain.has(origin.id)) plain.set(origin.id, plainText(origin.title)); return plain.get(origin.id) },
+  }
+}
+
+function relationRows({ node, outgoing, incoming, vaultNode, pathOf, titles }) {
   const rows = []
   for (const type of RELATION_TYPES) {
-    for (const edge of outgoing.filter((item) => item.type === type)) {
+    for (const edge of outgoing) {
+      if (edge.type !== type) continue
       const target = vaultNode(edge.target)
       if (!target) continue
-      rows.push(`- ${type} → [[${noteBasename(pathOf(target))}|${readableTitle(target.title)}]]\n`)
+      rows.push(`- ${type} → [[${noteBasename(pathOf(target))}|${titles.readableOf(target)}]]\n`)
     }
     // An incoming row is plain text: a link here would give this note an
     // outgoing native link that the canonical graph does not hold.
     if (type === DERIVED_RELATION_TYPE) continue
-    for (const edge of incoming.filter((item) => item.type === type)) {
+    for (const edge of incoming) {
+      if (edge.type !== type) continue
       const origin = vaultNode(edge.source)
       if (!origin || origin.id === node.id) continue
-      rows.push(`- ${type} ← ${plainText(origin.title)}\n`)
+      rows.push(`- ${type} ← ${titles.plainOf(origin)}\n`)
     }
   }
   return rows
@@ -244,6 +313,81 @@ function assertContained(relativePath) {
   if (relativePath.startsWith('/') || relativePath.includes('\\') || relativePath.includes('\u0000') || parts.some((part) => part === '' || part === '.' || part === '..')) {
     refuse('path-escapes-vault', 'a prepared path would leave the vault root')
   }
+}
+
+// One note, from its inputs alone: the prepared files (the note and, for a
+// wrapper, its attachment), the manifest entry, the attachment record, the
+// inversions it contributes per rewritten edge, and whether it closed a fence.
+// Nothing outside the arguments is read, which is what lets the result be
+// cached under the dependency key.
+function emitNote({ node, notePathValue, source: { bytes: source, rawDigest }, rows, outsideCount, occurrences, emittedTarget, key }) {
+  const sourceRecord = { path: node.path, rawDigest, byteLength: source.length }
+  const assetInversions = new Map()
+  const edgeInversions = new Map()
+  const files = []
+  let attachment = null
+  let authored
+  let regions
+  let closure = null
+
+  if (node.extension === 'md') {
+    const lens = readMarkdownLens(source, { repoId: node.repo, nodeId: node.id })
+    const edits = linkEdits({ source, lens, occurrences, emittedTarget })
+    const prefix = source.subarray(0, lens.body.start)
+    const body = applyEdits({ source, from: lens.body.start, to: lens.body.end, edits, noteOffset: prefix.length })
+    authored = Buffer.concat([prefix, body.bytes])
+    for (const { edgeKey, assetKey, ...inversion } of body.inversions) {
+      if (assetKey !== undefined) {
+        if (!assetInversions.has(assetKey)) assetInversions.set(assetKey, [])
+        assetInversions.get(assetKey).push(inversion)
+        continue
+      }
+      if (!edgeInversions.has(edgeKey)) edgeInversions.set(edgeKey, [])
+      edgeInversions.get(edgeKey).push(inversion)
+    }
+    regions = {
+      ...(lens.frontmatter ? { frontmatter: lens.frontmatter } : {}),
+      body: { start: lens.body.start, end: authored.length },
+    }
+    closure = fenceClosureFor(source, lens.finalNewline)
+    Object.assign(sourceRecord, { kind: 'markdown', finalNewline: lens.finalNewline, ...(lens.bom ? { bom: lens.bom } : {}) })
+  } else {
+    const extension = /^[a-z0-9]{1,16}$/.test(String(node.extension).toLowerCase()) ? String(node.extension).toLowerCase() : 'bin'
+    const attachmentPath = `attachments/${noteBasename(notePathValue)}.${extension}`
+    assertContained(attachmentPath)
+    attachment = { path: attachmentPath, digest: rawDigest, byteLength: source.length }
+    files.push({ path: attachmentPath, kind: 'attachment', bytes: source, digest: rawDigest })
+    authored = wrapperRepresentation({ node, attachmentPath })
+    regions = { body: { start: authored.length, end: authored.length }, representation: { start: 0, end: authored.length } }
+    Object.assign(sourceRecord, { kind: 'wrapper', attachment: attachmentPath })
+  }
+
+  const generated = generatedSections({ precedingBytes: authored, offset: authored.length, rows, outsideCount, closure })
+  const bytes = Buffer.concat([authored, generated.bytes])
+  assertStrictUtf8(bytes)
+  assertContained(notePathValue)
+  const { representation, ...authoredRegions } = regions
+  files.push({ path: notePathValue, kind: 'note', bytes, digest: sha256Digest(bytes) })
+  const note = {
+    repoId: node.repo,
+    nodeId: node.id,
+    path: notePathValue,
+    title: String(node.title || 'Untitled').slice(0, 512),
+    noteDigest: sha256Digest(bytes),
+    regions: {
+      ...authoredRegions,
+      generated: [...(representation ? [{ kind: 'representation', range: representation }] : []), ...generated.regions],
+    },
+    ext: {
+      [EXT_KEY]: {
+        source: sourceRecord,
+        ...(assetInversions.size > 0
+          ? { assetEmbeds: [...assetInversions].map(([attachment, inversions]) => ({ attachment, inversions })).sort((left, right) => compare(left.attachment, right.attachment)) }
+          : {}),
+      },
+    },
+  }
+  return { key, files, attachment, note, edgeInversions: [...edgeInversions], fenceClosed: Boolean(closure && generated.regions.length > 0) }
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +461,8 @@ function seededRegistry({ registry, priorManifest, workspaceId }) {
   return { ...base, entries: [...base.entries, ...recovered] }
 }
 
-export function prepareView({ snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes } = {}) {
+export function prepareView({ snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null } = {}) {
+  if (cache !== null && !isPreparationCache(cache)) refuse('invalid-preparation-cache', 'the preparation cache must come from createPreparationCache')
   assertObsidianContract('corpus-profile', profile)
   assertObsidianContract('scope', scope)
   if (!snapshot || typeof snapshot.readSource !== 'function') refuse('invalid-snapshot', 'snapshot needs a source snapshot document, a canonical graph and readSource')
@@ -385,84 +530,61 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
 
   const read = sourceReader(snapshot)
   const orderedNodes = [...vault].map((id) => nodeById.get(id)).sort((left, right) => compare(left.repo, right.repo) || compare(left.id, right.id))
+  // Edges indexed by endpoint once, so a note's rows cost its degree and not
+  // the size of the view.
+  const outgoingBy = new Map()
+  const incomingBy = new Map()
+  const outsideCountBy = new Map()
+  for (const edge of vaultEdges) {
+    if (!outgoingBy.has(edge.source)) outgoingBy.set(edge.source, [])
+    outgoingBy.get(edge.source).push(edge)
+    if (!incomingBy.has(edge.target)) incomingBy.set(edge.target, [])
+    incomingBy.get(edge.target).push(edge)
+  }
+  for (const edge of outsideEdges) {
+    // An outside edge has exactly one endpoint in the vault; the other endpoint's count is never read.
+    outsideCountBy.set(edge.source, (outsideCountBy.get(edge.source) ?? 0) + 1)
+    outsideCountBy.set(edge.target, (outsideCountBy.get(edge.target) ?? 0) + 1)
+  }
   const files = []
   const notes = []
   const attachments = []
   const inversionsByEdge = new Map()
   let fenceClosed = false
+  const reusable = isPreparationCache(cache) ? cache.notes : null
+  const nextCache = reusable ? new Map() : null
+  const preparation = { emitted: 0, reused: 0 }
+  const titles = titleRenderings()
 
   for (const node of orderedNodes) {
     const notePathValue = pathOf(node)
-    const { bytes: source, rawDigest } = read(node.repo, node.path)
-    const outgoing = vaultEdges.filter((edge) => edge.source === node.id).sort((left, right) => compare(left.target, right.target))
-    const incoming = vaultEdges.filter((edge) => edge.target === node.id).sort((left, right) => compare(left.source, right.source))
-    const rows = relationRows({ node, outgoing, incoming, vaultNode, pathOf })
-    const outsideCount = outsideEdges.filter((edge) => edge.source === node.id || edge.target === node.id).length
-    const sourceRecord = { path: node.path, rawDigest, byteLength: source.length }
-    const assetInversions = new Map()
-    let authored
-    let regions
-    let closure = null
-
-    if (node.extension === 'md') {
-      const lens = readMarkdownLens(source, { repoId: node.repo, nodeId: node.id })
-      const edits = linkEdits({ source, lens, occurrences: occurrencesBySource.get(node.id) ?? [], emittedTarget })
-      const prefix = source.subarray(0, lens.body.start)
-      const body = applyEdits({ source, from: lens.body.start, to: lens.body.end, edits, noteOffset: prefix.length })
-      authored = Buffer.concat([prefix, body.bytes])
-      for (const { edgeKey, assetKey, ...inversion } of body.inversions) {
-        if (assetKey !== undefined) {
-          if (!assetInversions.has(assetKey)) assetInversions.set(assetKey, [])
-          assetInversions.get(assetKey).push(inversion)
-          continue
-        }
-        const key = `${node.id}\u0000${edgeKey}`
-        if (!inversionsByEdge.has(key)) inversionsByEdge.set(key, [])
-        inversionsByEdge.get(key).push(inversion)
-      }
-      regions = {
-        ...(lens.frontmatter ? { frontmatter: lens.frontmatter } : {}),
-        body: { start: lens.body.start, end: authored.length },
-      }
-      closure = fenceClosureFor(source, lens.finalNewline)
-      Object.assign(sourceRecord, { kind: 'markdown', finalNewline: lens.finalNewline, ...(lens.bom ? { bom: lens.bom } : {}) })
+    const pinned = read.pinned(node.repo, node.path)
+    const outgoing = (outgoingBy.get(node.id) ?? []).slice().sort((left, right) => compare(left.target, right.target))
+    const incoming = (incomingBy.get(node.id) ?? []).slice().sort((left, right) => compare(left.source, right.source))
+    const rows = relationRows({ node, outgoing, incoming, vaultNode, pathOf, titles })
+    const outsideCount = outsideCountBy.get(node.id) ?? 0
+    const occurrences = occurrencesBySource.get(node.id) ?? []
+    const key = reusable ? dependencyKey({ node, notePathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) : null
+    const cached = reusable?.get(notePathValue)
+    let entry
+    if (cached && cached.key === key) {
+      entry = cached
+      preparation.reused += 1
     } else {
-      const extension = /^[a-z0-9]{1,16}$/.test(String(node.extension).toLowerCase()) ? String(node.extension).toLowerCase() : 'bin'
-      const attachmentPath = `attachments/${noteBasename(notePathValue)}.${extension}`
-      assertContained(attachmentPath)
-      attachments.push({ path: attachmentPath, digest: rawDigest, byteLength: source.length })
-      files.push({ path: attachmentPath, kind: 'attachment', bytes: source, digest: rawDigest })
-      authored = wrapperRepresentation({ node, attachmentPath })
-      regions = { body: { start: authored.length, end: authored.length }, representation: { start: 0, end: authored.length } }
-      Object.assign(sourceRecord, { kind: 'wrapper', attachment: attachmentPath })
+      entry = emitNote({ node, notePathValue, source: read(node.repo, node.path), rows, outsideCount, occurrences, emittedTarget, key })
+      preparation.emitted += 1
     }
-
-    const generated = generatedSections({ precedingBytes: authored, offset: authored.length, rows, outsideCount, closure })
-    if (closure && generated.regions.length > 0) fenceClosed = true
-    const bytes = Buffer.concat([authored, generated.bytes])
-    assertStrictUtf8(bytes)
-    assertContained(notePathValue)
-    const { representation, ...authoredRegions } = regions
-    files.push({ path: notePathValue, kind: 'note', bytes, digest: sha256Digest(bytes) })
-    notes.push({
-      repoId: node.repo,
-      nodeId: node.id,
-      path: notePathValue,
-      title: String(node.title || 'Untitled').slice(0, 512),
-      noteDigest: sha256Digest(bytes),
-      regions: {
-        ...authoredRegions,
-        generated: [...(representation ? [{ kind: 'representation', range: representation }] : []), ...generated.regions],
-      },
-      ext: {
-        [EXT_KEY]: {
-          source: sourceRecord,
-          ...(assetInversions.size > 0
-            ? { assetEmbeds: [...assetInversions].map(([attachment, inversions]) => ({ attachment, inversions })).sort((left, right) => compare(left.attachment, right.attachment)) }
-            : {}),
-        },
-      },
-    })
+    if (nextCache) nextCache.set(notePathValue, entry)
+    // The result never aliases the cache: a caller may change what it was handed, bytes included.
+    for (const file of entry.files) files.push({ ...file, bytes: Buffer.from(file.bytes) })
+    if (entry.attachment) attachments.push(structuredClone(entry.attachment))
+    notes.push(structuredClone(entry.note))
+    for (const [edgeKey, inversions] of entry.edgeInversions) {
+      const inversionKey = `${node.id}\u0000${edgeKey}`
+      if (!inversionsByEdge.has(inversionKey)) inversionsByEdge.set(inversionKey, [])
+      inversionsByEdge.get(inversionKey).push(...structuredClone(inversions))
+    }
+    if (entry.fenceClosed) fenceClosed = true
   }
 
   // One copy per asset, however many notes embed it, read through the pinned
@@ -541,12 +663,18 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   // under the publication protocol.
   changes.removed = [...prior.keys()].filter((notePathValue) => !present.has(notePathValue)).sort(compare)
 
+  // The cache is replaced only by a preparation that passed every check, and
+  // holds exactly the notes of this view.
+  if (nextCache) cache.notes = nextCache
+
   return {
     manifest,
     manifestBytes: utf8(`${JSON.stringify(manifest, null, 2)}\n`),
     files,
     persistentPathRegistry: registry,
     changes,
+    // How many notes were emitted on this call and how many were reused from the cache; without a cache every note is emitted.
+    preparation,
     diagnostics: [
       ...selection.diagnostics,
       ...(canonical.externalEdgeCount > 0 ? ['relations-to-identities-outside-the-census-are-not-emitted'] : []),

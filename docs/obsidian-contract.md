@@ -156,6 +156,54 @@ Fence detection is the canonical graph scanner's: `unclosedFenceAtEnd` in
 `src/graph/knowledge-graph.mjs` shares the rules that decide which text is
 scanned for links. Front matter is never read for fences.
 
+## Incremental preparation
+
+A maintenance tick rebuilds the canonical graph and prepares the whole view.
+Both stages accept a cache that makes repeated runs proportional to what
+changed, without changing a single emitted byte. Each cache is derived,
+in-memory, droppable state: it is never written anywhere, a dropped cache
+costs a full build or preparation, and the result is by construction the one
+a run with no cache produces. `test/obsidian-incremental.test.mjs` proves the
+equality over the materialization fixture under both scopes and over random
+change sequences (edits, retitles, relations, links, added and removed notes,
+eligibility and scope changes), and shows with mutation controls that the
+oracle sees a wrong cached byte, entry, inversion, node or scan.
+
+Graph stage: `buildKnowledgeGraph` / `buildCanonicalGraph` take `fileCache`
+(`createGraphFileCache`) and, optionally, `observedDigest`. A census node and
+link scan are reused only under an equal sha256 of the bytes and equal
+per-file inputs outside the bytes (coverage and the repository's read
+boundary), and the cache is rebuilt to hold exactly the current census.
+Without `observedDigest` every Markdown source is read and hashed on every
+build. The maintenance engine passes `observedDigest` from its observation
+index, and a source whose observed digest equals the cached one is then not
+opened: the bound is observation's own, a stat hint between full
+reconciliations, so bytes that change under an unchanged stat hint are not
+seen by the graph, the snapshot or the view until observation hashes the file
+again. The result reports `fileCensus: { reused, derived, read }`.
+
+Preparation stage: `prepareView` takes `cache` (`createPreparationCache`).
+Each note's bytes and manifest entry are a function of its pinned source
+digest, node record, allocated path, generated rows, outside-selection count
+and rewritten occurrences with their emitted targets; those inputs form a
+dependency key, and a note whose key equals the cached one reuses the cached
+bytes, manifest entry, attachment record and inversions. Everything else
+(asset copies, links, settings, collision checks, the manifest and the
+redaction guard over the whole result) runs as before. The result reports
+`preparation: { emitted, reused }`, and a preparation that emits exactly the
+notes whose output changed is what the tests pin.
+
+One bound is stated rather than hidden: a reused note's source is not read
+again, so bytes that drift under an unchanged pinned digest are not seen by
+`mixed-read` on that call. The emitted note is exactly the one the pin
+describes, and the next observation by digest sees the drift. A note whose pin
+changed is read and verified against the pin as always.
+
+The engine holds one graph file cache and one preparation cache per scope for
+its lifetime and hands them through the `createGraphCache` and
+`createPreparationCache` production seams; a test replaces either with
+`() => null` to build or prepare in full.
+
 ## Publication protocol `obsidian-cli-critical-section/v1`
 
 The journal's `protocolId` names this protocol. A publisher may use it only

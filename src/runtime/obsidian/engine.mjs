@@ -144,6 +144,15 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   const hintedKeys = new Set()
   const hintedPrefixes = new Set()
   const stores = new Map()
+  // One graph file cache, and one preparation cache per scope, kept for the engine's lifetime. Derived state only:
+  // each is reused under a content digest or dependency key that proves the cached value equal to a fresh one, and a
+  // dropped cache costs a full build or preparation, never a wrong one.
+  const graphCache = seams.createGraphCache?.() ?? null
+  const preparationCaches = new Map()
+  const preparationCacheFor = (scopeId) => {
+    if (!preparationCaches.has(scopeId)) preparationCaches.set(scopeId, seams.createPreparationCache?.() ?? null)
+    return preparationCaches.get(scopeId)
+  }
   let project = null
   let observedAssets = []
   let semantic = null
@@ -409,7 +418,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (attempt.size > 0) {
       let built = null
       try {
-        const graph = seams.buildGraph({ project, eligibility })
+        const graph = seams.buildGraph({ project, eligibility, cache: graphCache, index })
         // The assets this graph lets a view copy are observed from now on, and hashed now so the snapshot pins
         // what observation saw. A withheld asset is not observed: its bytes can change no view.
         const formerAssetKeys = new Set(observedAssets.map((asset) => sourceKey(asset.repo, asset.path)))
@@ -435,7 +444,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         try {
           const prepared = seams.prepareView({
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
-            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'),
+            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId),
           })
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
           const preparedGenerationId = prepared.manifest.generationId

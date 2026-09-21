@@ -100,14 +100,23 @@ export function isAbsolutePathLike(value) {
   return typeof value === 'string' && ABSOLUTE_PATH.test(value)
 }
 
-function collectAbsolutePaths(value, pointer, found) {
+// `pointer` is the JSON pointer of `value`, built only for a finding: a large
+// document (a manifest of every note) holds millions of values and almost
+// never a finding.
+function collectAbsolutePaths(value, pointer, found, trail = null) {
   if (typeof value === 'string') {
-    if (isAbsolutePathLike(value)) found.push(pointer || '/')
+    if (isAbsolutePathLike(value)) found.push(pointerOf(pointer, trail) || '/')
   } else if (Array.isArray(value)) {
-    value.forEach((item, index) => collectAbsolutePaths(item, `${pointer}/${index}`, found))
+    for (let index = 0; index < value.length; index += 1) collectAbsolutePaths(value[index], pointer, found, { key: index, up: trail })
   } else if (isPlainObject(value)) {
-    for (const [key, item] of Object.entries(value)) collectAbsolutePaths(item, `${pointer}/${key}`, found)
+    for (const key of Object.keys(value)) collectAbsolutePaths(value[key], pointer, found, { key, up: trail })
   }
+}
+
+function pointerOf(pointer, trail) {
+  const parts = []
+  for (let node = trail; node !== null; node = node.up) parts.push(node.key)
+  return `${pointer}${parts.reverse().map((part) => `/${part}`).join('')}`
 }
 
 function duplicates(values) {
@@ -499,7 +508,8 @@ export function createScopeSelectorForOracleTests(primitives = SCOPE_PRIMITIVES)
       .filter((edge) => visible.has(edge.source) && visible.has(edge.target))
       .sort((left, right) => compareIds(left.id, right.id))
       .filter((edge) => {
-        const key = JSON.stringify([edge.source, edge.target, edge.type, edge.origin])
+        // Identities and types are strings that never hold NUL; `origin` is whatever the edge carries.
+        const key = `${edge.source}\u0000${edge.target}\u0000${edge.type}\u0000${JSON.stringify(edge.origin) ?? 'null'}`
         if (seenEdgeKeys.has(key)) return false
         seenEdgeKeys.add(key)
         return true

@@ -58,7 +58,7 @@ const { dispatchAutomaticApply } = await import('../src/runtime/obsidian/pending
 // the guard: none of it may start the app, and its drivers never run on import.
 const { OutputRefusal, assertExternalOutput, repositoryContaining } = await import('../scripts/obsidian/lib/common.mjs')
 const { PROPOSED_TARGETS, createResourceSampler, createWarmChangeSummaryForOracleTests, percentile, waitUntil, warmChangeSummary } = await import('../scripts/obsidian/lib/measure.mjs')
-const { absentAdapter, deriveWorkspace, materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
+const { absentAdapter, createEngineSeams, deriveWorkspace, loadProject, materializeFixtureWorkspace } = await import('../scripts/obsidian/lib/derive.mjs')
 const { bindLayoutToVault, createCommandRunner, createInProcessServiceRuntime, createPerVaultAdapterFactory, createServiceRuntime, fileDigest, initialiseRepositories, noteFile, prepareWorkspace, stripProjectEnv } = await import('../scripts/obsidian/lib/service-world.mjs')
 const { resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { runAp03 } = await import('../scripts/obsidian/lib/ap03.mjs')
@@ -69,7 +69,7 @@ const { createNullWatcherFactory } = await import('../src/runtime/obsidian/watch
 const { createSourceApplyContribution } = await import('../src/projection/obsidian/edits/contribution.mjs')
 const { createProposalAdapterContribution } = await import('../src/projection/obsidian/proposals/contribution.mjs')
 const { DESKTOP_EXT_KEY, ReceiptRefusal, buildReceipt, evidenceFileName, writeGateReceipt } = await import('../scripts/obsidian/lib/receipts.mjs')
-const { DEFAULT_SEED, PROFILES, generateScaleDataset, planDataset } = await import('../scripts/obsidian/generate-scale.mjs')
+const { DEFAULT_SEED, PROFILES, generateScaleDataset, measureDerivation, planDataset } = await import('../scripts/obsidian/generate-scale.mjs')
 const {
   DESKTOP_PROCEDURES, IsolationRefusal, PROCEDURE_IDS, assertIsolatedInstance, compareMembership, compareResolvedLinks, discoverCapabilities, expectedLinkPairs, parseHelpOutput, parseVersionOutput,
   planProcedure, recordProcedureReceipts, runAp01, runAp02Membership, runAp04App,
@@ -857,6 +857,58 @@ test('cold derivation of the tiny dataset: the real pipeline publishes every not
   assert.deepEqual({ state: warm.state, expected: warm.expectedGeneration }, { state: 'committed', expected: result.generationId })
   const changed = warm.files.filter((file) => file.kind === 'note' && fs.readFileSync(path.join(vaultRoot, file.path), 'utf8').includes('Warm change 1.'))
   assert.equal(changed.length, 1)
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+// The warm path the measurement records is the engine's: caches and an
+// observation index carried between derivations. Its vault is byte-identical
+// to the one bare production seams publish from nothing, and a source the
+// observation index knows unchanged is not opened by the graph build.
+test('warm derivation through the engine seams publishes the same bytes as the path from nothing, and opens only the changed source', needsExchange, async (t) => {
+  const dir = tempDir(t, 'derive-engine')
+  const { manifest } = generateScaleDataset({ outDir: path.join(dir, 'data'), profile: 'tiny' })
+  const tree = (root) => { const found = {}; const walk = (directory) => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const full = path.join(directory, entry.name); if (entry.isDirectory()) walk(full); else found[path.relative(root, full).split(path.sep).join('/')] = fs.readFileSync(full).toString('hex') } }; walk(root); return found }
+  const engine = createEngineSeams()
+  const project = loadProject(manifest.projectFile)
+  const vaults = { engine: path.join(dir, 'vault-engine'), plain: path.join(dir, 'vault-plain') }
+  engine.observe(project, { full: true })
+  const cold = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot: path.join(dir, 'state-engine'), vaultRoot: vaults.engine, seams: engine.seams })
+  assert.equal(cold.state, 'committed')
+  const source = path.join(manifest.workspaceDir, 'scale-1', 'notes', '000', fs.readdirSync(path.join(manifest.workspaceDir, 'scale-1', 'notes', '000')).sort()[0])
+  fs.appendFileSync(source, '\nWarm change 1.\n')
+  const observed = engine.observe(project, { full: false })
+  assert.equal(observed.changes.length, 1, 'the stat hint sees the one edited source')
+  const warm = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot: path.join(dir, 'state-engine'), vaultRoot: vaults.engine, seams: engine.seams })
+  assert.deepEqual({ state: warm.state, expected: warm.expectedGeneration }, { state: 'committed', expected: cold.generationId })
+  // From nothing, over the edited corpus, into a second vault.
+  const plain = await deriveWorkspace({ projectFile: manifest.projectFile, stateRoot: path.join(dir, 'state-plain'), vaultRoot: vaults.plain })
+  assert.equal(plain.state, 'committed')
+  const [engineTree, plainTree] = [tree(vaults.engine), tree(vaults.plain)]
+  for (const root of [engineTree, plainTree]) for (const key of Object.keys(root)) if (key.startsWith('.atelier-publication/')) delete root[key]
+  assert.deepEqual(engineTree, plainTree, 'the vault bytes do not depend on the path taken')
+  assert.deepEqual(warm.files.map((file) => [file.path, file.digest]).sort(), plain.files.map((file) => [file.path, file.digest]).sort())
+  // The graph build behind the warm derivation opened only the edited source.
+  const graph = engine.seams.buildGraph({ project, eligibility: (await import('../src/runtime/obsidian/pipeline.mjs')).DEFAULT_ELIGIBILITY })
+  assert.equal(graph.fileCensus.read, 0, 'nothing changed since the last build, so no source is opened')
+  fs.appendFileSync(source, '\nWarm change 2.\n')
+  engine.observe(project, { full: false })
+  assert.equal(engine.seams.buildGraph({ project, eligibility: (await import('../src/runtime/obsidian/pipeline.mjs')).DEFAULT_ELIGIBILITY }).fileCensus.read, 1)
+  assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
+})
+
+test('measureDerivation records the engine warm path: every sample finds its note, carries observeMs and names the path', needsExchange, async (t) => {
+  const dir = tempDir(t, 'measure-engine')
+  const { manifestPath } = generateScaleDataset({ outDir: path.join(dir, 'data'), profile: 'tiny' })
+  const manifest = await measureDerivation({ manifestPath, warm: 2, sampleIntervalMs: 50 })
+  assert.equal(manifest.derivation.warm.samples.length, 2)
+  for (const sample of manifest.derivation.warm.samples) {
+    assert.equal(sample.fileFound, true)
+    assert.equal(sample.state, 'committed')
+    assert.ok(typeof sample.sourceToFileMs === 'number' && sample.sourceToFileMs >= 0)
+    assert.ok(typeof sample.timings.observeMs === 'number')
+    assert.deepEqual(sample.observed, { changes: 1, hashed: 1 })
+  }
+  assert.match(manifest.derivation.warmPath, /observation index/)
   assert.deepEqual(guardErrors, [], 'nothing tried to start the app')
 })
 

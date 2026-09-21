@@ -437,6 +437,73 @@ test('a scope change republishes that view only; a source change republishes eve
   for (const scopeId of ['scope-whole', 'scope-east']) assert.match(fs.readFileSync(world.noteFile('east-wing:lantern', scopeId), 'utf8'), /cleaned weekly/)
 })
 
+test('a one-note source change prepares one note; the rest of the view is reused through the engine\'s preparation cache', needsExchange, async (t) => {
+  const preparations = []
+  const builds = []
+  const recording = (input) => { const prepared = DEFAULT.prepareView(input); preparations.push({ scopeId: input.scope.scopeId, ...prepared.preparation }); return prepared }
+  const recordingBuild = (input) => { const graph = DEFAULT.buildGraph(input); builds.push(graph.fileCensus); return graph }
+  const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, EAST_SCOPE]) })
+  const engine = world.engine({ seams: { prepareView: recording, buildGraph: recordingBuild } })
+  assert.deepEqual((await engine.tick()).scopes.map((entry) => entry.state), ['current', 'current'])
+  assert.deepEqual(builds.splice(0), [{ reused: 0, derived: 3, read: 3 }], 'the engine\'s first build parses every Markdown source')
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 4, reused: 0 }, { scopeId: 'scope-east', emitted: 3, reused: 0 }], 'the engine\'s first preparation of a view emits every note')
+  fs.appendFileSync(world.source('east-wing/notes/compass.md'), '\nSouth is painted white.\n')
+  world.advance(1000)
+  const report = await engine.tick()
+  assert.deepEqual(report.scopes.map((entry) => entry.state), ['current', 'current'])
+  assert.deepEqual(builds.splice(0), [{ reused: 2, derived: 1, read: 1 }], 'one source is opened and parsed again; every other source is known unchanged from the observation index and is not opened')
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 1, reused: 3 }, { scopeId: 'scope-east', emitted: 1, reused: 2 }], 'one note is emitted per view; every other note is reused')
+  for (const scopeId of ['scope-whole', 'scope-east']) assert.match(fs.readFileSync(world.noteFile('east-wing:compass', scopeId), 'utf8'), /South is painted white/)
+  // A retitled note keeps its path; the notes whose relation rows name it are emitted again, and nothing else is.
+  fs.writeFileSync(world.source('west-wing/logs/tide.md'), FILES['west-wing/logs/tide.md'].replace('title: "Tide log"', 'title: "Tide ledger"'))
+  world.advance(1000)
+  await engine.tick()
+  assert.deepEqual(builds.splice(0), [{ reused: 2, derived: 1, read: 1 }])
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 2, reused: 2 }, { scopeId: 'scope-east', emitted: 0, reused: 3 }], 'the retitled note and the note that supports it, in the view that holds both; the east view only counts that relation as leading outside, so nothing in it changed')
+  // Control: an engine whose cache seam yields nothing prepares every view in full, and publishes the same bytes.
+  const control = makeWorld(t)
+  const uncached = control.engine({ seams: { createGraphCache: () => null, createPreparationCache: () => null, prepareView: recording, buildGraph: recordingBuild } })
+  assert.equal(control.scope(await uncached.tick()).state, 'current')
+  fs.appendFileSync(control.source('east-wing/notes/compass.md'), '\nSouth is painted white.\n')
+  control.advance(1000)
+  assert.equal(control.scope(await uncached.tick()).state, 'current')
+  assert.deepEqual(builds.splice(0), [{ reused: 0, derived: 3, read: 3 }, { reused: 0, derived: 3, read: 3 }])
+  assert.deepEqual(preparations.splice(0), [{ scopeId: 'scope-whole', emitted: 4, reused: 0 }, { scopeId: 'scope-whole', emitted: 4, reused: 0 }])
+  assert.equal(fs.readFileSync(control.noteFile('east-wing:compass'), 'utf8'), fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'))
+})
+
+test('a source that changes under an unchanged stat hint is served from the graph cache until the next full reconciliation opens it', needsExchange, async (t) => {
+  const builds = []
+  const recordingBuild = (input) => { const graph = DEFAULT.buildGraph(input); builds.push(graph.fileCensus); return graph }
+  const world = makeWorld(t)
+  const lstat = lyingStat()
+  const engine = world.engine({ lstat, fullReconciliationIntervalMs: FULL_INTERVAL, seams: { buildGraph: recordingBuild } })
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  assert.deepEqual(builds.splice(0), [{ reused: 0, derived: 3, read: 3 }])
+  // The compass changes while its stat hint stays frozen; the tide log changes visibly, so the view is rebuilt.
+  const compass = world.source('east-wing/notes/compass.md')
+  lstat.freeze(compass)
+  fs.appendFileSync(compass, '\nSouth is painted white.\n')
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  let report = await engine.tick()
+  assert.equal(report.full, false)
+  assert.equal(world.scope(report).state, 'current')
+  // The trust boundary, stated: the index reports the compass unchanged, the build takes that as the digest of
+  // its bytes and does not open it, and the compass note stays one change behind. That is observation's own
+  // stat-hint bound, not a new one.
+  assert.deepEqual(builds.splice(0), [{ reused: 2, derived: 1, read: 1 }], 'the tide log is opened; the compass, reported unchanged, is served from the cache')
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /Low water at six/)
+  assert.doesNotMatch(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+  // The full reconciliation hashes every file whatever its stat says: the digest that moved opens exactly that source, and the note converges.
+  world.advance(FULL_INTERVAL)
+  report = await engine.tick()
+  assert.equal(report.full, true)
+  assert.equal(world.scope(report).state, 'current')
+  assert.deepEqual(builds.splice(0), [{ reused: 2, derived: 1, read: 1 }], 'exactly the compass is opened and parsed again')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+})
+
 // ---------------------------------------------------------------------------
 // 4b. Eligibility fails closed; embedded assets
 // ---------------------------------------------------------------------------

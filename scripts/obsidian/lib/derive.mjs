@@ -5,6 +5,7 @@ import { createEditorAdapter } from '../../../src/projection/obsidian/publicatio
 import { PROTOCOL_ID } from '../../../src/projection/obsidian/publication/bridge-script.mjs'
 import { createRecoveryStore } from '../../../src/projection/obsidian/recovery/index.mjs'
 import { DEFAULT_ELIGIBILITY, createProductionSeams } from '../../../src/runtime/obsidian/pipeline.mjs'
+import { listSourceFiles, reconcile } from '../../../src/runtime/obsidian/observation.mjs'
 import { REPOSITORY_ROOT, bytesUnder, readJson, sha256Digest, writeJson } from './common.mjs'
 import { timed } from './measure.mjs'
 
@@ -63,6 +64,26 @@ export function loadProject(projectFile) {
   return resolveProjectConfig({ argv: [`--project=${projectFile}`], cwd: path.dirname(projectFile) })
 }
 
+// The seams the maintenance engine drives between ticks: one graph file
+// cache, one preparation cache and one observation index that `observe`
+// reconciles the way the engine does (every file hashed on a full pass, by
+// stat hint otherwise). A derivation through these seams is the warm path a
+// running service takes; `createProductionSeams()` alone is the path from
+// nothing. The result bytes are the same either way.
+export function createEngineSeams(base = createProductionSeams()) {
+  const graphCache = base.createGraphCache()
+  const preparationCache = base.createPreparationCache()
+  const index = new Map()
+  const seams = {
+    ...base,
+    buildGraph: (options) => base.buildGraph({ ...options, cache: graphCache, index }),
+    captureSnapshot: (options) => base.captureSnapshot({ ...options, index }),
+    prepareView: (options) => base.prepareView({ ...options, cache: preparationCache }),
+  }
+  const observe = (project, { full }) => reconcile({ index, files: listSourceFiles(project), prefix: 'source\u0000', full })
+  return { seams, index, observe }
+}
+
 // One derivation into `vaultRoot`. Returns per-phase timings, the committed
 // generation and what was written. Repeated calls continue the same recovery
 // store, so a second call is the warm path: prior manifest, expected
@@ -80,6 +101,7 @@ export async function deriveWorkspace({ projectFile, stateRoot, vaultRoot, scope
   const graph = await timed(timings, 'buildGraphMs', () => seams.buildGraph({ project, eligibility }))
   sampler?.sample('graph-built')
   const configDigest = sha256Digest(fs.readFileSync(projectFile))
+  // A seam set from createEngineSeams carries its own observation index; a bare production seam set observes nothing between calls.
   const snapshot = await timed(timings, 'captureSnapshotMs', () => seams.captureSnapshot({ project, graph, workspaceId, index: new Map(), configDigest, capturedAt: clock().toISOString() }))
   const repositoryRoots = project.repos.filter((repo) => !repo.external).map((repo) => repo.path)
   const store = seams.createRecoveryStore({ workspaceRoot: stateRoot, workspaceId, scopeId: scope.scopeId, vaultRoot, repositoryRoots })
