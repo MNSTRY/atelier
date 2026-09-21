@@ -86,7 +86,7 @@ export function capabilityImprovementCandidates({ workspaceRoot: input }) {
 // The caller chooses a repository, audience and destination through its normal
 // authoring/graph workflow. Generated evidence remains an unreviewed claim.
 export function capabilityGraphSources({ workspaceRoot: input, namespace, audience = 'private' }) {
-  if (!IDENTIFIER_PATTERN.test(namespace) || !['private', 'team', 'operator', 'staff', 'public', 'sensitive'].includes(audience)) throw new Error('invalid graph namespace or audience')
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(namespace) || !['private', 'team', 'operator', 'staff', 'public', 'sensitive'].includes(audience)) throw new Error('invalid graph namespace or audience')
   const root = workspaceRoot(input ?? process.cwd())
   const state = readCapabilityState(root), events = readCapabilityEvents({ workspaceRoot: root })
   if (!state) return { schema: 'mnstry.atelier-capability-graph-sources@v1', files: [], canonicalMutation: false }

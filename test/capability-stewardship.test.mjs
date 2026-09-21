@@ -276,6 +276,7 @@ test('content-free evidence stays version-bound, distinguishes cause and generat
   const candidates = capability.capabilityImprovementCandidates({ workspaceRoot })
   assert.equal(candidates.candidates[0].proposal, 'review-tool')
   assert.equal(candidates.candidates[0].automaticEdit, false)
+  assert.throws(() => capability.capabilityGraphSources({ workspaceRoot, namespace: 'invalid.namespace' }), /invalid graph namespace/)
   const graph = capability.capabilityGraphSources({ workspaceRoot, namespace: 'project' })
   assert.equal(graph.canonicalMutation, false)
   for (const file of graph.files) write(workspaceRoot, `governance/${file.path}`, file.content)
