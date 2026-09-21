@@ -238,6 +238,18 @@ export async function discoverCapabilities(instance, { now = isoNow } = {}) {
   return record
 }
 
+// A real-app receipt is evidence for one app version at or above the floor
+// the runtime pins. An instance below it (the installer's bundled app when
+// the pinned asar is not supplied) records nothing.
+export async function assertAppFloor(capabilities) {
+  const { MINIMUM_APP_VERSION, meetsMinimumAppVersion } = await import('../../src/runtime/obsidian/app-capability.mjs')
+  const version = capabilities?.app?.version ?? null
+  if (version === null || !meetsMinimumAppVersion(version, MINIMUM_APP_VERSION)) {
+    throw new OutputRefusal('app-below-floor', `the isolated app reports version ${version ?? 'unknown'}; the runtime floor is ${MINIMUM_APP_VERSION} (supply the pinned asar through ATELIER_OBSIDIAN_ASAR)`)
+  }
+  return capabilities
+}
+
 export const environmentOf = (capabilities) => ({
   os: osEnvironment(),
   app: { name: 'Obsidian', version: capabilities.app.version ?? 'unknown', ...(capabilities.app.installerVersion ? { ext: { installerVersion: capabilities.app.installerVersion } } : {}) },
@@ -459,7 +471,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       const full = shortLayout(createLayout)
       const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-full'), vaultRoot: full.vault , withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
       const { app, launchedAtMs } = await launch(full)
-      capabilities = await discoverCapabilities(app)
+      capabilities = await assertAppFloor(await discoverCapabilities(app))
       timingsByGate[plan.gates[0]] = { launchedAt: new Date(launchedAtMs).toISOString(), derivation: derived.timings }
       if (plan.app === 'small-fixture') {
         const run = await runAp01({ instance: app, manifest: derived.manifest })
@@ -497,7 +509,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       for (const scope of scopeDocuments) derivations[scope.scopeId] = (await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: world.workspaceRoot, workspaceId: world.workspaceId, vaultRoot: world.vaultRootFor(scope.scopeId), scope, sentinels: serviceSentinels })).timings
       const bound = { full: bindLayoutToVault(layouts.full, world.vaultRootFor(AP05_SCOPES.full)), ...(scoped ? { scoped: bindLayoutToVault(layouts.scoped, world.vaultRootFor(AP05_SCOPES.scoped)) } : {}) }
       const full = await launch(bound.full)
-      capabilities = await discoverCapabilities(full.app)
+      capabilities = await assertAppFloor(await discoverCapabilities(full.app))
       const [{ createQualifiedAdapterFactory }, { createProductionAppProbe }, { createObsidianRegistry }, { createSourceApplyContribution }, { createProposalAdapterContribution }] = await Promise.all([
         import('../../src/runtime/obsidian/app-capability.mjs'), import('../../src/runtime/obsidian/app-production-seams.mjs'), import('../../src/runtime/obsidian/extension-points.mjs'),
         import('../../src/projection/obsidian/edits/contribution.mjs'), import('../../src/projection/obsidian/proposals/contribution.mjs'),
@@ -551,7 +563,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       const layout = shortLayout(() => createLayout(undefined, path.dirname(scaleManifest.derivation.vaultRoot)))
       // A 10k-note vault takes the app longer to open than a fixture vault; the readiness wait gets the index budget.
       const { app, launchedAtMs } = await launch(layout, { readyTimeoutMs: INDEX_TIMEOUT_MS })
-      capabilities = await discoverCapabilities(app)
+      capabilities = await assertAppFloor(await discoverCapabilities(app))
       const adapter = createObsidianCliAdapter({ env: app.env })
       // The warm changes take the engine's path, as measureDerivation's do: the caches and the observation index
       // carried between derivations, every source hashed once here and by stat hint before each change.
