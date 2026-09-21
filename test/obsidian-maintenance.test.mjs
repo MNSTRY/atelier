@@ -472,6 +472,38 @@ test('a one-note source change prepares one note; the rest of the view is reused
   assert.equal(fs.readFileSync(control.noteFile('east-wing:compass'), 'utf8'), fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'))
 })
 
+test('a source that changes under an unchanged stat hint is served from the graph cache until the next full reconciliation opens it', needsExchange, async (t) => {
+  const builds = []
+  const recordingBuild = (input) => { const graph = DEFAULT.buildGraph(input); builds.push(graph.fileCensus); return graph }
+  const world = makeWorld(t)
+  const lstat = lyingStat()
+  const engine = world.engine({ lstat, fullReconciliationIntervalMs: FULL_INTERVAL, seams: { buildGraph: recordingBuild } })
+  assert.equal(world.scope(await engine.tick()).state, 'current')
+  assert.deepEqual(builds.splice(0), [{ reused: 0, derived: 3, read: 3 }])
+  // The compass changes while its stat hint stays frozen; the tide log changes visibly, so the view is rebuilt.
+  const compass = world.source('east-wing/notes/compass.md')
+  lstat.freeze(compass)
+  fs.appendFileSync(compass, '\nSouth is painted white.\n')
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  let report = await engine.tick()
+  assert.equal(report.full, false)
+  assert.equal(world.scope(report).state, 'current')
+  // The trust boundary, stated: the index reports the compass unchanged, the build takes that as the digest of
+  // its bytes and does not open it, and the compass note stays one change behind. That is observation's own
+  // stat-hint bound, not a new one.
+  assert.deepEqual(builds.splice(0), [{ reused: 2, derived: 1, read: 1 }], 'the tide log is opened; the compass, reported unchanged, is served from the cache')
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /Low water at six/)
+  assert.doesNotMatch(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+  // The full reconciliation hashes every file whatever its stat says: the digest that moved opens exactly that source, and the note converges.
+  world.advance(FULL_INTERVAL)
+  report = await engine.tick()
+  assert.equal(report.full, true)
+  assert.equal(world.scope(report).state, 'current')
+  assert.deepEqual(builds.splice(0), [{ reused: 2, derived: 1, read: 1 }], 'exactly the compass is opened and parsed again')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:compass'), 'utf8'), /South is painted white/)
+})
+
 // ---------------------------------------------------------------------------
 // 4b. Eligibility fails closed; embedded assets
 // ---------------------------------------------------------------------------

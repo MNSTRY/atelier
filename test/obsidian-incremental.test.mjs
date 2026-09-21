@@ -457,7 +457,43 @@ test('mutation control: an observer that reports the cached digest for a source 
   assert.throws(() => assert.deepEqual(comparableGraph(stale), comparableGraph(buildCanonicalGraph(project()))), assert.AssertionError)
   // Observation by digest is what repairs it, exactly as it is what decides a rebuild at all.
   observer.observe({ full: true })
-  assert.deepEqual(comparableGraph(buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })), comparableGraph(buildCanonicalGraph(project())))
+  const repaired = buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })
+  assert.deepEqual(comparableGraph(repaired), comparableGraph(buildCanonicalGraph(project())))
+  // The retitled note and every note whose links name the title: exactly the sources whose observed digest moved are opened.
+  const { read, derived, reused } = repaired.fileCensus
+  assert.ok(derived >= 1 && read === derived && reused === corpus.notes.size - derived, `the full reconciliation moved the digests of the changed sources, and exactly those are opened: ${JSON.stringify(repaired.fileCensus)}`)
+})
+
+test('mutation control: an observed digest is not the whole key; a census input outside the bytes still derives every entry, and a key that ignored it would fail the oracle', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-incremental-observed-inputs-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const corpus = new Corpus(23)
+  corpus.write(dir)
+  const project = () => resolveProjectConfig({ argv: [`--project=${path.join(dir, 'atelier.project.json')}`], cwd: dir })
+  const cache = createGraphFileCache()
+  const observer = observedIndex(project)
+  observer.observe()
+  buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })
+  // The bytes and the observed digests are unchanged; the read boundary, an input of every census entry, is not.
+  writeJson(path.join(dir, 'repo-access.v1.json'), { schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'team', repos: Object.fromEntries(REPOSITORIES.map((repoId) => [repoId, { readBoundary: 'private' }])) })
+  observer.observe()
+  const full = buildCanonicalGraph(project())
+  const rebound = buildCanonicalGraph(project(), { fileCache: cache, observedDigest: observer.digestOf })
+  assert.deepEqual(comparableGraph(rebound), comparableGraph(full))
+  assert.deepEqual(rebound.fileCensus, { reused: 0, derived: corpus.notes.size, read: corpus.notes.size }, 'an equal observed digest under different inputs reuses nothing and opens every source')
+  // Control: the entries derived under the private boundary, relabelled with the inputs a team-boundary build
+  // records, are what a key that ignored the inputs would serve; the observer still reports every digest as
+  // unchanged, so they are all reused, and the graph is not the one a full build derives.
+  const privateEntries = new Map(cache.files)
+  writeJson(path.join(dir, 'repo-access.v1.json'), { schema: 'mnstry.atelier-repo-access@v1', defaultReadBoundary: 'team', repos: Object.fromEntries(REPOSITORIES.map((repoId) => [repoId, { readBoundary: 'team' }])) })
+  observer.observe()
+  const team = createGraphFileCache()
+  buildCanonicalGraph(project(), { fileCache: team, observedDigest: observer.digestOf })
+  const forged = createGraphFileCache()
+  for (const [key, entry] of privateEntries) forged.files.set(key, { ...entry, inputs: team.files.get(key).inputs })
+  const served = buildCanonicalGraph(project(), { fileCache: forged, observedDigest: observer.digestOf })
+  assert.deepEqual(served.fileCensus, { reused: corpus.notes.size, derived: 0, read: 0 }, 'nothing is opened: the forged inputs make every private-boundary entry look current')
+  assert.throws(() => assert.deepEqual(comparableGraph(served), comparableGraph(buildCanonicalGraph(project()))), assert.AssertionError, 'a census entry derived under another read boundary is not the one a full build derives')
 })
 
 // ---------------------------------------------------------------------------
