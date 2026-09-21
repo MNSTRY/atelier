@@ -62,6 +62,7 @@ export const commandMap = new Map([
   ['review', ['src/commands/review.mjs']],
   ['coauthor', ['src/commands/coauthor.mjs']],
   ['architecture', ['src/commands/architecture.mjs']],
+  ['trackable', ['src/commands/trackable.mjs']],
   ['practice', ['src/commands/practice.mjs']],
   ['skills', ['src/commands/skills.mjs']],
   ['capability', ['src/commands/capability.mjs']],
@@ -151,6 +152,7 @@ Core commands:
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
   architecture catalog|entry|resolve Inspect responsibility names and consumer bindings.
+  trackable preview|execute|view     Follow adopted definitions and occurrence evidence.
   practice plan|apply|status|context Adopt scoped instruction guidance and inspect use.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
   capability seal|plan|apply|status Publish local capability bundles and govern adoption.

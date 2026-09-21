@@ -11,6 +11,8 @@ import { verifyInstalledCoauthor } from './coauthor-consumer-smoke.mjs'
 import { verifyInstalledUpgrade } from './upgrade-consumer-smoke.mjs'
 import { verifyInstalledCapabilities } from './capability-consumer-smoke.mjs'
 import { verifyInstalledInquiry } from './inquiry-consumer-smoke.mjs'
+import { verifyInstalledKnowledgeIngestion } from './knowledge-ingestion-consumer-smoke.mjs'
+import { verifyInstalledResponsibilities } from './responsibility-consumer-smoke.mjs'
 import { verifyInstalledLearning } from './learning-consumer-smoke.mjs'
 import { execNpmSync } from './npm-cli.mjs'
 
@@ -193,6 +195,8 @@ assert.equal(typeof validateRepositoryObservation, 'function')
   await verifyInstalledCapabilities({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
   await verifyInstalledInquiry({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
   await verifyInstalledLearning({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
+  await verifyInstalledResponsibilities({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
+  await verifyInstalledKnowledgeIngestion({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
 
   // Exercise the actual launch config with root and parent-hoisted installs.
   for (const target of [join(tempRoot, 'nested', 'workspace'), tempRoot]) {

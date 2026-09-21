@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add portable Trackable definitions, shared preview/runtime rules, durable scoped reference storage and correction.
+- Add evidence-qualified Reflection, one-authority Interaction delivery, and bounded cross-repository Coordination views.
+
 - Reconcile eight responsibility names and typed consumer bindings; preserve historical aliases.
 - Connect durable ingestion to source-current knowledge context and graph proposals.
 - Add situated judgment and native ADR adapters, capability feedback, and recoverable scoped instruction adoption.

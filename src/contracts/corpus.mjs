@@ -26,6 +26,8 @@ import { fileURLToPath } from 'node:url'
 // document, not a schema, and is deliberately absent.
 
 export const CONTRACT_CORPUS = [
+  ...Object.entries({ interaction: ['observation', 'assessment', 'act', 'policy'], coordination: ['outcome', 'dependency', 'directive', 'disposition', 'recovery'] }).flatMap(([profile, shapes]) => shapes.map(shape => ({ name: `atelier-${profile}-${shape}`, contractFile: `contracts/atelier-${profile}.v1.schema.json`, docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-${profile}/${shape}`, registry: true }))),
+  ...['definition', 'request'].map(shape => ({ name: `atelier-trackable-${shape}`, contractFile: 'contracts/atelier-trackable.v1.schema.json', docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-trackable/${shape}`, registry: true })),
   ...['case', 'decision'].map(shape => ({ name: `atelier-judgment-${shape}`, contractFile: 'contracts/atelier-judgment.v1.schema.json', docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-judgment/${shape}`, registry: false })),
   ...['state', 'plan', 'receipt', 'context-receipt'].map(shape => ({ name: `atelier-instruction-${shape}`, contractFile: 'contracts/atelier-instruction-adoption.v1.schema.json', docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-instruction-adoption/${shape}`, registry: false })),
   ...['catalog', 'binding'].map(shape => ({ name: `atelier-architecture-${shape}`, contractFile: 'contracts/atelier-architecture.v1.schema.json', docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-architecture/${shape}`, registry: false })),

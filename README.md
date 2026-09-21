@@ -534,3 +534,8 @@ research quality or recipient acceptance. Hosted execution remains adapter-owned
 <!-- atelier:block:learning-harnesses:end -->
 
 Read the [Knowledge and Build Harness guide](docs/learning-harnesses.md) for the complete local learning cycle.
+
+The [research quickstart](docs/research-starter-quickstart.md) explains how to use
+a supplied candidate packet with existing tools and skills. See
+[Trackables](docs/trackables.md), [Interaction and Reflection](docs/interaction-and-reflection.md)
+and [Coordination](docs/coordination.md) for portable runtime profiles and host obligations.

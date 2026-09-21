@@ -8,6 +8,21 @@ This repository is the public, Apache-2.0 Atelier kit. It contains portable
 contracts, validators, templates, documentation, synthetic fixtures, and agent
 skills. Client and tenant repositories are separate trust domains.
 
+## Responsibility and runtime architecture
+
+Use `docs/architecture.md` and the validated responsibility catalog to distinguish
+responsibilities, harnesses, roles, capabilities, resources, methods, records and
+hosts. Reuse the existing owner of each fact and transition. Skill Steward belongs
+within Capability Stewardship; Companion and Witness share the host's existing
+conversation authority. Reflection remains optional.
+
+Behavioral authoring must identify its consumer and supported profile. Share
+domain rules between preview and execution, pin adopted definitions, and verify
+actual writes and readback. Preserve source evidence, situated judgment, native
+ADR authority and independent repository adoption. Context delivery, model
+behavior, native host acceptance and release are different proof obligations.
+Use the relevant bundled operating skill and document unsupported host bindings.
+
 ## Public-source boundary
 
 - Never copy client names, source material, product structures, private

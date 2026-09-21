@@ -1,0 +1,24 @@
+{
+  "schema": "atelier-coordination-record@v1",
+  "kind": "directive",
+  "repository": "alpha",
+  "id": "inspect",
+  "revision": 1,
+  "scope": [
+    "workshop"
+  ],
+  "observedAt": "2026-01-01T00:00:00Z",
+  "expiresAt": "2026-01-03T00:00:00Z",
+  "source": {
+    "ref": "native:receipt",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "body": {
+    "target": {
+      "repository": "beta",
+      "id": "consumer"
+    },
+    "instruction": "Inspect the synthetic artifact.",
+    "supersedes": null
+  }
+}

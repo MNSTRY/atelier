@@ -10,9 +10,9 @@ contracts, governance, graph and local runtime support eight responsibilities.
 | Practical Judgment | Discern fitting action, cultivate practice and learn from consequences | `learn`, practical cases, decision adapters, `practice` |
 | Creation and Delivery | Design, implement, verify and deliver changes | `harness build` |
 | Capability Stewardship | Qualify, package, adopt, exercise and evolve reusable abilities | `capability`, Skill Steward and `skills` |
-| Reflection | Form revisable assessments of the person, work, interaction and system | Witness role; host integration remains required |
-| Interaction | Listen, communicate, pace, challenge and repair | Companion role in the host's conversation authority |
-| Coordination | Connect work, owners, dependencies, delivery, recovery and outcomes | Collaboration ledger and Build coordination projections |
+| Reflection | Form revisable assessments of the person, work, interaction and system | Witness role; qualified assessments and reflective acts |
+| Interaction | Listen, communicate, pace, challenge and repair | Companion policy and controller over one host authority |
+| Coordination | Connect work, owners, dependencies, delivery, recovery and outcomes | Collaboration, Build and typed Coordination projections |
 
 These names describe responsibilities. A **harness** composes responsibilities
 into work. A **role** describes participation. A **capability** specifies a
@@ -69,10 +69,14 @@ fallback interpretation.
 | Personal Trackables | The selected host's domain writer | Definition adoption, occurrences, evidence and qualified views |
 | Conversation and reflection | Selected host conversation/effect authority | Delivery, interruption, correction and scope controls |
 
-Trackables and Interaction/Reflection host implementations are not established
-by this catalog. A catalog entry is not an executable runtime or an additional
+The portable Trackables reducer/local store, Reflection qualification, Interaction
+controller and Coordination views supply reference implementations. Production
+host adoption is not established by this catalog. A catalog entry is not an executable runtime or an additional
 semantic registry. Host adapters must map these contracts to existing domain
 operations rather than create competing writers.
 
 See [Practical Judgment](practical-judgment.md), [research starter](research-starter.md)
 and [integration decisions](integration-contract-decisions.md).
+
+See [Trackables](trackables.md), [Interaction and Reflection](interaction-and-reflection.md)
+and [Coordination](coordination.md) for supported profiles, native bindings and limits.

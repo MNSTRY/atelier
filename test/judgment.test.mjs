@@ -1,3 +1,4 @@
+import { harnessDigest } from '../src/harnesses/contracts.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -31,4 +32,18 @@ test('typed judgment enters existing Knowledge review; an unreviewed case cannot
   records.push(contribution)
   assert.equal(prepared.semanticAcceptance, 'pending')
   assert.throws(() => createJudgmentDependency({ records, subjectId: contribution.id, target: { repository: 'sample-build', profile: 'build' } }), /accepted contribution/)
+})
+test('accepted native ADR crosses the existing Knowledge handoff with exact source bytes and independent implementation status', () => {
+  const template = JSON.parse(fs.readFileSync(new URL('../fixtures/harnesses/learning-cycle.json', import.meta.url))).knowledge
+  const records = [template[0]], decision = fixture('decision')
+  const prepared = prepareJudgmentContribution({ records, value: decision, profile: 'decision', sourceText, title: decision.title, term: 'material', rightsBasis: 'Invented fixture.' })
+  const contribution = { ...template[1], data: prepared.data }; records.push(contribution)
+  const pin = value => ({ id: value.id, digest: harnessDigest(value) })
+  const evaluation = { ...template.find(r => r.kind === 'evaluation'), data: { ...template.find(r => r.kind === 'evaluation').data, contribution: pin(contribution) } }; records.push(evaluation)
+  const review = { ...template.find(r => r.kind === 'review'), data: { target: pin(contribution), disposition: 'accepted', basis: 'Retain the native choice and its stated limits.', evaluations: [pin(evaluation)] } }; records.push(review)
+  const options = { records, subjectId: contribution.id, nativeSourceText: sourceText, target: { repository: 'sample-build', profile: 'build', purpose: 'Implement the accepted decision.' } }
+  const handoff = createJudgmentDependency(options)
+  assert.equal(handoff.nativeAuthorityTransferred, false)
+  assert.match(handoff.handoff.payload, /planned/)
+  assert.throws(() => createJudgmentDependency({ ...options, nativeSourceText: sourceText + 'Changed' }), /source bytes/)
 })

@@ -66,7 +66,9 @@ export function catalogDocument() {
       "label": "Reflection",
       "aliases": [],
       "purpose": "Form revisable assessments of the person, work, interaction and system.",
-      "implementation": []
+      "implementation": [
+        "src/reflection/index.mjs"
+      ]
     },
     {
       "id": "interaction",
@@ -74,7 +76,9 @@ export function catalogDocument() {
       "label": "Interaction",
       "aliases": [],
       "purpose": "Communicate, listen, pace, challenge and repair through the host conversation authority.",
-      "implementation": []
+      "implementation": [
+        "src/interaction/index.mjs"
+      ]
     },
     {
       "id": "coordination",
@@ -83,8 +87,8 @@ export function catalogDocument() {
       "aliases": [],
       "purpose": "Connect work, ownership, dependencies, delivery, recovery and outcomes.",
       "implementation": [
-        "src/collaboration/index.mjs",
-        "src/harnesses/exchange.mjs"
+        "src/coordination/index.mjs",
+        "src/build/index.mjs"
       ]
     },
     {
@@ -217,7 +221,9 @@ export function catalogDocument() {
       "label": "Trackable",
       "aliases": [],
       "purpose": "Domain composition of definition, instance, occurrences, evidence and qualified views.",
-      "implementation": []
+      "implementation": [
+        "src/trackables/store.mjs"
+      ]
     },
     {
       "id": "adr",

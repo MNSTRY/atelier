@@ -111,7 +111,14 @@
     "./contracts/atelier-architecture.v1.schema.json": "./contracts/atelier-architecture.v1.schema.json",
     "./judgment": "./src/judgment/index.mjs",
     "./contracts/atelier-judgment.v1.schema.json": "./contracts/atelier-judgment.v1.schema.json",
-    "./contracts/atelier-instruction-adoption.v1.schema.json": "./contracts/atelier-instruction-adoption.v1.schema.json"
+    "./contracts/atelier-instruction-adoption.v1.schema.json": "./contracts/atelier-instruction-adoption.v1.schema.json",
+    "./trackables": "./src/trackables/store.mjs",
+    "./contracts/atelier-trackable.v1.schema.json": "./contracts/atelier-trackable.v1.schema.json",
+    "./reflection": "./src/reflection/index.mjs",
+    "./interaction": "./src/interaction/index.mjs",
+    "./coordination": "./src/coordination/index.mjs",
+    "./contracts/atelier-interaction.v1.schema.json": "./contracts/atelier-interaction.v1.schema.json",
+    "./contracts/atelier-coordination.v1.schema.json": "./contracts/atelier-coordination.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

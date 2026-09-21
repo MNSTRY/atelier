@@ -10,6 +10,8 @@ import { validateProjectConfigDoc } from '../src/project/config.mjs'
 // Expected-failure matchers per corpus entry; every invalid fixture must fail
 // for its registered reason, not merely fail.
 const INVALID_EXPECTATIONS = new Map([
+  ...Object.entries({ interaction: ['observation', 'assessment', 'act', 'policy'], coordination: ['outcome', 'dependency', 'directive', 'disposition', 'recovery'] }).flatMap(([profile, shapes]) => shapes.map(shape => [`atelier-${profile}-${shape}`, new Map([['document.json', /must NOT have additional properties/]])])),
+  ...['definition', 'request'].map(shape => [`atelier-trackable-${shape}`, new Map([['document.json', /must NOT have additional properties/]])]),
   ...['campaign', 'hypothesis', 'request', 'source', 'bundle', 'assessment', 'decision', 'withdrawal', 'feedback', 'legacy-assessment', 'ledger', 'handoff'].map(shape => [`atelier-inquiry-${shape}`, new Map([['document.json', /must NOT have additional properties/]])]),
   ['atelier-ingestion', new Map([['authority.json', /must NOT have additional properties/]])],
   ['atelier-learning', new Map([['authority.json', /must NOT have additional properties/]])],
