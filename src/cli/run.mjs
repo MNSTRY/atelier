@@ -62,6 +62,8 @@ export const commandMap = new Map([
   ['review', ['src/commands/review.mjs']],
   ['coauthor', ['src/commands/coauthor.mjs']],
   ['skills', ['src/commands/skills.mjs']],
+  ['learn', ['src/commands/learn.mjs']],
+  ['ingest', ['src/commands/ingest.mjs']],
   ['obsidian', ['src/commands/obsidian.mjs']],
 ])
 
@@ -144,6 +146,8 @@ Core commands:
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
+  learn capture|propose|decide|activate|withdraw Manage scoped lessons and their evidence.
+  ingest plan|run|status|query     Preserve selected sources and search bounded evidence.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -169,6 +173,12 @@ Machine-local repo paths belong in
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
   const help = {
+    ingest: `Usage: ${c} ingest plan|run|status|query
+
+Read one bounded UTF-8 JSON object {workspaceId,input} from stdin inside the intended Git workspace. Plans bind explicit sources, scope and budgets. Run performs bounded local text, CSV and JSON extraction. Query returns source-bound lexical evidence with partial coverage; it does not synthesize or accept claims. Private state stays in ignored .atelier-local/. See docs/ingestion.md.`,
+    learn: `Usage: ${c} learn capture|propose|decide|activate|withdraw|list|context|render|graph|export|plan
+
+Read a bounded JSON object from stdin in the intended Git workspace. Every request includes workspaceId. Writes include actor, requestId, expectedRevision and input. Context and render include query. Local actor identity is asserted, not authenticated. State stays in ignored .atelier-local/. Accepted content becomes context only after explicit activation for a named harness; no permission grant, file installation or sending occurs. See docs/learning.md.`,
     skills: `Usage: ${c} skills audit|observe|candidates|sync
 Audit bundled skills or --root DIR [--peer DIR].
 Sync previews by default; applying requires --apply --confirm PLAN_DIGEST.

@@ -23,6 +23,14 @@
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
   "exports": {
+    "./ingestion": "./src/ingestion/store.mjs",
+    "./ingestion/processors": "./src/ingestion/processors.mjs",
+    "./ingestion/evaluation": "./src/ingestion/evaluation.mjs",
+    "./contracts/atelier-ingestion.v1.schema.json": "./contracts/atelier-ingestion.v1.schema.json",
+    "./learning": "./src/learning/store.mjs",
+    "./learning/assistance": "./src/learning/assistance.mjs",
+    "./learning/adapters": "./src/learning/adapters.mjs",
+    "./contracts/atelier-learning.v1.schema.json": "./contracts/atelier-learning.v1.schema.json",
     "./presentation": "./src/ui/presentation/index.mjs",
     "./presentation/browser": "./src/ui/presentation/browser.mjs",
     "./presentation/native": "./src/ui/presentation/native.mjs",

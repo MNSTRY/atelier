@@ -63,3 +63,25 @@ test('intake refuses unignored state and occupied locks', t => {
   fs.writeFileSync(path.join(root, '.atelier-local/intake/operation.lock'), '');
   assert.throws(() => store.ingest({ ref: 'source.txt', expectedDigest: intakeDigest('Invented source') }), /EEXIST/);
 });
+
+test('read accessors preserve containment and distinguish absent, partial and corrupt attempts', t => {
+  const root = workspace(t), store = createIntakeStore({ workspaceRoot: root });
+  const source = store.readSource({ ref: 'source.txt' });
+  assert.equal(source.bytes.toString(), 'Invented source'); assert.equal(source.digest, intakeDigest(source.bytes));
+  assert.throws(() => store.readSource({ ref: '../source.txt' }), /relative/);
+  assert.throws(() => store.readSource({ ref: 'source.txt', expectedDigest: intakeDigest('Changed') }), { code: 'INTAKE_SOURCE_CHANGED' });
+  assert.equal(store.readAttempt('new-attempt').status, 'absent');
+  store.ingest({ ref: source.ref, expectedDigest: source.digest });
+  store.beginAttempt({ attemptId: 'new-attempt', blobId: source.digest, extractorId: 'sample', extractorVersion: '1', configurationDigest: intakeDigest('{}') });
+  assert.equal(store.readAttempt('new-attempt').status, 'begun');
+  const dir = path.join(root, '.atelier-local/intake/attempts/new-attempt');
+  fs.writeFileSync(path.join(dir, 'output.txt'), 'Derived');
+  assert.equal(store.readAttempt('new-attempt').status, 'partial');
+  store.completeAttempt({ attemptId: 'new-attempt', output: 'Derived', expectedOutputDigest: intakeDigest('Derived') });
+  assert.equal(store.readAttempt('new-attempt').status, 'complete');
+  fs.writeFileSync(path.join(dir, 'completion.json'), 'invented-private-invalid-json');
+  assert.throws(() => store.readAttempt('new-attempt'), error => error.code === 'INTAKE_INTEGRITY' && !error.message.includes('invented-private'));
+  fs.mkdirSync(path.join(root, '.atelier-local/intake/attempts/orphan'));
+  fs.writeFileSync(path.join(root, '.atelier-local/intake/attempts/orphan/output.txt'), 'Orphaned');
+  assert.throws(() => store.readAttempt('orphan'), { code: 'INTAKE_INTEGRITY' });
+});

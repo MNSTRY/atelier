@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {
+      "id": "service-note",
+      "ref": "service.md"
+    }
+  ],
+  "scope": {
+    "project": "sample-project",
+    "activity": "maintenance"
+  },
+  "purpose": "Find unresolved maintenance work.",
+  "budget": {
+    "maxInputBytes": 1048576,
+    "maxOutputBytes": 1048576,
+    "maxAttempts": 8
+  }
+}
