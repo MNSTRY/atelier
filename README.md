@@ -387,6 +387,7 @@ Then choose the path that matches what you are building:
 - [Assurance controls and evidence map](./docs/assurance-controls.md)
 - [Upgrade notes](./docs/upgrade.md)
 - [Upgrade with your agent](./docs/guided-upgrades.md)
+- [Obsidian projection](./docs/obsidian.md)
 
 ## Status and command reference
 
@@ -436,3 +437,17 @@ provider-independent ownership boundary and explicit Vercel/Cloudflare storage
 bindings. It is not enabled by local CLI commands. Hosting adapters can perform
 network I/O only when explicitly installed and invoked by a consuming host.
 Browser identity integration and hosted acceptance remain unqualified.
+
+## Experimental Obsidian projection
+
+An opt-in projection publishes readable, linked notes of an enrolled workspace
+into a vault outside every repository, keeps them current, and preserves every
+edit made in the editor before anything is republished. A body edit is applied
+to its source manually or under a scoped policy the user installs; anything
+structural stays a copy-only proposal. Atelier never commits to Git for it.
+It is disabled unless a project enables it, and it is proven on one platform
+and one app version. Read [what it does and its known limits](docs/obsidian.md),
+the [contract](docs/obsidian-contract.md) and the
+[maintenance service](docs/local-services.md) before relying on it. The
+package subpaths are `@mnstry/atelier/obsidian` and
+`@mnstry/atelier/obsidian/*`.

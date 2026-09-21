@@ -1,5 +1,84 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add an experimental, opt-in Obsidian projection. A project that enables
+  `ext["mnstry.atelier.obsidian"]` and declares views (`full`, `scoped` or
+  `focus`, with an optional bounded expansion) gets readable, linked notes of
+  the enrolled workspace in a vault outside every repository, under private
+  per-workspace storage. Nothing is published for a project that does not
+  enable it. See `docs/obsidian.md`, `docs/obsidian-contract.md` and
+  `docs/local-services.md`.
+- Add eleven closed `atelier-obsidian-*.v1` schemas with valid and invalid
+  fixtures, each exported under its own `./contracts/` path.
+- Add deterministic materialization: note paths made of a readable title and a
+  stable identity suffix, exact byte regions that invert to their source,
+  embedded assets, and audience and eligibility rules that fail closed. No
+  audience is admitted by default, which publishes an empty view.
+- Add publication that coordinates with a running editor through conditional
+  operations, with journals, restart recovery and late-writer rechecks, so
+  that a concurrent write by a person or the app is retained rather than
+  overwritten. It depends on an atomic file exchange and is proven on macOS
+  arm64 with one app version; see the contract for what is open.
+- Add a per-workspace loopback maintenance service and the noninteractive
+  `atelier obsidian` command (`status`, `scope`, `audience`, `mode`, `policy`,
+  `service`, `open`, `apply`, `proposals`). Reaching the installed app or the
+  operating system is never a default: it needs `--adapter=obsidian-cli`. The
+  app must be version 1.13.7 or later.
+- Preserve every edit made in the vault before anything is republished. A
+  body replacement is applied to its source manually, or automatically under
+  a scoped policy the user installs and can revoke; revocation is read again
+  before every write. An edit that is not a body replacement becomes a
+  copy-only proposal in the owning repository's proposal store and is never
+  applied. Atelier makes no Git commit for any of it.
+- Add selection binding, apply-policy setup, a read-only conflict view and an
+  acceptance-receipt validator that is labelled schema validation only and
+  closes no gate.
+- Add the package subpaths `./obsidian`, `./obsidian/contracts`,
+  `./obsidian/materialize`, `./obsidian/publication`, `./obsidian/recovery`,
+  `./obsidian/edits`, `./obsidian/proposals` and `./obsidian/selection`. The
+  package root exports nothing of the projection. Names ending
+  `ForOracleTests` are test mutation controls, not a supported API.
+- `release:audit` now requires the Obsidian runtime, schemas and documents in
+  the tarball, requires every declared export to name a packed file, and
+  refuses scripts, tests, experiments, receipt directories, application
+  archives, harness-written receipts and Obsidian fixtures above 262,144
+  bytes. The path allowlist is unchanged. A package proof packs the tarball,
+  imports the subpaths from a bare consumer and publishes a synthetic
+  workspace into a temporary vault with no app.
+- Known limits: Windows refuses publication and source apply because no atomic
+  exchange is known; the real-app suite has not been run on Linux, and x86_64
+  has not been run anywhere; macOS publication needs the stock system perl;
+  the app version has a floor and no ceiling; a vault body edit to a note
+  whose source uses CRLF becomes a proposal rather than an apply. No adopter
+  acceptance is recorded.
+
+### Changed
+
+- The resolver that produces `links_to` edges is now shared by the graph and
+  the projection, and its behaviour changed in five classes. Graph artifacts a
+  consumer has committed may differ after upgrading in exactly these classes
+  and no others; each is pinned in `test/graph-knowledge-graph.test.mjs` and
+  listed in `docs/obsidian-contract.md`. Regenerate committed graph artifacts
+  after upgrading and review the difference.
+  1. Links inside fenced code (backtick or tilde, any info string, up to three
+     spaces of indent, CRLF, CommonMark fence-length rules), inside inline
+     code and inside front matter no longer produce edges. Two stray backticks
+     that happen to pair across a link count as inline code, and links after
+     an unbalanced fence that runs to the end of the file are inside code.
+  2. A link to a directory resolves to that directory's `README.md`, then
+     `index.md`, testing eligibility per candidate. A link to a parent
+     directory now resolves where the earlier reader missed it.
+  3. A link that climbs above its own repository root and re-enters through
+     the checkout's directory name is reported as leaving the enrolled roots,
+     as before. It is never turned into a repository-local edge.
+  4. Malformed percent-encoding in a link is a `link-href-malformed` finding.
+     It no longer throws out of the graph build.
+  5. The workspace graph, not repository artifacts, additionally carries
+     wikilink edges and cross-repository Markdown-link edges, de-duplicated.
+
 ## 0.2.0-alpha.7
 
 - Add a guided owner-agent upgrade skill and read-only `upgrade explain`

@@ -112,8 +112,6 @@ const project = resolveProjectConfig({ argv: ['--project=' + projectFile], cwd: 
 const graph = await seams.buildGraph({ project, eligibility: DEFAULT_ELIGIBILITY })
 const configDigest = 'sha256:' + createHash('sha256').update(fs.readFileSync(projectFile)).digest('hex')
 const snapshot = await seams.captureSnapshot({ project, graph, workspaceId, index: new Map(), configDigest, capturedAt: '2026-02-01T12:00:00.000Z' })
-const repositoryRoots = project.repos.filter((repo) => !repo.external).map((repo) => repo.path)
-const store = seams.createRecoveryStore({ workspaceRoot: stateRoot, workspaceId, scopeId: scope.scopeId, vaultRoot, repositoryRoots })
 const profile = seams.profileFor({ project, workspaceId, audienceAllow: ['team'] })
 const prepared = await seams.prepareView({ snapshot, profile, scope, priorManifest: null, clock: () => '2026-02-01T12:00:01.000Z' })
 const manifestErrors = validateObsidianContract('generation-manifest', prepared.manifest)
@@ -126,6 +124,8 @@ const answer = {
 if (publish) {
   // No application has this vault open, so the editor is reported absent and
   // publication takes the direct path.
+  const repositoryRoots = project.repos.filter((repo) => !repo.external).map((repo) => repo.path)
+  const store = seams.createRecoveryStore({ workspaceRoot: stateRoot, workspaceId, scopeId: scope.scopeId, vaultRoot, repositoryRoots })
   const adapter = createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' })
   const result = await seams.publishView({ preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: null, recoveryStore: store, adapter, clock: () => new Date('2026-02-01T12:00:02.000Z'), quietPeriodMs: 0 })
   answer.published = { state: result.state, mode: result.mode ?? null }

@@ -228,6 +228,69 @@ The production loader reads regular `.mjs` modules from
 this contribution there is not part of this change, so the operations are not
 yet on the shipped command.
 
+## Package entry points
+
+The published package declares these subpaths. Each is the module named, and
+nothing under `scripts/obsidian/` ships.
+
+| Subpath | Module |
+| --- | --- |
+| `@mnstry/atelier/obsidian` | `src/runtime/obsidian/index.mjs`: enablement, machine settings, engine, service lifecycle, production seams, app qualification |
+| `@mnstry/atelier/obsidian/contracts` | `src/projection/obsidian/contracts.mjs`: contract validation, `selectScope`, note paths |
+| `@mnstry/atelier/obsidian/materialize` | `prepareView`, settings, path registry |
+| `@mnstry/atelier/obsidian/publication` | `publishView`, editor adapters, the exchange |
+| `@mnstry/atelier/obsidian/recovery` | recovery store, journals, late-writer recheck |
+| `@mnstry/atelier/obsidian/edits` | edit observation, arbitration, apply policy, source apply |
+| `@mnstry/atelier/obsidian/proposals` | proposal queue, router and adapter |
+| `@mnstry/atelier/obsidian/selection` | this document's module, `src/projection/obsidian/selection-ui/index.mjs` |
+
+Every `contracts/atelier-obsidian-*.v1.schema.json` is exported under its own
+path. The package root (`@mnstry/atelier`) exports nothing of the projection.
+Names ending `ForOracleTests` are mutation controls for the test suite, not a
+supported API. The whole surface is alpha and may change between prereleases.
+What the tarball must and must not carry, and the package proof, are in
+[release-engineering.md](release-engineering.md#obsidian-package-contents).
+
+## Known limits
+
+These are the limits known at this release. None is hidden behind a skipped
+test reported as a pass.
+
+- Windows: no atomic file exchange is known, so the publisher refuses with
+  `exchange-unsupported-platform` and publishes nothing, and source apply
+  refuses for the same reason. Selection, policy setup, `prepareView` and
+  receipt validation work. The tests that publish are skipped there and say
+  why.
+- Linux: the exchange primitive was proven in a container on aarch64. The
+  real-app suite (the publication interleavings and procedures AP-01 to AP-05)
+  has not been run on Linux. x86_64 has not been run on any system.
+- macOS: the exchange is a raw system call reached through the system perl. The
+  perl binary is used only when uid 0 owns it and neither group nor others can
+  write it; otherwise publication refuses with
+  `exchange-interpreter-untrusted`. A machine without the stock perl cannot
+  publish.
+- App version: `MINIMUM_APP_VERSION` in
+  `src/runtime/obsidian/app-capability.mjs` is 1.13.7, the only version the
+  publication protocol was proven on. An older, unreadable or unknown version
+  is `app-version-unsupported`. There is a floor and no ceiling: a newer app
+  is admitted although the protocol depends on the view's undocumented
+  `lastSavedData` field, and the protocol cases have not been re-run on any
+  later release. The "App capability floor" row of
+  [obsidian-contract.md](obsidian-contract.md) predates the floor and still
+  says none is pinned.
+- CRLF sources: the editor normalizes line endings when it saves, so a body
+  edit made in the vault to a note whose source uses CRLF is more than a body
+  replacement to the edit lens. It is preserved and becomes a proposal; it is
+  never applied to the source, in manual or automatic mode. Edit such a note
+  in its repository.
+- An edit the byte lens cannot turn into source bytes (a new or changed link
+  to another note of the vault, an edited front matter) becomes a copy-only
+  proposal. No operation applies one.
+- The selection, conflict and apply-policy operations of this module are not
+  on the shipped `atelier obsidian` command; see "The command operations".
+- Acceptance: a schema-valid receipt closes no gate, the package proof closes
+  no gate, and no adopter acceptance is recorded in this repository.
+
 ## Mutation controls
 
 The test suite proves each oracle can fail:
