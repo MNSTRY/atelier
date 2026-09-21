@@ -210,3 +210,67 @@ test('a consumer publishes that view into a temporary vault with no app, from th
   }
   assert.ok(!walk(vaultRoot).some((file) => /unclassified/i.test(path.relative(vaultRoot, file))), 'the withheld document names no vault path')
 })
+
+// Mutation control for the tarball audit: a synthetic package that packs what
+// must never ship. Each refusal is matched by its own message, so an audit
+// that stopped looking for one class fails here.
+test('mutation control: the release audit refuses proof tooling, experiments, a receipt directory, an app archive, a harness receipt, an oversized Obsidian fixture and an export with no packed file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-obsidian-audit-mutation-'))
+  try {
+    for (const rel of ['scripts/check-release-tarball.mjs', 'scripts/npm-cli.mjs', 'scripts/structural-patterns.mjs', 'src/disclosure/content-scan.mjs', 'src/egress/forbidden-egress.mjs']) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
+      fs.copyFileSync(path.join(ROOT, rel), path.join(root, rel))
+    }
+    const receipt = (ext) => `${JSON.stringify({ schema: 'atelier-obsidian-acceptance-receipt/v1', receiptId: 'acceptance-synthetic-0001', ext })}\n`
+    const files = {
+      'README.md': 'fixture 0.0.0-mutation.1\n',
+      'CHANGELOG.md': '# Changelog\n\n## 0.0.0-mutation.1\n',
+      LICENSE: 'Apache-2.0\n',
+      NOTICE: 'fixture\n',
+      'TRADEMARKS.md': 'fixture\n',
+      'SECURITY.md': 'fixture\n',
+      'bin/atelier.mjs': 'export {}\n',
+      'bin/mnstry-atelier.mjs': 'export {}\n',
+      'scripts/obsidian/desktop-receipts.mjs': 'export {}\n',
+      'experiments/probe/notes.md': '# Probe\n',
+      '.artifacts/obsidian/desktop/G07.json': receipt({}),
+      'fixtures/app/synthetic.asar': 'not an archive\n',
+      'fixtures/obsidian/acceptance/receipts/harness.v1.json': receipt({ 'mnstry.atelier.obsidian.desktop-receipts': { closes: false } }),
+      'fixtures/elsewhere/receipt.v1.json': receipt({}),
+      'fixtures/obsidian/scale/corpus.json': `${JSON.stringify({ filler: 'a'.repeat(300_000) })}\n`,
+    }
+    for (const [rel, content] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
+      fs.writeFileSync(path.join(root, rel), content)
+    }
+    fs.writeFileSync(path.join(root, 'package.json'), `${JSON.stringify({
+      name: '@mnstry/atelier', version: '0.0.0-mutation.1', private: false, license: 'Apache-2.0', type: 'module',
+      bin: { atelier: 'bin/atelier.mjs', 'mnstry-atelier': 'bin/mnstry-atelier.mjs' },
+      exports: { './obsidian': './src/runtime/obsidian/index.mjs' },
+      files: ['README.md', 'CHANGELOG.md', 'LICENSE', 'NOTICE', 'TRADEMARKS.md', 'SECURITY.md', 'bin/', 'scripts/obsidian/', 'experiments/', '.artifacts/', 'fixtures/'],
+    }, null, 2)}\n`)
+    let status = 0
+    let stderr = ''
+    try {
+      execFileSync(process.execPath, [path.join(root, 'scripts', 'check-release-tarball.mjs')], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ATELIER_DENYLIST_JSON: '{"patterns":[]}', ATELIER_CANDIDATE_TARBALL: '', ATELIER_CANDIDATE_PACK_JSON: '', ATELIER_EXPECTED_TARBALL_SHA256: '' } })
+    } catch (error) {
+      status = error.status
+      stderr = String(error.stderr)
+    }
+    assert.equal(status, 1, stderr)
+    for (const expected of [
+      /proof tooling, tests and experiments are not shipped: scripts\/obsidian\/desktop-receipts\.mjs/,
+      /proof tooling, tests and experiments are not shipped: experiments\/probe\/notes\.md/,
+      /acceptance receipts and their evidence are not shipped: \.artifacts\/obsidian\/desktop\/G07\.json/,
+      /an application archive is not shipped: fixtures\/app\/synthetic\.asar/,
+      /packed acceptance receipt is not a synthetic fixture: fixtures\/obsidian\/acceptance\/receipts\/harness\.v1\.json/,
+      /packed acceptance receipt is not a synthetic fixture: fixtures\/elsewhere\/receipt\.v1\.json/,
+      /packed Obsidian fixture exceeds 262144 bytes: fixtures\/obsidian\/scale\/corpus\.json/,
+      /package export \.\/obsidian names a file the tarball does not carry/,
+      /tarball must include docs\/obsidian\.md/,
+      /tarball must include src\/projection\/obsidian\/publication\/index\.mjs/,
+    ]) assert.match(stderr, expected)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

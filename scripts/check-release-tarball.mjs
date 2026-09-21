@@ -189,6 +189,63 @@ for (const requiredPortableFile of [
   }
 }
 
+// Every declared export names a packed file: a subpath whose target was left
+// out of the tarball would resolve in this checkout and fail for a consumer.
+for (const [subpath, target] of Object.entries(packedPackageJson.exports ?? {})) {
+  if (typeof target !== 'string' || !paths.includes(target.replace(/^\.\//, ''))) {
+    console.error(`[release:audit] package export ${subpath} names a file the tarball does not carry`)
+    failures += 1
+  }
+}
+
+// The Obsidian projection ships as runtime, contracts and documents. Its
+// proof tooling (scripts/obsidian, the desktop harness and its receipts) and
+// the experiments never ship; see docs/release-engineering.md.
+const obsidianSchemas = existsSync(join(packageRoot, 'contracts'))
+  ? readdirSync(join(packageRoot, 'contracts')).filter((name) => /^atelier-obsidian-[a-z0-9-]+\.v\d+\.schema\.json$/.test(name)).map((name) => `contracts/${name}`)
+  : []
+for (const requiredObsidianFile of [
+  'docs/obsidian.md',
+  'docs/obsidian-contract.md',
+  'src/commands/obsidian.mjs',
+  'src/runtime/obsidian/index.mjs',
+  'src/runtime/obsidian/service-main.mjs',
+  'src/runtime/obsidian/contributions/source-apply.mjs',
+  'src/runtime/obsidian/contributions/proposal-adapter.mjs',
+  'src/projection/obsidian/contracts.mjs',
+  'src/projection/obsidian/materialize/index.mjs',
+  'src/projection/obsidian/publication/index.mjs',
+  'src/projection/obsidian/recovery/index.mjs',
+  'src/projection/obsidian/edits/index.mjs',
+  'src/projection/obsidian/proposals/index.mjs',
+  'src/projection/obsidian/selection-ui/index.mjs',
+  ...obsidianSchemas,
+]) {
+  if (!paths.includes(requiredObsidianFile)) {
+    console.error(`[release:audit] tarball must include ${requiredObsidianFile}`)
+    failures += 1
+  }
+}
+for (const schemaPath of obsidianSchemas) {
+  if (packedPackageJson.exports?.[`./${schemaPath}`] !== `./${schemaPath}`) {
+    console.error(`[release:audit] package must export ./${schemaPath}`)
+    failures += 1
+  }
+}
+
+// The allowlist below already refuses these. They are named here as well so
+// that widening an allowlist pattern cannot admit them, and so the failure
+// says what the file is.
+const neverPacked = [
+  { pattern: /^(experiments|scripts|test|examples)\//, label: 'proof tooling, tests and experiments are not shipped' },
+  { pattern: /(^|\/)\.artifacts\//, label: 'acceptance receipts and their evidence are not shipped' },
+  { pattern: /\.asar$/i, label: 'an application archive is not shipped' },
+]
+// Packed Obsidian fixtures are small synthetic text. Scale corpora and binary
+// samples are generated in temporary storage at test time.
+const MAX_OBSIDIAN_FIXTURE_BYTES = 262_144
+const DESKTOP_RECEIPT_EXT_KEY = 'mnstry.atelier.obsidian.desktop-receipts'
+
 if (!paths.includes('bin/atelier.mjs')) {
   console.error('[release:audit] tarball must include bin/atelier.mjs')
   failures += 1
@@ -223,6 +280,12 @@ if (!paths.includes(announcementsKey)) {
 }
 
 for (const filePath of paths) {
+  const refused = neverPacked.find(({ pattern }) => pattern.test(filePath))
+  if (refused) {
+    console.error(`[release:audit] ${refused.label}: ${filePath}`)
+    failures += 1
+    continue
+  }
   if (!allowedFiles.some((pattern) => pattern.test(filePath))) {
     console.error(`[release:audit] unexpected tarball file: ${filePath}`)
     failures += 1
@@ -233,6 +296,10 @@ for (const filePath of paths) {
   // effectively unscanned (text can hide in compressed chunks). Nothing
   // binary is allowed to pack rather than allowing it past the scrub.
   const bytes = readFileSync(join(auditRoot, filePath))
+  if (filePath.startsWith('fixtures/obsidian/') && bytes.length > MAX_OBSIDIAN_FIXTURE_BYTES) {
+    console.error(`[release:audit] packed Obsidian fixture exceeds ${MAX_OBSIDIAN_FIXTURE_BYTES} bytes: ${filePath}`)
+    failures += 1
+  }
   if (bytes.includes(0)) {
     console.error(`[release:audit] binary file cannot be content-scanned: ${filePath}`)
     failures += 1
@@ -285,6 +352,13 @@ for (const filePath of paths) {
       if (!value || typeof value !== 'object') return false
       if (typeof value.d === 'string' && /^[A-Za-z0-9_-]{40,}$/.test(value.d)) return true
       return Object.values(value).some(carriesPrivateScalar)
+    }
+    // An acceptance receipt in the package is a synthetic shape fixture. One
+    // written by the desktop harness records a real host and never ships.
+    if (doc?.schema === 'atelier-obsidian-acceptance-receipt/v1'
+      && (!filePath.startsWith('fixtures/obsidian/') || Object.hasOwn(doc.ext ?? {}, DESKTOP_RECEIPT_EXT_KEY))) {
+      console.error(`[release:audit] packed acceptance receipt is not a synthetic fixture: ${filePath}`)
+      failures += 1
     }
     if (carriesPrivateScalar(doc)) {
       console.error(`[release:audit] packed JSON document carries a private key member: ${filePath}`)
