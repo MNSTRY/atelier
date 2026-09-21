@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add an experimental progressive local ingestion runner with exact plans,
+  bounded deterministic text/CSV/JSON extraction, immutable intake reuse,
+  resumable attempt accounting and source-verified lexical queries. Add a
+  JSON stdin CLI and structural evaluation that retains missing cases and
+  unknown costs. No model dispatch, automatic semantic acceptance or native
+  desktop admission is provided by the portable runner.
+
 - Add a portable local learning lifecycle: Evidence, proposals, exact decisions,
   explicit harness activation, withdrawal and retained history. Include a JSON
   stdin CLI, private graph/export projections, bounded proposal-assistance

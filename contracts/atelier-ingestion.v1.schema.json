@@ -1,0 +1,806 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-ingestion.v1.schema.json",
+  "$comment": "contract revision 1.0.0; explicit local extraction, private evidence and selected-only coverage.",
+  "title": "Atelier progressive local ingestion v1",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/planInput"
+    },
+    {
+      "$ref": "#/$defs/plan"
+    },
+    {
+      "$ref": "#/$defs/event"
+    },
+    {
+      "$ref": "#/$defs/extraction"
+    },
+    {
+      "$ref": "#/$defs/workspace"
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+    },
+    "sourceId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "rawDigest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "activity"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "#/$defs/id"
+        },
+        "activity": {
+          "$ref": "#/$defs/id"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxInputBytes",
+        "maxOutputBytes",
+        "maxAttempts"
+      ],
+      "properties": {
+        "maxInputBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 128
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "sourceSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ref"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "planInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sources",
+        "scope",
+        "purpose",
+        "budget"
+      ],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/sourceSelection"
+          },
+          "minItems": 1
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "processor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "format",
+        "modality",
+        "supported",
+        "limitations"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]{1,64}$"
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "modality": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "supported": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ref",
+        "sourceDigest",
+        "inputBytes",
+        "processor",
+        "initialStatus",
+        "reason"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "sourceDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rawDigest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inputBytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16777216
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "processor": {
+          "$ref": "#/$defs/processor"
+        },
+        "initialStatus": {
+          "enum": [
+            "pending",
+            "unavailable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "planId",
+        "planDigest",
+        "workspaceId",
+        "createdAt",
+        "nonce",
+        "scope",
+        "purpose",
+        "budget",
+        "items",
+        "census",
+        "semanticAcceptance"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-ingestion-plan@v1"
+        },
+        "planId": {
+          "$ref": "#/$defs/id"
+        },
+        "planDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/item"
+          },
+          "minItems": 1
+        },
+        "census": {
+          "const": "explicit-selection-only"
+        },
+        "semanticAcceptance": {
+          "const": "pending"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxOutputBytes",
+        "maxEvidenceItems"
+      ],
+      "properties": {
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "maxEvidenceItems": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "total",
+        "processed",
+        "omitted",
+        "complete",
+        "limitations"
+      ],
+      "properties": {
+        "unit": {
+          "enum": [
+            "line",
+            "csv-cell",
+            "json-leaf",
+            "source"
+          ]
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "omitted": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "limitations": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "extraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "processor",
+        "format",
+        "modality",
+        "coverage",
+        "evidence"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-ingestion-extraction@v1"
+        },
+        "processor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "version"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/sourceId"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9._-]{1,64}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          }
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "modality": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 2000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "locator",
+              "text"
+            ],
+            "properties": {
+              "locator": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "value"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "line",
+                      "csv-cell",
+                      "json-pointer"
+                    ]
+                  },
+                  "value": {
+                    "type": "string",
+                    "maxLength": 16384
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                }
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 16777216
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "reservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "inputBytes",
+        "attemptId",
+        "configurationDigest",
+        "limits",
+        "cacheState",
+        "outputAllowance"
+      ],
+      "properties": {
+        "sourceId": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "inputBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "attemptId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sourceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configurationDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rawDigest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "cacheState": {
+          "enum": [
+            "absent",
+            "begun",
+            "partial",
+            "complete",
+            "corrupt",
+            "unsupported"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "outputAllowance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        }
+      }
+    },
+    "disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "status",
+        "reason",
+        "attemptId",
+        "cacheReuse",
+        "reconciled",
+        "outputBytes",
+        "coverage",
+        "semanticAcceptance"
+      ],
+      "properties": {
+        "sourceId": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "unsupported",
+            "unavailable",
+            "failed",
+            "budget-blocked",
+            "stale"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "attemptId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sourceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cacheReuse": {
+          "type": "boolean"
+        },
+        "reconciled": {
+          "type": "boolean"
+        },
+        "outputBytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16777216
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/coverage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "semanticAcceptance": {
+          "const": "pending"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      }
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema",
+            "planId",
+            "planDigest",
+            "revision",
+            "previousDigest",
+            "digest",
+            "type",
+            "record"
+          ],
+          "properties": {
+            "schema": {
+              "const": "mnstry.atelier-ingestion-event@v1"
+            },
+            "planId": {
+              "$ref": "#/$defs/id"
+            },
+            "planDigest": {
+              "$ref": "#/$defs/digest"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "previousDigest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "type": {
+              "const": "reservation"
+            },
+            "record": {
+              "$ref": "#/$defs/reservation"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            },
+            "contractVersion": {
+              "type": "string",
+              "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema",
+            "planId",
+            "planDigest",
+            "revision",
+            "previousDigest",
+            "digest",
+            "type",
+            "record"
+          ],
+          "properties": {
+            "schema": {
+              "const": "mnstry.atelier-ingestion-event@v1"
+            },
+            "planId": {
+              "$ref": "#/$defs/id"
+            },
+            "planDigest": {
+              "$ref": "#/$defs/digest"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "previousDigest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "type": {
+              "const": "disposition"
+            },
+            "record": {
+              "$ref": "#/$defs/disposition"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            },
+            "contractVersion": {
+              "type": "string",
+              "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        }
+      ]
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "workspaceId"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-ingestion-workspace@v1"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,8 +1,12 @@
 # Progressive ingestion — design proposal
 
-Status: proposed architecture, not an available ingestion command or a released
-contract. This document adds no executor, provider connection, schema field, or
-permission. The existing analysis adapter remains disabled.
+Status: architecture proposal with a bounded experimental subset now implemented.
+This document is not a release announcement or provider authorization.
+The existing analysis adapter remains disabled.
+
+An experimental [local runner](ingestion.md) now implements the selected-file,
+bounded deterministic extraction and lexical retrieval subset. The remaining
+architecture below stays proposed; it is not a statement of released capability.
 
 ## Outcome
 
