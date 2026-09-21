@@ -1,0 +1,269 @@
+{
+  "schema": "atelier-harness-ledger@v1",
+  "profile": "build",
+  "records": [
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "reminder-build",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "objective",
+      "data": {
+        "repository": "workshop-product",
+        "owner": "synthetic-owner",
+        "purpose": "Build a synthetic reminder prototype.",
+        "scope": "Disposable local example only.",
+        "audience": "private",
+        "acceptance": [
+          "The prototype is a retained file with explicit synthetic verification."
+        ],
+        "gates": [
+          {
+            "id": "tests",
+            "kind": "source",
+            "required": true
+          },
+          {
+            "id": "review",
+            "kind": "review",
+            "required": true
+          },
+          {
+            "id": "ci",
+            "kind": "ci",
+            "required": true
+          }
+        ],
+        "dependencies": [
+          {
+            "id": "rationale",
+            "need": "Current accepted trial rationale.",
+            "handoff": {
+              "schema": "atelier-harness-handoff@v1",
+              "source": {
+                "repository": "workshop-notes",
+                "profile": "knowledge",
+                "run": "workshop-knowledge",
+                "historyDigest": "sha256:25a21cfe6e5ee573aeb5c6067de5209f542bb5c09f30dbf758b4488022357c22",
+                "subject": {
+                  "id": "trial-rationale",
+                  "digest": "sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311"
+                }
+              },
+              "target": {
+                "repository": "workshop-product",
+                "profile": "build",
+                "purpose": "Implement a disposable reminder prototype."
+              },
+              "audience": "private",
+              "payload": "{\"subject\":{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"trial-rationale\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"contribution\",\"data\":{\"domain\":{\"id\":\"workshop-knowledge\",\"digest\":\"sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331\"},\"category\":\"decision-rationale\",\"term\":\"material\",\"title\":\"Reversible trial rationale\",\"body\":\"A small follow-up trial may test whether notice leads to return visits.\",\"audience\":\"private\",\"scope\":\"Invented workshop visitors\",\"origin\":{\"method\":\"authored\",\"reason\":\"Synthetic interpretation of limited evidence.\"},\"basedOn\":[{\"contribution\":{\"id\":\"observation\",\"digest\":\"sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c\"},\"quote\":\"Synthetic observation: three of five fictional visitors noticed the reminder.\"}]}},\"context\":[{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"workshop-knowledge\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"domain\",\"data\":{\"repository\":\"workshop-notes\",\"purpose\":\"Synthetic learning-cycle demonstration.\",\"scope\":\"Invented workshop visitors\",\"owner\":\"synthetic-owner\",\"audience\":\"private\",\"questions\":[{\"id\":\"return\",\"question\":\"What justifies a reversible reminder trial?\",\"acceptance\":\"A reviewed rationale traces to a source and its limitations.\"}],\"vocabulary\":{\"types\":[{\"id\":\"material\",\"meaning\":\"A source or interpreted contribution.\"}],\"relations\":[{\"id\":\"justifies\",\"meaning\":\"A limited evidential relationship.\",\"graphPredicate\":\"supports\"}]},\"identityRules\":\"Keep distinct observations distinct; propose matches for review.\",\"sourcePolicy\":\"Invented material only; retain original bytes and provenance.\",\"acceptancePolicy\":\"A simulated owner reviews each contribution after evaluation.\"}},{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"claim-review\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"review\",\"data\":{\"target\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"},\"disposition\":\"accepted\",\"basis\":\"Simulated owner acceptance for a disposable example.\",\"evaluations\":[{\"id\":\"claim-evaluation\",\"digest\":\"sha256:5021560b9d5468909153da655483de1a42aae3b56e5d220c347391c6b3006dae\"}]}},{\"schema\":\"atelier-knowledge-record@v1\",\"id\":\"claim-evaluation\",\"run\":\"workshop-knowledge\",\"at\":\"2026-01-01T00:00:00Z\",\"by\":\"synthetic-owner\",\"kind\":\"evaluation\",\"data\":{\"contribution\":{\"id\":\"trial-rationale\",\"digest\":\"sha256:bacf972e3426314bf3340ca3841b9c1a1f74235f5b86d68299a5bb2a75209311\"},\"judgment\":\"uncertain\",\"rationale\":\"Retained for this synthetic scenario only.\",\"limitations\":[\"Invented evidence; no empirical or calibrated inference.\"],\"scope\":\"Invented workshop visitors\"}}],\"assurance\":\"caller-reported; acceptance-is-not-truth-or-authority\"}",
+              "payloadDigest": "sha256:7aa31d9785d74039798b4943006bc103b93bb6e424a1f30f14b8766b0d944cf6",
+              "assurance": "caller-reported",
+              "authority": "none"
+            }
+          }
+        ],
+        "allowedEffects": [
+          "read-workspace",
+          "write-workspace",
+          "execute-local"
+        ],
+        "maxAttempts": 3,
+        "stoppingRule": "Stop on stale evidence, unsettled execution or failed required gates."
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "prototype",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "candidate",
+      "data": {
+        "objective": {
+          "id": "reminder-build",
+          "digest": "sha256:d28ba057711e4a3eca1c3bc8170545961a6943200912809b690acf0b7c099a42"
+        },
+        "repository": "workshop-product",
+        "commit": "1111111111111111111111111111111111111111",
+        "tree": "2222222222222222222222222222222222222222",
+        "artifactDigest": "sha256:137e2ba6a83245723fcb82e55a5e1675c9bf64ea6018992f473af798354abc35",
+        "writer": {
+          "owner": "synthetic-owner",
+          "reservation": "disposable-writer",
+          "evidenceDigest": "sha256:ebdd6376092dae5143c7ee3566eab8941e582896c1dc8856716bc8169c084324"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "test-attempt",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "attempt",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+        },
+        "operation": "test",
+        "requestDigest": "sha256:886f5ca461607989f0265ce1f47cc21f48691f8cf5599b7222f9aa03bb9b5713",
+        "effects": [
+          "execute-local"
+        ]
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "test-uncertain",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "progress",
+      "data": {
+        "attempt": {
+          "id": "test-attempt",
+          "digest": "sha256:ff1a699758bd2010838a3a64eb2873feb1273ff1f1506a9d8f087cb1b2409bed"
+        },
+        "state": "uncertain",
+        "evidenceDigest": "sha256:5629b3a58ce4b8e796f7b85316a1ed54b48eba46679fe85a8d6f3c68d64509b1",
+        "reason": "Simulated uncertain transport; do not replay."
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "test-completion",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "progress",
+      "data": {
+        "attempt": {
+          "id": "test-attempt",
+          "digest": "sha256:ff1a699758bd2010838a3a64eb2873feb1273ff1f1506a9d8f087cb1b2409bed"
+        },
+        "state": "completed",
+        "evidenceDigest": "sha256:6eb8c0c9c0ec72660c39c2458757b8bd8f4f5fde8128510ecf899f29a8021cb4",
+        "reason": "Simulated reconciliation against the same attempt."
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "tests-gate",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "gate",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+        },
+        "gate": "tests",
+        "status": "passed",
+        "evidence": {
+          "digest": "sha256:609661757ec908d46e6658cfe228f34dd9c803c3fced0e67902010c9f0b4c868",
+          "locator": "synthetic:tests",
+          "verifier": "synthetic-fixture"
+        },
+        "attempt": {
+          "id": "test-attempt",
+          "digest": "sha256:ff1a699758bd2010838a3a64eb2873feb1273ff1f1506a9d8f087cb1b2409bed"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "review-gate",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "gate",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+        },
+        "gate": "review",
+        "status": "passed",
+        "evidence": {
+          "digest": "sha256:f08c25d4b59377186d5cf0eb43fe8d316b0301a8f5074ac9aa3c2dc39ed290f8",
+          "locator": "synthetic:review",
+          "verifier": "synthetic-fixture"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "ci-gate",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "gate",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+        },
+        "gate": "ci",
+        "status": "passed",
+        "evidence": {
+          "digest": "sha256:b08431c7ef924beae08c9b090aacfc974ffe8d9286390320640572808779b81a",
+          "locator": "synthetic:ci",
+          "verifier": "synthetic-fixture"
+        }
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "candidate-review",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "decision",
+      "data": {
+        "candidate": {
+          "id": "prototype",
+          "digest": "sha256:f8888449f33abdb8b1895587461fadb0045b2564398bd391ae93b4d204668090"
+        },
+        "disposition": "accepted",
+        "reason": "Simulated acceptance for contract testing only.",
+        "gates": [
+          {
+            "id": "tests-gate",
+            "digest": "sha256:f876f7ca33cc2882108ecebbef68639548cc40c0251b80e91444554e9a7e96ae"
+          },
+          {
+            "id": "review-gate",
+            "digest": "sha256:883c76e1c7eda7f930c34e64920c7cbb15036381e44c6e03c4a65ec7864c4e19"
+          },
+          {
+            "id": "ci-gate",
+            "digest": "sha256:f8d42ffac9713fc4ee50e8e58184867cfa6fedf5b25fa197f409074e559411c9"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-build-record@v1",
+      "id": "delivery-report",
+      "run": "reminder-build",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "delivery",
+      "data": {
+        "decision": {
+          "id": "candidate-review",
+          "digest": "sha256:135c4bebd80082e604e777dd3426579bafcfb5fc1d1e84fc4b6ac7a2c17e46be"
+        },
+        "recipient": "synthetic-recipient",
+        "evidenceDigest": "sha256:bb7777d519c2d97f25e40e680308971a9504e4f2fe4977b956c93f8040b80a1b",
+        "acceptance": "Simulated recipient acceptance; no external delivery occurred."
+      }
+    }
+  ],
+  "head": "sha256:a4195ecb65f0cdeefb6ba81537b79e794fe9ee1037835d54319c326b7201cff3",
+  "authorityGranted": true
+}

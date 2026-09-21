@@ -1,0 +1,61 @@
+{
+  "schema": "mnstry.atelier-capability-package@v1",
+  "id": "mnstry.atelier/build-harness",
+  "version": "1.0.0",
+  "title": "Build Harness",
+  "summary": "Portable governed build development and stewardship.",
+  "license": "Apache-2.0",
+  "source": {
+    "repository": "https://github.com/MNSTRY/atelier",
+    "revision": "unreleased-learning-harness-v1"
+  },
+  "hosts": [
+    "codex-repo-v1",
+    "claude-repo-v1"
+  ],
+  "dependencies": [],
+  "evaluations": [
+    {
+      "id": "acceptance",
+      "kind": "integration",
+      "path": "evaluation.md",
+      "outcome": "unknown"
+    }
+  ],
+  "migrations": [],
+  "limitations": [
+    "Unreleased source package; digest integrity does not authenticate publisher identity.",
+    "Synthetic workflow verification does not establish host behavior, research quality, calibration or recipient acceptance."
+  ],
+  "capabilities": [
+    {
+      "id": "build-harness",
+      "description": "Develop build outcomes with traceable evidence and governance.",
+      "inputs": [
+        "Explicit purpose, sources, operating policy and existing tools"
+      ],
+      "outputs": [
+        "Typed harness records, evidence and reviewable handoffs"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "harness",
+      "name": "atelier-build-harness",
+      "path": "skills/atelier-build-harness",
+      "capabilities": [
+        "build-harness"
+      ]
+    }
+  ],
+  "requirements": {
+    "tools": [
+      "atelier-harness-v1"
+    ],
+    "effects": [
+      "read-workspace",
+      "write-workspace"
+    ]
+  }
+}

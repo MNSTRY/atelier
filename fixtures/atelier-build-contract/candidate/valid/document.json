@@ -1,0 +1,23 @@
+{
+  "schema": "atelier-build-record@v1",
+  "id": "prototype",
+  "run": "reminder-build",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "candidate",
+  "data": {
+    "objective": {
+      "id": "reminder-build",
+      "digest": "sha256:d28ba057711e4a3eca1c3bc8170545961a6943200912809b690acf0b7c099a42"
+    },
+    "repository": "workshop-product",
+    "commit": "1111111111111111111111111111111111111111",
+    "tree": "2222222222222222222222222222222222222222",
+    "artifactDigest": "sha256:137e2ba6a83245723fcb82e55a5e1675c9bf64ea6018992f473af798354abc35",
+    "writer": {
+      "owner": "synthetic-owner",
+      "reservation": "disposable-writer",
+      "evidenceDigest": "sha256:ebdd6376092dae5143c7ee3566eab8941e582896c1dc8856716bc8169c084324"
+    }
+  }
+}

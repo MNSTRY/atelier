@@ -1,0 +1,17 @@
+{
+  "schema": "atelier-build-record@v1",
+  "id": "delivery-report",
+  "run": "reminder-build",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "delivery",
+  "data": {
+    "decision": {
+      "id": "candidate-review",
+      "digest": "sha256:135c4bebd80082e604e777dd3426579bafcfb5fc1d1e84fc4b6ac7a2c17e46be"
+    },
+    "recipient": "synthetic-recipient",
+    "evidenceDigest": "sha256:bb7777d519c2d97f25e40e680308971a9504e4f2fe4977b956c93f8040b80a1b",
+    "acceptance": "Simulated recipient acceptance; no external delivery occurred."
+  }
+}

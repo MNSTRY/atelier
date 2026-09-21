@@ -1,0 +1,26 @@
+{
+  "schema": "atelier-knowledge-record@v1",
+  "id": "graph-use",
+  "run": "workshop-knowledge",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "activation",
+  "data": {
+    "reviews": [
+      {
+        "id": "claim-review",
+        "digest": "sha256:9cfe99b751c2f9f0bb25efa09cdc9c9575d4d7326ca6675cbcd5ba37fe1bb882"
+      },
+      {
+        "id": "relation-review",
+        "digest": "sha256:56101efa09e227d109be1b4c5bdbe049b75e308d777fdc73ad1bb4771dd88f1e"
+      }
+    ],
+    "purpose": "Prepare a graph-backed trial decision.",
+    "destination": "synthetic workspace",
+    "questions": [
+      "return"
+    ]
+  },
+  "authorityGranted": true
+}

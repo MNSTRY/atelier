@@ -1,0 +1,18 @@
+{
+  "schema": "atelier-build-record@v1",
+  "id": "test-completion",
+  "run": "reminder-build",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "progress",
+  "data": {
+    "attempt": {
+      "id": "test-attempt",
+      "digest": "sha256:ff1a699758bd2010838a3a64eb2873feb1273ff1f1506a9d8f087cb1b2409bed"
+    },
+    "state": "completed",
+    "evidenceDigest": "sha256:6eb8c0c9c0ec72660c39c2458757b8bd8f4f5fde8128510ecf899f29a8021cb4",
+    "reason": "Simulated reconciliation against the same attempt."
+  },
+  "authorityGranted": true
+}

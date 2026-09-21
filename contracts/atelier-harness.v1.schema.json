@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-harness.v1.schema.json",
+  "title": "Atelier harness contract",
+  "$comment": "contract revision 1.0.0 (initial local harness contract)",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/handoff"
+    }
+  ],
+  "$defs": {
+    "pointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "package": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "releaseDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "generation": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "binding": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "bindingDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "host": {
+          "enum": [
+            "codex-repo-v1",
+            "claude-repo-v1"
+          ]
+        },
+        "session": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "package",
+        "releaseDigest",
+        "generation",
+        "binding",
+        "bindingDigest",
+        "host",
+        "session"
+      ]
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-harness-handoff@v1"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "profile": {
+              "enum": [
+                "inquiry",
+                "knowledge",
+                "build"
+              ]
+            },
+            "run": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "historyDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "subject": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "id",
+                "digest"
+              ]
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "repository",
+            "profile",
+            "run",
+            "historyDigest",
+            "subject"
+          ]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "profile": {
+              "enum": [
+                "inquiry",
+                "knowledge",
+                "build"
+              ]
+            },
+            "purpose": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "repository",
+            "profile",
+            "purpose"
+          ]
+        },
+        "audience": {
+          "enum": [
+            "public",
+            "team",
+            "operator",
+            "staff",
+            "private",
+            "sensitive"
+          ]
+        },
+        "payload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "payloadDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "assurance": {
+          "const": "caller-reported"
+        },
+        "authority": {
+          "const": "none"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "source",
+        "target",
+        "audience",
+        "payload",
+        "payloadDigest",
+        "assurance",
+        "authority"
+      ]
+    }
+  }
+}

@@ -64,6 +64,7 @@ export const commandMap = new Map([
   ['skills', ['src/commands/skills.mjs']],
   ['capability', ['src/commands/capability.mjs']],
   ['inquiry', ['src/commands/inquiry.mjs']],
+  ['harness', ['src/commands/harness.mjs']],
   ['obsidian', ['src/commands/obsidian.mjs']],
 ])
 
@@ -147,6 +148,7 @@ Core commands:
   coauthor start|read|event|recover Save and resume private authoring drafts.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
   capability seal|plan|apply|status Publish local capability bundles and govern adoption.
+  harness                         Govern knowledge and build workflows.
   inquiry append|handoff|status|graph Run the local Discovery and Research Harness workflow.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.

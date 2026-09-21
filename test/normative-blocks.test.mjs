@@ -28,6 +28,7 @@ test('the canonical block set exists', () => {
     'claims',
     'conformance-admission',
     'inquiry-harnesses',
+    'learning-harnesses',
     'will-not-do',
   ])
 })

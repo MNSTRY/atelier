@@ -70,6 +70,7 @@ Core commands:
   coauthor start|read|event|recover Save and resume private authoring drafts.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
   capability seal|plan|apply|status Publish local capability bundles and govern adoption.
+  harness                         Govern knowledge and build workflows.
   inquiry append|handoff|status|graph Run the local Discovery and Research Harness workflow.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
@@ -108,7 +109,7 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
   assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
   assert.deepEqual(commandMap.get('capability'), ['src/commands/capability.mjs'])
-  assert.equal(commandMap.size, 59)
+  assert.equal(commandMap.size, 60)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {

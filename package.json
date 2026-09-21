@@ -73,7 +73,13 @@
     "./contracts/atelier-upgrade-receipt.v1.schema.json": "./contracts/atelier-upgrade-receipt.v1.schema.json",
     "./local-state": "./src/project/durable-state.mjs",
     "./inquiry": "./src/inquiry/index.mjs",
-    "./contracts/atelier-inquiry.v1.schema.json": "./contracts/atelier-inquiry.v1.schema.json"
+    "./contracts/atelier-inquiry.v1.schema.json": "./contracts/atelier-inquiry.v1.schema.json",
+    "./harnesses": "./src/harnesses/index.mjs",
+    "./knowledge": "./src/knowledge/index.mjs",
+    "./build": "./src/build/index.mjs",
+    "./contracts/atelier-harness.v1.schema.json": "./contracts/atelier-harness.v1.schema.json",
+    "./contracts/atelier-knowledge.v1.schema.json": "./contracts/atelier-knowledge.v1.schema.json",
+    "./contracts/atelier-build.v1.schema.json": "./contracts/atelier-build.v1.schema.json"
   },
   "scripts": {
     "contract": "node src/check-atelier-export-contract.mjs",

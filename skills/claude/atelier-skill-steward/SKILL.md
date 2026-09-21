@@ -105,3 +105,11 @@ unmanaged target is a blocker, not permission to overwrite it.
 The steward has no model provider, telemetry, send path, browser apply endpoint,
 or hidden source-mutation authority. Scheduling may invoke this workflow, but a
 schedule does not widen its permissions or lower its evidence gates.
+
+## Knowledge and Build Harnesses
+
+Govern these as independent capability packages alongside existing tools. Their
+shared handoffs preserve domain-specific records and do not grant execution.
+Use version-bound harness feedback; distinguish knowledge quality from build
+verification and preserve unknown causes. A contribution or delivery correction
+can justify an evaluation proposal without authorizing any repository upgrade.
