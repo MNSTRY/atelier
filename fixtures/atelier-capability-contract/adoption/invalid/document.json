@@ -1,0 +1,71 @@
+{
+  "schema": "mnstry.atelier-capability-adoption@v1",
+  "id": "example-research-workspace",
+  "packages": [
+    {
+      "id": "atelier.examples/evidence-review",
+      "digest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913",
+      "mode": "managed",
+      "bindings": [
+        {
+          "skill": "review",
+          "host": "codex-repo-v1",
+          "alias": "evidence-review"
+        },
+        {
+          "skill": "review",
+          "host": "claude-repo-v1",
+          "alias": "evidence-review"
+        }
+      ],
+      "allowedTools": [],
+      "allowedEffects": [
+        "read-workspace"
+      ]
+    },
+    {
+      "id": "atelier.examples/research",
+      "digest": "sha256:f4ecc6d8d0ea9640ec5a45c92c8872a425d479df0a71867cde09ada99af8c63d",
+      "mode": "managed",
+      "bindings": [
+        {
+          "skill": "plan",
+          "host": "codex-repo-v1",
+          "alias": "research-plan"
+        },
+        {
+          "skill": "plan",
+          "host": "claude-repo-v1",
+          "alias": "research-plan"
+        },
+        {
+          "skill": "synthesize",
+          "host": "codex-repo-v1",
+          "alias": "research-synthesize"
+        },
+        {
+          "skill": "synthesize",
+          "host": "claude-repo-v1",
+          "alias": "research-synthesize"
+        },
+        {
+          "skill": "integrate",
+          "host": "codex-repo-v1",
+          "alias": "research-integrate"
+        },
+        {
+          "skill": "integrate",
+          "host": "claude-repo-v1",
+          "alias": "research-integrate"
+        }
+      ],
+      "allowedTools": [],
+      "allowedEffects": [
+        "read-workspace",
+        "write-workspace",
+        "network"
+      ]
+    }
+  ],
+  "unexpectedAuthority": true
+}

@@ -30,6 +30,8 @@
     "./contracts/atelier-pane-presentation.v1.schema.json": "./contracts/atelier-pane-presentation.v1.schema.json",
     "./coauthor": "./src/coauthor/session.mjs",
     "./skills": "./src/skills/steward.mjs",
+    "./capabilities": "./src/capabilities/index.mjs",
+    "./contracts/atelier-capability.v1.schema.json": "./contracts/atelier-capability.v1.schema.json",
     "./intake": "./src/intake/store.mjs",
     "./contracts/atelier-intake.v1.schema.json": "./contracts/atelier-intake.v1.schema.json",
     "./guides": "./src/guides/contracts.mjs",

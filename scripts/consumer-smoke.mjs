@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { verifyInstalledReview } from './review-consumer-smoke.mjs'
 import { verifyInstalledCoauthor } from './coauthor-consumer-smoke.mjs'
 import { verifyInstalledUpgrade } from './upgrade-consumer-smoke.mjs'
+import { verifyInstalledCapabilities } from './capability-consumer-smoke.mjs'
 import { execNpmSync } from './npm-cli.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -187,6 +188,7 @@ assert.equal(typeof validateRepositoryObservation, 'function')
   await verifyInstalledReview({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
   await verifyInstalledCoauthor({installedRoot:join(tempRoot,'node_modules/@mnstry/atelier'),consumerRoot:tempRoot})
   verifyInstalledUpgrade({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
+  await verifyInstalledCapabilities({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
 
   // Exercise the actual launch config with root and parent-hoisted installs.
   for (const target of [join(tempRoot, 'nested', 'workspace'), tempRoot]) {

@@ -35,6 +35,9 @@ its definition or ceiling.
 
 For local-harness authoring, see [durable coauthor sessions](docs/coauthor-session.md)
 and [skill stewardship and managed installation](docs/skill-steward.md).
+The next-release [capability stewardship foundation](docs/capability-stewardship.md)
+adds portable packages, repository-owned adoption and version-bound evidence
+alongside existing skills and tools.
 [Immutable intake and guide contracts](docs/intake-and-guides.md) extend existing
 processing and hosted-tool adapters without adding remote execution or publication
 authority. These alpha capabilities require explicit consumer integration.
@@ -241,6 +244,30 @@ version and treat the package export map and shipped source modules as the
 executable API reference. [Distribution contracts](./docs/distributions.md) explain
 how a governed subset can be packaged for another surface without widening its
 audience.
+
+## Capabilities alongside your existing tools
+
+<!-- atelier:block:capability-stewardship:start -->
+Atelier's Skill Steward can govern portable capabilities alongside a person's
+existing skills and tools. A capability package describes the useful outcome,
+its procedures, requirements, evaluation evidence and limits. Each repository
+chooses exact release pins, aliases and whether to reference, manage, customize
+or retire it.
+
+The local foundation verifies complete package contents, prepares an exact
+adoption plan, preserves previous bundles, and refuses collisions and local
+drift. Repository host profiles keep placement explicit. Cross-repository status
+shows each adopter's own state; one repository's update never implies another's
+acceptance.
+
+Installation, host discovery and successful exercise are separate evidence.
+Content-free observations can guide improvement, and draft graph records keep
+provenance connected to adoption and outcomes. Publisher authentication, live
+host evaluation and human acceptance require their own evidence. This source
+capability is intended for the next release; alpha.7 does not expose its command.
+<!-- atelier:block:capability-stewardship:end -->
+
+See [capability stewardship](docs/capability-stewardship.md) for the operating guide.
 
 ## Where the Atelier stops
 

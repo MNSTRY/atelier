@@ -62,6 +62,7 @@ export const commandMap = new Map([
   ['review', ['src/commands/review.mjs']],
   ['coauthor', ['src/commands/coauthor.mjs']],
   ['skills', ['src/commands/skills.mjs']],
+  ['capability', ['src/commands/capability.mjs']],
   ['obsidian', ['src/commands/obsidian.mjs']],
 ])
 
@@ -144,6 +145,7 @@ Core commands:
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
+  capability seal|plan|apply|status Publish local capability bundles and govern adoption.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -169,6 +171,10 @@ Machine-local repo paths belong in
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
   const help = {
+    capability: `Usage: ${c} capability seal|verify|inventory|plan|apply|status|observe|candidates|recover|fleet|graph|profiles
+Run ${c} capability help for options. Releases stay local; adoption is per repository
+and requires an exact plan digest. Installed bytes, host loading and successful
+exercise are separate evidence. No model execution or tool permission grants.`,
     skills: `Usage: ${c} skills audit|observe|candidates|sync
 Audit bundled skills or --root DIR [--peer DIR].
 Sync previews by default; applying requires --apply --confirm PLAN_DIGEST.
