@@ -19,6 +19,12 @@ export async function verifyInstalledCapabilities({ installedRoot, consumerRoot 
     const settings = { workspaceRoot, adoption: { ...adoption, id: `consumer-${name}` }, sources }
     const plan = api.planCapabilityAdoption(settings)
     assert.equal(plan.applyAllowed, true, plan.blockers.join('; '))
+    if (process.platform === 'win32') {
+      assert.throws(() => api.applyCapabilityAdoption({ ...settings, confirm: plan.planDigest }), /qualified POSIX/)
+      for (const name of ['.atelier-local', '.agents', '.claude']) assert.equal(fs.existsSync(path.join(workspaceRoot, name)), false)
+      workspaces.push(workspaceRoot)
+      continue
+    }
     api.applyCapabilityAdoption({ ...settings, confirm: plan.planDigest })
     const status = api.capabilityEvidenceStatus({ workspaceRoot })
     assert.equal(status.packages.flatMap(item => item.bindings).length, 8)
@@ -29,5 +35,6 @@ export async function verifyInstalledCapabilities({ installedRoot, consumerRoot 
     workspaces.push(workspaceRoot)
   }
   assert.equal(api.inspectCapabilityFleet({ workspaces }).repositories.length, 2)
-  console.log('[consumer:capabilities] two packages, two repositories and two host projections verified; host execution remains unobserved')
+  if (process.platform === 'win32') console.log('[consumer:capabilities] sealed packages, read-only plans/fleet and refusal before adoption writes verified; Windows adoption is unsupported')
+  else console.log('[consumer:capabilities] two packages, two repositories and two host projections verified; host execution remains unobserved')
 }

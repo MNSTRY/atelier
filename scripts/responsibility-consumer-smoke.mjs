@@ -64,6 +64,10 @@ export async function verifyInstalledResponsibilities({ installedRoot, consumerR
     assert.match(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), /Preserve local terminology/)
     step('withdraw', { activationId: 'activation', reason: 'Reconsider this practice.' })
     assert.throws(() => capabilities.consumeInstructionContext({ ...options, session: 'later-task' }), /current scoped/)
+  } else {
+    assert.throws(() => capabilities.planInstructionAdoption({ workspaceRoot: root }), /qualified POSIX/)
+    assert.equal(fs.existsSync(path.join(root, 'AGENTS.md')), false)
   }
-  console.log('[consumer:responsibilities] installed definition-to-record-to-CLI-view, reflective qualification, native file delivery/readback, coordination and scoped instruction context passed; product-host adoption remains separate')
+  if (process.platform === 'win32') console.log('[consumer:responsibilities] installed Trackables, reflection, delivery/readback and coordination passed; instruction adoption refused on unsupported Windows host')
+  else console.log('[consumer:responsibilities] installed definition-to-record-to-CLI-view, reflective qualification, native file delivery/readback, coordination and scoped instruction context passed; product-host adoption remains separate')
 }

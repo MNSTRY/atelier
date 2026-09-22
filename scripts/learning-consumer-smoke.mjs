@@ -18,8 +18,23 @@ export async function verifyInstalledLearning({ installedRoot, consumerRoot }) {
     const adoption = { schema: 'mnstry.atelier-capability-adoption@v1', id: `learning-${index}`, packages: releases.map(r => ({ id: r.package.id, digest: r.digest, mode: 'managed', bindings: [{ skill: 'harness', host, alias: r.package.skills[0].name }], allowedTools: ['atelier-harness-v1'], allowedEffects: ['read-workspace', 'write-workspace'] })) }
     const options = { workspaceRoot: root, sources, adoption, availableTools: ['atelier-harness-v1'] }
     const plan = capability.planCapabilityAdoption(options); assert.equal(plan.applyAllowed, true)
-    capability.applyCapabilityAdoption({ ...options, confirm: plan.planDigest })
+    if (process.platform === 'win32') {
+      assert.throws(() => capability.applyCapabilityAdoption({ ...options, confirm: plan.planDigest }), /qualified POSIX/)
+      for (const profile of ['knowledge', 'build']) assert.throws(() => h.appendHarness({ workspaceRoot: root, profile, record: fixture[profile][0], confirm: h.EMPTY_HARNESS_HEAD }), /qualified POSIX/)
+      assert.equal(fs.existsSync(path.join(root, '.atelier-local')), false)
+    } else capability.applyCapabilityAdoption({ ...options, confirm: plan.planDigest })
     assert.equal(fs.readFileSync(path.join(root, '.agents/skills/existing/SKILL.md'), 'utf8'), 'Existing skill')
+  }
+  if (process.platform === 'win32') {
+    const dependencies = [{ repository: fixture.knowledge[0].data.repository, profile: 'knowledge', records: fixture.knowledge }]
+    assert.equal(h.buildReadiness(fixture.build, { dependencySnapshots: dependencies }).readyReported, true)
+    const snapshots = [...dependencies, { repository: fixture.build[0].data.repository, profile: 'build', records: fixture.build }]
+    assert.ok(k.knowledgeGraphProposal(fixture.lessons, { namespace: 'lessons', activationId: 'lesson-use', dependencySnapshots: snapshots }).files.length)
+    dependencies[0].records = [...fixture.knowledge, fixture.withdrawal]
+    assert.equal(h.buildReadiness(fixture.build, { dependencySnapshots: snapshots }).readyReported, false)
+    assert.ok(k.reconcileKnowledge(fixture.lessons, { dependencySnapshots: snapshots }).reconsider.some(r => r.id === 'lesson-use'))
+    console.log('[consumer:learning] installed plans, pure knowledge/build exchange, correction propagation and no-write refusal passed; Windows persistence is unsupported')
+    return
   }
   const append = (root, profile, records) => records.reduce((head, record) => h.appendHarness({ workspaceRoot: root, profile, record, confirm: head }).head, h.EMPTY_HARNESS_HEAD)
   append(roots[0], 'knowledge', fixture.knowledge)

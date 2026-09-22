@@ -17,6 +17,16 @@ export async function verifyInstalledInquiry({ installedRoot, consumerRoot }) {
     const options = { workspaceRoot: root, sources, adoption, availableTools: ['atelier-inquiry-v1'] }
     const plan = capabilities.planCapabilityAdoption(options)
     assert.equal(plan.applyAllowed, true, plan.blockers.join(';'))
+    if (process.platform === 'win32') {
+      assert.throws(() => capabilities.applyCapabilityAdoption({ ...options, confirm: plan.planDigest }), /qualified POSIX/)
+      assert.throws(() => api.appendInquiry({ workspaceRoot: root, record: records[0], confirm: api.EMPTY_INQUIRY_HEAD }), /qualified POSIX/)
+      for (const name of ['.atelier-local', '.agents', '.claude']) assert.equal(fs.existsSync(path.join(root, name)), false)
+      const state = api.inspectInquiry(records)
+      assert.ok(Math.abs(state.assessments['revised-assessment'].probability - 0.25) < 1e-12)
+      assert.ok(state.reconsider.some(r => r.id === 'decision-before'))
+      assert.ok(api.inquiryGraphProposal(records, { namespace: 'consumer' }).files.some(f => f.path === 'decision-after.md'))
+      continue
+    }
     capabilities.applyCapabilityAdoption({ ...options, confirm: plan.planDigest })
     let head = api.EMPTY_INQUIRY_HEAD
     for (const record of records) head = api.appendInquiry({ workspaceRoot: root, record, confirm: head }).head
@@ -32,5 +42,6 @@ export async function verifyInstalledInquiry({ installedRoot, consumerRoot }) {
     assert.ok(graph.files.some(f => f.path === 'decision-after.md'))
     assert.deepEqual(api.validateInquiryDocument(cli('handoff', '--campaign', 'workshop', '--request', 'research'), 'handoff'), [])
   }
-  console.log('[consumer:inquiry] two host profiles, immutable campaign replay, withdrawal and portable graph proposal verified; research quality remains unevaluated')
+  if (process.platform === 'win32') console.log('[consumer:inquiry] installed plans, pure replay/withdrawal/graph and refusal before ledger writes verified; Windows persistence is unsupported')
+  else console.log('[consumer:inquiry] two host profiles, immutable campaign replay, withdrawal and portable graph proposal verified; research quality remains unevaluated')
 }
