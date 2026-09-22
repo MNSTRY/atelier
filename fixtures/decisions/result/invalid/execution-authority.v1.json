@@ -1,0 +1,50 @@
+{
+  "schema": "atelier-decision-result@v1",
+  "contractVersion": "1.0.0",
+  "requestId": "synthetic-request-1",
+  "requestDigest": "e08ba4b1c7253986b908aed74c8dcee5e4b47a569c28e233f78b6704151af778",
+  "task": "passage-triage",
+  "rubricVersion": "fictional-notes.v1",
+  "scope": {
+    "workspaceId": "synthetic-workspace",
+    "authorizationRef": "synthetic-consent-1"
+  },
+  "provider": {
+    "id": "synthetic-provider",
+    "model": "synthetic-model.v1"
+  },
+  "authority": "execute",
+  "mode": "shadow",
+  "status": "assessed",
+  "answers": {
+    "priority": {
+      "type": "choice",
+      "choice": "maintenance",
+      "probabilities": {
+        "maintenance": 0.8,
+        "hours": 0.15,
+        "unmatched": 0.05
+      },
+      "confidence": 0.7
+    },
+    "evidence_score": {
+      "type": "score",
+      "score": 1.85,
+      "probabilities": [
+        0.05,
+        0.05,
+        0.9
+      ],
+      "confidence": 0.8
+    },
+    "saturday_open": {
+      "type": "boolean",
+      "probability": 0.95
+    }
+  },
+  "usage": {
+    "inputTokens": 240,
+    "outputTokens": 24
+  },
+  "elapsedMs": 12.5
+}

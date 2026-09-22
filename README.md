@@ -242,6 +242,12 @@ executable API reference. [Distribution contracts](./docs/distributions.md) expl
 how a governed subset can be packaged for another surface without widening its
 audience.
 
+The [advisory decision contract](./docs/decisions.md) gives hosts bounded
+choice, score and boolean questions with evidence references and recorded
+uncertainty. `@mnstry/atelier/decisions` validates these records offline.
+The host supplies optional provider execution and retains authorization;
+an assessment carries proposal-only authority.
+
 ## Where the Atelier stops
 
 The open package owns repository-side structure and proof. A managed runtime
