@@ -27,6 +27,74 @@ function fixture(t) {
   const options = { workspaceRoot: root, workspaceId: 'fixture', scope, harnessId: 'local-summary', lessonId: lesson.id, target: 'AGENTS.md', slot: 'summary-uncertainty' }
   return { root, store, execute, options }
 }
+function revise(execute, options, content) {
+  const lesson = execute('propose', { id: 'revised-uncertainty', supersedes: options.lessonId,
+    title: 'Revised uncertainty practice', principle: 'Preserve exact guidance.', rationale: 'The reviewed revision refines the same scoped practice.',
+    exceptions: ['Preserve literal dollar patterns: $& $$ $` $\'.'], evidenceIds: ['observation'], scope,
+    artifact: { kind: 'instruction', name: 'uncertainty', content } })
+  const decision = execute('decide', { lessonId: lesson.id, lessonDigest: lesson.digest, verdict: 'accepted', reason: 'Accept the revision.' })
+  execute('activate', { id: 'revised-activation', lessonId: lesson.id, lessonDigest: lesson.digest, decisionId: decision.id, harnessId: options.harnessId })
+  return { ...options, lessonId: lesson.id }
+}
+localTest('replanning an unchanged adopted practice preserves the destination and remains usable', t => {
+  const { root, options } = fixture(t), file = path.join(root, 'AGENTS.md')
+  fs.writeFileSync(file, '# Local rules\n')
+  const initial = planInstructionAdoption(options)
+  applyInstructionAdoption({ ...options, confirm: initial.digest })
+  const inode = fs.statSync(file).ino
+  const repeated = planInstructionAdoption(options)
+  assert.notEqual(repeated.digest, initial.digest)
+  assert.equal(repeated.before, repeated.after)
+  assert.equal(applyInstructionAdoption({ ...options, confirm: repeated.digest }).status, 'persisted-and-read-back')
+  assert.equal(fs.statSync(file).ino, inode)
+  assert.equal(inspectInstructionAdoption({ workspaceRoot: root }).pending, null)
+  assert.match(consumeInstructionContext({ ...options, session: 'after-readoption' }).context.content, /retain material uncertainty/)
+  const retire = planInstructionAdoption({ ...options, mode: 'retire' })
+  applyInstructionAdoption({ ...options, mode: 'retire', confirm: retire.digest })
+  assert.equal(fs.readFileSync(file, 'utf8'), '# Local rules\n\n')
+})
+for (const content of ['Revised guidance with ordinary text.', 'Keep $& and $$ and $` and $\' literally in guidance.']) {
+  localTest(`revised practice round-trips exact text and preserves another slot: ${content}`, t => {
+    const { root, options, execute } = fixture(t), file = path.join(root, 'AGENTS.md')
+    fs.writeFileSync(file, '# Local rules\n')
+    const first = planInstructionAdoption(options)
+    applyInstructionAdoption({ ...options, confirm: first.digest })
+    const other = { ...options, slot: 'second-slot' }, second = planInstructionAdoption(other)
+    applyInstructionAdoption({ ...other, confirm: second.digest })
+    fs.appendFileSync(file, '\nKeep the local ending.\n')
+    const next = revise(execute, options, content), plan = planInstructionAdoption(next)
+    const oldBlock = inspectInstructionAdoption({ workspaceRoot: root }).bindings.find(b => b.slot === options.slot).block
+    const otherBlock = inspectInstructionAdoption({ workspaceRoot: root }).bindings.find(b => b.slot === other.slot).block
+    const position = plan.before.indexOf(oldBlock)
+    const prefix = plan.before.slice(0, position), suffix = plan.before.slice(position + oldBlock.length)
+    applyInstructionAdoption({ ...next, confirm: plan.digest })
+    const inspection = inspectInstructionAdoption({ workspaceRoot: root })
+    const binding = inspection.bindings.find(b => b.slot === next.slot)
+    assert.equal(binding.status, 'current')
+    assert.equal(fs.readFileSync(file, 'utf8'), prefix + binding.block + suffix)
+    assert.ok(binding.block.includes(content))
+    assert.ok(binding.block.includes('Preserve literal dollar patterns: $& $$ $` $\'.'))
+    assert.equal(inspection.bindings.find(b => b.slot === other.slot).block, otherBlock)
+    assert.equal(consumeInstructionContext({ ...next, session: 'after-revision' }).context.content, content)
+    const retire = planInstructionAdoption({ ...next, mode: 'retire' })
+    applyInstructionAdoption({ ...next, mode: 'retire', confirm: retire.digest })
+    assert.equal(fs.readFileSync(file, 'utf8'), prefix + suffix)
+  })
+}
+localTest('unchanged adoption recovers after intent without requiring displaced bytes', t => {
+  const { root, options } = fixture(t)
+  const initial = planInstructionAdoption(options)
+  applyInstructionAdoption({ ...options, confirm: initial.digest })
+  const next = planInstructionAdoption(options), rename = fs.renameSync
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith('/instructions/state.json')) throw new Error('fixture no-op state fault')
+    return rename(from, to)
+  }
+  try { assert.throws(() => applyInstructionAdoption({ ...options, confirm: next.digest }), /fixture no-op state fault/) }
+  finally { fs.renameSync = rename }
+  assert.equal(recoverInstructionAdoption({ workspaceRoot: root, confirm: next.digest }).status, 'persisted-and-read-back')
+  assert.equal(inspectInstructionAdoption({ workspaceRoot: root }).pending, null)
+})
 localTest('scoped practice reaches exact instruction bytes, survives restart and is returned to a consumer', t => {
   const { root, options } = fixture(t)
   fs.writeFileSync(path.join(root, 'AGENTS.md'), '# Local rules\n\nKeep local terminology.\n')

@@ -2,8 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { syncPrivateDirectory } from '../project/private-state.mjs'
+import { acquirePrivateLock } from '../project/durable-state.mjs'
 import { assertDocument, HOST_PROFILES, projectSkill, unique, verifyCapabilityRelease } from './package.mjs'
-import { canonical, currentTree, digest, jsonAt, jsonText, objectDigest, replaceJson, stat, tree, within, workspaceRoot, writeNew } from './files.mjs'
+import { bytesAt, canonical, currentTree, digest, jsonAt, jsonText, objectDigest, replaceJson, stat, tree, within, workspaceRoot, writeNew } from './files.mjs'
 
 export const CAPABILITY_STATE = '.atelier-local/capabilities/state.json'
 const ACTIVE = '.atelier-local/capabilities/active.json'
@@ -172,14 +173,68 @@ function prepare(options) {
 
 export function planCapabilityAdoption(options) { return prepare(options).plan }
 
+function operationLocked(reason) {
+  return Object.assign(new Error(`EEXIST: operation lock ${reason}`), { code: 'EEXIST' })
+}
+
+function sameLockFile(left, right) {
+  return left && right && left.identity.dev === right.identity.dev && left.identity.ino === right.identity.ino && left.bytes.equals(right.bytes)
+}
+
+function readOperationLock(root) {
+  const identity = stat(within(root, OPERATION_LOCK))
+  if (!identity) return null
+  const bytes = bytesAt(root, OPERATION_LOCK), current = stat(within(root, OPERATION_LOCK))
+  if (!current || identity.dev !== current.dev || identity.ino !== current.ino || identity.mtimeMs !== current.mtimeMs || identity.ctimeMs !== current.ctimeMs) throw operationLocked('changed during inspection')
+  return { identity, bytes }
+}
+
+function requireDeadOperationOwner(observed) {
+  if (!observed) return
+  let owner
+  try { owner = JSON.parse(observed.bytes.toString('utf8')) } catch { throw operationLocked('requires its owner') }
+  if (owner?.owner !== 'capability-steward' || !Number.isSafeInteger(owner.pid) || owner.pid < 1 || !/^[a-f0-9-]{36}$/.test(owner.operationId)) throw operationLocked('requires its owner')
+  try { process.kill(owner.pid, 0) } catch (error) {
+    if (error.code === 'ESRCH') return
+    throw operationLocked('owner identity is unavailable')
+  }
+  // An existing PID may be a reused PID. Neither case permits reclamation.
+  throw operationLocked('owner is still alive')
+}
+
+function removeOperationLock(root, observed) {
+  if (!sameLockFile(readOperationLock(root), observed)) return false
+  fs.unlinkSync(within(root, OPERATION_LOCK))
+  syncPrivateDirectory(path.dirname(path.join(root, OPERATION_LOCK)))
+  return true
+}
+
 function withOperationLock(root, callback) {
-  const operationId = crypto.randomUUID()
-  writeNew(root, OPERATION_LOCK, jsonText({ owner: 'capability-steward', operationId, pid: process.pid }))
-  try { return callback() } finally {
-    if (jsonAt(root, OPERATION_LOCK).operationId === operationId) {
-      fs.unlinkSync(within(root, OPERATION_LOCK))
-      syncPrivateDirectory(path.dirname(path.join(root, OPERATION_LOCK)))
+  within(root, path.posix.dirname(OPERATION_LOCK), { directory: true, create: true })
+  const prior = readOperationLock(root)
+  requireDeadOperationOwner(prior)
+  // Durable owner generations serialize competing reclaimers. Keep the shared
+  // exclusive file as well, so the existing skill-sync writer still excludes us.
+  const release = acquirePrivateLock(within(root, OPERATION_LOCK))
+  let owned, failed = false
+  try {
+    if (prior) {
+      requireDeadOperationOwner(prior)
+      if (!removeOperationLock(root, prior)) throw operationLocked('changed before reclamation')
     }
+    const bytes = Buffer.from(jsonText({ owner: 'capability-steward', operationId: crypto.randomUUID(), pid: process.pid }))
+    writeNew(root, OPERATION_LOCK, bytes)
+    const installed = readOperationLock(root)
+    if (!installed?.bytes.equals(bytes)) throw operationLocked('changed before the operation')
+    owned = installed
+    return callback()
+  } catch (error) { failed = true; throw error } finally {
+    let cleanupError
+    try { if (owned) removeOperationLock(root, owned) } catch (error) { cleanupError = error }
+    try { release() } catch (error) { cleanupError ??= error }
+    // A missing or changed file never authorizes deleting a replacement; a
+    // cleanup failure must also preserve the operation's original exception.
+    if (cleanupError && !failed) throw cleanupError
   }
 }
 
@@ -263,15 +318,6 @@ export function recoverCapabilityAdoption({ workspaceRoot: input, confirm }) {
   const root = workspaceRoot(input ?? process.cwd(), { write: true })
   const initial = inspectCapabilityRecovery({ workspaceRoot: root })
   if (!initial.pending || initial.planDigest !== confirm || initial.blockers.length) throw new Error('recovery requires the exact unblocked recovery plan')
-  // A killed process may have left the shared operation lock. Only reclaim a
-  // recognizably owned lock whose process no longer exists, never legacy locks.
-  if (stat(within(root, OPERATION_LOCK))) {
-    const lock = jsonAt(root, OPERATION_LOCK)
-    if (lock.owner !== 'capability-steward' || !Number.isInteger(lock.pid) || lock.pid < 1 || !/^[a-f0-9-]{36}$/.test(lock.operationId)) throw new Error('operation lock requires its owner')
-    try { process.kill(lock.pid, 0); throw new Error('operation owner is still alive') } catch (error) { if (error.code !== 'ESRCH') throw error }
-    if (canonical(jsonAt(root, OPERATION_LOCK)) !== canonical(lock)) throw new Error('operation lock changed')
-    fs.unlinkSync(within(root, OPERATION_LOCK))
-  }
   return withOperationLock(root, () => {
     const plan = inspectCapabilityRecovery({ workspaceRoot: root })
     if (plan.planDigest !== confirm || plan.blockers.length) throw new Error('recovery plan changed')

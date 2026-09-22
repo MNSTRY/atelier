@@ -223,6 +223,12 @@ installed bundles too. Unknown bytes or changed state block recovery. A killed
 operation's lock can be reclaimed only when it is recognizably owned by this
 capability executor and its process is absent; other owners' locks remain theirs.
 
+The next capability or harness operation also checks for a recognizable dead
+owner when no adoption journal exists. Reclamation is serialized through the
+existing durable lock; a live or uncertain process, unknown owner, or changed
+lock refuses. A missing lock during cleanup never masks the original operation
+error, and a replacement owner's lock is preserved.
+
 This is a local POSIX, cooperating-writer transaction. It is not atomic across
 multiple skill directories, repositories or host sessions, and it cannot prevent
 an unrelated writer racing between filesystem checks and rename. Stop host file

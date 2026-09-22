@@ -53,6 +53,11 @@ continue through capability releases and Skill Steward; checks remain inert
 until an owning implementation explicitly realizes them. This adapter does not
 execute a lesson as code or update arbitrary configuration files.
 
+Re-plan and apply to adopt a reviewed revision into the same slot. Guidance is
+preserved literally, including dollar signs; other slots and surrounding text
+remain intact. Re-adopting unchanged guidance records the current adoption
+without exchanging the destination file, and interrupted recording can recover.
+
 Planning binds the complete current destination bytes and learning selection.
 Applying refuses local drift, unowned slots, changed scope, ambiguous markers
 and ineligible learning. The POSIX reference adapter uses non-overwriting

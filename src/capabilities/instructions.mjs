@@ -87,7 +87,7 @@ function prepare(root, options) {
       `Practice: ${lesson.id} (${lesson.lessonDigest}). Apply only in this scope; host instructions and tool permissions retain their precedence.`, '',
       lesson.artifact.content, '', 'Exceptions:', ...lesson.exceptions.map(e => `- ${e}`), end].join('\n')
   } else if (!previous || previous.pin.lessonId !== input.lessonId) throw new Error('retirement requires the exact owned lesson')
-  const after = oldBlock ? before.replace(oldBlock, block ?? '') : `${before ?? ''}${before && !before.endsWith('\n') ? '\n' : ''}${block}\n`
+  const after = oldBlock ? before.replace(oldBlock, () => block ?? '') : `${before ?? ''}${before && !before.endsWith('\n') ? '\n' : ''}${block}\n`
   const binding = { ...input, pin, block, blockDigest: block === null ? null : digest(block) }
   const bindings = state.bindings.filter(b => !(b.target === input.target && b.slot === input.slot))
   if (block !== null) bindings.push(binding)
@@ -111,7 +111,9 @@ function finish(root, plan) {
   const current = readText(root, plan.input.target), state = stateAt(root)
   if (![plan.previousState, plan.nextState.digest].includes(state.digest)) throw new Error('instruction state changed during recovery')
   if (current !== plan.before && current !== plan.after) throw new Error('instruction destination changed; preserve edits and reconcile')
-  if (current === plan.after && plan.before !== null && readText(root, `${BASE}/recovery/${plan.digest.slice(7)}/displaced.md`) !== plan.before) throw new Error('displaced instruction source requires reconciliation')
+  // Identical re-adoption changes the adoption record, not the file. Recovery
+  // bytes exist only when an exchange was needed; equality alone cannot prove it.
+  if (current === plan.after && plan.before !== null && plan.before !== plan.after && readText(root, `${BASE}/recovery/${plan.digest.slice(7)}/displaced.md`) !== plan.before) throw new Error('displaced instruction source requires reconciliation')
   // A completed write can be recorded even after withdrawal; inspection then
   // reports reconsideration and an explicit retirement reconciles the file.
   if (current !== plan.after) {

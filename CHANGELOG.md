@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Correct unchanged instruction re-adoption and preserve literal replacement text during revisions; add recovery and neighboring-slot regressions.
+- Recover recognized dead capability operation locks without requiring an adoption journal; preserve live, uncertain and replacement owners.
 - Add portable Trackable definitions, shared preview/runtime rules, durable scoped reference storage and correction.
 - Add evidence-qualified Reflection, one-authority Interaction delivery, and bounded cross-repository Coordination views.
 
