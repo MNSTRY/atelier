@@ -339,8 +339,14 @@ test('example command runs from an installed path with spaces, hashes, percent s
   fs.mkdirSync(destination)
   const installed = fs.realpathSync.native(destination)
   const source = new URL('..', import.meta.url)
-  for (const directory of ['src', 'bin', 'contracts']) fs.cpSync(fileURLToPath(new URL(`${directory}/`, source)), path.join(installed, directory), { recursive: true })
-  fs.cpSync(fileURLToPath(new URL('fixtures/harnesses/', source)), path.join(installed, 'fixtures/harnesses'), { recursive: true })
+  // Use the JS traversal: Node 22's native recursive copy can misencode
+  // non-ASCII Windows destinations (nodejs/node#61950). Keep the actual CLI
+  // path demanding for URL conversion; only fixture construction changes.
+  for (const directory of ['src', 'bin', 'contracts', 'fixtures/harnesses']) {
+    const target = path.join(installed, directory)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.cpSync(fileURLToPath(new URL(`${directory}/`, source)), target, { recursive: true, filter: () => true })
+  }
   fs.copyFileSync(new URL('package.json', source), path.join(installed, 'package.json'))
   fs.symlinkSync(fs.realpathSync(new URL('node_modules/', source)), path.join(installed, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
   assert.equal(fs.existsSync(path.join(installed, 'bin/atelier.mjs')), true, 'installed CLI entrypoint exists')
