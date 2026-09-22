@@ -142,6 +142,38 @@ assert.equal(typeof validateRepositoryObservation, 'function')
 `)
 
   run(process.execPath, ['smoke.mjs'], { cwd: tempRoot, stdio: 'inherit' })
+  // A bare consumer resolves the declarations beside the exported .mjs.
+  // Unsupported question kinds must fail compilation; a missing declaration
+  // cannot turn the API into any and silently pass this check.
+  writeFileSync(join(tempRoot, 'decisions-consumer.mts'), `
+import { decisionRequestDigest, validateDecisionRequest, validateDecisionResult, validateDecisionAnswers } from '@mnstry/atelier/decisions'
+import type { DecisionRequest, DecisionResult, DecisionQuestion } from '@mnstry/atelier/decisions'
+const request: DecisionRequest = {
+  schema: 'atelier-decision-request@v1', id: 'sample-decision', task: 'sample-priority',
+  rubricVersion: '1', scope: { workspaceId: 'sample-workspace', authorizationRef: 'sample-scope' },
+  state: 'The invented workshop note contains a materials list.',
+  evidence: [{ id: 'note', sourceRef: 'sample-note:1' }],
+  questions: { useful: { type: 'boolean', instructions: 'Does the note list materials?',
+    criteria: { true: 'Materials are listed.', false: 'Materials are absent.' }, evidenceIds: ['note'] } },
+}
+const result: DecisionResult = {
+  schema: 'atelier-decision-result@v1', requestId: request.id, requestDigest: decisionRequestDigest(request),
+  task: request.task, rubricVersion: request.rubricVersion, scope: request.scope,
+  provider: { id: 'synthetic', model: 'fixture-v1' }, authority: 'proposal-only', mode: 'shadow',
+  status: 'assessed', answers: { useful: { type: 'boolean', probability: 0.8 } }, usage: null, elapsedMs: 0,
+}
+const unsupported: DecisionQuestion = {
+  // @ts-expect-error free-form generation is outside this decision contract
+  type: 'prose', instructions: 'Write a paragraph.', criteria: { true: 'Yes', false: 'No' }, evidenceIds: ['note'],
+}
+void unsupported
+if (!validateDecisionRequest(request).ok || !validateDecisionResult(request, result).ok) throw new Error('decision consumer refused')
+if (!validateDecisionAnswers(request.questions, result.answers).ok) throw new Error('transient answer consumer refused')
+`)
+  run(process.execPath, [join(packageRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+    '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext',
+    '--outDir', 'compiled', 'decisions-consumer.mts'], { cwd: tempRoot, stdio: 'inherit' })
+  run(process.execPath, [join('compiled', 'decisions-consumer.mjs')], { cwd: tempRoot, stdio: 'inherit' })
   const atelierCli = join('node_modules', '@mnstry', 'atelier', 'bin', 'atelier.mjs')
   const legacyCli = join('node_modules', '@mnstry', 'atelier', 'bin', 'mnstry-atelier.mjs')
   const cliOutput = run(process.execPath, [

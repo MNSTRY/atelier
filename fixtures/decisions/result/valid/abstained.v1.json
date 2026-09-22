@@ -1,0 +1,23 @@
+{
+  "schema": "atelier-decision-result@v1",
+  "contractVersion": "1.0.0",
+  "requestId": "synthetic-request-1",
+  "requestDigest": "e08ba4b1c7253986b908aed74c8dcee5e4b47a569c28e233f78b6704151af778",
+  "task": "passage-triage",
+  "rubricVersion": "fictional-notes.v1",
+  "scope": {
+    "workspaceId": "synthetic-workspace",
+    "authorizationRef": "synthetic-consent-1"
+  },
+  "provider": {
+    "id": "synthetic-provider",
+    "model": "synthetic-model.v1"
+  },
+  "authority": "proposal-only",
+  "mode": "shadow",
+  "status": "abstained",
+  "answers": {},
+  "usage": null,
+  "elapsedMs": 12.5,
+  "reason": "insufficient-evidence"
+}

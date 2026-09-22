@@ -1,0 +1,61 @@
+{
+  "schema": "atelier-decision-request@v1",
+  "contractVersion": "1.0.0",
+  "id": "synthetic-request-1",
+  "task": "passage-triage",
+  "rubricVersion": "fictional-notes.v1",
+  "scope": {
+    "workspaceId": "synthetic-workspace",
+    "authorizationRef": "synthetic-consent-1"
+  },
+  "state": "passage-1: The fictional Cedarbell reading room opens on Saturday. Its blue shelf needs a new bracket.\npassage-2: This note does not describe Sunday hours.",
+  "evidence": [
+    {
+      "id": "passage-1",
+      "sourceRef": "fictional-notes:passage-1"
+    },
+    {
+      "id": "passage-2",
+      "sourceRef": "fictional-notes:passage-2"
+    }
+  ],
+  "questions": {
+    "priority": {
+      "type": "choice",
+      "instructions": "Which reading-room note should a person inspect next? Keep all source passages regardless of the answer.",
+      "evidenceIds": [
+        "passage-1",
+        "passage-2"
+      ],
+      "criteria": {
+        "maintenance": "A passage describes a repair to inspect.",
+        "hours": "A passage only describes opening hours.",
+        "unmatched": "Neither description fits."
+      }
+    },
+    "evidence_score": {
+      "type": "score",
+      "instructions": "How directly does passage-1 support the statement that the blue shelf needs repair?",
+      "evidenceIds": [
+        "passage-1"
+      ],
+      "criteria": [
+        "No support.",
+        "Indirect support.",
+        "Direct support."
+      ]
+    },
+    "saturday_open": {
+      "type": "boolean",
+      "instructions": "Does passage-1 state that the fictional reading room opens on Saturday?",
+      "evidenceIds": [
+        "passage-1"
+      ],
+      "criteria": {
+        "true": "The passage explicitly says it opens on Saturday.",
+        "false": "The passage does not say it opens on Saturday."
+      }
+    }
+  },
+  "executionAuthority": true
+}

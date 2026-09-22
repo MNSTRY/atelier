@@ -38,6 +38,9 @@ const allowedFiles = [
   /^fixtures\/[A-Za-z0-9./_-]+\.(json|md|html|yaml|yml|csv)$/,
   /^skills\/(codex|claude)\/[a-z0-9-]+\/SKILL\.md$/,
   /^src\/[a-z0-9./-]+\.mjs$/,
+  // The decision contract's declarations are part of its public typed API.
+  // Other declaration paths still require their own reviewed admission.
+  /^src\/decisions\/contracts\.d\.mts$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.?gitignore)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
   /^announcements\/(keys\/)?[A-Za-z0-9.-]+\.json$/,

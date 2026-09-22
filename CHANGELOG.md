@@ -4,6 +4,11 @@
 
 ### Added
 
+- Add portable, typed advisory decision requests and results under
+  `@mnstry/atelier/decisions`, with versioned schemas, invented fixtures and
+  offline validation of evidence bindings, distributions and abstention.
+  Provider execution, credentials, budgets and authorization stay with the
+  host. See `docs/decisions.md`.
 - Add an experimental, opt-in Obsidian projection. A project that enables
   `ext["mnstry.atelier.obsidian"]` and declares views (`full`, `scoped` or
   `focus`, with an optional bounded expansion) gets readable, linked notes of

@@ -100,6 +100,9 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
       'skills/claude/atelier-public-boundary/SKILL.md': '# Skill\n',
       'announcements/keys/mnstry-announcements.public.v1.json': '{}\n',
       'src/test/packed.test.mjs': `// ${'@atelier-egress-allow-test-fixture'}\nawait fetch("https://example.invalid/packed")\n`,
+      'src/decisions/contracts.d.mts': 'export type SyntheticDecision = string\n',
+      'src/decisions/unapproved.d.mts': 'export type UnapprovedDeclaration = string\n',
+      'src/other/contracts.d.mts': 'export type UnapprovedLocation = string\n',
     }
     for (const [rel, text] of Object.entries(files)) {
       const target = path.join(root, rel)
@@ -123,6 +126,9 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
     assert.equal(result.status, 1)
     assert.match(result.stderr, /packed egress finding src[\\/]test[\\/]packed\.test\.mjs/)
     assert.match(result.stderr, /test-fixture egress suppression marker/)
+    assert.doesNotMatch(result.stderr, /unexpected tarball file: src\/decisions\/contracts\.d\.mts/)
+    assert.match(result.stderr, /unexpected tarball file: src\/decisions\/unapproved\.d\.mts/)
+    assert.match(result.stderr, /unexpected tarball file: src\/other\/contracts\.d\.mts/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

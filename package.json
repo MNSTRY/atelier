@@ -23,6 +23,9 @@
     "mnstry-atelier": "bin/mnstry-atelier.mjs"
   },
   "exports": {
+    "./decisions": "./src/decisions/contracts.mjs",
+    "./contracts/atelier-decision-request.v1.schema.json": "./contracts/atelier-decision-request.v1.schema.json",
+    "./contracts/atelier-decision-result.v1.schema.json": "./contracts/atelier-decision-result.v1.schema.json",
     "./presentation": "./src/ui/presentation/index.mjs",
     "./presentation/browser": "./src/ui/presentation/browser.mjs",
     "./presentation/native": "./src/ui/presentation/native.mjs",
@@ -130,7 +133,8 @@
     "esbuild": "0.25.12",
     "playwright": "1.55.1",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "typescript": "5.8.3"
   },
   "license": "Apache-2.0",
   "repository": {
