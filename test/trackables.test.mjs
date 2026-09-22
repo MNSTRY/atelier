@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { learningDigest as digest } from '../src/learning/contracts.mjs'
 import { createTrackableStore, releaseTrackable, previewTrackable, reduceTrackables, initialTrackables, trackableView, trackableOccurrence, validateTrackable } from '../src/trackables/store.mjs'
 const at = '2026-01-02T15:00:00Z', pin = `sha256:${'a'.repeat(64)}`
 const definition = (profile = 'recurring-practice') => ({ schema: 'atelier-trackable-definition@v1', id: profile, revision: 1, purpose: 'Follow an invented workshop practice.', profile, schedule: profile === 'recurring-practice' ? { cadence: 'daily', timezone: 'America/New_York' } : null, interpretationLimits: ['Recorded participation does not establish independent ability.'] })
@@ -112,4 +113,127 @@ test('explicit skip, waiver, inapplicability and empty qualitative evidence do n
   const view = f.store.view({ instanceId: 'practice', at: '2026-01-04T15:00:00Z' })
   assert.deepEqual(view.occurrences.map(o => o.result), ['skipped', 'waived', 'not-applicable'])
   assert.equal(view.completedOccurrences, 0); assert.equal(view.progressPercent, null)
+})
+
+// Model a changed timezone database in a fresh process, not an actual tzdata upgrade.
+function withShiftedCalendar(options, source, instant = '2026-03-08T06:30:00Z') {
+  const program = `
+    import assert from 'node:assert/strict';
+    import { createTrackableStore, previewTrackable } from ${JSON.stringify(new URL('../src/trackables/store.mjs', import.meta.url).href)};
+    const original = Intl.DateTimeFormat.prototype.formatToParts;
+    Intl.DateTimeFormat.prototype.formatToParts = function(date) {
+      const parts = original.call(this, date);
+      return date.toISOString() === new Date(${JSON.stringify(instant)}).toISOString()
+        ? parts.map(p => p.type === 'day' ? {...p, value: '09'} : p) : parts;
+    };
+    const options = ${JSON.stringify(options)};
+    ${source}
+  `;
+  return execFileSync(process.execPath, ['--input-type=module', '-e', program], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+test('recorded calendar resolution survives timezone-data drift while new capture and preview use current rules', t => {
+  const f = fixture(t); instantiate(f, 'practice')
+  const instant = '2026-03-08T06:30:00Z', entry = evidence('calendar', instant)
+  const command = f.command('record', { instanceId: 'practice', evidence: entry })
+  f.store.execute(command)
+  const original = f.store.snapshot().evidence[0].occurrence
+  withShiftedCalendar(f.options, `
+    const s = createTrackableStore(options);
+    assert.deepEqual(s.snapshot().evidence[0].occurrence, ${JSON.stringify(original)});
+    assert.equal(s.view({instanceId: 'practice', at: ${JSON.stringify(instant)}}).occurrences.find(o => o.evidenceIds.includes('calendar')).occurrence.localDate, '2026-03-08');
+    const exported = s.exportHistory();
+    assert.equal(exported.stateVerified, true);
+    assert.equal(exported.events.at(-1).occurrenceResolution.occurrence.localDate, '2026-03-08');
+    assert.equal(typeof exported.events.at(-1).occurrenceResolution.tzdata, 'string');
+    assert.equal(s.execute(${JSON.stringify(command)}).duplicate, true);
+    const next = ${JSON.stringify(command)};
+    next.requestId = 'later-request'; next.expectedRevision = s.snapshot().revision;
+    next.input.evidence.id = 'later'; next.input.evidence.source.ref = 'source:later';
+    s.execute(next);
+    assert.equal(s.snapshot().evidence.at(-1).occurrence.localDate, '2026-03-09');
+    const preview = previewTrackable({definition: ${JSON.stringify(definition())}, at: ${JSON.stringify(instant)}, evidence: [${JSON.stringify(entry)}]});
+    assert.equal(preview.occurrences[0].occurrence.localDate, '2026-03-09');
+    s.execute({schema: 'atelier-trackable-command@v1', requestId: 'correction', expectedRevision: s.snapshot().revision, operation: 'correct', input: {evidenceId: 'calendar', reason: 'Clarify the original result.', replacement: {result: 'partial', value: null}}});
+    assert.deepEqual(s.snapshot().evidence[0].occurrence, ${JSON.stringify(original)});
+  `)
+  const reopened = createTrackableStore(f.options)
+  assert.deepEqual(reopened.snapshot().evidence.map(e => e.occurrence.localDate), ['2026-03-08', '2026-03-09'])
+  assert.equal(reopened.exportHistory().stateVerified, true)
+})
+
+function eventDirectory(f) {
+  const parent = path.join(f.root, '.atelier-local', 'trackables')
+  return path.join(parent, fs.readdirSync(parent)[0], 'events')
+}
+function rewriteJournal(f, events) {
+  let previous = null
+  for (const event of events) {
+    const { digest: ignored, ...body } = event
+    body.previous = previous
+    const pin = digest(body)
+    fs.writeFileSync(path.join(eventDirectory(f), `${String(body.revision).padStart(10, '0')}.json`), JSON.stringify({ ...body, digest: pin }))
+    previous = pin
+  }
+}
+test('legacy journals remain readable and append v2; calendar drift permits only explicitly unverified history export', t => {
+  const f = fixture(t); instantiate(f, 'practice')
+  f.apply('record', { instanceId: 'practice', evidence: evidence('legacy', '2026-03-08T06:30:00Z') })
+  const legacy = f.store.exportHistory().events.map(({ occurrenceResolution, ...event }) => ({ ...event, schema: 'atelier-trackable-event@v1' }))
+  rewriteJournal(f, legacy)
+  assert.equal(createTrackableStore(f.options).snapshot().evidence[0].occurrence.localDate, '2026-03-08')
+  const originalEvents = createTrackableStore(f.options).exportHistory().events
+  withShiftedCalendar(f.options, `
+    const s = createTrackableStore(options), exported = s.exportHistory();
+    assert.equal(exported.stateVerified, false);
+    assert.equal(exported.replayError.code, 'legacy-replay-state-differs');
+    assert.equal(exported.replayError.revision, 3);
+    assert.deepEqual(exported.events, ${JSON.stringify(originalEvents)});
+    assert.throws(() => s.snapshot(), /legacy trackable replay/);
+    assert.throws(() => s.view({instanceId: 'practice'}), /legacy trackable replay/);
+    assert.throws(() => s.execute({schema: 'atelier-trackable-command@v1', requestId: 'pause', expectedRevision: 3, operation: 'lifecycle', input: {instanceId: 'practice', status: 'paused'}}), /legacy trackable replay/);
+  `)
+  const restored = createTrackableStore(f.options)
+  assert.equal(restored.exportHistory().stateVerified, true)
+  restored.execute({schema: 'atelier-trackable-command@v1', requestId: 'pause', expectedRevision: 3, operation: 'lifecycle', input: {instanceId: 'practice', status: 'paused'}})
+  assert.equal(createTrackableStore(f.options).snapshot().instances[0].lifecycle, 'paused')
+  assert.equal(restored.exportHistory().events.at(-1).schema, 'atelier-trackable-event@v2')
+  // Even after replay degrades, every subsequent event must pass chain checks.
+  const tail = path.join(eventDirectory(f), '0000000004.json')
+  fs.writeFileSync(tail, fs.readFileSync(tail, 'utf8').replace('pause', 'different-request'))
+  withShiftedCalendar(f.options, `assert.throws(() => createTrackableStore(options), /integrity/);`)
+})
+test('replay resolutions bind the command and adopted occurrence; command input cannot override the calendar', t => {
+  const f = fixture(t); instantiate(f, 'practice')
+  f.apply('record', {instanceId: 'practice', evidence: evidence('bound', '2026-03-08T06:30:00Z')})
+  const original = f.store.exportHistory().events
+  const cases = [
+    [e => { delete e.occurrenceResolution }, /resolution missing/],
+    [e => { e.occurrenceResolution.occurredAt = at }, /identity differs/],
+    [e => { e.occurrenceResolution.sourceRef = 'source:other' }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.scope = 'other' }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.instanceId = 'other' }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.definitionDigest = pin }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.effectiveAt = at }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.timezone = 'UTC' }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.window = 'other' }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.id = pin }, /identity differs/],
+    [e => { e.occurrenceResolution.occurrence.localDate = '2026-02-30' }, /calendar date/],
+    [e => { e.occurrenceResolution.tzdata = {} }, /timezone data version/],
+    [e => { e.occurrenceResolution.extra = true }, /identity differs/],
+    [e => { e.schema = 'atelier-trackable-event@v3' }, /unsupported/],
+    [e => { e.stateDigest = pin }, /replay state differs/],
+    [e => {
+      const o = e.occurrenceResolution.occurrence;
+      o.localDate = o.window = '2026-03-09';
+      const {id, localDate, timezone, ...key} = o; o.id = digest(key);
+    }, /replay state differs/],
+  ]
+  for (const [mutate, expected] of cases) {
+    const changed = structuredClone(original); mutate(changed.at(-1)); rewriteJournal(f, changed)
+    assert.throws(() => createTrackableStore(f.options), expected)
+  }
+  rewriteJournal(f, original)
+  const command = {schema: 'atelier-trackable-command@v1', requestId: 'injected', expectedRevision: 3, operation: 'record', input: {instanceId: 'practice', evidence: evidence('injected'), occurrenceResolution: original.at(-1).occurrenceResolution}}
+  assert.throws(() => createTrackableStore(f.options).execute(command), /additional properties/)
+  assert.equal(createTrackableStore(f.options).snapshot().revision, 3)
 })

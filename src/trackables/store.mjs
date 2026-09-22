@@ -34,15 +34,32 @@ export function createTrackableStore({ workspaceRoot, scope, actor }) {
     }
     if (readRegularTextNoFollow(identityPath) !== canonicalize(identity)) throw new Error('trackable scope or workspace identity differs')
   })
-  const readSequence = createVerifiedFileSequence({ directory: events, initial: () => ({ state: initialTrackables(scope), events: [], head: null }),
+  const readSequence = createVerifiedFileSequence({ directory: events, initial: () => ({ state: initialTrackables(scope), events: [], head: null, replayError: null }),
     apply(text, history, index, name) {
       if (name !== `${String(index).padStart(10, '0')}.json`) throw new Error('trackable history is not contiguous')
       const event = JSON.parse(text); boundedLearningValue(event)
       const { digest: pin, ...body } = event
       if (pin !== digest(body) || body.previous !== history.head || body.scope !== scope || body.revision !== index || history.events.some(e => e.command.requestId === body.command.requestId)) throw new Error('trackable history integrity mismatch')
-      const state = reduceTrackables(history.state, body.command, { actor: body.actor, recordedAt: body.recordedAt })
-      if (digest(state) !== body.stateDigest) throw new Error('trackable replay state differs')
-      return { state, events: [...history.events, event], head: pin }
+      const legacy = body.schema === 'atelier-trackable-event@v1'
+      if (!legacy && body.schema !== 'atelier-trackable-event@v2') throw new Error('unsupported trackable event schema')
+      if (validateTrackable(body.command, 'request').length) throw new Error('invalid journal command')
+      const invalidResolution = legacy ? Object.hasOwn(body, 'occurrenceResolution')
+        : body.command.operation === 'record'
+          ? !body.occurrenceResolution || typeof body.occurrenceResolution !== 'object' || Array.isArray(body.occurrenceResolution)
+          : body.occurrenceResolution !== null
+      if (invalidResolution) throw new Error('trackable event resolution missing or unexpected')
+      let state = null, replayError = history.replayError
+      if (!replayError) {
+        state = reduceTrackables(history.state, body.command, { actor: body.actor, recordedAt: body.recordedAt, occurrenceResolution: legacy ? null : body.occurrenceResolution })
+        if (digest(state) !== body.stateDigest) {
+          if (!legacy || body.command.operation !== 'record') throw new Error('trackable replay state differs')
+          // Old events did not retain their calendar resolution. Keep the chain
+          // exportable, but never treat a differing reconstructed state as truth.
+          replayError = { code: 'legacy-replay-state-differs', revision: index, message: 'legacy trackable replay state differs; original timezone data may be required' }
+          state = null
+        }
+      }
+      return { state, events: [...history.events, event], head: pin, replayError }
     } })
   function read() {
     placement(); directory(); directory('events')
@@ -57,15 +74,20 @@ export function createTrackableStore({ workspaceRoot, scope, actor }) {
     return readSequence()
   }
   read()
+  function verifiedRead() {
+    const h = read()
+    if (h.replayError) throw new Error(h.replayError.message)
+    return h
+  }
   return Object.freeze({
-    snapshot() { const h = read(); return { ...h.state, head: h.head, authenticated: false } },
-    view(query) { return trackableView(read().state, query) },
+    snapshot() { const h = verifiedRead(); return { ...h.state, head: h.head, authenticated: false } },
+    view(query) { return trackableView(verifiedRead().state, query) },
     execute(command) {
       command = boundedLearningValue(command)
       const errors = validateTrackable(command, 'request')
       if (errors.length) throw new Error(errors.join('; '))
       return withPrivateLock(path.join(directory(), 'operation.lock'), () => {
-        const h = read(), prior = h.events.find(e => e.command.requestId === command.requestId)
+        const h = verifiedRead(), prior = h.events.find(e => e.command.requestId === command.requestId)
         if (prior) {
           if (digest({ command: prior.command, actor: prior.actor }) !== digest({ command, actor })) throw new Error('request identity reused with different input or actor')
           return { duplicate: true, revision: prior.revision, eventDigest: prior.digest, currentRevision: h.state.revision, persisted: true }
@@ -73,18 +95,20 @@ export function createTrackableStore({ workspaceRoot, scope, actor }) {
         // Leave bounded space for corrections and retirement after ordinary writes stop.
         if (h.state.revision >= (['correct', 'lifecycle'].includes(command.operation) ? 10000 : 9000)) throw new Error('trackable capacity reached; retain/export this history')
         const recordedAt = new Date().toISOString(), state = reduceTrackables(h.state, command, { actor, recordedAt })
-        const body = { schema: 'atelier-trackable-event@v1', scope, revision: state.revision, previous: h.head, command, actor, recordedAt, stateDigest: digest(state) }
+        const occurrenceResolution = command.operation === 'record' ? { occurredAt: command.input.evidence.occurredAt, sourceRef: command.input.evidence.source.ref,
+          occurrence: state.evidence.at(-1).occurrence, tzdata: process.versions.tz ?? null } : null
+        const body = { schema: 'atelier-trackable-event@v2', scope, revision: state.revision, previous: h.head, command, actor, recordedAt, occurrenceResolution, stateDigest: digest(state) }
         const event = { ...body, digest: digest(body) }, bytes = canonicalize(event)
         if (Buffer.byteLength(bytes) > 256 * 1024) throw new Error('trackable event limit exceeded')
         const used = h.events.reduce((sum, e) => sum + Buffer.byteLength(canonicalize(e)), 0)
         const limit = ['correct', 'lifecycle'].includes(command.operation) ? 32 * 1024 * 1024 : 28 * 1024 * 1024
         if (used + Buffer.byteLength(bytes) > limit) throw new Error('trackable journal capacity reached')
         publishPrivateFile(path.join(events, `${String(state.revision).padStart(10, '0')}.json`), bytes)
-        const actual = read()
+        const actual = verifiedRead()
         if (actual.head !== event.digest || digest(actual.state) !== body.stateDigest) throw new Error('trackable durable readback differs')
         return { duplicate: false, revision: state.revision, eventDigest: event.digest, stateDigest: body.stateDigest, persisted: true }
       })
     },
-    exportHistory() { const h = read(); return { identity, events: h.events, head: h.head, private: true, authenticated: false } },
+    exportHistory() { const h = read(); return { identity, events: h.events, head: h.head, private: true, authenticated: false, stateVerified: h.replayError === null, replayError: h.replayError } },
   })
 }

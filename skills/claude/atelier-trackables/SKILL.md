@@ -19,7 +19,10 @@ native profiles and report unsupported mappings rather than converting meaning.
 Release and pin a validated definition. Preview through the same reducer that the
 runtime uses. Adopt an exact revision with an effective instant; do not silently
 change existing instances when authoring changes. Preserve timezone, local-day
-identity and the definition applicable to late evidence.
+identity and the definition applicable to late evidence. Persist resolved
+occurrences for replay; do not recompute historical local days after a calendar
+update. A legacy export with `stateVerified: false` preserves raw history, not
+a usable reconstructed state. Restore compatible calendar rules before writes.
 
 Within the user's existing authority, use typed commands with request identity
 and expected revision. Preserve subject, recorder, source event and assistance

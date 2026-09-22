@@ -52,14 +52,29 @@ function dateAt(at, timezone) {
   return ['year', 'month', 'day'].map(k => parts.find(p => p.type === k).value).join('-')
 }
 export function trackableOccurrence(state, instanceId, occurredAt, eventId = null) {
+  return resolveOccurrence(state, instanceId, occurredAt, eventId)
+}
+function resolveOccurrence(state, instanceId, occurredAt, eventId, resolution = null) {
   if (!/^\d{4}-\d\d-\d\dT.*Z$/.test(occurredAt) || !Number.isFinite(Date.parse(occurredAt))) throw new Error('UTC occurrence instant required')
   const instance = instanceFor(state, instanceId), adoption = adoptionAt(instance, occurredAt)
   const definition = definitionFor(state, adoption.definitionDigest)
   if (definition.profile === 'qualitative-series' && (typeof eventId !== 'string' || !eventId)) throw new Error('qualitative occurrence requires source event identity')
-  const localDate = definition.schedule ? dateAt(occurredAt, definition.schedule.timezone) : null
+  // Replay owns a journal-pinned calendar observation. New commands and previews
+  // omit it and resolve using the current host. Never accept it in command input.
+  const localDate = resolution ? resolution.occurrence?.localDate
+    : definition.schedule ? dateAt(occurredAt, definition.schedule.timezone) : null
+  if (definition.schedule) {
+    if (typeof localDate !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(localDate) || !Number.isFinite(Date.parse(localDate)) || new Date(localDate).toISOString().slice(0, 10) !== localDate) throw new Error('invalid recorded calendar date')
+  } else if (localDate !== null) throw new Error('invalid recorded calendar date')
   const key = { scope: state.scope, instanceId, definitionDigest: adoption.definitionDigest, effectiveAt: adoption.effectiveAt,
     window: localDate ?? (definition.profile === 'milestone' ? 'milestone' : eventId) }
-  return { id: digest(key), ...key, localDate, timezone: definition.schedule?.timezone ?? null }
+  const occurrence = { id: digest(key), ...key, localDate, timezone: definition.schedule?.timezone ?? null }
+  if (resolution) {
+    const tzdata = resolution.tzdata
+    if (tzdata !== null && (typeof tzdata !== 'string' || !/^[a-zA-Z0-9._-]{1,64}$/.test(tzdata))) throw new Error('invalid recorded timezone data version')
+    if (digest(resolution) !== digest({ occurredAt, sourceRef: eventId, occurrence, tzdata })) throw new Error('recorded occurrence identity differs')
+  }
+  return occurrence
 }
 function checkResult(definition, result, value) {
   if (definition.profile === 'qualitative-series') {
@@ -71,8 +86,9 @@ function checkResult(definition, result, value) {
 function effectiveEvidence(state, instanceId) { return state.evidence.filter(e => e.instanceId === instanceId && !e.withdrawn) }
 // The same reducer is used by authoring preview, durable local execution and
 // host adapters. Host authentication and storage are separate responsibilities.
-export function reduceTrackables(previous, command, { actor, recordedAt } = {}) {
+export function reduceTrackables(previous, command, { actor, recordedAt, occurrenceResolution = null } = {}) {
   valid(command, 'request')
+  if (occurrenceResolution !== null && (command.operation !== 'record' || typeof occurrenceResolution !== 'object' || Array.isArray(occurrenceResolution))) throw new Error('recorded occurrence requires a record command')
   if (typeof actor !== 'string' || !actor || actor.length > 128 || !Number.isFinite(Date.parse(recordedAt))) throw new Error('actor and recording time required')
   if (command.expectedRevision !== previous.revision) throw new Error('trackable revision changed; reload')
   const state = structuredClone(previous), input = command.input
@@ -111,7 +127,7 @@ export function reduceTrackables(previous, command, { actor, recordedAt } = {}) 
       const evidence = input.evidence
       if (state.evidence.some(e => e.id === evidence.id)) throw new Error('evidence identity already exists')
       if (Date.parse(evidence.occurredAt) > Date.parse(recordedAt)) throw new Error('future occurrence evidence refused')
-      const occurrence = trackableOccurrence(state, instance.id, evidence.occurredAt, evidence.source.ref)
+      const occurrence = resolveOccurrence(state, instance.id, evidence.occurredAt, evidence.source.ref, occurrenceResolution)
       checkResult(definitionFor(state, occurrence.definitionDigest), evidence.result, evidence.value)
       if (state.evidence.some(e => e.instanceId === instance.id && e.source.kind === evidence.source.kind && e.source.ref === evidence.source.ref)) throw new Error('source event already recorded; retry the original command or correct it')
       state.evidence.push({ ...structuredClone(evidence), instanceId: instance.id, occurrence, recorder: actor, recordedAt, corrections: [], withdrawn: false })

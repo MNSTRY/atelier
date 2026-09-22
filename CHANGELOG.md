@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve recorded Trackable calendar resolutions across host timezone-data changes; retain verified-chain export when legacy replay cannot reconstruct state.
+
 - Correct unchanged instruction re-adoption and preserve literal replacement text during revisions; add recovery and neighboring-slot regressions.
 - Recover recognized dead capability operation locks without requiring an adoption journal; preserve live, uncertain and replacement owners.
 - Add portable Trackable definitions, shared preview/runtime rules, durable scoped reference storage and correction.
