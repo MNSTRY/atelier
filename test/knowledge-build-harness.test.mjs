@@ -1,8 +1,10 @@
 import test from 'node:test'
+import { capabilityWriteTest } from './helpers/capability-write.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import * as harness from '../src/harnesses/index.mjs'
 import * as knowledge from '../src/knowledge/index.mjs'
@@ -15,7 +17,7 @@ import * as capabilities from '../src/capabilities/index.mjs'
 const example = JSON.parse(fs.readFileSync(new URL('../fixtures/harnesses/learning-cycle.json', import.meta.url)))
 const { knowledge: K, build: B, lessons: L } = example
 const clone = structuredClone, pin = harness.harnessRef, digest = harness.contentDigest
-const CLI = new URL('../bin/atelier.mjs', import.meta.url).pathname
+const CLI = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
 const get = (records, id) => clone(records.find(r => r.id === id))
 const add = (records, id, kind, data) => [...clone(records), { ...records[0], id, kind, data }]
 const snapshot = (profile, records) => ({ repository: records[0].data.repository, profile, records })
@@ -298,7 +300,7 @@ test('graph export preserves relation rationale, review and domain alongside a d
   assert.equal(claim.promoted, false)
 })
 
-test('local history refuses stale heads, tampering, interrupted replacement and redirected state', t => {
+capabilityWriteTest('local history refuses stale heads, tampering, interrupted replacement and redirected state', t => {
   const root = workspace(t), head = append(root, 'knowledge', K)
   const file = path.join(root, '.atelier-local/harnesses/knowledge/workshop-knowledge/ledger.json'), bytes = fs.readFileSync(file)
   assert.throws(() => harness.appendHarness({ workspaceRoot: root, profile: 'knowledge', record: example.withdrawal, confirm: harness.EMPTY_HARNESS_HEAD }), /current.*digest/)
@@ -313,7 +315,7 @@ test('local history refuses stale heads, tampering, interrupted replacement and 
   assert.equal(fs.existsSync(path.join(external, 'knowledge')), false)
 })
 
-test('CLI persists both workflows and preserves the existing build projection alias', t => {
+capabilityWriteTest('CLI persists both workflows and preserves the existing build projection alias', t => {
   const root = workspace(t), file = path.join(root, 'input.json')
   const cli = args => spawnSync(process.execPath, [CLI, 'harness', ...args], { cwd: root, encoding: 'utf8' })
   for (const [profile, records] of [['knowledge', K], ['build', B]]) {
@@ -329,23 +331,25 @@ test('CLI persists both workflows and preserves the existing build projection al
   fs.writeFileSync(file, JSON.stringify(dependencies))
   const result = cli(['build', 'readiness', '--run', B[0].id, '--dependencies', file]); assert.equal(result.status, 0); assert.equal(JSON.parse(result.stdout).readyReported, true)
   const code = "import {commandMap} from './src/cli/run.mjs'; if(commandMap.get('build')[0] !== 'src/commands/project.mjs') process.exit(1)"
-  assert.equal(spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: new URL('..', import.meta.url).pathname }).status, 0)
+  assert.equal(spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: fileURLToPath(new URL('..', import.meta.url)) }).status, 0)
 })
 
 test('example command runs from an installed path with spaces, hashes, percent signs and Unicode', t => {
-  const root = workspace(t), installed = path.join(root, 'Atelier path # 100% café')
-  fs.mkdirSync(installed)
+  const root = workspace(t), destination = path.join(root, 'Atelier path # 100% café')
+  fs.mkdirSync(destination)
+  const installed = fs.realpathSync.native(destination)
   const source = new URL('..', import.meta.url)
-  for (const directory of ['src', 'bin', 'contracts']) fs.cpSync(new URL(`${directory}/`, source), path.join(installed, directory), { recursive: true })
-  fs.cpSync(new URL('fixtures/harnesses/', source), path.join(installed, 'fixtures/harnesses'), { recursive: true })
+  for (const directory of ['src', 'bin', 'contracts']) fs.cpSync(fileURLToPath(new URL(`${directory}/`, source)), path.join(installed, directory), { recursive: true })
+  fs.cpSync(fileURLToPath(new URL('fixtures/harnesses/', source)), path.join(installed, 'fixtures/harnesses'), { recursive: true })
   fs.copyFileSync(new URL('package.json', source), path.join(installed, 'package.json'))
-  fs.symlinkSync(fs.realpathSync(new URL('node_modules/', source)), path.join(installed, 'node_modules'))
+  fs.symlinkSync(fs.realpathSync(new URL('node_modules/', source)), path.join(installed, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+  assert.equal(fs.existsSync(path.join(installed, 'bin/atelier.mjs')), true, 'installed CLI entrypoint exists')
   const result = JSON.parse(execFileSync(process.execPath, [path.join(installed, 'bin/atelier.mjs'), 'harness', 'example'], { encoding: 'utf8' }))
   assert.deepEqual(result.knowledge, K)
 })
 
-test('two host profiles adopt independent harness packages beside existing skills and retain exact feedback attribution', t => {
-  const sources = ['knowledge-harness', 'build-harness'].map(n => new URL(`../fixtures/harness-packages/${n}`, import.meta.url).pathname)
+capabilityWriteTest('two host profiles adopt independent harness packages beside existing skills and retain exact feedback attribution', t => {
+  const sources = ['knowledge-harness', 'build-harness'].map(n => fileURLToPath(new URL(`../fixtures/harness-packages/${n}`, import.meta.url)))
   for (const [index, host] of ['codex-repo-v1', 'claude-repo-v1'].entries()) {
     const root = workspace(t)
     fs.mkdirSync(path.join(root, '.agents/skills/existing'), { recursive: true }); fs.writeFileSync(path.join(root, '.agents/skills/existing/SKILL.md'), 'Existing owner content')

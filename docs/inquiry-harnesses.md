@@ -101,6 +101,8 @@ The pure API can inspect and exchange exported histories without an account.
 
 Stored ledgers are under `.atelier-local/inquiry/CAMPAIGN/ledger.json`. Writes
 require ignored, untracked `.atelier-local/` state on a qualified POSIX filesystem.
+Windows ledger writes refuse before creating state; read-only inspection and
+exchange of existing histories remain available.
 A shared steward lock serializes cooperating writers. Each append checks the
 expected head, replays the history, and atomically replaces one file containing
 the complete immutable record sequence. Interrupted writes retain a complete

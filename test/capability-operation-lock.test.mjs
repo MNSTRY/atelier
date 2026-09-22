@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import test from 'node:test'
+import { capabilityWriteTest } from './helpers/capability-write.mjs'
 import { inspectCapabilityRecovery, withOperationLock } from '../src/capabilities/adoption.mjs'
 import { applyCapabilityAdoption, planCapabilityAdoption, readCapabilityEvents, recordCapabilityEvent } from '../src/capabilities/index.mjs'
 import { appendHarness, EMPTY_HARNESS_HEAD, readHarness } from '../src/harnesses/index.mjs'
@@ -32,7 +34,7 @@ function deadOwner() {
   return { owner: 'capability-steward', operationId: randomUUID(), pid: child.pid }
 }
 
-for (const afterPublication of [false, true]) test(`journal-free harness interruption ${afterPublication ? 'after' : 'before'} publication permits the next append`, t => {
+for (const afterPublication of [false, true]) capabilityWriteTest(`journal-free harness interruption ${afterPublication ? 'after' : 'before'} publication permits the next append`, t => {
   const root = workspace(t), module = new URL('../src/harnesses/index.mjs', import.meta.url).href
   const input = { workspaceRoot: root, profile: 'knowledge', record: records[0], confirm: EMPTY_HARNESS_HEAD }
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
@@ -56,8 +58,8 @@ for (const afterPublication of [false, true]) test(`journal-free harness interru
   assert.equal(fs.existsSync(path.join(root, lockRelative)), false)
 })
 
-test('journal-free capability event interruption preserves the committed event and permits another event', t => {
-  const root = workspace(t), packageRoot = new URL('../fixtures/capability-packages/evidence-review/', import.meta.url).pathname
+capabilityWriteTest('journal-free capability event interruption preserves the committed event and permits another event', t => {
+  const root = workspace(t), packageRoot = fileURLToPath(new URL('../fixtures/capability-packages/evidence-review/', import.meta.url))
   const release = JSON.parse(fs.readFileSync(path.join(packageRoot, 'capability-release.json')))
   const settings = { workspaceRoot: root, sources: [packageRoot], adoption: {
     schema: 'mnstry.atelier-capability-adoption@v1', id: 'example-workspace', packages: [{ id: release.package.id, digest: release.digest, mode: 'managed',

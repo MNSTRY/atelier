@@ -106,7 +106,14 @@ export function workspaceRoot(input, { write = false } = {}) {
   const root = fs.realpathSync(path.resolve(input))
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')))
   const git = args => execFileSync('git', ['-C', root, ...args], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
-  if (fs.realpathSync(git(['rev-parse', '--show-toplevel'])) !== root) throw new Error('capability workspace must be the repository root')
+  const top = fs.realpathSync(git(['rev-parse', '--show-toplevel']))
+  // Git can expand a Windows short-name alias. Preserve case-sensitive paths
+  // and compare actual directory identity when the resolved spellings differ.
+  const rootStat = fs.statSync(root, { bigint: true }), topStat = fs.statSync(top, { bigint: true })
+  if (!rootStat.isDirectory() || !topStat.isDirectory() ||
+      (top !== root && !(rootStat.ino !== 0n && rootStat.dev === topStat.dev && rootStat.ino === topStat.ino))) {
+    throw new Error('capability workspace must be the repository root')
+  }
   if (write) {
     if (process.platform === 'win32') throw new Error('capability writes require a qualified POSIX filesystem')
     if (git(['ls-files', '--', '.atelier-local'])) throw new Error('private capability state is tracked')

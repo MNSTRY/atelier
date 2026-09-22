@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import test from 'node:test'
+import { capabilityWriteTest } from './helpers/capability-write.mjs'
 import * as inquiry from '../src/inquiry/index.mjs'
 import * as capability from '../src/capabilities/index.mjs'
 import { digest } from '../src/capabilities/files.mjs'
@@ -11,7 +13,7 @@ import { buildKnowledgeGraph, REPO_ACCESS_SCHEMA } from '../src/graph/knowledge-
 import { getBundledReadinessProtocol } from '../src/readiness-protocols/bundled-pack.mjs'
 import { validateJsonSchema } from '../src/export/atelier-export-contract.mjs'
 
-const CLI = new URL('../bin/atelier.mjs', import.meta.url).pathname
+const CLI = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
 const specimen = JSON.parse(fs.readFileSync(new URL('../fixtures/inquiry/workshop.json', import.meta.url)))
 const clone = v => structuredClone(v)
 const record = id => clone(specimen.find(r => r.id === id))
@@ -167,7 +169,7 @@ test('graph proposal excludes superseded conclusions and produces valid relation
   assert.throws(() => inquiry.inquiryGraphProposal(specimen, { namespace: 'a.b' }), /namespace/)
 })
 
-test('repository journal rejects stale writers and replays exact immutable content', t => {
+capabilityWriteTest('repository journal rejects stale writers and replays exact immutable content', t => {
   const root = workspace(t), head = appendAll(root, specimen)
   const read = inquiry.readInquiry({ workspaceRoot: root, campaign: 'workshop' })
   assert.equal(read.head, head); assert.deepEqual(read.records, specimen)
@@ -179,7 +181,7 @@ test('repository journal rejects stale writers and replays exact immutable conte
   assert.throws(() => inquiry.readInquiry({ workspaceRoot: root, campaign: 'workshop' }), /integrity mismatch/)
 })
 
-test('interrupted atomic replacement preserves the previous complete ledger', t => {
+capabilityWriteTest('interrupted atomic replacement preserves the previous complete ledger', t => {
   const root = workspace(t), head = appendAll(root, through('reminder')), rename = fs.renameSync
   fs.renameSync = () => { throw new Error('synthetic write interruption') }
   try { assert.throws(() => inquiry.appendInquiry({ workspaceRoot: root, record: record('research'), confirm: head }), /interruption/) }
@@ -188,7 +190,7 @@ test('interrupted atomic replacement preserves the previous complete ledger', t 
   inquiry.appendInquiry({ workspaceRoot: root, record: record('research'), confirm: head })
 })
 
-test('campaign writes refuse redirected paths and nonignored state', t => {
+capabilityWriteTest('campaign writes refuse redirected paths and nonignored state', t => {
   const root = workspace(t), external = path.join(root, 'elsewhere'); fs.mkdirSync(external)
   fs.mkdirSync(path.join(root, '.atelier-local'))
   fs.symlinkSync(external, path.join(root, '.atelier-local/inquiry'))
@@ -198,7 +200,7 @@ test('campaign writes refuse redirected paths and nonignored state', t => {
   assert.throws(() => appendAll(root, through('workshop')), /ignored/)
 })
 
-test('CLI exercises append, handoff, export, replay and graph without provider execution', t => {
+capabilityWriteTest('CLI exercises append, handoff, export, replay and graph without provider execution', t => {
   const root = workspace(t), file = path.join(root, 'record.json')
   const missing = spawnSync(process.execPath, [CLI, 'inquiry', 'export', '--campaign', 'missing'], { cwd: root, encoding: 'utf8' })
   assert.equal(missing.status, 1)
@@ -234,9 +236,9 @@ test('feedback preserves causes the older Steward vocabulary cannot represent', 
   }
 })
 
-test('two repositories adopt both harnesses and feedback stays bound to the actual skill', t => {
+capabilityWriteTest('two repositories adopt both harnesses and feedback stays bound to the actual skill', t => {
   const first = workspace(t), second = workspace(t)
-  const sources = ['discovery-harness', 'research-harness'].map(n => new URL(`../fixtures/inquiry-packages/${n}`, import.meta.url).pathname)
+  const sources = ['discovery-harness', 'research-harness'].map(n => fileURLToPath(new URL(`../fixtures/inquiry-packages/${n}`, import.meta.url)))
   for (const [index, root] of [first, second].entries()) {
     fs.mkdirSync(path.join(root, '.agents/skills/existing'), { recursive: true }); fs.writeFileSync(path.join(root, '.agents/skills/existing/SKILL.md'), 'Existing owner content')
     const host = index ? 'claude-repo-v1' : 'codex-repo-v1'

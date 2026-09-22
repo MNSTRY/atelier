@@ -206,8 +206,10 @@ and `export` for the complete ledger, including private content. `inspect` check
 history and references; `validate` checks one record's shape only.
 
 Writes require a Git root, ignored untracked private state, a qualified POSIX
-filesystem, the cooperating-writer lock and the current head. Atomic single-file
-replacement preserves a complete previous or next history after interruption.
+filesystem, the cooperating-writer lock and the current head. Windows ledger
+writes refuse before creating state; read-only inspection and exchange of
+existing histories remain available. Atomic single-file replacement preserves
+a complete previous or next history after interruption.
 Hard process termination can leave the shared lock for operator reconciliation;
 no automatic lock recovery or multi-repository transaction is added here. Hashes
 do not defend against a writer who can replace the whole history. Audience labels

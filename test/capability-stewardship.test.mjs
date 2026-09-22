@@ -2,13 +2,15 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import test from 'node:test'
+import { capabilityWriteTest } from './helpers/capability-write.mjs'
 import * as capability from '../src/capabilities/index.mjs'
 import { digest, jsonText, objectDigest } from '../src/capabilities/files.mjs'
 import { buildKnowledgeGraph, REPO_ACCESS_SCHEMA } from '../src/graph/knowledge-graph.mjs'
 
-const CLI = new URL('../bin/atelier.mjs', import.meta.url).pathname
+const CLI = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
 const fixed = '2026-01-01T00:00:00.000Z'
 for (const shape of ['package', 'release', 'adoption', 'state', 'plan', 'event', 'journal', 'notice']) {
   test(`capability ${shape} contract accepts its fixture and refuses undeclared authority`, () => {
@@ -71,7 +73,7 @@ test('release integrity covers resources, identity and evidence; sealing never o
   assert.throws(() => capability.verifyCapabilityRelease({ packageRoot: directory }), /integrity mismatch/)
 })
 
-test('two repositories adopt alongside external skills on both host profiles; clean update and local customization diverge', t => {
+capabilityWriteTest('two repositories adopt alongside external skills on both host profiles; clean update and local customization diverge', t => {
   const root = sandbox(t), first = repo(root, 'first'), second = repo(root, 'second')
   const v1 = bundle(root), v2 = bundle(root, 'package-two', { version: '1.1.0' })
   for (const workspaceRoot of [first, second]) write(workspaceRoot, '.agents/skills/third-party/SKILL.md', 'Existing owner content')
@@ -99,7 +101,7 @@ test('two repositories adopt alongside external skills on both host profiles; cl
   for (const workspaceRoot of [first, second]) assert.equal(fs.readFileSync(path.join(workspaceRoot, '.agents/skills/third-party/SKILL.md'), 'utf8'), 'Existing owner content')
 })
 
-test('multiple publishers coexist under explicit aliases and exact dependencies', t => {
+capabilityWriteTest('multiple publishers coexist under explicit aliases and exact dependencies', t => {
   const root = sandbox(t), workspaceRoot = repo(root)
   const base = bundle(root, 'base', { id: 'other.publisher/review' })
   const dependent = bundle(root, 'dependent', { dependencies: [{ id: base.release.package.id, version: '1.0.0', digest: base.release.digest, optional: false, capabilities: ['inquiry'] }] })
@@ -117,7 +119,7 @@ test('multiple publishers coexist under explicit aliases and exact dependencies'
   assert.match(capability.planCapabilityAdoption({ ...settings, adoption: collision }).blockers.join(' '), /alias-collision|target-owned/)
 })
 
-test('reference mode preserves an existing skill; managed mode refuses ownership without consent', t => {
+capabilityWriteTest('reference mode preserves an existing skill; managed mode refuses ownership without consent', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   write(workspaceRoot, '.agents/skills/research-inquire/SKILL.md', 'External workflow')
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release, { mode: 'reference' }) }
@@ -145,7 +147,7 @@ test('plans bind repository, requirements, tool observations and source bytes', 
   assert.equal(fs.existsSync(path.join(workspaceRoot, '.agents')), false)
 })
 
-test('same publisher/version cannot be rebound to different bytes even after retirement', t => {
+capabilityWriteTest('same publisher/version cannot be rebound to different bytes even after retirement', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) }
   adopt(settings)
@@ -155,7 +157,7 @@ test('same publisher/version cannot be rebound to different bytes even after ret
   assert.match(capability.planCapabilityAdoption({ ...settings, adoption: { ...settings.adoption, packages: [] } }).blockers.join(' '), /explicit-retirement-required/)
 })
 
-test('retirement preserves previous bytes and refuses local drift', t => {
+capabilityWriteTest('retirement preserves previous bytes and refuses local drift', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) }
   adopt(settings)
@@ -177,7 +179,7 @@ test('unsafe package links, resources and target ancestors are refused without t
   assert.throws(() => capability.prepareCapabilityRelease({ packageRoot: pkg.directory }), /escapes its bundle/)
 })
 
-test('existing steward lock and unignored private state block all adoption writes', t => {
+capabilityWriteTest('existing steward lock and unignored private state block all adoption writes', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) }
   const plan = capability.planCapabilityAdoption(settings)
@@ -189,7 +191,7 @@ test('existing steward lock and unignored private state block all adoption write
   assert.equal(fs.existsSync(path.join(workspaceRoot, '.agents')), false)
 })
 
-test('interruption leaves a blocking journal and recover restores the prior generation without deleting bundles', t => {
+capabilityWriteTest('interruption leaves a blocking journal and recover restores the prior generation without deleting bundles', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) }
   const initial = adopt(settings)
@@ -217,7 +219,7 @@ test('interruption leaves a blocking journal and recover restores the prior gene
   assert.equal(capability.inspectCapabilityAdoption({ workspaceRoot }).packages[0].bindings[0].installed, 'current')
 })
 
-test('recovery refuses unexpected writer bytes and preserves them', t => {
+capabilityWriteTest('recovery refuses unexpected writer bytes and preserves them', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) }
   const plan = capability.planCapabilityAdoption(settings), original = fs.renameSync
@@ -235,7 +237,7 @@ test('recovery refuses unexpected writer bytes and preserves them', t => {
   assert.match(fs.readFileSync(path.join(workspaceRoot, target), 'utf8'), /New local work/)
 })
 
-test('process termination preserves its journal and only its dead owned lock can be reclaimed', t => {
+capabilityWriteTest('process termination preserves its journal and only its dead owned lock can be reclaimed', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) }
   const plan = capability.planCapabilityAdoption(settings)
@@ -265,7 +267,7 @@ test('a repository edit after preview invalidates confirmation without replacing
   assert.equal(fs.readFileSync(path.join(workspaceRoot, '.agents/skills/research-inquire/SKILL.md'), 'utf8'), 'A new local skill')
 })
 
-test('content-free evidence stays version-bound, distinguishes cause and generates reviewable graph sources', t => {
+capabilityWriteTest('content-free evidence stays version-bound, distinguishes cause and generates reviewable graph sources', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const result = adopt({ workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) })
   const ev = event(result.state)
@@ -305,13 +307,20 @@ test('CLI exposes the complete local publisher-to-adopter flow with machine-read
   assert.equal(preview.status, 0, preview.stderr + preview.stdout)
   const plan = JSON.parse(preview.stdout)
   const apply = run('apply', ...args, '--confirm', plan.planDigest)
+  if (process.platform === 'win32') {
+    assert.equal(apply.status, 1, apply.stderr + apply.stdout)
+    assert.match(JSON.parse(apply.stdout).error, /qualified POSIX/)
+    assert.equal(fs.existsSync(path.join(workspaceRoot, '.atelier-local')), false)
+    assert.equal(fs.existsSync(path.join(workspaceRoot, '.agents')), false)
+    return
+  }
   assert.equal(apply.status, 0, apply.stderr + apply.stdout)
   assert.equal(JSON.parse(run('status').stdout).packages[0].bindings[0].installed, 'current')
   assert.equal(run('apply', ...args, '--confirm', plan.planDigest).status, 1)
   assert.equal(run('plan', ...args, '--surprise').status, 2)
 })
 
-test('supplied withdrawal blocks further adoption without deleting installed files; retirement remains explicit', t => {
+capabilityWriteTest('supplied withdrawal blocks further adoption without deleting installed files; retirement remains explicit', t => {
   const root = sandbox(t), workspaceRoot = repo(root), pkg = bundle(root)
   const settings = { workspaceRoot, sources: [pkg.directory], adoption: policy(pkg.release) }
   adopt(settings)
@@ -322,9 +331,9 @@ test('supplied withdrawal blocks further adoption without deleting installed fil
   assert.equal(result.state.packages[0].mode, 'retired')
 })
 
-test('shipped research and evidence-review examples install with complete self-contained resources', t => {
+capabilityWriteTest('shipped research and evidence-review examples install with complete self-contained resources', t => {
   const root = sandbox(t), workspaceRoot = repo(root)
-  const sources = ['evidence-review', 'research'].map(name => new URL(`../fixtures/capability-packages/${name}`, import.meta.url).pathname)
+  const sources = ['evidence-review', 'research'].map(name => fileURLToPath(new URL(`../fixtures/capability-packages/${name}`, import.meta.url)))
   const adoption = JSON.parse(fs.readFileSync(new URL('../fixtures/capability-packages/adoption.example.json', import.meta.url)))
   adopt({ workspaceRoot, sources, adoption })
   assert.equal(capability.inspectCapabilityAdoption({ workspaceRoot }).packages.flatMap(item => item.bindings).length, 8)
