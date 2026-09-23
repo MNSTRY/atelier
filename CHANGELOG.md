@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0-alpha.9
+
 - Add portable template profiles, digest-bound project bindings, staged structural
   validation and canonical read-only presentation through installed package APIs.
 - Add explicit local template adoption and updates through the existing exact-plan
@@ -44,6 +46,15 @@
   retain execution and access authority.
 
 - Recompile cached JSON Schema validators when caller-owned schemas change; preserve unchanged-schema reuse and fresh compilation for non-JSON schemas.
+
+### Fixed
+
+- The maintenance service process could not start from the shipped package:
+  its entry awaits the command contributions at top level, and the selection
+  contribution shipped in 0.2.0-alpha.8 reaches the entry again through
+  `opening.mjs` → `lifecycle.mjs`, so the process deadlocked on its own await
+  and exited 13 before it listened. `SERVICE_ENTRY_PATH` now lives in its own
+  module that nothing else depends on, and a test spawns the real entry.
 
 ## 0.2.0-alpha.8
 

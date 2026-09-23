@@ -9,6 +9,23 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.9
+
+This candidate adds the responsibility workflows, source-current ingestion,
+Trackables, governed instruction adoption and local template profiles. Template
+adoption uses the existing exact-plan transaction engine with explicit v2 policy
+and v3 plans; existing policies are never converted automatically. See
+[template profiles](template-profile.md) and [template adoption](template-upgrades.md).
+Optional advisory decisions require no provider installation or activation.
+
+New Trackable journals retain resolved calendar occurrences and byte-bound state.
+Legacy v1 journals remain available as chain-verified exports when state replay
+cannot be established. Preserve historical records and use the documented
+[Trackables](trackables.md) host limits before adopting a new profile.
+Regenerate local graph/projection artifacts through the ordinary upgrade process
+and qualify each consuming host independently. A package update supplies no
+publication permission or runtime activation.
+
 ## Upgrading to 0.2.0-alpha.8
 
 This release adds typed advisory decision contracts and an experimental,
@@ -158,7 +175,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.8
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.9
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -166,7 +183,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.8"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.9"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
