@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `status` now gives the same reason-specific next step as `open` for a
+  publication that stopped because an Obsidian that may hold the vault could
+  not be coordinated with (`publisher-conflict`, reason
+  `editor-uncoordinated`). The text no longer names one cause, since the
+  reason has several: another vault open, a command line that did not answer,
+  an unknown process table (on Linux, any app on a system Electron), or an app
+  started during an app-closed publication. The advice depends on whether the
+  view was ever published. Before a first publication: quit Obsidian (on
+  Linux, also any app that runs on a system Electron) so the view is
+  published, then `atelier obsidian open` starts Obsidian on it. After one:
+  the same, or open the view in the app as it is with `atelier obsidian open
+  --allow-stale`. A concurrent publisher keeps its advice.
+
 ## 0.2.0-alpha.10
 
 ### Fixed

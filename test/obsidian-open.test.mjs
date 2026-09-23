@@ -120,6 +120,9 @@ const projectDocument = (ext) => ({
 const absentAdapter = () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' })
 const REFUSED_PUBLICATION = { state: 'refused', refusal: { code: 'exchange-unsupported-platform', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
 const CONFLICT_PUBLICATION = { state: 'refused', refusal: { code: 'publication-in-progress', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
+// Obsidian runs and does not answer for this vault: the publisher writes nothing. There is no other publisher.
+const UNCOORDINATED_PUBLICATION = { state: 'refused', refusal: { code: 'editor-uncoordinated', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
+const FIRST_PUBLICATION_NEXT = 'an Obsidian that may hold this vault could not be coordinated with, so publication stopped; quit Obsidian (on Linux, also any app that runs on a system Electron) so the view is published, then `atelier obsidian open` starts Obsidian on it'
 
 function listing(directory) {
   const found = {}
@@ -718,6 +721,38 @@ test('--allow-stale opens a readable vault as it is and still does not call it c
   const result = await world.run(openArgs(['--allow-stale']), { seams: { ...UNREACHABLE_SEAMS, ...app } })
   assert.deepEqual([result.json.outcome, result.json.ok, result.exit, result.json.launched, app.launches.length], ['held-for-your-edit', false, EXIT.notSuccess, true, 1])
   assert.deepEqual([result.json.pendingEdits.open, result.json.pendingEdits.byState.queued], [1, 1])
+})
+
+test('a first publication stopped as editor-uncoordinated says, in status and in open, to quit the app so the view is published; nothing is launched', async (t) => {
+  const world = makeWorld(t)
+  await world.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
+  const app = fakeApp({ running: true })
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app } })
+  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.next, opened.json.readBack.readable], ['publisher-conflict', 'editor-uncoordinated', FIRST_PUBLICATION_NEXT, false])
+  const scope = (await world.run(['status', '--json'])).json.scopes[0]
+  assert.deepEqual([scope.outcome, scope.reason, scope.next, scope.readBack.readable], ['publisher-conflict', 'editor-uncoordinated', FIRST_PUBLICATION_NEXT, false])
+  // There is nothing to open as it is: --allow-stale launches nothing either, and says the same.
+  const stale = await world.run(openArgs(['--allow-stale']), { seams: { ...UNREACHABLE_SEAMS, ...app } })
+  assert.deepEqual([stale.json.outcome, stale.json.next, stale.json.launched, app.launches.length], ['publisher-conflict', FIRST_PUBLICATION_NEXT, false, 0])
+})
+
+test('the same refusal after a view was published says to quit the app or open the view in it as it is, and that open launches it', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+  let uncoordinated = false
+  await world.service({ engineOptions: { seams: { publishView: (input) => (uncoordinated ? Promise.resolve(UNCOORDINATED_PUBLICATION) : publishView(input)) } } })
+  uncoordinated = true
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  const app = fakeApp()
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app } })
+  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.next, opened.json.readBack.readable, app.launches.length], ['publisher-conflict', 'editor-uncoordinated', REASON_NEXT['editor-uncoordinated'], true, 0])
+  assert.match(REASON_NEXT['editor-uncoordinated'], /quit Obsidian .*`atelier obsidian open --allow-stale`/)
+  const scope = (await world.run(['status', '--json'])).json.scopes[0]
+  assert.deepEqual([scope.outcome, scope.reason, scope.next], ['publisher-conflict', 'editor-uncoordinated', REASON_NEXT['editor-uncoordinated']])
+  // The advice holds: --allow-stale opens the last published view in the app, and does not call it current.
+  const stale = await world.run(openArgs(['--allow-stale']), { seams: { ...UNREACHABLE_SEAMS, ...app } })
+  assert.deepEqual([stale.json.outcome, stale.json.ok, stale.json.launched, app.launches], ['publisher-conflict', false, true, [world.vault()]])
 })
 
 test('open starts the owned service the first time only with a consent, reconnects afterwards, and an unknown view refuses', async (t) => {
@@ -1339,8 +1374,22 @@ test('no process this suite started is left behind, no banned program was asked 
 })
 
 test('a publisher refusal for an app without this vault open advises quitting the app, not waiting for another publisher', () => {
-  const next = nextStep('publisher-conflict', 'editor-uncoordinated')
-  assert.match(next, /quit Obsidian/)
-  assert.doesNotMatch(next, /other publisher/)
-  assert.match(nextStep('publisher-conflict', 'publication-in-progress'), /other publisher/, 'a real concurrent publisher keeps its advice')
+  for (const published of [true, false]) {
+    const next = nextStep('publisher-conflict', 'editor-uncoordinated', { published })
+    assert.match(next, /quit Obsidian/)
+    assert.doesNotMatch(next, /other publisher/)
+    for (const reason of ['publication-in-progress', 'generation-mismatch', 'state-mismatch']) {
+      assert.equal(nextStep('publisher-conflict', reason, { published }), OPENING_OUTCOMES['publisher-conflict'].next, `${reason} is another publisher or a changed state, and keeps its advice`)
+    }
+  }
+  assert.equal(nextStep('publisher-conflict', 'editor-uncoordinated', { published: false }), FIRST_PUBLICATION_NEXT, 'before a first publication there is nothing to open as it is')
+  assert.equal(nextStep('publisher-conflict', 'editor-uncoordinated'), REASON_NEXT['editor-uncoordinated'])
+  // The reason has several causes (another vault open, a command line that did not answer, an unknown process table,
+  // an app started during a publication with the app closed): the text names none of them as the cause, stops short
+  // of claiming nothing was written, and names what clears every one of them.
+  for (const next of [FIRST_PUBLICATION_NEXT, REASON_NEXT['editor-uncoordinated']]) {
+    assert.doesNotMatch(next, /without (this|the|that) vault|nothing (is|was) written/)
+    assert.match(next, /may hold this vault could not be coordinated with/)
+    assert.match(next, /on Linux, also any app that runs on a system Electron/)
+  }
 })
