@@ -528,7 +528,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
       try {
         if (!scoped) {
           const appSeam = { openNote: (notePath) => full.app.stimulus('open', notePath), readIncludes: async ({ path: notePath, needle }) => (await evalValue(full.app, PROBES.readIncludes, { path: notePath, needle })) === 'true' }
-          const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe({ env }), createAdapter: () => createObsidianCliAdapter({ env }) })
+          const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe({ env }), createAdapter: ({ qualification }) => createObsidianCliAdapter({ env, qualification }) })
           const run = await runAp03({ world, runtime, app: appSeam, adapterFactory })
           evidenceByGate.G14 = run.evidence.filter((item) => item.name.startsWith('G14'))
           evidenceByGate.G15 = run.evidence.filter((item) => item.name.startsWith('G15'))

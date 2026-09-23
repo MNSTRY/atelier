@@ -348,7 +348,7 @@ test('the production seams are imported in exactly two places, dynamically, behi
   const command = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/commands/obsidian.mjs'), 'utf8')
   assert.ok(command.indexOf("refuse('app-adapter-not-selected'", command.indexOf('const appSeams')) < command.indexOf("import('../runtime/obsidian/app-production-seams.mjs')"), 'the adapter is checked before the import')
   const entry = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/service-main.mjs'), 'utf8')
-  assert.match(entry, /createQualifiedAdapterFactory\(\{ appProbe: createProductionAppProbe\(\), createAdapter: \(\) => createObsidianCliAdapter\(\) \}\)/, 'the service constructs the CLI adapter only through the version-qualified factory')
+  assert.match(entry, /createQualifiedAdapterFactory\(\{ appProbe: createProductionAppProbe\(\), createAdapter: \(\{ qualification \}\) => createObsidianCliAdapter\(\{ qualification \}\) \}\)/, 'the service constructs the CLI adapter only through the version-qualified factory, and hands it the qualification')
   assert.equal((entry.match(/createObsidianCliAdapter\(/g) ?? []).length, 1)
   assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
   // Control: the trace exists. A child that only evaluates the module (it constructs and calls nothing) shows it.
@@ -1360,19 +1360,6 @@ test('sync status is exactly what it was when the Obsidian member is absent or d
   assert.equal(obsidianMaintenanceNotice({ repoPath: path.join(TMP, 'not-enrolled-anywhere') }), null, 'a report never throws into sync')
 })
 
-// ---------------------------------------------------------------------------
-// 10. Nothing left behind
-// ---------------------------------------------------------------------------
-
-test('no process this suite started is left behind, no banned program was asked for, and the production seams were never loaded', async () => {
-  await waitFor(() => SPAWNED.every((entry) => entry.gone || entry.child.exitCode !== null || entry.child.signalCode !== null), { timeoutMs: 15000, label: 'every child to exit' }).catch(() => {})
-  const left = SPAWNED.filter((entry) => !entry.gone && entry.child.exitCode === null && entry.child.signalCode === null)
-  for (const entry of left) { try { entry.child.kill('SIGKILL') } catch { /* gone */ } }
-  assert.deepEqual(left.map((entry) => `pid ${entry.pid} started by "${entry.test}"`), [])
-  assert.deepEqual(guardErrors, [], 'the spawn guard never fired outside its own test')
-  assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
-})
-
 test('a publisher refusal for an app without this vault open advises quitting the app, not waiting for another publisher', () => {
   for (const published of [true, false]) {
     const next = nextStep('publisher-conflict', 'editor-uncoordinated', { published })
@@ -1392,4 +1379,17 @@ test('a publisher refusal for an app without this vault open advises quitting th
     assert.match(next, /may hold this vault could not be coordinated with/)
     assert.match(next, /on Linux, also any app that runs on a system Electron/)
   }
+})
+
+// ---------------------------------------------------------------------------
+// 10. Nothing left behind
+// ---------------------------------------------------------------------------
+
+test('no process this suite started is left behind, no banned program was asked for, and the production seams were never loaded', async () => {
+  await waitFor(() => SPAWNED.every((entry) => entry.gone || entry.child.exitCode !== null || entry.child.signalCode !== null), { timeoutMs: 15000, label: 'every child to exit' }).catch(() => {})
+  const left = SPAWNED.filter((entry) => !entry.gone && entry.child.exitCode === null && entry.child.signalCode === null)
+  for (const entry of left) { try { entry.child.kill('SIGKILL') } catch { /* gone */ } }
+  assert.deepEqual(left.map((entry) => `pid ${entry.pid} started by "${entry.test}"`), [])
+  assert.deepEqual(guardErrors, [], 'the spawn guard never fired outside its own test')
+  assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
 })

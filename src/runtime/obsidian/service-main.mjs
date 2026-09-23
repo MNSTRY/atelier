@@ -23,12 +23,14 @@ import { runMaintenanceService } from './service.mjs'
 // selected them. The editor adapter is constructed only for an app that meets
 // the minimum version; below it, or when the version cannot be read, the
 // factory refuses, the engine records that reason and nothing is published.
+// An adapter qualified while no app ran carries that qualification and does
+// not coordinate with an app that starts before the next qualification.
 const ADAPTERS = Object.freeze({
   'obsidian-cli': async () => {
     const [{ createObsidianCliAdapter }, { createProductionAppProbe }, { createQualifiedAdapterFactory }] = await Promise.all([
       import('../../projection/obsidian/publication/transport.mjs'), import('./app-production-seams.mjs'), import('./app-capability.mjs'),
     ])
-    const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe(), createAdapter: () => createObsidianCliAdapter() })
+    const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe(), createAdapter: ({ qualification }) => createObsidianCliAdapter({ qualification }) })
     return { adapterFactory, appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } } }
   },
 })

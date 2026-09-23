@@ -11,8 +11,10 @@ import { readVersionAnswer } from './app-capability.mjs'
 // This module is imported by exactly two places, both real command-line
 // entries and both behind an explicit `--adapter=obsidian-cli`: the service
 // entry (service-main.mjs) and the command entry (src/commands/obsidian.mjs,
-// `production: true`). No test imports it, and importing it leaves a trace
-// below that the test suite asserts is absent.
+// `production: true`). No test imports it in-process, and importing it leaves
+// a trace below that the test suite asserts is absent. One test imports it in
+// a child process, with a stand-in for the command-line tool, to read the
+// version answers it parses.
 //
 // Status: written against the documented command-line interface and NOT yet
 // exercised against a running app. The acceptance work qualifies it on an

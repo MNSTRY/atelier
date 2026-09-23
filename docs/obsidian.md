@@ -350,13 +350,16 @@ none runs. Otherwise it stops, and the view reports `publisher-conflict` with
 reason `editor-uncoordinated`. That reason has several causes, and the report
 does not say which: Obsidian runs without this vault open, or with it open but
 its command line did not answer; the process table could not be read, or on
-Linux shows an app that runs on a system Electron, which may be Obsidian; or
-an app started while the view was being published with the app closed, which
-stops that publication partway. Before a first publication no app has the
-vault open, so only the first way on applies: quit Obsidian (on Linux, also
-any app that runs on a system Electron). The service then publishes the view
-directly, and `atelier obsidian open --scope ID --adapter=obsidian-cli` starts
-Obsidian on it. `status` and `open` give that as the next step. Once a view
+Linux shows an app that runs on a system Electron, which may be Obsidian; the
+app's version was not checked when the publication began (it started just
+then, or on macOS it is installed outside `/Applications`; see "Known
+limits"); or an app started while the view was being published with the app
+closed, which stops that publication partway. Before a first publication no
+app has the vault open, so only the first way on applies: quit Obsidian (on
+Linux, also any app that runs on a system Electron). The service then
+publishes the view directly, and
+`atelier obsidian open --scope ID --adapter=obsidian-cli` starts Obsidian on
+it. `status` and `open` give that as the next step. Once a view
 has been published, the last published vault stays in place and there is a
 second way on: open it in the running app as it is with
 `atelier obsidian open --allow-stale`, which waits, bounded, until the app
@@ -393,7 +396,20 @@ test reported as a pass.
   is admitted although the protocol depends on the view's undocumented
   `lastSavedData` field, and the protocol cases have not been re-run on any
   later release. See the "App capability floor" row of
-  [obsidian-contract.md](obsidian-contract.md).
+  [obsidian-contract.md](obsidian-contract.md). An app that was not running
+  when an adapter was qualified had no version to check, and neither had an
+  app that was not found. Such an answer is never reused, and the adapter
+  built on it does not coordinate with any app it then finds running, and
+  asks it nothing. That publication stops as `publisher-conflict` with reason
+  `editor-uncoordinated`, and the next publication asks again and reads the
+  version. A view that stopped is tried again on its next change, or at the
+  next full reconciliation, every five minutes.
+- Install location (macOS): the app is found only at
+  `/Applications/Obsidian.app`, and its command-line tool only inside it. An
+  Obsidian installed elsewhere, or a renamed bundle, is `app-missing`.
+  Nothing is published through it, publication waits while it runs (the
+  process probe still sees it), and `open` answers `app-missing` and cannot
+  start it. With it quit, the view is published on the path with no app.
 - No vault open: while Obsidian runs with no vault open, its command-line tool
   answers every command, `version` included, with `Vault not found.`. The
   version floor cannot be checked then, so the app does not qualify:
@@ -404,20 +420,47 @@ test reported as a pass.
   the version again on a later tick. `open` launches nothing while the app
   runs with no vault open, and after its own launch it waits, bounded, while
   the app is still opening the vault.
-- Detecting the app: the process table is read with `ps -A -o comm=`, and the
-  app is recognised by the executable a process runs, never by its arguments,
-  so a path argument that contains an `obsidian` directory (the maintenance
-  service itself, anything under the private data root) is not the app. On
-  macOS the executable `Obsidian` and the bundle's `Obsidian Helper`
-  processes count, in any directory. On Linux a process named `obsidian`
-  counts, which covers the .deb, snap, AppImage and Flatpak builds. A
-  distribution that runs the app under a system Electron shows only
-  `electron`: the table is then `unknown`, which is treated as a running app,
-  so publication through the app-free path waits until no such process runs.
-  The command-line tool (`obsidian-cli`) is a client of the app and is not
-  counted. A process renamed by its packager, an app on another machine and an
-  app that starts after a reading are not seen; see "The path with no app" in
-  [obsidian-contract.md](obsidian-contract.md).
+- Detecting the app: the process table is read with `ps -A -o comm=`
+  (`pid=,comm=` on Linux), and the app is recognised by the executable a
+  process runs, never by its arguments, so a path argument that contains an
+  `obsidian` directory (the maintenance service itself, anything under the
+  private data root) is not the app. A `ps` that has not answered within five
+  seconds is killed and the reading is `unknown`, which is treated as a
+  running app.
+  - macOS: the executable `Obsidian` and the bundle's `Obsidian Helper`
+    processes count, in any directory. An app started through a differently
+    named link shows that name for its main process; its `Obsidian Helper`
+    processes still count.
+  - Linux: a process named `obsidian` counts, which covers the .deb, snap,
+    AppImage and Flatpak builds. Linux names a process after the path it was
+    started through, so for a name that is not recognised the probe reads
+    the executable `/proc/<pid>/exe` resolves to: an app started through a
+    link or launcher named `obs`, or a child started through
+    `/proc/self/exe` whose executable is readable, still counts. A process
+    whose executable this user may not read (another user's, or one of this
+    user's that hides it from tracing, such as ssh-agent) or that exited
+    meanwhile is judged by its name alone. Any other read failure, or a
+    table in which no executable resolves at all, is `unknown`. A
+    distribution that runs the app under a system Electron shows only
+    `electron`: the table is then `unknown`, so publication through the
+    app-free path waits until no such process runs.
+  - The command-line tool (`obsidian-cli`) is a client of the app and is not
+    counted. An app packaged under another executable name, an app on
+    another machine and an app that starts after a reading are not seen; see
+    "The path with no app" in [obsidian-contract.md](obsidian-contract.md).
+- The app-free path is live: before 0.2.0-alpha.10 the probe always found
+  Atelier's own service, so publication never took the path with no app.
+  From 0.2.0-alpha.10 it does, whenever the process table shows, positively,
+  that no Obsidian runs. It applies only then. The table is read at path
+  selection, again immediately before the first note, and again whenever two
+  seconds have passed. An app that starts between two readings is not seen
+  for at most two seconds plus one note's publication, and in that window a
+  note is exchanged with no editor check. Bytes on disk stay protected by the
+  on-disk comparison and the exchange. An unsaved buffer in the newly started
+  app does not: the app applies its own external-modification merge, which
+  can drop overlapping edits. Once a reading shows an app, every remaining
+  note refuses. To avoid the window, do not start Obsidian while a view is
+  being published with the app closed.
 - CRLF sources: the editor normalizes line endings when it saves, so a body
   edit made in the vault to a note whose source uses CRLF is more than a body
   replacement to the edit lens. It is preserved and becomes a proposal; it is

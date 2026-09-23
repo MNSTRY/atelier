@@ -16,6 +16,30 @@
   published, then `atelier obsidian open` starts Obsidian on it. After one:
   the same, or open the view in the app as it is with `atelier obsidian open
   --allow-stale`. A concurrent publisher keeps its advice.
+- The service's app qualification checks no version for an app that is not
+  running, and that answer is remembered for up to ten seconds. An editor
+  adapter built on it could coordinate with an Obsidian started inside that
+  window, whose version nobody had checked, and publish through it in-app.
+  The adapter now receives the qualification and does not coordinate, or ask
+  the app anything, unless a version was checked. An answer that checked no
+  version (the app was not running, or none was found) is no longer reused,
+  so the next publication after the app starts reads its version and
+  coordinates. A publication that stops this way is tried again on the next
+  change or at the next full reconciliation, every five minutes.
+- On macOS the app is found only at `/Applications/Obsidian.app`. An
+  Obsidian installed elsewhere is `app-missing`: nothing is published through
+  it, and publication waits while it runs. This is now documented.
+- On Linux an app started through a differently named link or launcher was
+  read as absent, because the process name is the name it was started
+  through. A process whose name is not recognised is now identified by the
+  executable `/proc/<pid>/exe` resolves to. A read failure other than a
+  process that exited or whose executable this user may not read, or a table
+  in which nothing resolves, is `unknown`.
+- The `ps` call of the process probe had no timeout, so a hung `ps` blocked
+  the service. It is killed after five seconds and the reading is `unknown`.
+- Documented that from 0.2.0-alpha.10 the app-free publication path runs in
+  production, with its re-probe window of up to two seconds plus one note
+  while Obsidian is not running (see "Known limits" in `docs/obsidian.md`).
 
 ## 0.2.0-alpha.10
 

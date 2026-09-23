@@ -242,7 +242,7 @@ export function createInProcessServiceRuntime({ loadProject, dataRoot, env, cons
 // for selects the app that holds it, reached through that app's private
 // HOME. Each app is qualified on its own (version floor, running process).
 export function createPerVaultAdapterFactory(apps, { createQualifiedAdapterFactory, createProductionAppProbe, createObsidianCliAdapter }) {
-  const factories = apps.map(({ vaultRoot, env }) => ({ vaultRoot: fs.realpathSync(vaultRoot), factory: createQualifiedAdapterFactory({ appProbe: createProductionAppProbe({ env }), createAdapter: () => createObsidianCliAdapter({ env }) }) }))
+  const factories = apps.map(({ vaultRoot, env }) => ({ vaultRoot: fs.realpathSync(vaultRoot), factory: createQualifiedAdapterFactory({ appProbe: createProductionAppProbe({ env }), createAdapter: ({ qualification }) => createObsidianCliAdapter({ env, qualification }) }) }))
   const factory = (input) => {
     const vaultRoot = input?.store?.vaultRoot
     const match = factories.find((item) => item.vaultRoot === vaultRoot)
