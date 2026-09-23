@@ -55,6 +55,19 @@ export function describeOutcome(code) {
   return { outcome: code, ...OPENING_OUTCOMES[code] }
 }
 
+// A reason whose next step is not its outcome's. With no vault open the app's
+// command line answers nothing, its version included, so the version floor
+// cannot be checked until a vault is open or the app is quit.
+export const REASON_NEXT = Object.freeze({
+  'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again',
+})
+
+// The next step for an outcome and its reason; null for a code that is not an opening outcome.
+export function nextStep(outcome, reason) {
+  if (typeof reason === 'string' && Object.hasOwn(REASON_NEXT, reason)) return REASON_NEXT[reason]
+  return Object.hasOwn(OPENING_OUTCOMES, outcome) ? OPENING_OUTCOMES[outcome].next : null
+}
+
 // The decisions the opening oracles are sensitive to; tests substitute broken ones to prove the oracles can fail.
 export const OPENING_PRIMITIVES = Object.freeze({
   // The freshness states that are their own outcome.
@@ -146,6 +159,8 @@ export function resolveScope(enablement, requested) {
 
 const defaultSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 const READABLE = new Set(['stale-readable', 'held-for-your-edit', 'updating', 'publisher-conflict'])
+// After a launch: the app is still starting, or still opening the vault it was asked for.
+const NOT_UP_YET = new Set(['version-unknown', 'no-vault-open'])
 
 // Starts or reconnects the owned service, asks it for a tick, reads the view
 // back, qualifies the app, has the vault opened and reports one outcome.
@@ -164,7 +179,7 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   const project = loadProject()
   const enablement = readObsidianEnablement(project)
   const applyAvailable = extensions !== null && extensions.applyOperation() !== UNAVAILABLE_APPLY_OPERATION
-  const finish = (outcome, extra = {}) => ({ ok: outcome === 'current', ...describeOutcome(outcome), launched: false, ...extra })
+  const finish = (outcome, extra = {}) => ({ ok: outcome === 'current', ...describeOutcome(outcome), next: nextStep(outcome, extra.reason), launched: false, ...extra })
   if (enablement.state === 'disabled') return finish('disabled', { reason: enablement.reason, scopeId: requestedScope ?? null })
   const scopeId = resolveScope(enablement, requestedScope)
   const lifecycle = { loadProject, dataRoot, env, platform, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
@@ -217,8 +232,8 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   let vault = { answered: false, indexReady: false }
   for (;;) {
     after = qualifyApp(await inspectApp(appProbe), { requireVersion: true })
-    // A running app below the floor is final; an app that has not come up yet is asked again.
-    if (!rules.appQualifies(after) && after.reason !== 'version-unknown') return finish(after.outcome, { ...common, launched: true, reason: after.reason, app: app(after) })
+    // A running app below the floor is final; an app that has not come up yet, or not yet opened a vault, is asked again.
+    if (!rules.appQualifies(after) && !NOT_UP_YET.has(after.reason)) return finish(after.outcome, { ...common, launched: true, reason: after.reason, app: app(after) })
     if (rules.appQualifies(after)) {
       try { vault = await appProbe.vaultState({ vaultRoot: view.vaultRoot }) } catch { vault = { answered: false, indexReady: false } }
       if (vault?.answered === true && vault.indexReady === true) break

@@ -291,7 +291,10 @@ still protected by the on-disk comparison and the exchange. An unsaved buffer
 in the newly started app is not: the app then takes its own
 external-modification merge, which can drop overlapping edits. The probe also
 cannot see an app on another machine that reaches the vault through a shared
-or synchronized folder, or an app packaged under another executable name.
+or synchronized folder, or an app packaged under another executable name. It
+recognises the app by the executable a process runs (`ps -A -o comm=`), never
+by its arguments; on Linux a system Electron process, which does not say which
+app it hosts, makes the reading unknown rather than absent.
 
 ### Proven boundary
 

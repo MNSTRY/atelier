@@ -364,6 +364,30 @@ test reported as a pass.
   `lastSavedData` field, and the protocol cases have not been re-run on any
   later release. See the "App capability floor" row of
   [obsidian-contract.md](obsidian-contract.md).
+- No vault open: while Obsidian runs with no vault open, its command-line tool
+  answers every command, `version` included, with `Vault not found.`. The
+  version floor cannot be checked then, so the app does not qualify:
+  `app-version-unsupported` with reason `no-vault-open`, and nothing is
+  published through the app. `status` (under `service.app`) and `open` say what
+  to do: open any vault in Obsidian, or quit Obsidian. With the app quit,
+  maintenance publishes on its own path again; with a vault open, it reads
+  the version again on a later tick. `open` launches nothing while the app
+  runs with no vault open, and after its own launch it waits, bounded, while
+  the app is still opening the vault.
+- Detecting the app: the process table is read with `ps -A -o comm=`, and the
+  app is recognised by the executable a process runs, never by its arguments,
+  so a path argument that contains an `obsidian` directory (the maintenance
+  service itself, anything under the private data root) is not the app. On
+  macOS the executable `Obsidian` and the bundle's `Obsidian Helper`
+  processes count, in any directory. On Linux a process named `obsidian`
+  counts, which covers the .deb, snap, AppImage and Flatpak builds. A
+  distribution that runs the app under a system Electron shows only
+  `electron`: the table is then `unknown`, which is treated as a running app,
+  so publication through the app-free path waits until no such process runs.
+  The command-line tool (`obsidian-cli`) is a client of the app and is not
+  counted. A process renamed by its packager, an app on another machine and an
+  app that starts after a reading are not seen; see "The path with no app" in
+  [obsidian-contract.md](obsidian-contract.md).
 - CRLF sources: the editor normalizes line endings when it saves, so a body
   edit made in the vault to a note whose source uses CRLF is more than a body
   replacement to the edit lens. It is preserved and becomes a proposal; it is
