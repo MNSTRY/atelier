@@ -282,7 +282,7 @@ step. Only `current` is success:
 | `stale-readable` | a last good vault exists and reads back, but is not proven to be the present generation |
 | `not-prepared` | no generation of this view has been published |
 | `publisher-conflict` | another publisher or an uncoordinated editor holds the vault |
-| `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability; below the minimum version, or a version that cannot be read |
+| `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability; below the minimum version, or a version that cannot be read (reason `no-vault-open` when the app runs with no vault open and its command line answers nothing else) |
 | `launch-failed` | the operating system refused, or the app never answered for this vault |
 | `indexing` | the app answers for this vault and has not finished reading it |
 | `service-unavailable` | the service could not be started or is not provably ours (`occupied`, no consent yet, a start that never proved ownership) |

@@ -5,13 +5,14 @@ import { refuse } from './errors.mjs'
 // Nothing here looks at this machine. What is installed is learned through an
 // injected `appProbe`:
 //
-//   appProbe.inspect()                 -> { installed, cli, running, version }
+//   appProbe.inspect()                 -> { installed, cli, running, version, noVaultOpen? }
 //   appProbe.vaultState({ vaultRoot }) -> { answered, indexReady }
 //
 // `installed` and `cli` are booleans, `running` is true, false or null (not
-// known) and `version` is the app's own version text or null. The production
-// probe is a separate module that only the real command-line entries load;
-// every test passes its own.
+// known) and `version` is the app's own version text or null. `noVaultOpen`
+// is true when the command-line tool answered that no vault is open. The
+// production probe is a separate module that only the real command-line
+// entries load; every test passes its own.
 
 // The publication protocol sets the view's undocumented `lastSavedData` field.
 // 1.13.7 is the only app version that protocol was proven on, so it is the
@@ -59,14 +60,32 @@ export function meetsMinimumAppVersion(version, floor = MINIMUM_APP_VERSION) {
   return order !== null && order >= 0
 }
 
+// While the app runs with no vault open, its command-line tool answers every
+// command, `version` too, with this line (observed on 1.13.7, on either output
+// stream and with either exit status). It is not a version.
+const NO_VAULT_OPEN = /^vault not found\.?$/i
+
+// Pure. What one `version` call of the command-line tool answered:
+// { version, noVaultOpen }. `exited` is false for a call that failed or exited
+// non-zero; its output is then read for the no-vault answer, never for a version.
+export function readVersionAnswer({ stdout = '', stderr = '', exited = true } = {}) {
+  const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
+  if (lines.some((line) => NO_VAULT_OPEN.test(line))) return { version: null, noVaultOpen: true }
+  const text = typeof stdout === 'string' ? stdout.trim() : ''
+  return { version: exited && text !== '' ? text : null, noVaultOpen: false }
+}
+
 // Pure. `requireVersion: false` lets an installed app that is positively not
 // running pass without a version: nothing is published through an app that
-// does not run, and the version is asked for again once it does.
+// does not run, and the version is asked for again once it does. An app whose
+// command-line tool says no vault is open runs, whatever the process table
+// said, and answers nothing else: `no-vault-open`, which does not qualify.
 export function qualifyApp(observation, { requireVersion = true, floor = MINIMUM_APP_VERSION } = {}) {
   const seen = observation !== null && typeof observation === 'object' ? observation : {}
   const base = { floor, version: typeof seen.version === 'string' ? seen.version.slice(0, 80) : null, running: seen.running === true ? true : seen.running === false ? false : null }
   if (seen.installed !== true) return { ...base, outcome: 'app-missing', reason: 'no-app-found' }
   if (seen.cli !== true) return { ...base, outcome: 'app-cli-unavailable', reason: 'cli-capability-absent' }
+  if (seen.noVaultOpen === true) return { ...base, outcome: 'app-version-unsupported', reason: 'no-vault-open' }
   if (base.version === null) {
     if (!requireVersion && base.running === false) return { ...base, outcome: 'qualified', reason: 'app-not-running-version-not-needed', versionChecked: false }
     return { ...base, outcome: 'app-version-unsupported', reason: 'version-unknown' }
