@@ -51,6 +51,8 @@ export function createApplyCommandOperation({ create = createSourceApply } = {})
   return {
     name: 'apply',
     summary: SUMMARY,
+    // The command's option table is shared; this declares that `apply` is the operation that takes `--actor`.
+    options: ['actor'],
     async run({ args, flags, loadProject, dataRoot, env, platform, clock }) {
       const [sub = 'list', editId, ...extra] = args
       const sourceApply = create({ loadProject, ...(dataRoot === undefined ? {} : { dataRoot }), env, platform, clock })

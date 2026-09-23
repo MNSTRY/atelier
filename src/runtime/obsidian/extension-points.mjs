@@ -75,6 +75,8 @@ export function createCommandOperations({ reserved = [] } = {}) {
       const valid = operation !== null && typeof operation === 'object' && typeof operation.name === 'string' && OPERATION_NAME.test(operation.name)
         && typeof operation.summary === 'string' && operation.summary !== '' && typeof operation.run === 'function'
       if (!valid) refuse('invalid-extension', 'a command operation needs a name, a summary and run()')
+      // Optional: the shared options of the command this operation takes beyond the ones every operation takes.
+      if (operation.options !== undefined && !(Array.isArray(operation.options) && operation.options.every((item) => typeof item === 'string'))) refuse('invalid-extension', 'a command operation declares its options as a list of names')
       if (reserved.includes(operation.name) && !REPLACEABLE_OPERATIONS.includes(operation.name)) refuse('operation-name-reserved', 'a built-in operation cannot be replaced', { name: operation.name })
       if (registered.has(operation.name)) refuse('extension-already-registered', 'an operation of this name is already registered', { name: operation.name })
       registered.set(operation.name, operation)

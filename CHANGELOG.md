@@ -29,9 +29,16 @@
   arm64 with one app version; see the contract for what is open.
 - Add a per-workspace loopback maintenance service and the noninteractive
   `atelier obsidian` command (`status`, `scope`, `audience`, `mode`, `policy`,
-  `service`, `open`, `apply`, `proposals`). Reaching the installed app or the
-  operating system is never a default: it needs `--adapter=obsidian-cli`. The
-  app must be version 1.13.7 or later.
+  `service`, `open`, `apply`, `proposals`, `conflicts`, `apply-policy`,
+  `selection`). Reaching the installed app or the operating system is never a
+  default: it needs `--adapter=obsidian-cli`. The app must be version 1.13.7
+  or later.
+- Ship the selection contribution on the command: the one-line loader module
+  `src/runtime/obsidian/contributions/selection-ui.mjs` puts `selection`,
+  `conflicts` and `apply-policy` on `atelier obsidian`, beside `apply` and
+  `proposals`. The usage text names every contributed operation, and a
+  contributed operation declares under `options` which shared options it
+  takes, so `--actor` is refused everywhere but `apply run`.
 - Preserve every edit made in the vault before anything is republished. A
   body replacement is applied to its source manually, or automatically under
   a scoped policy the user installs and can revoke; revocation is read again

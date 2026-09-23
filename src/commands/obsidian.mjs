@@ -60,8 +60,19 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   open [--scope ID] [--consent-actor ID] [--allow-stale] --adapter=${PRODUCTION_ADAPTER}
                                        Start or reconnect maintenance, verify the view, open it in Obsidian.
 
+Contributed operations, registered by the modules shipped under src/runtime/obsidian/contributions/:
+  apply list | show EDIT | run EDIT [--actor ID] | recover
+                                       Pending edits, and the explicit apply of one of them to its source file.
+  conflicts [ID]                       The shared conflict state of edited objects. Read-only.
+  apply-policy create FILE | show | revoke
+                                       Build, digest and install an apply policy from a JSON request; show it; revoke it.
+  selection resolve ID | persist ID [allow-empty] | show ID | list
+                                       The exact selected set of a declared view; persisted in Atelier state.
+  proposals list | show OPERATION      Structural edits routed as copy-only proposals. Read-only.
+\`status\` lists the operations this command registered under "operations".
+
 Opening outcomes: ${Object.keys(OPENING_OUTCOMES).join(', ')}.
-Pending edits additionally report ${APPLY_UNAVAILABLE} until an apply operation ships.
+Pending edits additionally report ${APPLY_UNAVAILABLE} while no apply operation is registered.
 Minimum Obsidian version: ${MINIMUM_APP_VERSION}.
 Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer is not success.`
 
@@ -92,7 +103,7 @@ const NEXT = Object.freeze({
   'app-adapter-not-selected': `pass --adapter=${PRODUCTION_ADAPTER} to let this command reach the installed app`,
   'startup-consent-required': 'pass --consent-actor ID to record who allows the maintenance service to run',
   'automatic-mode-refused': 'install an active automatic policy with `obsidian policy install FILE`',
-  [APPLY_UNAVAILABLE]: 'no apply operation ships yet; edits stay preserved and queued',
+  [APPLY_UNAVAILABLE]: 'no apply operation is registered on this command; edits stay preserved and queued',
   'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
   disabled: 'declare the Obsidian settings in the project configuration',
 })
@@ -239,7 +250,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           if (!would.authorized) refuse('automatic-mode-refused', 'automatic mode needs an installed, matching, active automatic policy; nothing was changed', { reason: would.reason })
         }
         writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...current, maintenanceMode: value, updatedAt: now } })
-        return { exit: EXIT.ok, document: { maintenanceMode: value, apply: applyShown }, human: [`mode: ${value}${value === 'automatic' && !applyAvailable ? `; every apply reports ${APPLY_UNAVAILABLE} until an apply operation ships` : ''}`] }
+        return { exit: EXIT.ok, document: { maintenanceMode: value, apply: applyShown }, human: [`mode: ${value}${value === 'automatic' && !applyAvailable ? `; every apply reports ${APPLY_UNAVAILABLE} while no apply operation is registered` : ''}`] }
       },
 
       async policy() {
@@ -320,7 +331,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
       },
 
-      // A placeholder until an apply operation ships; the work that ships one registers its own `apply`.
+      // The placeholder that answers when no contribution registered an apply operation; the shipped source-apply contribution replaces it.
       async apply() {
         return refuse(APPLY_UNAVAILABLE, 'no apply operation is registered; pending edits stay preserved and queued', { operationId: registry.extensions.applyOperation().id })
       },
@@ -328,8 +339,9 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
 
     const contributed = registry.operations.get(operationName)
     if (contributed === null && !Object.hasOwn(operations, operationName)) refuse('usage', `unknown operation: ${String(operationName).slice(0, 40)}`)
-    // One option table serves every operation. No built-in operation has a use for an actor; a contributed one says so itself.
-    if (contributed === null && flags.actor !== undefined) refuse('usage', '--actor belongs to `apply run`; this operation does not take it')
+    // One option table serves every operation. No built-in operation has a use for an actor, and a contributed one takes
+    // it only when it declares so (`options: ['actor']`); the apply operation then decides which of its verbs takes it.
+    if (flags.actor !== undefined && !(Array.isArray(contributed?.options) && contributed.options.includes('actor'))) refuse('usage', '--actor belongs to `apply run`; this operation does not take it')
     const result = contributed !== null
       ? await contributed.run({ args: positionals.slice(1), flags: { ...flags }, registry, loadProject, dataRoot, env, platform, clock, readable, writable })
       : await operations[operationName]()

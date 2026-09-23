@@ -222,6 +222,7 @@ for (const requiredObsidianFile of [
   'src/runtime/obsidian/service-main.mjs',
   'src/runtime/obsidian/contributions/source-apply.mjs',
   'src/runtime/obsidian/contributions/proposal-adapter.mjs',
+  'src/runtime/obsidian/contributions/selection-ui.mjs',
   'src/projection/obsidian/contracts.mjs',
   'src/projection/obsidian/materialize/index.mjs',
   'src/projection/obsidian/publication/index.mjs',

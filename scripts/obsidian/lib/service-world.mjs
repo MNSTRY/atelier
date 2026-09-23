@@ -5,7 +5,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveProjectConfig } from '../../../src/project/config.mjs'
 import { createRecoveryStore } from '../../../src/projection/obsidian/recovery/index.mjs'
-import { createSelectionContribution } from '../../../src/projection/obsidian/selection-ui/index.mjs'
 import { loadContributions } from '../../../src/runtime/obsidian/contributions.mjs'
 import { readServiceStatusDocument, requestServiceTick, serviceStatus, startService, stopService } from '../../../src/runtime/obsidian/lifecycle.mjs'
 import { defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } from '../../../src/runtime/obsidian/machine-settings.mjs'
@@ -266,7 +265,8 @@ const UNREACHABLE = new Proxy({}, { get: (_target, name) => { throw new Error(`t
 // throw if anything reaches them.
 export async function createCommandRunner({ projectFile, dataRoot, env = stripProjectEnv(), cwd = path.dirname(projectFile), clock = () => new Date(), contributions = null, entryPath = SERVICE_ENTRY_PATH }) {
   const { runObsidianCommandForOracleTests } = await import('../../../src/commands/obsidian.mjs')
-  const loaded = contributions ?? [...await loadContributions(), createSelectionContribution()]
+  // The shipped directory now holds the selection contribution, so the production loader is the whole set.
+  const loaded = contributions ?? await loadContributions()
   const calls = []
   const run = async (...argv) => {
     const out = []
