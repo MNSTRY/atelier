@@ -122,7 +122,7 @@ const REFUSED_PUBLICATION = { state: 'refused', refusal: { code: 'exchange-unsup
 const CONFLICT_PUBLICATION = { state: 'refused', refusal: { code: 'publication-in-progress', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
 // Obsidian runs and does not answer for this vault: the publisher writes nothing. There is no other publisher.
 const UNCOORDINATED_PUBLICATION = { state: 'refused', refusal: { code: 'editor-uncoordinated', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
-const FIRST_PUBLICATION_NEXT = 'quit Obsidian; the view is published while the app is closed, then `atelier obsidian open` starts Obsidian on it'
+const FIRST_PUBLICATION_NEXT = 'an Obsidian that may hold this vault could not be coordinated with, so publication stopped; quit Obsidian (on Linux, also any app that runs on a system Electron) so the view is published, then `atelier obsidian open` starts Obsidian on it'
 
 function listing(directory) {
   const found = {}
@@ -723,7 +723,7 @@ test('--allow-stale opens a readable vault as it is and still does not call it c
   assert.deepEqual([result.json.pendingEdits.open, result.json.pendingEdits.byState.queued], [1, 1])
 })
 
-test('a first publication refused because Obsidian runs without this vault says, in status and in open, to quit the app so the view is published; nothing is launched', async (t) => {
+test('a first publication stopped as editor-uncoordinated says, in status and in open, to quit the app so the view is published; nothing is launched', async (t) => {
   const world = makeWorld(t)
   await world.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
   const app = fakeApp({ running: true })
@@ -1384,4 +1384,12 @@ test('a publisher refusal for an app without this vault open advises quitting th
   }
   assert.equal(nextStep('publisher-conflict', 'editor-uncoordinated', { published: false }), FIRST_PUBLICATION_NEXT, 'before a first publication there is nothing to open as it is')
   assert.equal(nextStep('publisher-conflict', 'editor-uncoordinated'), REASON_NEXT['editor-uncoordinated'])
+  // The reason has several causes (another vault open, a command line that did not answer, an unknown process table,
+  // an app started during a publication with the app closed): the text names none of them as the cause, stops short
+  // of claiming nothing was written, and names what clears every one of them.
+  for (const next of [FIRST_PUBLICATION_NEXT, REASON_NEXT['editor-uncoordinated']]) {
+    assert.doesNotMatch(next, /without (this|the|that) vault|nothing (is|was) written/)
+    assert.match(next, /may hold this vault could not be coordinated with/)
+    assert.match(next, /on Linux, also any app that runs on a system Electron/)
+  }
 })

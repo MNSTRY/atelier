@@ -58,20 +58,25 @@ export function describeOutcome(code) {
 // A reason whose next step is not its outcome's. With no vault open the app's
 // command line answers nothing, its version included, so the version floor
 // cannot be checked until a vault is open or the app is quit.
-// `editor-uncoordinated` is the publisher refusing to write while an Obsidian
-// runs that does not answer for this vault: nothing coordinates with the app,
-// so nothing is written. There is no other publisher to wait for. With the app
-// quit, the view is published directly; a view that was published before can
-// instead be opened in the app as it is, which then answers for it.
+// `editor-uncoordinated` is the publisher stopping because an Obsidian that may
+// hold this vault could not be coordinated with. There is no other publisher to
+// wait for, and the cause is not known here: the app runs without this vault,
+// or with it but its command line did not answer, or the process table was
+// unknown (on Linux, any app that runs on a system Electron), or an app started
+// while the view was published with the app closed. Every cause clears once no
+// such process runs, and a view that was published before can instead be
+// opened in the app as it is, which then answers for it.
+const UNCOORDINATED = 'an Obsidian that may hold this vault could not be coordinated with, so publication stopped'
+const QUIT = 'quit Obsidian (on Linux, also any app that runs on a system Electron)'
 export const REASON_NEXT = Object.freeze({
   'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again',
-  'editor-uncoordinated': 'quit Obsidian (the view is then published while the app is closed), or open this view in it with `atelier obsidian open --allow-stale`; it is retried automatically',
+  'editor-uncoordinated': `${UNCOORDINATED}; ${QUIT}, or open this view in it with \`atelier obsidian open --allow-stale\`; it is retried automatically`,
 })
 
 // Before a first publication there is no vault to open in the app: the view is
-// published only while the app is closed.
+// published only while no such process runs.
 const FIRST_PUBLICATION_NEXT = Object.freeze({
-  'editor-uncoordinated': 'quit Obsidian; the view is published while the app is closed, then `atelier obsidian open` starts Obsidian on it',
+  'editor-uncoordinated': `${UNCOORDINATED}; ${QUIT} so the view is published, then \`atelier obsidian open\` starts Obsidian on it`,
 })
 
 // The next step for an outcome and its reason; null for a code that is not an
