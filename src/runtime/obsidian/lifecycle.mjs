@@ -8,7 +8,7 @@ import { ensureWorkspaceIdentity } from './machine-settings.mjs'
 import { acquirePrivateGenerationLock, createAbandonmentProof, isProcessAlive } from './private-lock.mjs'
 import { processRunsRecordedExecutable } from './process-identity.mjs'
 import { DEFAULT_PROBE_TIMEOUT_MS, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'
-import { SERVICE_ENTRY_PATH } from './service-main.mjs'
+import { SERVICE_ENTRY_PATH } from './service-entry-path.mjs'
 import {
   CONSENT_COVERAGES, SERVICE_SETTINGS_SCHEMA, executableIdentity, openServiceLog, publicRecord, readServiceRecord, readServiceSettings, removeServiceRecord,
   serviceNameFor, servicePaths, writeServiceSettings,

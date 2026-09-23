@@ -143,7 +143,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const serviceSeam = async () => {
       if (seams !== null) { if (typeof seams.service?.entryPath !== 'string') refuse('seams-required', 'the service seam names the entry this command may start'); return seams.service }
       if (flags.adapter !== PRODUCTION_ADAPTER) refuse('app-adapter-not-selected', 'no editor adapter was selected; a service that reaches the installed app is never a default')
-      const { SERVICE_ENTRY_PATH } = await import('../runtime/obsidian/service-main.mjs')
+      const { SERVICE_ENTRY_PATH } = await import('../runtime/obsidian/service-entry-path.mjs')
       return { entryPath: SERVICE_ENTRY_PATH, entryArgs: [`--adapter=${PRODUCTION_ADAPTER}`] }
     }
     const appSeams = async () => {
