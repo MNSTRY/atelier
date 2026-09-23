@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- A first publication refused because Obsidian runs without that vault open
+  (`publisher-conflict`, reason `editor-uncoordinated`) now advises quitting
+  Obsidian so the view publishes directly, instead of waiting for "the other
+  publisher", which does not exist.
 - The Obsidian process probe matched Atelier's own maintenance service: it
   searched every argument of every process for an `obsidian` path segment, so
   the service (`…/src/runtime/obsidian/service-main.mjs`) and anything naming

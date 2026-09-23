@@ -338,6 +338,18 @@ absolute directory. Private state inside an enrolled repository is refused.
 Publication is proven on macOS arm64 only and is refused on Windows; see
 [Known limits](#known-limits).
 
+### First publication while Obsidian is running
+
+The publisher writes into a vault only when it can coordinate with every
+Obsidian that might have it open. An Obsidian that is running without this
+vault open cannot be coordinated with, so the first publication of a view is
+refused as `publisher-conflict` with reason `editor-uncoordinated`, and
+nothing is written. Quit Obsidian: the service then publishes the view
+directly, and `atelier obsidian open --scope ID --adapter=obsidian-cli` starts
+Obsidian on it. An Obsidian with no vault open at all answers its command line
+with "Vault not found." for every command, its version included; that is
+reported as reason `no-vault-open`, and the same remedy applies.
+
 ## Known limits
 
 These are the limits known at this release. None is hidden behind a skipped

@@ -51,7 +51,7 @@ const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/err
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
 const { ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
-const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT } = await import('../src/runtime/obsidian/opening.mjs')
+const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth } = await import('../src/runtime/obsidian/service-client.mjs')
@@ -1336,4 +1336,11 @@ test('no process this suite started is left behind, no banned program was asked 
   assert.deepEqual(left.map((entry) => `pid ${entry.pid} started by "${entry.test}"`), [])
   assert.deepEqual(guardErrors, [], 'the spawn guard never fired outside its own test')
   assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
+})
+
+test('a publisher refusal for an app without this vault open advises quitting the app, not waiting for another publisher', () => {
+  const next = nextStep('publisher-conflict', 'editor-uncoordinated')
+  assert.match(next, /quit Obsidian/)
+  assert.doesNotMatch(next, /other publisher/)
+  assert.match(nextStep('publisher-conflict', 'publication-in-progress'), /other publisher/, 'a real concurrent publisher keeps its advice')
 })

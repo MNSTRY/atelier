@@ -58,8 +58,13 @@ export function describeOutcome(code) {
 // A reason whose next step is not its outcome's. With no vault open the app's
 // command line answers nothing, its version included, so the version floor
 // cannot be checked until a vault is open or the app is quit.
+// `editor-uncoordinated` is the publisher refusing to write while an Obsidian
+// runs that does not answer for this vault: nothing coordinates with the app,
+// so nothing is written. There is no other publisher to wait for. With the app
+// quit, the view is published directly, and `open` then starts the app on it.
 export const REASON_NEXT = Object.freeze({
   'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again',
+  'editor-uncoordinated': 'Obsidian is running without this vault open, so nothing is written into it: quit Obsidian, let the view publish, then open again',
 })
 
 // The next step for an outcome and its reason; null for a code that is not an opening outcome.
