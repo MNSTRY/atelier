@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `status` now gives the same reason-specific next step as `open` for a
+  publication refused because Obsidian runs without the vault open
+  (`publisher-conflict`, reason `editor-uncoordinated`), and the advice
+  depends on whether the view was ever published. Before a first
+  publication: quit Obsidian; the view is published while the app is closed,
+  then `atelier obsidian open` starts Obsidian on it. After one: quit
+  Obsidian, or open the view in it as it is with `atelier obsidian open
+  --allow-stale`. A concurrent publisher keeps its advice.
+
 ## 0.2.0-alpha.10
 
 ### Fixed

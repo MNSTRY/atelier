@@ -303,7 +303,10 @@ usage text; `atelier obsidian --help` prints it.
    --adapter=obsidian-cli` prints a startup unit and installs nothing.
 4. Open a view: `atelier obsidian open --scope ID --adapter=obsidian-cli`.
    The command starts or reconnects maintenance, verifies the vault by reading
-   it back, and asks the app (version 1.13.7 or later) to open it.
+   it back, and asks the app (version 1.13.7 or later) to open it. Quit
+   Obsidian before a view's first publication: while the app runs without that
+   vault open, nothing is written into it, and `open` and `status` say so; see
+   [First publication while Obsidian is running](#first-publication-while-obsidian-is-running).
 
 `open` and `status` answer with a freshness state, not a promise. `current`
 means the vault is the present generation, verified by read-back, and the app
@@ -346,9 +349,18 @@ vault open cannot be coordinated with, so the first publication of a view is
 refused as `publisher-conflict` with reason `editor-uncoordinated`, and
 nothing is written. Quit Obsidian: the service then publishes the view
 directly, and `atelier obsidian open --scope ID --adapter=obsidian-cli` starts
-Obsidian on it. An Obsidian with no vault open at all answers its command line
-with "Vault not found." for every command, its version included; that is
-reported as reason `no-vault-open`, and the same remedy applies.
+Obsidian on it. `status` and `open` give that as the next step. A later
+publication refused the same way leaves the last published vault in place,
+and there are two ways on: quit Obsidian, or open that vault in the running
+app as it is with `atelier obsidian open --allow-stale`, which waits, bounded,
+until the app answers for it. The publication is retried automatically either
+way.
+
+An Obsidian with no vault open at all answers its command line with "Vault not
+found." for every command, its version included. That is reported as outcome
+`app-version-unsupported` with reason `no-vault-open`, under `service.app` in
+`status` and by `open`. Opening any vault in Obsidian resolves it, because the
+version can then be read, and so does quitting Obsidian.
 
 ## Known limits
 

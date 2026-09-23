@@ -61,15 +61,27 @@ export function describeOutcome(code) {
 // `editor-uncoordinated` is the publisher refusing to write while an Obsidian
 // runs that does not answer for this vault: nothing coordinates with the app,
 // so nothing is written. There is no other publisher to wait for. With the app
-// quit, the view is published directly, and `open` then starts the app on it.
+// quit, the view is published directly; a view that was published before can
+// instead be opened in the app as it is, which then answers for it.
 export const REASON_NEXT = Object.freeze({
   'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again',
-  'editor-uncoordinated': 'Obsidian is running without this vault open, so nothing is written into it: quit Obsidian, let the view publish, then open again',
+  'editor-uncoordinated': 'quit Obsidian (the view is then published while the app is closed), or open this view in it with `atelier obsidian open --allow-stale`; it is retried automatically',
 })
 
-// The next step for an outcome and its reason; null for a code that is not an opening outcome.
-export function nextStep(outcome, reason) {
-  if (typeof reason === 'string' && Object.hasOwn(REASON_NEXT, reason)) return REASON_NEXT[reason]
+// Before a first publication there is no vault to open in the app: the view is
+// published only while the app is closed.
+const FIRST_PUBLICATION_NEXT = Object.freeze({
+  'editor-uncoordinated': 'quit Obsidian; the view is published while the app is closed, then `atelier obsidian open` starts Obsidian on it',
+})
+
+// The next step for an outcome and its reason; null for a code that is not an
+// opening outcome. `published` says whether a published generation of the view
+// reads back.
+export function nextStep(outcome, reason, { published = true } = {}) {
+  if (typeof reason === 'string') {
+    if (!published && Object.hasOwn(FIRST_PUBLICATION_NEXT, reason)) return FIRST_PUBLICATION_NEXT[reason]
+    if (Object.hasOwn(REASON_NEXT, reason)) return REASON_NEXT[reason]
+  }
   return Object.hasOwn(OPENING_OUTCOMES, outcome) ? OPENING_OUTCOMES[outcome].next : null
 }
 
@@ -147,7 +159,7 @@ export function scopeReport({ workspace, scopeId, repositoryRoots, serviceState,
   } else if (serviceState !== 'healthy') { outcome = 'stale-readable'; reason = serviceState === 'busy' ? 'maintenance-busy-not-rechecked' : 'maintenance-not-running' }
   else { outcome = 'current'; reason = entry.reason }
   return {
-    scopeId, ...describeOutcome(outcome), reason,
+    scopeId, ...describeOutcome(outcome), next: nextStep(outcome, reason, { published: verification.readable }), reason,
     freshness: entry === null ? null : { state: entry.state, reason: entry.reason, verified: entry.verified, generationId: entry.generationId, preparedGenerationId: entry.preparedGenerationId, heldNoteCount: entry.heldNotes.length, retainedEdits: entry.retainedEdits, checkedAt: entry.checkedAt },
     readBack: { readable: verification.readable, reason: verification.reason, generationId: verification.generationId, intact: verification.intact, noteCount: verification.noteCount, differing: verification.differing, missing: verification.missing },
     pendingEdits: pendingSummary(stateStore, scopeId, applyAvailable),
@@ -184,7 +196,7 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   const project = loadProject()
   const enablement = readObsidianEnablement(project)
   const applyAvailable = extensions !== null && extensions.applyOperation() !== UNAVAILABLE_APPLY_OPERATION
-  const finish = (outcome, extra = {}) => ({ ok: outcome === 'current', ...describeOutcome(outcome), next: nextStep(outcome, extra.reason), launched: false, ...extra })
+  const finish = (outcome, extra = {}) => ({ ok: outcome === 'current', ...describeOutcome(outcome), next: nextStep(outcome, extra.reason, { published: extra.readBack?.readable !== false }), launched: false, ...extra })
   if (enablement.state === 'disabled') return finish('disabled', { reason: enablement.reason, scopeId: requestedScope ?? null })
   const scopeId = resolveScope(enablement, requestedScope)
   const lifecycle = { loadProject, dataRoot, env, platform, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
