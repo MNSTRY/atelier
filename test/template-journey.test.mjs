@@ -34,6 +34,15 @@ test('canonical graph binds exact source bytes and uses the existing read-only p
   assert.equal(result.conformanceClaim, 'none')
   assert.deepEqual(result.optionalDecisions, [{ id: 'reading-priority', status: 'absent', fallback: 'deterministic-or-manual', invocationAuthorized: false }])
   assert.ok(result.capabilityDiagnostics.some(item => item.id === 'shelf' && item.bindingAllowed === false))
+  for (const output of [result.html, result.textPreview]) {
+    for (const ref of [result.templateRef, result.bindingRef, ...result.records.map(record => record.ref)]) assert.ok(output.includes(ref.digest))
+    for (const { document } of result.records) {
+      assert.ok(output.includes(document.rawDigest))
+      assert.equal(output.includes(document.path), false)
+    }
+    assert.match(output, /Release: none \(local preview\)/)
+    assert.match(output, /not verified authorship, release acceptance or rights/)
+  }
 })
 
 for (const [name, patch] of [
@@ -99,6 +108,8 @@ test('real source apply changes canonical bytes, rebinds preview and preserves a
   assert.match(after.html, /Four paper shapes/)
   assert.match(after.textPreview, /Four paper shapes/)
   assert.doesNotMatch(after.html, /Three paper shapes/)
+  assert.ok(after.html.includes(after.records[0].document.rawDigest))
+  assert.equal(after.html.includes(before.records[0].document.rawDigest), false)
   const stale = validateTemplateBinding(profile, before.binding, after.records)
   assert.equal(stale.ok, false)
   assert.ok(stale.errors.includes('dangling exact reference'))

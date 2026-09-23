@@ -71,6 +71,13 @@ export function createTemplateProjectView(project, requestJson) {
       return { id, type: 'collection', label: view.id, items: sourceIds.map(sourceId => ({ id: `item-${identity(sourceId)}`, label: sources.get(sourceId).document.title, detail: sources.get(sourceId).document.summary })) }
     })
     nodes.unshift({ id: 'description', type: 'text', label: 'Inputs and limits', text: `Inputs: ${profile.inputs.join('; ')}. Limits: ${profile.limitations.join('; ')}` })
+    nodes.push({ id: 'identity', type: 'text', label: 'Template and binding identity', text: `Template: ${templateRef.id}@${templateRef.version}; ${templateRef.digest}. Binding: ${bindingRef.id}@${bindingRef.version}; ${bindingRef.digest}. Release: none (local preview). Structural references only; not verified authorship, release acceptance or rights.` })
+    // Provenance travels with readable exports, not only the API envelope.
+    // Use opaque refs and byte pins; never expose local repository paths here.
+    for (let offset = 0; offset < records.length; offset += 128) nodes.push({
+      id: `provenance-${offset}`, type: 'collection', label: 'Source provenance',
+      items: records.slice(offset, offset + 128).map(({ ref, document }) => ({ id: `source-${identity(ref.id)}`, label: document.title, detail: `SourceRef: ${ref.id}; ${ref.digest}. Source bytes: ${document.rawDigest}.` })),
+    })
     const model = { schema: 'atelier.presentation/v1', version: '1.0.0', id: `template-${identity(profile.id)}`, title: profile.purpose, lang: 'en', direction: 'ltr', theme, density: 'comfortable', navigation: [], panes: [{ id: 'content', label: 'Template preview', role: 'primary', blocks: nodes.map(node => node.id) }], nodes }
     if (validatePresentation(model).length) return outcome(false, ['presentation binding invalid'])
     // Reuse the exact same non-interactive renderer for local web and document
