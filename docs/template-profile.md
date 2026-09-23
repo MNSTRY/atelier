@@ -112,8 +112,12 @@ the synthetic shelf's role to existing source identities. The adapter calls the
 canonical graph builder with its fresh file cache; each SourceRef binds the
 exact Markdown byte digest used by that census, not metadata alone.
 
-The initial adapter supports classified active Markdown sources and the
-Resource/Collection and CollectionView/StatusView subset. Unknown targets,
+The initial adapter supports classified active Markdown sources bound as
+Resource, with CollectionView/StatusView presentation. CollectionView is a view
+of selected resources, not proof of a semantic Collection. An unused optional
+Collection role reports unsupported without closing local Resource authoring;
+binding it or requiring it refuses until an explicit canonical mapping exists.
+Unknown targets,
 missing or withheld selected sources, audience/repository-boundary widening,
 unsupported views, missing required roles and runtime-profile requirements
 refuse. Draft/archived sources do not appear. Local archival is not a governed

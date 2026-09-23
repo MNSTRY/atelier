@@ -33,6 +33,7 @@ test('canonical graph binds exact source bytes and uses the existing read-only p
   assert.equal(result.publicationAuthority, false)
   assert.equal(result.conformanceClaim, 'none')
   assert.deepEqual(result.optionalDecisions, [{ id: 'reading-priority', status: 'absent', fallback: 'deterministic-or-manual', invocationAuthorized: false }])
+  assert.ok(result.capabilityDiagnostics.some(item => item.id === 'shelf' && item.bindingAllowed === false))
 })
 
 for (const [name, patch] of [
@@ -40,6 +41,8 @@ for (const [name, patch] of [
   ['public widening of team sources', { target: 'public' }],
   ['unknown role', { roleNodeIds: { unknown: ['library:paper'] } }],
   ['unknown source', { roleNodeIds: { items: ['library:missing'] } }],
+  ['document coerced into collection', { roleNodeIds: { items: ['library:paper'], shelf: ['library:thread'] } }],
+  ['required collection without canonical mapping', { profile: { ...profile, semanticRoles: profile.semanticRoles.map(role => ({ ...role, required: true })) } }],
   ['duplicate source', { roleNodeIds: { items: ['library:paper', 'library:paper'] } }],
   ['missing required role', { roleNodeIds: {} }],
   ['unknown request field', { execute: true }],

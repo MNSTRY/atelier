@@ -194,7 +194,10 @@ export function validateTemplateHost(profile, host) {
     for (const pack of p.compatibility.packRefs) {
       if (!h.packRefs.some(x => same(x, pack))) errors.push('required exact pack unavailable')
     }
-    for (const role of p.semanticRoles) if (!h.semanticPrimitives.includes(role.primitive)) errors.push('unsupported semantic primitive')
+    for (const role of p.semanticRoles) if (!h.semanticPrimitives.includes(role.primitive)) {
+      if (role.required) errors.push('unsupported semantic primitive')
+      else diagnostics.push({ kind: 'semantic-role', id: role.id, status: 'unsupported', bindingAllowed: false })
+    }
     for (const role of p.surfaceRoles) if (!h.surfacePrimitives.includes(role.primitive)) errors.push('unsupported surface primitive')
     if (!same(p.runtimeProfileRef, h.runtimeProfileRef)) errors.push('runtime profile missing or mismatched')
     unique(h.optionalDecisions, x => x.id, errors, 'host decision')
