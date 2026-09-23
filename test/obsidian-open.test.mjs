@@ -1089,7 +1089,7 @@ test('a contribution is a module in a directory: found without editing any dispa
   const result = await world.run(['echo', 'hello', '--json'], { contributions: null, contributionsDirectory: directory })
   assert.deepEqual([result.exit, result.json.said], [EXIT.ok, ['hello']])
   assert.deepEqual(await loadContributions({ directory: path.join(world.dir, 'nowhere') }), [])
-  assert.deepEqual((await loadContributions()).map((item) => item.id), ['atelier.proposal-adapter', 'atelier.source-apply'], 'the shipped directory holds the proposal adapter and the source apply contribution, in name order, and nothing else')
+  assert.deepEqual((await loadContributions()).map((item) => item.id), ['atelier.proposal-adapter', 'atelier.selection-ui', 'atelier.source-apply'], 'the shipped directory holds the proposal adapter, the selection and the source apply contribution, in name order, and nothing else')
   const run = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/cli/run.mjs'), 'utf8')
   assert.deepEqual([(run.match(/obsidian\.mjs/g) ?? []).length, run.includes("'echo'")], [1, false], 'the dispatch table names the command once and no sub-operation')
 
@@ -1102,6 +1102,52 @@ test('a contribution is a module in a directory: found without editing any dispa
   assert.equal((await world.run(['status', '--json'], { contributions: [twice, twice] })).json.error.code, 'extension-already-registered')
   const answersWrongly = await world.run(['odd', '--json'], { contributions: [{ id: 'odd', register: ({ operations }) => operations.register({ name: 'odd', summary: 'answers nothing', run: async () => undefined }) }] })
   assert.equal(answersWrongly.json.error.code, 'invalid-extension')
+})
+
+test('the shipped contributions reach the command: apply, conflicts, apply-policy, selection and proposals answer on an enabled workspace with the discipline of the built-ins', async (t) => {
+  const world = makeWorld(t)
+  world.configureMachine({ maintenanceMode: 'manual', audienceAllow: ['team'] })
+  // `contributions: null` makes the command load the shipped directory itself, exactly as the real entry does.
+  const shipped = { contributions: null }
+  const status = await world.run(['status', '--json'], shipped)
+  assert.equal(status.exit, EXIT.ok)
+  assert.deepEqual(status.json.operations.map((item) => item.name), ['apply', 'apply-policy', 'conflicts', 'proposals', 'selection'], 'status lists every contributed operation')
+  assert.deepEqual(status.json.apply, { available: true, state: 'available', operationId: 'atelier.source-apply/v1' })
+
+  const list = await world.run(['apply', 'list', '--json'], shipped)
+  assert.deepEqual([list.exit, list.json.ok, list.json.operation, list.json.edits], [EXIT.ok, true, 'apply', []], 'apply list answers an empty list on a workspace with no pending edit')
+  const conflicts = await world.run(['conflicts', '--json'], shipped)
+  assert.deepEqual([conflicts.exit, conflicts.json.operation, conflicts.json.objects], [EXIT.ok, 'conflicts', []])
+  const policy = await world.run(['apply-policy', 'show', '--json'], shipped)
+  assert.deepEqual([policy.exit, policy.json.operation, policy.json.installed], [EXIT.ok, 'apply-policy', false])
+  const selections = await world.run(['selection', 'list', '--json'], shipped)
+  assert.deepEqual([selections.exit, selections.json.operation, selections.json.selections], [EXIT.ok, 'selection', []])
+  const resolved = await world.run(['selection', 'resolve', FULL_SCOPE.scopeId, '--json'], shipped)
+  assert.deepEqual([resolved.exit, resolved.json.scopeId, resolved.json.persisted, resolved.json.selection.mode], [EXIT.ok, FULL_SCOPE.scopeId, false, 'full'])
+  const proposals = await world.run(['proposals', 'list', '--json'], shipped)
+  assert.deepEqual([proposals.exit, proposals.json.operation, Array.isArray(proposals.json.operations)], [EXIT.ok, 'proposals', true])
+
+  // Refusals keep the shape and the exit code of the built-ins: one document, a typed code, exit 2.
+  const unknown = await world.run(['nonesuch', '--json'], shipped)
+  assert.deepEqual([unknown.exit, unknown.json.ok, unknown.json.error.code, unknown.json.error.message], [EXIT.refused, false, 'usage', 'unknown operation: nonesuch'])
+  const badVerb = await world.run(['apply', 'frobnicate', '--json'], shipped)
+  assert.deepEqual([badVerb.exit, badVerb.json.error.code], [EXIT.refused, 'usage'])
+  const noEdit = await world.run(['apply', 'run', '--actor', 'someone', '--json'], shipped)
+  assert.deepEqual([noEdit.exit, noEdit.json.error.code], [EXIT.refused, 'usage'])
+  const actorElsewhere = await world.run(['conflicts', '--actor', 'someone', '--json'], shipped)
+  assert.deepEqual([actorElsewhere.exit, actorElsewhere.json.error.code], [EXIT.refused, 'usage'], 'a contributed operation that has no use for --actor refuses it as the built-ins do')
+  const human = await world.run(['apply', 'list'], shipped)
+  assert.deepEqual([human.exit, human.stdout, human.stderr], [EXIT.ok, 'no pending edit', ''])
+
+  // Beside the shipped set, a contribution that wants a built-in name is refused before anything runs.
+  const production = await loadContributions()
+  for (const name of ['scope', 'policy', 'mode']) {
+    const taken = await world.run(['apply', 'list', '--json'], { contributions: [...production, { id: 'greedy', register: ({ operations }) => operations.register({ name, summary: 'x', run: async () => ({ exit: 0, document: {} }) }) }] })
+    assert.deepEqual([taken.exit, taken.json.error.code, taken.json.error.detail], [EXIT.refused, 'operation-name-reserved', { name }], name)
+  }
+  // And the usage text names every contributed operation the shipped set registers.
+  const help = await world.run(['--help', '--json'], shipped)
+  for (const name of status.json.operations.map((item) => item.name)) assert.ok(new RegExp(`^  ${name} `, 'm').test(help.json.usage), `usage names ${name}`)
 })
 
 // ---------------------------------------------------------------------------

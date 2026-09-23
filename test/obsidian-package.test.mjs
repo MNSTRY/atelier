@@ -145,7 +145,7 @@ test('the packed tarball carries the Obsidian runtime, contracts and documents, 
   const sourceSchemas = fs.readdirSync(path.join(ROOT, 'contracts')).filter((name) => /^atelier-obsidian-.*\.schema\.json$/.test(name)).sort()
   assert.ok(sourceSchemas.length >= 11)
   assert.deepEqual(OBSIDIAN_SCHEMA_SUBPATHS.map((subpath) => subpath.slice('./contracts/'.length)).sort(), sourceSchemas, 'every Obsidian schema is an export')
-  for (const required of ['docs/obsidian.md', 'docs/obsidian-contract.md', 'docs/local-services.md', 'src/commands/obsidian.mjs', 'src/runtime/obsidian/service-main.mjs', 'src/runtime/obsidian/contributions/source-apply.mjs', 'src/runtime/obsidian/contributions/proposal-adapter.mjs']) {
+  for (const required of ['docs/obsidian.md', 'docs/obsidian-contract.md', 'docs/local-services.md', 'src/commands/obsidian.mjs', 'src/runtime/obsidian/service-main.mjs', 'src/runtime/obsidian/contributions/source-apply.mjs', 'src/runtime/obsidian/contributions/proposal-adapter.mjs', 'src/runtime/obsidian/contributions/selection-ui.mjs']) {
     assert.ok(shipped.has(required), `${required} is packed`)
   }
   const forbidden = files.filter((file) => /^(experiments|scripts|test|examples|\.artifacts|\.github)\//.test(file) || /\.asar$/i.test(file) || file.includes('node_modules/') || /(^|\/)\.artifacts\//.test(file))

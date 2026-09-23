@@ -222,11 +222,30 @@ runtime lays out. It registers:
 - `apply-policy create FILE | show | revoke`
 
 The built-in `scope`, `policy` and `mode` names are reserved and untouched.
-The contribution is loaded in the tests by passing it to the command runner.
 The production loader reads regular `.mjs` modules from
-`src/runtime/obsidian/contributions/`; the one-line module that would load
-this contribution there is not part of this change, so the operations are not
-yet on the shipped command.
+`src/runtime/obsidian/contributions/`, and that directory ships three one-line
+modules: `source-apply.mjs` (`apply`), `proposal-adapter.mjs` (`proposals`)
+and `selection-ui.mjs` (`selection`, `conflicts`, `apply-policy`). The shipped
+`atelier obsidian` command loads them and dispatches every registered
+operation with the discipline of the built-ins: noninteractive, one JSON
+document under `--json`, exit 2 with a typed code for a refusal or a usage
+error, exit 3 when the operation ran and its answer is not success.
+`atelier obsidian status` lists the registered operations under
+`operations`; `atelier obsidian --help` names them.
+
+A manual apply on a real workspace, from the shipped command:
+
+```sh
+atelier obsidian apply list --project atelier.project.json --json
+atelier obsidian apply show EDIT --project atelier.project.json --json
+atelier obsidian apply run EDIT --actor ID --project atelier.project.json --json
+```
+
+`--actor` is an option of `apply run` only; every other operation refuses it
+as a usage error. `apply run` exits 0 when the edit was applied and 3 when it
+ran and the answer is anything else; nothing is staged or committed either
+way. A contribution registers which shared options it takes by naming them
+under `options`; one that names none refuses `--actor` before it runs.
 
 ## Package entry points
 
@@ -285,8 +304,6 @@ test reported as a pass.
 - An edit the byte lens cannot turn into source bytes (a new or changed link
   to another note of the vault, an edited front matter) becomes a copy-only
   proposal. No operation applies one.
-- The selection, conflict and apply-policy operations of this module are not
-  on the shipped `atelier obsidian` command; see "The command operations".
 - Acceptance: a schema-valid receipt closes no gate, the package proof closes
   no gate, and no adopter acceptance is recorded in this repository.
 
