@@ -35,6 +35,7 @@ import { CRASH_INJECTION_TEST_SEAM } from '../src/projection/obsidian/publicatio
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which is asserted separately' }
 import { EXCHANGE_CANDIDATE_NAME, LATE_EXCHANGE_CANDIDATE_NAME, VAULT_LOCK_DIRECTORY, acquireVaultLock, classifyCandidateFile, createRecoveryStore, listJournals, namedCandidates, recheckDisplacedFiles, recoverPublications } from '../src/projection/obsidian/recovery/index.mjs'
+import { createQualifiedAdapterFactory } from '../src/runtime/obsidian/app-capability.mjs'
 
 // Every G00 interleaving, replayed against the production publisher on a real
 // filesystem. The editor is a model: an in-process object with the surface the
@@ -164,7 +165,7 @@ class ModelApp {
 
 // The production adapter rules over an in-process call into the model app.
 // `plan` injects transport faults and interleavings around single calls.
-function modelAdapter(app, { plan = {}, crashSeam, processProbe = () => 'running' } = {}) {
+function modelAdapter(app, { plan = {}, crashSeam, processProbe = () => 'running', qualification } = {}) {
   const calls = []
   const inProcess = createInProcessCall(createInProcessHost({ app, window: app.window, document: app.mainDocument, crashSeam }))
   const call = async (payload) => {
@@ -178,7 +179,7 @@ function modelAdapter(app, { plan = {}, crashSeam, processProbe = () => 'running
     if (plan.dropAfter?.(payload, index)) throw new Error('connection lost after the call ran')
     return reply
   }
-  const adapter = createEditorAdapter({ call, processProbe, kind: 'model' })
+  const adapter = createEditorAdapter({ call, processProbe, kind: 'model', qualification })
   adapter.calls = calls
   adapter.count = (op) => calls.filter((item) => item.op === op).length
   return adapter
@@ -1498,7 +1499,7 @@ test('path selection: the direct path only when no Obsidian runs; a running app 
   assert.equal(defaultObsidianProcessProbe({ platform: 'darwin', run: () => { throw new Error('denied') } }), 'unknown')
   assert.equal(defaultObsidianProcessProbe({ platform: 'darwin', run: () => '/sbin/launchd\n/usr/bin/some-editor --flag\n' }), 'absent')
   assert.equal(defaultObsidianProcessProbe({ platform: 'darwin', run: () => '/sbin/launchd\n/Applications/Obsidian.app/Contents/MacOS/Obsidian\n' }), 'running')
-  assert.equal(defaultObsidianProcessProbe({ platform: 'linux', run: () => 'systemd\nobsidian\n' }), 'running')
+  assert.equal(defaultObsidianProcessProbe({ platform: 'linux', run: () => '1 systemd\n200 obsidian\n' }), 'running')
 })
 
 // A process table as `ps -A -o comm=` (the executable as started) and `ps -A -o args=` (the whole command line) print it.
@@ -1513,12 +1514,20 @@ const PS = Object.freeze({
   renderer: { comm: '/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (Renderer).app/Contents/MacOS/Obsidian Helper (Renderer)', args: '/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (Renderer).app/Contents/MacOS/Obsidian Helper (Renderer) --type=renderer' },
   shortHelper: { comm: 'Obsidian Helper', args: '(Obsidian Helper)' },
   renamedBundle: { comm: '/Volumes/synthetic-home/Applications/Obsidian 2.app/Contents/MacOS/Obsidian', args: '/Volumes/synthetic-home/Applications/Obsidian 2.app/Contents/MacOS/Obsidian' },
-  init: { comm: 'systemd', args: '/sbin/init' },
-  linuxService: { comm: 'node', args: 'node /home/synthetic/work/node_modules/@mnstry/atelier/src/runtime/obsidian/service-main.mjs --adapter=obsidian-cli' },
-  linuxDataRootReader: { comm: 'tail', args: 'tail -f /home/synthetic/.local/share/atelier/obsidian/ws-0001/state/service/service.log' },
-  linuxApp: { comm: 'obsidian', args: '/opt/Obsidian/obsidian --no-sandbox' },
-  linuxAppImageRuntime: { comm: 'Obsidian-1.8.10', args: '/home/synthetic/Applications/Obsidian-1.8.10.AppImage' },
-  systemElectron: { comm: 'electron', args: '/usr/lib/electron33/electron /usr/lib/obsidian/app.asar' },
+  // Linux rows also carry the process ID and what `/proc/<pid>/exe` resolves to, or the error reading it gives.
+  init: { pid: 1, comm: 'systemd', args: '/sbin/init', exeError: 'EACCES' },
+  linuxService: { pid: 400, comm: 'node', args: 'node /home/synthetic/work/node_modules/@mnstry/atelier/src/runtime/obsidian/service-main.mjs --adapter=obsidian-cli', exe: '/usr/bin/node' },
+  linuxDataRootReader: { pid: 410, comm: 'tail', args: 'tail -f /home/synthetic/.local/share/atelier/obsidian/ws-0001/state/service/service.log', exe: '/usr/bin/tail' },
+  linuxApp: { pid: 500, comm: 'obsidian', args: '/opt/Obsidian/obsidian --no-sandbox', exe: '/opt/Obsidian/obsidian' },
+  linuxAppImageRuntime: { pid: 490, comm: 'Obsidian-1.8.10', args: '/home/synthetic/Applications/Obsidian-1.8.10.AppImage', exe: '/home/synthetic/Applications/Obsidian-1.8.10.AppImage' },
+  systemElectron: { pid: 520, comm: 'electron', args: '/usr/lib/electron33/electron /usr/lib/obsidian/app.asar', exe: '/usr/lib/electron33/electron' },
+  linkedApp: { pid: 530, comm: 'obs', args: '/home/synthetic/bin/obs', exe: '/opt/Obsidian/obsidian' },
+  updatedApp: { pid: 531, comm: 'obs', args: '/home/synthetic/bin/obs', exe: '/opt/Obsidian/obsidian (deleted)' },
+  selfExecChild: { pid: 532, comm: 'exe', args: '/proc/self/exe --type=renderer', exe: '/opt/Obsidian/obsidian' },
+  hiddenAgent: { pid: 540, comm: 'ssh-agent', args: 'ssh-agent', exeError: 'EACCES' },
+  exited: { pid: 550, comm: 'sh', args: 'sh -c true', exeError: 'ENOENT' },
+  electronLauncher: { pid: 560, comm: 'code-oss', args: '/usr/bin/code-oss', exe: '/usr/lib/electron33/electron' },
+  oddlyUnreadable: { pid: 570, comm: 'worker', args: 'worker', exeError: 'EIO' },
 })
 
 const PROCESS_CASES = [
@@ -1533,24 +1542,101 @@ const PROCESS_CASES = [
   ['linux', ['init', 'linuxService', 'linuxApp'], 'running', 'the app on Linux'],
   ['linux', ['init', 'linuxAppImageRuntime', 'linuxApp'], 'running', 'an AppImage runs the app executable'],
   ['linux', ['init', 'systemElectron'], 'unknown', 'a system Electron does not say which app it hosts'],
+  ['linux', ['init', 'linuxService', 'linkedApp'], 'running', 'an app started through a differently named link resolves to the app executable'],
+  ['linux', ['init', 'linuxService', 'updatedApp'], 'running', 'an app whose executable was replaced while it ran'],
+  ['linux', ['init', 'linuxService', 'selfExecChild'], 'running', 'a child the app started through /proc/self/exe'],
+  ['linux', ['init', 'linuxService', 'hiddenAgent', 'exited'], 'absent', 'a process that hides its executable, or exited since the table was read, is judged by its name'],
+  ['linux', ['init', 'linuxService', 'electronLauncher'], 'unknown', 'a launcher that resolves to a system Electron'],
+  ['linux', ['init', 'linuxService', 'oddlyUnreadable'], 'unknown', 'an executable that cannot be read for an unexpected reason'],
+  ['linux', ['init', 'hiddenAgent', 'exited'], 'unknown', 'no executable could be resolved at all, so nothing below the names is established'],
   ['darwin', [], 'unknown', 'an empty table'],
   ['linux', [], 'unknown', 'an empty table on Linux'],
 ]
 
+const PS_COLUMNS = Object.freeze({ 'comm=': (entry) => entry.comm, 'args=': (entry) => entry.args, 'pid=,comm=': (entry) => `${String(entry.pid).padStart(7)} ${entry.comm}` })
 const psRun = (names) => (file, argv) => {
   const column = argv.at(-1)
-  if (file !== '/bin/ps' || (column !== 'comm=' && column !== 'args=')) throw new Error(`unexpected process table request: ${file} ${argv.join(' ')}`)
-  return names.map((name) => `${PS[name][column === 'comm=' ? 'comm' : 'args']}\n`).join('')
+  if (file !== '/bin/ps' || !Object.hasOwn(PS_COLUMNS, column)) throw new Error(`unexpected process table request: ${file} ${argv.join(' ')}`)
+  return names.map((name) => `${PS_COLUMNS[column](PS[name])}\n`).join('')
+}
+const exeOf = (names) => (pid) => {
+  const entry = names.map((name) => PS[name]).find((item) => item.pid === pid)
+  const code = entry === undefined ? 'ENOENT' : entry.exeError
+  if (code !== undefined) throw Object.assign(new Error(`readlink /proc/${pid}/exe: ${code}`), { code })
+  return entry.exe
 }
 
 function assertProcessProbe(probe) {
-  for (const [platform, names, expected, what] of PROCESS_CASES) assert.equal(probe({ platform, run: psRun(names) }), expected, `${platform}: ${what}`)
+  for (const [platform, names, expected, what] of PROCESS_CASES) assert.equal(probe({ platform, run: psRun(names), readExe: exeOf(names) }), expected, `${platform}: ${what}`)
   assert.equal(probe({ platform: 'darwin', run: () => { throw new Error('denied') } }), 'unknown', 'a table that cannot be read')
   assert.equal(probe({ platform: 'win32', run: psRun(['app']) }), 'unknown', 'a platform with no known table')
+  assert.equal(probe({ platform: 'linux', run: () => '    1 systemd\nnot a row\n', readExe: exeOf(['init']) }), 'unknown', 'a Linux row with no process ID')
 }
 
 test('the process probe recognises the app by its executable, never by an argument; what it cannot establish is unknown', () => {
   assertProcessProbe(defaultObsidianProcessProbe)
+})
+
+test('mutation control: the probe of 0.2.0-alpha.10, which read only the command name, misses on Linux an app started through a differently named link', () => {
+  const namesOnly = ({ platform, run }) => {
+    if (platform !== 'darwin' && platform !== 'linux') return 'unknown'
+    try {
+      const table = run('/bin/ps', ['-A', '-o', 'comm='], { encoding: 'utf8' })
+      if (typeof table !== 'string' || table.trim() === '') return 'unknown'
+      const names = table.split('\n').map((line) => line.trim()).filter((line) => line !== '').map((line) => line.slice(line.lastIndexOf('/') + 1))
+      if (names.some((name) => (platform === 'darwin' ? /^obsidian(?: helper\b.*)?$/i : /^obsidian$/i).test(name))) return 'running'
+      return platform === 'linux' && names.some((name) => /^\.?electron(?:\d+|-wrap.*)?$/i.test(name)) ? 'unknown' : 'absent'
+    } catch {
+      return 'unknown'
+    }
+  }
+  assert.equal(namesOnly({ platform: 'linux', run: psRun(['init', 'linuxService', 'linkedApp']) }), 'absent', 'the app started as `obs` reads as absent')
+  assert.throws(() => assertProcessProbe(namesOnly), assert.AssertionError)
+})
+
+test('the process table is read with a bounded wait: a ps that does not answer in time is killed, and the reading is unknown', () => {
+  for (const platform of ['darwin', 'linux']) {
+    let options = null
+    defaultObsidianProcessProbe({ platform, run: (file, argv, given) => { options = given; return '' } })
+    assert.ok(Number.isFinite(options?.timeout) && options.timeout > 0 && options.timeout <= 10000, `${platform}: a timeout is passed`)
+    assert.equal(options.killSignal, 'SIGKILL', `${platform}: a ps that ignores SIGTERM is still ended`)
+    const timedOut = Object.assign(new Error('spawnSync /bin/ps ETIMEDOUT'), { code: 'ETIMEDOUT' })
+    assert.equal(defaultObsidianProcessProbe({ platform, run: () => { throw timedOut } }), 'unknown')
+  }
+})
+
+test('an adapter qualified while no app ran never coordinates with an app found running: it is uncoordinated and asks the app nothing', async () => {
+  const answered = []
+  const call = async (payload) => { answered.push(payload.op); return { status: 'inspected', vaultBasePath: '/vault' } }
+  const adapterWith = (qualification, processes = 'running') => createEditorAdapter({ call, processProbe: () => processes, qualification })
+  for (const qualification of [{ outcome: 'qualified', reason: 'app-not-running-version-not-needed', versionChecked: false }, { outcome: 'app-missing', reason: 'no-app-found' }, null]) {
+    const probe = await adapterWith(qualification).probe({ vaultRoot: '/vault' })
+    assert.deepEqual([probe.state, /app-version-unchecked/.test(probe.reason)], ['uncoordinated', true], JSON.stringify(qualification))
+  }
+  assert.deepEqual(answered, [], 'an app whose version was never checked is not asked anything')
+  assert.equal((await adapterWith({ versionChecked: false }, 'absent').probe({ vaultRoot: '/vault' })).state, 'absent', 'with no app running, the path with no app stays open')
+  assert.equal((await adapterWith({ outcome: 'qualified', reason: 'meets-minimum-version', versionChecked: true }).probe({ vaultRoot: '/vault' })).state, 'coordinated')
+  assert.equal((await adapterWith(undefined).probe({ vaultRoot: '/vault' })).state, 'coordinated', 'an adapter built without a qualification coordinates as before')
+})
+
+test('an app launched after a qualification that checked no version is never published through: the publication is refused, not taken in-app', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const before = snapshotTree(world)
+  const app = new ModelApp(world.vault)
+  app.open(NOTE)
+  let observation = { installed: true, cli: true, running: false, version: null }
+  const adapters = []
+  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => observation }, createAdapter: ({ qualification }) => { const adapter = modelAdapter(app, { qualification }); adapters.push(adapter); return adapter } })
+  // Qualified with no app running; the app starts (below the floor, say) and opens this vault inside the cache window.
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), factory({}))
+  assert.deepEqual([result.state, result.refusal?.code], ['refused', 'editor-uncoordinated'], JSON.stringify(result))
+  assert.equal(adapters[0].calls.length, 0, 'the app was asked nothing')
+  assert.deepEqual(snapshotTree(world), before)
+  // Control: once qualification checked a version, the same app is coordinated with.
+  observation = { installed: true, cli: true, running: true, version: '1.13.7 (installer 1.12.7)' }
+  const checked = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => observation }, createAdapter: ({ qualification }) => modelAdapter(app, { qualification }) })
+  const published = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), checked({}))
+  assert.deepEqual([published.state, published.mode], ['committed', 'in-app'], JSON.stringify(published))
 })
 
 test('mutation control: the probe of 0.2.0-alpha.9, which searched every argument, finds the app in the maintenance service itself', () => {

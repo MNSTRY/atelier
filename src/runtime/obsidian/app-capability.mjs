@@ -103,7 +103,10 @@ export async function inspectApp(appProbe) {
 // The adapter factory of a service that reaches a real app. The editor adapter
 // is constructed only after the app qualified; otherwise the factory refuses,
 // typed, and the engine records that reason and publishes nothing. The answer
-// is remembered briefly so a tick over many views asks once.
+// is remembered briefly so a tick over many views asks once. `createAdapter`
+// receives the qualification with its input: an app that was not running
+// qualified without a version, and an adapter built on that answer must not
+// coordinate with an app started since (see createEditorAdapter).
 export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor = MINIMUM_APP_VERSION, maxAgeMs = 10_000, now = () => Date.now() } = {}) {
   if (typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspectSync()')
   if (typeof createAdapter !== 'function') throw new TypeError('the qualified adapter factory needs createAdapter')
@@ -120,7 +123,7 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
     const result = qualification()
     // No app at all is not an unqualified app: the publisher's own path needs none, and its adapter finds no process.
     if (result.outcome !== 'qualified' && result.outcome !== 'app-missing') refuse(result.outcome, 'the installed Obsidian does not qualify; nothing is published through it', { reason: result.reason, floor: result.floor, version: result.version })
-    return createAdapter(input)
+    return createAdapter({ ...input, qualification: result })
   }
   factory.qualification = qualification
   // What was last learned, without asking again: for a status answer.

@@ -294,7 +294,12 @@ cannot see an app on another machine that reaches the vault through a shared
 or synchronized folder, or an app packaged under another executable name. It
 recognises the app by the executable a process runs (`ps -A -o comm=`), never
 by its arguments; on Linux a system Electron process, which does not say which
-app it hosts, makes the reading unknown rather than absent.
+app it hosts, makes the reading unknown rather than absent, and a process whose
+name is not recognised is identified by the executable `/proc/<pid>/exe`
+resolves to. A `ps` that does not answer within five seconds is unknown.
+Before 0.2.0-alpha.10 no production reading was ever absent, because the probe
+found Atelier's own service; from that release this path, and this window, are
+live.
 
 ### Proven boundary
 
