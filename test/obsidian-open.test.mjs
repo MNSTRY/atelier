@@ -724,6 +724,23 @@ setInterval(() => { if (!fs.existsSync(${JSON.stringify(flag)})) return; fs.rmSy
 await runServiceProcess({ ...options, entryPath: fileURLToPath(import.meta.url), adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' }), createEngine: () => ({ tick: async () => ({ state: 'ticked', scopes: [] }), stop() {} }) })
 `
 
+// The shipped service entry loads the command contributions at top level
+// before it serves. Nothing those contributions import may reach the entry
+// through a static import, or the process deadlocks on its own await and exits
+// 13 before it ever listens. The stub entry the other tests spawn never loads
+// them, so this one spawns the real entry.
+test('the real service entry starts and serves: loading the shipped contributions does not deadlock the process', needsProcessProof, async (t) => {
+  const world = makeWorld(t)
+  const entryPath = path.join(REPOSITORY_ROOT, 'src', 'runtime', 'obsidian', 'service-main.mjs')
+  const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath, entryArgs: ['--adapter=obsidian-cli'], intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', CONSENT.actor], { seams, startTimeoutMs: 20000 })
+  assert.deepEqual([started.exit, started.json.service.state, started.json.service.started], [EXIT.ok, 'healthy', true], JSON.stringify(started.json).slice(0, 600))
+  const status = await world.run(['service', 'status', '--json'], { seams })
+  assert.equal(status.json.service.state, 'healthy')
+  const stop = await world.run(['service', 'stop', '--json'], { seams })
+  assert.equal(stop.json.service.stopped, true, JSON.stringify(stop.json).slice(0, 300))
+})
+
 test('a real service in a long tick is busy: open says so, start starts nothing, stop refuses with a retry hint, and it is healthy again afterwards', needsProcessProof, async (t) => {
   const world = makeWorld(t)
   const flag = path.join(world.dir, 'block-now')

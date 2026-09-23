@@ -33,7 +33,9 @@ const ADAPTERS = Object.freeze({
   },
 })
 
-export const SERVICE_ENTRY_PATH = fileURLToPath(import.meta.url)
+import { SERVICE_ENTRY_PATH } from './service-entry-path.mjs'
+
+export { SERVICE_ENTRY_PATH }
 export const EXIT_REFUSED = 2
 
 const log = (entry) => { try { process.stdout.write(`${JSON.stringify(entry)}\n`) } catch { /* a closed log never ends the service */ } }
@@ -68,7 +70,7 @@ export function serviceOptionsFromArgv(argv, { env = process.env } = {}) {
   }
 }
 
-const invokedDirectly = (() => { try { return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(SERVICE_ENTRY_PATH) } catch { return false } })()
+const invokedDirectly = (() => { try { return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)) } catch { return false } })()
 
 if (invokedDirectly) {
   let options = null
