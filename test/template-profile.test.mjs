@@ -164,6 +164,17 @@ test('epoch metadata is optional and reserved ext never admits required semantic
   refused(validateTemplateDefinition(p))
 })
 
+test('host distinguishes an unsupported optional role from required semantic support', () => {
+  const f = fixture()
+  f.host.semanticPrimitives = ['Resource']
+  const result = hostCheck(f)
+  assert.equal(result.ok, true)
+  assert.ok(result.diagnostics.some(item => item.kind === 'semantic-role' && item.id === 'shelf' && item.bindingAllowed === false))
+  f.profile.semanticRoles[1].required = true
+  f.host.templateRef = makeRef('TemplateRef', f.profile.id, f.profile)
+  refused(hostCheck(f), 'unsupported semantic primitive')
+})
+
 test('validation does not mutate inputs or widen existing extension-pack v1', () => {
   const f = fixture(), before = JSON.stringify(f)
   releaseCheck(f); hostCheck(f)

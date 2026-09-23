@@ -11,7 +11,7 @@ const outcome = (ok, errors, rest = {}) => ({ ok, errors, authority: 'structural
 /** Read-only composition over a loaded project, not a graph or source writer.
  * The request is bounded JSON text: {profile, projectRef, roleNodeIds, target,
  * theme?}. This initial binding supports classified active Markdown resources,
- * Resource/Collection roles and CollectionView/StatusView. Other requirements
+ * Resource bindings and CollectionView/StatusView. Other requirements
  * refuse instead of being converted to a superficially similar surface.
  */
 export function createTemplateProjectView(project, requestJson) {
@@ -31,7 +31,7 @@ export function createTemplateProjectView(project, requestJson) {
     const templateRef = templateReference('TemplateRef', profile.id, profile.version, profile)
     const host = validateTemplateHost(profile, {
       schema: 'atelier-template-host@v1', templateRef, carrier: 'web', atelierVersion: packageVersion,
-      packRefs: [], semanticPrimitives: ['Resource', 'Collection'], surfacePrimitives: ['CollectionView', 'StatusView'],
+      packRefs: [], semanticPrimitives: ['Resource'], surfacePrimitives: ['CollectionView', 'StatusView'],
       runtimeProfileRef: null, optionalDecisions: [],
     })
     if (!host.ok) return outcome(false, host.errors)
@@ -43,6 +43,7 @@ export function createTemplateProjectView(project, requestJson) {
     const records = [], sources = new Map(), roles = []
     for (const [roleRef, ids] of Object.entries(roleNodeIds)) {
       if (!profile.semanticRoles.some(role => role.id === roleRef) || !Array.isArray(ids) || !ids.length || ids.length > 256 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) return outcome(false, ['invalid role selection'])
+      if (profile.semanticRoles.find(role => role.id === roleRef).primitive !== 'Resource') return outcome(false, ['semantic role has no canonical binding'])
       const refs = []
       for (const id of ids) {
         const node = visible.get(id)
@@ -65,7 +66,7 @@ export function createTemplateProjectView(project, requestJson) {
     const bindingRef = templateReference('BindingRef', binding.id, binding.version, binding)
     const nodes = profile.surfaceRoles.map((view, index) => {
       const id = `view-${index}`
-      if (view.primitive === 'StatusView') return { id, type: 'status', label: view.id, text: 'Read-only local projection. Runtime actions and publication are unavailable.', tone: 'neutral', details: host.diagnostics.map(item => ({ label: item.id, value: `${item.status}; deterministic or manual fallback` })), actions: [] }
+      if (view.primitive === 'StatusView') return { id, type: 'status', label: view.id, text: 'Read-only local projection. Runtime actions and publication are unavailable.', tone: 'neutral', details: host.diagnostics.map(item => ({ label: item.id, value: item.kind === 'semantic-role' ? 'Optional role unsupported; binding unavailable' : `${item.status}; deterministic or manual fallback` })), actions: [] }
       const sourceIds = [...new Set(view.semanticRoleRefs.flatMap(role => roleNodeIds[role] ?? []))]
       return { id, type: 'collection', label: view.id, items: sourceIds.map(sourceId => ({ id: `item-${identity(sourceId)}`, label: sources.get(sourceId).document.title, detail: sources.get(sourceId).document.summary })) }
     })
@@ -76,7 +77,7 @@ export function createTemplateProjectView(project, requestJson) {
     // preview. This creates bytes only; it does not publish or erase old copies.
     const html = renderReadOnlyDocument(model)
     const textPreview = [model.title, ...nodes.flatMap(node => [node.label, ...(node.items ? node.items.flatMap(item => [item.label, item.detail]) : [node.text]), ...(node.details ?? []).map(item => `${item.label}: ${item.value}`)])].join('\n\n')
-    return outcome(true, [], { templateRef, bindingRef, binding, records, model, html, textPreview, optionalDecisions: host.diagnostics, target, lifecycle: 'active-only', artifacts: { web: html, documents: html } })
+    return outcome(true, [], { templateRef, bindingRef, binding, records, model, html, textPreview, capabilityDiagnostics: host.diagnostics, optionalDecisions: host.diagnostics.filter(item => item.kind !== 'semantic-role'), target, lifecycle: 'active-only', artifacts: { web: html, documents: html } })
   } catch {
     // Do not disclose source paths or source text through exception messages.
     return outcome(false, ['template project composition refused'])
