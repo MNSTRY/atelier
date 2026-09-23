@@ -1,0 +1,70 @@
+{
+  "schema": "atelier-template-profile@v1",
+  "id": "sample.library",
+  "version": "1.0.0",
+  "purpose": "Organize an invented local reading shelf.",
+  "inputs": [
+    "Project-owned text resources"
+  ],
+  "limitations": [
+    "Runtime actions require a separately qualified host."
+  ],
+  "semanticRoles": [
+    {
+      "id": "items",
+      "primitive": "Resource",
+      "required": true,
+      "cardinality": "many"
+    },
+    {
+      "id": "shelf",
+      "primitive": "Collection",
+      "required": false,
+      "cardinality": "one"
+    }
+  ],
+  "surfaceRoles": [
+    {
+      "id": "catalog",
+      "primitive": "CollectionView",
+      "semanticRoleRefs": [
+        "items"
+      ]
+    },
+    {
+      "id": "state",
+      "primitive": "StatusView",
+      "semanticRoleRefs": []
+    }
+  ],
+  "runtimeProfileRef": null,
+  "carriers": [
+    {
+      "id": "web",
+      "required": true
+    },
+    {
+      "id": "documents",
+      "required": true
+    },
+    {
+      "id": "chat",
+      "required": false
+    }
+  ],
+  "extensions": [],
+  "optionalDecisions": [
+    {
+      "id": "reading-priority",
+      "contract": "atelier-decision-request@v1",
+      "required": false
+    }
+  ],
+  "compatibility": {
+    "atelierVersions": [
+      "0.2.0-alpha.7"
+    ],
+    "packRefs": []
+  },
+  "definitionLicense": "Apache-2.0"
+}
