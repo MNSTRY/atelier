@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.2.0-alpha.9
+## 0.2.0-alpha.10
 
 - Add portable template profiles, digest-bound project bindings, staged structural
   validation and canonical read-only presentation through installed package APIs.
@@ -46,6 +46,8 @@
   retain execution and access authority.
 
 - Recompile cached JSON Schema validators when caller-owned schemas change; preserve unchanged-schema reuse and fresh compilation for non-JSON schemas.
+
+## 0.2.0-alpha.9
 
 ### Fixed
 
