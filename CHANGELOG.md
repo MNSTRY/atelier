@@ -21,8 +21,14 @@
   adapter built on it could coordinate with an Obsidian started inside that
   window, whose version nobody had checked, and publish through it in-app.
   The adapter now receives the qualification and does not coordinate, or ask
-  the app anything, unless a version was checked. The publication is refused
-  as `editor-uncoordinated` and retried once the app qualifies.
+  the app anything, unless a version was checked. An answer that checked no
+  version (the app was not running, or none was found) is no longer reused,
+  so the next publication after the app starts reads its version and
+  coordinates. A publication that stops this way is tried again on the next
+  change or at the next full reconciliation, every five minutes.
+- On macOS the app is found only at `/Applications/Obsidian.app`. An
+  Obsidian installed elsewhere is `app-missing`: nothing is published through
+  it, and publication waits while it runs. This is now documented.
 - On Linux an app started through a differently named link or launcher was
   read as absent, because the process name is the name it was started
   through. A process whose name is not recognised is now identified by the

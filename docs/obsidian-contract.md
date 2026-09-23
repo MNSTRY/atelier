@@ -2,8 +2,10 @@
 
 This document freezes what later work receives from the contract and
 feasibility track. It states what is proven, on what, and what is not. Nothing
-here enables a feature: a publisher exists under
-`src/projection/obsidian/publication/`, and no command or service calls it yet.
+here enables a feature. The publisher under
+`src/projection/obsidian/publication/` is called by the maintenance service
+(`atelier obsidian service start`) and so by `atelier obsidian open`; see
+[obsidian.md](obsidian.md).
 
 ## Registered shapes
 
@@ -292,7 +294,8 @@ in the newly started app is not: the app then takes its own
 external-modification merge, which can drop overlapping edits. The probe also
 cannot see an app on another machine that reaches the vault through a shared
 or synchronized folder, or an app packaged under another executable name. It
-recognises the app by the executable a process runs (`ps -A -o comm=`), never
+recognises the app by the executable a process runs (`ps -A -o comm=`, or
+`pid=,comm=` on Linux), never
 by its arguments; on Linux a system Electron process, which does not say which
 app it hosts, makes the reading unknown rather than absent, and a process whose
 name is not recognised is identified by the executable `/proc/<pid>/exe`

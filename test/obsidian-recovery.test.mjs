@@ -1570,7 +1570,9 @@ function assertProcessProbe(probe) {
   for (const [platform, names, expected, what] of PROCESS_CASES) assert.equal(probe({ platform, run: psRun(names), readExe: exeOf(names) }), expected, `${platform}: ${what}`)
   assert.equal(probe({ platform: 'darwin', run: () => { throw new Error('denied') } }), 'unknown', 'a table that cannot be read')
   assert.equal(probe({ platform: 'win32', run: psRun(['app']) }), 'unknown', 'a platform with no known table')
-  assert.equal(probe({ platform: 'linux', run: () => '    1 systemd\nnot a row\n', readExe: exeOf(['init']) }), 'unknown', 'a Linux row with no process ID')
+  // Beside a row that resolves (so nothing else would make the reading unknown), a row with no process ID is unknown.
+  assert.equal(probe({ platform: 'linux', run: () => '    1 systemd\n  400 node\nnot a row\n', readExe: exeOf(['init', 'linuxService']) }), 'unknown', 'a Linux row with no process ID')
+  assert.equal(probe({ platform: 'linux', run: () => '    1 systemd\n  400 node\n', readExe: exeOf(['init', 'linuxService']) }), 'absent', 'control: the same table without that row')
 }
 
 test('the process probe recognises the app by its executable, never by an argument; what it cannot establish is unknown', () => {
@@ -1637,6 +1639,48 @@ test('an app launched after a qualification that checked no version is never pub
   const checked = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => observation }, createAdapter: ({ qualification }) => modelAdapter(app, { qualification }) })
   const published = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), checked({}))
   assert.deepEqual([published.state, published.mode], ['committed', 'in-app'], JSON.stringify(published))
+})
+
+test('an app launched within ten seconds of a qualification that checked no version is asked for its version by the next publication and coordinated with, not refused on the old answer', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const app = new ModelApp(world.vault)
+  let running = false
+  let clock = 0
+  const factory = createQualifiedAdapterFactory({
+    appProbe: { inspectSync: () => (running ? { installed: true, cli: true, running: true, version: '1.13.7 (installer 1.12.7)' } : { installed: true, cli: true, running: false, version: null }) },
+    createAdapter: ({ qualification }) => modelAdapter(app, { qualification, processProbe: () => (running ? 'running' : 'absent') }),
+    now: () => clock,
+  })
+  // A tick publishes with the app closed; `open` then launches the app on this vault, and a source change arrives three seconds later.
+  const direct = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), factory({}))
+  assert.deepEqual([direct.state, direct.mode], ['committed', 'direct'], JSON.stringify(direct))
+  running = true
+  app.open(NOTE)
+  clock += 3000
+  const next = await world.publish(viewOf('gen-0003', { notes: { [NOTE]: BASE } }), factory({}))
+  assert.deepEqual([next.state, next.mode, next.refusal?.code], ['committed', 'in-app', undefined], JSON.stringify(next))
+})
+
+test('the qualified adapter factory reuses an answer that checked a version or refuses, and never one that let an adapter through unchecked', () => {
+  let clock = 0
+  let observation = null
+  let asked = 0
+  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => { asked += 1; return observation } }, createAdapter: ({ qualification }) => qualification, now: () => clock })
+  const call = () => { try { return factory({}) } catch (error) { return error.code } }
+  for (const [what, seen, reused] of [
+    ['an app that was not running', { installed: true, cli: true, running: false, version: null }, false],
+    ['no app found', { installed: false, cli: false, running: null, version: null }, false],
+    ['a checked version', { installed: true, cli: true, running: true, version: '1.13.7' }, true],
+    ['a version below the floor', { installed: true, cli: true, running: true, version: '1.13.6' }, true],
+  ]) {
+    observation = seen
+    clock += 60_000
+    asked = 0
+    call()
+    clock += 3000
+    call()
+    assert.equal(asked, reused ? 1 : 2, what)
+  }
 })
 
 test('mutation control: the probe of 0.2.0-alpha.9, which searched every argument, finds the app in the maintenance service itself', () => {
