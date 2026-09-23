@@ -1,0 +1,781 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-trackable.v1.schema.json",
+  "title": "Trackable definition and domain commands",
+  "$comment": "contract revision 1.0.0; portable reference profile",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/definition"
+    },
+    {
+      "$ref": "#/$defs/request"
+    }
+  ],
+  "$defs": {
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-trackable-definition@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "profile": {
+          "enum": [
+            "recurring-practice",
+            "milestone",
+            "qualitative-series"
+          ]
+        },
+        "schedule": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cadence": {
+                  "const": "daily"
+                },
+                "timezone": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "cadence",
+                "timezone"
+              ]
+            }
+          ]
+        },
+        "interpretationLimits": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "maxItems": 16
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "revision",
+        "purpose",
+        "profile",
+        "schedule",
+        "interpretationLimits"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "manual",
+                "session",
+                "instrument"
+              ]
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "kind",
+            "ref",
+            "digest"
+          ]
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "assistance": {
+          "enum": [
+            "independent",
+            "assisted",
+            "unknown"
+          ]
+        },
+        "result": {
+          "enum": [
+            "completed",
+            "partial",
+            "skipped",
+            "waived",
+            "not-applicable",
+            "observed"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "occurredAt",
+        "assistance",
+        "result",
+        "value"
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-trackable-command@v1"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "operation": {
+          "enum": [
+            "release",
+            "instantiate",
+            "adopt",
+            "lifecycle",
+            "record",
+            "correct",
+            "disposition"
+          ]
+        },
+        "input": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "definition": {
+                  "$ref": "#/$defs/definition"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "definition"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                },
+                "subject": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                },
+                "definitionDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "effectiveAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "instanceId",
+                "subject",
+                "definitionDigest",
+                "effectiveAt"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                },
+                "definitionDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "effectiveAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "instanceId",
+                "definitionDigest",
+                "effectiveAt"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                },
+                "status": {
+                  "enum": [
+                    "active",
+                    "paused",
+                    "retired"
+                  ]
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "instanceId",
+                "status"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                },
+                "evidence": {
+                  "$ref": "#/$defs/evidence"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "instanceId",
+                "evidence"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "evidenceId": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "replacement": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "result": {
+                          "enum": [
+                            "completed",
+                            "partial",
+                            "skipped",
+                            "waived",
+                            "not-applicable",
+                            "observed"
+                          ]
+                        },
+                        "value": {
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 4096
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "ext": {
+                          "type": "object",
+                          "maxProperties": 0
+                        }
+                      },
+                      "required": [
+                        "result",
+                        "value"
+                      ]
+                    }
+                  ]
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "evidenceId",
+                "reason",
+                "replacement"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                },
+                "status": {
+                  "enum": [
+                    "open",
+                    "fulfilled",
+                    "released"
+                  ]
+                },
+                "basisEvidenceIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "maxItems": 32
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "instanceId",
+                "status",
+                "basisEvidenceIds"
+              ]
+            }
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "requestId",
+        "expectedRevision",
+        "operation",
+        "input"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "release"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "definition": {
+                    "$ref": "#/$defs/definition"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "definition"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "instantiate"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "definitionDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "effectiveAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "Z$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "instanceId",
+                  "subject",
+                  "definitionDigest",
+                  "effectiveAt"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "adopt"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "definitionDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "effectiveAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "Z$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "instanceId",
+                  "definitionDigest",
+                  "effectiveAt"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "lifecycle"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "paused",
+                      "retired"
+                    ]
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "instanceId",
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "record"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "evidence": {
+                    "$ref": "#/$defs/evidence"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "instanceId",
+                  "evidence"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "correct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "evidenceId": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "replacement": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "result": {
+                            "enum": [
+                              "completed",
+                              "partial",
+                              "skipped",
+                              "waived",
+                              "not-applicable",
+                              "observed"
+                            ]
+                          },
+                          "value": {
+                            "oneOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 4096
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "ext": {
+                            "type": "object",
+                            "maxProperties": 0
+                          }
+                        },
+                        "required": [
+                          "result",
+                          "value"
+                        ]
+                      }
+                    ]
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "evidenceId",
+                  "reason",
+                  "replacement"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "disposition"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                  },
+                  "status": {
+                    "enum": [
+                      "open",
+                      "fulfilled",
+                      "released"
+                    ]
+                  },
+                  "basisEvidenceIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+                    },
+                    "maxItems": 32
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "instanceId",
+                  "status",
+                  "basisEvidenceIds"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

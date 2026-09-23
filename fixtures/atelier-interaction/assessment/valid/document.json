@@ -1,0 +1,31 @@
+{
+  "schema": "atelier-reflection-assessment@v1",
+  "id": "friction",
+  "revision": 1,
+  "scope": "workshop",
+  "purpose": "work-quality",
+  "subject": {
+    "kind": "system",
+    "id": "editor"
+  },
+  "author": "reviewer",
+  "criterion": "Work can resume after a delay.",
+  "claim": "The editor needs draft recovery.",
+  "evidence": [
+    {
+      "kind": "observation",
+      "id": "tool-delay",
+      "digest": "sha256:ff7862082d39b181c84613f86fb857dfe9b66bcc747386ba01f7d0572d3e5a4f"
+    }
+  ],
+  "method": {
+    "id": "case-inspection",
+    "revision": "1"
+  },
+  "uncertainty": "material",
+  "limits": [
+    "One reported event; cause remains uncertain."
+  ],
+  "claimKind": "system-friction",
+  "status": "active"
+}

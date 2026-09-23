@@ -1,0 +1,33 @@
+{
+  "schema": "atelier-coordination-record@v1",
+  "kind": "disposition",
+  "repository": "beta",
+  "id": "report",
+  "revision": 1,
+  "scope": [
+    "workshop"
+  ],
+  "observedAt": "2026-01-01T00:00:00Z",
+  "expiresAt": "2026-01-03T00:00:00Z",
+  "source": {
+    "ref": "native:receipt",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "body": {
+    "directive": {
+      "repository": "alpha",
+      "id": "inspect",
+      "digest": "sha256:71c967c4731a5c3289f4a9511c5feb2aa36b45b5148065f9bb7f60737ffc78d6"
+    },
+    "recipient": {
+      "repository": "beta",
+      "id": "consumer"
+    },
+    "stage": "read",
+    "evidence": {
+      "ref": "native:receipt",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "detail": "Reported reading."
+  }
+}

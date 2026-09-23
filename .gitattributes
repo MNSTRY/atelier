@@ -3,3 +3,9 @@ templates/external-project-workspace/packs/** text eol=lf
 
 # Generated schema bytes must match the canonical LF generator on every host.
 src/ui/presentation/schema.generated.mjs text eol=lf
+
+# Sealed capability bundles and imported ADRs retain their pinned source bytes.
+fixtures/capability-packages/** text eol=lf
+fixtures/inquiry-packages/** text eol=lf
+fixtures/harness-packages/** text eol=lf
+fixtures/atelier-judgment/native-decision.md text eol=lf

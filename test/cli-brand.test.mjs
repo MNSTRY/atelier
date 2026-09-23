@@ -68,7 +68,15 @@ Core commands:
   review run|history|handoff       Evidence-bound local human review.
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
+  architecture catalog|entry|resolve Inspect responsibility names and consumer bindings.
+  trackable preview|execute|view     Follow adopted definitions and occurrence evidence.
+  practice plan|apply|status|context Adopt scoped instruction guidance and inspect use.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
+  capability seal|plan|apply|status Publish local capability bundles and govern adoption.
+  harness                         Govern knowledge and build workflows.
+  inquiry append|handoff|status|graph Run the local Discovery and Research Harness workflow.
+  learn capture|propose|decide|activate|withdraw Manage scoped lessons and their evidence.
+  ingest plan|run|status|query     Preserve selected sources and search bounded evidence.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -105,7 +113,10 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
   assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
-  assert.equal(commandMap.size, 57)
+  assert.deepEqual(commandMap.get('capability'), ['src/commands/capability.mjs'])
+  assert.deepEqual(commandMap.get('learn'), ['src/commands/learn.mjs'])
+  assert.deepEqual(commandMap.get('ingest'), ['src/commands/ingest.mjs'])
+  assert.equal(commandMap.size, 65)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {

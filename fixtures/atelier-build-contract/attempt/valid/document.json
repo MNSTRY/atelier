@@ -1,0 +1,19 @@
+{
+  "schema": "atelier-build-record@v1",
+  "id": "test-attempt",
+  "run": "reminder-build",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "attempt",
+  "data": {
+    "candidate": {
+      "id": "prototype",
+      "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+    },
+    "operation": "test",
+    "requestDigest": "sha256:886f5ca461607989f0265ce1f47cc21f48691f8cf5599b7222f9aa03bb9b5713",
+    "effects": [
+      "execute-local"
+    ]
+  }
+}

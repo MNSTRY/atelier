@@ -30,6 +30,11 @@ structure, missing-asset evidence, and format-specific completeness checks.
 Do not flatten a conversation export merely to satisfy a text-output API.
 Packet authoring can proceed before corpus ingestion.
 
+The [progressive ingestion proposal](progressive-ingestion.md) describes a
+possible coverage, routing and incremental-processing layer over this store.
+It is a design proposal; those orchestration capabilities are not supplied by
+the current intake API.
+
 ## Guides and private implementations
 
 `@mnstry/atelier/guides` and the guide schema define portable offers, inert

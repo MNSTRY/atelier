@@ -1,0 +1,15 @@
+{
+  "schema": "atelier-knowledge-record@v1",
+  "id": "source-withdrawal",
+  "run": "workshop-knowledge",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "withdrawal",
+  "data": {
+    "target": {
+      "id": "observation",
+      "digest": "sha256:c319652770799da6edc7895a6e73dd736f3f316ffeb507d1c51aa5b468d8ee4c"
+    },
+    "reason": "Synthetic correction: the observation cannot be relied on."
+  }
+}

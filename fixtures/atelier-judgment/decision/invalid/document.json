@@ -1,0 +1,38 @@
+{
+  "schema": "atelier-judgment-decision@v1",
+  "native": {
+    "repository": "sample-workshop",
+    "id": "workshop-format",
+    "ref": "decisions/workshop-format.md",
+    "digest": "sha256:1c2ea1562ec8dfd487122f0474927cbec5f85d9c149aa0de2ca348ed4ef97056"
+  },
+  "audience": "public",
+  "title": "Workshop opening",
+  "context": "An invented small workshop has mixed arrival times.",
+  "alternatives": [
+    "Individual orientation",
+    "Short common opening"
+  ],
+  "decision": {
+    "status": "accepted",
+    "choice": "Short common opening",
+    "reason": "A trial group requested a common orientation.",
+    "authorityRef": "synthetic-local-decision"
+  },
+  "implementation": {
+    "status": "planned",
+    "receipt": null
+  },
+  "evidence": {
+    "status": "unknown",
+    "references": []
+  },
+  "supersedes": null,
+  "consequences": [
+    "Quiet work begins after the opening."
+  ],
+  "reconsiderWhen": [
+    "Arrival times no longer overlap."
+  ],
+  "authority": "all"
+}

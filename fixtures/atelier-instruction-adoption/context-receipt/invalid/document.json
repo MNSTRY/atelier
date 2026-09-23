@@ -1,0 +1,18 @@
+{
+  "schema": "atelier-instruction-context-receipt@v1",
+  "session": "sample-use",
+  "target": "AGENTS.md",
+  "slot": "uncertainty",
+  "pin": {
+    "lessonId": "lesson",
+    "lessonDigest": "sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19",
+    "artifactDigest": "sha256:61d589707df7ad1cb3e803ccf93d914cfd29fa304be05a236d68159e8fce36af",
+    "activationId": "activation",
+    "decisionId": "decision:d573fdba1a00eba338d358da26a45e30"
+  },
+  "contextDigest": "sha256:1d5165b7e010cbbc1321c6f56df6f93d9078fe86666634a244459872c5cbd494",
+  "delivery": "returned-to-calling-consumer",
+  "behaviorVerified": false,
+  "digest": "sha256:d0eeba21cf957041e9b7195b44e71caf142bc44d6bb0833b0b91ce9a35eaa221",
+  "authority": "all"
+}

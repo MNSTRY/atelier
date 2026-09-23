@@ -1,4 +1,4 @@
-import { withPrivateLock, publishPrivateFile } from '../project/durable-state.mjs';
+import { withPrivateLock, publishPrivateFile, isPendingPrivateWrite } from '../project/durable-state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -67,6 +67,43 @@ export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
   }
   function record(dir, name, value) { valid(value); immutable(path.join(dir, name), canonicalize(value) + '\n'); return value; }
   return Object.freeze({
+    // Explicit current-source reads stay behind intake's containment and byte
+    // checks. They do not enroll a source or interpret its contents.
+    readSource({ ref, expectedDigest } = {}) {
+      placement();
+      if (expectedDigest !== undefined) digest(expectedDigest);
+      const bytes = read(sourceFile(ref)), actual = intakeDigest(bytes);
+      if (expectedDigest !== undefined && actual !== expectedDigest) throw Object.assign(new Error('current source digest differs'), { code: 'INTAKE_SOURCE_CHANGED' });
+      return { ref, digest: actual, bytes };
+    },
+    // A missing directory is a cache miss. A broken committed attempt is an
+    // integrity failure, never permission to overwrite or retry it silently.
+    readAttempt(attemptId) {
+      placement(); id(attemptId);
+      const dir = path.join(directory('attempts'), attemptId);
+      try { fs.lstatSync(dir); }
+      catch (error) { if (error.code === 'ENOENT') return { status: 'absent', attempt: null, completion: null, output: null }; throw error; }
+      directory('attempts', attemptId);
+      try {
+        const names = fs.readdirSync(dir).filter(name => !isPendingPrivateWrite(name));
+        if (names.some(name => !['attempt.json', 'completion.json', 'output.txt'].includes(name))) throw new Error('unknown attempt file');
+        if (!names.includes('attempt.json')) {
+          if (names.length) throw new Error('orphaned attempt bytes');
+          return { status: 'absent', attempt: null, completion: null, output: null };
+        }
+        const attemptBytes = read(path.join(dir, 'attempt.json')), attempt = valid(JSON.parse(attemptBytes));
+        if (attempt.schema !== 'mnstry.atelier-intake-attempt@v1' || attempt.attemptId !== attemptId) throw new Error('attempt identity differs');
+        blob(attempt.blobId);
+        const outputBytes = names.includes('output.txt') ? read(path.join(dir, 'output.txt')) : null;
+        const output = outputBytes === null ? null : new TextDecoder('utf-8', { fatal: true }).decode(outputBytes);
+        if (!names.includes('completion.json')) return { status: output === null ? 'begun' : 'partial', attempt, completion: null, output };
+        const completion = valid(JSON.parse(read(path.join(dir, 'completion.json'))));
+        if (completion.schema !== 'mnstry.atelier-intake-completion@v1' || completion.attemptId !== attemptId ||
+          completion.integrity !== 'verified' || completion.semanticAcceptance !== 'pending' || outputBytes === null ||
+          completion.attemptDigest !== intakeDigest(attemptBytes) || completion.outputDigest !== intakeDigest(outputBytes) || completion.bytes !== outputBytes.length) throw new Error('completion integrity differs');
+        return { status: 'complete', attempt, completion, output };
+      } catch { throw Object.assign(new Error('intake attempt integrity refused'), { code: 'INTAKE_INTEGRITY' }); }
+    },
     ingest({ ref, expectedDigest }) {
       return locked(() => {
         digest(expectedDigest);

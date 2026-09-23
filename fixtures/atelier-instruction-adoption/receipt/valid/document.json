@@ -1,0 +1,21 @@
+{
+  "schema": "atelier-instruction-receipt@v1",
+  "workspace": "sha256:2e2ff87336e5b47594cfab87f9ef035e2026ea8349d22b088de009e009c07616",
+  "planDigest": "sha256:c1e1249bdef5c39d933425bb26d58c2b54c16155b4bd9d2abb70d709ef30b087",
+  "target": "AGENTS.md",
+  "slot": "uncertainty",
+  "pin": {
+    "lessonId": "lesson",
+    "lessonDigest": "sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19",
+    "artifactDigest": "sha256:61d589707df7ad1cb3e803ccf93d914cfd29fa304be05a236d68159e8fce36af",
+    "activationId": "activation",
+    "decisionId": "decision:d573fdba1a00eba338d358da26a45e30"
+  },
+  "mode": "adopt",
+  "resultDigest": "sha256:0ebe4b23e1dd8b33ae9a6e4856939afeede5d4287e4f2e07363e06b7c24b4d74",
+  "stateDigest": "sha256:b1b25079f91c4e1ceb3e5d854582ed48531f3d80da8545fdca2d6838f1b55cea",
+  "status": "persisted-and-read-back",
+  "hostLoaded": false,
+  "behaviorVerified": false,
+  "digest": "sha256:b7404b7078b8e50fb79b06c15facf25146287276ecd1d7cec9bcba352fcc1c29"
+}

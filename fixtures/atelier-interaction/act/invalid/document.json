@@ -1,0 +1,25 @@
+{
+  "schema": "atelier-interaction-act@v1",
+  "id": "repair-offer",
+  "scope": "workshop",
+  "purpose": "work-quality",
+  "origin": "witness",
+  "kind": "propose",
+  "meaning": "Offer recovery of the draft.",
+  "text": "The delay may be a tool problem. We can recover the draft first.",
+  "mode": "reflective",
+  "dependencies": [
+    {
+      "kind": "assessment",
+      "id": "friction",
+      "digest": "sha256:5d52baa92e8a45964aac6fa112858d209262e145112b4ac1990034f459b6fefc"
+    },
+    {
+      "kind": "observation",
+      "id": "tool-delay",
+      "digest": "sha256:ff7862082d39b181c84613f86fb857dfe9b66bcc747386ba01f7d0572d3e5a4f"
+    }
+  ],
+  "expiresAt": "2026-01-03T00:00:00Z",
+  "unexpected": true
+}

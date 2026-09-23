@@ -1,0 +1,18 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "feedback",
+  "id": "research-feedback",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "request": {
+      "id": "research",
+      "digest": "sha256:308ed6d35eebb2f8815204853f4038c164e012523a4e94a33df607c23e5d8ff0"
+    },
+    "outcome": "unknown",
+    "cause": "unknown",
+    "evidenceDigest": "sha256:9b263d6852991b461575b3810b34fa2143e651fbf820f7da448509aed5ec4add",
+    "rationale": "No host research quality evaluation was executed."
+  }
+}

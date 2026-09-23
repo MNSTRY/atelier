@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+- Preserve recorded Trackable calendar resolutions across host timezone-data changes; retain verified-chain export when legacy replay cannot reconstruct state.
+
+- Correct unchanged instruction re-adoption and preserve literal replacement text during revisions; add recovery and neighboring-slot regressions.
+- Recover recognized dead capability operation locks without requiring an adoption journal; preserve live, uncertain and replacement owners.
+- Add portable Trackable definitions, shared preview/runtime rules, durable scoped reference storage and correction.
+- Add evidence-qualified Reflection, one-authority Interaction delivery, and bounded cross-repository Coordination views.
+
+- Reconcile eight responsibility names and typed consumer bindings; preserve historical aliases.
+- Connect durable ingestion to source-current knowledge context and graph proposals.
+- Add situated judgment and native ADR adapters, capability feedback, and recoverable scoped instruction adoption.
+- Include a provider-agnostic research starter and Practical Judgment operating skill.
+
+- Add Knowledge Harness, Fabric-derived Build Harness and shared typed handoffs, with immutable local history, intake and inquiry bridges, graph activation, correction propagation and version-bound skill feedback.
+
+- Add local Discovery and Research Harnesses with versioned inquiry records,
+  portable research handoffs, reproducible basic belief calculations, evidence
+  dependence and withdrawal checks, and reviewable graph proposals. Add separate
+  capability packages and version-bound Skill Steward feedback. Rename the
+  discovery readiness display title while retaining all persisted identifiers.
+- Add an experimental progressive local ingestion runner with exact plans,
+  bounded deterministic text/CSV/JSON extraction, immutable intake reuse,
+  resumable attempt accounting and source-verified lexical queries. Add a
+  JSON stdin CLI and structural evaluation that retains missing cases and
+  unknown costs. No model dispatch, automatic semantic acceptance or native
+  desktop admission is provided by the portable runner.
+
+- Add a portable local learning lifecycle: Evidence, proposals, exact decisions,
+  explicit harness activation, withdrawal and retained history. Include a JSON
+  stdin CLI, private graph/export projections, bounded proposal-assistance
+  adapters and compatibility with existing skill observations. Local actor
+  assertions do not authenticate users; check artifacts remain inert and hosts
+  retain execution and access authority.
+
+- Recompile cached JSON Schema validators when caller-owned schemas change; preserve unchanged-schema reuse and fresh compilation for non-JSON schemas.
+
 ## 0.2.0-alpha.8
 
 ### Added
