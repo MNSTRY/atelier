@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A first publication refused because Obsidian runs without that vault open
+  (`publisher-conflict`, reason `editor-uncoordinated`) now advises quitting
+  Obsidian so the view publishes directly, instead of waiting for "the other
+  publisher", which does not exist.
+- The Obsidian process probe matched Atelier's own maintenance service: it
+  searched every argument of every process for an `obsidian` path segment, so
+  the service (`…/src/runtime/obsidian/service-main.mjs`) and anything naming
+  the private data root read as a running app. With the app quit, the service
+  reported `app-version-unsupported` and never published, and the app-free
+  publication path was blocked. The probe now reads `ps -A -o comm=` and
+  recognises the app by its executable: `Obsidian` and `Obsidian Helper…` on
+  macOS, `obsidian` on Linux. On Linux a system Electron process makes the
+  reading `unknown`, which is treated as a running app.
+- An app running with no vault open answers every command-line call with
+  `Vault not found.`, which was read as a version and reported as
+  `version-unknown` or `version-unreadable`. It is now the reason
+  `no-vault-open` under the existing outcome `app-version-unsupported`, still
+  not qualified, and `status` and `open` say to open any vault in Obsidian or
+  quit it. `open` waits for an app it launched that is still opening the vault.
+
 ## 0.2.0-alpha.9
 
 ### Fixed

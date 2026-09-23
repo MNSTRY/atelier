@@ -1498,7 +1498,74 @@ test('path selection: the direct path only when no Obsidian runs; a running app 
   assert.equal(defaultObsidianProcessProbe({ platform: 'darwin', run: () => { throw new Error('denied') } }), 'unknown')
   assert.equal(defaultObsidianProcessProbe({ platform: 'darwin', run: () => '/sbin/launchd\n/usr/bin/some-editor --flag\n' }), 'absent')
   assert.equal(defaultObsidianProcessProbe({ platform: 'darwin', run: () => '/sbin/launchd\n/Applications/Obsidian.app/Contents/MacOS/Obsidian\n' }), 'running')
-  assert.equal(defaultObsidianProcessProbe({ platform: 'linux', run: () => '/usr/bin/electron /opt/obsidian/app.asar\n' }), 'running')
+  assert.equal(defaultObsidianProcessProbe({ platform: 'linux', run: () => 'systemd\nobsidian\n' }), 'running')
+})
+
+// A process table as `ps -A -o comm=` (the executable as started) and `ps -A -o args=` (the whole command line) print it.
+const PS = Object.freeze({
+  launchd: { comm: '/sbin/launchd', args: '/sbin/launchd' },
+  ps: { comm: '/bin/ps', args: '/bin/ps -A -o comm=' },
+  service: { comm: '/usr/local/bin/node', args: '/usr/local/bin/node /Volumes/synthetic-home/work/node_modules/@mnstry/atelier/src/runtime/obsidian/service-main.mjs --project=/Volumes/synthetic-home/work/atelier.project.json --adapter=obsidian-cli' },
+  dataRootReader: { comm: 'tail', args: 'tail -f /Volumes/synthetic-home/Library/Application Support/Atelier/obsidian/ws-0001/state/service/service.log' },
+  dataRootExecutable: { comm: '/Volumes/synthetic-home/Library/Application Support/Atelier/obsidian/ws-0001/hooks/after-tick', args: '/Volumes/synthetic-home/Library/Application Support/Atelier/obsidian/ws-0001/hooks/after-tick' },
+  cliCall: { comm: '/Applications/Obsidian.app/Contents/MacOS/obsidian-cli', args: '/Applications/Obsidian.app/Contents/MacOS/obsidian-cli version' },
+  app: { comm: '/Applications/Obsidian.app/Contents/MacOS/Obsidian', args: '/Applications/Obsidian.app/Contents/MacOS/Obsidian' },
+  renderer: { comm: '/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (Renderer).app/Contents/MacOS/Obsidian Helper (Renderer)', args: '/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (Renderer).app/Contents/MacOS/Obsidian Helper (Renderer) --type=renderer' },
+  shortHelper: { comm: 'Obsidian Helper', args: '(Obsidian Helper)' },
+  renamedBundle: { comm: '/Volumes/synthetic-home/Applications/Obsidian 2.app/Contents/MacOS/Obsidian', args: '/Volumes/synthetic-home/Applications/Obsidian 2.app/Contents/MacOS/Obsidian' },
+  init: { comm: 'systemd', args: '/sbin/init' },
+  linuxService: { comm: 'node', args: 'node /home/synthetic/work/node_modules/@mnstry/atelier/src/runtime/obsidian/service-main.mjs --adapter=obsidian-cli' },
+  linuxDataRootReader: { comm: 'tail', args: 'tail -f /home/synthetic/.local/share/atelier/obsidian/ws-0001/state/service/service.log' },
+  linuxApp: { comm: 'obsidian', args: '/opt/Obsidian/obsidian --no-sandbox' },
+  linuxAppImageRuntime: { comm: 'Obsidian-1.8.10', args: '/home/synthetic/Applications/Obsidian-1.8.10.AppImage' },
+  systemElectron: { comm: 'electron', args: '/usr/lib/electron33/electron /usr/lib/obsidian/app.asar' },
+})
+
+const PROCESS_CASES = [
+  ['darwin', ['launchd', 'ps', 'service'], 'absent', "this package's maintenance service, whose arguments name an obsidian directory, is not the app"],
+  ['darwin', ['launchd', 'dataRootReader', 'dataRootExecutable'], 'absent', 'a process under or naming the private data root is not the app'],
+  ['darwin', ['launchd', 'service', 'cliCall'], 'absent', 'the command-line tool is a client of the app, not the app'],
+  ['darwin', ['launchd', 'service', 'app'], 'running', 'the app executable of the bundle'],
+  ['darwin', ['launchd', 'renderer'], 'running', 'a helper of the bundle'],
+  ['darwin', ['launchd', 'shortHelper'], 'running', 'a helper that ps names by its short name'],
+  ['darwin', ['launchd', 'renamedBundle'], 'running', 'a renamed bundle'],
+  ['linux', ['init', 'linuxService', 'linuxDataRootReader'], 'absent', 'the maintenance service and a reader of the data root on Linux'],
+  ['linux', ['init', 'linuxService', 'linuxApp'], 'running', 'the app on Linux'],
+  ['linux', ['init', 'linuxAppImageRuntime', 'linuxApp'], 'running', 'an AppImage runs the app executable'],
+  ['linux', ['init', 'systemElectron'], 'unknown', 'a system Electron does not say which app it hosts'],
+  ['darwin', [], 'unknown', 'an empty table'],
+  ['linux', [], 'unknown', 'an empty table on Linux'],
+]
+
+const psRun = (names) => (file, argv) => {
+  const column = argv.at(-1)
+  if (file !== '/bin/ps' || (column !== 'comm=' && column !== 'args=')) throw new Error(`unexpected process table request: ${file} ${argv.join(' ')}`)
+  return names.map((name) => `${PS[name][column === 'comm=' ? 'comm' : 'args']}\n`).join('')
+}
+
+function assertProcessProbe(probe) {
+  for (const [platform, names, expected, what] of PROCESS_CASES) assert.equal(probe({ platform, run: psRun(names) }), expected, `${platform}: ${what}`)
+  assert.equal(probe({ platform: 'darwin', run: () => { throw new Error('denied') } }), 'unknown', 'a table that cannot be read')
+  assert.equal(probe({ platform: 'win32', run: psRun(['app']) }), 'unknown', 'a platform with no known table')
+}
+
+test('the process probe recognises the app by its executable, never by an argument; what it cannot establish is unknown', () => {
+  assertProcessProbe(defaultObsidianProcessProbe)
+})
+
+test('mutation control: the probe of 0.2.0-alpha.9, which searched every argument, finds the app in the maintenance service itself', () => {
+  const searchesArguments = ({ platform, run }) => {
+    if (platform !== 'darwin' && platform !== 'linux') return 'unknown'
+    try {
+      const table = run('/bin/ps', ['-A', '-o', 'args='], { encoding: 'utf8' })
+      if (typeof table !== 'string' || table.trim() === '') return 'unknown'
+      return /(^|[\\/ ])obsidian(\.app|\.exe|-cli)?([\\/ ]|$)/im.test(table.split('\n').filter((line) => !line.includes('/bin/ps')).join('\n')) ? 'running' : 'absent'
+    } catch {
+      return 'unknown'
+    }
+  }
+  assert.equal(searchesArguments({ platform: 'darwin', run: psRun(['launchd', 'ps', 'service']) }), 'running', 'with the app closed, the service line alone reads as a running app')
+  assert.throws(() => assertProcessProbe(searchesArguments), assert.AssertionError)
 })
 
 test('the direct path reads the process table again immediately before the first note: an app started during staging stops it', needsExchange, async (t) => {

@@ -117,18 +117,39 @@ export function createObsidianCliCall({ cliPath = defaultCliPath(), env = proces
   })
 }
 
+// The app is recognised by the executable a process runs, never by its
+// arguments: a path argument with an `obsidian` segment (this package's own
+// maintenance service, its private data root) is not the app. `ps -o comm=`
+// names the executable as it was started on macOS, usually its full path, and
+// by its command name of at most 15 characters on Linux.
+//
+//   macOS  `Obsidian` and the bundle's `Obsidian Helper…` processes, in any
+//          directory: a moved or renamed bundle still counts, and so does a
+//          process whose path ps cannot read and names by its short name.
+//   Linux  `obsidian`, the executable of the .deb, snap, AppImage and Flatpak
+//          builds. A distribution that runs the app under a system Electron
+//          shows only `electron`, and which app it hosts is not known.
+//
+// The command-line tool is a client of the app, not the app: counting it would
+// make every call this package makes through it look like a running app.
+const APP_EXECUTABLE = Object.freeze({ darwin: /^obsidian(?: helper\b.*)?$/i, linux: /^obsidian$/i })
+const ELECTRON_HOST = /^\.?electron(?:\d+|-wrap.*)?$/i
+
 // Default process probe: 'absent' only when the process table was read and
 // holds no Obsidian. Limits: it sees this machine's processes as this user
 // can list them; it cannot see an app on another machine that reaches the
 // vault through a shared or synchronized folder, an app packaged under another
 // executable name, or an app that starts after the probe. Anything it cannot
-// establish is 'unknown', which the adapter treats as a running app.
+// establish is 'unknown', which the adapter treats as a running app: an empty
+// table, a failed read, and on Linux a system Electron process.
 export function defaultObsidianProcessProbe({ platform = process.platform, run = execFileSync } = {}) {
-  if (platform !== 'darwin' && platform !== 'linux') return 'unknown'
+  if (!Object.hasOwn(APP_EXECUTABLE, platform)) return 'unknown'
   try {
-    const table = run('/bin/ps', ['-A', '-o', 'args='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024 })
+    const table = run('/bin/ps', ['-A', '-o', 'comm='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024 })
     if (typeof table !== 'string' || table.trim() === '') return 'unknown'
-    return /(^|[\\/ ])obsidian(\.app|\.exe|-cli)?([\\/ ]|$)/im.test(table.split('\n').filter((line) => !line.includes('/bin/ps')).join('\n')) ? 'running' : 'absent'
+    const names = table.split('\n').map((line) => line.trim()).filter((line) => line !== '').map((line) => line.slice(line.lastIndexOf('/') + 1))
+    if (names.some((name) => APP_EXECUTABLE[platform].test(name))) return 'running'
+    return platform === 'linux' && names.some((name) => ELECTRON_HOST.test(name)) ? 'unknown' : 'absent'
   } catch {
     return 'unknown'
   }

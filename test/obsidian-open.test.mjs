@@ -44,14 +44,14 @@ syncBuiltinESMExports()
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
 const { createEditorAdapter, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
-const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp } = await import('../src/runtime/obsidian/app-capability.mjs')
+const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { loadContributions } = await import('../src/runtime/obsidian/contributions.mjs')
 const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await import('../src/runtime/obsidian/engine.mjs')
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
 const { ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
-const { OPENING_OUTCOMES, OPENING_PRIMITIVES } = await import('../src/runtime/obsidian/opening.mjs')
+const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth } = await import('../src/runtime/obsidian/service-client.mjs')
@@ -142,12 +142,16 @@ const UNREACHABLE_SEAMS = Object.freeze({
 
 // An installed app, as the injected probe describes it, and a launcher that records what it was asked.
 function fakeApp(overrides = {}) {
-  const state = { installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, ...overrides }
+  // `noVaultAnswers`: how many inspections of the running app answer that no vault is open before it has one.
+  const state = { installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0, ...overrides }
   const launches = []
   return {
     state, launches,
     appProbe: {
-      inspect: async () => ({ installed: state.installed, cli: state.cli, running: state.running, version: state.running ? state.version : null }),
+      inspect: async () => {
+        if (state.running && state.noVaultAnswers > 0) { state.noVaultAnswers -= 1; return { installed: state.installed, cli: state.cli, running: true, version: null, noVaultOpen: true } }
+        return { installed: state.installed, cli: state.cli, running: state.running, version: state.running ? state.version : null }
+      },
       vaultState: async ({ vaultRoot }) => ({ answered: state.answered && launches.includes(vaultRoot), indexReady: state.answered && state.indexReady && launches.includes(vaultRoot) }),
     },
     launcher: { open: async ({ vaultRoot }) => { launches.push(vaultRoot); if (state.launchResult.launched && state.comesUp) state.running = true; return state.launchResult } },
@@ -405,6 +409,74 @@ test('the app qualification is typed and fails closed; the qualified adapter fac
   }
 })
 
+// What the command-line tool prints with no vault open, on either stream, with either exit status; and a real version for contrast.
+const NO_VAULT = 'Vault not found.'
+const VERSION_ANSWERS = [
+  [{ stdout: `${NO_VAULT}\n`, exited: true }, 'no-vault-open'],
+  [{ stdout: `${NO_VAULT}\n`, exited: false }, 'no-vault-open'],
+  [{ stderr: `${NO_VAULT}\n`, exited: false }, 'no-vault-open'],
+  [{ stdout: '', stderr: `${NO_VAULT}\n`, exited: true }, 'no-vault-open'],
+  [{ stdout: '1.13.7 (installer 1.12.7)\n', exited: true }, 'meets-minimum-version'],
+  [{ stdout: '1.13.7 (installer 1.12.7)\n', exited: false }, 'version-unknown'],
+  [{ stdout: '', exited: true }, 'version-unknown'],
+  [{ stdout: 'Error: the app did not answer\n', exited: true }, 'version-unreadable'],
+]
+
+// `read` turns one CLI answer into { version, noVaultOpen }; the oracle qualifies a running app with it.
+function assertNoVaultIsNotAVersion(read) {
+  for (const [answer, reason] of VERSION_ANSWERS) {
+    const { version, noVaultOpen } = read(answer)
+    const qualification = qualifyApp({ installed: true, cli: true, running: true, version, ...(noVaultOpen ? { noVaultOpen } : {}) }, { requireVersion: false })
+    assert.equal(qualification.reason, reason, JSON.stringify(answer))
+    if (reason === 'no-vault-open') assert.deepEqual([qualification.outcome, qualification.version], ['app-version-unsupported', null], 'the answer is not recorded as a version')
+  }
+}
+
+test('an app that runs with no vault open answers "Vault not found." to every command; that is the reason no-vault-open, never a version, and it does not qualify', () => {
+  assertNoVaultIsNotAVersion(readVersionAnswer)
+  assert.deepEqual(readVersionAnswer({ stdout: NO_VAULT }), { version: null, noVaultOpen: true })
+  // The answer proves the app runs, so the path for an app that is positively not running does not apply.
+  for (const running of [true, false, null]) {
+    for (const requireVersion of [true, false]) assert.equal(qualifyApp({ installed: true, cli: true, running, version: null, noVaultOpen: true }, { requireVersion }).reason, 'no-vault-open', `running ${running}, requireVersion ${requireVersion}`)
+  }
+  const built = []
+  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => ({ installed: true, cli: true, running: true, version: null, noVaultOpen: true }) }, createAdapter: (input) => { built.push(input); return { kind: 'fake' } } })
+  assert.throws(() => factory({}), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'app-version-unsupported' && error.detail.reason === 'no-vault-open')
+  assert.deepEqual([built.length, factory.lastQualification().reason], [0, 'no-vault-open'], 'nothing is published through it')
+})
+
+test('mutation control: reading the answer of 0.2.0-alpha.9, which took any successful output as the version, records "Vault not found." as a version', () => {
+  const tookAnyOutput = ({ stdout = '', exited = true }) => ({ version: exited && typeof stdout === 'string' && stdout.trim() !== '' ? stdout.trim() : null, noVaultOpen: false })
+  assert.equal(tookAnyOutput({ stdout: `${NO_VAULT}\n` }).version, NO_VAULT)
+  assert.throws(() => assertNoVaultIsNotAVersion(tookAnyOutput), assert.AssertionError)
+})
+
+test('the production app probe reads both output streams of the version call, with either exit status', (t) => {
+  // The command-line tool is played by this Node binary running a script named `version` in the child's directory, so the
+  // same arrangement runs on every platform. `win32` keeps the process table out of it: the version is always asked.
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-version-answer-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(dir, 'version'), "process[process.env.ANSWER_STREAM].write(process.env.ANSWER_TEXT + '\\n'); process.exitCode = Number(process.env.ANSWER_STATUS)\n")
+  const cases = [['stdout', NO_VAULT, 0], ['stdout', NO_VAULT, 1], ['stderr', NO_VAULT, 1], ['stderr', NO_VAULT, 0], ['stdout', '1.13.7 (installer 1.12.7)', 0], ['stdout', '1.13.7 (installer 1.12.7)', 1]]
+  const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
+  const script = `const { createProductionAppProbe } = await import(${JSON.stringify(seams)})
+const seen = []
+for (const [stream, text, status] of ${JSON.stringify(cases)}) {
+  const probe = createProductionAppProbe({ platform: 'win32', cliPath: process.execPath, env: { ...process.env, ANSWER_STREAM: stream, ANSWER_TEXT: text, ANSWER_STATUS: String(status) } })
+  seen.push({ sync: probe.inspectSync(), async: await probe.inspect() })
+}
+process.stdout.write(JSON.stringify(seen))`
+  const child = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 60000 })
+  assert.equal(child.status, 0, child.stderr)
+  const seen = JSON.parse(child.stdout)
+  const expected = ['no-vault-open', 'no-vault-open', 'no-vault-open', 'no-vault-open', 'meets-minimum-version', 'version-unknown']
+  for (const [index, { sync, async }] of seen.entries()) {
+    assert.deepEqual(sync, async, `${cases[index].join(' ')}: both probes read the same answer`)
+    assert.deepEqual([sync.installed, sync.cli, qualifyApp(sync, { requireVersion: false }).reason], [true, true, expected[index]], cases[index].join(' '))
+    if (expected[index] === 'no-vault-open') assert.deepEqual([sync.version, sync.noVaultOpen], [null, true])
+  }
+})
+
 async function assertUnqualifiedAppIsNeverPublishedThrough(t, factoryOf) {
   const world = makeWorld(t)
   const published = []
@@ -426,8 +498,21 @@ test('a service whose adapter factory qualified an app says what it learned in i
   const adapterFactory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => ({ installed: true, cli: true, running: true, version: '1.12.4' }) }, createAdapter: absentAdapter })
   await world.service({ adapterFactory, appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } } })
   const status = await world.run(['status', '--json'])
-  assert.deepEqual(status.json.service.app, { outcome: 'app-version-unsupported', reason: 'below-minimum-version', version: '1.12.4', floor: MINIMUM_APP_VERSION })
+  assert.deepEqual(status.json.service.app, { outcome: 'app-version-unsupported', reason: 'below-minimum-version', version: '1.12.4', floor: MINIMUM_APP_VERSION, next: OPENING_OUTCOMES['app-version-unsupported'].next })
   assert.deepEqual([status.json.scopes[0].outcome, status.json.scopes[0].reason, fs.readdirSync(world.vault()).filter((name) => name.endsWith('.md')).length], ['not-prepared', 'app-version-unsupported', 0], 'nothing was published through it')
+})
+
+test('a service that found the app running with no vault open says so, and status tells the person to open a vault or quit the app', async (t) => {
+  const world = makeWorld(t)
+  const adapterFactory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => ({ installed: true, cli: true, running: true, version: null, noVaultOpen: true }) }, createAdapter: absentAdapter })
+  await world.service({ adapterFactory, appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } } })
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual(status.json.service.app, { outcome: 'app-version-unsupported', reason: 'no-vault-open', version: null, floor: MINIMUM_APP_VERSION, next: REASON_NEXT['no-vault-open'] })
+  assert.match(REASON_NEXT['no-vault-open'], /open any vault in Obsidian, or quit Obsidian/)
+  assert.equal(fs.readdirSync(world.vault()).filter((name) => name.endsWith('.md')).length, 0, 'nothing was published through it')
+  const lines = (await world.run(['status'])).stdout.split('\n')
+  assert.ok(lines.some((line) => line.includes('app app-version-unsupported (no-vault-open)')), lines.join('\n'))
+  assert.ok(lines.includes(`Next for the app: ${REASON_NEXT['no-vault-open']}`), lines.join('\n'))
 })
 
 test('mutation control: a factory that does not look at the version fails the floor oracle', async (t) => {
@@ -606,6 +691,17 @@ test('an app below the floor is never launched; one that turns out to be below i
   assert.deepEqual([neverUp.result.json.outcome, neverUp.result.json.reason], ['app-version-unsupported', 'version-unknown'], 'an app whose version never becomes known is not qualified')
   const otherVault = await openWithApp(t, undefined, { answered: false })
   assert.deepEqual([otherVault.result.json.outcome, otherVault.result.json.reason], ['launch-failed', 'app-did-not-answer-for-this-vault'])
+})
+
+test('open with the app running and no vault open launches nothing and says to open a vault or quit the app; an app that opens its vault after the launch is waited for', needsExchange, async (t) => {
+  const noVault = await openWithApp(t, undefined, { running: true, noVaultAnswers: Number.POSITIVE_INFINITY })
+  assert.deepEqual([noVault.result.json.outcome, noVault.result.json.reason, noVault.result.json.next, noVault.app.launches.length, noVault.result.json.launched], ['app-version-unsupported', 'no-vault-open', REASON_NEXT['no-vault-open'], 0, false])
+  assert.equal(noVault.result.json.app.version, null)
+  // Started by the launch, the app answers with no vault open while it is still opening the one it was asked for.
+  const opening = await openWithApp(t, undefined, { running: false, noVaultAnswers: 2 })
+  assert.deepEqual([opening.result.json.outcome, opening.app.launches.length, opening.app.state.noVaultAnswers], ['current', 1, 0])
+  const neverOpens = await openWithApp(t, undefined, { running: false, noVaultAnswers: Number.POSITIVE_INFINITY })
+  assert.deepEqual([neverOpens.result.json.outcome, neverOpens.result.json.reason, neverOpens.result.json.next, neverOpens.result.json.launched], ['app-version-unsupported', 'no-vault-open', REASON_NEXT['no-vault-open'], true])
 })
 
 test('mutation control: an open that skips the app prerequisites reports current for an app below the floor', needsExchange, async (t) => {
@@ -1240,4 +1336,11 @@ test('no process this suite started is left behind, no banned program was asked 
   assert.deepEqual(left.map((entry) => `pid ${entry.pid} started by "${entry.test}"`), [])
   assert.deepEqual(guardErrors, [], 'the spawn guard never fired outside its own test')
   assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
+})
+
+test('a publisher refusal for an app without this vault open advises quitting the app, not waiting for another publisher', () => {
+  const next = nextStep('publisher-conflict', 'editor-uncoordinated')
+  assert.match(next, /quit Obsidian/)
+  assert.doesNotMatch(next, /other publisher/)
+  assert.match(nextStep('publisher-conflict', 'publication-in-progress'), /other publisher/, 'a real concurrent publisher keeps its advice')
 })

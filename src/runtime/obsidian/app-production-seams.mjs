@@ -1,7 +1,8 @@
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { defaultCliPath, defaultObsidianProcessProbe } from '../../projection/obsidian/publication/transport.mjs'
+import { readVersionAnswer } from './app-capability.mjs'
 
 // The production seams of `obsidian open` and of the service's adapter
 // factory: the only code that asks the installed Obsidian anything or asks the
@@ -31,15 +32,18 @@ function cliExists(cliPath) {
   try { return fs.statSync(cliPath).isFile() } catch { return false }
 }
 
-const observationOf = ({ platform, cliPath, processes, versionText }) => {
+const NOT_ASKED = Object.freeze({ version: null, noVaultOpen: false })
+
+const observationOf = ({ platform, cliPath, processes, answer }) => {
   const appPath = installedAppPath(platform)
   const present = cliExists(cliPath)
-  const answered = typeof versionText === 'string' && versionText.trim() !== ''
+  const answered = answer.version !== null || answer.noVaultOpen
   return {
     installed: appPath === null ? (present !== false && (answered || present === true)) : fs.existsSync(appPath),
     cli: present === true || answered,
     running: processes === 'running' ? true : processes === 'absent' ? false : null,
-    version: answered ? versionText.trim() : null,
+    version: answer.version,
+    ...(answer.noVaultOpen ? { noVaultOpen: true } : {}),
   }
 }
 
@@ -47,17 +51,22 @@ export function createProductionAppProbe({ platform = process.platform, env = pr
   const options = { env, timeout: CLI_TIMEOUT_MS, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }
   return {
     // For the service's adapter factory, which is synchronous. The version is asked for only while an app runs.
+    // Both output streams are read, whatever the exit status: the answer with no vault open is not a version.
     inspectSync() {
       const processes = defaultObsidianProcessProbe({ platform })
-      let versionText = null
-      if (processes !== 'absent') { try { versionText = execFileSync(cliPath, ['version'], { ...options, stdio: ['ignore', 'pipe', 'ignore'] }) } catch { versionText = null } }
-      return observationOf({ platform, cliPath, processes, versionText })
+      if (processes === 'absent') return observationOf({ platform, cliPath, processes, answer: NOT_ASKED })
+      let answer = NOT_ASKED
+      try {
+        const reply = spawnSync(cliPath, ['version'], { ...options, stdio: ['ignore', 'pipe', 'pipe'] })
+        answer = readVersionAnswer({ stdout: reply.stdout, stderr: reply.stderr, exited: reply.error === undefined && reply.status === 0 })
+      } catch { answer = NOT_ASKED }
+      return observationOf({ platform, cliPath, processes, answer })
     },
     inspect() {
       const processes = defaultObsidianProcessProbe({ platform })
-      if (processes === 'absent') return Promise.resolve(observationOf({ platform, cliPath, processes, versionText: null }))
+      if (processes === 'absent') return Promise.resolve(observationOf({ platform, cliPath, processes, answer: NOT_ASKED }))
       return new Promise((resolve) => {
-        execFile(cliPath, ['version'], options, (error, stdout) => resolve(observationOf({ platform, cliPath, processes, versionText: error ? null : stdout })))
+        execFile(cliPath, ['version'], options, (error, stdout, stderr) => resolve(observationOf({ platform, cliPath, processes, answer: readVersionAnswer({ stdout, stderr, exited: !error }) })))
       })
     },
     // Whether the app answers for exactly this vault and has finished reading it.

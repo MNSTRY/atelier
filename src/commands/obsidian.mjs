@@ -16,7 +16,7 @@ import {
   authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readInstalledApplyPolicy, readMachineSettings,
   revokeApplyPolicy, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
-import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
+import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
 import { serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
@@ -187,6 +187,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const { project, enablement, workspace, workspaceId } = readable()
         const service = enablement.reason === 'not-configured' ? { state: 'stopped', reason: 'not-configured' } : await serviceStatus(lifecycle, lifecycleRules)
         const running = service.state === 'healthy' ? (await readServiceStatusDocument(lifecycle, lifecycleRules)).document : null
+        // What the service last learned about the app, and what a person can do about it.
+        const app = running?.app ? { ...running.app, next: running.app.outcome === 'qualified' ? null : nextStep(running.app.outcome, running.app.reason) } : null
         const scopes = workspace === null
           ? enablement.scopes.map(({ scopeId }) => ({ scopeId, outcome: enablement.state === 'disabled' ? 'disabled' : 'not-prepared', reason: enablement.state === 'disabled' ? enablement.reason : 'workspace-not-prepared' }))
           : enablement.scopes.map(({ scopeId }) => {
@@ -196,14 +198,15 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const document = {
           enablement: { state: enablement.state, reason: enablement.reason, defaultScopeId: enablement.defaultScopeId }, workspace: { workspaceId, prepared: workspace !== null },
           machine: shownMachine(machineOf(workspace), workspace), apply: applyShown,
-          service: { state: service.state, reason: service.reason ?? null, address: service.address ?? null, runtimeId: service.record?.runtimeId ?? null, pid: service.record?.pid ?? null, lastTick: running?.lastTick ?? null, lastError: running?.lastError ?? null, app: running?.app ?? null },
+          service: { state: service.state, reason: service.reason ?? null, address: service.address ?? null, runtimeId: service.record?.runtimeId ?? null, pid: service.record?.pid ?? null, lastTick: running?.lastTick ?? null, lastError: running?.lastError ?? null, app },
           app: { probed: false, minimumVersion: MINIMUM_APP_VERSION }, scopes, extensions: registry.extensions.describe(), operations: registry.operations.describe(),
         }
         return {
           exit: EXIT.ok, document,
           human: [
             `obsidian: ${enablement.state} (${enablement.reason}); mode ${document.machine.maintenanceMode}; audiences ${document.machine.audienceAllow.join(', ') || 'none'}`,
-            `service: ${service.state} (${service.reason ?? 'no reason'})${running?.app ? `; app ${running.app.outcome}` : ''}`,
+            `service: ${service.state} (${service.reason ?? 'no reason'})${app ? `; app ${app.outcome} (${app.reason})` : ''}`,
+            ...(app?.next ? [`Next for the app: ${app.next}`] : []),
             `apply: ${applyShown.state}`,
             ...scopes.map((scope) => `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}`),
           ],
