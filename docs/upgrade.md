@@ -9,6 +9,14 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.9
+
+This release fixes a defect in 0.2.0-alpha.8: the Obsidian maintenance service
+could not start from the published package (`atelier obsidian service start`
+reported `start-failed` with `service-exited-13`). Upgrade from 0.2.0-alpha.8
+directly; nothing else changes and no project or machine setting needs to be
+touched. 0.2.0-alpha.8 is deprecated.
+
 ## Upgrading to 0.2.0-alpha.8
 
 This release adds typed advisory decision contracts and an experimental,
@@ -158,7 +166,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.8
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.9
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -166,7 +174,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.8"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.9"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
