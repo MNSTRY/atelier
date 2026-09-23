@@ -270,6 +270,74 @@ supported API. The whole surface is alpha and may change between prereleases.
 What the tarball must and must not carry, and the package proof, are in
 [release-engineering.md](release-engineering.md#obsidian-package-contents).
 
+## First vault: what to expect
+
+This is the path an adopter walks on one machine, in the order the command
+requires it. Every operation and flag below is the shipped `atelier obsidian`
+usage text; `atelier obsidian --help` prints it.
+
+1. Enable the projection in the project configuration. The member
+   `ext["mnstry.atelier.obsidian"]` is an `atelier-obsidian-ext-settings/v1`
+   document: `enabled: true`, `scopes` (each with a `scopeId`, a `mode` of
+   `full`, `scoped` or `focus`, a `selector`, and for an expansion an explicit
+   `depth` and `maxNodes`), and optionally `defaultScopeId`. A project without
+   this member is `disabled (not-configured)` and nothing is published.
+   `atelier obsidian scope list` shows what was declared.
+2. Set the private machine settings. They live outside every repository and
+   are never committed:
+   - `atelier obsidian audience set A,B` names the audiences this machine lets
+     into a view. No audience is admitted by default, so a view is empty until
+     one is set; `audience clear` empties it again.
+   - `atelier obsidian mode set manual` keeps every queued edit waiting for a
+     person. `mode set automatic` is refused until an active automatic policy
+     is installed.
+   - `atelier obsidian policy digest FILE` prints the digest the policy file
+     has to carry; `policy install FILE` installs it and leaves the mode
+     unchanged; `policy revoke` returns the mode to `manual` and stops every
+     later apply.
+3. Start the maintenance service:
+   `atelier obsidian service start --consent-actor ID --adapter=obsidian-cli`.
+   Reaching the installed app is never a default, so `--adapter=obsidian-cli`
+   is required, and the consent actor records who allowed the service to run.
+   `service status` and `service stop` manage it; `service unit --print
+   --adapter=obsidian-cli` prints a startup unit and installs nothing.
+4. Open a view: `atelier obsidian open --scope ID --adapter=obsidian-cli`.
+   The command starts or reconnects maintenance, verifies the vault by reading
+   it back, and asks the app (version 1.13.7 or later) to open it.
+
+`open` and `status` answer with a freshness state, not a promise. `current`
+means the vault is the present generation, verified by read-back, and the app
+has it open. `updating` means maintenance is publishing or has not finished.
+`stale-readable` means a last good vault exists but is not proven current;
+`open --allow-stale` opens it as it is. `not-prepared` means no generation has
+been published yet. `held-for-your-edit` means a note you edited is preserved
+and the view is not republished over it. The remaining outcomes (`indexing`,
+`publisher-conflict`, `app-missing`, `app-version-unsupported`,
+`app-cli-unavailable`, `launch-failed`, `service-unavailable`, `busy`,
+`disabled`) each name what to do next, and exit code 3 says the answer is not
+success.
+
+Edits made in the vault are preserved before anything is republished. A body
+replacement is held as a pending edit; under manual mode it reaches its source
+file only through `atelier obsidian apply run EDIT [--actor ID]`, after
+`apply list` and `apply show EDIT` named it. An applied edit changes the source
+file and nothing is staged or committed. Under automatic mode the engine
+applies body replacements itself under the installed policy, and revocation is
+read again before every one. An edit that is not a body replacement, such as a
+new or changed link to another note or an edited front matter, becomes a
+copy-only proposal in the owning repository's proposal store; `atelier obsidian
+proposals list` and `proposals show OPERATION` read them, and nothing applies
+one. A body edit to a note whose source uses CRLF line endings is also a
+proposal, never an apply, because the app normalizes line endings on save.
+
+The vault itself lives under the private data root, outside every repository:
+`~/Library/Application Support/Atelier` on macOS, `$XDG_DATA_HOME/atelier`
+(else `~/.local/share/atelier`) on Linux and `%LOCALAPPDATA%\Atelier` on
+Windows, under `obsidian/<workspace-id>/`. `--data-root DIR` names another
+absolute directory. Private state inside an enrolled repository is refused.
+Publication is proven on macOS arm64 only and is refused on Windows; see
+[Known limits](#known-limits).
+
 ## Known limits
 
 These are the limits known at this release. None is hidden behind a skipped

@@ -9,6 +9,19 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.8
+
+This release adds typed advisory decision contracts and an experimental,
+opt-in Obsidian projection. Nothing is published for a project that does not
+enable `ext["mnstry.atelier.obsidian"]`; see [obsidian.md](obsidian.md).
+
+The link resolver that produces `links_to` edges changed in five classes
+(links inside code and front matter, directory links, links that climb above
+the repository root, malformed percent-encoding, and workspace-only wikilink
+and cross-repository edges). Regenerate committed graph artifacts after
+upgrading and review the difference; the classes are listed in the changelog
+and in [obsidian-contract.md](obsidian-contract.md).
+
 ## Upgrading to 0.2.0-alpha.7
 
 This release adds optional evidence-bound local review and the external-project
@@ -145,7 +158,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.7
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.8
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -153,7 +166,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.7"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.8"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
