@@ -62,7 +62,8 @@
   ],
   "compatibility": {
     "atelierVersions": [
-      "0.2.0-alpha.7"
+      "0.2.0-alpha.7",
+      "0.2.0-alpha.8"
     ],
     "packRefs": []
   },
