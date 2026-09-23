@@ -35,6 +35,9 @@ See the [responsibility architecture](docs/architecture.md) for Inquiry, Knowled
 Stewardship, Practical Judgment, Creation and Delivery, Capability Stewardship,
 Reflection, Interaction and Coordination. Start a provider-neutral research
 workflow with the [research starter](docs/research-starter.md).
+Use [portable template profiles](docs/template-profile.md) to bind semantic and
+surface roles to canonical sources, with optional advisory decisions and
+separate host and release validation.
 
 ## From files to a working system
 

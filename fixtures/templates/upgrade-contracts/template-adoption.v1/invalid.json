@@ -1,0 +1,60 @@
+{
+  "schema": "mnstry.atelier-template-adoption@v1",
+  "participant": "local-template-profile@1",
+  "templateRef": {
+    "kind": "TemplateRef",
+    "id": "sample.library",
+    "version": "1.0.0",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "bindingRef": {
+    "kind": "BindingRef",
+    "id": "sample.binding",
+    "version": "1.0.0",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "inputs": {
+    "profile": {
+      "path": "next-profile.json",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "selection": {
+      "path": "next-selection.json",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "previousAdoptionDigest": null,
+  "managed": [
+    {
+      "path": "atelier-template/profile.json",
+      "state": {
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mode": "100644"
+      }
+    },
+    {
+      "path": "atelier-template/selection.json",
+      "state": {
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mode": "100644"
+      }
+    },
+    {
+      "path": "atelier-output/template.html",
+      "state": {
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mode": "100644"
+      }
+    },
+    {
+      "path": "atelier-output/template-binding.json",
+      "state": {
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mode": "100644"
+      }
+    }
+  ],
+  "ext": {
+    "execute": true
+  }
+}

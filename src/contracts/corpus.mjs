@@ -26,6 +26,12 @@ import { fileURLToPath } from 'node:url'
 // document, not a schema, and is deliberately absent.
 
 export const CONTRACT_CORPUS = [
+  { name: 'atelier-template-profile', contractFile: 'contracts/atelier-template-profile.v1.schema.json', validFiles: ['fixtures/templates/local-library.v1.json'], registry: false },
+  ...['adoption-policy.v2', 'migration.v3', 'template-adoption.v1', 'upgrade-plan.v3'].map(shape => ({
+    name: `atelier-template-${shape}`, contractFile: `contracts/atelier-${shape}.schema.json`,
+    validFiles: [`fixtures/templates/upgrade-contracts/${shape}/valid.json`],
+    invalidFiles: [`fixtures/templates/upgrade-contracts/${shape}/invalid.json`], registry: false,
+  })),
   { name: 'atelier-decision-request', contractFile: 'contracts/atelier-decision-request.v1.schema.json', fixtureRoot: 'fixtures/decisions/request', registry: false },
   { name: 'atelier-decision-result', contractFile: 'contracts/atelier-decision-result.v1.schema.json', fixtureRoot: 'fixtures/decisions/result', registry: false },
   ...Object.entries({ interaction: ['observation', 'assessment', 'act', 'policy'], coordination: ['outcome', 'dependency', 'directive', 'disposition', 'recovery'] }).flatMap(([profile, shapes]) => shapes.map(shape => ({ name: `atelier-${profile}-${shape}`, contractFile: `contracts/atelier-${profile}.v1.schema.json`, docPointer: `#/$defs/${shape}`, fixtureRoot: `fixtures/atelier-${profile}/${shape}`, registry: true }))),

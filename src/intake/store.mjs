@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { canonicalize } from '../attestation/jcs.mjs';
 import { validateJsonSchema } from '../export/atelier-export-contract.mjs';
 import { ensureContainedPrivateDirectory, openRegularFileNoFollow } from '../project/private-state.mjs';
+import { registerIntakeReadScope } from './read-scope.mjs';
 
 export const INTAKE_MAX_BYTES = 16 * 1024 * 1024;
 const schema = JSON.parse(fs.readFileSync(new URL('../../contracts/atelier-intake.v1.schema.json', import.meta.url), 'utf8'));
@@ -34,21 +35,44 @@ function immutable(file, bytes) {
 // authority. Callers retain their source trees and choose their existing extractor.
 export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
   const root = fs.realpathSync(workspaceRoot);
-  function placement() {
+  let readScopeActive = false, placementChecked = false;
+  function placement(force = false) {
+    if (readScopeActive && placementChecked && !force) return;
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
     try {
       if (execFileSync('git', ['-C', root, 'ls-files', '-z', '--', '.atelier-local'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) throw new Error('tracked state');
       execFileSync('git', ['-C', root, 'check-ignore', '--quiet', '.atelier-local/'], { env, stdio: 'ignore' });
     } catch { throw new Error('intake requires ignored, untracked .atelier-local/ in a Git workspace'); }
+    placementChecked = readScopeActive;
   }
   placement();
+  function readScope(read) {
+    const active = readScopeActive;
+    readScopeActive = true; placementChecked = false;
+    try {
+      placement();
+      const result = read();
+      // Result inspection must not pass admission to a thenable's accessor,
+      // and asynchronous work must obtain fresh admission after it resumes.
+      readScopeActive = false; placementChecked = false;
+      if (typeof result?.then === 'function') throw new Error('intake read scope requires a synchronous result');
+      // No result escapes if placement changed during the read-only operation.
+      placement(true);
+      return result;
+    } finally { readScopeActive = active; placementChecked = false; }
+  }
   function directory(...parts) {
     return ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, '.atelier-local', 'intake', ...parts), label: 'intake state' });
   }
   function locked(fn) {
-    placement();
-    const file = path.join(directory(), 'operation.lock');
-    return withPrivateLock(file, fn);
+    // A mutation cannot inherit or leave behind read-scope admission.
+    const active = readScopeActive;
+    readScopeActive = false; placementChecked = false;
+    try {
+      placement();
+      const file = path.join(directory(), 'operation.lock');
+      return withPrivateLock(file, fn);
+    } finally { readScopeActive = active; placementChecked = false; }
   }
   function sourceFile(ref) {
     if (typeof ref !== 'string' || !ref || path.isAbsolute(ref) || ref.includes('\\') ||
@@ -66,7 +90,7 @@ export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
     return bytes;
   }
   function record(dir, name, value) { valid(value); immutable(path.join(dir, name), canonicalize(value) + '\n'); return value; }
-  return Object.freeze({
+  const store = Object.freeze({
     // Explicit current-source reads stay behind intake's containment and byte
     // checks. They do not enroll a source or interpret its contents.
     readSource({ ref, expectedDigest } = {}) {
@@ -153,4 +177,6 @@ export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
       return receipt;
     },
   });
+  registerIntakeReadScope(store, readScope);
+  return store;
 }

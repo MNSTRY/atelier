@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { canonicalize } from '../attestation/jcs.mjs';
 import { createIntakeStore, intakeDigest, INTAKE_MAX_BYTES } from '../intake/store.mjs';
+import { withIntakeReadScope } from '../intake/read-scope.mjs';
 import { ensureContainedPrivateDirectory, openRegularFileNoFollow } from '../project/private-state.mjs';
 import { withPrivateLock, publishPrivateFile, createVerifiedFileSequence, isPendingPrivateWrite } from '../project/durable-state.mjs';
 import { describeIngestionProcessor, extractIngestionEvidence } from './processors.mjs';
@@ -267,13 +268,13 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
       if (new Set(input.sources.map(source => source.id)).size !== input.sources.length) refuse('INGESTION_INVALID', 'source identifiers must be unique');
       return withPrivateLock(path.join(directory(), 'operation.lock'), () => {
         checkIdentity();
-        const items = input.sources.map(source => {
+        const items = withIntakeReadScope(intake, () => input.sources.map(source => {
           const processor = valid('processor', describeIngestionProcessor(source.ref));
           try {
             const current = intake.readSource({ ref: source.ref });
             return { ...source, sourceDigest: current.digest, inputBytes: current.bytes.length, processor, initialStatus: 'pending', reason: 'awaiting-explicit-run' };
           } catch (error) { return { ...source, sourceDigest: null, inputBytes: null, processor, initialStatus: 'unavailable', reason: sourceReason(error) }; }
-        });
+        }));
         const body = { schema: schema('plan'), workspaceId, createdAt: new Date().toISOString(), nonce: randomUUID(), scope: input.scope, purpose: input.purpose, budget: input.budget, items, census: 'explicit-selection-only', semanticAcceptance: 'pending' };
         const planId = `plan-${ingestionDigest(body).slice(7, 47)}`;
         const plan = valid('plan', { ...body, planId, planDigest: ingestionDigest({ ...body, planId }) });
@@ -294,34 +295,40 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
           if (processed++ >= maxItems) break;
           handle = processItem(handle, item);
         }
-        return statusFrom(handle);
+        return withIntakeReadScope(intake, () => statusFrom(handle));
       });
     },
-    status(reference) { return statusFrom(load(exactRequest(reference, ['planId', 'planDigest']))); },
+    status(reference) {
+      const handle = load(exactRequest(reference, ['planId', 'planDigest']));
+      return withIntakeReadScope(intake, () => statusFrom(handle));
+    },
     query(input = {}) {
       const { planId, planDigest, query, limit = 20 } = exactRequest(input, ['planId', 'planDigest', 'query', 'limit']);
       if (typeof query !== 'string' || !query.trim() || query.length > 512 || !Number.isInteger(limit) || limit < 1 || limit > 100) refuse('INGESTION_INVALID', 'query requires bounded text and a limit from 1 to 100');
       const terms = query.toLowerCase().trim().split(/\s+/u);
       if (terms.length > 32) refuse('INGESTION_INVALID', 'query has too many terms');
-      const handle = load({ planId, planDigest }), status = statusFrom(handle), hits = [], omissions = [];
-      let matched = 0;
-      for (const item of status.items) {
-        if (item.status === 'complete') {
-          try { intake.readSource({ ref: item.ref, expectedDigest: item.sourceDigest }); item.freshness = 'current'; }
-          catch (error) { item.status = 'stale'; item.reason = sourceReason(error); item.freshness = 'stale'; }
-        }
-        if (item.status !== 'complete') { omissions.push({ sourceId: item.id, status: item.status, reason: item.reason }); continue; }
-        try {
-          const extraction = extractionFor(item, handle.state.reservations.get(item.id), intake.readAttempt(item.attemptId));
-          for (const evidence of extraction.evidence) {
-            if (!terms.every(term => evidence.text.toLowerCase().includes(term))) continue;
-            matched++;
-            if (hits.length < limit) hits.push({ sourceId: item.id, ref: item.ref, sourceDigest: item.sourceDigest, attemptId: item.attemptId, locator: evidence.locator, text: evidence.text });
+      const handle = load({ planId, planDigest });
+      return withIntakeReadScope(intake, () => {
+        const status = statusFrom(handle), hits = [], omissions = [];
+        let matched = 0;
+        for (const item of status.items) {
+          if (item.status === 'complete') {
+            try { intake.readSource({ ref: item.ref, expectedDigest: item.sourceDigest }); item.freshness = 'current'; }
+            catch (error) { item.status = 'stale'; item.reason = sourceReason(error); item.freshness = 'stale'; }
           }
-        } catch { item.status = 'failed'; item.reason = 'stored-evidence-integrity-refused'; omissions.push({ sourceId: item.id, status: item.status, reason: item.reason }); }
-      }
-      status.progress = progressOf(status.items); status.complete = status.progress.byStatus.complete === status.items.length; status.settled = status.progress.remaining === 0;
-      return { schema: schema('query'), planId, planDigest, query, hits, matched, truncated: matched > hits.length, omissions, status, semanticAcceptance: 'pending', synthesized: false };
+          if (item.status !== 'complete') { omissions.push({ sourceId: item.id, status: item.status, reason: item.reason }); continue; }
+          try {
+            const extraction = extractionFor(item, handle.state.reservations.get(item.id), intake.readAttempt(item.attemptId));
+            for (const evidence of extraction.evidence) {
+              if (!terms.every(term => evidence.text.toLowerCase().includes(term))) continue;
+              matched++;
+              if (hits.length < limit) hits.push({ sourceId: item.id, ref: item.ref, sourceDigest: item.sourceDigest, attemptId: item.attemptId, locator: evidence.locator, text: evidence.text });
+            }
+          } catch { item.status = 'failed'; item.reason = 'stored-evidence-integrity-refused'; omissions.push({ sourceId: item.id, status: item.status, reason: item.reason }); }
+        }
+        status.progress = progressOf(status.items); status.complete = status.progress.byStatus.complete === status.items.length; status.settled = status.progress.remaining === 0;
+        return { schema: schema('query'), planId, planDigest, query, hits, matched, truncated: matched > hits.length, omissions, status, semanticAcceptance: 'pending', synthesized: false };
+      });
     },
   });
 }

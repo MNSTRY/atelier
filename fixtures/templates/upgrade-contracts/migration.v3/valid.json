@@ -1,0 +1,21 @@
+{
+  "schema": "mnstry.atelier-migration@v3",
+  "id": "local-template-profile@1",
+  "executorDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "readScope": "whole-enrolled-repository",
+  "allowedWrites": [
+    "atelier.lock.json"
+  ],
+  "sideEffects": [
+    "git-index",
+    "git-commit"
+  ],
+  "postChecks": [
+    "exact-inventory",
+    "lock-schema",
+    "exact-index",
+    "commit-parent-tree-message",
+    "template-adoption",
+    "template-current-source"
+  ]
+}

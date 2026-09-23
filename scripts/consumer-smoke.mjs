@@ -14,6 +14,7 @@ import { verifyInstalledInquiry } from './inquiry-consumer-smoke.mjs'
 import { verifyInstalledKnowledgeIngestion } from './knowledge-ingestion-consumer-smoke.mjs'
 import { verifyInstalledResponsibilities } from './responsibility-consumer-smoke.mjs'
 import { verifyInstalledLearning } from './learning-consumer-smoke.mjs'
+import { verifyInstalledTemplates } from './template-consumer-smoke.mjs'
 import { execNpmSync } from './npm-cli.mjs'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -229,6 +230,7 @@ if (!validateDecisionAnswers(request.questions, result.answers).ok) throw new Er
   await verifyInstalledLearning({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
   await verifyInstalledResponsibilities({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
   await verifyInstalledKnowledgeIngestion({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
+  verifyInstalledTemplates({ installedRoot: join(tempRoot, 'node_modules', '@mnstry', 'atelier'), consumerRoot: tempRoot })
 
   // Exercise the actual launch config with root and parent-hoisted installs.
   for (const target of [join(tempRoot, 'nested', 'workspace'), tempRoot]) {

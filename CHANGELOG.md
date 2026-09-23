@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add portable template profiles, digest-bound project bindings, staged structural
+  validation and canonical read-only presentation through installed package APIs.
+- Add explicit local template adoption and updates through the existing exact-plan
+  upgrade engine, preserving source, local customization and adoption history.
+- Reuse Git placement checks within synchronous ingestion read operations;
+  recheck at operation boundaries and around writes without caching source bytes
+  or integrity verdicts.
+
 - Preserve recorded Trackable calendar resolutions across host timezone-data changes; retain verified-chain export when legacy replay cannot reconstruct state.
 
 - Correct unchanged instruction re-adoption and preserve literal replacement text during revisions; add recovery and neighboring-slot regressions.
