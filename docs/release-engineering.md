@@ -300,6 +300,13 @@ A version bump touches exactly:
 - `CHANGELOG.md` (a `## <version>` heading)
 - the pinned install tags in `README.md`, `docs/install.md`,
   and `docs/upgrade.md`
+- `compatibleRootVersions` in
+  `templates/external-project-workspace/pack-lifecycle.json`, so the shipped
+  starter's pack is qualified for the released root version (the
+  `review packs` consumer smoke and `test/review-portability.test.mjs` fail
+  when it lags)
+- the linked package version recorded in
+  `examples/astro-presentation/package-lock.json`
 
 The release scripts derive the expected version and tarball name from
 `package.json`, so they are not part of the bump surface, and `release:audit`
