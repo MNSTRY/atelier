@@ -9,6 +9,16 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.10
+
+This release fixes the first activation of the Obsidian projection. In
+0.2.0-alpha.9 the check for a running Obsidian matched Atelier's own maintenance
+service, so with Obsidian quit no view was ever published, and an Obsidian
+with no vault open was reported as an unsupported version. To publish a view
+for the first time, quit Obsidian, let the service publish, then run
+`atelier obsidian open --scope ID --adapter=obsidian-cli`. No project or
+machine setting needs to change.
+
 ## Upgrading to 0.2.0-alpha.9
 
 This release fixes a defect in 0.2.0-alpha.8: the Obsidian maintenance service
@@ -166,7 +176,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.9
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.10
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -174,7 +184,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.9"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.10"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
