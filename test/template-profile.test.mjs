@@ -155,6 +155,15 @@ test('bounded JSON refuses accessors, symbols, cycles, sparse arrays and exotic 
   assert.equal(invoked, false)
 })
 
+test('epoch metadata is optional and reserved ext never admits required semantics', () => {
+  const p = clone(sample)
+  p.contractVersion = '1.0.0'
+  p.ext = {}
+  assert.equal(validateTemplateDefinition(p).ok, true)
+  p.ext.requiredBehavior = true
+  refused(validateTemplateDefinition(p))
+})
+
 test('validation does not mutate inputs or widen existing extension-pack v1', () => {
   const f = fixture(), before = JSON.stringify(f)
   releaseCheck(f); hostCheck(f)

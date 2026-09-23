@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mnstry.ai/schemas/atelier/atelier-template-profile.v1.schema.json",
-  "$comment": "Additive data-only profile. Stage results prove structure and exact content identity, never authenticated policy, host execution, publication or acceptance.",
-  "$ref": "#/$defs/definition",
+  "title": "Portable template profile",
+  "$comment": "contract revision 1.0.0; structural identity only, no execution or publication authority. Reserved ext containers are empty; optional payloads use the digest-bound extensions list.",
   "$defs": {
     "TemplateRef": {
       "type": "object",
@@ -30,6 +30,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -59,6 +63,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -89,6 +97,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -119,6 +131,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -149,6 +165,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -178,6 +198,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -208,6 +232,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -238,6 +266,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -268,6 +300,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -298,6 +334,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -328,6 +368,10 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -435,6 +479,10 @@
                   "one",
                   "many"
                 ]
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
@@ -483,6 +531,10 @@
                   "pattern": "^[a-z][a-z0-9]*(?:[.:-][a-z0-9]+)*$",
                   "maxLength": 128
                 }
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
@@ -524,6 +576,10 @@
               },
               "required": {
                 "type": "boolean"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
@@ -556,6 +612,10 @@
               },
               "payloadRef": {
                 "$ref": "#/$defs/PayloadRef"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
@@ -584,6 +644,10 @@
               },
               "required": {
                 "const": false
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
@@ -634,9 +698,17 @@
                   "digest": {
                     "type": "string",
                     "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
                   }
                 }
               }
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
             }
           }
         },
@@ -645,6 +717,14 @@
           "minLength": 1,
           "maxLength": 2000,
           "pattern": "\\S"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -707,9 +787,17 @@
                 "items": {
                   "$ref": "#/$defs/SourceRef"
                 }
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -793,6 +881,10 @@
         },
         "capabilityRef": {
           "$ref": "#/$defs/CapabilityRef"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -835,6 +927,10 @@
           "items": {
             "$ref": "#/$defs/ProjectionRef"
           }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -903,6 +999,10 @@
               "digest": {
                 "type": "string",
                 "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
@@ -993,9 +1093,17 @@
                     "$ref": "#/$defs/CapabilityRef"
                   }
                 ]
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
               }
             }
           }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
         }
       }
     },
@@ -1044,8 +1152,17 @@
             }
           ]
         },
-        "document": {}
+        "document": {},
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
       }
     }
-  }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/definition"
+    }
+  ]
 }

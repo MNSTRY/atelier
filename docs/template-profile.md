@@ -67,6 +67,11 @@ automatic version coercion, range admission, migration or upgrade apply in this
 module. A new contract version and the existing owner-controlled upgrade path
 must govern changes. Keep prior source and profile artifacts for recovery.
 
+The schema follows the contract epoch's optional `contractVersion` and `ext`
+conventions. Its `ext` containers are reserved and permit no properties in this
+revision. Optional extension data must use the explicit digest-bound namespaced
+`extensions` list; required behavior cannot be smuggled through an ignored bag.
+
 ## Optional advisory decisions
 
 `optionalDecisions` declares named tasks using `atelier-decision-request@v1`.
@@ -94,7 +99,51 @@ node --test test/template-profile.test.mjs
 
 The invented reading-shelf fixture exercises structural positive cases and
 refusals. It is not a real publication, owner approval, visual baseline or
-conformance certificate. A complete adopter journey still needs existing graph
-and presentation bindings, durable source editing/reload, upgrade participation,
-actual host conformance, and receiving-owner acceptance. Software/definition
-licensing never supplies content rights or paid-service entitlement.
+conformance certificate. Software/definition licensing never supplies content
+rights or paid-service entitlement.
+
+## Canonical project binding
+
+`src/template-bindings/project.mjs` exports `createTemplateProjectView(project,
+requestJson)`. Supply an existing loaded Atelier project and bounded JSON text
+with `profile`, `projectRef`, `roleNodeIds`, `target` and optional `theme`.
+For example, `roleNodeIds: { items: ['library:paper', 'library:thread'] }` binds
+the synthetic shelf's role to existing source identities. The adapter calls the
+canonical graph builder with its fresh file cache; each SourceRef binds the
+exact Markdown byte digest used by that census, not metadata alone.
+
+The initial adapter supports classified active Markdown sources and the
+Resource/Collection and CollectionView/StatusView subset. Unknown targets,
+missing or withheld selected sources, audience/repository-boundary widening,
+unsupported views, missing required roles and runtime-profile requirements
+refuse. Draft/archived sources do not appear. Local archival is not a governed
+withdrawal receipt, and old exported copies are not remotely erased.
+
+Presentation models, escaping, themes and static HTML come from the existing
+presentation package. Web and document preview are the same read-only bytes;
+no inert control pretends to be an implemented action. The adapter writes no
+source, projection, lock or release and performs no provider call. Optional
+decisions report absent with the deterministic/manual fallback.
+
+`textPreview` provides the same selected titles, summaries, self-description
+and status as plain text without CSS, script or media. It is a local low-bandwidth
+preview, not an email/chat adapter, portable document package or publication.
+
+```sh
+node --test test/template-profile.test.mjs test/template-journey.test.mjs
+```
+
+The journey test uses disposable synthetic repositories, the actual local
+maintenance engine and production `createSourceApply`, not an alternate source
+writer. A simulated person's edit is held, applied to canonical source,
+rebuilt and rendered; the old binding refuses against the new source, duplicate
+apply is idempotent and an unrelated resource remains byte-identical. The test
+does not open the desktop application, accept a release or prove accessibility
+with assistive technology. On platforms without production atomic exchange,
+the apply journey explicitly skips and must not count as platform acceptance.
+
+Remaining integration includes template adoption/lock and transactional upgrade
+participation, supported package exports, interactive host wiring, all-carrier
+conformance, actual host/accessibility/visual proof, and receiving-owner
+acceptance. Direct-source imports are not a shipped public API until the
+receiving package owner adds and tests the supported exports.
