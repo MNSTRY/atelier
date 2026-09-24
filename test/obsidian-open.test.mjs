@@ -1560,18 +1560,26 @@ test('of the backups beside the settings file, the first (the list as it was bef
   assert.equal(world.names().filter((name) => /\.atelier-backup-\d{8}T\d{9}Z$/.test(name)).length, 2)
 })
 
-test('a Flatpak or snap build is recognised by its sandbox for this account or its installation, on Linux only', (t) => {
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-sandboxed-')))
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
-  const build = (platform = 'linux') => obsidianSandboxedBuild({ platform, env: { HOME: home }, exists: (candidate) => candidate.startsWith(home) && fs.existsSync(candidate) })
+test('a Flatpak or snap build is recognised by its sandbox for this account or its installation, on Linux only', () => {
+  // The paths are Linux's, whatever platform runs this: what exists is answered from a list.
+  const present = new Set()
+  const build = (platform = 'linux', env = { HOME: '/home/someone' }) => obsidianSandboxedBuild({ platform, env, exists: (candidate) => present.has(candidate) })
   assert.equal(build(), null)
-  fs.mkdirSync(path.join(home, 'snap', 'obsidian'), { recursive: true })
+  present.add('/home/someone/snap/obsidian')
   assert.equal(build(), 'snap')
-  fs.mkdirSync(path.join(home, '.var', 'app', 'md.obsidian.Obsidian'), { recursive: true })
+  present.add('/home/someone/.var/app/md.obsidian.Obsidian')
   assert.equal(build(), 'flatpak')
-  for (const platform of ['darwin', 'win32']) assert.equal(build(platform), null)
-  assert.equal(obsidianSandboxedBuild({ platform: 'linux', env: {}, exists: (candidate) => candidate === '/var/lib/flatpak/app/md.obsidian.Obsidian' }), 'flatpak', 'installed system-wide')
-  assert.equal(obsidianSandboxedBuild({ platform: 'linux', env: {}, exists: (candidate) => candidate === '/snap/obsidian' }), 'snap')
+  for (const platform of ['darwin', 'win32']) assert.equal(build(platform), null, platform)
+  for (const [where, expected] of [['/home/someone/.local/share/flatpak/app/md.obsidian.Obsidian', 'flatpak'], ['/var/lib/flatpak/app/md.obsidian.Obsidian', 'flatpak'], ['/snap/obsidian', 'snap']]) {
+    present.clear()
+    present.add(where)
+    assert.equal(build(), expected, where)
+  }
+  // Installed system-wide, it is found whatever HOME is; a HOME that is not an absolute POSIX path names no sandbox of its own.
+  assert.equal(build('linux', {}), 'snap')
+  present.clear()
+  present.add('relative/snap/obsidian')
+  assert.equal(build('linux', { HOME: 'relative' }), null)
 })
 
 test('a listed folder is compared as written first, and its real path is read only when its last component is the vault root\'s: no other vault is waited on', (t) => {
