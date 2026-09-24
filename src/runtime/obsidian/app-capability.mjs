@@ -134,5 +134,8 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
   factory.qualification = qualification
   // What was last learned, without asking again: for a status answer.
   factory.lastQualification = () => last?.result ?? null
+  // Drops what was learned, so the next adapter asks the app again: a tick somebody asked for does not reuse an
+  // answer from before the app changed.
+  factory.forget = () => { last = null }
   return factory
 }

@@ -38,6 +38,17 @@ import { createNullWatcherFactory } from './watchers.mjs'
 //      prepareView -> publishView, unless that would replace a held note
 //   7. persist the freshness of every view
 //
+// A view is prepared and published once more, whatever its state, on the
+// next tick after `requestPreparation(scopeId)`: a one-shot request per view,
+// which the service makes for a tick requested for that view over its
+// listener (`open` requests its own). A view whose last publication did not
+// settle (stale, updating, or refused as a publisher conflict) is also tried
+// again without a request: at the full reconciliation; as soon as the app
+// looks different from when it was last tried (`observeApp`, when given: an
+// app that quit, started, or opened or closed a vault); and otherwise after a
+// delay that doubles per attempt from `publicationRetryMs` up to the full
+// reconciliation interval.
+//
 // From the moment a workspace is resolved until the tick ends, the tick holds
 // the workspace's private engine lock, so two engines (a service and a
 // foreground command, or two services) never tick one workspace together. An
@@ -50,6 +61,7 @@ import { createNullWatcherFactory } from './watchers.mjs'
 
 export const DEFAULT_FULL_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000
 export const DEFAULT_RETRY_INTERVAL_MS = 60 * 1000
+export const DEFAULT_PUBLICATION_RETRY_MS = 30 * 1000
 export const DEFAULT_LATE_WRITER_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 export const LATE_WRITER_EVERY_TICK_WINDOW_MS = 60 * 60 * 1000
 
@@ -76,6 +88,15 @@ export const ENGINE_PRIMITIVES = Object.freeze({
   dispatchAllowed: (maintenanceMode) => maintenanceMode === 'automatic',
   // Every file is hashed, whatever its stat says, at least this often.
   isFullReconciliationDue: ({ nowMs, lastFullMs, intervalMs }) => lastFullMs === null || nowMs - lastFullMs >= intervalMs,
+  // A view whose last attempt did not settle, between full reconciliations: again once a delay has passed that doubles
+  // per attempt in a row, from `retryMs` up to `maxMs`, and at once when the app looks different from when it was last
+  // tried. `appState()` answers what it looks like now, or null when that is not known.
+  isRetryDue({ nowMs, unsettled, appState, retryMs, maxMs }) {
+    if (unsettled === undefined) return false
+    if (nowMs - unsettled.lastAttemptMs >= Math.min(maxMs, retryMs * 2 ** Math.min(unsettled.attempts - 1, 20))) return true
+    const now = appState()
+    return now !== null && now !== unsettled.appState
+  },
   // The embedded assets observed beside the walk: those the last built graph lets a view copy, and no withheld one.
   observedAssetsOf: (graph) => (graph.assets ?? []).filter((asset) => asset.eligible === true).map(({ repo, path: assetPath }) => ({ repo, path: assetPath })),
   // One engine per workspace at a time, across processes.
@@ -129,6 +150,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     loadProject, dataRoot, adapterFactory, clock,
     watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility = DEFAULT_ELIGIBILITY,
     fullReconciliationIntervalMs = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS, lateWriterWindowMs = DEFAULT_LATE_WRITER_WINDOW_MS,
+    publicationRetryMs = DEFAULT_PUBLICATION_RETRY_MS, observeApp = null,
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
     // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
     lockOwner = null, lockProbe = probeHealth,
@@ -163,6 +185,11 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   let watching = { signature: null, handle: null }
   let known = null // { stateStore, maintenanceMode } once a workspace has been resolved
   let heldLock = null
+  // Views somebody asked to have prepared and published once more, at the next tick.
+  const preparationRequests = new Set()
+  // Views whose last attempt did not settle, by scope: { attempts in a row, lastAttemptMs, appState then }. Kept in
+  // memory only: a new engine attempts every view on its first tick.
+  const unsettled = new Map()
   const proveAbandoned = createAbandonmentProof({ probe: lockProbe })
 
   async function takeLock(workspaceRoot, workspaceId) {
@@ -246,6 +273,17 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   async function runTick() {
     const now = isoTime(clock)
     const nowMs = Date.parse(now)
+    // A request that arrives while this tick runs belongs to the next one.
+    const requested = new Set(preparationRequests)
+    preparationRequests.clear()
+    // What the app looked like, asked at most once per tick and only when a decision needs it.
+    let appState
+    const appNow = () => {
+      if (appState === undefined) { try { appState = typeof observeApp === 'function' ? observeApp() ?? null : null } catch { appState = null } }
+      return appState
+    }
+    // An adapter built on a tick somebody asked for asks the app again instead of reusing an answer from before it changed.
+    if (requested.size > 0) try { adapterFactory.forget?.() } catch { /* a factory that remembers nothing */ }
     const full = firstTick || forceFull || rules.isFullReconciliationDue({ nowMs, lastFullMs, intervalMs: fullReconciliationIntervalMs })
     const changes = []
     // The hints collected so far belong to this tick; one that arrives while it runs belongs to the next.
@@ -403,8 +441,10 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const invalidate = (scopeId, changeClass) => attempt.set(scopeId, new Set([...(attempt.get(scopeId) ?? []), ...(changeClass ? [changeClass] : [])]))
     for (const { scope } of scopes) {
       const entry = entries.get(scope.scopeId)
-      // A view that did not settle is tried again at the full reconciliation cadence, not on every tick.
-      if (firstTick || unseen.has(scope.scopeId) || (full && RETRIED_STATES.has(entry.state))) invalidate(scope.scopeId, null)
+      // A view that did not settle is tried again, not on every tick: see the head of this file.
+      const retried = RETRIED_STATES.has(entry.state)
+        && (full || rules.isRetryDue({ nowMs, unsettled: unsettled.get(scope.scopeId), appState: appNow, retryMs: publicationRetryMs, maxMs: fullReconciliationIntervalMs }))
+      if (firstTick || unseen.has(scope.scopeId) || requested.has(scope.scopeId) || retried) invalidate(scope.scopeId, null)
     }
     for (const change of changes) for (const { scope } of scopes) if (change.scopeId === undefined || change.scopeId === scope.scopeId) invalidate(scope.scopeId, change.changeClass)
 
@@ -493,6 +533,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       }
     }
     persist()
+    for (const scopeId of attempt.keys()) {
+      const settled = !RETRIED_STATES.has(entries.get(scopeId).state)
+      if (settled) unsettled.delete(scopeId)
+      else unsettled.set(scopeId, { attempts: (unsettled.get(scopeId)?.attempts ?? 0) + 1, lastAttemptMs: nowMs, appState: appNow() })
+    }
+    for (const scopeId of [...unsettled.keys()]) if (!entries.has(scopeId) || entries.get(scopeId).state === 'disabled') unsettled.delete(scopeId)
     semantic = nextSemantic
     firstTick = false
     return {
@@ -505,6 +551,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
   return {
     extensions,
+    // The next tick that starts prepares and publishes this view once more, whatever its state. A view this
+    // project does not declare is ignored then.
+    requestPreparation(scopeId) { if (typeof scopeId === 'string' && scopeId !== '') preparationRequests.add(scopeId) },
     async tick() {
       if (running) return { state: 'busy' }
       running = true

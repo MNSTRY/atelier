@@ -226,21 +226,21 @@ export async function stopService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
 
 // One authenticated request to the proven runtime, and to nothing else: anything but a healthy status is answered
 // with that status and no request is made.
-async function askProvenRuntime(options, rules, { method, operation, timeoutMs }) {
+async function askProvenRuntime(options, rules, { method, operation, timeoutMs, body = {} }) {
   const { loadProject, dataRoot, probeTimeoutMs, env = process.env, platform = process.platform, alive = isProcessAlive } = options
   const { workspace } = context({ loadProject, dataRoot, env, platform })
   if (!workspace?.workspaceRoot) return { requested: false, state: 'stopped', reason: 'workspace-not-prepared' }
   const status = await evaluate(workspace, { probeTimeoutMs, alive, rules })
   if (status.state !== 'healthy') return { requested: false, state: status.state, reason: status.reason }
   const { record } = status
-  const answer = await requestLoopback({ host: record.host, port: record.port, method, path: operation, bearer: record.ext.bearer, payload: method === 'POST' ? { runtimeId: record.runtimeId } : null, timeoutMs })
+  const answer = await requestLoopback({ host: record.host, port: record.port, method, path: operation, bearer: record.ext.bearer, payload: method === 'POST' ? { runtimeId: record.runtimeId, ...body } : null, timeoutMs })
   return { requested: true, state: 'healthy', answer }
 }
 
 // Asks the proven runtime for one tick now and returns what that tick reported. A tick that outlasts the wait is
-// `pending`, not an error.
+// `pending`, not an error. With `scopeId`, that view is prepared and published once more on the tick.
 export async function requestServiceTick(options = {}, rules = LIFECYCLE_PRIMITIVES) {
-  const asked = await askProvenRuntime(options, rules, { method: 'POST', operation: '/tick', timeoutMs: options.tickTimeoutMs ?? 60 * 1000 })
+  const asked = await askProvenRuntime(options, rules, { method: 'POST', operation: '/tick', timeoutMs: options.tickTimeoutMs ?? 60 * 1000, ...(options.scopeId === undefined ? {} : { body: { scopeId: options.scopeId } }) })
   if (!asked.requested) return asked
   const { answer } = asked
   if (answer.kind === 'timeout') return { requested: true, state: 'healthy', pending: true, tick: null, reason: 'tick-still-running' }

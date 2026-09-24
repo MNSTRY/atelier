@@ -21,7 +21,7 @@ export {
 export { listConfigFiles, listSourceFiles, listVaultNotes, reconcile } from './observation.mjs'
 export { createFsWatcherFactory, createNullWatcherFactory } from './watchers.mjs'
 export { DEFAULT_ELIGIBILITY, assetEligibilityFor, createProductionSeams } from './pipeline.mjs'
-export { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, DEFAULT_LATE_WRITER_WINDOW_MS, DEFAULT_RETRY_INTERVAL_MS, createMaintenanceEngine } from './engine.mjs'
+export { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, DEFAULT_LATE_WRITER_WINDOW_MS, DEFAULT_PUBLICATION_RETRY_MS, DEFAULT_RETRY_INTERVAL_MS, createMaintenanceEngine } from './engine.mjs'
 export { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock } from './private-lock.mjs'
 export { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
 export { HEALTH_SCHEMA, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'

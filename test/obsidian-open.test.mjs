@@ -76,12 +76,12 @@ const { loadContributions } = await import('../src/runtime/obsidian/contribution
 const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await import('../src/runtime/obsidian/engine.mjs')
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
-const { LIFECYCLE_PRIMITIVES, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
+const { LIFECYCLE_PRIMITIVES, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
 const { ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
-const { HEALTH_SCHEMA, probeHealth } = await import('../src/runtime/obsidian/service-client.mjs')
+const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
 const { readServiceRecord, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
@@ -807,6 +807,117 @@ test('the same refusal after a view was published says to quit the app or open t
   // The advice holds: --allow-stale opens the last published view in the app, and does not call it current.
   const stale = await world.run(openArgs(['--allow-stale']), { seams: { ...UNREACHABLE_SEAMS, ...app } })
   assert.deepEqual([stale.json.outcome, stale.json.ok, stale.json.launched, app.launches], ['publisher-conflict', false, true, [world.vault()]])
+})
+
+// ---------------------------------------------------------------------------
+// 4c. A refused publication is tried again soon, not only at the full reconciliation
+// ---------------------------------------------------------------------------
+
+async function assertRefusedViewRetriedSoon(t, primitives = ENGINE_PRIMITIVES) {
+  const world = makeWorld(t)
+  let refusing = true
+  let appState = 'running|other-vault'
+  const attempts = []
+  const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+  const engine = world.engine({
+    primitives, fullReconciliationIntervalMs: 60 * 60 * 1000, publicationRetryMs: 30 * 1000, observeApp: () => appState,
+    seams: { publishView: (input) => { attempts.push(world.clock().toISOString()); return refusing ? Promise.resolve(UNCOORDINATED_PUBLICATION) : publishView(input) } },
+  })
+  const tick = async () => (await engine.tick()).scopes[0]
+  assert.equal((await tick()).state, 'publisher-conflict')
+  assert.equal(attempts.length, 1)
+  await tick()
+  assert.equal(attempts.length, 1, 'nothing changed and nothing asked: not tried on every tick')
+  engine.requestPreparation('scope-not-declared')
+  await tick()
+  assert.equal(attempts.length, 1, 'a request for a view this project does not declare changes nothing')
+  engine.requestPreparation(FULL_SCOPE.scopeId)
+  await tick()
+  assert.equal(attempts.length, 2, 'a tick after a request for this view tries it again at once')
+  await tick()
+  assert.equal(attempts.length, 2, 'the request is used up')
+  appState = 'absent'
+  await tick()
+  assert.equal(attempts.length, 3, 'the app quit: tried again at once')
+  await tick()
+  assert.equal(attempts.length, 3)
+  // Three attempts in a row: the next is due 30 s x 2^2 after the last.
+  world.advance(119 * 1000)
+  await tick()
+  assert.equal(attempts.length, 3)
+  world.advance(1000)
+  await tick()
+  assert.equal(attempts.length, 4, 'due after 120 s')
+  world.advance(239 * 1000)
+  await tick()
+  assert.equal(attempts.length, 4)
+  world.advance(1000)
+  refusing = false
+  const settled = await tick()
+  assert.deepEqual([attempts.length, settled.state], [5, 'current'], 'due after 240 s, and it settles')
+  world.advance(3 * 60 * 1000)
+  appState = 'running|this-vault'
+  await tick()
+  assert.equal(attempts.length, 5, 'a settled view is not tried again because the app changed')
+}
+
+test('a view refused as a publisher conflict is tried again on a requested tick, when the app changes, and after a delay that doubles; never on every tick', needsExchange, async (t) => {
+  await assertRefusedViewRetriedSoon(t)
+})
+
+test('mutation control: an engine that tries a refused view again only at the full reconciliation fails the retry oracle', needsExchange, async (t) => {
+  await assert.rejects(assertRefusedViewRetriedSoon(t, { ...ENGINE_PRIMITIVES, isRetryDue: () => false }), assert.AssertionError)
+})
+
+test('the retry delay doubles per attempt up to the full reconciliation interval, and an app whose state is unknown triggers nothing', () => {
+  const due = (attempts, sinceMs, { then = 'a', now = 'a' } = {}) => ENGINE_PRIMITIVES.isRetryDue({ nowMs: 10_000_000, unsettled: { attempts, lastAttemptMs: 10_000_000 - sinceMs, appState: then }, appState: () => now, retryMs: 30_000, maxMs: 300_000 })
+  // attempts in a row -> the delay after the last one: 30 s doubling, never longer than the full reconciliation interval.
+  for (const [attempts, delayMs] of [[1, 30_000], [2, 60_000], [3, 120_000], [4, 240_000], [5, 300_000], [6, 300_000], [40, 300_000]]) {
+    assert.deepEqual([due(attempts, delayMs - 1), due(attempts, delayMs)], [false, true], `${attempts} attempt(s): due after ${delayMs} ms`)
+  }
+  assert.equal(due(1, 0, { then: 'a', now: 'b' }), true, 'an app that changed is tried at once')
+  assert.equal(due(1, 0, { then: 'a', now: null }), false, 'an app that cannot be observed changes nothing')
+  assert.equal(ENGINE_PRIMITIVES.isRetryDue({ nowMs: 1, unsettled: undefined, appState: () => 'b', retryMs: 1, maxMs: 1 }), false, 'a view this engine never tried waits for the full reconciliation')
+})
+
+test('a tick requested for a view over the service listener prepares it once more; a plain tick, and a tick of the service\'s own, do not', async (t) => {
+  const world = makeWorld(t)
+  const attempts = []
+  const service = await world.service({ engineOptions: { seams: { publishView: async () => { attempts.push(1); return UNCOORDINATED_PUBLICATION } } } })
+  assert.equal(attempts.length, 1)
+  await service.tickNow()
+  assert.equal(attempts.length, 1, 'a tick of the service\'s own has nothing new to try')
+  const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE }
+  const plain = await requestServiceTick(lifecycle)
+  assert.deepEqual([plain.requested, plain.tick.state, attempts.length], [true, 'ticked', 1], 'a tick that names no view prepares none')
+  const asked = await requestServiceTick({ ...lifecycle, scopeId: FULL_SCOPE.scopeId })
+  assert.deepEqual([asked.requested, asked.tick.scopes[0].state, attempts.length], [true, 'publisher-conflict', 2], 'the tick asked for this view tried it again')
+  // The body names the runtime and, for a tick, at most one view by its identity; anything else is refused.
+  const record = readServiceRecord(world.workspace())
+  const post = (operation, payload) => requestLoopback({ host: record.host, port: record.port, method: 'POST', path: operation, bearer: record.ext.bearer, payload, timeoutMs: 10000 })
+  for (const [operation, payload, statusCode] of [
+    ['/tick', { runtimeId: record.runtimeId, scopeId: '../escape' }, 400], ['/tick', { runtimeId: record.runtimeId, scopeId: 7 }, 400],
+    ['/tick', { runtimeId: record.runtimeId, scopeId: FULL_SCOPE.scopeId, extra: true }, 409], ['/tick', { runtimeId: 'rt-another', scopeId: FULL_SCOPE.scopeId }, 409],
+    ['/stop', { runtimeId: record.runtimeId, scopeId: FULL_SCOPE.scopeId }, 409],
+  ]) {
+    const answer = await post(operation, payload)
+    assert.deepEqual([answer.kind, answer.statusCode], ['response', statusCode], `${operation} ${JSON.stringify(payload)}`)
+  }
+  assert.equal(attempts.length, 2, 'a refused request prepares nothing')
+})
+
+test('a requested tick asks the app again: an adapter-factory refusal remembered from before the app changed is not reused', async (t) => {
+  const world = makeWorld(t)
+  let observation = { installed: true, cli: true, running: true, version: null, noVaultOpen: true }
+  const adapterFactory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => observation }, createAdapter: absentAdapter })
+  const engine = world.engine({ adapterFactory })
+  assert.deepEqual([(await engine.tick()).scopes[0].reason], ['app-version-unsupported'])
+  // The app now has a vault open and answers its version; the refusal above is remembered for ten seconds.
+  observation = { installed: true, cli: true, running: true, version: '1.13.7' }
+  engine.requestPreparation(FULL_SCOPE.scopeId)
+  const report = await engine.tick()
+  assert.equal(report.scopes[0].reason === 'app-version-unsupported', false, `asked again: ${report.scopes[0].reason}`)
+  assert.equal(adapterFactory.lastQualification().outcome, 'qualified')
 })
 
 // ---------------------------------------------------------------------------
