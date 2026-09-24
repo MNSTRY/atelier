@@ -385,6 +385,16 @@ answer decides wherever it gives one:
 - `open` does the same: the plugin's version stands in only where the tool
   gives none. It asks the service about the plugin at most once a second
   while it waits for the app.
+- Whether an app runs is the process table's answer, which says no only when
+  it finds no Obsidian process at all. A lease outlives its app by up to the
+  lease time (six seconds after a crash), and any process that holds the
+  vault's key can hold one, so while the process table shows no app, a
+  plugin's report counts for nothing, in the adapter factory and in `open`.
+  The probe's own answer stands (`app-not-running-version-not-needed`): the
+  publication goes to the files, and an adapter qualified on that answer
+  never coordinates with an app found running later (`app-version-unchecked`),
+  so an app started since, perhaps updated as it restarted, is asked for its
+  own version at the next qualification.
 - With two launches holding one view (two app profiles with the same vault
   open, both running the plugin), neither plugin's version decides.
 - An app below the floor refuses as before (`app-version-unsupported`,

@@ -1721,6 +1721,32 @@ test('qualification: the command-line tool\'s version decides wherever it gives 
   assert.deepEqual(qualifyApp({ versionSource: 'plugin', version: '1.14.2' }).outcome, 'app-missing', 'a plugin report alone does not say where the app is installed')
 })
 
+test('a lease that outlives its app vouches for no version: with no app in the process table the probe\'s own answer stands, and an app started since is never coordinated with on the old report', async () => {
+  // The app crashed a moment ago: the process table shows none, and its plugin's lease lapses within the lease time.
+  const report = { scopeId: SCOPE, appVersion: '1.13.7', pluginVersion: '1.1.0', sessions: 1, instances: 1, renewedAt: '2026-01-05T10:00:00.000Z' }
+  const built = []
+  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => ({ installed: true, cli: true, running: false, version: null }) }, createAdapter: (input) => { built.push(input.qualification); return { kind: 'fake' } } })
+  factory({ scope: { scopeId: SCOPE }, pluginReport: report })
+  assert.deepEqual(built.at(-1), { floor: MINIMUM_APP_VERSION, version: null, running: false, outcome: 'qualified', reason: 'app-not-running-version-not-needed', versionChecked: false })
+  assert.equal(factory.lastQualification().reason, 'app-not-running-version-not-needed')
+  // An adapter built on that answer publishes to the files while no app runs, and never coordinates with an app found
+  // running later (restarted, perhaps as a newer version): its version is asked for at the next qualification.
+  let processes = 'absent'
+  const adapter = createEditorAdapter({ call: async () => { throw new Error('no app answers') }, processProbe: () => processes, qualification: built.at(-1) })
+  assert.equal((await adapter.probe({ vaultRoot: '/vault' })).state, 'absent')
+  processes = 'running'
+  const later = await adapter.probe({ vaultRoot: '/vault' })
+  assert.deepEqual([later.state, later.reason.split(':')[0]], ['uncoordinated', 'app-version-unchecked'])
+  // open follows the same rule.
+  const presence = async () => ({ present: true, reason: 'live-lease', appVersion: '1.13.7', pluginVersion: '1.1.0', sessions: 1 })
+  const stopped = { installed: true, cli: true, running: false, version: null }
+  const inspected = await withPluginReportedVersion({ inspect: async () => ({ ...stopped }), vaultState: async () => ({ answered: false, indexReady: false }) }, presence).inspect()
+  assert.deepEqual(inspected, stopped)
+  // Where the process table cannot tell, the plugin's version still stands in.
+  const unknown = await withPluginReportedVersion({ inspect: async () => ({ ...stopped, running: null }), vaultState: async () => ({ answered: false, indexReady: false }) }, presence).inspect()
+  assert.deepEqual([unknown.versionSource, unknown.version], ['plugin', '1.13.7'])
+})
+
 test('status and open report the plugin, and open takes the app version from it where the command-line tool cannot tell', needsExchange, async (t) => {
   const world = serviceWorld(t)
   const service = await world.service()

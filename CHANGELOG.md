@@ -47,7 +47,9 @@
 - While one launch of the plugin holds a view open and the command-line
   tool gives no version (no vault open yet, or no answer in time), the app
   version the plugin reports counts as checked (reason `plugin-reported`), in
-  the service's adapter factory and in `open`. A version the tool does give
+  the service's adapter factory and in `open`, unless the process table shows
+  no app running (a lease outlives a crashed app by a few seconds, and then
+  vouches for no version). A version the tool does give
   decides, since the tool may reach another app holding the same vault, and
   whether the app and its tool are installed is still the probe's answer.
 

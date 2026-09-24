@@ -21,7 +21,9 @@ import { refuse } from './errors.mjs'
 // another app holding the same vault, so its own answer decides wherever it
 // gives one. Such an observation carries `versionSource: 'plugin'` and
 // qualifies with reason `plugin-reported`; whether the app is installed where
-// Atelier looks, with its command-line tool, is still the probe's answer.
+// Atelier looks, with its command-line tool, is still the probe's answer, and
+// so is whether it runs: a lease outlives a crashed app by up to its lease
+// time, so while the process table shows no app, a report stands for none.
 
 // The publication protocol sets the view's undocumented `lastSavedData` field.
 // 1.13.7 is the only app version that protocol was proven on, so it is the
@@ -130,11 +132,12 @@ export async function inspectApp(appProbe) {
 //
 // When the service passes `pluginReport` (one launch of the plugin holds a
 // live lease on the view), the probe is asked as without one, through the same
-// remembered answer, and that answer decides wherever the tool gave a version
-// or found no app or no tool. Only where the tool gave no version does the
-// plugin's version stand in; such an answer is never reused for another view
-// or a later call. The adapter still coordinates through its own channel,
-// which must answer for the vault before anything is published.
+// remembered answer, and that answer decides wherever the tool gave a version,
+// found no app or no tool, or the process table showed no app running. Only
+// where the tool gave no version while an app may run does the plugin's
+// version stand in; such an answer is never reused for another view or a later
+// call. The adapter still coordinates through its own channel, which must
+// answer for the vault before anything is published.
 export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor = MINIMUM_APP_VERSION, maxAgeMs = 10_000, now = () => Date.now() } = {}) {
   if (typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspectSync()')
   if (typeof createAdapter !== 'function') throw new TypeError('the qualified adapter factory needs createAdapter')
@@ -154,7 +157,10 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
   }
   const fromPlugin = (report) => {
     const probed = qualification()
-    if (probed.version !== null || probed.outcome === 'app-missing' || probed.outcome === 'app-cli-unavailable') return probed
+    // No app in the process table: a live lease is the echo of an app that is gone (it lapses within the lease time) or
+    // of a process holding the key, and vouches for no version. The probe's own answer stands, so an adapter built on it
+    // never coordinates with an app started since, whose version nobody checked.
+    if (probed.version !== null || probed.running === false || probed.outcome === 'app-missing' || probed.outcome === 'app-cli-unavailable') return probed
     return qualifyApp({ installed: true, cli: true, version: typeof report?.appVersion === 'string' ? report.appVersion : null, versionSource: 'plugin' }, { requireVersion: true, floor })
   }
   let shown = null

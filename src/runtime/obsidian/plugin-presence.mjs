@@ -26,7 +26,8 @@ export function pluginPresenceOf(statusDocument, scopeId) {
 // version is the app's. A version the tool did give decides, since the tool may
 // reach another app that holds the same vault. Whether the app is installed and
 // has its command-line capability is still the probe's answer; that capability
-// opens and coordinates the vault in this phase.
+// opens and coordinates the vault in this phase. So is whether the app runs: a
+// lease outlives a crashed app by up to its lease time.
 // The presence is asked at most once per `maxAgeMs`: open's wait loop asks the
 // app far more often, and each answer about the plugin costs a round trip to
 // the service.
@@ -39,7 +40,7 @@ export function withPluginReportedVersion(appProbe, readPresence, { maxAgeMs = 1
   return {
     async inspect() {
       const [observation, presence] = await Promise.all([appProbe.inspect(), presenceNow()])
-      if (presence?.present !== true || observation?.installed !== true || observation?.cli !== true || typeof observation.version === 'string') return observation
+      if (presence?.present !== true || observation?.installed !== true || observation?.cli !== true || observation.running === false || typeof observation.version === 'string') return observation
       return { ...observation, running: true, version: presence.appVersion, noVaultOpen: false, versionSource: 'plugin' }
     },
     vaultState: (input) => appProbe.vaultState(input),
