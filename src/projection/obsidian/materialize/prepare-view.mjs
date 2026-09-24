@@ -858,9 +858,10 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // The redaction guard, over the whole result. Its deny-list: identifiers of
   // every census node and asset outside this view, refused where they are
   // unambiguous (a repository-qualified identity, a repository-qualified path,
-  // a repository-relative path with a folder or an extension, a vault path) and
-  // reported where they are a bare word; an identifier this view's own notes
-  // share names nothing outside it.
+  // a repository-relative path with a folder, a vault path) and reported where
+  // they are a bare word (an identity, or a file name at a repository's root,
+  // such as README.md); an identifier this view's own notes share names nothing
+  // outside it.
   const viewAttachments = new Set(attachments.map((item) => item.path))
   const refused = []
   const reported = []
@@ -868,7 +869,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     const id = String(item.id)
     ;(id.startsWith(`${item.repo}:`) ? refused : reported).push(id)
     refused.push(`${item.repo}/${item.path}`)
-    ;(item.path.includes('/') || /\.[^./]+$/.test(item.path) ? refused : reported).push(item.path)
+    ;(item.path.includes('/') ? refused : reported).push(item.path)
   }
   for (const item of canonical.nodes) {
     if (!usable(item) || vault.has(item.id) || typeof item.path !== 'string') continue

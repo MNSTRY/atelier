@@ -61,11 +61,12 @@
   it, read as a reader sees it with the emitter's escapes removed and in NFC,
   refuses an unambiguous identifier of a note outside the view (a
   repository-qualified identity or path, a repository-relative path with a
-  folder or an extension, a vault path) and reports a bare-word identity, as
-  defence in depth. A view may newly refuse with `redaction-failure`; the
-  refusal names the rule and the in-view note, never the value. Both rules run
-  over every note, cached ones included, and the deny matcher is one automaton
-  whose cost does not grow with the number of withheld values.
+  folder, a vault path) and reports a bare-word identity or a file name at a
+  repository's root (`README.md`), as defence in depth. A view may newly
+  refuse with `redaction-failure`; the refusal names the rule and the in-view
+  note, never the value. Both rules run over every note, cached ones included,
+  and the deny matcher is one automaton whose cost does not grow with the
+  number of withheld values.
 - A focus query names each note by an anchored regular-expression path term
   (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
   exactly the selected notes; a focus persisted with the earlier version is

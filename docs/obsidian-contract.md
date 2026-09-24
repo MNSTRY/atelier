@@ -124,16 +124,17 @@ layout the view is prepared in:
    embedded asset outside this view (withheld, outside the selection, or an
    asset the view does not copy): a repository-qualified identity
    (`<repository>:…`), a repository-qualified source path
-   (`<repository>/<path>`), a repository-relative path that holds a folder or
-   a file extension, or a vault path the node has in another view or had in
-   this one. An identity or a repository-relative path that is a bare word is
-   reported, not refused (see "Notes that were laid out anyway"). A value that
-   also identifies a note of this view names nothing outside it and is
-   neither. A match is a whole token when no letter or digit is beside it, and
-   no one of `. _ : / -` joined to a letter or digit (a full stop that ends a
-   sentence is beside a whole token; `x.north-desk:a` is one longer token); it
-   is compared exactly, case included. The identity block, the one place a
-   note names its own repository-relative path, is held to rule 1.
+   (`<repository>/<path>`), a repository-relative path that holds a folder
+   (a `/`), or a vault path the node has in another view or had in this one.
+   An identity that is a bare word, and a file name at a repository's root
+   (`README.md`, `index.md`), are reported, not refused (see "Notes that were
+   laid out anyway"): in-view text names such words and files all the time. A
+   value that also identifies a note of this view names nothing outside it
+   and is neither. A match is a whole token when no letter or digit is beside
+   it, and no one of `. _ : / -` joined to a letter or digit (a full stop that
+   ends a sentence is beside a whole token; `x.north-desk:a` is one longer
+   token); it is compared exactly, case included. The identity block, the one
+   place a note names its own repository-relative path, is held to rule 1.
 3. Coverage. Rules 1 and 2 run over every note of the view on every
    preparation; a reused note is judged exactly as an emitted one.
 
@@ -151,10 +152,11 @@ fuzzy matching (the residual of the 2026-09-22 decision above).
 Identities are what the graph records. A sidecar's identity is checked for its
 form, but a Markdown note's `kg.id` may be any non-empty string, a bare word
 included; Atelier's own documents use repository-qualified identities
-(`<repository>:<name>`). A bare word could be any word of a title, so it is
-reported, never refused. The matcher is one Aho–Corasick automaton over every
-value with the token boundary tested at each hit: it reads a text once,
-however many values it denies.
+(`<repository>:<name>`). A bare word could be any word of a title, and a root
+file name such as `README.md` any repository's, so both are reported, never
+refused. The matcher is one Aho–Corasick automaton over every value with the
+token boundary tested at each hit: it reads a text once, however many values
+it denies.
 
 In layout 1 the guard additionally refuses any `--<hex>` identity suffix of a
 census identity outside the view, anywhere in generated text or emitted paths,
@@ -316,8 +318,8 @@ and `filePath` instead of `nodeId` and `notePath`):
   identity keys, which Properties shows instead of the generated block (see
   "Identity in the note");
 - `bare-identity-in-generated-text` (rule `deny-list`): generated text of the
-  note holds, as a whole word, an identity of a note outside the view that is
-  a bare word (see "The redaction guard").
+  note holds, as a whole token, the bare-word identity or the root file name
+  (`README.md`) of a note outside the view (see "The redaction guard").
 
 A view refused by the redaction guard records `{ code: "redaction-failure",
 rule, notePath | filePath }` in its freshness entry the same way.

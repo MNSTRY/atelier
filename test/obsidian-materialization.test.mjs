@@ -1067,21 +1067,38 @@ test('the deny-list refuses unambiguous identifiers of notes outside the view, r
   const doc = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
   const sealed = { 'north-desk/sealed/bare.md': doc('harbor', 'Bare'), 'north-desk/q3_budget.md': doc('north-desk:q3_budget', 'Budget') }
   const withheld = ['harbor', 'north-desk:q3_budget']
-  // Refused: a repository-qualified identity, a repository-qualified path, and a repository-relative path with a folder or an extension.
-  for (const named of ['north-desk:q3_layoffs', 'north-desk/sealed/q3_layoffs.md', 'sealed/q3_layoffs.md', 'q3_budget.md']) {
+  // Refused: a repository-qualified identity, a repository-qualified path, and a repository-relative path with a folder.
+  for (const named of ['north-desk:q3_layoffs', 'north-desk/sealed/q3_layoffs.md', 'sealed/q3_layoffs.md', 'north-desk/q3_budget.md']) {
     const error = refusalOf(makeWorkspaceWithheld(t, { ...sealed, 'north-desk/notes/naming.md': relatedNote('north-desk:naming', `See ${named}`) }, withheld))
     assert.ok(error, named)
     assert.deepEqual(error.detail, { rule: 'deny-list', notePath: 'north-desk/plans/Harbor plan.md' }, named)
     assert.equal(/q3_(layoffs|budget)/.test(`${error.message} ${JSON.stringify(error.detail)}`), false, 'the refusal never names the withheld value')
   }
-  // Reported, not refused: an identity that is a bare word, and a repository-relative path that is one.
-  const bare = makeWorkspaceWithheld(t, { ...sealed, 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'Lights by the harbor') }, withheld)
-  const prepared = prepare(bare, fullScope)
-  assert.deepEqual(prepared.manifest.ext[EXT].diagnostics, [{ code: 'bare-identity-in-generated-text', rule: 'deny-list', repoId: 'north-desk', nodeId: 'north-desk:harbor-plan', notePath: 'north-desk/plans/Harbor plan.md' }])
+  // Reported, not refused: an identity that is a bare word, and a file name at a repository's root.
+  for (const title of ['Lights by the harbor', 'See q3_budget.md']) {
+    const bare = makeWorkspaceWithheld(t, { ...sealed, 'north-desk/notes/naming.md': relatedNote('north-desk:naming', title) }, withheld)
+    const prepared = prepare(bare, fullScope)
+    assert.deepEqual(prepared.manifest.ext[EXT].diagnostics, [{ code: 'bare-identity-in-generated-text', rule: 'deny-list', repoId: 'north-desk', nodeId: 'north-desk:harbor-plan', notePath: 'north-desk/plans/Harbor plan.md' }], title)
+  }
   // A value that is also an identifier of a note in the view is no identifier of the one outside it.
   // (The sealed ledger is `north-desk/sealed/ledger.md`; an in-view note of another repository has the same repository-relative path.)
   const shared = makeWorkspaceWithheld(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'See sealed/ledger.md'), 'south-desk/sealed/ledger.md': doc('south-desk:ledger', 'Tide ledger') })
   assert.ok(prepare(shared, fullScope).manifest.notes.some((note) => note.nodeId === 'south-desk:ledger'))
+})
+
+test('a withheld README.md at a repository root never refuses a view whose notes mention README.md: the file name is reported, in a full or a scoped view', (t) => {
+  const doc = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
+  const withReadme = (title) => makeWorkspaceWithheld(t, { 'north-desk/README.md': doc('north-desk:readme', 'Read me'), 'north-desk/notes/naming.md': relatedNote('north-desk:naming', title) }, ['north-desk:readme'])
+  const snapshot = withReadme('See README.md first')
+  const reported = [{ code: 'bare-identity-in-generated-text', rule: 'deny-list', repoId: 'north-desk', nodeId: 'north-desk:harbor-plan', notePath: 'north-desk/plans/Harbor plan.md' }]
+  const scoped = { ...scopedScope, scopeId: 'scope-naming', selector: { ids: ['north-desk:harbor-plan', 'north-desk:naming'] } }
+  for (const scope of [fullScope, scoped]) {
+    const prepared = prepare(snapshot, scope)
+    assert.deepEqual(prepared.manifest.ext[EXT].diagnostics, reported, scope.scopeId)
+    assert.ok(prepared.manifest.notes.some((note) => note.nodeId === 'north-desk:naming'), scope.scopeId)
+  }
+  // With its repository, the same file names the withheld note unambiguously.
+  assert.throws(() => prepare(withReadme('See north-desk/README.md first'), scoped), /redaction-failure/)
 })
 
 test('the published materialization subpath carries no test seam of the redaction guard', async () => {
