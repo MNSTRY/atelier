@@ -65,6 +65,111 @@ a schema-checked JSON sidecar is the trust boundary. Richer format adapters
 that derive metadata from asset contents belong to extension packs
 (`atelier-extension-pack.v1`), not the kit core.
 
+## A worked example
+
+The assessment below is invented to show the shape and belongs to no one's
+method. Once a body of work is authored, a question file looks like this:
+
+```
+method/assessments/practice-patterns.md
+---
+title: Practice patterns assessment
+summary: Version 3 of the practice patterns questions, with the scoring rules they depend on.
+tags: [method, assessment]
+kg:
+  id: example:assessment:practice-patterns
+  type: document
+  status: active
+  audience: team
+  relations:
+    depends_on: [example:scoring:practice-patterns-v3]
+---
+## Q07
+Prompt: When my daily practice lapses, I tend to
+Answers: A drop it for the week / B restart the next day / C shorten it and continue
+Scores: A adds 2 to lapse. B adds 2 to restart. C adds 1 to adaptation.
+Missing answer: no score; mark the reading as partial.
+```
+
+The scoring rules live in their own file. The file itself is data a product
+reads:
+
+```
+method/scoring/practice-patterns-v3.json
+{ "version": 3, "weights": { "lapse": 2, "restart": 2, "adaptation": 1 }, "partialWhenMissing": true }
+```
+
+A sidecar beside it makes it a governed node, so the relationship between
+question, rule and test cases is declared rather than remembered:
+
+```
+method/scoring/practice-patterns-v3.json.kg.json
+{
+  "schema": "mnstry.source-sidecar@v1",
+  "asset": "practice-patterns-v3.json",
+  "title": "Scoring rules, version 3",
+  "summary": "Weights, thresholds and tie rules for the practice patterns assessment.",
+  "tags": ["method", "scoring"],
+  "kg": {
+    "id": "example:scoring:practice-patterns-v3",
+    "type": "manifest",
+    "domain": "example",
+    "lifecycle": "active",
+    "status": "active",
+    "audience": "team",
+    "relations": {
+      "implements": ["example:assessment:practice-patterns"]
+    }
+  }
+}
+```
+
+A sidecar carries `lifecycle` as well as `status` because the sidecar
+contract requires both; Markdown headers carry `status` alone.
+
+The worked examples are a third source, a table of sample answers with the
+scores and readings they produce, declared as evidence for the scoring rules:
+
+```
+method/examples/practice-patterns-v3.md
+---
+title: Worked examples, practice patterns v3
+summary: Sample answer sets with the scores and readings they produce.
+tags: [method, examples]
+kg:
+  id: example:examples:practice-patterns-v3
+  type: evidence
+  status: active
+  audience: team
+  relations:
+    evidences: [example:scoring:practice-patterns-v3]
+---
+| Answers | Scores | Reading |
+| --- | --- | --- |
+| Q07 = A | lapse 2 | partial pattern: lapse |
+| Q07 = C | adaptation 1 | partial pattern: adaptation |
+| Q07 missing | none | reading marked partial |
+```
+
+From those headers the builder compiles three edges: the assessment depends
+on the scoring rules, the rules implement the assessment, and the worked
+examples evidence the rules. Ask an agent to revise Q07 and it follows those edges to
+the rules and the examples that depend on the question, then revises the
+affected files and runs the graph check against the result. The graph check
+refuses a header that names a node which does not exist, and the audience on
+each file decides what an export may include.
+
+To try it: the first line inside each fence above is the file's path relative
+to the workspace's `content/` directory, not part of the file. Copy a
+`fixtures/projects/sample-workspace`, save the lines after each path line as
+that file under `content/` (so the assessment lands at
+`content/method/assessments/practice-patterns.md`), then run
+`atelier graph --check --project ./atelier.project.json` from the copy. With
+all four files present the graph builds with no diagnostics. Remove the
+scoring `.json` and the sidecar is refused (`sidecar has no matching source
+asset`). Point the assessment's `depends_on` at an id that does not exist and
+the check is refused (`declared depends_on target ... was not found`).
+
 ## Census Rules
 
 Graph and projection walks skip git-ignored paths. A committed artifact must

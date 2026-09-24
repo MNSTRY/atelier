@@ -129,6 +129,40 @@ That distinction matters whenever several interfaces share one body of work.
 A public site, an internal review tool, and an agent session can all use the
 same graph while receiving different, mechanically checked projections.
 
+## Readable by people, checkable by machines
+
+A governed file is plain text with a small header. The text is the author's:
+they open, read and correct it with no tool between them and the words. The
+header is the machine's: what the file is, who it is written for and what it
+depends on, compiled by the builder into the graph. The graph check refuses a
+header that names a node which does not exist, and an agent follows the same
+lines to every file declared to depend on it. One artifact is both the human
+record and the machine index, versioned by Git, diffable line by line, and
+portable by copying the folder that holds the record and its history.
+
+## One working surface
+
+The day-to-day surface is the coding harness you already use, Claude Code,
+Codex or another coding harness, opened on the repository with the Atelier's
+skills loaded. Behind it sits the projection served from your files, and
+beyond it whatever systems you connect through the harness. From one
+conversation an agent reaches the local files, the projected pages, and your
+connected tools. The files are yours. The package supplies the graph, the
+checks and the pages. The harness supplies the model, the tools and the
+conversation.
+
+Skills carry the workflows an agent runs: opening a source, guiding an
+authoring session, running a readiness review, keeping the public boundary.
+They are delivered from the package as an audited set of skill files,
+installed into the workspace by a plan whose content digest is confirmed
+before it applies, and pinned by a lock, so what an agent follows is known and
+reviewable. Enforcement never rests in a skill. The graph check, the contracts,
+the boundary guard in Git, the export validator and the review ledger run
+whether or not an agent followed its instructions, and they fail closed. See
+[Co-authoring with agents](./docs/co-authoring.md) for the loop this makes
+reliable, and [Describing the Atelier](./docs/describing-the-atelier.md) for
+the judgment behind these sentences.
+
 ## The system beneath it
 
 ### 1. The repository becomes an ontology
@@ -390,6 +424,9 @@ Then choose the path that matches what you are building:
 - [Distribution contracts](./docs/distributions.md)
 - [Conformance and attestation](./docs/attestation.md)
 - [Continuity commitments](./docs/continuity.md)
+- [Portability: what a record holds and what the checks prove](./docs/portability.md)
+- [Co-authoring with agents](./docs/co-authoring.md)
+- [Describing the Atelier](./docs/describing-the-atelier.md)
 - [Assurance controls and evidence map](./docs/assurance-controls.md)
 - [Upgrade notes](./docs/upgrade.md)
 - [Upgrade with your agent](./docs/guided-upgrades.md)
