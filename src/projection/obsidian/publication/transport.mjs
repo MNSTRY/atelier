@@ -1,6 +1,8 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { readlinkSync } from 'node:fs'
+import path from 'node:path'
 import { POLICY_SETTINGS_PATH, buildEvalCode, createInProcessHost, runInProcess, validatePayload } from './bridge-script.mjs'
+import { obsidianUserDataDir, vaultOpenInApp } from './vault-list.mjs'
 
 // Editor coordination adapter.
 //
@@ -111,13 +113,29 @@ export function defaultCliPath(platform = process.platform) {
   return 'obsidian-cli'
 }
 
+// A directory that is no vault, for a call that must not choose one by where it runs.
+export const NEUTRAL_DIRECTORY = (() => { try { return path.parse(process.cwd()).root } catch { return path.sep } })()
+
+// Which window a call runs in. The app answers a command in the window of the
+// vault that contains the tool's working directory (opening that vault first
+// when it is closed), and otherwise in the vault window that had focus last,
+// which may be any vault the person uses. A publication call therefore runs
+// inside the vault's folder while the app lists that vault as open, so it
+// reaches that vault's window whatever has focus. Otherwise it runs in a
+// directory that is no vault: a closed vault is never reopened by maintenance,
+// and the working directory of whoever started the service never picks a
+// vault. The script still checks that it answered for exactly this vault.
+export function openVaultDirectory({ env = process.env, platform = process.platform } = {}) {
+  return (payload) => (vaultOpenInApp({ vaultRoot: payload.vaultRoot, userDataDir: obsidianUserDataDir({ platform, env }) }) ? payload.vaultRoot : NEUTRAL_DIRECTORY)
+}
+
 // The CLI reaches the app through a socket under $HOME, so `env` selects the
 // app instance. It is passed explicitly and never edited here. A call that
 // outlives its timeout is killed with SIGKILL: the CLI ignores SIGTERM while
-// it waits on the app.
-export function createObsidianCliCall({ cliPath = defaultCliPath(), env = process.env, timeoutMs = 20000 } = {}) {
+// it waits on the app. `workingDirectory(payload)` says where a call runs.
+export function createObsidianCliCall({ cliPath = defaultCliPath(), env = process.env, timeoutMs = 20000, workingDirectory = () => NEUTRAL_DIRECTORY } = {}) {
   return (payload) => new Promise((resolve, reject) => {
-    execFile(cliPath, ['eval', `code=${buildEvalCode(payload)}`], { env, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(cliPath, ['eval', `code=${buildEvalCode(payload)}`], { env, cwd: workingDirectory(payload), timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) return reject(error.killed ? new TransportTimeout(`CLI call timed out: ${payload.op}`) : new Error(`CLI call failed: ${String(error.message).slice(0, 300)}`))
       const out = stdout || stderr || ''
       const start = out.indexOf('=> ')
@@ -207,6 +225,6 @@ export function defaultObsidianProcessProbe({ platform = process.platform, run =
   }
 }
 
-export function createObsidianCliAdapter({ cliPath, env, timeoutMs, processProbe = () => defaultObsidianProcessProbe(), qualification } = {}) {
-  return createEditorAdapter({ call: createObsidianCliCall({ cliPath, env, timeoutMs }), processProbe, kind: 'obsidian-cli', qualification })
+export function createObsidianCliAdapter({ cliPath, env = process.env, timeoutMs, processProbe = () => defaultObsidianProcessProbe(), qualification, workingDirectory = openVaultDirectory({ env }) } = {}) {
+  return createEditorAdapter({ call: createObsidianCliCall({ cliPath, env, timeoutMs, workingDirectory }), processProbe, kind: 'obsidian-cli', qualification })
 }

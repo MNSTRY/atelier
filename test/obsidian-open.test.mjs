@@ -68,7 +68,7 @@ function privateHomeEnv(dir, base = process.env) {
 }
 
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
-const { createEditorAdapter, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
+const { NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, obsidianUserDataDir, openVaultDirectory, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
 const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { loadContributions } = await import('../src/runtime/obsidian/contributions.mjs')
@@ -806,6 +806,40 @@ test('the same refusal after a view was published says to quit the app or open t
   // The advice holds: --allow-stale opens the last published view in the app, and does not call it current.
   const stale = await world.run(openArgs(['--allow-stale']), { seams: { ...UNREACHABLE_SEAMS, ...app } })
   assert.deepEqual([stale.json.outcome, stale.json.ok, stale.json.launched, app.launches], ['publisher-conflict', false, true, [world.vault()]])
+})
+
+// ---------------------------------------------------------------------------
+// 4d. Obsidian's settings file: written only while no Obsidian runs, atomically, keeping everything else
+// ---------------------------------------------------------------------------
+
+test('where the app keeps its settings: under HOME on macOS, under XDG_CONFIG_HOME or ~/.config on Linux, unknown elsewhere or without an absolute HOME', () => {
+  assert.equal(obsidianUserDataDir({ platform: 'darwin', env: { HOME: '/home/someone' } }), '/home/someone/Library/Application Support/obsidian')
+  assert.equal(obsidianUserDataDir({ platform: 'linux', env: { HOME: '/home/someone' } }), '/home/someone/.config/obsidian')
+  assert.equal(obsidianUserDataDir({ platform: 'linux', env: { HOME: '/home/someone', XDG_CONFIG_HOME: '/cfg' } }), '/cfg/obsidian')
+  assert.equal(obsidianUserDataDir({ platform: 'linux', env: { HOME: '/home/someone', XDG_CONFIG_HOME: 'relative' } }), '/home/someone/.config/obsidian')
+  for (const [platform, env] of [['win32', { HOME: 'C:\\Users\\someone' }], ['darwin', {}], ['darwin', { HOME: 'relative' }]]) assert.equal(obsidianUserDataDir({ platform, env }), null)
+})
+
+// ---------------------------------------------------------------------------
+// 4e. The command line of the app: its answers, and the window a call reaches
+// ---------------------------------------------------------------------------
+
+test('a publication call runs inside the vault\'s folder while the app lists that vault open, and otherwise in a directory that is no vault', { skip: process.platform === 'win32' && 'no location of the app\'s settings is known on Windows: every call runs in a directory that is no vault' }, (t) => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-cli-cwd-')))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const vaultRoot = path.join(home, 'vault')
+  fs.mkdirSync(vaultRoot)
+  const userDataDir = obsidianUserDataDir({ platform: 'darwin', env: { HOME: home } })
+  fs.mkdirSync(userDataDir, { recursive: true })
+  const list = (open) => fs.writeFileSync(path.join(userDataDir, OBSIDIAN_SETTINGS_FILE), JSON.stringify({ vaults: { cccccccccccccccc: { path: vaultRoot, ts: 1, ...(open ? { open: true } : {}) } } }))
+  const directory = openVaultDirectory({ env: { HOME: home }, platform: 'darwin' })
+  const payload = { op: 'inspect', vaultRoot, path: 'notes/x.md' }
+  assert.equal(directory(payload), NEUTRAL_DIRECTORY, 'the app does not list it: no vault is chosen')
+  list(false)
+  assert.equal(directory(payload), NEUTRAL_DIRECTORY, 'listed but closed: maintenance never reopens it')
+  list(true)
+  assert.equal(directory(payload), vaultRoot, 'listed and open: its window, whichever has focus')
+  assert.equal(directory({ ...payload, vaultRoot: path.join(home, 'another') }), NEUTRAL_DIRECTORY)
 })
 
 test('open starts the owned service the first time only with a consent, reconnects afterwards, and an unknown view refuses', async (t) => {
