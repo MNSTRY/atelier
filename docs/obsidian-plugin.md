@@ -277,7 +277,7 @@ the vault's key without sending it, and the service proves it first
 
 | Command | Fields | Answer |
 | --- | --- | --- |
-| `POST /plugin/challenge` | `protocol`, `keyHint`, `clientNonce` | `handshakeId`, `serverNonce`, `serverProof` |
+| `POST /plugin/challenge` | `protocol`, `keyHint`, `clientNonce`, `issuedAt` | `protocol`, `handshakeId`, `serverNonce`, `serverProof` |
 | `POST /plugin/hello` | `handshakeId`, `pluginVersion`, `appVersion`, `instanceId`, `vaultProof`, `clientProof` | sealed: a session identity, the lease time and the renewal interval |
 | `POST /plugin/lease` | `sessionId`, `counter`, `mac` | sealed: the renewed lease |
 | `POST /plugin/release` | `sessionId`, `counter`, `mac` | sealed: whether the session was released |
@@ -359,7 +359,9 @@ is authenticated, so they only ever decide what is shown.
 - Cost. A request without a key costs the service one look at the bearer
   directory (the bearers are kept in memory and read again only when that
   directory changed) and one HMAC per vault; at most four handshakes wait per
-  view, and recorded challenges cannot keep them filled.
+  view, and recorded challenges can keep them filled for at most about
+  thirty seconds after a restart, since a challenge is answered only within
+  thirty seconds of the time it names.
 - Egress. `plugins/` is in the egress scan, which fails a request whose target
   is not a literal loopback address, and the release audit requires the three
   plugin files in the package and scans them in the tarball.
