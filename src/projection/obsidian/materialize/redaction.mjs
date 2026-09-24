@@ -36,12 +36,18 @@ const GENERATED_MARKDOWN_LINK = /(?<!\\)\]\(([^()\n]*)\)/g
 
 const linesOf = (text) => text.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line))
 
+// Generated prose escapes Markdown punctuation with a backslash (see plainText
+// in prepare-view.mjs). A reader sees the text without those backslashes, and
+// the deny-list reads it the same way.
+const ESCAPED = /\\([\\`*_[\]<>#|^$%~=!&])/g
+const asRead = (text) => text.replace(ESCAPED, '$1')
+
 // An identity or a path matches only as a whole token, never inside a longer
 // one. A letter or digit beside the match, or one of `. _ : / -` joined to a
 // letter or digit beside it, continues the token; sentence punctuation after
 // it (a full stop, a colon before a space) does not.
 const WORD = /[\p{L}\p{N}]+/gu
-const FIRST_WORD = /^[\p{L}\p{N}]+/u
+const FIRST_WORD = /[\p{L}\p{N}]+/u
 const ALNUM = /^[\p{L}\p{N}]$/u
 const JOINERS = new Set(['.', '_', ':', '/', '-'])
 
@@ -56,25 +62,51 @@ const isAlnumAt = (text, index) => ALNUM.test(codePointAt(text, index))
 const continuesAfter = (text, end) => isAlnumAt(text, end) || (JOINERS.has(text[end]) && isAlnumAt(text, end + 1))
 const continuesBefore = (text, start) => isAlnumAt(text, start - 1) || (JOINERS.has(text[start - 1]) && isAlnumAt(text, start - 2))
 
-// A matcher for whole-token occurrences of any of `values`, indexed by the
-// first word of each value so a text costs one lookup per word.
+// A matcher for whole-token occurrences of any of `values`, linear in the
+// text whatever the number of values. A whole-token match always has the
+// value's first word (its first run of letters and digits) on a word of the
+// text, so each value is filed under that word, where the word starts in the
+// value and the character that follows it, and within that under its length.
+// A word of the text then costs a few lookups, and a candidate is compared
+// only where its length ends on a token boundary. A value with no letter or
+// digit at all is looked for directly.
 export function createDenyMatcher(values) {
-  const byFirstWord = new Map()
-  const unanchored = []
+  const filed = new Map()
+  const offsets = new Set()
+  const bare = []
   for (const value of new Set(values)) {
     if (typeof value !== 'string' || value === '') continue
     const first = FIRST_WORD.exec(value)
-    if (first === null) { unanchored.push(value); continue }
-    if (!byFirstWord.has(first[0])) byFirstWord.set(first[0], [])
-    byFirstWord.get(first[0]).push(value)
+    if (first === null) { bare.push(value); continue }
+    const key = `${first.index}\u0000${first[0]}\u0000${codePointAt(value, first.index + first[0].length)}`
+    offsets.add(first.index)
+    if (!filed.has(key)) filed.set(key, new Map())
+    const byLength = filed.get(key)
+    if (!byLength.has(value.length)) byLength.set(value.length, new Set())
+    byLength.get(value.length).add(value)
   }
-  const whole = (text, at, value) => !continuesBefore(text, at) && !continuesAfter(text, at + value.length)
+  const whole = (text, at, length) => !continuesBefore(text, at) && !continuesAfter(text, at + length)
+  const candidatesAt = (text, start, byLength) => {
+    for (const [length, candidates] of byLength) {
+      if (start + length <= text.length && whole(text, start, length) && candidates.has(text.slice(start, start + length))) return true
+    }
+    return false
+  }
   return function matches(text) {
     for (const word of text.matchAll(WORD)) {
-      for (const value of byFirstWord.get(word[0]) ?? []) if (text.startsWith(value, word.index) && whole(text, word.index, value)) return true
+      const next = codePointAt(text, word.index + word[0].length)
+      for (const offset of offsets) {
+        const start = word.index - offset
+        if (start < 0) continue
+        // The value's word is followed by what follows it in the text, or the value ends with it.
+        for (const after of next === '' ? [''] : [next, '']) {
+          const byLength = filed.get(`${offset}\u0000${word[0]}\u0000${after}`)
+          if (byLength !== undefined && candidatesAt(text, start, byLength)) return true
+        }
+      }
     }
-    for (const value of unanchored) {
-      for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) if (whole(text, at, value)) return true
+    for (const value of bare) {
+      for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) if (whole(text, at, value.length)) return true
     }
     return false
   }
@@ -103,7 +135,7 @@ function readGeneratedRegion({ kind, text, fence, own }) {
     if (incoming) { freeText.push(incoming[1]); continue }
     freeText.push(line.replace(GENERATED_WIKILINK, ' '))
   }
-  return { links, freeText }
+  return { links, freeText: freeText.map(asRead) }
 }
 
 // Whether an identity region holds exactly the identity lines of its own note

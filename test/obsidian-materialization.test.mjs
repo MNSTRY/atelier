@@ -23,6 +23,7 @@ import {
   stagePreparedView,
   withEligibility,
 } from '../src/projection/obsidian/materialize/index.mjs'
+import { createDenyMatcher } from '../src/projection/obsidian/materialize/redaction.mjs'
 
 // Invented fixtures only. The workspace is written into a temporary directory,
 // read by the real canonical graph builder, and prepared in memory.
@@ -1002,6 +1003,54 @@ test('a withheld identity that reaches only a relations row (never a path) is st
   assert.ok(!noteOf(prepared, 'north-desk:long').path.includes('ffffffffffff'), 'the long title is cut before its tail')
 })
 
+// One more withheld source, whose path and identity carry an underscore, a
+// character the emitter escapes in generated prose.
+const SEALED_UNDERSCORE = {
+  'north-desk/sealed/q3_layoffs.md': { text: '---\ntitle: "Q3 plan"\nkg:\n  id: "north-desk:q3_layoffs"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# Q3 plan\n' },
+}
+function makeWorkspaceWithheld(t, extraFiles) {
+  const savedFiles = workspace.files
+  const savedWithheld = workspace.withheldByEligibility
+  workspace.files = { ...savedFiles, ...SEALED_UNDERSCORE, ...extraFiles }
+  workspace.withheldByEligibility = [...savedWithheld, 'north-desk:q3_layoffs']
+  try { return makeWorkspace(t) } finally { workspace.files = savedFiles; workspace.withheldByEligibility = savedWithheld }
+}
+const sidecarWith = (fields) => ({ text: JSON.stringify({ ...JSON.parse(workspace.files['north-desk/charts/depth-chart.pdf.kg.json'].text), ...fields }) })
+
+test('the deny-list reads generated prose as a reader sees it: what the emitter escaped is matched unescaped', (t) => {
+  const outcome = (snapshot) => {
+    try { prepare(snapshot, fullScope); return 'accepted' } catch (error) { if (error.code === 'redaction-failure') return 'refused'; throw error }
+  }
+  const outcomes = {}
+  for (const named of ['north-desk/sealed/q3_layoffs.md', 'north-desk:q3_layoffs']) {
+    // An in-view title, repeated in the incoming relation row of the note it relates to.
+    outcomes[`title ${named}`] = outcome(makeWorkspaceWithheld(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', `See ${named}`) }))
+    // A wrapped file's summary and tags, repeated in its note.
+    outcomes[`summary ${named}`] = outcome(makeWorkspaceWithheld(t, { 'north-desk/charts/depth-chart.pdf.kg.json': sidecarWith({ summary: `Soundings, see ${named} first.` }) }))
+    outcomes[`tag ${named}`] = outcome(makeWorkspaceWithheld(t, { 'north-desk/charts/depth-chart.pdf.kg.json': sidecarWith({ tags: ['chart', named] }) }))
+  }
+  assert.deepEqual(outcomes, Object.fromEntries(Object.keys(outcomes).map((label) => [label, 'refused'])))
+  // Controls: the same prose naming nothing outside the view prepares, escaped exactly as before.
+  const benign = makeWorkspaceWithheld(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'See north-desk/plans/q3_notes.md') })
+  const plan = noteBytes(prepare(benign, fullScope), 'north-desk:harbor-plan').toString('utf8')
+  assert.ok(plan.includes('- supports ← See north-desk/plans/q3\\_notes.md\n'), plan)
+})
+
+test('a title that reaches generated text only in a sanitized form is carried as authored and not matched', (t) => {
+  // The note is only ever a relation target, so its title appears only as the alias of other notes' outgoing rows
+  // and in its file name, where `:` and `/` are unsafe and become spaces. Atelier generated no reference to the
+  // withheld node here; the author's words are carried in that form, and the deny-list, which is defence in depth
+  // over author text, does not match a sanitized form (see "What redaction covers").
+  const snapshot = makeWorkspaceWithheld(t, {
+    'north-desk/notes/target.md': { text: '---\ntitle: "About north-desk:q3_layoffs"\nkg:\n  id: "north-desk:target"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# About\n' },
+    'north-desk/notes/pointer.md': { text: '---\ntitle: "Pointer"\nkg:\n  id: "north-desk:pointer"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:target"\n---\n\n# Pointer\n' },
+  })
+  const prepared = prepare(snapshot, fullScope)
+  const pointer = noteBytes(prepared, 'north-desk:pointer').toString('utf8')
+  assert.ok(pointer.includes('|About north-desk q3_layoffs]]\n'), pointer)
+  assert.equal(noteOf(prepared, 'north-desk:target').path, 'north-desk/notes/About north-desk q3_layoffs.md')
+})
+
 // ---------------------------------------------------------------------------
 // The redaction guard, rule by rule. Each mutation control removes one rule
 // through createViewPreparationForOracleTests and shows that the view that
@@ -1068,6 +1117,61 @@ test('rule 2, deny-list: a withheld identity in generated free text refuses; wit
   assert.ok(generated.includes('north-desk:sealed-ledger'), 'without the deny-list the withheld identity reaches generated text')
   // The allow-list alone does not catch it: the words are free text, not a link.
   assert.throws(() => withoutRule('allowList')({ snapshot, profile, scope: fullScope, clock }), { code: 'redaction-failure' })
+})
+
+test('the deny matcher finds whole tokens only, wherever a value starts, and in any text', () => {
+  const matches = createDenyMatcher(['north-desk:sealed-ledger', 'north-desk/sealed/q3_layoffs.md', '_drafts/notes/n-1.md', '.hidden:x', 'harbor', 'north-desk/plans/Plan (b).md', '___'])
+  for (const text of [
+    'Names north-desk:sealed-ledger', 'north-desk:sealed-ledger.', '(north-desk:sealed-ledger)', 'see north-desk/sealed/q3_layoffs.md, then',
+    'a _drafts/notes/n-1.md b', '.hidden:x', 'the harbor', 'Harbor, harbor.', 'at north-desk/plans/Plan (b).md', 'a ___ b', '___',
+  ]) assert.equal(matches(text), true, text)
+  for (const text of [
+    'xnorth-desk:sealed-ledger', 'north-desk:sealed-ledgers', 'north-desk:sealed-ledger.v2', 'x.north-desk:sealed-ledger', 'north-desk:sealed-ledger-2',
+    'x_drafts/notes/n-1.md', 'harbors', 'harbor-wall', 'Harbor', 'north-desk/plans/Plan (b).mdx', 'a____b', 'plain words',
+  ]) assert.equal(matches(text), false, text)
+})
+
+test('the deny matcher agrees with a direct search for every occurrence of every value, on random values and texts', () => {
+  // The reference: every occurrence of every value, judged by the documented token rule.
+  const alnum = (character) => character !== undefined && /^[\p{L}\p{N}]$/u.test(character)
+  const joined = (character, beyond) => ['.', '_', ':', '/', '-'].includes(character) && alnum(beyond)
+  const reference = (values, text) => values.some((value) => {
+    for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) {
+      const end = at + value.length
+      if (!alnum(text[at - 1]) && !joined(text[at - 1], text[at - 2]) && !alnum(text[end]) && !joined(text[end], text[end + 1])) return true
+    }
+    return false
+  })
+  let seed = 7
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  const alphabet = ['a', 'b', 'é', '1', '_', '.', ':', '/', '-', ' ', '(', ')']
+  const word = (length) => Array.from({ length }, () => alphabet[Math.floor(random() * alphabet.length)]).join('')
+  for (let round = 0; round < 400; round += 1) {
+    const values = Array.from({ length: 1 + Math.floor(random() * 6) }, () => word(1 + Math.floor(random() * 5))).filter((value) => value.trim() !== '')
+    const matches = createDenyMatcher(values)
+    for (let sample = 0; sample < 20; sample += 1) {
+      const text = word(Math.floor(random() * 24))
+      assert.equal(matches(text), reference(values, text), JSON.stringify({ values, text }))
+    }
+  }
+})
+
+test('the deny matcher costs a few lookups per word, however many values: 15,000 to 30,000 values against titles that use a repository word', (t) => {
+  // Repository identities that are ordinary words, and one whose name starts with `_`: every value shares a first word
+  // with the text, which a matcher that compares candidates one by one pays for on every occurrence.
+  const values = []
+  for (let index = 0; index < 10000; index += 1) values.push(`harbor:note-${index}`, `harbor/notes/note ${index}.md`, `_drafts/notes/n-${index}.md`)
+  const texts = Array.from({ length: 4000 }, (_, index) => `Harbor lights ${index} over the harbor wall, _drafts of harbor plans and harbor: notes`)
+  const elapsed = {}
+  for (const count of [15000, 30000]) {
+    const started = performance.now()
+    const matches = createDenyMatcher(values.slice(0, count))
+    for (const text of texts) assert.equal(matches(text), false)
+    elapsed[count] = Math.round(performance.now() - started)
+  }
+  t.diagnostic(`deny matcher: 15,000 values ${elapsed[15000]} ms, 30,000 values ${elapsed[30000]} ms, over ${texts.length} titles`)
+  // Generous bounds, far below what a candidate-by-candidate matcher takes here (seconds to tens of seconds).
+  assert.ok(elapsed[15000] < 1500 && elapsed[30000] < 1500, JSON.stringify(elapsed))
 })
 
 test('rule 3, coverage: a reused note is judged like an emitted one; a guard that skipped the cache would serve a forged entry', (t) => {
