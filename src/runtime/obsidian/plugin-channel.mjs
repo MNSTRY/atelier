@@ -70,12 +70,18 @@ export function readPluginBearers({ workspaceRoot, workspaceId }) {
 }
 
 // The bearers in memory. They are read again only when the directory changed
-// (a bearer minted, replaced, or deleted to rotate it), so a request costs one
-// stat of the directory, not a read of every file.
+// (a bearer minted, replaced, or deleted to rotate it), so a request costs a
+// stat and a listing of the directory, not a read of every file. The names
+// are part of what is compared: not every platform changes a directory's times
+// when an entry goes away. A bearer the service replaces under the same name
+// is announced with `invalidate()`.
 export function createPluginBearerCache({ workspaceRoot, workspaceId, read = readPluginBearers }) {
   const directory = pluginBearerDirectory(workspaceRoot)
   const signature = () => {
-    try { const stat = fs.statSync(directory, { bigint: true }); return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}` } catch (error) { if (error.code === 'ENOENT') return 'absent'; throw error }
+    try {
+      const stat = fs.statSync(directory, { bigint: true })
+      return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${fs.readdirSync(directory).sort().join('/')}`
+    } catch (error) { if (error.code === 'ENOENT') return 'absent'; throw error }
   }
   let seen = null
   let bearers = new Map()
@@ -86,6 +92,7 @@ export function createPluginBearerCache({ workspaceRoot, workspaceId, read = rea
       if (now !== seen) { bearers = read({ workspaceRoot, workspaceId }); seen = now }
       return bearers
     },
+    invalidate() { seen = null },
   }
 }
 
@@ -226,6 +233,8 @@ export function createPluginChannelForOracleTests({
   }
   return {
     bearers: () => bearers.current(),
+    // The service minted a bearer: whatever the directory's times say, the next lookup reads the bearers again.
+    bearersChanged: () => bearers.invalidate?.(),
     handle: (command, request) => commands[command](request),
   }
 }

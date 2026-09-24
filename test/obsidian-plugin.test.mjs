@@ -1027,12 +1027,18 @@ test('the bearers are read into memory once, and again only when their directory
   const first = ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE })
   for (let index = 0; index < 50; index += 1) assert.equal(cache.current().get(SCOPE), first)
   assert.equal(reads, 2, 'fifty lookups, one read after the bearer was minted')
-  // Another view's bearer minted, and one deleted to rotate it: each is seen at the next lookup.
+  // Another view's bearer minted, and one deleted to rotate it: each is seen at the next lookup, on every platform.
   ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'scope-other' })
   assert.equal(cache.current().size, 2)
   fs.rmSync(path.join(pluginBearerDirectory(workspaceRoot), `${SCOPE}.json`))
   assert.equal(cache.current().has(SCOPE), false)
   assert.equal(reads, 4)
+  // A bearer replaced under the same name by whoever minted it is seen once that is announced.
+  const file = path.join(pluginBearerDirectory(workspaceRoot), 'scope-other.json')
+  fs.writeFileSync(file, '{"schema":"atelier-obsidian-plugin-bearer/v1"}')
+  const replaced = ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'scope-other' })
+  cache.invalidate()
+  assert.equal(cache.current().get('scope-other'), replaced)
 
   // Through the listener: fifty requests from a program without a key cost one read in all.
   const world = await channelWorld(t)

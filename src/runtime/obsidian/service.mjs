@@ -128,7 +128,9 @@ export async function runMaintenanceService(options = {}) {
       const vaultRoot = viewVaultRoot(workspaceRoot, scopeId)
       const { choice, community } = decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultRoot, clock })
       const off = choice.state === 'off'
-      const plugin = preparePluginFiles({ channel: { host, port }, scopeId, bearer: ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock }), onlyIfPresent: off })
+      const bearer = ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock })
+      if (pluginChannel.bearers().get(scopeId) !== bearer) pluginChannel.bearersChanged()
+      const plugin = preparePluginFiles({ channel: { host, port }, scopeId, bearer, onlyIfPresent: off })
       // Turned off: the files still there are kept current; a folder the person removed is not made again.
       const files = off ? plugin.files.filter((file) => vaultFilePresent(vaultRoot, file.path)) : plugin.files
       const kept = new Set(files.map((file) => file.path))
