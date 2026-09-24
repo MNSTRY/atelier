@@ -83,7 +83,8 @@
   cannot be published stays withheld instead of stopping the vault. Deciding
   it changes the eligibility revision, so every view is rebuilt at the next
   tick. A decision recorded as "only you" with them withheld keeps them
-  withheld until `audience set me` is run again.
+  withheld until `audience set me` is run again. `view add` counts what a
+  view would show the same way, as "only you" while nobody decided.
 
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the

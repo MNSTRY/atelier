@@ -529,12 +529,15 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const repositories = project.repos.filter((repo) => !repo.external && typeof repo.name === 'string').map((repo) => repo.name)
         const scope = viewFromRequest({ scopeId: value, all: flags.all === true, folders: flags.folder ?? [], repo: flags.repo, tag: flags.tag, expand: flags.expand, repositories })
         const plan = planViewAdd(project, { scope, makeDefault: flags.default === true })
-        // Counted for the audiences this machine admits; for "only you", the answer offered first, while nobody decided.
+        // Counted as this machine decided who may see; while nobody decided, for "only you", the answer offered first,
+        // which shows the notes without a classification too.
         const machine = machineOf(workspace)
         const decided = machine?.decisions.audience ?? null
         const audience = { allow: decided === null ? ONLY_YOU_AUDIENCES : machine.audienceAllow, decided: decided !== null }
+        const { eligibilityFor, onlyYouEligibility } = await import('../runtime/obsidian/pipeline.mjs')
         const { viewCounts } = await import('../runtime/obsidian/view-counts.mjs')
-        const counts = viewCounts({ project, audienceAllow: audience.allow, scope, ...(workspaceId === null ? {} : { workspaceId }) })
+        const eligibility = decided === null ? onlyYouEligibility({ project }) : eligibilityFor({ machine, project })
+        const counts = viewCounts({ project, audienceAllow: audience.allow, scope, eligibility, ...(workspaceId === null ? {} : { workspaceId }) })
         const countLine = viewCountWords(scope.scopeId, counts, audience)
         if (counts.shown === 0 && flags['allow-empty'] !== true) refuse('view-would-be-empty', `${countLine}; nothing was written`, { scopeId: scope.scopeId, counts, audience })
         const file = path.basename(project.configPath)

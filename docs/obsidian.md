@@ -350,10 +350,11 @@ atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo 
 - The first view declared is the default; `--default` makes a later one the
   default.
 - Before writing, the command counts the notes the view would show on this
-  machine, for the audiences the machine admits (for "only you" while nobody
-  decided who may see), and names how many of the notes it selects are
-  withheld: those without a classification (a `kg` block), and those whose
-  audience is not admitted. A view that would show no note is refused with
+  machine, as the machine decided who may see (as "only you", with the notes
+  without a classification it shows, while nobody decided), and names how
+  many of the notes it selects are withheld: those without a classification
+  (a `kg` block) that the decision does not show, and those whose audience is
+  not admitted. A view that would show no note is refused with
   `view-would-be-empty` and the counts; `--allow-empty` declares it anyway.
 - A person at a terminal sees the change and the counts and is asked
   `Write this change? [Y/n]`; `--yes` answers beforehand, and no answer within
