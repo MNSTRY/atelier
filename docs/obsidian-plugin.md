@@ -311,6 +311,14 @@ The service keeps handshakes and sessions in memory. A service that started
 again knows neither; the plugin's next lease is refused with
 `session-unknown`, and it shakes hands again.
 
+What the person sees of a refused challenge: a 401 is a key the service does
+not know (`Atelier: not set up`, reason "key not known to the service"; the
+data file is older than a rotated key, say), unless the answer says the
+challenge was `challenge-stale` or `challenge-replayed`. The key is not in
+question then: the plugin shows the service as unreachable with that reason,
+and its next round tries again with a fresh challenge. None of these answers
+is authenticated, so they only ever decide what is shown.
+
 ## Security argument
 
 - Reach. The listener binds a literal loopback address and refuses any `Host`

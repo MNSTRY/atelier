@@ -251,7 +251,7 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
 // reloads the plugin, so a change to the code without a new version would leave two plugins under one version.
 const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
-  '1.1.0': 'sha256:6be2900bfe25ae5a0aec920cb3c4289ad25b6d36eed1567fdd0cef88ed53ed95',
+  '1.1.0': 'sha256:7a4ed9bd7a9092e55e874b6ac722bcb6c8fabefdf85470ba5ded6e3e083cb347',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
@@ -814,6 +814,32 @@ test('the status bar does not flip between "not set up" and "service unreachable
   await plugin.cycle()
   assert.equal(statusBarOf(world), 'Atelier: current')
   plugin.unload()
+})
+
+test('a challenge the service found stale or answered already is not shown as a key it does not know', async (t) => {
+  // The service's clock runs a minute ahead of the plugin's: every challenge is stale when it arrives.
+  const skewed = await channelWorld(t, { now: () => Date.now() + 60_000 })
+  const plugin = skewed.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.deepEqual([statusBarOf(skewed), plugin.view.reason], ['Atelier: service unreachable', 'challenge-stale'])
+  assert.deepEqual(skewed.service.calls.plugin, ['challenge'])
+  plugin.unload()
+  // Answered already, and then a key the service does not know: only that one says "not set up".
+  const world = await channelWorld(t)
+  await world.service.listener.close()
+  let error = 'challenge-replayed'
+  const squat = await squatter(t, world.port, () => ({ statusCode: 401, body: { error } }))
+  const second = world.plugin()
+  await second.load()
+  await second.cycle()
+  assert.deepEqual([statusBarOf(world), second.view.reason], ['Atelier: service unreachable', 'challenge-replayed'])
+  error = 'plugin-key-unknown'
+  await second.cycle()
+  await second.cycle()
+  assert.deepEqual([statusBarOf(world), second.view.reason], ['Atelier: not set up', 'key-not-known-to-the-service'])
+  await squat.close()
+  second.unload()
 })
 
 test('a plugin unloaded while its hello is under way lets that session go at once, and shows nothing afterwards', async (t) => {

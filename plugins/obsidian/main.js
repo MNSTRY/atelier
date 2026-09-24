@@ -314,7 +314,11 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     if (!this.current(channel)) return false
     const offer = challenge.kind === 'response' && challenge.statusCode === 200 ? challenge.body : null
     if (offer === null) {
-      this.showRound(challenge.kind === 'response' && challenge.statusCode === 401 ? { state: 'not-set-up', reason: 'key-not-known-to-the-service', report: null } : this.unreachable(challenge))
+      // A 401 is a key the service does not know, unless the service says the challenge itself came too late or was
+      // answered already: the key is not in question then, and the next round's fresh challenge tries again.
+      const refusal = challenge.kind === 'response' && challenge.body ? challenge.body.error : null
+      const keyUnknown = challenge.kind === 'response' && challenge.statusCode === 401 && refusal !== 'challenge-stale' && refusal !== 'challenge-replayed'
+      this.showRound(keyUnknown ? { state: 'not-set-up', reason: 'key-not-known-to-the-service', report: null } : this.unreachable(challenge))
       return false
     }
     const bound = [channel.scopeId, authorityOf(channel), clientNonce, offer.serverNonce, offer.handshakeId]
