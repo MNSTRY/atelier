@@ -30,21 +30,24 @@ export const MAX_PROJECT_NAME_BYTES = 80
 const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029/\\:*?"<>|#^[\]()]/g
 const INVISIBLE = /[\u202a-\u202e\u2066-\u2069\ufeff\u200b]/g
 const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)$/i
-const TRAILING_JOINERS = /[\p{M}\u200d\ufe00-\ufe0f]+$/u
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
+// The longest start of `text` of at most `maxBytes` bytes that ends between two characters as a person reads them: a
+// letter and its accents, or an emoji sequence, stay together or go together.
 function cutToBytes(text, maxBytes) {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text
   let cut = ''
-  for (const character of text) {
-    if (Buffer.byteLength(cut + character, 'utf8') > maxBytes) break
-    cut += character
+  for (const { segment } of GRAPHEMES.segment(text)) {
+    if (Buffer.byteLength(cut + segment, 'utf8') > maxBytes) break
+    cut += segment
   }
-  return cut.replace(TRAILING_JOINERS, '')
+  return cut
 }
 
 // A piece of text as a folder name on macOS, Linux and Windows, and in the app: NFC, no control, separator, reserved
 // or link character, no parentheses (they end the view's part), single spaces, no leading or trailing space or dot
-// (a leading dot hides a folder from the app), cut to a number of bytes, and no Windows device name. May be empty.
+// (a leading dot hides a folder from the app), cut to a number of bytes between two characters as a person reads them,
+// and no Windows device name. May be empty.
 export function safeFolderPart(text, maxBytes = MAX_PROJECT_NAME_BYTES) {
   const cleaned = String(text ?? '').normalize('NFC').replace(INVISIBLE, '').replace(UNSAFE, ' ').replace(/\s+/gu, ' ').replace(/^[\s.]+|[\s.]+$/gu, '')
   const cut = cutToBytes(cleaned, maxBytes).replace(/[\s.]+$/u, '')
