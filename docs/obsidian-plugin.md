@@ -446,7 +446,9 @@ note open in the editor.
   every command with an error, which gets one renewal of a session and
   nothing more of it; answers that alternate between the two failures, which
   do not make the status bar flip; an unload while a hello is
-  under way; the refusal table above with mutation controls that must fail
+  under way; the plugin's own timer (a renewal every two seconds, rounds that
+  never overlap, nothing after an unload); the refusal table above with
+  mutation controls that must fail
   it; bearer minting, rotation and the bearer cache; publication of the
   plugin files, entries and data file, with a person's settings kept, the
   person's choice followed (an entry the app had and the person removed is

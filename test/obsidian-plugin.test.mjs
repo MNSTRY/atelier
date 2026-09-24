@@ -145,14 +145,14 @@ function fakeApp(vaultRoot, record) {
   return { vault, workspace: forbidden('workspace'), metadataCache: forbidden('metadataCache') }
 }
 
-function fakeObsidian({ apiVersion = '1.13.7' } = {}) {
+function fakeObsidian({ apiVersion = '1.13.7', keepIntervals = false } = {}) {
   const record = { notices: [], modals: [], commands: [], statusBars: [], intervals: [], forbidden: [], saved: 0 }
   class Component {
     constructor() { this.cleanups = [] }
     register(cleanup) { this.cleanups.push(cleanup) }
     // The stand-in app drives each round through cycle(), so a test never races the plugin's own timer: the interval
-    // it registers is recorded and stopped at once.
-    registerInterval(id) { record.intervals.push(id); clearInterval(id); return id }
+    // it registers is recorded and stopped at once, unless the test is about that timer, which then runs until unload.
+    registerInterval(id) { record.intervals.push(id); if (keepIntervals) this.register(() => clearInterval(id)); else clearInterval(id); return id }
     registerDomEvent(element, type, handler) { element.addEventListener(type, handler); this.register(() => element.removeEventListener(type, handler)) }
   }
   class Plugin extends Component {
@@ -369,7 +369,7 @@ test('the handshake computations: each binds everything it names, and no two of 
 
 // A workspace with one view whose vault holds the plugin as publication puts
 // it there, and a listener that holds the plugin channel of that workspace.
-async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginSessions(), primitives = SERVER_PRIMITIVES, channelPrimitives = PLUGIN_CHANNEL_PRIMITIVES, now = () => Date.now(), port: fixedPort = null } = {}) {
+async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginSessions(), primitives = SERVER_PRIMITIVES, channelPrimitives = PLUGIN_CHANNEL_PRIMITIVES, now = () => Date.now(), port: fixedPort = null, keepIntervals = false } = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const workspaceRoot = path.join(dir, 'workspace')
@@ -410,7 +410,7 @@ async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginS
   world.port = port
   world.bearer = world.install({ port })
   world.service = await world.listen({ port })
-  world.fake = fakeObsidian({ apiVersion })
+  world.fake = fakeObsidian({ apiVersion, keepIntervals })
   world.requires = []
   world.requests = []
   world.plugin = () => {
@@ -840,6 +840,24 @@ test('a challenge the service found stale or answered already is not shown as a 
   assert.deepEqual([statusBarOf(world), second.view.reason], ['Atelier: not set up', 'key-not-known-to-the-service'])
   await squat.close()
   second.unload()
+})
+
+test('the plugin\'s own timer renews the lease every two seconds, a round never overlaps another, and unloading stops it', async (t) => {
+  const world = await channelWorld(t, { keepIntervals: true })
+  const plugin = world.plugin()
+  await plugin.load()
+  // A round asked for while one is under way joins it.
+  assert.equal(plugin.cycle(), plugin.cycle())
+  await waitFor(() => world.service.calls.plugin.filter((command) => command === 'lease').length >= 2, { timeoutMs: 3 * PLUGIN_RENEW_INTERVAL_MS + 2000, everyMs: 50, label: 'two renewals by the plugin\'s own timer' })
+  const calls = [...world.service.calls.plugin]
+  assert.deepEqual(calls.slice(0, 3), ['challenge', 'hello', 'status'])
+  assert.equal(calls.filter((command) => command === 'challenge').length, 1, 'one handshake for the session')
+  assert.equal(statusBarOf(world), 'Atelier: current')
+  plugin.unload()
+  await waitFor(() => world.service.calls.plugin.includes('release'), { timeoutMs: 2000, everyMs: 20, label: 'the release' })
+  const after = world.service.calls.plugin.length
+  await sleep(PLUGIN_RENEW_INTERVAL_MS + 500)
+  assert.deepEqual(world.service.calls.plugin.slice(after), [], 'the timer stopped with the plugin')
 })
 
 test('a plugin unloaded while its hello is under way lets that session go at once, and shows nothing afterwards', async (t) => {
