@@ -1423,7 +1423,7 @@ test('the bearer goes into a private vault root only: a vault Atelier placed is 
   assert.equal(result.state, 'committed', 'the notes and the rest of the plugin are published')
   assert.deepEqual([outcomeOf(result, PLUGIN_DATA_PATH).outcome, outcomeOf(result, PLUGIN_DATA_PATH).reason, outcomeOf(result, PLUGIN_DATA_PATH).blocking], ['vault-not-private', 'vault-root-not-private', false])
   assert.equal(named.read(PLUGIN_DATA_PATH), null, 'no bearer in a vault others can read')
-  assert.equal(fs.statSync(outside).mode & 0o777, 0o755, 'a vault root Atelier did not place is never changed')
+  assert.equal(fs.statSync(outside).mode & 0o777, 0o755, 'the mode of a vault root Atelier did not place is never changed')
   assert.ok(named.read(`${PLUGIN_DIRECTORY}/main.js`))
   assert.equal(named.recovered().some((bytes) => bytes.includes('b'.repeat(43))), false, 'nor a copy of it anywhere in recovery')
 })
@@ -1438,7 +1438,7 @@ test('a vault path Atelier placed that is a link is never made private and never
   const result = await world.publish(pluginViewOf('gen-0001'))
   assert.equal(result.state, 'committed', 'the notes and the rest of the plugin are published')
   assert.deepEqual([outcomeOf(result, PLUGIN_DATA_PATH).outcome, outcomeOf(result, PLUGIN_DATA_PATH).reason, outcomeOf(result, PLUGIN_DATA_PATH).blocking], ['vault-not-private', 'vault-root-is-a-link', false])
-  assert.equal(fs.statSync(elsewhere).mode & 0o777, 0o755, 'the folder the link leads to is not changed')
+  assert.equal(fs.statSync(elsewhere).mode & 0o777, 0o755, 'the mode of the folder the link leads to is never changed')
   assert.equal(world.read(PLUGIN_DATA_PATH), null)
   // Private behind the link or not: the folder was chosen elsewhere, and the bearer does not go there.
   fs.chmodSync(elsewhere, 0o700)

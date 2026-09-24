@@ -193,8 +193,9 @@ with mode `0700` and makes an existing one private before the first bearer
 goes in. Any other vault root is only checked: when it is not private the data
 file is not published (`vault-not-private`), the rest of the vault is, and the
 plugin says `Atelier: not set up`. A vault path under the data root that is a
-link to a folder somewhere else is never changed and never receives the data
-file, private or not (`vault-not-private`, reason `vault-root-is-a-link`).
+link to a folder somewhere else never receives the data file, private or not
+(`vault-not-private`, reason `vault-root-is-a-link`), and its mode is never
+changed; the view is published into it as ever.
 
 Deleting `state/plugin/<view>.json` rotates the bearer. A session made with
 the old one ends at its next request, and a handshake with it is refused; the

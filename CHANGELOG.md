@@ -70,7 +70,7 @@
   (`0700`), and an existing one is made private before the plugin's key is
   written into it. A vault root Atelier did not place never receives the key
   unless it is already private, and a vault path under the data root that is
-  a link to another folder never receives it and is never changed.
+  a link to another folder never receives it, and its mode is never changed.
 - A settings file nobody may read (`core-plugins.json`, say) is reported as
   `path-unsafe` and left for the person instead of failing the publication.
 - `plugins/` is part of the egress scan, and the release audit requires the
