@@ -17,7 +17,7 @@ import {
   revokeApplyPolicy, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
-import { readPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
+import { currentPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
 import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
 import { serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
@@ -156,11 +156,11 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
     }
-    // Atelier's plugin as the running service sees it, for one view. A vault that turned it off says so from the private
-    // record too, whether or not the service runs.
+    // Atelier's plugin as the running service sees it, for one view. A vault that turned it off says so from its own list
+    // and the private record too, whether or not the service runs.
     const pluginView = (running, workspace, scopeId) => {
       const presence = pluginPresenceOf(running, scopeId)
-      if (presence.present || workspace === null || readPluginChoice({ ...workspace, scopeId }).state !== 'off') return presence
+      if (presence.present || workspace === null || currentPluginChoice({ ...workspace, scopeId }).state !== 'off') return presence
       return { present: false, reason: 'turned-off-in-this-vault', next: turnPluginOnNext(scopeId) }
     }
     const pluginOf = async (scopeId) => pluginPresenceOf((await readServiceStatusDocument(lifecycle, lifecycleRules)).document, scopeId)
@@ -358,8 +358,9 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
       },
 
-      // Atelier's plugin in the vault of a view: the person's choice as Atelier recorded it, and whether a plugin holds the
-      // vault open. `on` records a request: the view's next publication brings the entry and the plugin files back.
+      // Atelier's plugin in the vault of a view: the person's choice (as recorded, or as the vault shows it before the next
+      // publication records it), and whether a plugin holds the vault open. `on` records a request: the view's next
+      // publication brings the entry and the plugin files back.
       async plugin() {
         if (sub !== undefined && sub !== 'show' && sub !== 'on') refuse('usage', 'plugin show [--scope ID] | plugin on [--scope ID]')
         if (sub === 'on') {
@@ -376,11 +377,11 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const service = enablement.reason === 'not-configured' ? { state: 'stopped' } : await serviceStatus(lifecycle, lifecycleRules)
         const running = service.state === 'healthy' ? (await readServiceStatusDocument(lifecycle, lifecycleRules)).document : null
         const plugins = scopeIds.map((scopeId) => ({
-          scopeId, choice: workspace === null ? { state: 'undecided', reason: null, since: null } : readPluginChoice({ ...workspace, scopeId }), presence: pluginView(running, workspace, scopeId),
+          scopeId, choice: workspace === null ? { state: 'undecided', reason: null, since: null } : currentPluginChoice({ ...workspace, scopeId }), presence: pluginView(running, workspace, scopeId),
         }))
         return {
           exit: EXIT.ok, document: { plugins },
-          human: plugins.flatMap(({ scopeId, choice, presence }) => [`view ${scopeId}: plugin ${choice.state}${pluginLine(presence)}`, ...(presence.next ? [`  Next: ${presence.next}`] : [])]),
+          human: plugins.flatMap(({ scopeId, choice, presence }) => [`view ${scopeId}: plugin ${choice.state}${choice.pending ? ' (as the vault shows it; recorded at the view\'s next publication)' : ''}${pluginLine(presence)}`, ...(presence.next ? [`  Next: ${presence.next}`] : [])]),
         }
       },
 

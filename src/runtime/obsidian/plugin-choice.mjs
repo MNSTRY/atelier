@@ -23,7 +23,9 @@ import { canonicalJson, isPlainObject, isoTime } from './documents.mjs'
 // the entry only over exactly those bytes, so a change the person makes while
 // a publication runs is never written over, and the next preparation reads it.
 // A file that is absent or is not a list decides nothing. A record that cannot
-// be read counts as `off`: nothing is re-added on a guess.
+// be read counts as `off`: nothing is re-added on a guess. Status reads the
+// same change without recording it (currentPluginChoice), so it says what the
+// person did before the view's next preparation records it.
 
 export const PLUGIN_CHOICE_SCHEMA = 'atelier-obsidian-plugin-choice/v1'
 export const PLUGIN_CHOICE_STATES = Object.freeze(['requested', 'on', 'off'])
@@ -32,6 +34,8 @@ const MAX_SETTINGS_BYTES = 256 * 1024
 const segment = (identifier) => identifier.replaceAll(':', '_')
 
 export const pluginChoiceDirectory = (workspaceRoot) => path.join(workspaceRoot, 'state', 'plugin', 'choices')
+// Where the recovery store places a view's vault.
+export const viewVaultRoot = (workspaceRoot, scopeId) => path.join(workspaceRoot, 'vaults', segment(scopeId))
 const choiceFile = (workspaceRoot, scopeId) => path.join(pluginChoiceDirectory(workspaceRoot), `${segment(scopeId)}.json`)
 
 function validChoice(document, { workspaceId, scopeId }) {
@@ -108,16 +112,30 @@ export function readCommunityEntry(vaultRoot) {
   return { entry: list.includes(PLUGIN_ID) ? 'listed' : 'not-listed', file }
 }
 
-// The decision for one view, from its record and what its vault says now. A
-// change of the decision is recorded here: an entry removed after it was
-// confirmed is the person turning the plugin off; an entry the person put back
-// turns it on again.
+// A change of the decision the vault shows against the record, or null: an
+// entry removed after it was confirmed is the person turning the plugin off; an
+// entry the person put back turns it on again.
+function changeShown(choice, entry) {
+  if (choice.state === 'on' && entry === 'not-listed') return { state: 'off', reason: 'entry-removed-by-person' }
+  if (choice.state === 'off' && !choice.unreadable && entry === 'listed') return { state: 'on', reason: 'entry-restored-by-person' }
+  return null
+}
+
+// The decision for one view, from its record and what its vault says now, as
+// the view is prepared: a change is recorded here.
 export function decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultRoot, clock }) {
-  let choice = readPluginChoice({ workspaceRoot, workspaceId, scopeId })
+  const recorded = readPluginChoice({ workspaceRoot, workspaceId, scopeId })
   const community = readCommunityEntry(vaultRoot)
-  if (choice.state === 'on' && community.entry === 'not-listed') choice = writePluginChoice({ workspaceRoot, workspaceId, scopeId, state: 'off', reason: 'entry-removed-by-person', clock })
-  else if (choice.state === 'off' && !choice.unreadable && community.entry === 'listed') choice = writePluginChoice({ workspaceRoot, workspaceId, scopeId, state: 'on', reason: 'entry-restored-by-person', clock })
-  return { choice, community }
+  const change = changeShown(recorded, community.entry)
+  return { choice: change === null ? recorded : writePluginChoice({ workspaceRoot, workspaceId, scopeId, ...change, clock }), community }
+}
+
+// The same decision for status, read only: a change not recorded yet is marked
+// `pending` (the view's next preparation records it).
+export function currentPluginChoice({ workspaceRoot, workspaceId, scopeId }) {
+  const recorded = readPluginChoice({ workspaceRoot, workspaceId, scopeId })
+  const change = changeShown(recorded, readCommunityEntry(viewVaultRoot(workspaceRoot, scopeId)).entry)
+  return change === null ? recorded : { ...change, since: null, pending: true }
 }
 
 // After a publication: an offered entry that is now in place is confirmed.

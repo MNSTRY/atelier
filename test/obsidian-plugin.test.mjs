@@ -1140,6 +1140,12 @@ test('a person who turns the plugin off in a vault is followed: the entry is not
   fs.writeFileSync(vault.list, JSON.stringify(['dataview'], null, 2))
   fs.rmSync(path.join(world.vault, PLUGIN_DIRECTORY), { recursive: true })
   const theirs = fs.readFileSync(vault.list)
+  // Status says so at once, from the vault's own list; the record follows with the view's next preparation.
+  const seen = await world.run(['plugin', 'show', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual(seen.json.plugins[0].choice, { state: 'off', reason: 'entry-removed-by-person', since: null, pending: true })
+  assert.equal(seen.json.plugins[0].presence.reason, 'turned-off-in-this-vault')
+  assert.equal((await world.statusDocument()).plugins.scopes[0].entry, 'off')
+  assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'], 'status records nothing')
   await change('Low water at six.')
   assert.deepEqual(vault.choice(), ['off', 'entry-removed-by-person'])
   assert.ok(fs.readFileSync(vault.list).equals(theirs), 'the list is left exactly as the person wrote it')
@@ -1170,8 +1176,9 @@ test('a person who turns the plugin off in a vault is followed: the entry is not
   assert.deepEqual(vault.listed(), ['dataview'])
   assert.ok(fs.readFileSync(path.join(world.vault, PLUGIN_DIRECTORY, 'main.js')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))), 'a plugin file still there is kept current')
 
-  // The second way back: the person turns it on in Obsidian, which lists it again.
+  // The second way back: the person turns it on in Obsidian, which lists it again. Status follows at once.
   fs.writeFileSync(vault.list, JSON.stringify(['dataview', PLUGIN_ID]))
+  assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.reason, 'no-live-lease')
   await change('Spring tide after that.')
   assert.deepEqual(vault.choice(), ['on', 'entry-restored-by-person'])
   assert.deepEqual(vault.listed(), ['dataview', PLUGIN_ID])

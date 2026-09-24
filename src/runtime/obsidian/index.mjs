@@ -31,7 +31,7 @@ export {
 export { MAX_REQUEST_BYTES, SERVICE_OPERATIONS, createServiceServer } from './service-server.mjs'
 export { PLUGIN_BEARER_SCHEMA, PLUGIN_PRESENCE_SCHEMA, createPluginChannel, createPluginSessions, ensurePluginBearer, pluginBearerDirectory, pluginPresence, readPluginBearers } from './plugin-channel.mjs'
 export { PLUGIN_PRESENCE_REASONS, pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from './plugin-presence.mjs'
-export { PLUGIN_CHOICE_SCHEMA, PLUGIN_CHOICE_STATES, confirmPluginEntry, decidePluginChoice, pluginChoiceDirectory, readCommunityEntry, readPluginChoice, writePluginChoice } from './plugin-choice.mjs'
+export { PLUGIN_CHOICE_SCHEMA, PLUGIN_CHOICE_STATES, confirmPluginEntry, currentPluginChoice, decidePluginChoice, pluginChoiceDirectory, readCommunityEntry, readPluginChoice, viewVaultRoot, writePluginChoice } from './plugin-choice.mjs'
 export { DEFAULT_SHUTDOWN_GRACE_MS, SERVICE_STATUS_SCHEMA, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
 export { DEFAULT_START_TIMEOUT_MS, DEFAULT_STOP_TIMEOUT_MS, SERVICE_STATES, readServiceStatusDocument, requestServiceTick, serviceStatus, startService, stopService } from './lifecycle.mjs'
 export { STARTUP_PLATFORMS, buildStartupAdapter } from './startup-adapters.mjs'

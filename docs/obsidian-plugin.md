@@ -117,7 +117,10 @@ follows. The decision is the one Obsidian itself records: the
   current, so turning the plugin back on gets the current code. The vault
   works through the command-line path, and `status`, `open` and
   `atelier obsidian plugin show` report the plugin as not present with reason
-  `turned-off-in-this-vault` and the way back.
+  `turned-off-in-this-vault` and the way back. They read the vault's list, so
+  they say so as soon as the person has turned the plugin off; the decision
+  is recorded when the view is next prepared (`plugin show` marks a choice
+  not recorded yet as `pending`).
 - There are two ways back. Turning "Atelier" on again in Obsidian's settings
   (possible while its folder is there) lists the entry again; the view's next
   publication records the plugin as on and owns the entry again.

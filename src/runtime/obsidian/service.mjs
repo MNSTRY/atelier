@@ -1,6 +1,5 @@
 import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
-import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
 import { prepareView as productionPrepareView } from '../../projection/obsidian/materialize/index.mjs'
@@ -11,7 +10,7 @@ import { createMaintenanceEngine } from './engine.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { assertOutsideRepositories, protectedRoots, readLocalPointer, resolveDataRoot, workspaceStateRoot } from './machine-settings.mjs'
 import { createPluginChannel, createPluginSessions, ensurePluginBearer, pluginPresence } from './plugin-channel.mjs'
-import { confirmPluginEntry, decidePluginChoice, readPluginChoice, vaultFilePresent } from './plugin-choice.mjs'
+import { confirmPluginEntry, currentPluginChoice, decidePluginChoice, vaultFilePresent, viewVaultRoot } from './plugin-choice.mjs'
 import { isProcessAlive } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import {
@@ -124,10 +123,9 @@ export async function runMaintenanceService(options = {}) {
   // for that vault allows: the choice is read, and recorded when the vault shows it changed, from the community plugin
   // list as it is now, and those very bytes travel with the view. A bearer or a choice that cannot be kept leaves that
   // view without the plugin for this tick; the view itself is prepared as ever.
-  const vaultOf = (scopeId) => path.join(workspaceRoot, 'vaults', scopeId.replaceAll(':', '_'))
   const pluginFor = (scopeId) => {
     try {
-      const vaultRoot = vaultOf(scopeId)
+      const vaultRoot = viewVaultRoot(workspaceRoot, scopeId)
       const { choice, community } = decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultRoot, clock })
       const off = choice.state === 'off'
       const plugin = preparePluginFiles({ channel: { host, port }, scopeId, bearer: ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock }), onlyIfPresent: off })
@@ -227,7 +225,7 @@ export async function runMaintenanceService(options = {}) {
         if (lastError?.schema) { const { schema: _schema, workspaceId: _workspace, ...shown } = lastError; lastError = shown }
         return {
           schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(),
-          plugins: pluginPresence({ sessions: pluginSessions, scopeIds: [...pluginChannel.bearers().keys()], entryOf: (scopeId) => readPluginChoice({ workspaceRoot, workspaceId, scopeId }).state }),
+          plugins: pluginPresence({ sessions: pluginSessions, scopeIds: [...pluginChannel.bearers().keys()], entryOf: (scopeId) => currentPluginChoice({ workspaceRoot, workspaceId, scopeId }).state }),
           ...(typeof appStatus === 'function' ? { app: appStatus() } : {}),
         }
       },
