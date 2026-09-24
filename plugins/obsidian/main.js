@@ -300,7 +300,8 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     }
     const crypto = this.crypto
     const clientNonce = crypto.randomBytes(32).toString('hex')
-    const challenge = await post(this.http, channel, CHANNEL.routes.challenge, { protocol: CHANNEL.protocol, keyHint: hmacHex(crypto, channel.bearer, 'key-hint', [clientNonce]), clientNonce })
+    const issuedAt = Date.now()
+    const challenge = await post(this.http, channel, CHANNEL.routes.challenge, { protocol: CHANNEL.protocol, keyHint: hmacHex(crypto, channel.bearer, 'key-hint', [clientNonce, issuedAt]), clientNonce, issuedAt })
     if (!this.current(channel)) return false
     const offer = challenge.kind === 'response' && challenge.statusCode === 200 ? challenge.body : null
     if (offer === null) {

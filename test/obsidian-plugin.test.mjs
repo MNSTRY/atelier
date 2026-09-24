@@ -41,7 +41,7 @@ import { forbiddenEgressFindingsForText } from '../src/egress/forbidden-egress.m
 import { OBSIDIAN_EXT_KEY, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import { COMMUNITY_PLUGINS_PATH, POLICY_SETTINGS_PATH, isUserOwnedSettingsPath, prepareSettings } from '../src/projection/obsidian/materialize/index.mjs'
 import {
-  PLUGIN_CHANNEL_PROTOCOL, PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_DATA_SCHEMA, PLUGIN_DIRECTORY, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_ID, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES,
+  PLUGIN_CHALLENGE_WINDOW_MS, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_DATA_SCHEMA, PLUGIN_DIRECTORY, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_ID, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE,
   PLUGIN_MAX_REQUEST_BYTES, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MINIMUM_APP_VERSION, PLUGIN_RENEW_INTERVAL_MS, PLUGIN_ROUTES, PLUGIN_SOURCE_FILES, PLUGIN_STATUS_SCHEMA, pluginClientProof,
   pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof, preparePluginFiles, readPluginSource, validatePluginData, validatePluginRequest,
 } from '../src/projection/obsidian/plugin-bridge/index.mjs'
@@ -251,7 +251,7 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
 // reloads the plugin, so a change to the code without a new version would leave two plugins under one version.
 const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
-  '1.1.0': 'sha256:b0eb894dfa6739cccacd6acbe91a47c6459dce57c2a0c7a5a5470826b4f63a73',
+  '1.1.0': 'sha256:1e5ce052b41d68d88ee2c26dfe03e4c2157bd41676d700677a0fe35b7f34180c',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
@@ -298,7 +298,7 @@ test('the plugin reaches a literal loopback address only: the egress scan passes
 
 test('the channel contract refuses every request that is not exactly one of its commands', () => {
   const hex = (fill, length = 64) => fill.repeat(length)
-  const challenge = { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: hex('a'), clientNonce: hex('b') }
+  const challenge = { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: hex('a'), clientNonce: hex('b'), issuedAt: 1767607200000 }
   const hello = { handshakeId: `ph-${hex('1', 32)}`, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${hex('2', 32)}`, vaultProof: hex('c'), clientProof: hex('d') }
   const sealed = { sessionId: `ps-${hex('3', 32)}`, counter: 1, mac: hex('e') }
   assert.deepEqual(validatePluginRequest('challenge', challenge), { ok: true, body: challenge })
@@ -320,6 +320,8 @@ test('the channel contract refuses every request that is not exactly one of its 
     ['challenge', { ...challenge, scopeId: SCOPE }, 'request-malformed'],
     ['challenge', { ...challenge, keyHint: 'b'.repeat(43) }, 'request-malformed'],
     ['challenge', { ...challenge, clientNonce: hex('b', 32) }, 'request-malformed'],
+    ['challenge', { ...challenge, issuedAt: '1767607200000' }, 'request-malformed'],
+    ['challenge', { ...challenge, issuedAt: 0 }, 'request-malformed'],
     ['hello', { ...hello, vaultPath: '/vaults/scope-plugin' }, 'request-malformed'],
     ['hello', { ...hello, handshakeId: 'ph-guess' }, 'request-malformed'],
     ['hello', { ...hello, instanceId: `ps-${hex('2', 32)}` }, 'request-malformed'],
@@ -355,9 +357,10 @@ test('the handshake computations: each binds everything it names, and no two of 
   const answer = pluginResponseMac({ sessionKey, command: 'lease', sessionId, counter: 1, payload: '{}' })
   assert.notEqual(pluginResponseMac({ sessionKey, command: 'lease', sessionId, counter: 1, payload: '{ }' }), answer, 'the exact bytes of an answer are bound')
   // Separate labels: no proof can stand in for another, nor a request for an answer.
-  const hint = pluginKeyHint({ bearer: base.bearer, clientNonce: base.clientNonce })
+  const hint = pluginKeyHint({ bearer: base.bearer, clientNonce: base.clientNonce, issuedAt: 1767607200000 })
   assert.equal(new Set([proof, client, vaultProof, request, answer, hint, sessionKey.toString('hex')]).size, 7)
-  assert.notEqual(pluginKeyHint({ bearer: base.bearer, clientNonce: 'c'.repeat(64) }), hint, 'a hint is fresh with every nonce')
+  assert.notEqual(pluginKeyHint({ bearer: base.bearer, clientNonce: 'c'.repeat(64), issuedAt: 1767607200000 }), hint, 'a hint is fresh with every nonce')
+  assert.notEqual(pluginKeyHint({ bearer: base.bearer, clientNonce: base.clientNonce, issuedAt: 1767607200001 }), hint, 'and bound to the time the challenge names')
 })
 
 // ---------------------------------------------------------------------------
@@ -440,7 +443,7 @@ test('loaded in a vault Atelier published, the plugin shakes hands, holds a leas
     assert.ok(Object.values(PLUGIN_ROUTES).includes(request.path))
     for (const secret of [world.bearer, world.vaultRoot, fs.realpathSync(world.vaultRoot)]) assert.equal(request.body.includes(secret), false, `${request.path} carries ${secret}`)
   }
-  assert.deepEqual([world.requests[0].path, Object.keys(JSON.parse(world.requests[0].body)).sort()], [PLUGIN_ROUTES.challenge, ['clientNonce', 'keyHint', 'protocol']])
+  assert.deepEqual([world.requests[0].path, Object.keys(JSON.parse(world.requests[0].body)).sort()], [PLUGIN_ROUTES.challenge, ['clientNonce', 'issuedAt', 'keyHint', 'protocol']])
   assert.equal(world.requests[0].body.includes(SCOPE), false, 'the challenge does not name the view')
   assert.deepEqual([...new Set(world.requires)].sort(), ['crypto', 'fs', 'http', 'obsidian'])
   assert.deepEqual(world.fake.record.commands.map((command) => [command.id, command.name]), [[`${PLUGIN_ID}:show-status`, 'Atelier: Show status']])
@@ -707,6 +710,8 @@ test('a program squatting the service\'s address while it is down learns nothing
     answered += 1
     const forged = await raw({ port: world.port, route: PLUGIN_ROUTES.hello, headers: { Host }, body: JSON.stringify({ handshakeId: replayed.body.handshakeId, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${randomBytes(16).toString('hex')}`, vaultProof: randomBytes(32).toString('hex'), clientProof: randomBytes(32).toString('hex') }) })
     assert.equal(forged.statusCode, 401, 'a hello that does not prove the key')
+    const again = await raw({ port: world.port, route: entry.path, headers: { Host }, body: entry.body })
+    assert.deepEqual([again.statusCode, again.body.error], [401, 'challenge-replayed'], 'and it is answered once')
   }
   assert.equal(answered, 3)
   assert.equal(sessions.report(SCOPE), null, 'no session for the squatter')
@@ -805,13 +810,13 @@ test('a session whose vault key was rotated ends; the plugin waits for the new k
 // ---------------------------------------------------------------------------
 
 // A client that holds a vault's key and speaks the channel the way the plugin does, one step at a time.
-function keyHolder({ port, bearer, scopeId = SCOPE, vaultPath, pluginVersion = '1.1.0', appVersion = '1.13.7', instanceId = `pi-${randomBytes(16).toString('hex')}` }) {
+function keyHolder({ port, bearer, scopeId = SCOPE, vaultPath, pluginVersion = '1.1.0', appVersion = '1.13.7', instanceId = `pi-${randomBytes(16).toString('hex')}`, clock = () => Date.now() }) {
   const authority = authorityOf('127.0.0.1', port)
   const send = (route, body) => raw({ port, route, headers: { Host: authority }, body: JSON.stringify(body) })
   const holder = {
-    async challenge() {
-      const clientNonce = randomBytes(32).toString('hex')
-      return { answer: await send(PLUGIN_ROUTES.challenge, { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer, clientNonce }), clientNonce }), clientNonce }
+    // `clientNonce` and `issuedAt` can be forced, to send a challenge again or out of its time.
+    async challenge({ clientNonce = randomBytes(32).toString('hex'), issuedAt = clock() } = {}) {
+      return { answer: await send(PLUGIN_ROUTES.challenge, { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer, clientNonce, issuedAt }), clientNonce, issuedAt }), clientNonce, issuedAt }
     },
     // The hello that answers a challenge; `overrides` replace what is sent.
     helloFor({ answer, clientNonce }, overrides = {}) {
@@ -850,11 +855,12 @@ async function assertOnlyTheVaultKeyActs(t, { primitives = SERVER_PRIMITIVES, ch
   const Host = authorityOf('127.0.0.1', port)
   const send = (route, body, headers = {}, method = 'POST') => raw({ port, method, route, headers: { Host, ...headers }, body: body === null ? null : typeof body === 'string' ? body : JSON.stringify(body) })
   const vaultPath = fs.realpathSync(world.vaultRoot)
-  const client = keyHolder({ port, bearer: world.bearer, vaultPath })
+  const clock = () => now
+  const client = keyHolder({ port, bearer: world.bearer, vaultPath, clock })
   const otherBearer = ensurePluginBearer({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'scope-other' })
-  const challenge = () => { const clientNonce = randomBytes(32).toString('hex'); return { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer: world.bearer, clientNonce }), clientNonce } }
+  const challenge = () => { const clientNonce = randomBytes(32).toString('hex'); return { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer: world.bearer, clientNonce, issuedAt: now }), clientNonce, issuedAt: now } }
   const expect = async (label, pending, statusCode) => { const answer = await pending; assert.equal(answer.statusCode, statusCode, label); return answer }
-  const stranger = keyHolder({ port, bearer: randomBytes(32).toString('base64url'), vaultPath })
+  const stranger = keyHolder({ port, bearer: randomBytes(32).toString('base64url'), vaultPath, clock })
 
   // Who may start a handshake, and the shape of every request.
   await expect('a challenge made with a key the service does not hold', stranger.challenge().then(({ answer }) => answer), 401)
@@ -877,6 +883,13 @@ async function assertOnlyTheVaultKeyActs(t, { primitives = SERVER_PRIMITIVES, ch
   await expect('the vault key asking the service to stop', send('/stop', { runtimeId: world.service.identity.runtimeId }, { Authorization: `Bearer ${world.bearer}` }), 401)
   assert.deepEqual([world.service.calls.status, world.service.calls.tick, world.service.calls.stop], [0, 0, 0], 'no refused request reached a service operation')
 
+  // A challenge is answered once, and only while it is fresh: one recorded and sent again, or sent late, is refused.
+  const once = await client.challenge()
+  assert.equal(once.answer.statusCode, 200)
+  await expect('a challenge sent a second time', client.challenge(once).then(({ answer }) => answer), 401)
+  await expect('a challenge whose time left the window', client.challenge({ issuedAt: now - PLUGIN_CHALLENGE_WINDOW_MS - 1 }).then(({ answer }) => answer), 401)
+  await expect('a challenge whose time lies ahead', client.challenge({ issuedAt: now + PLUGIN_CHALLENGE_WINDOW_MS + 1 }).then(({ answer }) => answer), 401)
+
   // The service proves the key first, bound to its own exact address.
   const challenged = await client.challenge()
   assert.equal(challenged.answer.statusCode, 200)
@@ -890,7 +903,7 @@ async function assertOnlyTheVaultKeyActs(t, { primitives = SERVER_PRIMITIVES, ch
   const late = await client.challenge()
   now += PLUGIN_HANDSHAKE_TTL_MS
   await expect('a hello after its handshake lapsed', client.hello(late).then(({ answer }) => answer), 401)
-  const copy = keyHolder({ port, bearer: world.bearer, vaultPath: fs.realpathSync(world.dir) })
+  const copy = keyHolder({ port, bearer: world.bearer, vaultPath: fs.realpathSync(world.dir), clock })
   await expect('a hello that proves another folder', copy.hello(await copy.challenge()).then(({ answer }) => answer), 409)
   assert.equal(sessions.report(SCOPE), null, 'no refused request opened a session')
 
@@ -903,7 +916,7 @@ async function assertOnlyTheVaultKeyActs(t, { primitives = SERVER_PRIMITIVES, ch
   await expect('a request replayed', client.command(session, 'lease', { counter: session.counter }).then(({ answer }) => answer), 401)
   await expect('a request whose MAC was made up', client.command(session, 'status', { mac: randomBytes(32).toString('hex') }).then(({ answer }) => answer), 401)
   await expect('a MAC made for another command', client.command(session, 'status', { mac: pluginRequestMac({ sessionKey: session.key, command: 'lease', sessionId: session.id, counter: session.counter + 1 }) }).then(({ answer }) => answer), 401)
-  await expect('a session nobody was granted', keyHolder({ port, bearer: world.bearer, vaultPath }).command({ id: `ps-${'0'.repeat(32)}`, key: session.key, counter: 0 }, 'lease').then(({ answer }) => answer), 409)
+  await expect('a session nobody was granted', keyHolder({ port, bearer: world.bearer, vaultPath, clock }).command({ id: `ps-${'0'.repeat(32)}`, key: session.key, counter: 0 }, 'lease').then(({ answer }) => answer), 409)
   const statusAnswer = await client.command(session, 'status')
   assert.deepEqual(unsealed(statusAnswer, session, 'status'), { schema: PLUGIN_STATUS_SCHEMA, scopeId: SCOPE, service: { status: 'healthy' }, view: world.view, pendingEdits: { open: 0 } })
   assert.deepEqual(unsealed(await client.command(session, 'release'), session, 'release'), { schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE, released: true })
@@ -913,7 +926,7 @@ async function assertOnlyTheVaultKeyActs(t, { primitives = SERVER_PRIMITIVES, ch
   // Another vault's key opens a session for that vault only.
   const otherVault = path.join(world.workspaceRoot, 'vaults', 'scope-other')
   fs.mkdirSync(otherVault, { mode: 0o700 })
-  const other = keyHolder({ port, bearer: otherBearer, scopeId: 'scope-other', vaultPath: fs.realpathSync(otherVault) })
+  const other = keyHolder({ port, bearer: otherBearer, scopeId: 'scope-other', vaultPath: fs.realpathSync(otherVault), clock })
   const otherOpened = await other.hello(await other.challenge())
   assert.equal(unsealed({ answer: otherOpened.answer, counter: 0 }, { key: otherOpened.sessionKey, id: null }, 'hello').scopeId, 'scope-other')
   assert.deepEqual([sessions.report('scope-other')?.sessions, sessions.report(SCOPE)], [1, null])
@@ -930,6 +943,8 @@ for (const [label, broken] of [
   ['takes any MAC or proof for a match', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, macMatches: () => true } }],
   ['takes a counter it has already seen', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, counterIsNew: () => true } }],
   ['lets one handshake open more than one hello', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, handshakeUsedOnce: false } }],
+  ['answers a challenge it has answered before', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, noncesAnsweredOnce: false } }],
+  ['answers a challenge whatever time it names', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, challengeWindowMs: Number.MAX_SAFE_INTEGER } }],
   ['reads plugin payloads of any size', { primitives: { ...SERVER_PRIMITIVES, maxPluginRequestBytes: 1024 * 1024 } }],
 ]) {
   test(`mutation control: a channel that ${label} fails the plugin request oracle`, async (t) => {
@@ -937,16 +952,18 @@ for (const [label, broken] of [
   })
 }
 
-test('a hello must reach the address its handshake was made at, and handshakes waiting for a hello are bounded', (t) => {
-  let now = 0
+test('a hello must reach the address its handshake was made at; a challenge is answered once and only while fresh; waiting handshakes are bounded per view', (t) => {
+  let now = Date.parse('2026-01-05T10:00:00.000Z')
   const workspaceRoot = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-handshakes-'))
   t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
-  fs.mkdirSync(path.join(workspaceRoot, 'vaults', SCOPE), { recursive: true })
+  for (const scopeId of [SCOPE, 'scope-other']) fs.mkdirSync(path.join(workspaceRoot, 'vaults', scopeId), { recursive: true })
   const bearer = ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE })
+  const otherBearer = ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'scope-other' })
   const sessions = createPluginSessions({ now: () => now })
   const channel = createPluginChannelForOracleTests({ workspaceRoot, workspaceId: WORKSPACE_ID, runtimeId: 'rt-1', sessions, statusOf: () => ({ view: null, pendingEdits: null }), serviceStatus: () => 'healthy', now: () => now })
   const authority = '127.0.0.1:43123'
-  const challenge = () => { const clientNonce = randomBytes(32).toString('hex'); return { clientNonce, answer: channel.handle('challenge', { body: { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer, clientNonce }), clientNonce }, authority }) } }
+  const challenge = (key = bearer, { clientNonce = randomBytes(32).toString('hex'), issuedAt = now } = {}) => (
+    { clientNonce, issuedAt, answer: channel.handle('challenge', { body: { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer: key, clientNonce, issuedAt }), clientNonce, issuedAt }, authority }) })
   const helloAt = ({ clientNonce, answer }, at) => {
     const bound = { bearer, scopeId: SCOPE, authority, clientNonce, serverNonce: answer.body.serverNonce, handshakeId: answer.body.handshakeId }
     const vaultProof = pluginVaultProof({ sessionKey: pluginSessionKey(bound), vaultPath: fs.realpathSync(path.join(workspaceRoot, 'vaults', SCOPE)) })
@@ -954,10 +971,22 @@ test('a hello must reach the address its handshake was made at, and handshakes w
   }
   assert.equal(helloAt(challenge(), '127.0.0.1:43124').statusCode, 401, 'a hello at another address')
   assert.equal(helloAt(challenge(), authority).statusCode, 200)
+
+  // A challenge recorded while the service was down and sent to it later is answered at most once, and only while fresh.
+  const recorded = { clientNonce: randomBytes(32).toString('hex'), issuedAt: now }
+  assert.equal(challenge(bearer, recorded).answer.statusCode, 200)
+  assert.deepEqual(challenge(bearer, recorded).answer, { statusCode: 401, body: { error: 'challenge-replayed' } })
+  const late = { clientNonce: randomBytes(32).toString('hex'), issuedAt: now }
+  now += PLUGIN_CHALLENGE_WINDOW_MS + 1
+  assert.deepEqual(challenge(bearer, late).answer, { statusCode: 401, body: { error: 'challenge-stale' } })
+  assert.equal(challenge(bearer, { issuedAt: now + PLUGIN_CHALLENGE_WINDOW_MS + 1 }).answer.statusCode, 401, 'a time ahead of the clock too')
+
+  // However many recorded challenges one view's are, its waiting handshakes never hold up another view's.
   const waiting = []
-  for (let index = 0; index < PLUGIN_MAX_PENDING_HANDSHAKES; index += 1) waiting.push(challenge().answer.statusCode)
+  for (let index = 0; index < PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE; index += 1) waiting.push(challenge().answer.statusCode)
   assert.deepEqual(new Set(waiting), new Set([200]))
-  assert.equal(challenge().answer.statusCode, 429, 'no more handshakes wait than the bound')
+  assert.deepEqual(challenge().answer, { statusCode: 429, body: { error: 'too-many-handshakes' } }, 'no more handshakes wait for one view than its bound')
+  assert.equal(challenge(otherBearer).answer.statusCode, 200, 'another view is not held up')
   now += PLUGIN_HANDSHAKE_TTL_MS
   assert.equal(challenge().answer.statusCode, 200, 'lapsed handshakes free their places')
 })
@@ -1058,7 +1087,7 @@ test('the bearers are read into memory once, and again only when their directory
   t.after(() => listener.close())
   for (let index = 0; index < 50; index += 1) {
     const clientNonce = randomBytes(32).toString('hex')
-    const answer = await raw({ port, route: PLUGIN_ROUTES.challenge, headers: { Host: authorityOf('127.0.0.1', port) }, body: JSON.stringify({ protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: randomBytes(32).toString('hex'), clientNonce }) })
+    const answer = await raw({ port, route: PLUGIN_ROUTES.challenge, headers: { Host: authorityOf('127.0.0.1', port) }, body: JSON.stringify({ protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: randomBytes(32).toString('hex'), clientNonce, issuedAt: Date.now() }) })
     assert.equal(answer.statusCode, 401)
   }
   assert.equal(listenerReads.count, 1, 'the store was read once')

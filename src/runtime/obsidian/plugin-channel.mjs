@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow } from '../../project/private-state.mjs'
 import {
-  PLUGIN_BEARER, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MAX_SESSIONS_PER_SCOPE,
+  PLUGIN_BEARER, PLUGIN_CHALLENGE_WINDOW_MS, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MAX_SESSIONS_PER_SCOPE,
   PLUGIN_RENEW_INTERVAL_MS, PLUGIN_STATUS_SCHEMA, pluginClientProof, pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof,
 } from '../../projection/obsidian/plugin-bridge/channel.mjs'
 import { canonicalJson, compareText, isPlainObject, isoTime } from './documents.mjs'
@@ -102,6 +102,9 @@ export const PLUGIN_CHANNEL_PRIMITIVES = Object.freeze({
   macMatches: (presented, expected) => typeof presented === 'string' && presented.length === expected.length && timingSafeEqual(Buffer.from(presented, 'hex'), Buffer.from(expected, 'hex')),
   counterIsNew: (counter, last) => counter > last,
   handshakeUsedOnce: true,
+  // A challenge is answered only within this long of the time it names, and each of its nonces once.
+  challengeWindowMs: PLUGIN_CHALLENGE_WINDOW_MS,
+  noncesAnsweredOnce: true,
 })
 
 // Sessions of the plugin, per view. A session lives as long as its lease: a
@@ -157,6 +160,18 @@ export function createPluginChannelForOracleTests({
   const keyDigestOf = (bearer) => createHash('sha256').update(bearer, 'utf8').digest()
   const handshakes = new Map()
   const pruneHandshakes = () => { const at = now(); for (const [handshakeId, handshake] of handshakes) if (handshake.expiresAt <= at) handshakes.delete(handshakeId) }
+  // The nonces of the challenges each view's key answered, until their time has left the window: a challenge recorded
+  // by whoever squatted the address, sent later, is answered at most once and only while it is fresh.
+  const answered = new Map()
+  const seenBefore = (scopeId, clientNonce, issuedAt) => {
+    const at = now()
+    const nonces = answered.get(scopeId) ?? new Map()
+    for (const [nonce, until] of nonces) if (until <= at) nonces.delete(nonce)
+    const seen = nonces.has(clientNonce)
+    if (rules.noncesAnsweredOnce) nonces.set(clientNonce, issuedAt + rules.challengeWindowMs + 1)
+    answered.set(scopeId, nonces)
+    return seen
+  }
   const answer = (statusCode, body) => ({ statusCode, body })
   // An answer only the session's key can have made: the exact text of the document, and a MAC over it.
   const sealed = ({ sessionKey, command, sessionId, counter }, document) => {
@@ -180,14 +195,17 @@ export function createPluginChannelForOracleTests({
   }
   const commands = {
     challenge({ body, authority }) {
+      if (Math.abs(now() - body.issuedAt) > rules.challengeWindowMs) return answer(401, { error: 'challenge-stale' })
       // The key the hint was made with: every key is tried, all of them, whichever matches.
       let found = null
       for (const [scopeId, bearer] of bearers.current()) {
-        if (rules.macMatches(body.keyHint, pluginKeyHint({ bearer, clientNonce: body.clientNonce })) && found === null) found = { scopeId, bearer }
+        if (rules.macMatches(body.keyHint, pluginKeyHint({ bearer, clientNonce: body.clientNonce, issuedAt: body.issuedAt })) && found === null) found = { scopeId, bearer }
       }
       if (found === null) return answer(401, { error: 'plugin-key-unknown' })
+      if (seenBefore(found.scopeId, body.clientNonce, body.issuedAt)) return answer(401, { error: 'challenge-replayed' })
       pruneHandshakes()
-      if (handshakes.size >= PLUGIN_MAX_PENDING_HANDSHAKES) return answer(429, { error: 'too-many-handshakes' })
+      // Bounded per view: one view's waiting handshakes never hold up another's.
+      if ([...handshakes.values()].filter((handshake) => handshake.scopeId === found.scopeId).length >= PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE) return answer(429, { error: 'too-many-handshakes' })
       const handshake = { handshakeId: `ph-${randomBytes(16).toString('hex')}`, scopeId: found.scopeId, authority, clientNonce: body.clientNonce, serverNonce: randomBytes(32).toString('hex'), expiresAt: now() + PLUGIN_HANDSHAKE_TTL_MS }
       handshakes.set(handshake.handshakeId, handshake)
       return answer(200, { protocol: PLUGIN_CHANNEL_PROTOCOL, handshakeId: handshake.handshakeId, serverNonce: handshake.serverNonce, serverProof: pluginServerProof({ bearer: found.bearer, ...handshake }) })

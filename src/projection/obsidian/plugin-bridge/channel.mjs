@@ -5,10 +5,11 @@ import { createHmac } from 'node:crypto'
 //
 // A closed command surface over the service's literal loopback listener:
 //
-//   POST /plugin/challenge  a fresh nonce, and a hint at which vault's key it
-//                           means that only the holder of that key can read;
-//                           the service answers with its own nonce and a proof
-//                           that it holds the key
+//   POST /plugin/challenge  a fresh nonce and the time it was made, and a hint
+//                           at which vault's key it means that only the holder
+//                           of that key can read; the service answers, once
+//                           and only while it is fresh, with its own nonce and
+//                           a proof that it holds the key
 //   POST /plugin/hello      only after the plugin checked that proof: its own
 //                           proof, the plugin and app versions, an id of this
 //                           launch of the plugin, and a proof of the vault path
@@ -25,6 +26,11 @@ import { createHmac } from 'node:crypto'
 // while the service is down learns a nonce and a hint it cannot link to a
 // vault, and cannot answer. Both proofs bind the listener's exact address, so
 // an answer relayed from a service listening elsewhere does not verify.
+//
+// A challenge recorded by such a program and sent to the service later is
+// worth little: the service answers a challenge only within thirty seconds of
+// the time it names, and a nonce only once, and at most four handshakes wait
+// for their hello per view, so one view's challenges never hold up another's.
 //
 // The handshake derives a key for one session. Every later request carries
 // the session, a counter that only goes up, and a MAC over both and the
@@ -57,7 +63,7 @@ export const PLUGIN_STATUS_SCHEMA = 'atelier-obsidian-plugin-status/v1'
 export const PLUGIN_COMMANDS = Object.freeze(['challenge', 'hello', 'lease', 'release', 'status'])
 export const PLUGIN_ROUTES = Object.freeze(Object.fromEntries(PLUGIN_COMMANDS.map((command) => [command, `/plugin/${command}`])))
 export const PLUGIN_REQUEST_FIELDS = Object.freeze({
-  challenge: Object.freeze(['protocol', 'keyHint', 'clientNonce']),
+  challenge: Object.freeze(['protocol', 'keyHint', 'clientNonce', 'issuedAt']),
   hello: Object.freeze(['handshakeId', 'pluginVersion', 'appVersion', 'instanceId', 'vaultProof', 'clientProof']),
   lease: Object.freeze(['sessionId', 'counter', 'mac']),
   release: Object.freeze(['sessionId', 'counter', 'mac']),
@@ -70,7 +76,9 @@ export const PLUGIN_RENEW_INTERVAL_MS = 2000
 export const PLUGIN_LEASE_TTL_MS = 3 * PLUGIN_RENEW_INTERVAL_MS
 export const PLUGIN_MAX_SESSIONS_PER_SCOPE = 8
 export const PLUGIN_HANDSHAKE_TTL_MS = 5000
-export const PLUGIN_MAX_PENDING_HANDSHAKES = 32
+// A challenge is answered only this close to the time it names (both sides read one machine's clock).
+export const PLUGIN_CHALLENGE_WINDOW_MS = 30 * 1000
+export const PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE = 4
 // A session key is short-lived: the plugin shakes hands again after this long.
 export const PLUGIN_MAX_SESSION_AGE_MS = 15 * 60 * 1000
 // The app version the plugin needs, the floor of the publication protocol (app-capability.mjs).
@@ -105,7 +113,7 @@ export function validatePluginRequest(command, body) {
   const shaped = (field, pattern) => typeof body[field] === 'string' && pattern.test(body[field])
   if (command === 'challenge') {
     if (body.protocol !== PLUGIN_CHANNEL_PROTOCOL) return { ok: false, code: 'protocol-unsupported' }
-    if (!shaped('keyHint', PLUGIN_MAC) || !shaped('clientNonce', PLUGIN_NONCE)) return { ok: false, code: 'request-malformed' }
+    if (!shaped('keyHint', PLUGIN_MAC) || !shaped('clientNonce', PLUGIN_NONCE) || !Number.isSafeInteger(body.issuedAt) || body.issuedAt < 1) return { ok: false, code: 'request-malformed' }
   } else if (command === 'hello') {
     if (!shaped('handshakeId', PLUGIN_HANDSHAKE_ID) || !shaped('instanceId', PLUGIN_INSTANCE_ID) || !shaped('vaultProof', PLUGIN_MAC) || !shaped('clientProof', PLUGIN_MAC)) return { ok: false, code: 'request-malformed' }
     if (!shaped('pluginVersion', VERSION_TEXT) || !shaped('appVersion', VERSION_TEXT)) return { ok: false, code: 'request-malformed' }
@@ -124,10 +132,11 @@ const transcript = (label, fields) => [PLUGIN_CHANNEL_PROTOCOL, label, ...fields
 const hmac = (key, label, fields) => createHmac('sha256', key).update(transcript(label, fields), 'utf8').digest()
 const hmacHex = (key, label, fields) => hmac(key, label, fields).toString('hex')
 
-// A hint at the vault's key, fresh with every nonce: the service finds the
-// key it names by computing it for each key it holds, and a listener that
-// holds none cannot tell two hints of one vault apart.
-export const pluginKeyHint = ({ bearer, clientNonce }) => hmacHex(bearer, 'key-hint', [clientNonce])
+// A hint at the vault's key, fresh with every nonce and bound to the time the
+// challenge names: the service finds the key it names by computing it for each
+// key it holds, and a listener that holds none cannot tell two hints of one
+// vault apart, nor move one to another time.
+export const pluginKeyHint = ({ bearer, clientNonce, issuedAt }) => hmacHex(bearer, 'key-hint', [clientNonce, issuedAt])
 // What binds a handshake: the view, the listener's exact address, both nonces and the handshake.
 const handshakeFields = ({ scopeId, authority, clientNonce, serverNonce, handshakeId }) => [scopeId, authority, clientNonce, serverNonce, handshakeId]
 export const pluginServerProof = (input) => hmacHex(input.bearer, 'server-proof', handshakeFields(input))
