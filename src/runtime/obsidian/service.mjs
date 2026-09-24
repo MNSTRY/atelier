@@ -1,14 +1,17 @@
 import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
+import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
 import { prepareView as productionPrepareView } from '../../projection/obsidian/materialize/index.mjs'
 import { preparePluginFiles } from '../../projection/obsidian/plugin-bridge/bundle.mjs'
+import { publishView as productionPublishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { isoTime } from './documents.mjs'
 import { createMaintenanceEngine } from './engine.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { assertOutsideRepositories, protectedRoots, readLocalPointer, resolveDataRoot, workspaceStateRoot } from './machine-settings.mjs'
 import { createPluginChannel, createPluginSessions, ensurePluginBearer, pluginPresence } from './plugin-channel.mjs'
+import { confirmPluginEntry, decidePluginChoice, readPluginChoice, vaultFilePresent } from './plugin-choice.mjs'
 import { isProcessAlive } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import {
@@ -38,8 +41,10 @@ import { createFsWatcherFactory } from './watchers.mjs'
 //
 // It also holds the plugin channel (plugin-channel.mjs). Every view it
 // prepares carries Atelier's plugin, whose data file names this listener and
-// the view's bearer, and a plugin that holds a view open is reported by
-// status and tells the adapter factory the app version it runs in.
+// the view's bearer, unless the person turned the plugin off in that vault
+// (plugin-choice.mjs): then the entry is left alone and only the plugin files
+// that are still there are kept current. A plugin that holds a view open is
+// reported by status and tells the adapter factory the app version it runs in.
 //
 // `adapterFactory` has no default here either: whoever starts the service
 // decides whether it may reach a running app.
@@ -115,19 +120,43 @@ export async function runMaintenanceService(options = {}) {
   let settleDone
   const done = new Promise((resolve) => { settleDone = resolve })
 
-  // Every prepared view carries the plugin with this listener's address and the view's bearer. A bearer that cannot be
-  // kept leaves that view without the plugin for this tick; the view itself is prepared as ever.
+  // Every prepared view carries the plugin with this listener's address and the view's bearer, as the person's choice
+  // for that vault allows: the choice is read, and recorded when the vault shows it changed, from the community plugin
+  // list as it is now, and those very bytes travel with the view. A bearer or a choice that cannot be kept leaves that
+  // view without the plugin for this tick; the view itself is prepared as ever.
+  const vaultOf = (scopeId) => path.join(workspaceRoot, 'vaults', scopeId.replaceAll(':', '_'))
   const pluginFor = (scopeId) => {
-    try { return preparePluginFiles({ channel: { host, port }, scopeId, bearer: ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock }) }) } catch (error) {
+    try {
+      const vaultRoot = vaultOf(scopeId)
+      const { choice, community } = decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultRoot, clock })
+      const off = choice.state === 'off'
+      const plugin = preparePluginFiles({ channel: { host, port }, scopeId, bearer: ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock }), onlyIfPresent: off })
+      // Turned off: the files still there are kept current; a folder the person removed is not made again.
+      const files = off ? plugin.files.filter((file) => vaultFilePresent(vaultRoot, file.path)) : plugin.files
+      const kept = new Set(files.map((file) => file.path))
+      const unreadable = community.file.state === 'unreadable'
+      return {
+        files, ownership: { ...plugin.ownership, files: plugin.ownership.files.filter((entry) => kept.has(entry.path)) },
+        community: off || unreadable ? { entry: 'withheld', reason: off ? 'turned-off-in-this-vault' : 'list-unreadable' } : { entry: 'owned', existing: community.file.bytes },
+      }
+    } catch (error) {
       log({ at: isoTime(clock), event: 'plugin-not-prepared', code: errorCode(error), name: errorName(error) })
       return null
     }
   }
   const prepareWithPlugin = (input) => (engineOptions.seams?.prepareView ?? productionPrepareView)({ ...input, plugin: pluginFor(input.scope.scopeId) })
+  // An entry offered to a vault and now in place is confirmed: from then on, a list without it is the person's decision.
+  const publishAndConfirm = async (input) => {
+    const result = await (engineOptions.seams?.publishView ?? productionPublishView)(input)
+    try { confirmPluginEntry({ workspaceRoot, workspaceId, scopeId: input.recoveryStore.scopeId, result, clock }) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-entry-not-confirmed', code: errorCode(error), name: errorName(error) })
+    }
+    return result
+  }
   // The app version a live plugin reports counts as checked for the view it holds open.
   const pluginAwareAdapterFactory = (input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginSessions.report(input.scope.scopeId) : null })
   const engine = createEngine({
-    watcherFactory: createFsWatcherFactory(), ...engineOptions, seams: { ...(engineOptions.seams ?? {}), prepareView: prepareWithPlugin },
+    watcherFactory: createFsWatcherFactory(), ...engineOptions, seams: { ...(engineOptions.seams ?? {}), prepareView: prepareWithPlugin, publishView: publishAndConfirm },
     loadProject, dataRoot, adapterFactory: pluginAwareAdapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId },
   })
 
@@ -198,7 +227,8 @@ export async function runMaintenanceService(options = {}) {
         if (lastError?.schema) { const { schema: _schema, workspaceId: _workspace, ...shown } = lastError; lastError = shown }
         return {
           schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(),
-          plugins: pluginPresence({ sessions: pluginSessions, scopeIds: [...pluginChannel.bearers().keys()] }), ...(typeof appStatus === 'function' ? { app: appStatus() } : {}),
+          plugins: pluginPresence({ sessions: pluginSessions, scopeIds: [...pluginChannel.bearers().keys()], entryOf: (scopeId) => readPluginChoice({ workspaceRoot, workspaceId, scopeId }).state }),
+          ...(typeof appStatus === 'function' ? { app: appStatus() } : {}),
         }
       },
       async tick() {

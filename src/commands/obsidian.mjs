@@ -17,7 +17,8 @@ import {
   revokeApplyPolicy, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
-import { pluginPresenceOf, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
+import { readPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
+import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
 import { serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
@@ -60,6 +61,8 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
                                        Print an operating-system startup unit. Writes and installs nothing.
   open [--scope ID] [--consent-actor ID] [--allow-stale] --adapter=${PRODUCTION_ADAPTER}
                                        Start or reconnect maintenance, verify the view, open it in Obsidian.
+  plugin show [--scope ID]             Whether Atelier's plugin is on in a view's vault, and whether it holds it open.
+  plugin on [--scope ID]               Offer Atelier's plugin again in a vault where it was turned off.
 
 Contributed operations, registered by the modules shipped under src/runtime/obsidian/contributions/:
   apply list | show EDIT | run EDIT [--actor ID] | recover
@@ -153,9 +156,15 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
     }
-    // Atelier's plugin as the running service sees it, for one view.
+    // Atelier's plugin as the running service sees it, for one view. A vault that turned it off says so from the private
+    // record too, whether or not the service runs.
+    const pluginView = (running, workspace, scopeId) => {
+      const presence = pluginPresenceOf(running, scopeId)
+      if (presence.present || workspace === null || readPluginChoice({ ...workspace, scopeId }).state !== 'off') return presence
+      return { present: false, reason: 'turned-off-in-this-vault', next: turnPluginOnNext(scopeId) }
+    }
     const pluginOf = async (scopeId) => pluginPresenceOf((await readServiceStatusDocument(lifecycle, lifecycleRules)).document, scopeId)
-    const pluginLine = (plugin) => (plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : `; plugin not present (${plugin.reason})`)
+    const pluginLine = (plugin) => (plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : plugin.reason === 'turned-off-in-this-vault' ? '; plugin turned off in this vault' : `; plugin not present (${plugin.reason})`)
 
     const configured = () => {
       const project = loadProject()
@@ -197,7 +206,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           ? enablement.scopes.map(({ scopeId }) => ({ scopeId, outcome: enablement.state === 'disabled' ? 'disabled' : 'not-prepared', reason: enablement.state === 'disabled' ? enablement.reason : 'workspace-not-prepared' }))
           : enablement.scopes.map(({ scopeId }) => {
             const { vaultRoot: _vault, summary: _summary, ...report } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
-            const plugin = pluginPresenceOf(running, scopeId)
+            const plugin = pluginView(running, workspace, scopeId)
             return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next, plugin } : { ...report, plugin }
           })
         const document = {
@@ -213,7 +222,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             `service: ${service.state} (${service.reason ?? 'no reason'})${app ? `; app ${app.outcome} (${app.reason})` : ''}`,
             ...(app?.next ? [`Next for the app: ${app.next}`] : []),
             `apply: ${applyShown.state}`,
-            ...scopes.map((scope) => `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}${scope.plugin ? pluginLine(scope.plugin) : ''}`),
+            ...scopes.flatMap((scope) => [
+              `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}${scope.plugin ? pluginLine(scope.plugin) : ''}`,
+              ...(scope.plugin?.next ? [`  Next for the plugin: ${scope.plugin.next}`] : []),
+            ]),
           ],
         }
       },
@@ -344,6 +356,32 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const plugin = typeof result.scopeId === 'string' ? await pluginOf(result.scopeId) : null
         const document = plugin === null ? opened : { ...opened, plugin }
         return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
+      },
+
+      // Atelier's plugin in the vault of a view: the person's choice as Atelier recorded it, and whether a plugin holds the
+      // vault open. `on` records a request: the view's next publication brings the entry and the plugin files back.
+      async plugin() {
+        if (sub !== undefined && sub !== 'show' && sub !== 'on') refuse('usage', 'plugin show [--scope ID] | plugin on [--scope ID]')
+        if (sub === 'on') {
+          const { enablement, workspace } = writable()
+          const scopeId = resolveScope(enablement, flags.scope)
+          const choice = writePluginChoice({ ...workspace, scopeId, state: 'requested', reason: 'requested-by-command', clock })
+          return {
+            exit: EXIT.ok, document: { scopeId, choice, takesEffect: 'next-publication' },
+            human: [`view ${scopeId}: Atelier's plugin is requested; its entry and its files come back with the view's next publication (the next change at its sources, or when the maintenance service next starts)`],
+          }
+        }
+        const { enablement, workspace } = readable()
+        const scopeIds = flags.scope === undefined ? enablement.scopes.map((scope) => scope.scopeId) : [resolveScope(enablement, flags.scope)]
+        const service = enablement.reason === 'not-configured' ? { state: 'stopped' } : await serviceStatus(lifecycle, lifecycleRules)
+        const running = service.state === 'healthy' ? (await readServiceStatusDocument(lifecycle, lifecycleRules)).document : null
+        const plugins = scopeIds.map((scopeId) => ({
+          scopeId, choice: workspace === null ? { state: 'undecided', reason: null, since: null } : readPluginChoice({ ...workspace, scopeId }), presence: pluginView(running, workspace, scopeId),
+        }))
+        return {
+          exit: EXIT.ok, document: { plugins },
+          human: plugins.flatMap(({ scopeId, choice, presence }) => [`view ${scopeId}: plugin ${choice.state}${pluginLine(presence)}`, ...(presence.next ? [`  Next: ${presence.next}`] : [])]),
+        }
       },
 
       // The placeholder that answers when no contribution registered an apply operation; the shipped source-apply contribution replaces it.

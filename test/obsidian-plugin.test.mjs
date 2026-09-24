@@ -21,7 +21,8 @@ import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { runObsidianCommandForOracleTests } from '../src/commands/obsidian.mjs'
 import { MINIMUM_APP_VERSION, createQualifiedAdapterFactory, inspectApp, parseAppVersion, qualifyApp, readVersionAnswer } from '../src/runtime/obsidian/app-capability.mjs'
 import { ensureWorkspaceIdentity, protectedRoots, workspaceStateRoot, writeMachineSettings } from '../src/runtime/obsidian/machine-settings.mjs'
-import { pluginPresenceOf, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
+import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
+import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
 import { readServiceRecord, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
 import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { createMaintenanceStateStore } from '../src/runtime/obsidian/state-store.mjs'
@@ -971,12 +972,12 @@ function serviceWorld(t) {
     vault: path.join(workspaceRoot, 'vaults', SCOPE),
     source: (relative) => path.join(projectDir, relative),
     freshness: () => createMaintenanceStateStore({ workspaceRoot, workspaceId: WORKSPACE_ID }).readFreshness().scopes.find((entry) => entry.scopeId === SCOPE),
-    async service({ adapterFactory = () => absentAdapter(), appStatus } = {}) {
+    async service({ adapterFactory = () => absentAdapter(), appStatus, seams = {} } = {}) {
       const port = await freePort()
       writeServiceSettings({ workspaceRoot, workspaceId: WORKSPACE_ID, settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: new Date(START).toISOString(), ...CONSENT }, updatedAt: new Date(START).toISOString() } })
       const service = await runMaintenanceService({
         loadProject, dataRoot, env, adapterFactory, entryPath: TEST_SERVICE_ENTRY, intervalMs: 60 * 60 * 1000, clock: world.clock,
-        engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }), randomBytes: fixedRandom }, ...(appStatus ? { appStatus } : {}),
+        engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }), randomBytes: fixedRandom, seams }, ...(appStatus ? { appStatus } : {}),
       })
       t.after(() => service.shutdown('test-teardown'))
       world.port = port
@@ -1021,7 +1022,7 @@ test('the service publishes the plugin into the vault it maintains, and the plug
   assert.deepEqual(reports, [null], 'no plugin held the view while it was published')
   // Nothing of the bearer reaches the status of the service or its log.
   const before = await world.statusDocument()
-  assert.deepEqual(before.plugins, { schema: 'atelier-obsidian-plugin-presence/v1', leaseTtlMs: PLUGIN_LEASE_TTL_MS, scopes: [{ scopeId: SCOPE, present: false, sessions: 0 }] })
+  assert.deepEqual(before.plugins, { schema: 'atelier-obsidian-plugin-presence/v1', leaseTtlMs: PLUGIN_LEASE_TTL_MS, scopes: [{ scopeId: SCOPE, present: false, sessions: 0, entry: 'on' }] }, 'the entry was offered and confirmed in place')
   assert.equal(JSON.stringify(before).includes(bearers.get(SCOPE)), false)
 
   const { plugin, statusBar } = world.plugin()
@@ -1029,7 +1030,7 @@ test('the service publishes the plugin into the vault it maintains, and the plug
   await plugin.cycle()
   assert.equal(statusBar(), 'Atelier: current')
   const during = await world.statusDocument()
-  assert.deepEqual(during.plugins.scopes, [{ scopeId: SCOPE, present: true, sessions: 1, appVersion: '1.13.7', pluginVersion: shippedManifest().version, renewedAt: during.plugins.scopes[0].renewedAt }])
+  assert.deepEqual(during.plugins.scopes, [{ scopeId: SCOPE, present: true, sessions: 1, appVersion: '1.13.7', pluginVersion: shippedManifest().version, renewedAt: during.plugins.scopes[0].renewedAt, entry: 'on' }])
   for (const word of [world.dir, world.vault, bearers.get(SCOPE), 'notes/', '.md']) assert.equal(JSON.stringify(during).includes(word), false, `status carries ${word}`)
 
   // A change at the source: the next publication is made while the plugin holds the view, and the adapter factory is told its app version.
@@ -1098,6 +1099,108 @@ test('status and open report the plugin, and open takes the app version from it 
   await service.shutdown('test')
   const stopped = await world.run(['status', '--json'], { seams })
   assert.deepEqual(stopped.json.scopes[0].plugin, { present: false, reason: 'service-not-running' })
+})
+
+// Seams for the command that must not reach an app or start a service.
+const QUIET_SEAMS = Object.freeze({
+  appProbe: { inspect() { throw new Error('the app probe was reached') }, vaultState() { throw new Error('the app probe was reached') } },
+  launcher: { open() { throw new Error('the launcher was reached') } },
+  service: { entryPath: TEST_SERVICE_ENTRY, spawn() { throw new Error('a service was started') } },
+})
+
+function choiceWorld(world) {
+  const list = path.join(world.vault, COMMUNITY_PLUGINS_PATH)
+  return {
+    list,
+    listed: () => JSON.parse(fs.readFileSync(list, 'utf8')),
+    choice: () => { const { state, reason } = readPluginChoice({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE }); return [state, reason] },
+    pluginFiles: () => (fs.existsSync(path.join(world.vault, PLUGIN_DIRECTORY)) ? fs.readdirSync(path.join(world.vault, PLUGIN_DIRECTORY)).sort() : null),
+    pinned: () => createRecoveryStore({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE, repositoryRoots: [] }).readCurrentManifest().ext[OBSIDIAN_EXT_KEY].settings,
+  }
+}
+
+test('a person who turns the plugin off in a vault is followed: the entry is not added back, a removed folder is not made again, status says so, and both ways back work', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const service = await world.service()
+  const vault = choiceWorld(world)
+  const change = async (line) => {
+    fs.appendFileSync(world.source('harbor/notes/tides.md'), `\n${line}\n`)
+    world.advance(1000)
+    const tick = await service.tickNow()
+    assert.ok(tick.ok, JSON.stringify(tick))
+    assert.equal(world.freshness().state, 'current', `after "${line}"`)
+  }
+
+  // The first publication offers the entry; once it is in place it is confirmed, and from then on its absence is a decision.
+  await service.tickNow()
+  assert.deepEqual(vault.listed(), [PLUGIN_ID])
+  assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'])
+
+  // The person uninstalls the plugin in Obsidian: its entry leaves the list and its folder is deleted.
+  fs.writeFileSync(vault.list, JSON.stringify(['dataview'], null, 2))
+  fs.rmSync(path.join(world.vault, PLUGIN_DIRECTORY), { recursive: true })
+  const theirs = fs.readFileSync(vault.list)
+  await change('Low water at six.')
+  assert.deepEqual(vault.choice(), ['off', 'entry-removed-by-person'])
+  assert.ok(fs.readFileSync(vault.list).equals(theirs), 'the list is left exactly as the person wrote it')
+  assert.equal(vault.pluginFiles(), null, 'the folder the person removed is not made again')
+  assert.deepEqual([vault.pinned().pluginOwned.entry, vault.pinned().pluginOwned.withheldBecause, vault.pinned().pluginOwned.files, vault.pinned().policyOwned.map((entry) => entry.path)], ['withheld', 'turned-off-in-this-vault', [], [POLICY_SETTINGS_PATH]])
+  const status = await world.run(['status', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual(status.json.scopes[0].plugin, { present: false, reason: 'turned-off-in-this-vault', next: turnPluginOnNext(SCOPE) })
+  assert.equal((await world.statusDocument()).plugins.scopes[0].entry, 'off')
+  const shown = await world.run(['plugin', 'show', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual([shown.exit, shown.json.plugins[0].choice.state, shown.json.plugins[0].presence.reason], [0, 'off', 'turned-off-in-this-vault'])
+  await change('Slack water at three.')
+  assert.ok(fs.readFileSync(vault.list).equals(theirs), 'nor at any later publication')
+  assert.equal(vault.pluginFiles(), null)
+
+  // The first way back: `atelier obsidian plugin on`. The view's next publication brings the entry and the files back.
+  const on = await world.run(['plugin', 'on', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual([on.exit, on.json.choice.state, on.json.takesEffect], [0, 'requested', 'next-publication'])
+  await change('High water at noon again.')
+  assert.deepEqual(vault.listed(), ['dataview', PLUGIN_ID])
+  assert.deepEqual(vault.pluginFiles(), [...PLUGIN_SOURCE_FILES, 'data.json'].sort())
+  assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'])
+
+  // Off again, this time only turned off in the settings: the folder stays, and its files are kept current.
+  fs.writeFileSync(vault.list, JSON.stringify(['dataview']))
+  fs.writeFileSync(path.join(world.vault, PLUGIN_DIRECTORY, 'main.js'), '// an older release\n')
+  await change('Neap tide next week.')
+  assert.deepEqual(vault.choice(), ['off', 'entry-removed-by-person'])
+  assert.deepEqual(vault.listed(), ['dataview'])
+  assert.ok(fs.readFileSync(path.join(world.vault, PLUGIN_DIRECTORY, 'main.js')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))), 'a plugin file still there is kept current')
+
+  // The second way back: the person turns it on in Obsidian, which lists it again.
+  fs.writeFileSync(vault.list, JSON.stringify(['dataview', PLUGIN_ID]))
+  await change('Spring tide after that.')
+  assert.deepEqual(vault.choice(), ['on', 'entry-restored-by-person'])
+  assert.deepEqual(vault.listed(), ['dataview', PLUGIN_ID])
+  assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.reason, 'no-live-lease')
+})
+
+test('a change the person makes to the list while a publication runs is never written over; the next preparation reads it as their decision', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  let during = null
+  // Runs between the view's preparation and its publication: the person turns the plugin off just then.
+  const service = await world.service({ seams: { publishView: async (input) => { if (during) { during(); during = null } return publishView(input) } } })
+  const vault = choiceWorld(world)
+  await service.tickNow()
+  assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'])
+
+  during = () => fs.writeFileSync(vault.list, '[]')
+  fs.appendFileSync(world.source('harbor/notes/tides.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  assert.ok((await service.tickNow()).ok)
+  assert.deepEqual([world.freshness().state, world.freshness().reason], ['publisher-conflict', 'settings-changed'], 'held: the list changed under the publication')
+  assert.equal(fs.readFileSync(vault.list, 'utf8'), '[]', 'the entry is not written back over the change')
+  assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'], 'nothing is decided from a change seen in passing')
+
+  // The view is tried again at the next full reconciliation; its preparation reads the list as it is now.
+  world.advance(5 * 60 * 1000)
+  assert.ok((await service.tickNow()).ok)
+  assert.deepEqual(vault.choice(), ['off', 'entry-removed-by-person'])
+  assert.equal(fs.readFileSync(vault.list, 'utf8'), '[]')
+  assert.equal(world.freshness().state, 'current')
 })
 
 test('the plugin supplies the version only: an app without the command-line capability, or a probe that fails, is reported as before', async () => {

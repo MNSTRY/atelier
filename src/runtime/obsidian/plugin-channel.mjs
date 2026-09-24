@@ -138,12 +138,16 @@ export function createPluginChannel({ workspaceRoot, workspaceId, runtimeId, ses
   }
 }
 
-// Which views a plugin holds open, for the service's status document. Counts
-// and versions only: no vault path, no session identity.
-export function pluginPresence({ sessions, scopeIds }) {
+// Which views a plugin holds open, for the service's status document, and
+// whether the person wants the plugin in each vault (`entry`: undecided,
+// requested, on or off; see plugin-choice.mjs). Counts, versions and states
+// only: no vault path, no session identity.
+export function pluginPresence({ sessions, scopeIds, entryOf = () => null }) {
   const scopes = [...new Set([...scopeIds, ...sessions.scopeIds()])].sort(compareText).map((scopeId) => {
     const report = sessions.report(scopeId)
-    return report === null ? { scopeId, present: false, sessions: 0 } : { scopeId, present: true, sessions: report.sessions, appVersion: report.appVersion, pluginVersion: report.pluginVersion, renewedAt: report.renewedAt }
+    const entry = entryOf(scopeId)
+    const presence = report === null ? { scopeId, present: false, sessions: 0 } : { scopeId, present: true, sessions: report.sessions, appVersion: report.appVersion, pluginVersion: report.pluginVersion, renewedAt: report.renewedAt }
+    return entry === null ? presence : { ...presence, entry }
   })
   return { schema: PLUGIN_PRESENCE_SCHEMA, leaseTtlMs: PLUGIN_LEASE_TTL_MS, scopes }
 }
