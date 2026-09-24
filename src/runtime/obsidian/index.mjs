@@ -6,8 +6,9 @@
 export { ObsidianMaintenanceRefusal } from './errors.mjs'
 export { DISABLED_REASONS, ENABLEMENT_STATES, readObsidianEnablement } from './enablement.mjs'
 export {
-  LOCAL_POINTER_SCHEMA, MACHINE_SETTINGS_SCHEMA, MAINTENANCE_MODES, authorizeAutomaticApply, defaultDataRoot, defaultMachineSettings, ensureWorkspaceIdentity,
-  installApplyPolicy, localPointerPath, protectedRoots, readInstalledApplyPolicy, readLocalPointer, readMachineSettings, resolveDataRoot, revokeApplyPolicy, workspaceStateRoot, writeLocalPointer, writeMachineSettings,
+  DECISIONS, DECISION_SOURCES, LOCAL_POINTER_SCHEMA, MACHINE_SETTINGS_SCHEMA, MACHINE_SETTINGS_SCHEMA_V1, MAINTENANCE_MODES, ONLY_YOU_AUDIENCES, authorizeAutomaticApply,
+  defaultDataRoot, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, localPointerPath, protectedRoots, readInstalledApplyPolicy, readLocalPointer,
+  readMachineSettings, resolveDataRoot, revokeApplyPolicy, withDecision, workspaceStateRoot, writeLocalPointer, writeMachineSettings,
 } from './machine-settings.mjs'
 export { APPLY_RESULT_STATUSES, BUILT_IN_OPERATIONS, EXTENSION_KINDS, REPLACEABLE_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createCommandOperations, createMaintenanceExtensions, createObsidianRegistry } from './extension-points.mjs'
 export { CONTRIBUTIONS_DIRECTORY, loadContributions } from './contributions.mjs'
