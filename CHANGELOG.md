@@ -26,16 +26,24 @@
   plugin on again in Obsidian's settings is followed the same way;
   `atelier obsidian plugin on --scope ID` brings the entry and the files back
   at the view's next publication (the way back after an uninstall).
-- The maintenance service answers four plugin commands (`/plugin/hello`,
-  `/plugin/lease`, `/plugin/release`, `/plugin/status`) that need the random
-  bearer of one vault, kept owner-only in private state and in that vault's
-  plugin data file, and grant presence and read-only status of that view
-  only. `status` reports which views a plugin holds open, and so do
+- The maintenance service answers five plugin commands (`/plugin/challenge`,
+  `/plugin/hello`, `/plugin/lease`, `/plugin/release`, `/plugin/status`,
+  protocol `atelier-obsidian-plugin-channel/v2`) and grants presence and
+  read-only status of one view to a plugin that proves it holds that vault's
+  key. The key is random per vault, kept owner-only in private state and in
+  that vault's plugin data file, and never crosses the wire: the service
+  proves it holds the key over its own exact address before the plugin sends
+  anything that names the vault, and every later request and answer is sealed
+  with a key for that session and a counter that only goes up. A program that
+  takes the service's port while the service is down learns nothing it can
+  use. `status` reports which views a plugin holds open, and so do
   `atelier obsidian status` and `open`.
-- While the plugin holds a view open, the app version it reports counts as
-  checked (reason `plugin-reported`): the service's adapter factory and
-  `open` no longer depend on the command-line tool's `version` answer, which
-  fails with no vault open and can hang.
+- While one launch of the plugin holds a view open, the app version it
+  reports counts as checked (reason `plugin-reported`): on macOS the service's
+  adapter factory no longer runs the command-line tool's `version` command,
+  and `open` takes the plugin's version where the tool gives none. Whether the
+  app and its command-line tool are installed is still the probe's answer, and
+  a version the tool did give must meet the floor too.
 
 ### Changed
 
@@ -47,13 +55,18 @@
   plugin's four files, whose digests are pinned in the generation manifest
   under `ext["mnstry.atelier.obsidian"].settings`.
   Whatever occupies a plugin path is displaced to recovery, never lost; a
-  plugin path a person has to repair never holds a view back, and another
-  writer racing a plugin file makes the view try again.
+  plugin path a person has to repair (a link, a folder where a file goes, a
+  file nobody may read) never holds a view back, a generation whose plugin
+  files the person repaired, changed or removed is published again as it is,
+  and another writer racing a plugin file makes the view try again.
   `isUserOwnedSettingsPath` answers `false` for these paths.
 - Vault roots that Atelier places under its data root are created private
-  (`0700`), and an existing one is made private before the plugin's bearer is
-  written into it. A vault root Atelier did not place never receives the
-  bearer unless it is already private.
+  (`0700`), and an existing one is made private before the plugin's key is
+  written into it. A vault root Atelier did not place never receives the key
+  unless it is already private, and a vault path under the data root that is
+  a link to another folder never receives it and is never changed.
+- A settings file nobody may read (`core-plugins.json`, say) is reported as
+  `path-unsafe` and left for the person instead of failing the publication.
 - `plugins/` is part of the egress scan, and the release audit requires the
   plugin's three files in the package.
 

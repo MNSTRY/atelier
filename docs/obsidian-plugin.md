@@ -33,12 +33,13 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
 - A notice appears when the view moves into a state that needs a person (held,
   stale, service unreachable, app too old) and when it is current again.
   `updating` is not announced: it is what every change looks like.
-- While the vault is open the plugin tells the service so: it says hello once,
-  then renews a lease every two seconds, and releases it when the plugin
-  unloads (the vault closes, the app quits, the plugin is turned off). A lease
-  that is not renewed lapses after six seconds. The hello carries the plugin
-  version, the app version (`apiVersion`, the version of the app the plugin
-  runs in) and the real path of the vault the app has open.
+- While the vault is open the plugin tells the service so: it shakes hands
+  once (see "The channel"), then renews a lease every two seconds, and
+  releases it when the plugin unloads (the vault closes, the app quits, the
+  plugin is turned off). A lease that is not renewed lapses after six seconds.
+  The hello carries the plugin version, the app version (`apiVersion`, the
+  version of the app the plugin runs in), an id of this launch of the plugin,
+  and a proof of the real path of the vault the app has open.
 
 ## What it never does
 
@@ -49,14 +50,17 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
 - It reaches nothing but the maintenance service named in its `data.json`, on
   the literal address `127.0.0.1` or `::1`, through Node's `http` module, with
   no name to resolve. It sends no telemetry.
+- It never sends its vault's key, and it sends nothing that names the vault or
+  the view until whatever listens at that address has proven that it holds
+  the key.
 - It holds no state that matters: no manifest, no edit, no policy, no recovery
   bytes. Removing it loses nothing.
 
 The test suite holds the plugin to this: it loads `main.js` the way the app
 does into a stand-in app whose every write throws, records every module the
-plugin requires (`obsidian`, `http`, `fs`) and every request it makes, and
-fails a copy of the plugin that points a request at a host from its data
-file (see "Evidence" below).
+plugin requires (`obsidian`, `http`, `fs`, `crypto`) and every request it
+makes with its exact body, and fails a copy of the plugin that points a
+request at a host from its data file (see "Evidence" below).
 
 ## How it gets into a vault
 
@@ -81,11 +85,15 @@ differences. Each is compared with what the disk holds when the run begins
 rather than with an earlier generation, so whatever occupies a plugin path (a
 hand edit, an earlier release, something else entirely) is exchanged out into
 recovery with a receipt and is never lost. And a plugin path that a person has
-to repair never holds a view back: a symlinked folder or a directory where a
-file should be (`path-unsafe`), or a vault root that is not private enough for
-the bearer (`vault-not-private`), is reported and left alone while every note
-converges, and the file is written by a later publication once it is
-repaired. A plugin file that another program changes while a publication runs
+to repair never holds a view back: a symlinked folder, a directory where a
+file should be, or a file or folder nobody may read (`path-unsafe`), or a
+vault root that is not private enough for the bearer (`vault-not-private`),
+is reported and left alone while every note converges. Once it is repaired,
+or when a person changed or removed a plugin file, the next time the view is
+prepared the file is written again: a generation that is already committed
+is published again, as it is, when a plugin file it pins is not on disk as
+pinned, with its notes kept. (The settings files are held to the same rule
+for a file nobody may read.) A plugin file that another program changes while a publication runs
 is a race and is handled like one on a note: that publication does not
 commit, the view is tried again, and the file is planned from the disk anew
 (`plugin-file-changed`); nothing reads a plugin file as an edit of a note.
@@ -149,8 +157,8 @@ that cannot be read counts as `off`: nothing is added back on a guess.
 
 ### The data file and the privacy of the vault
 
-`data.json` names the address the service listens on and the bearer of this
-one vault:
+`data.json` names the address the service listens on and the key of this one
+vault, its bearer:
 
 ```json
 {
@@ -163,18 +171,22 @@ one vault:
 
 The bearer is 32 random bytes, minted by the service the first time the view
 is prepared and kept owner-only in `state/plugin/<view>.json` under the
-workspace's private state. The data file is written with mode `0600`, and only
-into a vault root that is private to this user (owned by this user, no group
-or other permission bits). Atelier creates the vaults it places under its own
-data root with mode `0700` and makes an existing one private before the first
-bearer goes in. Any other vault root is only checked: when it is not private
-the data file is not published (`vault-not-private`), the rest of the vault
-is, and the plugin says `Atelier: not set up`.
+workspace's private state. It is the key of the handshake below and never
+crosses the wire. The data file is written with mode `0600`, and only into a
+vault root that is private to this user (owned by this user, no group or other
+permission bits). Atelier creates the vaults it places under its own data root
+with mode `0700` and makes an existing one private before the first bearer
+goes in. Any other vault root is only checked: when it is not private the data
+file is not published (`vault-not-private`), the rest of the vault is, and the
+plugin says `Atelier: not set up`. A vault path under the data root that is a
+link to a folder somewhere else is never changed and never receives the data
+file, private or not (`vault-not-private`, reason `vault-root-is-a-link`).
 
-Deleting `state/plugin/<view>.json` rotates the bearer. The old one is
-refused at once; the next publication of the view (its next change, or the
-next start of the service) mints a new one and replaces the data file, which
-the plugin reads again without a restart.
+Deleting `state/plugin/<view>.json` rotates the bearer. A session made with
+the old one ends at its next request, and a handshake with it is refused; the
+next publication of the view (its next change, or the next start of the
+service) mints a new one and replaces the data file, which the plugin reads
+again without a restart.
 
 ## The trust prompt
 
@@ -205,69 +217,111 @@ it in a disposable app profile only; see "Evidence".
 ## The channel
 
 The service's loopback listener (see [local-services.md](local-services.md))
-answers four plugin commands besides its own four operations. Every one is a
+answers five plugin commands besides its own four operations. Every one is a
 `POST` of a JSON object of at most 1 KiB with exactly the fields of its
-command, and carries `Authorization: Bearer <the vault's bearer>`.
+command, and none carries a credential in a header: the plugin proves it holds
+the vault's key without sending it, and the service proves it first
+(protocol `atelier-obsidian-plugin-channel/v2`).
+
+1. The plugin sends a fresh 32-byte nonce and a hint at its key: an HMAC of
+   the nonce under the key. The hint names no vault, and two hints of one vault
+   do not look alike. The service computes the hint for each vault's key it
+   holds, in constant time for every one of them, and answers only for a key
+   it holds: its own nonce, a handshake id, and a proof, an HMAC under the key
+   over the view, its own exact address, both nonces and the handshake id.
+2. The plugin checks that proof, in constant time, against the address in
+   its data file. A listener that cannot make it (a program that took the
+   port while the service was down, or one relaying a service that listens
+   elsewhere) is told nothing more: the plugin shows the service as
+   unreachable (`listener-not-proven`) and tries again at its next round.
+3. Only then does the plugin say hello: its own proof under the key, over the
+   same values and everything the hello carries (plugin version, app version,
+   the id of this launch, and a proof of the vault path under the session key,
+   so the path itself is never sent). A handshake is used once, whatever the
+   hello proves, and lapses after five seconds.
+4. Both derive a key for this session from the same values. Every later
+   command carries the session, a counter that only goes up, and a MAC under
+   the session key over the command, the session and the counter; every
+   answer the service gives is the exact text of its document with a MAC over
+   it, the command and the request's counter. The plugin believes no answer
+   that does not verify, and an error, which nobody vouches for, only ever
+   makes it shake hands again. A session ends when its lease lapses, when it
+   is released, after fifteen minutes (the plugin shakes hands again), or at
+   its next request after its vault's key was rotated.
 
 | Command | Fields | Answer |
 | --- | --- | --- |
-| `POST /plugin/hello` | `protocol`, `scopeId`, `pluginVersion`, `appVersion`, `vaultPath` | a session identity, the lease time and the renewal interval |
-| `POST /plugin/lease` | `scopeId`, `sessionId` | the renewed lease |
-| `POST /plugin/release` | `scopeId`, `sessionId` | whether a session was released |
-| `POST /plugin/status` | `scopeId` | the view's state, reason, verification, committed and prepared generation, held notes (counted, not named), retained edits, open pending edits, and the service's own state |
+| `POST /plugin/challenge` | `protocol`, `keyHint`, `clientNonce` | `handshakeId`, `serverNonce`, `serverProof` |
+| `POST /plugin/hello` | `handshakeId`, `pluginVersion`, `appVersion`, `instanceId`, `vaultProof`, `clientProof` | sealed: a session identity, the lease time and the renewal interval |
+| `POST /plugin/lease` | `sessionId`, `counter`, `mac` | sealed: the renewed lease |
+| `POST /plugin/release` | `sessionId`, `counter`, `mac` | sealed: whether the session was released |
+| `POST /plugin/status` | `sessionId`, `counter`, `mac` | sealed: the view's state, reason, verification, committed and prepared generation, held notes (counted, not named), retained edits, open pending edits, and the service's own state |
 
 Refusals, before anything else is looked at: `Host` other than the listener's
 literal loopback authority, a cross-site `Origin` or `Sec-Fetch-Site`, a path
-other than one of the eight exactly (a query included), or another method (the
+other than one of the nine exactly (a query included), or another method (the
 listener's rules for every request). Then:
 
 | Case | Status | Code |
 | --- | --- | --- |
-| no bearer, an unknown one, the service's runtime bearer | 401 | `plugin-bearer-required` |
+| a credential in the `Authorization` header, the service's runtime bearer included | 400 | `plugin-command-takes-no-bearer` |
 | a body over 1 KiB | 413 | `payload-too-large` |
 | a body that is not a JSON object | 400 | `payload-not-json-object` |
-| a field too many or missing, or of the wrong shape | 400 | `request-malformed` |
-| a hello in another protocol | 409 | `protocol-unsupported` |
-| a bearer of one vault naming another view | 403 | `scope-not-this-vault` |
-| a hello from a vault that is not this view's | 409 | `wrong-vault` |
-| a lease or release for a session the service does not know | 409 | `session-unknown` (release answers `released: false`) |
+| a field too many or missing, or of the wrong shape (a challenge that names the view, say) | 400 | `request-malformed` |
+| a challenge in another protocol | 409 | `protocol-unsupported` |
+| a challenge whose hint matches no key the service holds | 401 | `plugin-key-unknown` |
+| thirty-two handshakes already waiting for their hello | 429 | `too-many-handshakes` |
+| a hello for a handshake that is unknown, used, lapsed, or was made at another address | 401 | `handshake-unknown` |
+| a hello whose proof does not verify under the key | 401 | `plugin-not-authenticated` |
+| a hello that proves a vault path other than this view's | 409 | `wrong-vault` |
 | a ninth live session for one view | 429 | `too-many-sessions` |
+| a command for a session the service does not know, or whose key was rotated | 409 | `session-unknown` |
+| a command whose MAC does not verify | 401 | `request-not-authenticated` |
+| a command with a counter already seen | 401 | `request-replayed` |
 
-The service keeps sessions in memory. A service that started again knows no
-session; the plugin's next lease is refused with `session-unknown`, and it says
-hello again.
+The service keeps handshakes and sessions in memory. A service that started
+again knows neither; the plugin's next lease is refused with
+`session-unknown`, and it shakes hands again.
 
 ## Security argument
 
 - Reach. The listener binds a literal loopback address and refuses any `Host`
   but its own authority, so nothing off the machine and no name that resolves
   to loopback reaches it. A web page, including a note rendered in the app,
-  sends an `Origin` or `Sec-Fetch-Site` that is refused. The plugin's own
-  requests come from Node's `http` module and carry neither.
-- Authority. A vault's bearer is compared in constant time with the bearer of
-  every view the workspace has, before the request body is read, and grants
-  exactly the four plugin commands for that one view: presence and read-only
-  status. It does not reach status, tick or stop of the service, and the
-  service's runtime bearer does not reach the plugin commands. No command
-  takes a path to act on, a name or code; `vaultPath` is compared with the
-  view's vault and never opened.
-- Secrecy. The bearer lives in two owner-only places: the private state of the
+  sends an `Origin` or `Sec-Fetch-Site` that is refused, and it cannot compute
+  a proof. The plugin's own requests come from Node's `http` module and carry
+  neither header.
+- Authenticity, both ways. The service answers a challenge only for a key it
+  holds and proves it over its own exact address; the plugin proves the same
+  key over the same values; every later request and answer is sealed with the
+  session's key. Comparisons are constant time. A proof or a MAC cannot stand
+  in for another (each has its own label), a handshake is used once, and a
+  counter is accepted once, so nothing recorded can be replayed.
+- Secrecy. The key lives in two owner-only places, the private state of the
   workspace and the vault's `data.json` (`0600`, in a vault root that is
-  `0700`). Another user of the machine cannot read either. Any process that
-  runs as this user can, including other community plugins in the same app:
-  the bearer separates vaults and processes of one person, it does not
-  authenticate a person. That is the same boundary the service's runtime
-  bearer has. A vault copied or synchronized to another machine carries its
-  bearer there, where it reaches nothing: the service answers on this
-  machine's loopback address only.
-- Blast radius. Whoever holds a bearer can make one view look open, or closed,
-  take its eight sessions for as long as it keeps renewing them, and claim an
-  app version for it. A claimed version only admits the
-  command-line path for that view: publication still needs the app to answer
-  for the vault through its own channel, and the in-app step still refuses on
-  an app that lacks the saved-content field it relies on
-  (`unsupported-app`). Nothing a bearer holder sends writes a file, starts a
-  publication or changes an edit.
+  `0700`), and never crosses the wire. Another user of the machine cannot read
+  it, and a program of any user that takes the service's port while it is
+  down learns a nonce, a hint it cannot link to a vault, and at most one
+  sealed renewal of a session that ended with the service: no key, no view, no
+  path, no session and no app version it can use (the squatter test in
+  "Evidence"). Any process that runs as this user can read the data file,
+  including other community plugins in the same app: the key separates vaults
+  and processes of one person, it does not authenticate a person. That is the
+  same boundary the service's runtime bearer has. A vault copied or
+  synchronized to another machine carries its key there, where it reaches
+  nothing: the service answers on this machine's loopback address only.
+- Blast radius. Whoever holds a vault's key can make that view look open, or
+  closed, take its eight sessions for as long as it keeps renewing them, and
+  claim an app version for it. A claimed version only admits the command-line
+  path for that view: publication still needs the app to answer for the vault
+  through its own channel, and the in-app step still refuses on an app that
+  lacks the saved-content field it relies on (`unsupported-app`). Nothing a
+  key holder sends writes a file, starts a publication or changes an edit, and
+  the key reaches nothing of the service itself: not its status, tick or stop.
+- Cost. A request without a key costs the service one look at the bearer
+  directory (the bearers are kept in memory and read again only when that
+  directory changed) and one HMAC per vault; at most thirty-two handshakes
+  wait at a time.
 - Egress. `plugins/` is in the egress scan, which fails a request whose target
   is not a literal loopback address, and the release audit requires the three
   plugin files in the package and scans them in the tarball.
@@ -287,16 +341,33 @@ The plugin runs inside the app whose version it reports, so while it holds a
 live lease on a view that version counts as checked:
 
 - The service's adapter factory qualifies the app from the lease (reason
-  `plugin-reported`) and does not run the command-line tool's `version`
-  command. The adapter still coordinates through the command-line tool, which
-  must answer for exactly this vault before anything is published.
-- `open` takes the version from the lease as well, so an app whose
-  command-line tool answers "Vault not found." or does not answer in time
-  still qualifies. Whether the app is installed and has its command-line
-  capability is still the probe's answer, because `open` and publication use
-  that capability in this phase.
+  `plugin-reported`) while one launch of the plugin alone holds the view.
+  Whether the app is installed where Atelier looks and has its command-line
+  tool is still the probe's answer, from the files where the tool has a fixed
+  place (macOS), so the tool's `version` command is not run there; where only
+  running the tool shows it is there, it is run, and the version it answers
+  must meet the floor as well. The adapter still coordinates through the
+  command-line tool, which must answer for exactly this vault before anything
+  is published.
+- `open` takes the version from the lease as well where the command-line tool
+  gives none (it did not answer in time, say). A version the tool did answer
+  must meet the floor too. Installation and the command-line capability are
+  the probe's answer, because `open` and publication use that capability in
+  this phase. `open` asks the service about the plugin at most once a second
+  while it waits for the app.
+- With two launches holding one view (two app profiles with the same vault
+  open, both running the plugin), neither version decides: the command-line
+  tool may reach either app, so the service asks the probe as it would without
+  a plugin.
 - An app below the floor refuses as before (`app-version-unsupported`,
   `below-minimum-version`), whoever reported the version.
+
+The limit that remains: two app profiles hold the same vault and only one runs
+the plugin (the other is in restricted mode, say). The service sees one
+launch, qualifies from its version and, where the tool has a fixed place, does
+not ask the tool, which may reach the other app. The in-app step still
+refuses an app without the saved-content field it relies on, for a note open
+in the editor.
 
 `atelier obsidian status` and `open` report the plugin for each view:
 `{ present, reason, appVersion, pluginVersion, sessions }`, and a line such as
@@ -306,28 +377,47 @@ live lease on a view that version counts as checked:
 
 - `test/obsidian-plugin.test.mjs` runs the shipped `main.js` in a stand-in app
   against a real listener on an ephemeral loopback port: parity of the
-  plugin's constants with the channel contract; the status bar, the status
-  window and the notices through every state; lease renewal, release and
-  lapse; a service restart; a republished data file; missing or unusable
-  channel data; the app floor; the refusal table above with mutation controls
-  that must fail it; bearer minting and rotation; publication of the plugin
-  files, entries and data file, with a person's settings kept, displaced bytes
-  kept in recovery, the privacy rule of the vault root and an upgrade; the
-  service publishing the plugin and the plugin it published holding the view;
-  qualification from a plugin report; and `status` and `open` reporting it.
-- The same file has a real-app test, skipped unless
+  plugin's constants and of every proof and MAC with the channel contract (a
+  plugin that computes any one of them otherwise gets nowhere); the status
+  bar, the status window and the notices through every state; lease renewal,
+  release and lapse; a service restart; a republished data file; a rotated
+  key; missing or unusable channel data; the app floor; a program squatting
+  the service's address, which learns no key, no view and no path and, with
+  everything it received replayed against the restarted service, opens no
+  session and sets no app version; an answer relayed from a service at
+  another address; answers that are not sealed; an unload while a hello is
+  under way; the refusal table above with mutation controls that must fail
+  it; bearer minting, rotation and the bearer cache; publication of the
+  plugin files, entries and data file, with a person's settings kept,
+  displaced bytes kept in recovery, the privacy rule of the vault root, a
+  linked vault root, unreadable files, a drifted plugin file written again,
+  and an upgrade; the service publishing the plugin and the plugin it
+  published holding the view; qualification from a plugin report, with one
+  launch or two; and `status` and `open` reporting it. A spawn guard refuses
+  any child of the suite that could reach an Obsidian with the developer's
+  own `HOME`.
+- The same file has three real-app tests, skipped unless
   `ATELIER_OBSIDIAN_PLUGIN=1` is set on a desktop host with Obsidian
-  installed. It publishes a synthetic vault through the maintenance service,
-  opens it in a disposable Obsidian instance (private `HOME`, private
+  installed. Each publishes a synthetic vault through the maintenance service
+  and opens it in a disposable Obsidian instance (private `HOME`, private
   profile, mock keychain, a copy of the pinned app archive when
-  `ATELIER_OBSIDIAN_ASAR` names one), checks that the trust prompt is shown,
-  answers it the way a person does, by pressing "Trust author and enable
-  plugins" in that window through the command-line tool's `eval`, and asserts
-  that the service sees the lease with the app's version, that the status bar
-  item says `Atelier: current`, that a publication made while the plugin holds
-  the view qualifies the app with reason `plugin-reported`, and that quitting
-  the app ends the presence. It never touches another app profile, and it
-  ends the disposable instance by its profile path.
+  `ATELIER_OBSIDIAN_ASAR` names one). The first checks that the trust prompt
+  is shown, answers it the way a person does, by pressing "Trust author and
+  enable plugins" in that window through the command-line tool's `eval`, and
+  asserts that the service sees the lease with the app's version, that the
+  status bar item says `Atelier: current`, that a publication made while the
+  plugin holds the view qualifies the app with reason `plugin-reported`, that
+  a rotated key reaches the running plugin, and that quitting the app ends the
+  presence. The second declines the prompt and publishes through the
+  command-line path as before. The third uninstalls the plugin in the app and
+  follows it until `atelier obsidian plugin on` brings it back. They never
+  touch another app profile, and they end each disposable instance by its
+  profile path.
+
+  The disposable window takes focus when it opens, so input meant for another
+  window can answer its prompt before the test looks. The first test then
+  fails and says so; the third, whose subject comes after trust, accepts a
+  vault trusted that way.
 
   Pressing the button in the prompt was chosen over the alternatives because
   it exercises the prompt a person sees and needs no knowledge of the app's
@@ -346,7 +436,9 @@ closes gates G20 and G21 of the initiative. Nothing below is implemented.
    protocol variant, `obsidian-plugin-critical-section/v1`, recorded in every
    journal it writes. The service stays the only client that starts work; the
    plugin fetches work with a bounded long poll (`POST /plugin/work`) and
-   answers with `POST /plugin/result`, so the plugin never listens on a port.
+   answers with `POST /plugin/result`, both sealed under the session's key
+   like every command of phase 1, so the plugin never listens on a port and
+   takes work only from a service that proved it holds the vault's key.
    At most one operation per vault is in flight, every operation has an
    identity, a lost answer is recovered with `collect`, and a publish is never
    sent twice.
