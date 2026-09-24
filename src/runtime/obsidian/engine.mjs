@@ -3,7 +3,7 @@ import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
-import { PublicationRefusal } from '../../projection/obsidian/recovery/store.mjs'
+import { PublicationRefusal, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal } from './errors.mjs'
@@ -18,6 +18,7 @@ import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import { FRESHNESS_SCHEMA, LATE_WRITERS_SCHEMA, createMaintenanceStateStore } from './state-store.mjs'
+import { ensureVaultAllocation, projectDisplayName } from './vault-location.mjs'
 import { createNullWatcherFactory } from './watchers.mjs'
 
 // The maintenance engine. One explicit `tick()`; no timer, no process, no
@@ -169,6 +170,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility = DEFAULT_ELIGIBILITY,
     fullReconciliationIntervalMs = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS, lateWriterWindowMs = DEFAULT_LATE_WRITER_WINDOW_MS,
     publicationRetryMs = DEFAULT_PUBLICATION_RETRY_MS, observeApp = null,
+    // The app's own vault list (id -> { path }) when it can be read without asking the app, or null: a folder for a
+    // new vault is never allocated inside a vault it lists, nor under a name a vault it lists already has.
+    readAppVaultList = null,
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
     // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
     lockOwner = null, lockProbe = probeHealth,
@@ -249,7 +253,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   }
 
   function storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) {
-    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots])
+    // A view's vault can be allocated, or moved, while the engine runs: the store follows its record.
+    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots, readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path ?? null])
     const cached = stores.get(scope.scopeId)
     if (cached?.signature === signature) return cached.store
     const store = seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId: scope.scopeId, repositoryRoots })
@@ -353,7 +358,24 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       ?? writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: defaultMachineSettings({ workspaceId, updatedAt: now }) })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }
-    const scopes = enablement.scopes.map((scope) => ({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }))
+    // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never
+    // published under the data root (vault-location.mjs). A view whose folder cannot be allocated is not prepared on
+    // this tick, and its freshness says why; the other views go on.
+    const allocationRefusals = new Map()
+    if (machine.decisions.location !== null) {
+      let vaults = null
+      try { vaults = typeof readAppVaultList === 'function' ? readAppVaultList() ?? null : null } catch { vaults = null }
+      const allocatedPaths = enablement.scopes.map((scope) => readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path).filter((item) => typeof item === 'string')
+      for (const scope of enablement.scopes) {
+        try {
+          ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId, location: machine.decisions.location, projectName: projectDisplayName(project), repositoryRoots, vaults, allocatedPaths, now })
+        } catch (error) {
+          if (!isTypedRefusal(error)) throw error
+          allocationRefusals.set(scope.scopeId, error.code)
+        }
+      }
+    }
+    const scopes = enablement.scopes.filter((scope) => !allocationRefusals.has(scope.scopeId)).map((scope) => ({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }))
 
     watch([
       ...(project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => ({ id: `repo:${repo.name}`, path: repo.path, recursive: true, keyPrefix: sourceKey(repo.name, ''), keyOf: (relative) => sourceKey(repo.name, relative) })),
@@ -455,7 +477,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (full) { lastFullMs = nowMs; forceFull = false }
 
     // 7. Which views are invalid.
-    declaredScopes = new Set(scopes.map(({ scope }) => scope.scopeId))
+    declaredScopes = new Set(enablement.scopes.map((scope) => scope.scopeId))
     const previous = readPreviousFreshness(stateStore)
     const entries = new Map()
     const unseen = new Set()
@@ -482,6 +504,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // Invalidation is durable before any work: a view is not reported current while it is being rebuilt.
     for (const [scopeId, classes] of attempt) entries.set(scopeId, { ...demote(entries.get(scopeId), 'stale', 'invalidated', now), changeClasses: [...classes].sort() })
+    for (const [scopeId, code] of allocationRefusals) {
+      entries.set(scopeId, demote(previous?.scopes.find((entry) => entry.scopeId === scopeId && entry.state !== 'disabled') ?? blankEntry(scopeId, now), 'stale', code, now))
+    }
     for (const entry of previous?.scopes ?? []) if (!entries.has(entry.scopeId)) entries.set(entry.scopeId, demote(entry, 'disabled', 'scope-not-configured', now))
     const persist = () => stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries }))
     persist()
