@@ -82,12 +82,14 @@ no detail. Three rules, in the vault layout the view is prepared in:
 
 1. Allow-list. Every path the emitter wrote must be a path allocated to this
    view: every note and attachment path of the manifest, every rewritten link
-   or embed target (the inversion's emitted bytes, percent-decoded, without a
-   `#` fragment or the `|` words the author wrote), every attachment an embed
-   names, and every `[[…]]` or `![[…]]` target in a generated region (relation
-   rows, a wrapper's link and embed of its file). The identity block of each
-   note must name exactly that note's own repository, identity and source
-   path, and nothing else may appear in it.
+   or embed target (the bytes an inversion emitted must be such a path, as it
+   is or percent-encoded the way the emitter encodes it; the words an
+   author's wikilink keeps after `|` are the author's), every attachment an
+   embed names, and every `[[…]]` or `![[…]]` target in a generated region,
+   without its `#` fragment or `|` alias (relation rows, a wrapper's link and
+   embed of its file). The identity block of each note must name exactly that
+   note's own repository, identity and source path, and nothing else may
+   appear in it.
 2. Deny-list. The free text of the generated regions (the titles in relation
    rows, a wrapper's title, summary and tags), the link targets excluded,
    must not contain, as a whole token, the canonical identity, the
@@ -320,6 +322,15 @@ The folders `notes/` and `attachments/` are left behind empty: the publisher
 moves files, never folders, and a person may delete them. While a view waits
 for a held note, a selection resolved from the registry names layout 2 paths
 that the vault does not hold yet.
+
+In automatic mode a policy may apply a held edit in the very tick that lays
+the view out again: the edit is then closed as applied before the view is
+prepared, nothing holds the layout, and the note the person edited is not
+removed (it differs from what was published) but kept at its layout 1 path
+and surfaced as a retained edit. Its text is in the source and in the laid
+out note; nothing is lost, and the person may delete the copy. In manual mode
+the hold lifts first, the note is published over nothing, and it is then
+retired to recovery like any other.
 
 ## Graph behaviour changes since the shared link resolver
 

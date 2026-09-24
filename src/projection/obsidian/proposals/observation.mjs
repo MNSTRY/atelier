@@ -5,7 +5,7 @@ import { compareText, isoTime } from '../../../runtime/obsidian/documents.mjs'
 import { readObsidianEnablement } from '../../../runtime/obsidian/enablement.mjs'
 import { ObsidianMaintenanceRefusal } from '../../../runtime/obsidian/errors.mjs'
 import { OPEN_EDIT_STATES, createMaintenanceStateStore } from '../../../runtime/obsidian/state-store.mjs'
-import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal } from '../contracts.mjs'
+import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../contracts.mjs'
 import { SOURCE_APPLY_PRIMITIVES, SourceApplyRefusal, locateSource } from '../edits/apply.mjs'
 import { EditArbitrationRefusal } from '../edits/arbitrate.mjs'
 import { createEditObserverForOracleTests, editIdempotencyKey, observeEdit } from '../edits/observe.mjs'
@@ -131,17 +131,22 @@ export function createTickObservation(options = {}) {
     const kept = retained(store, noteEntry.noteDigest)
     if (kept) return kept
     workspace.prepared ??= new Map()
-    if (!workspace.prepared.has(scope.scopeId)) {
+    // Prepared in the vault layout of the edit's generation, once per generation.
+    const preparedKey = `${scope.scopeId}\u0000${manifest.generationId}`
+    if (!workspace.prepared.has(preparedKey)) {
       let files = []
       try {
         const { graph, profile } = workspace.corpus()
         const snapshot = seams.captureSnapshot({ project: workspace.project, graph, workspaceId: workspace.workspaceId, index: new Map(), configDigest: manifest.ext?.[EXT]?.configDigest ?? `sha256:${'0'.repeat(64)}`, capturedAt: now })
         const persistentPathRegistry = createMaintenanceStateStore({ workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId }).readPathRegistry()
-        files = seams.prepareView({ snapshot, profile, scope, persistentPathRegistry, priorManifest: manifest, existingSettings: null, clock: workspace.clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8') }).files
+        files = seams.prepareView({
+          snapshot, profile, scope, persistentPathRegistry, priorManifest: manifest, existingSettings: null, clock: workspace.clock,
+          vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), layout: manifestLayoutVersion(manifest),
+        }).files
       } catch (error) { if (!isTyped(error) && !GONE.has(error?.code)) throw error }
-      workspace.prepared.set(scope.scopeId, files)
+      workspace.prepared.set(preparedKey, files)
     }
-    const file = workspace.prepared.get(scope.scopeId).find((item) => item.path === noteEntry.path && item.digest === noteEntry.noteDigest)
+    const file = workspace.prepared.get(preparedKey).find((item) => item.path === noteEntry.path && item.digest === noteEntry.noteDigest)
     return file ? file.bytes : null
   }
 

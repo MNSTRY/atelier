@@ -1,17 +1,23 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import test from 'node:test'
 import {
   fileNameParts, folderNameOf, identityLineTexts, isReadableVaultPath, joinFileName, noteNameOf, qualifierIdOf, vaultName, validateObsidianContract,
 } from '../src/projection/obsidian/contracts.mjs'
 import { applyEditLens } from '../src/projection/obsidian/edits/index.mjs'
 import { PATH_REGISTRY_SCHEMA, allocateWorkspacePaths, collisionKey, prepareView } from '../src/projection/obsidian/materialize/index.mjs'
+import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
 import { prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
+import { digestOf, makeApplyWorld, noteText, treeListing } from './support/obsidian-edits/apply-world.mjs'
 
 // Vault layout 2: file names are titles, folders mirror the repository, and
 // each note names its identity in generated properties. Invented, synthetic
 // content only. See "Vault layout" in docs/obsidian-contract.md.
 
 const EXT = 'mnstry.atelier.obsidian'
+const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
+const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which the recovery suite asserts' }
 const bytes = (value) => Buffer.byteLength(value, 'utf8')
 const node = (repo, id, sourcePath, title, extension = sourcePath.split('.').at(-1)) => ({ repo, id, path: sourcePath, title, extension })
 
@@ -403,4 +409,152 @@ test('every rewritten link and relation row resolves, the way the app resolves i
   assert.ok(resolved >= 6, `${resolved} links checked`)
   // The control: the layout 1 spelling of a link, a bare name, is ambiguous here and resolves by the app's tie-break, not by identity.
   assert.equal(new Set(prepared.manifest.notes.filter((note) => note.path.toLowerCase().endsWith('/intro.md')).map((note) => note.path)).size, 3)
+})
+
+// ---------------------------------------------------------------------------
+// Upgrade from layout 1
+// ---------------------------------------------------------------------------
+
+const UPGRADE_FILES = {
+  'east-wing/notes/lantern.md': noteText({ id: 'east-wing:lantern', title: 'Lantern room', body: 'The lamp turns once a minute. See the [compass](compass.md).' }),
+  'east-wing/notes/compass.md': noteText({ id: 'east-wing:compass', title: 'Compass rose', body: 'North is painted red.' }),
+  'west-wing/logs/tide.md': noteText({ id: 'west-wing:tide', title: 'Tide log', body: 'High water at noon.' }),
+}
+const V1 = 'atelier-obsidian-generation-manifest/v1'
+const V2 = 'atelier-obsidian-generation-manifest/v2'
+const upgradeWorld = (t) => makeApplyWorld(t, { repositories: ['east-wing', 'west-wing'], files: UPGRADE_FILES })
+// What the earlier release prepared: layout 1 paths, recorded in a layout 1 registry.
+const EARLIER_RELEASE = {
+  prepareView(input) {
+    const prepared = prepareView({ ...input, layout: 1 })
+    const entries = prepared.manifest.notes.map(({ repoId, nodeId, path: notePath }) => ({ repoId, nodeId, path: notePath }))
+    return { ...prepared, persistentPathRegistry: { schema: PATH_REGISTRY_SCHEMA, workspaceId: prepared.persistentPathRegistry.workspaceId, entries } }
+  },
+}
+const vaultFiles = (world) => treeListing(world.vault(), { skip: (name) => name.startsWith('.') })
+
+test('upgrade: a vault the earlier release published is laid out again once, and every earlier file is retired to recovery, none deleted', needsExchange, async (t) => {
+  const world = upgradeWorld(t)
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  assert.equal((await earlier.tick()).scopes[0].state, 'current')
+  assert.equal(world.manifest().schema, V1)
+  const earlierFiles = Object.entries(vaultFiles(world)).filter(([name]) => !name.endsWith('/'))
+  assert.ok(earlierFiles.length >= 3 && earlierFiles.every(([name]) => name.startsWith('notes/')), 'the earlier release laid the vault out flat')
+  assert.equal(world.stateStore().readPathRegistry().layout, undefined)
+  earlier.stop()
+
+  const engine = world.engine()
+  world.advance(1000)
+  assert.equal((await engine.tick()).scopes[0].state, 'current')
+  const after = world.manifest()
+  assert.deepEqual([after.schema, after.layoutVersion], [V2, 2])
+  assert.deepEqual(after.notes.map((note) => note.path).sort(), ['east-wing/notes/Compass rose.md', 'east-wing/notes/Lantern room.md', 'west-wing/logs/Tide log.md'])
+  assert.equal(world.stateStore().readPathRegistry().layout, 2, 'the registry is laid out again too')
+  // No earlier file is left in the vault, only the folder that held them...
+  const now = vaultFiles(world)
+  for (const [name] of earlierFiles) assert.equal(now[name], undefined, name)
+  assert.deepEqual(Object.keys(now).filter((name) => name.startsWith('notes')), ['notes/'])
+  // ...and every one of them is in the recovery area, byte for byte.
+  const recovered = new Set(Object.values(treeListing(world.recovery())))
+  for (const [name, digest] of earlierFiles) assert.ok(recovered.has(digest), `${name} is retained in recovery`)
+  // Laid out once: the next ticks change nothing.
+  for (let tick = 0; tick < 2; tick += 1) { world.advance(1000); assert.equal((await engine.tick()).scopes[0].state, 'current') }
+  assert.equal(world.manifest().generationId, after.generationId)
+})
+
+test('upgrade with a held edit: the view keeps layout 1 while a note is held, the edit applies from its layout 1 generation, and then the view is laid out again with nothing lost', needsExchange, async (t) => {
+  const world = upgradeWorld(t)
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  await earlier.tick()
+  const edited = world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  world.advance(1000)
+  assert.equal((await earlier.tick()).scopes[0].state, 'held-for-your-edit')
+  earlier.stop()
+  const edit = world.editOf('east-wing:lantern')
+  assert.match(edit.path, /^notes\/Lantern room--[0-9a-f]{12}\.md$/)
+
+  // The new release: while the note is held nothing moves, and a source that changes is still prepared in layout 1.
+  const engine = world.engine()
+  world.advance(1000)
+  assert.equal((await engine.tick()).scopes[0].state, 'held-for-your-edit')
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nA line added at the source.\n')
+  world.advance(1000)
+  assert.equal((await engine.tick()).scopes[0].state, 'held-for-your-edit')
+  const heldManifest = world.manifest()
+  assert.equal(heldManifest.schema, V1)
+  assert.match(heldManifest.notes.find((note) => note.nodeId === 'west-wing:tide').path, /^notes\/Tide log--[0-9a-f]{12}\.md$/)
+  assert.match(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8'), /A line added at the source/)
+  assert.deepEqual(fs.readFileSync(path.join(world.vault(), edit.path)), edited, 'the held note is untouched')
+
+  // The edit applies: the published note of its layout 1 generation is prepared again in that layout.
+  const result = await world.sourceApply().apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+  assert.deepEqual([result.status, result.code], ['applied', 'applied'])
+  assert.match(fs.readFileSync(world.source('east-wing/notes/lantern.md'), 'utf8'), /twice a minute/)
+
+  // The hold lifts, and then the view is laid out again.
+  for (let tick = 0; tick < 3; tick += 1) { world.advance(1000); await engine.tick() }
+  const after = world.manifest()
+  assert.deepEqual([after.schema, after.layoutVersion], [V2, 2])
+  assert.equal(world.pendingEdits().find((item) => item.editId === edit.editId).state, 'withdrawn')
+  assert.equal(after.notes.find((note) => note.nodeId === 'east-wing:lantern').path, 'east-wing/notes/Lantern room.md')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /twice a minute/)
+  // Nothing is lost: the person's bytes are in the object store and the note they edited is in recovery.
+  assert.deepEqual(fs.readFileSync(path.join(world.workspaceRoot(), edit.objectRef)), edited)
+  assert.ok(new Set(Object.values(treeListing(world.recovery()))).has(digestOf(edited)), 'the layout 1 note the person edited is retained')
+  assert.equal(fs.existsSync(path.join(world.vault(), edit.path)), false)
+})
+
+test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is held, and is laid out again once the person restores the note', needsExchange, async (t) => {
+  const world = upgradeWorld(t)
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  await earlier.tick()
+  const published = fs.readFileSync(world.noteFile('east-wing:lantern'))
+  world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  world.advance(1000)
+  assert.equal((await earlier.tick()).scopes[0].state, 'held-for-your-edit')
+  earlier.stop()
+  const edit = world.editOf('east-wing:lantern')
+
+  const engine = world.engine()
+  world.advance(1000)
+  assert.equal((await engine.tick()).scopes[0].state, 'held-for-your-edit')
+  assert.equal(world.manifest().schema, V1)
+  // The person puts the note back as it was published: the edit is withdrawn, the hold lifts, and the view is laid out again.
+  fs.writeFileSync(path.join(world.vault(), edit.path), published)
+  for (let tick = 0; tick < 3; tick += 1) { world.advance(1000); await engine.tick() }
+  const after = world.manifest()
+  assert.deepEqual([after.schema, after.layoutVersion], [V2, 2])
+  assert.equal(world.pendingEdits().find((item) => item.editId === edit.editId).state, 'withdrawn')
+  assert.doesNotMatch(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /twice a minute/)
+  assert.equal(fs.existsSync(path.join(world.vault(), edit.path)), false)
+  assert.ok(new Set(Object.values(treeListing(world.recovery()))).has(digestOf(published)), 'the layout 1 note is retired to recovery')
+})
+
+test('prepareView keeps layout 1 exactly while the prior generation is in layout 1 and holds a note, and lays out again otherwise', (t) => {
+  const cleanups = []
+  t.after(() => { for (const cleanup of cleanups) cleanup() })
+  const files = Object.fromEntries(Object.entries(UPGRADE_FILES).map(([name, text]) => [name, { text }]))
+  const { prepared: first, inputs } = prepareWorkspace({ after: (fn) => cleanups.push(fn) }, { repositories: ['east-wing', 'west-wing'], files }, { layout: 1 })
+  assert.equal(first.manifest.schema, V1)
+  const again = (extra) => prepareView({ ...inputs, priorManifest: first.manifest, ...extra })
+  // Held: the generation is prepared exactly as the earlier release prepared it.
+  const held = again({ heldNotePaths: [first.manifest.notes[1].path] })
+  assert.deepEqual(held.manifestBytes, first.manifestBytes)
+  assert.deepEqual(held.files.map((file) => [file.path, file.digest]), first.files.map((file) => [file.path, file.digest]))
+  assert.equal(held.persistentPathRegistry.layout, 2, 'the persistent registry is laid out again whichever layout the view is prepared in')
+  // Not held, or held only for a path the prior generation does not hold: laid out again, every layout 1 path reported removed.
+  for (const heldNotePaths of [null, [], ['notes/Elsewhere--0123456789ab.md']]) {
+    const relaid = again({ heldNotePaths })
+    assert.deepEqual([relaid.manifest.schema, relaid.manifest.layoutVersion], [V2, 2])
+    assert.deepEqual(relaid.changes.removed, first.manifest.notes.map((note) => note.path).sort())
+    assert.deepEqual(relaid.changes.added, relaid.manifest.notes.map((note) => note.path))
+  }
+  // A layout 2 generation with a held note stays in layout 2, on its own paths.
+  const second = again({})
+  const stays = prepareView({ ...inputs, priorManifest: second.manifest, persistentPathRegistry: second.persistentPathRegistry, heldNotePaths: [second.manifest.notes[0].path] })
+  assert.deepEqual(stays.manifestBytes, second.manifestBytes)
+  // An explicit layout is what recovering a generation as it was published asks for; anything else refuses.
+  assert.deepEqual(prepareView({ ...inputs, priorManifest: first.manifest, layout: 1 }).manifestBytes, first.manifestBytes)
+  assert.throws(() => prepareView({ ...inputs, layout: 3 }), { code: 'invalid-layout' })
+  assert.throws(() => prepareView({ ...inputs, heldNotePaths: 'notes/x.md' }), { code: 'invalid-held-notes' })
 })

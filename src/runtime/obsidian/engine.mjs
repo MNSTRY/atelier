@@ -502,14 +502,15 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         const entry = entries.get(scopeId)
         const settle = (state, reason, extra = {}) => entries.set(scopeId, { ...entry, ...extra, state, reason, verified: extra.verified === true, checkedAt: now })
         try {
+          const held = heldPaths(edits, scopeId)
+          // A view whose notes are held for an open edit keeps the vault layout they were published in.
           const prepared = seams.prepareView({
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
-            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId),
+            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId), heldNotePaths: held,
           })
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
           const preparedGenerationId = prepared.manifest.generationId
           const trusted = () => store.readCurrent()
-          const held = heldPaths(edits, scopeId)
           const observed = new Map(held.map((notePath) => [notePath, rules.heldNoteDigest({ file: path.join(store.vaultRoot, notePath), indexed: index.get(vaultKey(scopeId, notePath))?.digest ?? null })]))
           const conflicts = rules.publicationConflicts({ prepared, held, bases: basesOf.get(scopeId) ?? new Map(), observed })
           if (conflicts.length > 0) {
