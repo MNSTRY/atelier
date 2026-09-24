@@ -1771,6 +1771,13 @@ test('a lease that outlives its app vouches for no version: with no app in the p
   // Where the process table cannot tell, the plugin's version still stands in.
   const unknown = await withPluginReportedVersion({ inspect: async () => ({ ...stopped, running: null }), vaultState: async () => ({ answered: false, indexReady: false }) }, presence).inspect()
   assert.deepEqual([unknown.versionSource, unknown.version], ['plugin', '1.13.7'])
+  // The same with a probe the factory asks without blocking, as the service's is.
+  const waiting = createQualifiedAdapterFactory({ appProbe: { inspect: async () => ({ installed: true, cli: true, running: false, version: null }) }, createAdapter: (input) => { built.push(input.qualification); return { kind: 'fake' } } })
+  await waiting({ scope: { scopeId: SCOPE }, pluginReport: report })
+  assert.deepEqual([built.at(-1).reason, built.at(-1).versionChecked], ['app-not-running-version-not-needed', false])
+  const answering = createQualifiedAdapterFactory({ appProbe: { inspect: async () => ({ installed: true, cli: true, running: true, version: null, noVaultOpen: true }) }, createAdapter: (input) => { built.push(input.qualification); return { kind: 'fake' } } })
+  await answering({ scope: { scopeId: SCOPE }, pluginReport: report })
+  assert.deepEqual([built.at(-1).reason, built.at(-1).version], ['plugin-reported', '1.13.7'], 'where an app runs and its tool gives no version, the report stands in')
 })
 
 test('status and open report the plugin, and open takes the app version from it where the command-line tool cannot tell', needsExchange, async (t) => {
