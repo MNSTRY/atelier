@@ -117,7 +117,9 @@ function fakeObsidian({ apiVersion = '1.13.7' } = {}) {
   class Component {
     constructor() { this.cleanups = [] }
     register(cleanup) { this.cleanups.push(cleanup) }
-    registerInterval(id) { record.intervals.push(id); this.register(() => clearInterval(id)); return id }
+    // The stand-in app drives each round through cycle(), so a test never races the plugin's own timer: the interval
+    // it registers is recorded and stopped at once.
+    registerInterval(id) { record.intervals.push(id); clearInterval(id); return id }
     registerDomEvent(element, type, handler) { element.addEventListener(type, handler); this.register(() => element.removeEventListener(type, handler)) }
   }
   class Plugin extends Component {

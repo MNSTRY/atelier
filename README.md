@@ -452,7 +452,11 @@ edit made in the editor before anything is republished. A body edit is applied
 to its source manually or under a scoped policy the user installs; anything
 structural stays a copy-only proposal. Atelier never commits to Git for it.
 It is disabled unless a project enables it, and it is proven on one platform
-and one app version. Read [what it does and its known limits](docs/obsidian.md),
+and one app version. Every vault it publishes carries
+[Atelier's own Obsidian plugin](docs/obsidian-plugin.md), which Obsidian asks
+you to trust once per vault; it shows whether the view is current, writes
+nothing, and talks only to the local maintenance service, and the projection
+works the same without it. Read [what it does and its known limits](docs/obsidian.md),
 the [contract](docs/obsidian-contract.md) and the
 [maintenance service](docs/local-services.md) before relying on it. The
 package subpaths are `@mnstry/atelier/obsidian` and

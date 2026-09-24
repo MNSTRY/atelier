@@ -21,7 +21,8 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
 - A status bar item says how current the view is: `Atelier: current`,
   `Atelier: updating`, `Atelier: held (N)` with the number of notes held for
   an edit you made, `Atelier: stale` or `Atelier: service unreachable`. Before
-  the first answer it says `Atelier: connecting`; without channel data it says
+  the first answer it says `Atelier: connecting`; without channel data, or in
+  a copy of the vault rather than the vault Atelier maintains, it says
   `Atelier: not set up`; in an app older than 1.13.7 it says
   `Atelier: needs a newer Obsidian`.
 - The command "Atelier: show status", or a click on the status bar item, opens
@@ -212,9 +213,12 @@ hello again.
   runs as this user can, including other community plugins in the same app:
   the bearer separates vaults and processes of one person, it does not
   authenticate a person. That is the same boundary the service's runtime
-  bearer has.
+  bearer has. A vault copied or synchronized to another machine carries its
+  bearer there, where it reaches nothing: the service answers on this
+  machine's loopback address only.
 - Blast radius. Whoever holds a bearer can make one view look open, or closed,
-  and can claim an app version for it. A claimed version only admits the
+  take its eight sessions for as long as it keeps renewing them, and claim an
+  app version for it. A claimed version only admits the
   command-line path for that view: publication still needs the app to answer
   for the vault through its own channel, and the in-app step still refuses on
   an app that lacks the saved-content field it relies on
