@@ -1,13 +1,40 @@
 import assert from 'node:assert/strict'
 import { createHash, randomBytes } from 'node:crypto'
-import { execFileSync, spawnSync } from 'node:child_process'
+import childProcess, { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
+import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+
+// No child of this suite reaches the developer's own Obsidian. The app, its
+// command-line tool, an app link, and anything that takes the command-line
+// adapter or loads the production app seams run only with a private HOME: the
+// tool finds the app through a socket under HOME. The real-app tests give each
+// disposable instance its own; an attempt with the developer's HOME throws
+// here instead of running.
+const REACHES_THE_APP = [/obsidian-cli/, /\/Obsidian$/, /--adapter=obsidian-cli/, /app-production-seams/, /obsidian:\/\//i]
+const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
+function guardSpawn(command, args, options) {
+  const words = [command, ...(Array.isArray(args) ? args : [])].map(String)
+  const home = options?.env ? options.env.HOME : process.env.HOME
+  if (words.some((word) => REACHES_THE_APP.some((pattern) => pattern.test(word))) && (typeof home !== 'string' || home === '' || REAL_HOMES.includes(path.resolve(home)))) {
+    throw new Error('spawn guard: a child that can reach a running Obsidian needs a private HOME, never the developer\'s own')
+  }
+}
+for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
+  const original = childProcess[method]
+  childProcess[method] = function guarded(command, args, ...rest) {
+    // exec and execSync take one shell line, and their options come second.
+    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/), args)
+    else guardSpawn(command, args, Array.isArray(args) ? rest[0] : args)
+    return original.call(this, command, args, ...rest)
+  }
+}
+syncBuiltinESMExports()
 import { forbiddenEgressFindingsForText } from '../src/egress/forbidden-egress.mjs'
 import { OBSIDIAN_EXT_KEY, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import { COMMUNITY_PLUGINS_PATH, POLICY_SETTINGS_PATH, isUserOwnedSettingsPath, prepareSettings } from '../src/projection/obsidian/materialize/index.mjs'
@@ -184,6 +211,20 @@ test('the shipped plugin: three files, a desktop-only manifest at the protocol f
   for (const file of source.files) assert.ok(file.bytes.equals(fs.readFileSync(path.join(PLUGIN_SOURCE, file.name))), `${file.name} is shipped byte for byte`)
   const pkg = JSON.parse(fs.readFileSync(path.join(REPOSITORY_ROOT, 'package.json'), 'utf8'))
   for (const name of PLUGIN_SOURCE_FILES) assert.ok(pkg.files.includes(`plugins/obsidian/${name}`), `package.json files ships ${name}`)
+})
+
+test('the spawn guard: a child that can reach a running Obsidian runs only with a private HOME', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-guard-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const reaching = ['-e', '0', '--', '--adapter=obsidian-cli']
+  assert.throws(() => childProcess.spawnSync(process.execPath, reaching), /private HOME/)
+  assert.throws(() => spawnSync(process.execPath, reaching, { env: { ...process.env } }), /private HOME/, 'the named import is guarded too')
+  assert.throws(() => execFileSync('/Applications/Obsidian.app/Contents/MacOS/obsidian-cli', ['version'], { env: { ...process.env, HOME: os.homedir() } }), /private HOME/)
+  assert.throws(() => childProcess.execSync('/usr/bin/open "obsidian://open?path=/tmp"'), /private HOME/)
+  const home = path.join(dir, 'home')
+  fs.mkdirSync(home)
+  assert.equal(spawnSync(process.execPath, reaching, { env: { ...process.env, HOME: home } }).status, 0, 'a private HOME lets it run')
+  assert.equal(spawnSync(process.execPath, ['-e', '0']).status, 0, 'a child that reaches no app runs with any HOME')
 })
 
 // Every released plugin version and the code it shipped. A vault keeps running an older main.js until the app
