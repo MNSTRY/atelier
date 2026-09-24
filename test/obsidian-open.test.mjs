@@ -862,13 +862,21 @@ await runServiceProcess({ ...options, entryPath: fileURLToPath(import.meta.url),
 // them, so this one spawns the real entry.
 test('the real service entry starts and serves: loading the shipped contributions does not deadlock the process', needsProcessProof, async (t) => {
   const world = makeWorld(t)
+  // The real entry with the obsidian-cli adapter reaches a running Obsidian
+  // through the command-line tool's socket under HOME: the child gets a
+  // private HOME, so the developer's own Obsidian is never contacted.
+  const home = path.join(world.dir, 'private-home')
+  fs.mkdirSync(home)
+  const { XDG_CONFIG_HOME: _config, ...rest } = world.env
+  const env = { ...rest, HOME: home }
+  assert.notEqual(path.resolve(env.HOME), path.resolve(os.homedir()), 'the spawned service must not see the real HOME')
   const entryPath = path.join(REPOSITORY_ROOT, 'src', 'runtime', 'obsidian', 'service-main.mjs')
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath, entryArgs: ['--adapter=obsidian-cli'], intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
-  const started = await world.run(['service', 'start', '--json', '--consent-actor', CONSENT.actor], { seams, startTimeoutMs: 20000 })
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', CONSENT.actor], { seams, startTimeoutMs: 20000, env })
   assert.deepEqual([started.exit, started.json.service.state, started.json.service.started], [EXIT.ok, 'healthy', true], JSON.stringify(started.json).slice(0, 600))
-  const status = await world.run(['service', 'status', '--json'], { seams })
+  const status = await world.run(['service', 'status', '--json'], { seams, env })
   assert.equal(status.json.service.state, 'healthy')
-  const stop = await world.run(['service', 'stop', '--json'], { seams })
+  const stop = await world.run(['service', 'stop', '--json'], { seams, env })
   assert.equal(stop.json.service.stopped, true, JSON.stringify(stop.json).slice(0, 300))
 })
 
