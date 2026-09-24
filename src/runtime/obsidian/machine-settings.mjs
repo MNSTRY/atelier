@@ -42,6 +42,9 @@ export const DECISION_SOURCES = Object.freeze(['question', 'command', 'defaults'
 // "Only you": every audience of a note, except `sensitive`, which a vault takes only when it is named. A vault is a
 // folder in which the app's community plugins run with full access to its files.
 export const ONLY_YOU_AUDIENCES = Object.freeze(LOCAL_AUDIENCES.filter((audience) => audience !== 'sensitive').sort())
+// Whether the notes that carry no classification enter this workspace's vaults. They may only for "only you": a vault
+// of any other audience never shows them. Withheld unless a person decided otherwise.
+export const UNCLASSIFIED_CHOICES = Object.freeze(['shown', 'withheld'])
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const DIGEST = /^sha256:[0-9a-f]{64}$/
@@ -177,10 +180,9 @@ function validateCommonFields(document, workspaceId) {
 const isOneOf = (values) => (value) => values.includes(value)
 const isAbsoluteDirectory = (value) => typeof value === 'string' && value.length <= 4096 && !CONTROL.test(value) && path.isAbsolute(value) && path.resolve(value) === value
 // The members of each decision besides its stamp, and what each may hold. A decision gains a member here, and a
-// document that carries it is refused by a release that does not know it, loudly. The pending decision whether an
-// "only you" vault also shows unclassified notes lands as a member of `audience`.
+// document that carries it is refused by a release that does not know it, loudly.
 const DECISION_MEMBERS = Object.freeze({
-  audience: Object.freeze({ choice: isOneOf(['only-you', 'custom']) }),
+  audience: Object.freeze({ choice: isOneOf(['only-you', 'custom']), unclassified: isOneOf(UNCLASSIFIED_CHOICES) }),
   location: Object.freeze({ parent: isAbsoluteDirectory }),
   loginItem: Object.freeze({ choice: isOneOf(['on', 'off']) }),
   adapter: Object.freeze({ choice: isOneOf(['obsidian-cli']) }),
@@ -208,6 +210,9 @@ function validateDecisions(document) {
   if (document.decisions.audience?.choice === 'only-you' && !sameMembers(document.audienceAllow, ONLY_YOU_AUDIENCES)) {
     refuse(code, 'the audiences allowed are not the ones "only you" stands for')
   }
+  if (document.decisions.audience?.unclassified === 'shown' && document.decisions.audience.choice !== 'only-you') {
+    refuse(code, 'notes without a classification are shown only in a vault that is only yours')
+  }
 }
 
 function validateV1(document, workspaceId) {
@@ -225,10 +230,11 @@ function validateV2(document, workspaceId) {
 }
 
 // A v1 document as the v2 document it stands for. Nothing was remembered then, except that a list of audiences a
-// person set (`audience set`) is their decision, and is carried over as one; who made it is not known.
+// person set (`audience set`) is their decision, and is carried over as one, with the notes that carry no
+// classification withheld as they were; who made it is not known.
 function fromV1(document) {
   const { schema: _v1, ...fields } = document
-  const audience = fields.audienceAllow.length === 0 ? null : { choice: 'custom', decidedAt: fields.updatedAt, decidedBy: null, via: 'v1' }
+  const audience = fields.audienceAllow.length === 0 ? null : { choice: 'custom', unclassified: 'withheld', decidedAt: fields.updatedAt, decidedBy: null, via: 'v1' }
   return { ...fields, schema: MACHINE_SETTINGS_SCHEMA, decisions: { audience, location: null, loginItem: null, adapter: null } }
 }
 
@@ -249,7 +255,8 @@ export function defaultMachineSettings({ workspaceId, updatedAt }) {
 }
 
 // The settings with one decision recorded, validated; nothing is written. `decision` holds the decision's own members
-// (`{ choice }`, `{ parent }`); the stamp says when, by whom (an identifier, or null when not known) and how.
+// (`{ choice, unclassified }`, `{ parent }`, `{ choice }`); the stamp says when, by whom (an identifier, or null when not
+// known) and how.
 export function withDecision(settings, name, decision, { decidedAt, decidedBy = null, via }) {
   if (!DECISIONS.includes(name)) throw new TypeError(`unknown decision: ${String(name)}`)
   const next = { ...settings, decisions: { ...settings.decisions, [name]: { ...decision, decidedAt, decidedBy, via } } }

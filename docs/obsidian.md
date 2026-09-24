@@ -337,7 +337,7 @@ defaults (`defaults`), or carried over from an earlier release (`v1`).
 
 | Decision | Holds | Made today by |
 | --- | --- | --- |
-| `audience` | `only-you` or `custom`; the admitted list stays in `audienceAllow`, the engine's only audience input | `audience set me` (only you) or `audience set A,B` / `audience clear` |
+| `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you) or `audience set A,B` / `audience clear`; each withholds unclassified notes for now |
 | `location` | the absolute folder that holds this workspace's vaults | not yet: the first-run flow |
 | `loginItem` | `on` or `off` | not yet: the first-run flow |
 | `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open` or `service start` |

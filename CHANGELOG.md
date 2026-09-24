@@ -188,10 +188,13 @@
   `atelier-obsidian-machine-settings/v2`, with a closed `decisions` member,
   one entry per decision (`audience`, `location`, `loginItem`, `adapter`),
   each null until decided and otherwise stamped with when, by whom when known,
-  and how (`question`, `command`, `defaults`, `v1`). A v1 document is read as
-  the v2 document it stands for and stays v1 on disk until the next write,
-  which writes v2; an audience list set before is carried over as that
-  person's decision. A release up to 0.2.0-alpha.11 refuses a v2 document
+  and how (`question`, `command`, `defaults`, `v1`). The audience decision
+  also says whether notes that carry no classification are `shown` or
+  `withheld`: only an "only you" decision may show them, and every decision
+  made today withholds them. A v1 document is read as the v2 document it
+  stands for and stays v1 on disk until the next write, which writes v2; an
+  audience list set before is carried over as that person's decision, with
+  unclassified notes withheld as they were. A release up to 0.2.0-alpha.11 refuses a v2 document
   (`invalid-machine-settings`), so after an upgrade a maintenance service
   still running the earlier release fails its ticks until it is replaced:
   `atelier obsidian open` replaces it, as does `service stop` and a new

@@ -332,7 +332,7 @@ test('a v1 machine settings document is read as v2, stays v1 on disk until the n
   fs.writeFileSync(file, v1)
   const read = readMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID })
   assert.equal(read.schema, 'atelier-obsidian-machine-settings/v2')
-  assert.deepEqual(read.decisions, { ...nothingDecided, audience: { choice: 'custom', decidedAt: '2026-01-05T10:00:00.000Z', decidedBy: null, via: 'v1' } })
+  assert.deepEqual(read.decisions, { ...nothingDecided, audience: { choice: 'custom', unclassified: 'withheld', decidedAt: '2026-01-05T10:00:00.000Z', decidedBy: null, via: 'v1' } }, 'withheld, as they were')
   assert.deepEqual({ mode: read.maintenanceMode, audiences: read.audienceAllow, policy: read.applyPolicy }, { mode: 'automatic', audiences: ['team'], policy: { policyId: 'policy-synthetic', version: 2, digest: digest('p') } })
   assert.equal(fs.readFileSync(file, 'utf8'), v1, 'reading changes nothing on disk')
   assert.deepEqual(authorizeAutomaticApply({ workspaceRoot: root, workspaceId: WORKSPACE_ID }).reason, 'apply-policy-absent', 'a v1 document still authorizes exactly what it did')
@@ -360,7 +360,7 @@ test('remembered decisions are closed documents: each says what was decided, whe
   const world = makeWorld(t, { machine: null })
   const root = workspaceStateRoot(world.dataRoot, WORKSPACE_ID)
   const base = defaultMachineSettings({ workspaceId: WORKSPACE_ID, updatedAt: '2026-01-05T10:00:00.000Z' })
-  const decided = withDecision(withDecision(withDecision(withDecision({ ...base, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you' }, STAMP),
+  const decided = withDecision(withDecision(withDecision(withDecision({ ...base, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'shown' }, STAMP),
     'location', { parent: path.join(TMP, 'Atelier') }, { ...STAMP, via: 'question' }), 'loginItem', { choice: 'on' }, { ...STAMP, via: 'defaults', decidedBy: null }), 'adapter', { choice: 'obsidian-cli' }, STAMP)
   assert.deepEqual(DECISIONS, ['audience', 'location', 'loginItem', 'adapter'])
   assert.deepEqual(decided.decisions.location, { parent: path.join(TMP, 'Atelier'), ...STAMP, via: 'question' })
@@ -382,6 +382,10 @@ test('remembered decisions are closed documents: each says what was decided, whe
     ['an unknown audience answer', decision('audience', (item) => ({ ...item, choice: 'everyone' }))],
     ['"only you" beside another list of audiences', { ...decided, audienceAllow: ['team'] }],
     ['"only you" with sensitive added', { ...decided, audienceAllow: [...ONLY_YOU_AUDIENCES, 'sensitive'] }],
+    ['an audience decision that does not say whether unclassified notes are shown', decision('audience', ({ unclassified: _unclassified, ...rest }) => rest)],
+    ['an unknown answer about unclassified notes', decision('audience', (item) => ({ ...item, unclassified: 'sometimes' }))],
+    ['unclassified notes shown to a list of audiences', { ...decision('audience', (item) => ({ ...item, choice: 'custom' })), audienceAllow: ['private', 'team'] }],
+    ['unclassified notes shown to a list that holds every audience of "only you"', decision('audience', (item) => ({ ...item, choice: 'custom' }))],
     ['a time that is not UTC', decision('adapter', (item) => ({ ...item, decidedAt: '2026-01-05 11:00' }))],
     ['a decider that is not an identifier', decision('adapter', (item) => ({ ...item, decidedBy: 'some one' }))],
     ['an unknown source', decision('adapter', (item) => ({ ...item, via: 'guess' }))],
@@ -390,7 +394,10 @@ test('remembered decisions are closed documents: each says what was decided, whe
     assert.throws(() => writeMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID, repositoryRoots: [], settings }), (error) => error.code === 'invalid-machine-settings', label)
   }
   assert.throws(() => withDecision(base, 'colour', { choice: 'red' }, STAMP), TypeError)
-  assert.throws(() => withDecision(base, 'audience', { choice: 'only-you' }, STAMP), (error) => error.code === 'invalid-machine-settings', 'only you needs its audiences')
+  assert.throws(() => withDecision(base, 'audience', { choice: 'only-you', unclassified: 'shown' }, STAMP), (error) => error.code === 'invalid-machine-settings', 'only you needs its audiences')
+  // Unclassified notes are shown only to "only you", which may also withhold them; any other list always withholds them.
+  assert.equal(withDecision({ ...base, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, STAMP).decisions.audience.unclassified, 'withheld')
+  assert.equal(withDecision({ ...base, audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, STAMP).decisions.audience.choice, 'custom')
   // "Only you" is every audience of a note but sensitive, which a vault takes only by name.
   assert.deepEqual(ONLY_YOU_AUDIENCES, ['operator', 'private', 'public', 'staff', 'team'])
   assert.equal(ONLY_YOU_AUDIENCES.includes('sensitive'), false)

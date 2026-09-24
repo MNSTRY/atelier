@@ -144,7 +144,7 @@ const SOURCE_WORDS = Object.freeze({ question: 'answered at a terminal', command
 function decisionWords(name, decision, audienceAllow = []) {
   if (decision === null) return name === 'audience' && audienceAllow.length === 0 ? 'not decided; no audience is allowed, so every view is empty' : 'not decided'
   const what = name === 'audience'
-    ? (decision.choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.length === 0 ? 'no audience: every view is empty' : audienceAllow.join(', '))
+    ? `${decision.choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.length === 0 ? 'no audience: every view is empty' : audienceAllow.join(', ')}; notes without a classification ${decision.unclassified}`
     : name === 'location' ? decision.parent : decision.choice
   return `${what} (${SOURCE_WORDS[decision.via]}, ${decision.decidedAt}${decision.decidedBy === null ? '' : `, by ${decision.decidedBy}`})`
 }
@@ -402,7 +402,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         if (sub === 'show' || sub === undefined) {
           const { workspace } = readable()
           const { audienceAllow, decisions } = shownMachine(machineOf(workspace), workspace)
-          return { exit: EXIT.ok, document: { audienceAllow, choice: decisions.audience?.choice ?? null }, human: [decisionWords('audience', decisions.audience, audienceAllow)] }
+          return { exit: EXIT.ok, document: { audienceAllow, choice: decisions.audience?.choice ?? null, unclassified: decisions.audience?.unclassified ?? 'withheld' }, human: [decisionWords('audience', decisions.audience, audienceAllow)] }
         }
         if (sub !== 'set' && sub !== 'clear') refuse('usage', 'audience show | audience set me|A,B | audience clear')
         const named = sub === 'clear' ? [] : String(value ?? '').split(',').map((item) => item.trim()).filter((item) => item !== '')
@@ -414,12 +414,13 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const { workspace, repositoryRoots, now } = writable()
         const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
         const changed = JSON.stringify(current.audienceAllow) !== JSON.stringify(audienceAllow)
-        const decided = withDecision({ ...current, audienceAllow }, 'audience', { choice }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
+        // Notes without a classification stay withheld: no release shows them yet.
+        const decided = withDecision({ ...current, audienceAllow }, 'audience', { choice, unclassified: 'withheld' }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
         writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
         // The engine compares a digest of these on every tick: a change invalidates every view at the next one.
         return {
-          exit: EXIT.ok, document: { audienceAllow, choice, changed, takesEffect: 'next-tick' },
-          human: [`audiences: ${choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.join(', ') || 'none'}; views are rebuilt at the next tick`],
+          exit: EXIT.ok, document: { audienceAllow, choice, unclassified: 'withheld', changed, takesEffect: 'next-tick' },
+          human: [`audiences: ${choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.join(', ') || 'none'}; notes without a classification withheld; views are rebuilt at the next tick`],
         }
       },
 
