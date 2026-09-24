@@ -4,38 +4,58 @@
 
 ### Changed
 
+- **Breaking:** Obsidian generation manifests of the new vault layout are
+  `atelier-obsidian-generation-manifest/v2`, a new contract major that records
+  `layoutVersion: 2` and each note's identity region, and a vault an earlier
+  release published is laid out again once (below). The v1 contract is
+  unchanged and still validates every generation an earlier release wrote; a
+  reader of generation manifests must accept both majors.
 - Obsidian views are laid out in vault layout 2, so a file name reads as the
   note's title and the vault reads as the repositories. Folders mirror each
-  repository under a folder named after it. A note's file name is its title
-  (the front-matter `title`, else its first H1, else the file stem as
-  written), with a trailing source extension dropped and made safe for macOS,
-  Linux, Windows and Obsidian links. Two notes that would share a name in one
-  folder, compared case- and normalization-insensitively, are told apart by
-  the source file stem and then by a short stable id; a name that collides
-  with nothing carries no hash. A wrapped file keeps its own name beside its
-  note (`<file name>.md`), and an embedded file is copied to its mirrored
-  path. An allocated path never changes: not on retitle, not when other files
-  come and go. Links name their target by its full vault path.
+  repository under a folder named after it, so a view's folder names show the
+  repository identity and source directories of its notes. A note's file name
+  is its title (the front-matter `title`, else its first H1, else the file
+  stem as written), with a trailing source extension dropped and made safe
+  for macOS, Linux, Windows and Obsidian links. Two notes that would share a
+  name in one folder, compared case- and normalization-insensitively, are
+  told apart by the source file stem and then by a short stable id; a name
+  that collides with nothing carries no hash. A wrapped file keeps its own
+  name beside its note (`<file name>.md`), and an embedded file is copied to
+  its mirrored path. Links name their target by its full vault path.
+- An allocated path does not change on retitle or when other files come and
+  go. An identity that leaves the census (a deleted source, or one renamed
+  into a new identity) releases its path, so a renamed source takes its name
+  back; a withheld one keeps it. A lost path registry costs no view its
+  published paths: a path allocated while the registry was lost is
+  provisional until a view's generation confirms it, and a view takes back
+  what it published.
+- A note that cannot be laid out (a path too long for the file system even
+  with its title cut, or a source folder named like an allocated file) is
+  parked: left out of the view and named in its manifest's
+  `completeness.ext["mnstry.atelier.obsidian"].parked`. Every other note is
+  published; nothing else is refused because of it.
 - Every note names its identity in three generated front-matter properties,
   `atelier-id`, `atelier-repo` and `atelier-source`, or, when its own front
   matter could not take them unchanged in meaning, in a generated block at
   its end. An edit to them is never applied to a source.
-- The generation manifest of a layout 2 view is
-  `atelier-obsidian-generation-manifest/v2`, a new major that records
-  `layoutVersion: 2` and each note's identity region. The v1 contract is
-  unchanged and still validates every generation an earlier release wrote;
-  readers of manifests must accept both.
 - A vault published by an earlier release is laid out again once. Every
   earlier path is retired through the publisher's remove units: moved to the
   recovery area, or kept where it is when somebody edited it. A view that
   holds a note for an open edit keeps its earlier layout until the edit is
-  applied or withdrawn, and such an edit still applies. See "Vault layout" in
-  `docs/obsidian-contract.md`.
-- The redaction guard is re-based on the readable layout: every path the
-  emitter writes must be one allocated to the view, generated free text must
-  name no canonical identity, repository-qualified source path or vault path
-  outside the view, and both rules run over every note, cached ones
-  included.
+  applied or withdrawn, and such an edit still applies; an edit applied
+  automatically keeps it until its note is published with the applied text,
+  so the file the person edited is retired like any other. See "Vault
+  layout" in `docs/obsidian-contract.md`.
+- The redaction guard is re-based on the readable layout. Atelier never
+  generates a reference to a note outside a view: every path the emitter
+  writes must be one allocated to the view, and every identity block names
+  its own note. Generated prose repeats author text (the titles, summaries
+  and tags of in-view notes), which is carried as authored; the deny-list over
+  it, read as a reader sees it with the emitter's escapes removed, refuses
+  any canonical identity, repository-qualified source path or vault path
+  outside the view, as defence in depth. Both rules run over every note,
+  cached ones included, and the deny matcher's cost no longer grows with the
+  number of withheld values.
 - `atelier obsidian open` makes the first open of a view automatic: Obsidian
   no longer has to be quit, and no vault folder has to be opened by hand. It
   makes the app know the view's vault as one of its vaults before it opens
