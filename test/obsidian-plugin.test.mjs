@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 
 // No child of this suite reaches the developer's own Obsidian. The app, its
 // command-line tool, an app link, and anything that takes the command-line
@@ -27,12 +28,13 @@ function guardSpawn(command, args, options) {
 }
 for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
   const original = childProcess[method]
-  childProcess[method] = function guarded(command, args, ...rest) {
-    // exec and execSync take one shell line, and their options come second.
-    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/), args)
-    else guardSpawn(command, args, Array.isArray(args) ? rest[0] : args)
-    return original.call(this, command, args, ...rest)
-  }
+  // exec and execSync take one shell line, and their options come second.
+  const check = (command, args, rest) => (method === 'exec' || method === 'execSync' ? guardSpawn('sh', String(command).split(/\s+/), args) : guardSpawn(command, args, Array.isArray(args) ? rest[0] : args))
+  const guarded = function guarded(command, args, ...rest) { check(command, args, rest); return original.call(this, command, args, ...rest) }
+  // exec and execFile have a promisified form of their own ({ stdout, stderr }); it is kept, and guarded the same way.
+  const custom = original[promisify.custom]
+  if (typeof custom === 'function') guarded[promisify.custom] = function guardedPromise(command, args, ...rest) { check(command, args, rest); return custom.call(this, command, args, ...rest) }
+  childProcess[method] = guarded
 }
 syncBuiltinESMExports()
 import { forbiddenEgressFindingsForText } from '../src/egress/forbidden-egress.mjs'
@@ -227,7 +229,7 @@ test('the shipped plugin: three files, a desktop-only manifest at the protocol f
   for (const name of PLUGIN_SOURCE_FILES) assert.ok(pkg.files.includes(`plugins/obsidian/${name}`), `package.json files ships ${name}`)
 })
 
-test('the spawn guard: a child that can reach a running Obsidian runs only with a private HOME', (t) => {
+test('the spawn guard: a child that can reach a running Obsidian runs only with a private HOME', async (t) => {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-guard-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const reaching = ['-e', '0', '--', '--adapter=obsidian-cli']
@@ -239,6 +241,10 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
   fs.mkdirSync(home)
   assert.equal(spawnSync(process.execPath, reaching, { env: { ...process.env, HOME: home } }).status, 0, 'a private HOME lets it run')
   assert.equal(spawnSync(process.execPath, ['-e', '0']).status, 0, 'a child that reaches no app runs with any HOME')
+  // The promisified execFile keeps its own form, as the isolated-instance helper relies on, and is guarded too.
+  assert.throws(() => promisify(childProcess.execFile)(process.execPath, reaching), /private HOME/)
+  const answered = await promisify(childProcess.execFile)(process.execPath, ['-e', 'process.stdout.write("ok")', '--', '--adapter=obsidian-cli'], { env: { ...process.env, HOME: home } })
+  assert.deepEqual(answered, { stdout: 'ok', stderr: '' })
 })
 
 // Every released plugin version and the code it shipped. A vault keeps running an older main.js until the app
