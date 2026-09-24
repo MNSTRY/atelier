@@ -1892,10 +1892,10 @@ test('a person who turns the plugin off in a vault is followed: the entry is not
   assert.ok(fs.readFileSync(vault.list).equals(theirs), 'nor at any later publication')
   assert.equal(vault.pluginFiles(), null)
 
-  // The first way back: `atelier obsidian plugin on`. The view's next publication brings the entry and the files back.
+  // The first way back: `atelier obsidian plugin on`. The running service publishes the view at once, with its entry
+  // and its files, although nothing changed at its sources.
   const on = await world.run(['plugin', 'on', '--json'], { seams: QUIET_SEAMS })
-  assert.deepEqual([on.exit, on.json.choice.state, on.json.takesEffect], [0, 'requested', 'next-publication'])
-  await change('High water at noon again.')
+  assert.deepEqual([on.exit, on.json.choice.state, on.json.takesEffect, on.json.service.asked, on.json.service.view], [0, 'requested', 'published', true, { state: 'current', reason: 'published-and-verified' }])
   assert.deepEqual(vault.listed(), ['dataview', PLUGIN_ID])
   assert.deepEqual(vault.pluginFiles(), [...PLUGIN_SOURCE_FILES, 'data.json'].sort())
   assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'])
@@ -1915,6 +1915,11 @@ test('a person who turns the plugin off in a vault is followed: the entry is not
   assert.deepEqual(vault.choice(), ['on', 'entry-restored-by-person'])
   assert.deepEqual(vault.listed(), ['dataview', PLUGIN_ID])
   assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.reason, 'no-live-lease')
+
+  // With no service running, `plugin on` records the request, and the view's next publication brings the plugin back.
+  await service.shutdown('test-stops-the-service')
+  const offline = await world.run(['plugin', 'on', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual([offline.exit, offline.json.choice.state, offline.json.takesEffect, offline.json.service.asked], [0, 'requested', 'next-publication', false])
 })
 
 test('an entry written while an app held the vault is only offered: that app writing back its list without it is no decision of the person\'s, until the plugin ran there', needsExchange, async (t) => {
@@ -2279,14 +2284,12 @@ test('real isolated Obsidian: uninstalling the plugin in the app is followed unt
     real.note('uninstalled-and-followed', { ...off, list: JSON.parse(theirs.toString('utf8')) })
     assert.deepEqual([off.choice.state, off.choice.reason, off.listUntouched, off.folderMadeAgain, off.entry, off.freshness], ['off', 'entry-removed-by-person', true, false, 'off', 'current'])
 
-    // `atelier obsidian plugin on`, then the view's next publication: the entry and the folder come back.
+    // `atelier obsidian plugin on`: the running service publishes the view at once, and the entry and the folder come back.
     const on = await real.world.run(['plugin', 'on', '--json'], { seams: QUIET_SEAMS })
-    assert.equal(on.json.choice.state, 'requested')
-    await real.change('Slack water at three.')
-    const back = { choice: choice(), listed: JSON.parse(fs.readFileSync(list, 'utf8')), files: fs.existsSync(folder) ? fs.readdirSync(folder).sort() : null }
+    const back = { takesEffect: on.json.takesEffect, service: on.json.service, choice: choice(), listed: JSON.parse(fs.readFileSync(list, 'utf8')), files: fs.existsSync(folder) ? fs.readdirSync(folder).sort() : null }
     real.note('plugin-on', back)
     // Published through the running app, which read its list before: offered, not yet confirmed.
-    assert.deepEqual([back.choice.state, back.choice.reason, back.listed.includes(PLUGIN_ID), back.files], ['offered', 'entry-offered-while-the-app-runs', true, [...PLUGIN_SOURCE_FILES, 'data.json'].sort()])
+    assert.deepEqual([on.json.choice.state, back.takesEffect, back.choice.state, back.choice.reason, back.listed.includes(PLUGIN_ID), back.files], ['requested', 'published', 'offered', 'entry-offered-while-the-app-runs', true, [...PLUGIN_SOURCE_FILES, 'data.json'].sort()])
 
     // The app reads its plugin list when it starts: after a restart the plugin runs again, and the vault's trust was kept.
     await real.instance.quit()

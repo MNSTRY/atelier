@@ -143,11 +143,17 @@ follows. The decision is the one Obsidian itself records: the
 - There are two ways back. Turning "Atelier" on again in Obsidian's settings
   (possible while its folder is there) lists the entry again; the view's next
   publication records the plugin as on and owns the entry again.
-  `atelier obsidian plugin on --scope ID` records a request instead; the view's
-  next publication adds the entry back and makes the plugin's files again,
-  which is the way back after an uninstall. The command publishes nothing by
-  itself: the next publication is the one the next change at the view's
-  sources causes, or the one when the maintenance service next starts.
+  `atelier obsidian plugin on --scope ID` records a request instead and asks
+  the running maintenance service for a tick that names the view: that tick
+  prepares and publishes the view again, which adds the entry back and makes
+  the plugin's files again (the way back after an uninstall), and the command
+  says so when it returns (`takesEffect: "published"`). With
+  `--adapter=obsidian-cli`, a service of an earlier release still running
+  after an upgrade is replaced by the installed one first, under the consent
+  already recorded, as `open` does; without it, such a service is only
+  reported (`service-outdated`) with that next step. With no service
+  running, the view's next publication does it: the one the next change at
+  its sources causes, or the one when the service next starts.
   Obsidian reads `community-plugins.json` when it opens a vault, so a plugin
   brought back this way runs from the next time the vault is opened; one
   turned on in Obsidian's settings runs at once.
@@ -441,7 +447,8 @@ note open in the editor.
   plugin files, entries and data file, with a person's settings kept, the
   person's choice followed (an entry the app had and the person removed is
   not added back; one published while an app held the vault is only offered
-  until the plugin runs there),
+  until the plugin runs there; `plugin on` publishing the view at once while
+  the service runs),
   displaced bytes kept in recovery, the privacy rule of the vault root, a
   linked vault root, unreadable files, a drifted plugin file written again,
   and an upgrade; the service publishing the plugin and the plugin it
@@ -464,7 +471,8 @@ note open in the editor.
   a rotated key reaches the running plugin, and that quitting the app ends the
   presence. The second declines the prompt and publishes through the
   command-line path as before. The third uninstalls the plugin in the app and
-  follows it until `atelier obsidian plugin on` brings it back, offered while
+  follows it until `atelier obsidian plugin on` brings it back at once (the
+  running service publishes the view on a tick that names it), offered while
   that app holds the vault and confirmed when the plugin runs after a
   restart. They never touch another app profile, and they end each disposable
   instance by its profile path.

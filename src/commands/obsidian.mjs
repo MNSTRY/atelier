@@ -11,7 +11,7 @@ import { isoTime } from '../runtime/obsidian/documents.mjs'
 import { readObsidianEnablement } from '../runtime/obsidian/enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from '../runtime/obsidian/errors.mjs'
 import { BUILT_IN_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createObsidianRegistry } from '../runtime/obsidian/extension-points.mjs'
-import { LIFECYCLE_PRIMITIVES, readServiceStatusDocument, serviceStatus, startService, stopService } from '../runtime/obsidian/lifecycle.mjs'
+import { LIFECYCLE_PRIMITIVES, readServiceStatusDocument, requestServiceTick, serviceStatus, startService, stopService } from '../runtime/obsidian/lifecycle.mjs'
 import {
   authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readInstalledApplyPolicy, readMachineSettings,
   revokeApplyPolicy, writeMachineSettings,
@@ -62,7 +62,10 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   open [--scope ID] [--consent-actor ID] [--allow-stale] --adapter=${PRODUCTION_ADAPTER}
                                        Start or reconnect maintenance, verify the view, add it to Obsidian and open it.
   plugin show [--scope ID]             Whether Atelier's plugin is on in a view's vault, and whether it holds it open.
-  plugin on [--scope ID]               Offer Atelier's plugin again in a vault where it was turned off.
+  plugin on [--scope ID] [--adapter=${PRODUCTION_ADAPTER}]
+                                       Offer Atelier's plugin again in a vault where it was turned off; a running
+                                       service publishes the view at once (with --adapter, one of an earlier release
+                                       is replaced first).
 
 Contributed operations, registered by the modules shipped under src/runtime/obsidian/contributions/:
   apply list | show EDIT | run EDIT [--actor ID] | recover
@@ -363,18 +366,34 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       },
 
       // Atelier's plugin in the vault of a view: the person's choice (as recorded, or as the vault shows it before the next
-      // publication records it), and whether a plugin holds the vault open. `on` records a request: the view's next
-      // publication brings the entry and the plugin files back.
+      // publication records it), and whether a plugin holds the vault open. `on` records a request and asks a running
+      // maintenance service for a tick that names the view, whose publication brings the entry and the plugin files back;
+      // with no service running, the view's next publication does.
       async plugin() {
         if (sub !== undefined && sub !== 'show' && sub !== 'on') refuse('usage', 'plugin show [--scope ID] | plugin on [--scope ID]')
         if (sub === 'on') {
           const { enablement, workspace } = writable()
           const scopeId = resolveScope(enablement, flags.scope)
           const choice = writePluginChoice({ ...workspace, scopeId, state: 'requested', reason: 'requested-by-command', clock })
-          return {
-            exit: EXIT.ok, document: { scopeId, choice, takesEffect: 'next-publication' },
-            human: [`view ${scopeId}: Atelier's plugin is requested; its entry and its files come back with the view's next publication (the next change at its sources, or when the maintenance service next starts)`],
+          // The request is recorded either way; a service that cannot be asked leaves it to the view's next publication.
+          // With the installed entry to start (`--adapter`), a service of an earlier release still running after an upgrade
+          // is replaced before its tick, under the consent already recorded, as `open` does; without it, it is reported.
+          const replaceable = seams !== null || flags.adapter === PRODUCTION_ADAPTER
+          let asked
+          try { asked = await requestServiceTick({ ...lifecycle, scopeId, ...(replaceable ? { service: await serviceSeam() } : {}) }, lifecycleRules) } catch (error) { if (!isTyped(error)) throw error; asked = { requested: false, reason: error.code } }
+          const view = asked.tick?.scopes?.find((scope) => scope.scopeId === scopeId) ?? null
+          const takesEffect = view?.state === 'current' ? 'published' : asked.pending === true || view?.state === 'updating' ? 'publishing' : 'next-publication'
+          const service = {
+            asked: asked.requested === true, reason: asked.reason ?? asked.state ?? null, ...(asked.restarted ? { restarted: asked.restarted } : {}),
+            ...(view === null ? {} : { view: { state: view.state, reason: view.reason } }),
           }
+          const human = takesEffect === 'published'
+            ? `view ${scopeId}: Atelier's plugin is requested and back: the maintenance service published the view again with its entry and its files; Obsidian runs it from the next time it opens the vault`
+            : takesEffect === 'publishing'
+              ? `view ${scopeId}: Atelier's plugin is requested; the maintenance service is publishing the view again, which brings its entry and its files back`
+              : `view ${scopeId}: Atelier's plugin is requested; its entry and its files come back with the view's next publication (the next change at its sources, or when the maintenance service next starts)${service.asked ? ` (the service's tick: ${view ? `${view.state}, ${view.reason}` : service.reason})` : ''}`
+          const outdated = service.reason === 'service-outdated' ? [`  Next: the running maintenance service is of an earlier release; run \`atelier obsidian plugin on --scope ${scopeId} --adapter=${PRODUCTION_ADAPTER}\` to replace it`] : []
+          return { exit: EXIT.ok, document: { scopeId, choice, takesEffect, service }, human: [human, ...(service.restarted ? [`service: restarted (${service.restarted})`] : []), ...outdated] }
         }
         const { enablement, workspace } = readable()
         const scopeIds = flags.scope === undefined ? enablement.scopes.map((scope) => scope.scopeId) : [resolveScope(enablement, flags.scope)]

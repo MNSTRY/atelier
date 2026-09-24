@@ -1907,6 +1907,27 @@ const server = http.createServer((request, response) => {
 server.listen(Number(port), '127.0.0.1')
 `
 
+test('`plugin on` with the installed entry to start replaces a service of an earlier release before its tick, under the consent already recorded, and the view is published with the plugin', async (t) => {
+  const world = makeWorld(t)
+  const spawn = trackingSpawn(t)
+  const seams = (entryPath) => ({ ...UNREACHABLE_SEAMS, service: { entryPath, intervalMs: IDLE_INTERVAL, spawn } })
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', 'first-actor'], { seams: seams(earlierEntry(world.dir)) })
+  assert.equal(started.json.service.state, 'healthy', JSON.stringify(started.json).slice(0, 400))
+  const before = readServiceRecord(world.workspace())
+  const consent = readServiceSettings(world.workspace()).consent
+  const on = await world.run(['plugin', 'on', '--json', '--scope', FULL_SCOPE.scopeId], { seams: seams(TEST_SERVICE_ENTRY) })
+  const after = readServiceRecord(world.workspace())
+  assert.deepEqual([on.exit, on.json.choice.state, on.json.service.restarted, on.json.takesEffect], [0, 'requested', 'outdated', EXCHANGE_HERE ? 'published' : 'next-publication'], JSON.stringify(on.json).slice(0, 600))
+  assert.notEqual(after.runtimeId, before.runtimeId)
+  assert.equal(after.executable.digest, digest(fs.readFileSync(TEST_SERVICE_ENTRY)), 'the installed entry runs now')
+  assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded')
+  await waitFor(() => !isAlive(before.pid), { label: 'the earlier runtime to end' })
+  if (EXCHANGE_HERE) assert.ok(fs.existsSync(path.join(world.vault(), '.obsidian', 'plugins', 'atelier-projection', 'main.js')), 'the plugin is in the vault')
+  const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
+  assert.equal(stopped.json.service.stopped, true)
+  await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
+})
+
 test('open restarts an owned service of an earlier release that refuses a tick naming a view, and says so; without the installed entry to start, such a service is only reported', async (t) => {
   const world = makeWorld(t)
   const port = await freePort()

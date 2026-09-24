@@ -28,7 +28,10 @@
   `atelier obsidian plugin show` report `turned-off-in-this-vault`. Turning the
   plugin on again in Obsidian's settings is followed the same way;
   `atelier obsidian plugin on --scope ID` brings the entry and the files back
-  at the view's next publication (the way back after an uninstall).
+  (the way back after an uninstall): at once, on a tick that names the view,
+  while the maintenance service runs (with `--adapter=obsidian-cli`, one of
+  an earlier release is replaced by the installed one first, as `open` does),
+  and otherwise at the view's next publication.
 - The maintenance service answers five plugin commands (`/plugin/challenge`,
   `/plugin/hello`, `/plugin/lease`, `/plugin/release`, `/plugin/status`,
   protocol `atelier-obsidian-plugin-channel/v2`) and grants presence and
