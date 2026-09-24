@@ -32,6 +32,9 @@ import { promisify } from 'node:util'
 const BANNED_PROGRAMS = ['obsidian-cli', 'obsidian', 'open', 'xdg-open', 'launchctl', 'systemctl']
 const WRAPPERS = ['sh', 'bash', 'zsh', 'dash', 'env', 'cmd', 'powershell', 'pwsh', 'nohup', 'sudo']
 const REACHES_THE_APP = /--adapter=obsidian-cli|app-production-seams/
+// The obsidian command of the real entry also reaches the app through an adapter its workspace remembers, which it uses
+// only outside the test runner: such a child counts as one that can reach the app unless it runs under the runner.
+const mayUseRememberedAdapter = (words, env) => words.includes('obsidian') && words.some((word) => word === 'open' || word === 'service') && (env ?? process.env).NODE_TEST_CONTEXT === undefined
 const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
 const REAL_RUNTIME_DIRS = [process.env.XDG_RUNTIME_DIR, typeof process.getuid === 'function' ? `/run/user/${process.getuid()}` : ''].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
 const REAL_CONFIG_HOMES = [process.env.XDG_CONFIG_HOME, ...REAL_HOMES.map((home) => path.join(home, '.config'))].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
@@ -60,7 +63,7 @@ function guardSpawn(command, args, options) {
     throw error
   }
   // A child with no env of its own inherits this process's, and with it the developer's HOME.
-  const refusal = words.some((word) => REACHES_THE_APP.test(word)) ? reachesOwnApp(options?.env ?? process.env) : null
+  const refusal = words.some((word) => REACHES_THE_APP.test(word)) || mayUseRememberedAdapter(words, options?.env) ? reachesOwnApp(options?.env ?? process.env) : null
   if (refusal !== null) {
     const error = new Error(`spawn guard: ${refusal}`)
     guardErrors.push(error.message)
@@ -95,7 +98,7 @@ const needsAppIsolation = APP_ISOLATION_HERE ? {} : { skip: 'the app listens on 
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
 const { isContractIdentifier, validateObsidianContract } = await import('../src/projection/obsidian/contracts.mjs')
 const { MAX_OBSIDIAN_SETTINGS_BYTES, NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, createObsidianCliCall, enclosingVaults, findVaultEntry, obsidianSandboxedBuild, obsidianUserDataDir, publicationRoute, readObsidianSettings, resolveExchange, vaultRoute } = await import('../src/projection/obsidian/publication/index.mjs')
-const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
+const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, accountActor, default: defaultCommand, isInteractive, runObsidianCommand, runObsidianCommandForOracleTests, selectAdapter } = await import('../src/commands/obsidian.mjs')
 const { launchPlan, runLaunchPlan, urlProcessed } = await import('../src/runtime/obsidian/launch-plan.mjs')
 const { appAnswered } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readEvalAnswer, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
@@ -105,7 +108,7 @@ const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await impor
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { LIFECYCLE_PRIMITIVES, releaseStanding, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
-const { ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
@@ -364,7 +367,7 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
       const pointer = ensureWorkspaceIdentity({ project, randomBytes: fixedRandom })
       const root = workspaceStateRoot(dataRoot, pointer.workspaceId)
       const current = fs.existsSync(root) ? readMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId }) : null
-      return writeMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(project), settings: { schema: 'atelier-obsidian-machine-settings/v1', workspaceId: pointer.workspaceId, applyPolicy: null, ...(current ?? {}), ...settings, updatedAt: world.clock().toISOString() } })
+      return writeMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(project), settings: { ...(current ?? defaultMachineSettings({ workspaceId: pointer.workspaceId, updatedAt: world.clock().toISOString() })), ...settings, updatedAt: world.clock().toISOString() } })
     },
     policyFile(overrides = {}) {
       const policy = {
@@ -495,6 +498,20 @@ test('the spawn guard refuses a child that can reach a running Obsidian unless n
     const answered = await promisify(childProcess.execFile)(process.execPath, ['-e', 'process.stdout.write("ok")', '--', '--adapter=obsidian-cli'], { env: isolated })
     assert.deepEqual(answered, { stdout: 'ok', stderr: '' })
   }
+  // The obsidian command of the real entry may use an adapter its workspace remembers, which it never does under the
+  // test runner: outside the runner's context, such a child needs the private environment too; inside it, it does not.
+  const { NODE_TEST_CONTEXT: _runner, ...outsideTheRunner } = process.env
+  for (const words of [['obsidian', 'open', '--json'], ['obsidian', 'service', 'start']]) {
+    const args = ['-e', '0', '--', ...words]
+    assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: outsideTheRunner }), /spawn guard: a child that can reach a running Obsidian/)
+    assert.equal(childProcess.spawnSync(process.execPath, args, { env: process.env }).status, 0)
+    if (APP_ISOLATION_HERE) {
+      const { NODE_TEST_CONTEXT: _isolatedRunner, ...isolatedOutside } = isolated
+      assert.equal(childProcess.spawnSync(process.execPath, args, { env: isolatedOutside }).status, 0)
+    }
+  }
+  assert.equal(guardErrors.length, before + 2)
+  guardErrors.length = before
   // Mutation control: a child that names neither passes whatever environment it has.
   assert.doesNotThrow(() => childProcess.spawnSync(process.execPath, ['-e', '0']))
 })
@@ -534,7 +551,13 @@ test('the production seams are imported in exactly two places, dynamically, behi
     assert.match(text, /import\('[^']*app-production-seams\.mjs'\)/)
   }
   const command = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/commands/obsidian.mjs'), 'utf8')
-  assert.ok(command.indexOf("refuse('app-adapter-not-selected'", command.indexOf('const appSeams')) < command.indexOf("import('../runtime/obsidian/app-production-seams.mjs')"), 'the adapter is checked before the import')
+  // Each production seam is loaded only after the adapter is selected, in the function that loads it.
+  for (const [seam, loaded] of [['const serviceSeam', "import('../runtime/obsidian/service-entry-path.mjs')"], ['const appSeams', "import('../runtime/obsidian/app-production-seams.mjs')"]]) {
+    const body = command.slice(command.indexOf(seam), command.indexOf(loaded))
+    assert.ok(command.indexOf(seam) > 0 && body.length > 0 && body.length < 600, `${seam} loads ${loaded}`)
+    assert.match(body, /\n\s+chooseAdapter\(\)\n/, `${seam} selects the adapter before it loads anything`)
+  }
+  assert.match(command, /const chooseAdapter = \(\) => selectAdapter\(/, 'the selection is the one pure rule')
   const entry = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/service-main.mjs'), 'utf8')
   assert.match(entry, /createQualifiedAdapterFactory\(\{ appProbe: createProductionAppProbe\(\), createAdapter: \(\{ qualification \}\) => createObsidianCliAdapter\(\{ qualification \}\) \}\)/, 'the service constructs the CLI adapter only through the version-qualified factory, and hands it the qualification')
   assert.equal((entry.match(/createObsidianCliAdapter\(/g) ?? []).length, 1)
@@ -2129,6 +2152,154 @@ test('open starts the owned service the first time only with a consent, reconnec
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
   assert.deepEqual([stopped.exit, stopped.json.service.stopped], [EXIT.ok, true])
   await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+})
+
+// ---------------------------------------------------------------------------
+// Remembered choices: the adapter, the consent of the first start, and who may see
+// ---------------------------------------------------------------------------
+
+test('selectAdapter: the flag, or the adapter a workspace remembers when the real entry runs outside the test runner; nothing else selects one', () => {
+  const outside = {}
+  const refusal = (options) => { try { selectAdapter(options); return null } catch (error) { return error.code } }
+  assert.deepEqual(selectAdapter({ flag: 'obsidian-cli', production: true, env: outside }), { adapter: 'obsidian-cli', source: 'flag' })
+  assert.deepEqual(selectAdapter({ flag: 'obsidian-cli', remembered: null, production: false, env: process.env }), { adapter: 'obsidian-cli', source: 'flag' }, 'the flag is the caller\'s explicit decision, as before')
+  assert.deepEqual(selectAdapter({ remembered: 'obsidian-cli', production: true, env: outside }), { adapter: 'obsidian-cli', source: 'remembered' })
+  assert.equal(refusal({ remembered: 'obsidian-cli', production: true, env: { NODE_TEST_CONTEXT: 'child-v8' } }), 'remembered-adapter-under-test')
+  assert.equal(refusal({ remembered: 'obsidian-cli', production: true, env: process.env }), 'remembered-adapter-under-test', 'this suite runs under the runner')
+  assert.equal(refusal({ remembered: 'obsidian-cli', production: false, env: outside }), 'app-adapter-not-selected', 'only the real entry uses a remembered adapter')
+  assert.equal(refusal({ production: true, env: outside }), 'app-adapter-not-selected')
+  assert.equal(refusal({ remembered: 'another-adapter', production: true, env: outside }), 'app-adapter-not-selected')
+  assert.equal(refusal({ flag: 'obsidian-plugin', remembered: 'obsidian-cli', production: true, env: outside }), 'app-adapter-not-selected', 'a flag naming another adapter is not overruled by a remembered one')
+})
+
+test('isInteractive: a person is at a terminal only when both streams are terminals and nothing says otherwise; an account name is an actor only when it is an identifier', () => {
+  const both = { stdin: true, stdout: true }
+  assert.equal(isInteractive({ flags: {}, env: {}, terminal: both }), true)
+  for (const [flags, env, terminal] of [
+    [{ json: true }, {}, both], [{ 'no-input': true }, {}, both], [{}, { CI: 'true' }, both], [{}, { CI: '1' }, both], [{}, { ATELIER_NONINTERACTIVE: '1' }, both],
+    [{}, {}, { stdin: false, stdout: true }], [{}, {}, { stdin: true, stdout: false }], [{}, {}, undefined],
+  ]) {
+    assert.equal(isInteractive({ flags, env, terminal }), false, JSON.stringify({ flags, env, terminal }))
+  }
+  for (const env of [{ CI: '' }, { CI: 'false' }, { CI: '0' }, { ATELIER_NONINTERACTIVE: '0' }]) assert.equal(isInteractive({ flags: {}, env, terminal: both }), true, JSON.stringify(env))
+  assert.equal(accountActor('someone'), 'someone')
+  for (const name of ['some one', '', '.hidden', 'x'.repeat(129), undefined, null]) assert.equal(accountActor(name), null, String(name))
+})
+
+test('a person at a terminal allows the first start by their account\'s name; a recorded consent is never replaced by one, and without a person a consent is still named', async (t) => {
+  const world = makeWorld(t)
+  const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const person = { terminal: { stdin: true, stdout: true }, account: () => 'someone' }
+  const spawned = () => SPAWNED.filter((entry) => entry.test === t.name).length
+  for (const [argv, extra, label] of [
+    [['service', 'start', '--json'], person, 'JSON is for a program'],
+    [['service', 'start', '--no-input'], person, 'no input'],
+    [['service', 'start'], { ...person, env: { ...world.env, CI: 'true' } }, 'a CI environment'],
+    [['service', 'start'], { ...person, env: { ...world.env, ATELIER_NONINTERACTIVE: '1' } }, 'ATELIER_NONINTERACTIVE'],
+    [['service', 'start'], { ...person, terminal: { stdin: false, stdout: true } }, 'input that is no terminal'],
+    [['service', 'start'], { ...person, account: () => 'some one' }, 'an account name that is no identifier'],
+    [['service', 'start'], {}, 'no terminal injected: under the runner the process\'s own is never looked at'],
+  ]) {
+    const result = await world.run(argv, { seams, ...extra })
+    assert.equal(result.exit, EXIT.refused, label)
+    assert.match(`${result.stdout}${result.stderr}`, /startup-consent-required/, label)
+  }
+  assert.equal(spawned(), 0)
+  assert.equal(readServiceSettings(world.workspace()), null, 'nothing was recorded')
+
+  const started = await world.run(['service', 'start'], { seams, ...person })
+  assert.equal(started.exit, EXIT.ok, started.stderr)
+  const { actor, coverage } = readServiceSettings(world.workspace()).consent
+  assert.deepEqual({ actor, coverage }, { actor: 'someone', coverage: 'service' })
+  assert.match(started.stdout, /allowed by someone, this account; recorded for this workspace/)
+  const record = readServiceRecord(world.workspace())
+  const stopped = await world.run(['service', 'stop', '--json'], { seams })
+  assert.equal(stopped.json.service.stopped, true)
+  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+
+  // Another account at a terminal later: the consent recorded stays; only --consent-actor names another actor.
+  const again = await world.run(['service', 'start'], { seams, terminal: { stdin: true, stdout: true }, account: () => 'another' })
+  assert.equal(again.exit, EXIT.ok, again.stderr)
+  assert.match(again.stdout, /^healthy \(started\)$/m)
+  assert.doesNotMatch(again.stdout, /allowed by/)
+  assert.equal(readServiceSettings(world.workspace()).consent.actor, 'someone')
+  const second = readServiceRecord(world.workspace())
+  await world.run(['service', 'stop', '--json'], { seams })
+  await waitFor(() => !isAlive(second.pid), { label: 'the second service to exit' })
+})
+
+test('--adapter given once is remembered for the workspace before anything starts; the real entry then needs none, and under the test runner a remembered adapter always refuses', async (t) => {
+  const world = makeWorld(t)
+  const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  assert.equal(readMachineSettings(world.workspace()).decisions.adapter, null)
+  // An operation that does not start the service remembers nothing.
+  const listed = await world.run(['scope', 'list', '--json', '--adapter=obsidian-cli'], { seams })
+  assert.equal(listed.exit, EXIT.ok)
+  assert.equal(readMachineSettings(world.workspace()).decisions.adapter, null)
+
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', CONSENT.actor, '--adapter=obsidian-cli'], { seams })
+  assert.equal(started.json.service.state, 'healthy', JSON.stringify(started.json).slice(0, 300))
+  assert.deepEqual(started.json.rememberedNow, { adapter: true, consentActor: null })
+  const adapter = readMachineSettings(world.workspace()).decisions.adapter
+  assert.deepEqual(adapter, { choice: 'obsidian-cli', decidedAt: iso(START), decidedBy: CONSENT.actor, via: 'command' })
+  // Given again later: nothing is written again.
+  world.advance(60 * 1000)
+  const again = await world.run(['service', 'start', '--json', '--adapter=obsidian-cli'], { seams })
+  assert.deepEqual([again.json.service.alreadyRunning, again.json.rememberedNow.adapter], [true, false])
+  assert.deepEqual(readMachineSettings(world.workspace()).decisions.adapter, adapter)
+
+  // The real entry, in this process under the runner: the remembered adapter refuses before anything is loaded or started.
+  for (const argv of [['open', '--json'], ['service', 'start', '--json'], ['service', 'unit', '--print', '--json']]) {
+    const result = await world.run(argv, { seams: null, production: true })
+    assert.deepEqual([result.exit, result.json.error.code], [EXIT.refused, 'remembered-adapter-under-test'], argv.join(' '))
+  }
+  // And as a child of the real entry, which inherits the runner's context: the same refusal, before it loads anything.
+  const child = childProcess.spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'bin', 'atelier.mjs'), 'obsidian', 'open', '--json', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`], { env: world.env, cwd: world.projectDir, encoding: 'utf8', windowsHide: true })
+  assert.deepEqual([child.status, JSON.parse(child.stdout).error.code], [EXIT.refused, 'remembered-adapter-under-test'])
+  assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
+  assert.equal(SPAWNED.filter((entry) => entry.test === t.name).length, 1, 'only the service the first start made')
+
+  const record = readServiceRecord(world.workspace())
+  await world.run(['service', 'stop', '--json'], { seams })
+  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+})
+
+test('`audience set me` is only you; any other list is the person\'s own; either is remembered, and `settings` shows what is remembered and how to change it', async (t) => {
+  const world = makeWorld(t)
+  const person = { account: () => 'someone' }
+  const before = await world.run(['settings', '--json'])
+  assert.deepEqual(before.json.decisions, { audience: null, location: null, loginItem: null, adapter: null })
+  assert.deepEqual([before.json.audienceAllow, before.json.consent, before.json.workspace.prepared], [['team'], null, true])
+  assert.equal(typeof before.json.change.audience, 'string')
+
+  const me = await world.run(['audience', 'set', 'me', '--json'], person)
+  assert.deepEqual([me.json.audienceAllow, me.json.choice, me.json.changed], [[...ONLY_YOU_AUDIENCES], 'only-you', true])
+  assert.deepEqual(readMachineSettings(world.workspace()).decisions.audience, { choice: 'only-you', decidedAt: iso(START), decidedBy: 'someone', via: 'command' })
+  const shown = await world.run(['audience', 'show', '--json'])
+  assert.deepEqual([shown.json.audienceAllow, shown.json.choice], [[...ONLY_YOU_AUDIENCES], 'only-you'])
+  const sensitive = await world.run(['audience', 'set', 'me,sensitive', '--json'], person)
+  assert.deepEqual([sensitive.json.audienceAllow, sensitive.json.choice], [[...ONLY_YOU_AUDIENCES, 'sensitive'], 'custom'])
+  const team = await world.run(['audience', 'set', 'team', '--json'], person)
+  assert.deepEqual([team.json.audienceAllow, team.json.choice], [['team'], 'custom'])
+  const cleared = await world.run(['audience', 'clear', '--json'], person)
+  assert.deepEqual([cleared.json.audienceAllow, cleared.json.choice], [[], 'custom'])
+  const twice = await world.run(['audience', 'set', 'me,me', '--json'], person)
+  assert.deepEqual([twice.exit, twice.json.error.code], [EXIT.refused, 'invalid-audience'])
+
+  await world.run(['audience', 'set', 'me', '--json'], person)
+  const settings = await world.run(['settings', '--json'])
+  assert.deepEqual(settings.json.decisions.audience.choice, 'only-you')
+  const words = await world.run(['settings'])
+  assert.equal(words.exit, EXIT.ok)
+  assert.match(words.stdout, /^who may see: only you \(operator, private, public, staff, team\) \(given on the command line, 2026-01-05T10:00:00\.000Z, by someone\)$/m)
+  assert.match(words.stdout, /^where vaults live: not decided$/m)
+  assert.match(words.stdout, /^start at login: not decided$/m)
+  assert.match(words.stdout, /^reaching the app: not decided$/m)
+  assert.match(words.stdout, /^maintenance allowed by: nobody yet$/m)
+  assert.match(words.stdout, /^Change: `atelier obsidian audience set me\|A,B`/m)
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual(status.json.machine.decisions.audience.choice, 'only-you')
+  assert.match((await world.run(['status'])).stdout, /^remembered: who may see only you$/m)
 })
 
 test('the service is started in the root directory, whichever directory the command runs in', async (t) => {

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import tty from 'node:tty'
 import { fileURLToPath } from 'node:url'
 import { AtelierDiagnosticError, resolveProjectConfig } from '../project/config.mjs'
 import { ObsidianContractRefusal } from '../projection/obsidian/contracts.mjs'
@@ -13,13 +15,13 @@ import { ObsidianMaintenanceRefusal, refuse } from '../runtime/obsidian/errors.m
 import { BUILT_IN_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createObsidianRegistry } from '../runtime/obsidian/extension-points.mjs'
 import { LIFECYCLE_PRIMITIVES, readServiceStatusDocument, requestServiceTick, serviceStatus, startService, stopService } from '../runtime/obsidian/lifecycle.mjs'
 import {
-  authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readInstalledApplyPolicy, readMachineSettings,
-  revokeApplyPolicy, writeMachineSettings,
+  DECISIONS, ONLY_YOU_AUDIENCES, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots,
+  readInstalledApplyPolicy, readMachineSettings, revokeApplyPolicy, withDecision, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
 import { currentPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
 import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
-import { serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
+import { readServiceSettings, serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
 
@@ -37,8 +39,15 @@ import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
 // Reaching the installed app or the operating system goes through seams
 // (`appProbe`, `launcher`, `registry`, `service`). A caller passes them. The production
 // seams are constructed only when this module runs as the real command-line
-// entry (`production: true`) AND `--adapter=obsidian-cli` was given, the same
-// explicit rule the service entry has; there is no default.
+// entry (`production: true`) AND the adapter was selected: `--adapter=obsidian-cli`
+// given now, or given once before and remembered in this workspace's machine
+// settings (`selectAdapter`). A remembered adapter is never used under the test
+// runner. There is no default.
+//
+// What a person decided is remembered per workspace on this machine
+// (`atelier obsidian settings` shows it). The first start of the maintenance
+// service records who allowed it: `--consent-actor ID`, or, for a person at a
+// terminal, their account's name (`isInteractive`).
 
 export const COMMAND_SCHEMA = 'atelier-obsidian-command/v1'
 export const EXIT = Object.freeze({ ok: 0, error: 1, refused: 2, notSuccess: 3 })
@@ -47,25 +56,31 @@ const PRODUCTION_ADAPTER = 'obsidian-cli'
 const MAX_POLICY_BYTES = 64 * 1024
 const AUDIENCE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
-export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.project.json] [--data-root DIR] [--json]
+export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.project.json] [--data-root DIR] [--json] [--no-input]
 
   status                               Enablement, machine settings, service and per-view freshness. Read-only.
+  settings                             What this machine remembers for this workspace, and how to change it. Read-only.
   scope list | scope show ID           The views this project declares. Read-only.
-  audience show | set A,B | clear      The audiences this machine lets into a view (private; none by default).
+  audience show | set me|A,B | clear   The audiences this machine lets into a view (private; none by default).
+                                       \`me\` is only you: every audience but sensitive, which is added by name.
   mode show | set manual|automatic     Whether queued edits wait for a person or are applied under the policy.
   policy show | install FILE | revoke  The private apply policy. Automatic mode needs an installed, active one.
   policy digest FILE                   The digest FILE has to carry to be installed. Reads FILE; writes nothing.
-  service start [--consent-actor ID] --adapter=${PRODUCTION_ADAPTER}
+  service start [--consent-actor ID] [--adapter=${PRODUCTION_ADAPTER}]
   service status | stop                The owned maintenance service of this workspace.
-  service unit --print --adapter=${PRODUCTION_ADAPTER}
+  service unit --print [--adapter=${PRODUCTION_ADAPTER}]
                                        Print an operating-system startup unit. Writes and installs nothing.
-  open [--scope ID] [--consent-actor ID] [--allow-stale] --adapter=${PRODUCTION_ADAPTER}
+  open [--scope ID] [--consent-actor ID] [--allow-stale] [--adapter=${PRODUCTION_ADAPTER}]
                                        Start or reconnect maintenance, verify the view, add it to Obsidian and open it.
   plugin show [--scope ID]             Whether Atelier's plugin is on in a view's vault, and whether it holds it open.
   plugin on [--scope ID] [--adapter=${PRODUCTION_ADAPTER}]
                                        Offer Atelier's plugin again in a vault where it was turned off; a running
                                        service publishes the view at once (with --adapter, one of an earlier release
                                        is replaced first).
+
+Reaching the installed app needs --adapter=${PRODUCTION_ADAPTER} once for a workspace; it is remembered after that.
+The first start of the maintenance service records who allows it: --consent-actor ID, or, for a person at a terminal,
+their account's name. --no-input, --json, a CI environment or ATELIER_NONINTERACTIVE=1 mean no person is at a terminal.
 
 Contributed operations, registered by the modules shipped under src/runtime/obsidian/contributions/:
   apply list | show EDIT | run EDIT [--actor ID] | recover
@@ -83,7 +98,71 @@ Pending edits additionally report ${APPLY_UNAVAILABLE} while no apply operation 
 Minimum Obsidian version: ${MINIMUM_APP_VERSION}.
 Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer is not success.`
 
-const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
+const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
+
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+
+// Which adapter this run may use, or a typed refusal. Pure. `flag` is --adapter as given; `remembered` is the adapter
+// this workspace's machine settings remember (or null); `production` says this module runs as the real command-line
+// entry. A remembered adapter is used only by the real entry, and never under the test runner: a test that reaches an
+// app names the adapter, and runs where no app of the developer's can be reached.
+export function selectAdapter({ flag, remembered = null, production = false, env = process.env } = {}) {
+  if (flag !== undefined) {
+    if (flag !== PRODUCTION_ADAPTER) refuse('app-adapter-not-selected', `no editor adapter is called ${String(flag).slice(0, 40)}; the only one is ${PRODUCTION_ADAPTER}`)
+    return { adapter: PRODUCTION_ADAPTER, source: 'flag' }
+  }
+  if (remembered === PRODUCTION_ADAPTER && production === true) {
+    if (env.NODE_TEST_CONTEXT !== undefined) refuse('remembered-adapter-under-test', 'a remembered adapter is never used under the test runner; pass the seams, or the adapter explicitly')
+    return { adapter: PRODUCTION_ADAPTER, source: 'remembered' }
+  }
+  return refuse('app-adapter-not-selected', 'no editor adapter was selected; reaching the installed app is never a default')
+}
+
+// Whether a person is at a terminal: nothing says otherwise, and both standard input and output are one. Pure.
+// `terminal` is `{ stdin, stdout }`, each true when that stream is a terminal.
+export function isInteractive({ flags = {}, env = process.env, terminal = { stdin: false, stdout: false } } = {}) {
+  if (flags.json === true || flags['no-input'] === true) return false
+  if (env.ATELIER_NONINTERACTIVE === '1') return false
+  if (typeof env.CI === 'string' && env.CI !== '' && env.CI !== 'false' && env.CI !== '0') return false
+  return terminal.stdin === true && terminal.stdout === true
+}
+
+// The account's name as an actor identifier, or null when it is not one.
+export const accountActor = (username) => (typeof username === 'string' && IDENTIFIER.test(username) ? username : null)
+
+// How each remembered answer is changed; null where no command changes it.
+const DECISION_CHANGES = Object.freeze({
+  audience: '`atelier obsidian audience set me|A,B` decides who may see the vaults again',
+  location: null,
+  loginItem: null,
+  adapter: null,
+  consent: '`atelier obsidian service stop`, then `service start --consent-actor ID`, records another actor',
+})
+const SOURCE_WORDS = Object.freeze({ question: 'answered at a terminal', command: 'given on the command line', defaults: 'the defaults', v1: 'set before this release' })
+
+// One remembered answer in words, with when and how it was given.
+function decisionWords(name, decision, audienceAllow = []) {
+  if (decision === null) return name === 'audience' && audienceAllow.length === 0 ? 'not decided; no audience is allowed, so every view is empty' : 'not decided'
+  const what = name === 'audience'
+    ? (decision.choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.length === 0 ? 'no audience: every view is empty' : audienceAllow.join(', '))
+    : name === 'location' ? decision.parent : decision.choice
+  return `${what} (${SOURCE_WORDS[decision.via]}, ${decision.decidedAt}${decision.decidedBy === null ? '' : `, by ${decision.decidedBy}`})`
+}
+
+function decisionSummary(decisions) {
+  const words = {
+    audience: (decision) => `who may see ${decision.choice === 'only-you' ? 'only you' : 'a list of audiences'}`,
+    location: (decision) => `vaults in ${decision.parent}`,
+    loginItem: (decision) => `start at login ${decision.choice}`,
+    adapter: (decision) => `app through ${decision.choice}`,
+  }
+  const decided = DECISIONS.filter((name) => decisions[name] !== null)
+  return decided.length === 0 ? 'nothing yet' : decided.map((name) => words[name](decisions[name])).join('; ')
+}
+
+function accountName() {
+  try { return os.userInfo().username } catch { return null }
+}
 
 function parse(argv) {
   const positionals = []
@@ -107,8 +186,9 @@ const plainMessage = (error) => String(error.message ?? '').replace(new RegExp(`
 const NEXT = Object.freeze({
   usage: 'run `atelier obsidian --help`',
   'seams-required': 'pass the seams, or run the real command-line entry',
-  'app-adapter-not-selected': `pass --adapter=${PRODUCTION_ADAPTER} to let this command reach the installed app`,
-  'startup-consent-required': 'pass --consent-actor ID to record who allows the maintenance service to run',
+  'app-adapter-not-selected': `pass --adapter=${PRODUCTION_ADAPTER} to let this command reach the installed app; it is remembered for this workspace`,
+  'remembered-adapter-under-test': `a test passes its own seams, or --adapter=${PRODUCTION_ADAPTER} with a HOME that leads to no app of the developer's`,
+  'startup-consent-required': 'pass --consent-actor ID to record who allows the maintenance service to run (at a terminal, your account\'s name is recorded)',
   'automatic-mode-refused': 'install an active automatic policy with `obsidian policy install FILE`',
   [APPLY_UNAVAILABLE]: 'no apply operation is registered on this command; edits stay preserved and queued',
   'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
@@ -123,6 +203,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
   const {
     argv = [], seams = null, production = false, env = process.env, cwd = process.cwd(), platform = process.platform, clock = () => new Date(),
     stdout = (text) => process.stdout.write(`${text}\n`), stderr = (text) => process.stderr.write(`${text}\n`), contributions = null, contributionsDirectory,
+    // Whether standard input and output are terminals, and the name of the account this runs as. A test injects both;
+    // under the test runner the process's own terminal is never looked at.
+    terminal = env.NODE_TEST_CONTEXT === undefined ? { stdin: tty.isatty(0), stdout: tty.isatty(1) } : { stdin: false, stdout: false },
+    account = accountName,
   } = options
   let json = argv.includes('--json')
   let operationName = null
@@ -147,18 +231,22 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const applyAvailable = registry.extensions.applyOperation() !== UNAVAILABLE_APPLY_OPERATION
     const lifecycle = { loadProject, dataRoot, env, platform, ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }) }
 
+    // The adapter of this run: given now, or remembered by this workspace (read only when the real entry has no flag).
+    const chooseAdapter = () => selectAdapter({ flag: flags.adapter, remembered: flags.adapter === undefined && production === true ? rememberedAdapter() : null, production, env })
     const serviceSeam = async () => {
       if (seams !== null) { if (typeof seams.service?.entryPath !== 'string') refuse('seams-required', 'the service seam names the entry this command may start'); return seams.service }
-      if (flags.adapter !== PRODUCTION_ADAPTER) refuse('app-adapter-not-selected', 'no editor adapter was selected; a service that reaches the installed app is never a default')
+      chooseAdapter()
       const { SERVICE_ENTRY_PATH } = await import('../runtime/obsidian/service-entry-path.mjs')
       return { entryPath: SERVICE_ENTRY_PATH, entryArgs: [`--adapter=${PRODUCTION_ADAPTER}`] }
     }
     const appSeams = async () => {
       if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher, registry: seams.registry }
-      if (flags.adapter !== PRODUCTION_ADAPTER) refuse('app-adapter-not-selected', 'no editor adapter was selected; reaching the installed app is never a default')
+      chooseAdapter()
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
     }
+    // Whether this run may reach the installed app: --adapter given, or remembered by the workspace for the real entry.
+    const adapterSelected = () => { try { chooseAdapter(); return true } catch (error) { if (isTyped(error)) return false; throw error } }
     // Atelier's plugin as the running service sees it, for one view. A vault that turned it off says so from its own list
     // and the private record too, whether or not the service runs.
     const pluginView = (running, workspace, scopeId) => {
@@ -189,11 +277,58 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       return { project, enablement, workspace: workspace?.workspaceRoot ? workspace : null, workspaceId: workspace?.workspaceId ?? null }
     }
     const machineOf = (workspace) => (workspace === null ? null : readMachineSettings(workspace))
-    const consent = flags['consent-actor'] === undefined ? undefined : { actor: flags['consent-actor'], coverage: 'service' }
+    const rememberedAdapter = () => machineOf(readable().workspace)?.decisions.adapter?.choice ?? null
+    const interactive = isInteractive({ flags, env, terminal })
+    // Who allows the maintenance service to run, for a start this run may make: --consent-actor; else, for a person at a
+    // terminal and only while this workspace has no consent recorded, their account's name. A derived consent never
+    // replaces a recorded one. `source` says which.
+    const consentOfThisRun = () => {
+      if (flags['consent-actor'] !== undefined) return { consent: { actor: flags['consent-actor'], coverage: 'service' }, source: 'flag' }
+      if (!interactive) return { consent: undefined, source: null }
+      const { workspace } = readable()
+      if (workspace !== null && readServiceSettings(workspace) !== null) return { consent: undefined, source: null }
+      const actor = accountActor(account())
+      return actor === null ? { consent: undefined, source: null } : { consent: { actor, coverage: 'service' }, source: 'account' }
+    }
+    // --adapter, given to an operation that starts or reaches the service of an enabled project, is remembered the first
+    // time: the workspace is prepared and the decision written before anything starts, so no later run needs the flag.
+    // Answers whether this run remembered it.
+    // Remembering never stands in the way of the operation: a workspace that cannot be prepared refuses the operation
+    // itself, which says so in its own terms.
+    const rememberAdapter = (decidedBy) => {
+      if (flags.adapter !== PRODUCTION_ADAPTER) return false
+      try {
+        if (readable().enablement.state !== 'enabled') return false
+        const { workspace, repositoryRoots, now } = writable()
+        const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
+        if (current.decisions.adapter?.choice === PRODUCTION_ADAPTER) return false
+        const decided = withDecision(current, 'adapter', { choice: PRODUCTION_ADAPTER }, { decidedAt: now, decidedBy: decidedBy ?? accountActor(account()), via: 'command' })
+        writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
+        return true
+      } catch (error) {
+        if (isTyped(error)) return false
+        throw error
+      }
+    }
+    // What a run that starts or reaches the service says about what it remembered, in the document and in words.
+    const rememberedLines = ({ adapterRemembered, consent }) => [
+      ...(consent.source === 'account' ? [`The maintenance service is allowed by ${consent.consent.actor}, this account; recorded for this workspace.`] : []),
+      ...(adapterRemembered ? [`Remembered for this workspace: the app is reached through ${PRODUCTION_ADAPTER}; --adapter is not needed again.`] : []),
+    ]
     const shownMachine = (machine, workspace) => {
-      const settings = machine ?? { maintenanceMode: 'manual', audienceAllow: [], applyPolicy: null }
+      const settings = machine ?? defaultMachineSettings({ workspaceId: workspace?.workspaceId ?? 'ws-unprepared', updatedAt: isoTime(clock) })
       const automatic = workspace === null ? { authorized: false, reason: 'machine-settings-absent' } : authorizeAutomaticApply(workspace)
-      return { maintenanceMode: settings.maintenanceMode, audienceAllow: settings.audienceAllow, applyPolicy: settings.applyPolicy, automaticApply: { authorized: automatic.authorized, reason: automatic.reason } }
+      return {
+        maintenanceMode: settings.maintenanceMode, audienceAllow: settings.audienceAllow, applyPolicy: settings.applyPolicy, automaticApply: { authorized: automatic.authorized, reason: automatic.reason },
+        decisions: settings.decisions,
+      }
+    }
+    // After a run that may have started the service: whether the consent it derived is the one now recorded.
+    const consentRecorded = (consent) => {
+      if (consent.source !== 'account') return consent
+      const { workspace } = readable()
+      const recorded = workspace === null ? null : readServiceSettings(workspace)
+      return recorded?.consent.actor === consent.consent.actor ? consent : { consent: undefined, source: null }
     }
     const applyShown = { available: applyAvailable, state: applyAvailable ? 'available' : APPLY_UNAVAILABLE, operationId: registry.extensions.applyOperation().id }
     const [, sub, value] = positionals
@@ -222,6 +357,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           exit: EXIT.ok, document,
           human: [
             `obsidian: ${enablement.state} (${enablement.reason}); mode ${document.machine.maintenanceMode}; audiences ${document.machine.audienceAllow.join(', ') || 'none'}`,
+            `remembered: ${decisionSummary(document.machine.decisions)}`,
             `service: ${service.state} (${service.reason ?? 'no reason'})${app ? `; app ${app.outcome} (${app.reason})` : ''}`,
             ...(app?.next ? [`Next for the app: ${app.next}`] : []),
             `apply: ${applyShown.state}`,
@@ -230,6 +366,26 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
               ...(scope.plugin?.next ? [`  Next for the plugin: ${scope.plugin.next}`] : []),
               ...(scope.diagnostics ?? []).map((item) => `  ${item.notePath ?? item.filePath ?? item.assetPath ?? item.nodeId ?? ''}: ${item.code}${item.rule ? ` (${item.rule})` : ''}`),
             ]),
+          ],
+        }
+      },
+
+      // What this machine remembers for this workspace, and how each answer is changed. Read-only.
+      async settings() {
+        const { workspace, workspaceId } = readable()
+        const { audienceAllow, decisions } = shownMachine(machineOf(workspace), workspace)
+        const service = workspace === null ? null : readServiceSettings(workspace)
+        const consent = service === null ? null : service.consent
+        const document = { workspace: { workspaceId, prepared: workspace !== null }, decisions, audienceAllow, consent, change: DECISION_CHANGES }
+        return {
+          exit: EXIT.ok, document,
+          human: [
+            `who may see: ${decisionWords('audience', decisions.audience, audienceAllow)}`,
+            `where vaults live: ${decisionWords('location', decisions.location)}`,
+            `start at login: ${decisionWords('loginItem', decisions.loginItem)}`,
+            `reaching the app: ${decisionWords('adapter', decisions.adapter)}`,
+            `maintenance allowed by: ${consent === null ? 'nobody yet' : `${consent.actor} (${consent.coverage}, since ${consent.grantedAt})`}`,
+            ...Object.values(DECISION_CHANGES).filter((change) => change !== null).map((change) => `Change: ${change}`),
           ],
         }
       },
@@ -245,19 +401,26 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       async audience() {
         if (sub === 'show' || sub === undefined) {
           const { workspace } = readable()
-          const { audienceAllow } = shownMachine(machineOf(workspace), workspace)
-          return { exit: EXIT.ok, document: { audienceAllow }, human: [audienceAllow.join(', ') || 'no audience is allowed: every view is empty'] }
+          const { audienceAllow, decisions } = shownMachine(machineOf(workspace), workspace)
+          return { exit: EXIT.ok, document: { audienceAllow, choice: decisions.audience?.choice ?? null }, human: [decisionWords('audience', decisions.audience, audienceAllow)] }
         }
-        if (sub !== 'set' && sub !== 'clear') refuse('usage', 'audience show | audience set A,B | audience clear')
-        const audienceAllow = sub === 'clear' ? [] : String(value ?? '').split(',').map((item) => item.trim()).filter((item) => item !== '')
-        if (sub === 'set' && audienceAllow.length === 0) refuse('usage', 'audience set needs at least one audience; `audience clear` allows none')
-        if (audienceAllow.some((item) => !AUDIENCE.test(item)) || new Set(audienceAllow).size !== audienceAllow.length || audienceAllow.length > 64) refuse('invalid-audience', 'audiences are distinct identifiers, at most 64')
+        if (sub !== 'set' && sub !== 'clear') refuse('usage', 'audience show | audience set me|A,B | audience clear')
+        const named = sub === 'clear' ? [] : String(value ?? '').split(',').map((item) => item.trim()).filter((item) => item !== '')
+        if (sub === 'set' && named.length === 0) refuse('usage', 'audience set needs at least one audience; `audience clear` allows none')
+        if (named.some((item) => !AUDIENCE.test(item)) || new Set(named).size !== named.length || named.length > 64) refuse('invalid-audience', 'audiences are distinct identifiers, at most 64')
+        // `me` stands for "only you". Named beside other audiences, it adds its own to theirs, and the list is the person's own choice.
+        const audienceAllow = [...new Set(named.flatMap((item) => (item === 'me' ? ONLY_YOU_AUDIENCES : [item])))]
+        const choice = named.length === 1 && named[0] === 'me' ? 'only-you' : 'custom'
         const { workspace, repositoryRoots, now } = writable()
         const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
         const changed = JSON.stringify(current.audienceAllow) !== JSON.stringify(audienceAllow)
-        writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...current, audienceAllow, updatedAt: now } })
+        const decided = withDecision({ ...current, audienceAllow }, 'audience', { choice }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
+        writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
         // The engine compares a digest of these on every tick: a change invalidates every view at the next one.
-        return { exit: EXIT.ok, document: { audienceAllow, changed, takesEffect: 'next-tick' }, human: [`audiences: ${audienceAllow.join(', ') || 'none'}; views are rebuilt at the next tick`] }
+        return {
+          exit: EXIT.ok, document: { audienceAllow, choice, changed, takesEffect: 'next-tick' },
+          human: [`audiences: ${choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.join(', ') || 'none'}; views are rebuilt at the next tick`],
+        }
       },
 
       async mode() {
@@ -325,9 +488,19 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         if (sub === 'start') {
           configured()
           const seam = await serviceSeam()
-          const result = shown(await startService({ ...lifecycle, detached: true, ...seam, ...(consent === undefined ? {} : { consent }) }, lifecycleRules))
+          const consent = consentOfThisRun()
+          const adapterRemembered = rememberAdapter(consent.consent?.actor)
+          const result = shown(await startService({ ...lifecycle, detached: true, ...seam, ...(consent.consent === undefined ? {} : { consent: consent.consent }) }, lifecycleRules))
+          const recorded = consentRecorded(consent)
           const running = result.state === 'healthy' || result.state === 'busy'
-          return { exit: running ? EXIT.ok : EXIT.notSuccess, document: { service: result }, human: [result.state === 'busy' ? 'running, and busy in a long tick; nothing was started beside it' : `${result.state}${result.started ? ' (started)' : result.alreadyRunning ? ' (already running)' : ` (${result.reason})`}`] }
+          return {
+            exit: running ? EXIT.ok : EXIT.notSuccess,
+            document: { service: result, rememberedNow: { adapter: adapterRemembered, consentActor: recorded.source === 'account' ? recorded.consent.actor : null } },
+            human: [
+              result.state === 'busy' ? 'running, and busy in a long tick; nothing was started beside it' : `${result.state}${result.started ? ' (started)' : result.alreadyRunning ? ' (already running)' : ` (${result.reason})`}`,
+              ...rememberedLines({ adapterRemembered, consent: recorded }),
+            ],
+          }
         }
         if (sub === 'stop') {
           const result = await stopService(lifecycle, lifecycleRules)
@@ -349,20 +522,28 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const seam = await serviceSeam()
         const app = await appSeams()
         const { appProbe } = app
+        const consent = consentOfThisRun()
+        const adapterRemembered = rememberAdapter(consent.consent?.actor)
         // The view whose plugin may report the app version; an unknown one is refused by open itself.
         const requested = () => { try { return resolveScope(readObsidianEnablement(loadProject()), flags.scope) } catch { return null } }
         const result = await openScopeForOracleTests({
           ...lifecycle, ...app,
           appProbe: typeof appProbe?.inspect === 'function' && typeof appProbe?.vaultState === 'function' ? withPluginReportedVersion(appProbe, async () => { const scopeId = requested(); return scopeId === null ? null : pluginOf(scopeId) }) : appProbe,
-          service: seam, scopeId: flags.scope, consent, allowStale: flags['allow-stale'] === true, extensions: registry.extensions,
+          service: seam, scopeId: flags.scope, consent: consent.consent, allowStale: flags['allow-stale'] === true, extensions: registry.extensions,
           ...(flags['wait-ms'] === undefined ? {} : { tickTimeoutMs: Number(flags['wait-ms']) || undefined }), ...(options.open ?? {}),
         }, openingRules, lifecycleRules)
+        const recorded = consentRecorded(consent)
         const { ok: _ok, ...opened } = result
         const plugin = typeof result.scopeId === 'string' ? await pluginOf(result.scopeId) : null
-        const document = plugin === null ? opened : { ...opened, plugin }
+        const rememberedNow = { adapter: adapterRemembered, consentActor: recorded.source === 'account' ? recorded.consent.actor : null }
+        const document = plugin === null ? { ...opened, rememberedNow } : { ...opened, plugin, rememberedNow }
         return {
           exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
-          human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []), ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])],
+          human: [
+            `${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []),
+            ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : []),
+            ...rememberedLines({ adapterRemembered, consent: recorded }),
+          ],
         }
       },
 
@@ -377,9 +558,9 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           const scopeId = resolveScope(enablement, flags.scope)
           const choice = writePluginChoice({ ...workspace, scopeId, state: 'requested', reason: 'requested-by-command', clock })
           // The request is recorded either way; a service that cannot be asked leaves it to the view's next publication.
-          // With the installed entry to start (`--adapter`), a service of an earlier release still running after an upgrade
+          // With the installed entry to start (`--adapter`, given or remembered), a service of an earlier release still running after an upgrade
           // is replaced before its tick, under the consent already recorded, as `open` does; without it, it is reported.
-          const replaceable = seams !== null || flags.adapter === PRODUCTION_ADAPTER
+          const replaceable = seams !== null || adapterSelected()
           let asked
           try { asked = await requestServiceTick({ ...lifecycle, scopeId, ...(replaceable ? { service: await serviceSeam() } : {}) }, lifecycleRules) } catch (error) { if (!isTyped(error)) throw error; asked = { requested: false, reason: error.code } }
           const view = asked.tick?.scopes?.find((scope) => scope.scopeId === scopeId) ?? null

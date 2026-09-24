@@ -305,22 +305,37 @@ error, 3 the operation ran and its answer is not success.
 
 | Operation | What it does | Writes |
 | --- | --- | --- |
-| `status` | enablement, machine settings, proven service state, per-view freshness with its diagnostics (a code, the rule and the in-view note concerned, never a value; see [the Obsidian contract](obsidian-contract.md#notes-that-were-laid-out-anyway)), whether an apply operation exists | nothing |
+| `status` | enablement, machine settings, what was decided, proven service state, per-view freshness with its diagnostics (a code, the rule and the in-view note concerned, never a value; see [the Obsidian contract](obsidian-contract.md#notes-that-were-laid-out-anyway)), whether an apply operation exists | nothing |
+| `settings` | what this machine remembers for the workspace (who may see, where vaults live, start at login, the adapter), who allowed the service, and how each answer is changed | nothing |
 | `scope list`, `scope show ID` | the declared views | nothing |
-| `audience show`, `audience set A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. A change invalidates every view at the next tick | private machine settings |
+| `audience show`, `audience set me\|A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. `me` is only you: every audience but `sensitive`, which is added by name. The answer is remembered as the person's decision. A change invalidates every view at the next tick | private machine settings |
 | `mode show`, `mode set manual\|automatic` | `automatic` refuses without an installed, matching, active automatic policy | private machine settings |
 | `policy show`, `policy install FILE`, `policy revoke` | `install` validates against the apply-policy contract and stores the policy owner-only beside the machine settings, never in a project, a repository or a note. `revoke` marks the stored policy revoked, which the engine reads before its very next dispatch, and returns the mode to manual | private machine settings |
-| `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start needs `--consent-actor ID` | what the lifecycle writes |
+| `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start records who allowed it: `--consent-actor ID`, or for a person at a terminal the account's name | what the lifecycle writes |
 | `service unit --print` | the text `buildStartupAdapter` returns. Installing a unit is not offered | nothing |
 | `open [--scope ID]` | starts or reconnects the owned service, asks it for a tick, reads the view back, qualifies the installed app, makes the app know the vault (through the app while it runs; in its settings while none runs), has the vault opened, and asks again for a view the app kept from publication | what the service writes; the app's vault list (see [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list)) |
 
 Reaching the installed app or the operating system is never a default.
 `open`, `service start` and `service unit` refuse with
-`app-adapter-not-selected` unless `--adapter=obsidian-cli` is given, the same
-explicit rule the service entry has, and the modules that talk to an app are
-loaded only after that check. Tests pass their own seams and a guard in the
-test file throws if anything tries to start the app, its command-line tool, an
-operating-system opener or a service manager.
+`app-adapter-not-selected` unless `--adapter=obsidian-cli` is given, or was
+given once before to `open` or `service start` of this workspace, which
+remembers it (`selectAdapter`). The service entry keeps its own explicit
+rule. The modules that talk to an app are loaded only after that selection. A
+remembered adapter is used only by the real command-line entry and never
+under the Node test runner (`remembered-adapter-under-test`). Tests pass their
+own seams and a guard in the test file throws if anything tries to start the
+app, its command-line tool, an operating-system opener or a service manager,
+or starts the `obsidian` command's `open` or `service` outside the test
+runner's context with an environment that leads to the developer's app.
+
+A person at a terminal is never asked anything by these operations, but the
+first start of the maintenance service records the account's name as the
+actor that allowed it when no `--consent-actor` is given. A person is at a
+terminal when standard input and output are both terminals and neither
+`--json`, `--no-input`, a `CI` environment nor `ATELIER_NONINTERACTIVE=1`
+says otherwise (`isInteractive`); under the test runner the process's own
+terminal is never looked at. A recorded consent is never replaced by a derived
+one.
 
 `open` answers one typed outcome, each with a one-line explanation and a next
 step. Only `current` is success:

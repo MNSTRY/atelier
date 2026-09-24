@@ -28,6 +28,9 @@ import { promisify } from 'node:util'
 const BANNED_PROGRAMS = ['obsidian-cli', 'obsidian', 'open', 'xdg-open', 'launchctl', 'systemctl']
 const WRAPPERS = ['sh', 'bash', 'zsh', 'dash', 'env', 'cmd', 'powershell', 'pwsh', 'nohup', 'sudo']
 const REACHES_THE_APP = /--adapter=obsidian-cli|app-production-seams/
+// The obsidian command of the real entry also reaches the app through an adapter its workspace remembers, which it uses
+// only outside the test runner: such a child counts as one that can reach the app unless it runs under the runner.
+const mayUseRememberedAdapter = (words, env) => words.includes('obsidian') && words.some((word) => word === 'open' || word === 'service') && (env ?? process.env).NODE_TEST_CONTEXT === undefined
 const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
 const REAL_RUNTIME_DIRS = [process.env.XDG_RUNTIME_DIR, typeof process.getuid === 'function' ? `/run/user/${process.getuid()}` : ''].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
 const REAL_CONFIG_HOMES = [process.env.XDG_CONFIG_HOME, ...REAL_HOMES.map((home) => path.join(home, '.config'))].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
@@ -55,7 +58,7 @@ function guardSpawn(command, args, options) {
     throw error
   }
   // A child with no env of its own inherits this process's, and with it the developer's HOME.
-  const refusal = words.some((word) => REACHES_THE_APP.test(word)) ? reachesOwnApp(options?.env ?? process.env) : null
+  const refusal = words.some((word) => REACHES_THE_APP.test(word)) || mayUseRememberedAdapter(words, options?.env) ? reachesOwnApp(options?.env ?? process.env) : null
   if (refusal !== null) {
     const error = new Error(`spawn guard: ${refusal}`)
     guardErrors.push(error.message)

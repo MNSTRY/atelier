@@ -181,6 +181,43 @@
   (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
   exactly the selected notes; a focus persisted with the earlier version is
   still read.
+- The Obsidian machine settings of a workspace remember what a person decided
+  once, so no later run has to ask again or be told again: who may see the
+  vaults, where they live, whether maintenance starts at login, and that the
+  installed app may be reached. The document is now
+  `atelier-obsidian-machine-settings/v2`, with a closed `decisions` member,
+  one entry per decision (`audience`, `location`, `loginItem`, `adapter`),
+  each null until decided and otherwise stamped with when, by whom when known,
+  and how (`question`, `command`, `defaults`, `v1`). A v1 document is read as
+  the v2 document it stands for and stays v1 on disk until the next write,
+  which writes v2; an audience list set before is carried over as that
+  person's decision. A release up to 0.2.0-alpha.11 refuses a v2 document
+  (`invalid-machine-settings`), so after an upgrade a maintenance service
+  still running the earlier release fails its ticks until it is replaced:
+  `atelier obsidian open` replaces it, as does `service stop` and a new
+  `service start`. `atelier obsidian settings` shows what is remembered and
+  how each answer is changed; `status` carries the decisions and a one-line
+  summary.
+- `--adapter=obsidian-cli` is needed once per workspace. Given to `open` or
+  `service start` of an enabled project, it is remembered before anything
+  starts, and later runs of the real command-line entry reach the app without
+  it (`service unit --print` too). A remembered adapter is never used under
+  the Node test runner (`remembered-adapter-under-test`), and never by a
+  caller that passes its own seams; the decision is one pure rule,
+  `selectAdapter`.
+- The first start of the maintenance service records who allowed it: still
+  `--consent-actor ID`, or now, for a person at a terminal, the name of the
+  account the command runs as, which the command says it recorded. A person
+  is at a terminal when standard input and output are both terminals and
+  nothing says otherwise: `--json`, the new `--no-input`, a `CI` environment
+  or `ATELIER_NONINTERACTIVE=1` mean nobody is (`isInteractive`). A consent
+  recorded already is never replaced by a derived one, and a program still
+  names its actor.
+- `atelier obsidian audience set me` admits "only you": every audience of a
+  note (`public`, `team`, `operator`, `staff`, `private`) except `sensitive`,
+  which a vault takes only when it is named (`audience set me,sensitive`).
+  Any other list is the person's own; either is remembered as their decision.
+
 - `atelier obsidian open` makes the first open of a view automatic: Obsidian
   no longer has to be quit, and no vault folder has to be opened by hand. It
   makes the app know the view's vault as one of its vaults before it opens
