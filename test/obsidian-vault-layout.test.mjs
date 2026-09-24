@@ -636,6 +636,24 @@ test('a file whose edit closed on this tick holds a layout 1 view once more, but
   assert.throws(() => prepareView({ ...later, layoutHeldNotePaths: 'r/a/Plan.md' }), { code: 'invalid-held-notes' })
 })
 
+test('the deprecated allocateWorkspacePaths of the published subpath still allocates the earlier layout for a whole workspace, as before', async () => {
+  const published = await import('../src/projection/obsidian/materialize/index.mjs')
+  const nodes = [{ repo: 'r', id: 'r:b', title: 'Plan' }, { repo: 'r', id: 'r:a', title: 'Plan' }, { repo: 'q', id: 'q:1', title: 'Other' }]
+  const first = published.allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes })
+  assert.deepEqual(first.registry, { schema: PATH_REGISTRY_SCHEMA, workspaceId: 'ws', entries: [
+    { repoId: 'q', nodeId: 'q:1', path: 'notes/Other--835d2017521b.md' },
+    { repoId: 'r', nodeId: 'r:a', path: 'notes/Plan--a77edc445b0d.md' },
+    { repoId: 'r', nodeId: 'r:b', path: 'notes/Plan--8acf6c2e3e3b.md' },
+  ] })
+  // An entry is kept and a newcomer is allocated beside it; a registry of another workspace, or with an entry whose
+  // suffix is not its identity's, refuses; a layout 2 registry holds no entries of this layout.
+  const grown = published.allocateWorkspacePaths({ registry: first.registry, workspaceId: 'ws', nodes: [...nodes, { repo: 'r', id: 'r:c', title: 'Plan' }] })
+  assert.deepEqual([grown.pathOf('r', 'r:a'), grown.pathOf('r', 'r:c'), grown.pathOf('r', 'r:none')], ['notes/Plan--a77edc445b0d.md', 'notes/Plan--a1cdfb14d71e.md', null])
+  assert.throws(() => published.allocateWorkspacePaths({ registry: first.registry, workspaceId: 'other', nodes }), { code: 'invalid-path-registry' })
+  assert.throws(() => published.allocateWorkspacePaths({ registry: { ...first.registry, entries: [{ repoId: 'r', nodeId: 'r:z', path: 'notes/Plan--000000000000.md' }] }, workspaceId: 'ws', nodes }), { code: 'invalid-path-registry' })
+  assert.deepEqual(published.allocateWorkspacePaths({ registry: published.emptyPathRegistry('ws'), workspaceId: 'ws', nodes }).registry, first.registry)
+})
+
 test('a file leaves a layout 2 vault under the kind its generation recorded: a repository named attachments holds notes', () => {
   const digest = `sha256:${'a'.repeat(64)}`
   const prior = (schema, extra) => ({ schema, notes: [{ path: 'attachments/notes/Plan.md', noteDigest: digest }], attachments: [{ path: 'attachments/charts/chart.pdf', digest }], ...extra })

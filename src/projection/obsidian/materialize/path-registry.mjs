@@ -452,5 +452,38 @@ export function allocateLegacyPaths({ nodes, priorManifest = null, vaultRootByte
       refuse('path-too-long', 'an allocated note path exceeds the supported path length')
     }
   }
-  return { pathOf: (repoId, nodeId) => byIdentity.get(identityKey(repoId, nodeId)) ?? null }
+  const entries = [...byIdentity].map(([key, allocated]) => {
+    const [repoId, nodeId] = key.split('\u0000')
+    return { repoId, nodeId, path: allocated }
+  }).sort((left, right) => compare(left.repoId, right.repoId) || compare(left.nodeId, right.nodeId))
+  return { entries, pathOf: (repoId, nodeId) => byIdentity.get(identityKey(repoId, nodeId)) ?? null }
+}
+
+// Deprecated. The earlier release's allocation, kept for callers of the
+// published subpath with the same inputs, checks and result: layout 1 note
+// paths (`notes/<title>--<suffix>.md`) for every node of a workspace, reusing
+// and returning a registry of `{ repoId, nodeId, path }` entries. Atelier no
+// longer calls it: views are laid out in layout 2, each by allocateViewPaths.
+// A layout 2 registry holds no layout 1 entries and is read as empty.
+export function allocateWorkspacePaths({ registry, workspaceId, nodes, vaultRootBytes = 0, maxFullPathBytes = DEFAULT_MAX_FULL_PATH_BYTES }) {
+  const notes = []
+  if (registry !== undefined && registry !== null) {
+    if (registry.schema !== PATH_REGISTRY_SCHEMA || !Array.isArray(registry.entries)) refuse('invalid-path-registry', 'path registry has an unknown shape')
+    if (registry.workspaceId !== workspaceId) refuse('invalid-path-registry', 'path registry belongs to another workspace')
+    const seen = new Set()
+    const taken = new Set()
+    for (const entry of registry.entries) {
+      const match = typeof entry?.path === 'string' ? LEGACY_NOTE_PATH.exec(entry.path) : null
+      if (!match || typeof entry.repoId !== 'string' || typeof entry.nodeId !== 'string') refuse('invalid-path-registry', 'path registry entry is malformed')
+      if (identitySuffix(entry.repoId, entry.nodeId, LEGACY_SUFFIX).slice(0, match[2].length) !== match[2]) refuse('invalid-path-registry', 'path registry entry carries a suffix that is not derived from its identity')
+      const key = identityKey(entry.repoId, entry.nodeId)
+      if (seen.has(key)) refuse('duplicate-identity', 'path registry repeats a canonical identity')
+      if (taken.has(collisionKey(entry.path))) refuse('path-collision', 'path registry allocates one path to more than one identity')
+      seen.add(key)
+      taken.add(collisionKey(entry.path))
+      notes.push({ repoId: entry.repoId, nodeId: entry.nodeId, path: entry.path })
+    }
+  }
+  const { entries, pathOf } = allocateLegacyPaths({ nodes, priorManifest: { notes }, vaultRootBytes, maxFullPathBytes })
+  return { registry: { schema: PATH_REGISTRY_SCHEMA, workspaceId, entries }, pathOf }
 }
