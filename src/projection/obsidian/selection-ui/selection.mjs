@@ -79,17 +79,19 @@ export function resolveSelection({ canonicalSnapshot, profile, scope, allowEmpty
   const workspaceId = typeof profile?.workspaceId === 'string' ? profile.workspaceId : 'ws-unnamed'
   const nodeById = new Map(canonicalSnapshot.nodes.map((node) => [node.id, node]))
   // Paths are allocated over every visible node of the workspace, as a prepared view allocates them: a name that
-  // collides takes a qualifier, so which name a note gets depends on the notes allocated with it.
+  // collides takes a qualifier, so which name a note gets depends on the notes allocated with it, and an identity
+  // that left the census releases its name. A node that cannot be laid out has no path and is left out here too.
   let pathOf
   try {
     const visible = selectScope({ canonicalSnapshot, profile, selector: { all: true }, mode: 'scoped' }).nodes.map((id) => nodeById.get(id))
-    ;({ pathOf } = allocateWorkspacePaths({ registry: pathRegistry, workspaceId, nodes: visible }))
+    const census = { nodes: canonicalSnapshot.nodes, ...(Array.isArray(canonicalSnapshot.assets) ? { assets: canonicalSnapshot.assets } : {}) }
+    ;({ pathOf } = allocateWorkspacePaths({ registry: pathRegistry, workspaceId, nodes: visible, census }))
   } catch (error) { contractRefusalToTyped(error) }
-  const notePaths = Object.fromEntries(result.nodes.map((id) => [id, pathOf(nodeById.get(id).repo, id)]))
+  const notePaths = Object.fromEntries(result.nodes.map((id) => [id, pathOf(nodeById.get(id).repo, id)]).filter(([, notePath]) => notePath !== null))
 
   let focus = null
   if (document.mode === 'focus') {
-    const built = buildFocusQuery(result.nodes.map((id) => notePaths[id]))
+    const built = buildFocusQuery(result.nodes.filter((id) => Object.hasOwn(notePaths, id)).map((id) => notePaths[id]))
     focus = { ...built, bookmark: focusBookmarkPayload({ scopeId: document.scopeId, query: built.query }) }
   }
 

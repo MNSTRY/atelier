@@ -334,11 +334,14 @@ test('path allocation detects case, normalization and length collisions', () => 
   // A long title is cut to 150 bytes on a character boundary.
   const long = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [{ repo: 'r', id: 'long', path: 'long.md', title: '語'.repeat(120), extension: 'md' }] })
   assert.equal(long.registry.entries[0].path, `r/${'語'.repeat(50)}.md`)
-  // A path over the full-path bound is shortened by cutting the title, never below 16 bytes.
+  // A path over the full-path bound is shortened by cutting the title, never below 16 bytes; a node whose path still
+  // does not fit is parked, and nothing else is refused.
   const title = 'x'.repeat(150)
   const fitted = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [{ repo: 'r', id: 'fit', path: 'a/fit.md', title, extension: 'md' }], vaultRootBytes: 1024 - 1 - 'r/a/.md'.length - 40 })
   assert.equal(fitted.registry.entries[0].path, `r/a/${'x'.repeat(40)}.md`)
-  assert.throws(() => allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes, vaultRootBytes: 1010 }), { code: 'path-too-long' })
+  const tooLong = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes, vaultRootBytes: 1010 })
+  assert.deepEqual(tooLong.parked, [{ repoId: 'r', nodeId: 'one', reason: 'path-too-long' }, { repoId: 'r', nodeId: 'two', reason: 'path-too-long' }])
+  assert.deepEqual([tooLong.registry.entries, tooLong.pathOf('r', 'one')], [[], null])
   assert.throws(() => allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [nodes[0], nodes[0]] }), { code: 'duplicate-identity' })
 })
 

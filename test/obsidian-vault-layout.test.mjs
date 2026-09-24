@@ -6,7 +6,7 @@ import {
   fileNameParts, folderNameOf, identityLineTexts, isReadableVaultPath, joinFileName, noteNameOf, qualifierIdOf, vaultName, validateObsidianContract,
 } from '../src/projection/obsidian/contracts.mjs'
 import { applyEditLens } from '../src/projection/obsidian/edits/index.mjs'
-import { PATH_REGISTRY_SCHEMA, allocateWorkspacePaths, collisionKey, prepareView } from '../src/projection/obsidian/materialize/index.mjs'
+import { PATH_REGISTRY_SCHEMA, allocateWorkspacePaths, collisionKey, prepareView, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
 import { prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
 import { digestOf, makeApplyWorld, noteText, treeListing } from './support/obsidian-edits/apply-world.mjs'
@@ -409,6 +409,78 @@ test('every rewritten link and relation row resolves, the way the app resolves i
   assert.ok(resolved >= 6, `${resolved} links checked`)
   // The control: the layout 1 spelling of a link, a bare name, is ambiguous here and resolves by the app's tie-break, not by identity.
   assert.equal(new Set(prepared.manifest.notes.filter((note) => note.path.toLowerCase().endsWith('/intro.md')).map((note) => note.path)).size, 3)
+})
+
+// ---------------------------------------------------------------------------
+// The census, a lost registry, and sources that cannot be laid out
+// ---------------------------------------------------------------------------
+
+const titled = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
+function workspaceOf(t, files, repositories = ['r']) {
+  const cleanups = []
+  t.after(() => { for (const cleanup of cleanups) cleanup() })
+  return prepareWorkspace({ after: (fn) => cleanups.push(fn) }, { repositories, files }).inputs
+}
+const pathsIn = (prepared) => Object.fromEntries(prepared.manifest.notes.map((note) => [note.nodeId, note.path]))
+
+test('an identity that leaves the census releases its path: a renamed source takes the name back, while a withheld one keeps its reservation', (t) => {
+  // A source without an identity of its own is identified by its path, so renaming it makes a new identity.
+  const draft = workspaceOf(t, { 'r/notes/plan-draft.md': { text: '# Plan\n\nThe draft.\n' }, 'r/notes/keep.md': titled('r:keep', 'Kept note') })
+  const first = prepareView(draft)
+  assert.equal(pathsIn(first)['r:notes-plan-draft'], 'r/notes/Plan.md')
+  const renamed = workspaceOf(t, { 'r/notes/plan-final.md': { text: '# Plan\n\nThe final text.\n' }, 'r/notes/keep.md': titled('r:keep', 'Kept note') })
+  const second = prepareView({ ...renamed, persistentPathRegistry: first.persistentPathRegistry, priorManifest: first.manifest })
+  assert.deepEqual(pathsIn(second), { 'r:keep': 'r/notes/Kept note.md', 'r:notes-plan-final': 'r/notes/Plan.md' })
+  assert.deepEqual(second.persistentPathRegistry.entries.map((entry) => entry.nodeId), ['r:keep', 'r:notes-plan-final'], 'the old identity is released')
+  // A withheld node is still in the census: its path stays reserved, and a newcomer of the same title is qualified.
+  const withheld = { ...renamed, snapshot: { ...renamed.snapshot, graph: withEligibility(renamed.snapshot.graph, (node) => node.id !== 'r:notes-plan-final', () => true) } }
+  const hidden = prepareView({ ...withheld, persistentPathRegistry: second.persistentPathRegistry })
+  assert.equal(hidden.persistentPathRegistry.entries.find((entry) => entry.nodeId === 'r:notes-plan-final').path, 'r/notes/Plan.md')
+})
+
+test('a lost registry costs no view its paths: views prepared after the loss keep what they published, and none refuses', (t) => {
+  const viewA = { schema: 'atelier-obsidian-scope/v1', scopeId: 'scope-a', mode: 'scoped', selector: { repo: 'r', pathPrefix: 'b/' } }
+  const viewB = { ...viewA, scopeId: 'scope-b', selector: { repo: 'r', pathPrefix: 'a/' } }
+  // History: r:2 came first and took "Plan"; r:1, which sorts first, came later and was qualified.
+  const early = workspaceOf(t, { 'r/a/two.md': titled('r:2', 'Plan'), 'r/b/other.md': titled('r:x', 'Other') })
+  const a0 = prepareView({ ...early, scope: viewA })
+  const b0 = prepareView({ ...early, scope: viewB, persistentPathRegistry: a0.persistentPathRegistry })
+  const later = workspaceOf(t, { 'r/a/two.md': titled('r:2', 'Plan'), 'r/a/one.md': titled('r:1', 'Plan'), 'r/b/other.md': titled('r:x', 'Other') })
+  const a1 = prepareView({ ...later, scope: viewA, persistentPathRegistry: b0.persistentPathRegistry, priorManifest: a0.manifest })
+  const b1 = prepareView({ ...later, scope: viewB, persistentPathRegistry: a1.persistentPathRegistry, priorManifest: b0.manifest })
+  assert.deepEqual(pathsIn(b1), { 'r:1': 'r/a/Plan (one).md', 'r:2': 'r/a/Plan.md' })
+  // The registry is lost. View A is prepared first and allocates view B's notes afresh, in identity order...
+  const a2 = prepareView({ ...later, scope: viewA, persistentPathRegistry: null, priorManifest: a1.manifest })
+  assert.deepEqual(pathsIn(a2), pathsIn(a1))
+  // ...and view B still prepares, on the paths it published.
+  const b2 = prepareView({ ...later, scope: viewB, persistentPathRegistry: a2.persistentPathRegistry, priorManifest: b1.manifest })
+  assert.deepEqual(pathsIn(b2), pathsIn(b1))
+  assert.deepEqual(b2.changes.removed, [])
+  // Settled: neither view moves the other's notes on the next preparations.
+  const a3 = prepareView({ ...later, scope: viewA, persistentPathRegistry: b2.persistentPathRegistry, priorManifest: a2.manifest })
+  const b3 = prepareView({ ...later, scope: viewB, persistentPathRegistry: a3.persistentPathRegistry, priorManifest: b2.manifest })
+  assert.deepEqual([pathsIn(a3), pathsIn(b3)], [pathsIn(a1), pathsIn(b1)])
+  assert.deepEqual(b3.persistentPathRegistry, b2.persistentPathRegistry)
+})
+
+test('a source that cannot be laid out is parked with a typed diagnostic, and every other note of the view is published', (t) => {
+  const parkedOf = (prepared) => prepared.manifest.completeness.ext?.[EXT]?.parked ?? []
+  // Too deep for the path budget, even with its title cut to the shortest name.
+  const deep = `${'a-long-folder-name-for-depth/'.repeat(6)}deep.md`
+  const tooLong = workspaceOf(t, { [`r/${deep}`]: titled('r:deep', 'Deep note'), 'r/shallow.md': titled('r:shallow', 'Shallow note') })
+  const trimmed = prepareView({ ...tooLong, maxFullPathBytes: 160 })
+  assert.deepEqual(pathsIn(trimmed), { 'r:shallow': 'r/Shallow note.md' })
+  assert.deepEqual(parkedOf(trimmed), [{ repoId: 'r', nodeId: 'r:deep', reason: 'path-too-long' }])
+  assert.deepEqual(trimmed.manifest.completeness, { status: 'complete', expectedNotes: 1, writtenNotes: 1, ext: { [EXT]: { parked: parkedOf(trimmed) } } })
+  assert.deepEqual(validateObsidianContract('generation-manifest', trimmed.manifest), [])
+  // A source folder named like a note allocated before it: the folder cannot take a file's name.
+  const odd = workspaceOf(t, { 'r/docs/setup.md': titled('r:a-guide', 'Guide'), 'r/docs/Guide.md/inner.md': titled('r:b-inner', 'Inner note') })
+  const folded = prepareView(odd)
+  assert.deepEqual(pathsIn(folded), { 'r:a-guide': 'r/docs/Guide.md' })
+  assert.deepEqual(parkedOf(folded), [{ repoId: 'r', nodeId: 'r:b-inner', reason: 'path-collision' }])
+  // A view that does not select a parked note says nothing about it.
+  const other = prepareView({ ...odd, scope: { schema: 'atelier-obsidian-scope/v1', scopeId: 'scope-guide', mode: 'scoped', selector: { ids: ['r:a-guide'] } } })
+  assert.deepEqual([other.manifest.completeness.ext, pathsIn(other)], [undefined, { 'r:a-guide': 'r/docs/Guide.md' }])
 })
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ import {
   selectScope,
 } from '../contracts.mjs'
 import { assertStrictUtf8, readMarkdownLens, refuse, sha256Digest } from './byte-lens.mjs'
-import { allocateLegacyPaths, allocateWorkspacePaths, collisionKey, emptyPathRegistry, titleWithinBudget } from './path-registry.mjs'
+import { allocateLegacyPaths, allocateWorkspacePaths, collisionKey, titleWithinBudget } from './path-registry.mjs'
 import { REDACTION_RULES, assertOnlyVaultIdentities, assertViewRedaction, createDenyMatcher } from './redaction.mjs'
 import { isUserOwnedSettingsPath, prepareSettings } from './settings.mjs'
 
@@ -596,24 +596,21 @@ function canonicalSnapshotOf(graph) {
   return { nodes: graph.nodes, edges, externalEdgeCount: graph.edges.length - edges.length }
 }
 
-// A path the prior generation published stays allocated even when the caller
-// lost the registry: a layout 2 prior manifest seeds any identity, and any
-// embedded asset, the registry lacks. A layout 1 prior manifest seeds nothing:
-// its paths are the earlier layout's.
-function seededRegistry({ registry, priorManifest, workspaceId }) {
-  if (!priorManifest || manifestLayoutVersion(priorManifest) !== CURRENT_VAULT_LAYOUT) return registry
-  const base = registry && registry.layout === CURRENT_VAULT_LAYOUT ? registry : emptyPathRegistry(workspaceId)
-  if (!Array.isArray(base.entries) || !Array.isArray(base.assets)) return base
-  const known = new Set(base.entries.map((entry) => `${entry?.repoId}\u0000${entry?.nodeId}`))
-  const recovered = priorManifest.notes.filter((note) => !known.has(`${note.repoId}\u0000${note.nodeId}`)).map(({ repoId, nodeId, path: notePathValue, ext }) => {
-    const attachment = ext?.[EXT_KEY]?.source?.attachment
-    return { repoId, nodeId, path: notePathValue, ...(typeof attachment === 'string' ? { attachment } : {}) }
-  })
-  const knownAssets = new Set(base.assets.map((entry) => `${entry?.repoId}\u0000${entry?.assetPath}`))
-  const recoveredAssets = priorManifest.attachments
-    .filter((item) => item.ext?.[EXT_KEY]?.kind === 'embedded-asset' && !knownAssets.has(`${item.ext[EXT_KEY].repoId}\u0000${item.ext[EXT_KEY].assetPath}`))
-    .map((item) => ({ repoId: item.ext[EXT_KEY].repoId, assetPath: item.ext[EXT_KEY].assetPath, path: item.path }))
-  return { ...base, entries: [...base.entries, ...recovered], assets: [...base.assets, ...recoveredAssets] }
+// What a layout 2 prior generation allocated, which allocation takes back
+// where the registry lost it or holds only a provisional path instead (see
+// allocateWorkspacePaths). A layout 1 prior generation offers nothing: its
+// paths are the earlier layout's.
+function publishedOf(priorManifest) {
+  if (!priorManifest || manifestLayoutVersion(priorManifest) !== CURRENT_VAULT_LAYOUT) return null
+  return {
+    notes: priorManifest.notes.map(({ repoId, nodeId, path: notePathValue, ext }) => {
+      const attachment = ext?.[EXT_KEY]?.source?.attachment
+      return { repoId, nodeId, path: notePathValue, ...(typeof attachment === 'string' ? { attachment } : {}) }
+    }),
+    assets: priorManifest.attachments
+      .filter((item) => item.ext?.[EXT_KEY]?.kind === 'embedded-asset')
+      .map((item) => ({ repoId: item.ext[EXT_KEY].repoId, assetPath: item.ext[EXT_KEY].assetPath, path: item.path })),
+  }
 }
 
 function layoutOf({ layout, priorManifest, heldNotePaths }) {
@@ -658,28 +655,39 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   const universe = selectScope({ canonicalSnapshot: canonical, profile, selector: { all: true }, mode: 'scoped' })
   const selection = selectScope({ canonicalSnapshot: canonical, profile, selector: scope.selector, expansion: scope.expansion, mode: scope.mode })
   const nodeById = new Map(canonical.nodes.map((node) => [node.id, node]))
-  const vault = new Set(selection.vaultNodes)
-  const vaultNode = (id) => (vault.has(id) ? nodeById.get(id) : null)
   const universeNodes = universe.nodes.map((id) => nodeById.get(id))
   const assets = visibleAssets(snapshot.graph, profile)
+  const censusAssets = Array.isArray(snapshot.graph.assets) ? snapshot.graph.assets : []
+  const usable = (item) => item && typeof item.repo === 'string' && item.repo !== '' && typeof item.id === 'string' && item.id !== ''
   const limits = { ...(vaultRootBytes === undefined ? {} : { vaultRootBytes }), ...(maxFullPathBytes === undefined ? {} : { maxFullPathBytes }) }
 
   // The persistent registry is always layout 2 and always allocated for the
   // whole workspace, whichever layout this view is prepared in.
   const readable = allocateWorkspacePaths({
-    registry: seededRegistry({ registry: persistentPathRegistry, priorManifest, workspaceId: profile.workspaceId }),
+    registry: persistentPathRegistry,
     workspaceId: profile.workspaceId,
     nodes: universeNodes,
     assets: [...assets.values()],
+    census: { nodes: canonical.nodes.filter(usable), assets: censusAssets.filter((item) => usable(item) && typeof item.path === 'string') },
+    published: publishedOf(priorManifest),
     ...limits,
   })
   const legacy = layout.version === 1
     ? allocateLegacyPaths({ nodes: universeNodes, priorManifest: priorManifest && manifestLayoutVersion(priorManifest) === 1 ? priorManifest : null, ...limits })
     : null
+  // A selected node that cannot be laid out is parked: left out of this view and named in its manifest.
+  const selected = new Set(selection.vaultNodes)
+  const parked = legacy ? [] : readable.parked.filter((item) => selected.has(item.nodeId) && nodeById.get(item.nodeId)?.repo === item.repoId)
+  const parkedIds = new Set(parked.map((item) => item.nodeId))
+  const vault = new Set(selection.vaultNodes.filter((id) => !parkedIds.has(id)))
+  const vaultNode = (id) => (vault.has(id) ? nodeById.get(id) : null)
   const allocatedPath = legacy ? legacy.pathOf : readable.pathOf
   const pathOf = (node) => allocatedPath(node.repo, node.id)
   const attachmentOf = (node) => (legacy ? null : readable.attachmentOf(node.repo, node.id))
-  if (priorManifest && manifestLayoutVersion(priorManifest) === layout.version) {
+  // Layout 1 paths are derived from identities; a disagreement there is state that cannot be trusted. In layout 2 a
+  // prior generation's paths are taken back where they can be (see allocateWorkspacePaths), and a note whose path
+  // cannot be taken back moves.
+  if (legacy && priorManifest && manifestLayoutVersion(priorManifest) === 1) {
     for (const note of priorManifest.notes) {
       const current = allocatedPath(note.repoId, note.nodeId)
       if (current !== null && current !== note.path) refuse('path-registry-divergence', 'the path registry and the prior manifest disagree about an allocated path')
@@ -704,6 +712,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   for (const embed of Array.isArray(snapshot.graph.embeds) ? snapshot.graph.embeds : []) {
     const asset = assets.get(embed?.asset?.id)
     if (!asset || !vault.has(embed.source) || nodeById.get(embed.source).extension !== 'md') continue
+    if (!legacy && readable.assetPathOf(asset.repo, asset.path) === null) continue
     embeddedAssets.set(asset.id, asset)
     if (!occurrencesBySource.has(embed.source)) occurrencesBySource.set(embed.source, [])
     occurrencesBySource.get(embed.source).push(embed)
@@ -831,15 +840,13 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     notes,
     links,
     attachments,
-    completeness: { status: 'complete', expectedNotes: orderedNodes.length, writtenNotes: notes.length },
+    completeness: { status: 'complete', expectedNotes: orderedNodes.length, writtenNotes: notes.length, ...(parked.length > 0 ? { ext: { [EXT_KEY]: { parked } } } : {}) },
     freshness: { status: 'current', checkedAt },
     ext: { [EXT_KEY]: { emitterVersion: layout.emitterVersion, mode: selection.mode, settings: settings.ownership } },
   }
   assertObsidianContract('generation-manifest', manifest)
 
   // The redaction guard, over the whole result.
-  const usable = (item) => item && typeof item.repo === 'string' && item.repo !== '' && typeof item.id === 'string' && item.id !== ''
-  const censusAssets = Array.isArray(snapshot.graph.assets) ? snapshot.graph.assets : []
   const viewAttachments = new Set(attachments.map((item) => item.path))
   const deny = []
   for (const item of canonical.nodes) {

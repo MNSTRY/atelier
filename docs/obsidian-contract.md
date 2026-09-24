@@ -84,8 +84,9 @@ A qualified file name (see "Collisions") can show that another name is, or
 was, allocated in the same folder of this workspace; it names nothing about
 that other note. Allocation runs over visible nodes only, so a node that was
 never visible on this machine never causes a qualifier. A path once allocated
-stays reserved, also when its node is later withheld: that is what keeps
-every path stable.
+stays reserved while its node is in the census, also when the node is
+withheld: that is what keeps every path stable. A node that leaves the census
+releases its path.
 
 ### The redaction guard
 
@@ -222,7 +223,7 @@ Obsidian links:
 A path longer than the file system allows (255 bytes a name, and
 `maxFullPathBytes`, 1024 by default, with the vault root) is shortened by
 cutting the title part further, never below 16 bytes; a path that still does
-not fit refuses `path-too-long`.
+not fit is parked (see "Notes that cannot be laid out").
 
 ### Collisions
 
@@ -251,13 +252,44 @@ the census lists them.
 ### Stability
 
 The persistent path registry allocates each path once per workspace and every
-view and generation reuses it; it is machine-private state, and when it is
-lost the prior manifest seeds it. A retitled source keeps its path: the note
-shows the new title in its heading and every relation row that names it shows
-it too. A source deleted and added again keeps its allocated path. Renaming
-on retitle arrives with the in-vault plugin, which can use Obsidian's own
-rename so that the app's bookmarks, open tabs, graph layout and links follow;
-a rename made by a program outside the app would break all of them.
+view and generation reuses it; it is machine-private state. A retitled source
+keeps its path: the note shows the new title in its heading and every
+relation row that names it shows it too. Renaming on retitle arrives with the
+in-vault plugin, which can use Obsidian's own rename so that the app's
+bookmarks, open tabs, graph layout and links follow; a rename made by a
+program outside the app would break all of them.
+
+An identity that leaves the census releases its paths: a deleted source, or
+one renamed into a new identity (a source without an identity of its own is
+identified by its path). A renamed source therefore takes its name back
+instead of keeping a qualifier its old name forced, and a source deleted and
+added again gets its earlier path again when nothing took it meanwhile. A
+withheld or unselected node is still in the census and keeps its paths.
+
+When the registry is lost, the view prepared first takes back the paths its
+prior generation published and allocates everything else afresh. What is
+allocated while the registry is lost is provisional: when another view's prior
+generation recorded a different path for one of its notes, that view takes
+its path back, and a provisional allocation of a note it did not publish
+there gives way. A path its own view's generation recorded is confirmed, and a
+confirmed allocation is never taken back by another view: if two views
+disagree about a confirmed path, the note moves in the view that did not
+confirm it. No view is refused because the registry was lost.
+
+### Notes that cannot be laid out
+
+A node whose path cannot be allocated is parked: a path too long for the file
+system even with its title cut to 16 bytes, or a source folder whose mirrored
+folder would take the name of a file already allocated (a source directory
+`docs/Guide.md/` after a note `docs/Guide.md`). A parked node gets no path and
+is not written into the vault of any view that selects it; in that vault it
+is treated as a node outside the view is: links to it stay as written and no
+relation row names it. The view's manifest names it in
+`completeness.ext["mnstry.atelier.obsidian"].parked` as
+`{ repoId, nodeId, reason }`, the reason `path-too-long` or
+`path-collision`, and every other note is published. Nothing else is refused
+because of it. A path allocated under a shorter vault root that does not fit
+this one is parked in this view and keeps its allocation.
 
 ### Identity in the note
 
