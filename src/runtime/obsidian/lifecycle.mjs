@@ -2,6 +2,7 @@ import childProcess from 'node:child_process'
 import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
+import path from 'node:path'
 import { isoTime } from './documents.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { ensureWorkspaceIdentity } from './machine-settings.mjs'
@@ -162,8 +163,9 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
     const log = openServiceLog(workspaceRoot)
     try {
       const args = [executable.path, `--project=${project.configPath}`, ...(dataRoot === undefined ? [] : [`--data-root=${dataRoot}`]), `--runtime-id=${runtimeId}`, ...(intervalMs === undefined ? [] : [`--interval-ms=${intervalMs}`]), ...entryArgs]
-      // No shell. Detached only when the service is meant to outlive the command that starts it.
-      child = spawn(execPath, args, { detached, shell: false, windowsHide: true, stdio: ['ignore', log.descriptor, log.descriptor], env })
+      // No shell. Detached only when the service is meant to outlive the command that starts it. It runs in the root
+      // directory, never in the one the command was started in, which may be a vault or a folder somebody removes.
+      child = spawn(execPath, args, { detached, shell: false, windowsHide: true, stdio: ['ignore', log.descriptor, log.descriptor], env, cwd: path.parse(executable.path).root })
     } finally {
       fs.closeSync(log.descriptor)
     }

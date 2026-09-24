@@ -89,9 +89,13 @@ export const REASON_NEXT = Object.freeze({
   'obsidian-settings-unreadable': `Obsidian's settings file cannot be read as JSON, so it is not written; ${THROUGH_THE_APP}`,
   'obsidian-settings-not-object': `Obsidian's settings file is not a JSON object, so it is not written; ${THROUGH_THE_APP}`,
   'obsidian-settings-unwritable': `Obsidian's settings directory cannot be written (space or permissions); ${THROUGH_THE_APP}`,
+  'obsidian-settings-too-large': `with this view's vault, Obsidian's settings file would be larger than a settings file can be, so it is not written; ${THROUGH_THE_APP}`,
+  'obsidian-sandboxed': `this Obsidian is a Flatpak or snap build, which keeps its vault list inside its sandbox, where Atelier does not write; ${THROUGH_THE_APP}`,
   'obsidian-settings-changed': 'Obsidian\'s settings file changed while the vault was being added, and nothing was written; open again',
   'app-may-be-running': 'Obsidian started while the vault was being added, and nothing was written; open again',
   'app-started-during-registration': 'Obsidian started just as this view\'s vault was added to its list and may not have read it; open again: a vault it missed is then added through it',
+  'registration-not-read-back': 'this view\'s vault was added to Obsidian\'s settings file, but the file could not be read back to confirm it; open again',
+  'addition-not-answered': 'Obsidian did not answer when asked to add this view\'s vault, and its vault list does not show it; open again, or quit Obsidian and open again',
   'app-did-not-list-its-vaults': 'Obsidian runs but did not answer with its vault list; open again, or quit Obsidian and open again',
   'app-refused-registration': 'Obsidian did not accept this view\'s vault folder as a vault; quit Obsidian and open again',
   'registration-not-verified': 'Obsidian answered, but its vault list does not show this view\'s vault; quit Obsidian and open again',
@@ -223,7 +227,7 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 //
 //   - answering its command line (it gave its version): its own list is read;
 //     a vault it does not list is added and opened through the app, and read
-//     back from its list by real path;
+//     back from its list (findVaultEntry);
 //   - running with no vault open: its command line answers nothing, and its
 //     settings file is the running app's, so it is only read: a vault it lists
 //     is opened by path, and one it does not list is `no-vault-open`;
@@ -260,20 +264,21 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
     if (known) return { ok: true, path: known.path, how: 'listed', vaults: listed.vaults }
     if (inside(listed.vaults)) return { ok: false, reason: 'vault-inside-another-vault' }
     const asked = await attempt(() => registry.registerThroughApp({ vaultRoot }))
-    if (asked?.answered !== true) return { ok: false, reason: asked?.reason === 'no-vault-open' ? 'no-vault-open' : 'app-did-not-list-its-vaults' }
-    if (asked.result !== true) return { ok: false, reason: 'app-refused-registration' }
+    if (asked?.answered !== true && asked?.reason === 'no-vault-open') return { ok: false, reason: 'no-vault-open' }
+    if (asked?.answered === true && asked.result !== true) return { ok: false, reason: 'app-refused-registration' }
+    // An addition that was not answered (a call that timed out, say) may still have been made: the list tells.
     for (let attempts = 1; ; attempts += 1) {
       const again = await attempt(() => registry.listThroughApp())
       const added = again?.answered === true ? findVaultEntry(again.vaults, vaultRoot) : null
       if (added) return { ok: true, path: added.path, how: 'added-through-app', vaults: again.vaults }
-      if (attempts >= VERIFY_ATTEMPTS) return { ok: false, reason: 'registration-not-verified' }
+      if (attempts >= VERIFY_ATTEMPTS) return { ok: false, reason: asked?.answered === true ? 'registration-not-verified' : 'addition-not-answered' }
       await sleep(pollMs)
     }
   }
   const written = await attempt(() => registry.registerInSettings({ vaultRoot }))
   if (written === null) return { ok: false, reason: 'obsidian-settings-unwritable' }
   if (written.ok !== true) return { ok: false, reason: typeof written.code === 'string' ? written.code : 'obsidian-settings-unwritable' }
-  if (written.confirmed !== true) return { ok: false, reason: 'app-started-during-registration' }
+  if (written.confirmed !== true) return { ok: false, reason: written.reason === 'registration-not-read-back' ? 'registration-not-read-back' : 'app-started-during-registration' }
   return { ok: true, path: written.entry.path, how: written.registered === 'already' ? 'listed' : 'added-to-settings', vaults: written.vaults }
 }
 

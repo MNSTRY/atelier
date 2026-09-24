@@ -366,7 +366,7 @@ to open a folder by hand:
 - **Obsidian runs and answers its command line (any vault is open).** `open`
   reads the app's vault list through its command line. A vault the app does
   not list is added and opened in a new window through the app itself (it
-  writes its own settings), and read back from its list by real path. `open`
+  writes its own settings), and read back from its list. `open`
   then waits, bounded, until the app answers for exactly this vault, and asks
   maintenance for the view again: the publication runs through the app, which
   now holds the vault, with every editor check of the publication protocol.
@@ -416,10 +416,12 @@ publication still stopped, it says to quit Obsidian and open again.
 The tick `open` asks for prepares and publishes its view once more, whatever
 state the view is in. A view whose last publication did not settle (refused,
 stale or still updating) is also tried again without waiting for a change: as
-soon as the app looks different (it quit or started, qualified differently,
-or opened or closed a vault in its list), and otherwise after a delay that
-starts at 30 seconds and doubles per attempt, up to the full reconciliation
-every five minutes.
+soon as the app looks different (it quit or started, or opened or closed a
+vault in its list), and otherwise after a delay that starts at 30 seconds and
+doubles per attempt, up to the full reconciliation every five minutes. What
+the app looks like is read from the process table and the app's vault list
+alone: maintenance runs nothing in Obsidian to find out, and asks it for its
+version only when a view is about to be published, without blocking.
 
 ## Known limits
 
@@ -482,10 +484,15 @@ test reported as a pass.
   shows, positively, that no Obsidian runs, only when Obsidian created it
   before, and with a backup beside it; see
   [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list). A
-  Flatpak or snap build keeps its settings elsewhere and is not found there:
-  with such a build, leave it running with any vault open and `open` adds the
-  vault through the app instead. On Windows no location is known, and the
-  same applies.
+  Flatpak or snap build keeps its list inside its sandbox and never reads that
+  file. Such a build is recognised by its sandbox in HOME or by its
+  installation, and the file is then neither read nor written: `open` answers
+  `obsidian-sandboxed` and says to start Obsidian with any vault open, then
+  open again, and adds the vault through the app. On Windows no location is
+  known, and `open` adds the vault through the app in the same way.
+- Recent items: adding a vault through the running app is Obsidian's own
+  "open folder as vault", which also puts the vault's folder in the operating
+  system's recently used documents (Recent Items on macOS).
 - Which window answers: Obsidian answers a command-line call that names a
   vault (`vault=<id>` first) in that vault's window; any other call in the
   window of the first vault in its list whose folder is the tool's working

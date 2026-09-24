@@ -30,5 +30,5 @@ await runServiceProcess({
   entryPath: fileURLToPath(import.meta.url),
   adapterFactory,
   appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } },
-  engineOptions: { observeApp: () => appStateSignature({ qualification: adapterFactory.qualification(), settings: readObsidianSettings({ userDataDir: profile }) }) },
+  engineOptions: { observeApp: () => appStateSignature({ processes: processProbe(), settings: readObsidianSettings({ userDataDir: profile }) }) },
 })

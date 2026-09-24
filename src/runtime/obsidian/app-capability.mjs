@@ -135,8 +135,14 @@ export async function inspectApp(appProbe) {
 // qualification with its input: an app that was not running qualified without
 // a version, and an adapter built on that answer must not coordinate with an
 // app started since (see createEditorAdapter).
+//
+// The app is asked only when an adapter is wanted, that is when a view is
+// about to be published. An appProbe with `inspect()` is asked without
+// blocking, and the factory and `qualification()` then answer promises; one
+// with only `inspectSync()` is asked synchronously.
 export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor = MINIMUM_APP_VERSION, maxAgeMs = 10_000, now = () => Date.now() } = {}) {
-  if (typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspectSync()')
+  const waits = typeof appProbe?.inspect === 'function'
+  if (!waits && typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspect() or inspectSync()')
   if (typeof createAdapter !== 'function') throw new TypeError('the qualified adapter factory needs createAdapter')
   let last = null
   // An answer that lets an adapter through without a checked version (no app
@@ -144,20 +150,17 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
   // asked for its version by the next call, not refused on the old answer. An
   // answer that checked a version, or that refuses, is reused for `maxAgeMs`.
   const reusable = (result) => result.versionChecked === true || (result.outcome !== 'qualified' && result.outcome !== 'app-missing')
-  const qualification = () => {
-    if (last === null || !reusable(last.result) || now() - last.at > maxAgeMs) {
-      let observation
-      try { observation = appProbe.inspectSync() } catch { observation = null }
-      last = { at: now(), result: qualifyApp(observation, { requireVersion: false, floor }) }
-    }
-    return last.result
-  }
-  const factory = (input) => {
-    const result = qualification()
+  const current = () => last !== null && reusable(last.result) && now() - last.at <= maxAgeMs
+  const learn = (observation) => { last = { at: now(), result: qualifyApp(observation, { requireVersion: false, floor }) }; return last.result }
+  const qualification = waits
+    ? async () => { if (current()) return last.result; let observation; try { observation = await appProbe.inspect() } catch { observation = null } return learn(observation) }
+    : () => { if (current()) return last.result; let observation; try { observation = appProbe.inspectSync() } catch { observation = null } return learn(observation) }
+  const build = (input, result) => {
     // No app at all is not an unqualified app: the publisher's own path needs none, and its adapter finds no process.
     if (result.outcome !== 'qualified' && result.outcome !== 'app-missing') refuse(result.outcome, 'the installed Obsidian does not qualify; nothing is published through it', { reason: result.reason, floor: result.floor, version: result.version })
     return createAdapter({ ...input, qualification: result })
   }
+  const factory = waits ? async (input) => build(input, await qualification()) : (input) => build(input, qualification())
   factory.qualification = qualification
   // What was last learned, without asking again: for a status answer.
   factory.lastQualification = () => last?.result ?? null

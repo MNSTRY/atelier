@@ -2,7 +2,7 @@ import { execFile, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
-import { obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
+import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
 import { readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
 import { registerVaultInObsidianSettings } from './app-registration.mjs'
 
@@ -126,11 +126,15 @@ function vaultRegisterCode(vaultRoot) {
 //
 // Through the app only while it runs and answers; in its settings file only
 // while no Obsidian runs, which registerVaultInObsidianSettings checks itself.
-// Adding a vault opens a window, so a call may take longer than a version answer.
+// A Flatpak or snap build found for this account (`sandbox`) never reads that
+// file: it is then neither read nor written (`obsidian-sandboxed`), and a vault
+// is added through the app only. Adding a vault opens a window, so a call may
+// take longer than a version answer.
 export function createProductionAppRegistry({
   platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), processProbe = () => defaultObsidianProcessProbe({ platform }), workingDirectory = NEUTRAL_DIRECTORY,
-  userDataDir = obsidianUserDataDir({ platform, env }), timeoutMs = CLI_TIMEOUT_MS * 3,
+  userDataDir = obsidianUserDataDir({ platform, env }), sandbox = obsidianSandboxedBuild({ platform, env }), timeoutMs = CLI_TIMEOUT_MS * 3,
 } = {}) {
+  const sandboxed = { ok: false, code: 'obsidian-sandboxed', message: `this Obsidian is a ${sandbox} build, which reads its vault list inside its sandbox, where Atelier does not write` }
   const evaluate = (code) => new Promise((resolve) => {
     execFile(cliPath, ['eval', `code=${code}`], { env, cwd: workingDirectory, timeout: timeoutMs, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => resolve(readEvalAnswer({ stdout, stderr, failed: Boolean(error) })))
   })
@@ -145,8 +149,8 @@ export function createProductionAppRegistry({
       const answer = await evaluate(vaultRegisterCode(vaultRoot))
       return answer.answered ? { answered: true, result: answer.value?.result ?? null } : answer
     },
-    readSettings: () => readObsidianSettings({ userDataDir }),
-    registerInSettings: ({ vaultRoot }) => (userDataDir === null
+    readSettings: () => (sandbox === null ? readObsidianSettings({ userDataDir }) : sandboxed),
+    registerInSettings: ({ vaultRoot }) => (sandbox !== null ? sandboxed : userDataDir === null
       ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
       : registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe })),
   }

@@ -165,9 +165,11 @@ The listener refuses a request before looking its operation up when:
 Status, tick and stop additionally refuse without the bearer of the running
 runtime. A `POST` payload is a JSON object of at most 1 KiB that names the
 runtime identifier it is meant for, so a request aimed at an earlier runtime on
-the same port does nothing. A tick may also name one view by its `scopeId`;
-any other member, or a `scopeId` that is not a contract identifier, is refused
-and nothing runs.
+the same port does nothing (409, `request-names-another-runtime`). A tick may
+also name one view by its `scopeId`, which must be a contract identifier as
+the scope contract defines it (400, `request-invalid`); any other member, and a
+`scopeId` on a stop, is refused (400, `request-member-unknown`). A refused
+request runs nothing.
 
 ### Status values and refusal cases
 
@@ -180,8 +182,9 @@ and nothing runs.
 | `stale-record` | the recorded address is closed and the recorded PID is gone | starts; the new service replaces the record once it listens | refuses; nothing is proven to stop |
 | `pid-not-ours` | the recorded address is closed and a process has the recorded PID (the number was reused, or a process outlived its listener) | starts; that PID is never signalled | refuses; that PID is never signalled |
 
-`start` is serialized per workspace, spawns the service without a shell, and
-detaches it only when asked for a service that survives the launching command.
+`start` is serialized per workspace, spawns the service without a shell, in
+the root directory rather than the one the command runs in, and detaches it
+only when asked for a service that survives the launching command.
 It waits for health to echo the runtime identifier it generated and the PID of
 the child it created. If that proof never arrives it stops only that child, by
 its process handle, and reports the private operational log,

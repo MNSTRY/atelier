@@ -39,7 +39,8 @@ import { createNullWatcherFactory } from './watchers.mjs'
 //   7. persist the freshness of every view
 //
 // A view is prepared and published once more, whatever its state, on the
-// next tick after `requestPreparation(scopeId)`: a one-shot request per view,
+// next tick after `requestPreparation(scopeId)`: a one-shot request per view
+// the project declared at the last tick (at most 64 wait before the first),
 // which the service makes for a tick requested for that view over its
 // listener (`open` requests its own). A view whose last publication did not
 // settle (stale, updating, or refused as a publisher conflict) is also tried
@@ -127,17 +128,20 @@ export const ENGINE_PRIMITIVES = Object.freeze({
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
 const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
 
-// An editor adapter that `build` makes the first time the publisher calls it; a refusal of `build` is thrown from that call.
+// An editor adapter that `build` makes, synchronously or not, the first time the publisher calls it; a refusal of
+// `build` is thrown from that call.
 function builtOnFirstUse(build) {
   let adapter = null
-  const built = () => (adapter ??= build())
+  const built = () => (adapter ??= Promise.resolve().then(build))
   return {
-    probe: (input) => built().probe(input),
-    inspect: (payload) => built().inspect(payload),
-    collect: (payload) => built().collect(payload),
-    publish: (payload) => built().publish(payload),
+    probe: async (input) => (await built()).probe(input),
+    inspect: async (payload) => (await built()).inspect(payload),
+    collect: async (payload) => (await built()).collect(payload),
+    publish: async (payload) => (await built()).publish(payload),
   }
 }
+// Views a tick may be asked to prepare again, at most, before it runs.
+const MAX_PREPARATION_REQUESTS = 64
 
 function journalTime(journalId) {
   const match = /^journal-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{3})-/.exec(journalId)
@@ -199,6 +203,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   let heldLock = null
   // Views somebody asked to have prepared and published once more, at the next tick.
   const preparationRequests = new Set()
+  // The views the project declared at the last tick; null before the first.
+  let declaredScopes = null
   // Views whose last attempt did not settle, by scope: { attempts in a row, lastAttemptMs, appState then }. Kept in
   // memory only: a new engine attempts every view on its first tick.
   const unsettled = new Map()
@@ -321,6 +327,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const enablement = readObsidianEnablement(project)
     if (enablement.state === 'disabled') {
       stopWatching()
+      declaredScopes = new Set()
       await persistOutcome({ enablement: 'disabled', state: 'disabled', reason: enablement.reason, now, scopeIds: enablement.scopes.map((scope) => scope.scopeId) })
       semantic = null
       firstTick = true
@@ -441,6 +448,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (full) { lastFullMs = nowMs; forceFull = false }
 
     // 7. Which views are invalid.
+    declaredScopes = new Set(scopes.map(({ scope }) => scope.scopeId))
     const previous = readPreviousFreshness(stateStore)
     const entries = new Map()
     const unseen = new Set()
@@ -515,7 +523,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           // recovery, before it would probe. Its adapter is then built only if the publisher asks for one, so an app
           // that cannot be qualified never makes a current view stale. Any other publication builds the adapter first,
           // and an app that does not qualify keeps the publisher from being reached at all.
-          const adapter = trusted()?.generationId === preparedGenerationId ? builtOnFirstUse(() => adapterFactory({ store, scope })) : adapterFactory({ store, scope })
+          const adapter = trusted()?.generationId === preparedGenerationId ? builtOnFirstUse(() => adapterFactory({ store, scope })) : await adapterFactory({ store, scope })
           const result = await seams.publishView({
             preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
             ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
@@ -570,7 +578,14 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     extensions,
     // The next tick that starts prepares and publishes this view once more, whatever its state. A view this
     // project does not declare is ignored then.
-    requestPreparation(scopeId) { if (typeof scopeId === 'string' && scopeId !== '') preparationRequests.add(scopeId) },
+    // A view the project declared at the last tick (before the first, any view), and at most MAX_PREPARATION_REQUESTS
+    // of them; whether the request was taken.
+    requestPreparation(scopeId) {
+      if (typeof scopeId !== 'string' || scopeId === '' || (declaredScopes !== null && !declaredScopes.has(scopeId))) return false
+      if (!preparationRequests.has(scopeId) && preparationRequests.size >= MAX_PREPARATION_REQUESTS) return false
+      preparationRequests.add(scopeId)
+      return true
+    },
     async tick() {
       if (running) return { state: 'busy' }
       running = true

@@ -91,7 +91,8 @@ const APP_ISOLATION_HERE = reachesOwnApp({ HOME: path.join(os.tmpdir(), 'private
 const needsAppIsolation = APP_ISOLATION_HERE ? {} : { skip: 'the app listens on a pipe of the user account on this platform, which no environment isolates: no child that could reach it is started' }
 
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
-const { NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, createObsidianCliCall, enclosingVaults, findVaultEntry, obsidianUserDataDir, publicationRoute, readObsidianSettings, resolveExchange, vaultRoute } = await import('../src/projection/obsidian/publication/index.mjs')
+const { isContractIdentifier, validateObsidianContract } = await import('../src/projection/obsidian/contracts.mjs')
+const { MAX_OBSIDIAN_SETTINGS_BYTES, NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, createObsidianCliCall, enclosingVaults, findVaultEntry, obsidianSandboxedBuild, obsidianUserDataDir, publicationRoute, readObsidianSettings, resolveExchange, vaultRoute } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
 const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readEvalAnswer, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { appStateSignature, registerVaultInObsidianSettings } = await import('../src/runtime/obsidian/app-registration.mjs')
@@ -203,10 +204,12 @@ function fakeApp(overrides = {}) {
   // `registerResult`: what the app answers when asked to add a vault; `registerForgets`: it answers true and lists nothing;
   // `loadingAnswers`: how many list calls after an addition reach the new window while it is still loading.
   // `listNoVault` / `registerNoVault`: the app answered its version, then its last vault window closed, so the list or
-  // the addition answers "Vault not found.".
+  // the addition answers "Vault not found.". `registerUnanswered`: the addition gets no answer (a call that timed
+  // out); 'added' when the app added the vault all the same, 'not-added' when it did not.
   const state = {
     installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0,
-    noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, listNoVault: false, registerNoVault: false, ...overrides,
+    noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, listNoVault: false, registerNoVault: false,
+    registerUnanswered: null, ...overrides,
   }
   const launches = []
   const registrations = []
@@ -250,6 +253,7 @@ function fakeApp(overrides = {}) {
       registerThroughApp: async ({ vaultRoot }) => {
         if (!state.running || noVaultNow()) throw new Error('the app cannot be asked')
         if (state.registerNoVault) return { answered: false, reason: 'no-vault-open' }
+        if (state.registerUnanswered !== null) { if (state.registerUnanswered === 'added') add(vaultRoot, 'app'); return { answered: false, reason: 'cli-failed' } }
         if (state.registerResult === true) add(vaultRoot, 'app')
         return { answered: true, result: state.registerResult }
       },
@@ -261,8 +265,10 @@ function fakeApp(overrides = {}) {
         if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: true }, confirmed: true, vaults: structuredClone(state.vaults) }
         if (Object.values(state.vaults).some((entry) => vaultRoot.startsWith(entry.path + path.sep))) return { ok: false, code: 'vault-inside-another-vault', message: 'fake' }
         add(vaultRoot, 'settings')
-        // `settingsUnconfirmed`: an app started right after the write, and may have read the list before it.
-        return { ok: true, registered: 'written', entry: { id: 'fake', path: vaultRoot, open: true }, confirmed: !state.settingsUnconfirmed, vaults: structuredClone(state.vaults), ...(state.settingsUnconfirmed ? { reason: 'app-started-during-registration' } : {}) }
+        // `settingsUnconfirmed`: an app started right after the write, and may have read the list before it; or, when it
+        // names a reason, that reason (`registration-not-read-back`: the written file could not be read back).
+        const unconfirmed = state.settingsUnconfirmed === true ? 'app-started-during-registration' : state.settingsUnconfirmed || null
+        return { ok: true, registered: 'written', entry: { id: 'fake', path: vaultRoot, open: true }, confirmed: unconfirmed === null, vaults: structuredClone(state.vaults), ...(unconfirmed === null ? {} : { reason: unconfirmed }) }
       },
     },
   }
@@ -1030,14 +1036,30 @@ test('open verifies what the app says: a vault it refuses, one its list does not
     [{ running: false, settingsRefusal: { ok: false, code: 'obsidian-settings-unsafe', message: 'fake' } }, 'obsidian-settings-unsafe'],
     // Written, but an app started just then and may have read its list before: a URL it may not resolve is never sent.
     [{ running: false, settingsUnconfirmed: true }, 'app-started-during-registration'],
+    // Written, and not read back: the same, with its own reason.
+    [{ running: false, settingsUnconfirmed: 'registration-not-read-back' }, 'registration-not-read-back'],
+    // Too large to write, and a Flatpak or snap build, whose list is not this file.
+    [{ running: false, settingsRefusal: { ok: false, code: 'obsidian-settings-too-large', message: 'fake' } }, 'obsidian-settings-too-large'],
+    [{ running: false, settingsRefusal: { ok: false, code: 'obsidian-sandboxed', message: 'fake' } }, 'obsidian-sandboxed'],
+    // An addition the app did not answer, and after which its list does not show the vault.
+    [{ running: true, registerUnanswered: 'not-added' }, 'addition-not-answered'],
   ]
   for (const [state, reason] of cases) {
     const world = makeWorld(t)
     await world.service()
     const app = fakeApp(state)
     const result = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+    assert.equal(typeof REASON_NEXT[reason], 'string', `${reason} has a next step of its own`)
     assert.deepEqual([result.json.outcome, result.json.reason, result.json.next, result.json.launched, app.launches], ['launch-failed', reason, REASON_NEXT[reason], false, []], reason)
   }
+})
+
+test('an addition the app did not answer (a call that timed out, say) is looked up in its list: made all the same, the vault is opened', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const app = fakeApp({ running: true, registerUnanswered: 'added' })
+  await serviceBehindApp(world, app)
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.registration?.how, app.launches], ['current', 'added-through-app', [world.vault()]], JSON.stringify(opened.json).slice(0, 400))
 })
 
 test('an app whose last vault window closes between its version answer and the list or the addition is a typed answer, never an internal error; nothing is added or launched', async (t) => {
@@ -1189,15 +1211,37 @@ test('a tick requested for a view over the service listener prepares it once mor
   // The body names the runtime and, for a tick, at most one view by its identity; anything else is refused.
   const record = readServiceRecord(world.workspace())
   const post = (operation, payload) => requestLoopback({ host: record.host, port: record.port, method: 'POST', path: operation, bearer: record.ext.bearer, payload, timeoutMs: 10000 })
-  for (const [operation, payload, statusCode] of [
-    ['/tick', { runtimeId: record.runtimeId, scopeId: '../escape' }, 400], ['/tick', { runtimeId: record.runtimeId, scopeId: 7 }, 400],
-    ['/tick', { runtimeId: record.runtimeId, scopeId: FULL_SCOPE.scopeId, extra: true }, 409], ['/tick', { runtimeId: 'rt-another', scopeId: FULL_SCOPE.scopeId }, 409],
-    ['/stop', { runtimeId: record.runtimeId, scopeId: FULL_SCOPE.scopeId }, 409],
+  for (const [operation, payload, statusCode, error] of [
+    ['/tick', { runtimeId: record.runtimeId, scopeId: '../escape' }, 400, 'request-invalid'], ['/tick', { runtimeId: record.runtimeId, scopeId: 7 }, 400, 'request-invalid'],
+    ['/tick', { runtimeId: record.runtimeId, scopeId: 'a'.repeat(129) }, 400, 'request-invalid'],
+    ['/tick', { runtimeId: record.runtimeId, scopeId: FULL_SCOPE.scopeId, extra: true }, 400, 'request-member-unknown'],
+    ['/stop', { runtimeId: record.runtimeId, scopeId: FULL_SCOPE.scopeId }, 400, 'request-member-unknown'],
+    ['/tick', { runtimeId: 'rt-another', scopeId: FULL_SCOPE.scopeId }, 409, 'request-names-another-runtime'],
   ]) {
     const answer = await post(operation, payload)
-    assert.deepEqual([answer.kind, answer.statusCode], ['response', statusCode], `${operation} ${JSON.stringify(payload)}`)
+    assert.deepEqual([answer.kind, answer.statusCode, answer.body?.error], ['response', statusCode, error], `${operation} ${JSON.stringify(payload).slice(0, 80)}`)
   }
   assert.equal(attempts.length, 2, 'a refused request prepares nothing')
+})
+
+test('a preparation is taken for a view the project declares, at most 64 at a time before the first tick; any other request is not taken', async (t) => {
+  const world = makeWorld(t)
+  const engine = world.engine()
+  // Before the first tick nothing says which views are declared: requests wait, bounded.
+  const taken = Array.from({ length: 70 }, (_, index) => engine.requestPreparation(`scope-${index}`))
+  assert.deepEqual([taken.filter(Boolean).length, taken.slice(64).some(Boolean)], [64, false])
+  await engine.tick()
+  assert.deepEqual([engine.requestPreparation('scope-not-declared'), engine.requestPreparation(FULL_SCOPE.scopeId), engine.requestPreparation(FULL_SCOPE.scopeId), engine.requestPreparation(''), engine.requestPreparation(7)], [false, true, true, false, false])
+})
+
+test('the listener checks a view against the contracts\' own identifier, and has no pattern of its own', () => {
+  const scopeOf = (scopeId) => ({ schema: 'atelier-obsidian-scope/v1', scopeId, mode: 'full', selector: { all: true } })
+  for (const value of ['scope-whole', 'a', 'a'.repeat(128), 'a'.repeat(129), '.hidden', '-lead', 'a:b.c_d-e', '', 'ä', '../escape', 'with space', 7, null]) {
+    assert.equal(isContractIdentifier(value), typeof value === 'string' && validateObsidianContract('scope', scopeOf(value)).length === 0, JSON.stringify(value))
+  }
+  const source = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/service-server.mjs'), 'utf8')
+  assert.equal(/\[A-Za-z0-9\]\[A-Za-z0-9\._:-\]/.test(source), false)
+  assert.match(source, /isContractIdentifier\(scopeId\)/)
 })
 
 test('a requested tick asks the app again: an adapter-factory refusal remembered from before the app changed is not reused', async (t) => {
@@ -1454,6 +1498,7 @@ test('a write that fails at any step leaves the settings file as it was and noth
     from = at + 1
   }
   const renamed = steps.indexOf('renameSync temporary') + 1
+  const unconfirmed = []
   for (let failAt = 1; failAt <= steps.length; failAt += 1) {
     const { world, before, result, calls } = attempt(failAt)
     const step = `${calls[failAt - 1]} (call ${failAt})`
@@ -1462,6 +1507,8 @@ test('a write that fails at any step leaves the settings file as it was and noth
     if (/^(openSync|writeFileSync|writeSync|fchmodSync|fsyncSync|closeSync) (temporary|backup)$|^renameSync/.test(calls[failAt - 1])) assert.equal(result.ok, false, `${step}: a failed write is refused`)
     if (failAt > renamed) assert.equal(result.ok, true, `${step}: after the replacement, the vault is added`)
     if (result.ok) {
+      // Written, and the file could not be read back to find the entry: said as such, never as an app that started.
+      if (!result.confirmed) { assert.equal(result.reason, 'registration-not-read-back', step); unconfirmed.push(step) }
       assert.deepEqual(world.names(), [OBSIDIAN_SETTINGS_FILE, BACKUP], `${step}: the backup and no temporary file`)
       assert.deepEqual(fs.readFileSync(path.join(world.userDataDir, BACKUP)), before, `${step}: the whole backup`)
       assert.notEqual(findVaultEntry(JSON.parse(world.bytes().toString('utf8')).vaults, world.vaultRoot), null, step)
@@ -1469,6 +1516,84 @@ test('a write that fails at any step leaves the settings file as it was and noth
       assert.match(result.code, /^obsidian-settings-/, step)
       assert.deepEqual([world.bytes(), world.names()], [before, [OBSIDIAN_SETTINGS_FILE]], `${step}: the file as it was, and nothing beside it`)
     }
+  }
+  assert.ok(unconfirmed.length > 0, 'a failed read-back after the rename was among the steps')
+})
+
+test('the settings file is never written larger than a settings file this module reads, nor through a second name (a hard link), nor for a Flatpak or snap build', (t) => {
+  const refusedWith = (world, options, code) => {
+    const before = world.bytes()
+    const result = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: world.vaultRoot, processProbe: world.probeOf(['absent']), now: () => START, ...options })
+    assert.deepEqual([result.ok, result.code, world.bytes(), world.names()], [false, code, before, [OBSIDIAN_SETTINGS_FILE]], JSON.stringify(result))
+  }
+  // Just under the bound as it is: the entry would take it over.
+  const filler = 'x'.repeat(MAX_OBSIDIAN_SETTINGS_BYTES - Buffer.byteLength(JSON.stringify({ ...SETTINGS_BEFORE, filler: '' })) - 10)
+  const full = settingsWorld(t, { document: { ...SETTINGS_BEFORE, filler } })
+  assert.equal(readObsidianSettings({ userDataDir: full.userDataDir }).ok, true, 'the file as it is can be read')
+  refusedWith(full, {}, 'obsidian-settings-too-large')
+  const linked = settingsWorld(t)
+  let linkedHere = true
+  try { fs.linkSync(linked.file, path.join(linked.dir, 'another-name.json')) } catch (error) { if (process.platform !== 'win32') throw error; linkedHere = false }
+  if (linkedHere) {
+    const other = fs.readFileSync(path.join(linked.dir, 'another-name.json'))
+    refusedWith(linked, {}, 'obsidian-settings-unsafe')
+    assert.deepEqual(fs.readFileSync(path.join(linked.dir, 'another-name.json')), other, 'the other name keeps the same list')
+  }
+  for (const sandbox of ['flatpak', 'snap']) refusedWith(settingsWorld(t), { sandbox }, 'obsidian-sandboxed')
+})
+
+test('of the backups beside the settings file, the first (the list as it was before Atelier wrote it) and the latest are kept', (t) => {
+  const world = settingsWorld(t)
+  const before = world.bytes()
+  const vaults = ['scope-east', 'scope-west', 'scope-north'].map((name) => { const folder = path.join(world.dir, 'vaults', name); fs.mkdirSync(folder, { recursive: true }); return folder })
+  const results = vaults.map((vaultRoot, index) => registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot, processProbe: world.probeOf(['absent']), now: () => START + index * 1000 }))
+  assert.deepEqual(results.map((result) => result.registered), ['written', 'written', 'written'])
+  const backups = world.names().filter((name) => name.includes('.atelier-backup-'))
+  assert.deepEqual(backups, [path.basename(results[0].backupPath), path.basename(results[2].backupPath)], 'the first and the latest')
+  assert.deepEqual(fs.readFileSync(results[0].backupPath), before, 'the first holds the list as it was before any write')
+  // A file that only looks like a backup is not one of Atelier's, and stays.
+  fs.writeFileSync(path.join(world.userDataDir, `${OBSIDIAN_SETTINGS_FILE}.atelier-backup-kept-by-hand`), 'x')
+  const next = path.join(world.dir, 'vaults', 'scope-south')
+  fs.mkdirSync(next)
+  registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: next, processProbe: world.probeOf(['absent']), now: () => START + 9000 })
+  assert.equal(world.names().includes(`${OBSIDIAN_SETTINGS_FILE}.atelier-backup-kept-by-hand`), true)
+  assert.equal(world.names().filter((name) => /\.atelier-backup-\d{8}T\d{9}Z$/.test(name)).length, 2)
+})
+
+test('a Flatpak or snap build is recognised by its sandbox for this account or its installation, on Linux only', (t) => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-sandboxed-')))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const build = (platform = 'linux') => obsidianSandboxedBuild({ platform, env: { HOME: home }, exists: (candidate) => candidate.startsWith(home) && fs.existsSync(candidate) })
+  assert.equal(build(), null)
+  fs.mkdirSync(path.join(home, 'snap', 'obsidian'), { recursive: true })
+  assert.equal(build(), 'snap')
+  fs.mkdirSync(path.join(home, '.var', 'app', 'md.obsidian.Obsidian'), { recursive: true })
+  assert.equal(build(), 'flatpak')
+  for (const platform of ['darwin', 'win32']) assert.equal(build(platform), null)
+  assert.equal(obsidianSandboxedBuild({ platform: 'linux', env: {}, exists: (candidate) => candidate === '/var/lib/flatpak/app/md.obsidian.Obsidian' }), 'flatpak', 'installed system-wide')
+  assert.equal(obsidianSandboxedBuild({ platform: 'linux', env: {}, exists: (candidate) => candidate === '/snap/obsidian' }), 'snap')
+})
+
+test('a listed folder is compared as written first, and its real path is read only when its last component is the vault root\'s: no other vault is waited on', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-lexical-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const vaultRoot = path.join(dir, 'vaults', 'scope-whole')
+  fs.mkdirSync(vaultRoot, { recursive: true })
+  const others = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`${String(index).padStart(16, 'a')}`, { path: path.join(dir, 'elsewhere', `vault-${index}`), ts: 1 }]))
+  const asked = []
+  const realpath = fs.realpathSync
+  t.mock.method(fs, 'realpathSync', (target, ...rest) => { asked.push(String(target)); return realpath(target, ...rest) })
+  const count = (operation) => { asked.length = 0; const answer = operation(); return { answer, others: asked.filter((target) => target !== vaultRoot).length } }
+  const listed = { ...others, cccccccccccccccc: { path: vaultRoot, ts: 2, open: true } }
+  assert.deepEqual(count(() => findVaultEntry(listed, vaultRoot)), { answer: { id: 'cccccccccccccccc', path: vaultRoot, open: true }, others: 0 })
+  assert.deepEqual(count(() => findVaultEntry(others, vaultRoot)), { answer: null, others: 0 })
+  assert.deepEqual(count(() => vaultRoute({ vaults: listed, vaultRoot, open: true })), { answer: { how: 'folder', cwd: vaultRoot }, others: 0 })
+  assert.deepEqual(count(() => enclosingVaults({ vaults: { ...others, dddddddddddddddd: { path: dir } }, vaultRoot }).map((entry) => entry.id)), { answer: ['dddddddddddddddd'], others: 0 })
+  // The vault root reached through a linked parent keeps its last component, and is still found.
+  if (process.platform !== 'win32') {
+    fs.symlinkSync(path.join(dir, 'vaults'), path.join(dir, 'linked'))
+    const throughLink = { eeeeeeeeeeeeeeee: { path: path.join(dir, 'linked', 'scope-whole'), ts: 3 } }
+    assert.equal(findVaultEntry({ ...others, ...throughLink }, vaultRoot)?.id, 'eeeeeeeeeeeeeeee')
   }
 })
 
@@ -1494,17 +1619,45 @@ test('an eval answer is read from the value after "=> ", once or twice parsed; "
   assert.deepEqual(readEvalAnswer({ stdout: '=> /a/plain/string\n' }), { answered: false, reason: 'no-value' })
 })
 
-test('what the app looks like changes when it quits or starts, when it qualifies differently, and when a vault opens or closes', () => {
+test('what the app looks like, from the process table and its list alone, changes when it quits or starts and when a vault opens or closes; the service asks the app nothing to find out', () => {
   const settings = (open) => ({ ok: true, vaults: { a: { path: '/one', open: open.includes('/one') }, b: { path: '/two', open: open.includes('/two') } } })
-  const running = { running: true, outcome: 'qualified', reason: 'meets-minimum-version' }
-  const base = appStateSignature({ qualification: running, settings: settings(['/one']) })
-  assert.equal(appStateSignature({ qualification: running, settings: settings(['/one']) }), base)
+  const base = appStateSignature({ processes: 'running', settings: settings(['/one']) })
+  assert.equal(appStateSignature({ processes: 'running', settings: settings(['/one']) }), base)
   for (const other of [
-    appStateSignature({ qualification: { running: false, outcome: 'qualified', reason: 'app-not-running-version-not-needed' }, settings: settings(['/one']) }),
-    appStateSignature({ qualification: { running: true, outcome: 'app-version-unsupported', reason: 'no-vault-open' }, settings: settings(['/one']) }),
-    appStateSignature({ qualification: running, settings: settings(['/one', '/two']) }),
-    appStateSignature({ qualification: running, settings: { ok: false, code: 'obsidian-settings-missing' } }),
+    appStateSignature({ processes: 'absent', settings: settings(['/one']) }),
+    appStateSignature({ processes: 'unknown', settings: settings(['/one']) }),
+    appStateSignature({ processes: 'running', settings: settings(['/one', '/two']) }),
+    appStateSignature({ processes: 'running', settings: { ok: false, code: 'obsidian-settings-missing' } }),
   ]) assert.notEqual(other, base)
+  // Built from the process table and the settings file, never from a qualification, which runs the command-line tool
+  // in the window that had focus last.
+  const entry = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/service-main.mjs'), 'utf8')
+  assert.match(entry, /const observeApp = \(\) => appStateSignature\(\{ processes: defaultObsidianProcessProbe\(\), settings: /)
+  assert.equal(/\.qualification\(\)/.test(entry), false)
+})
+
+test('the service\'s adapter factory asks the app without blocking, and only when a view is published', needsExchange, async (t) => {
+  let asked = 0
+  let answer = { installed: true, cli: true, running: true, version: '1.13.7 (installer 1.12.7)' }
+  const appProbe = { inspect: async () => { asked += 1; await new Promise((resolve) => { setImmediate(resolve) }); return answer } }
+  const factory = createQualifiedAdapterFactory({ appProbe, createAdapter: absentAdapter })
+  const pending = factory({})
+  assert.ok(pending instanceof Promise, 'an answer to wait for, not a call that blocks')
+  assert.equal(typeof (await pending).probe, 'function')
+  answer = { installed: true, cli: true, running: true, version: '1.13.6' }
+  factory.forget()
+  await assert.rejects(factory({}), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'app-version-unsupported')
+  assert.equal(asked, 2)
+  // The engine waits for it: a view is published through it, and a tick with nothing to publish asks nothing.
+  const world = makeWorld(t)
+  answer = { installed: true, cli: true, running: false, version: null }
+  asked = 0
+  const engine = world.engine({ adapterFactory: createQualifiedAdapterFactory({ appProbe, createAdapter: absentAdapter }) })
+  assert.equal((await engine.tick()).scopes[0].state, 'current')
+  const afterFirst = asked
+  await engine.tick()
+  await engine.tick()
+  assert.deepEqual([afterFirst, asked], [1, 1], 'nothing to publish, nothing asked')
 })
 
 test('where a call about a vault reaches the app, predicted from the app\'s list as the app routes it: in the vault\'s folder, by its id, or not at all', () => {
@@ -1589,6 +1742,7 @@ else if (mode === 'hang') setTimeout(() => {}, 60000)
 else console.log('=> ' + process.env.EVAL_ANSWER)\n`
   for (const where of [dir, vaultRoot]) fs.writeFileSync(path.join(where, 'eval'), script)
   fs.writeFileSync(path.join(dir, 'vault=dddddddddddddddd'), script)
+  fs.mkdirSync(path.join(dir, 'flatpak-home', '.var', 'app', 'md.obsidian.Obsidian'), { recursive: true })
   const log = path.join(dir, 'log.jsonl')
   const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
   const child = `const { createProductionAppProbe, createProductionAppRegistry } = await import(${JSON.stringify(seams)})
@@ -1607,6 +1761,8 @@ const started = Date.now()
 out.registerHung = await registry('hang', '', { timeoutMs: 1500 }).registerThroughApp({ vaultRoot })
 out.hungMs = Date.now() - started
 out.settings = registry('answer').registerInSettings({ vaultRoot })
+const sandboxed = registry('answer', '', { platform: 'linux', env: { ...env('answer'), HOME: ${JSON.stringify(path.join(dir, 'flatpak-home'))} }, userDataDir: undefined })
+out.sandboxed = [sandboxed.readSettings().code, sandboxed.registerInSettings({ vaultRoot }).code]
 const probe = (answer) => createProductionAppProbe({ platform: 'win32', cliPath: process.execPath, workingDirectory: ${JSON.stringify(dir)}, env: env('answer', answer) })
 const folder = { how: 'folder', cwd: vaultRoot }
 out.vaultState = await probe(JSON.stringify({ basePath: vaultRoot, ready: true })).vaultState({ vaultRoot, route: folder })
@@ -1625,6 +1781,7 @@ process.stdout.write(JSON.stringify(out))`
   assert.deepEqual(out.registerHung, { answered: false, reason: 'cli-failed' })
   assert.ok(out.hungMs < 10000, 'a call that does not answer is killed at its timeout')
   assert.deepEqual([out.settings.ok, out.settings.code], [false, 'obsidian-settings-location-unknown'])
+  assert.deepEqual(out.sandboxed, ['obsidian-sandboxed', 'obsidian-sandboxed'], 'a Flatpak build\'s list is neither read nor written where the native build keeps it')
   assert.deepEqual([out.vaultState, out.vaultStateById, out.vaultStateOther, out.vaultStateIndexing], [{ answered: true, indexReady: true }, { answered: true, indexReady: true }, { answered: false, indexReady: false }, { answered: true, indexReady: false }])
   assert.deepEqual([out.vaultStateUnrouted, out.vaultStateAmbiguous], [{ answered: false, indexReady: false }, { answered: false, indexReady: false }], 'without a route that reaches only this vault, nothing is asked')
   const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
@@ -1661,6 +1818,20 @@ test('open starts the owned service the first time only with a consent, reconnec
   assert.deepEqual([unknown.exit, unknown.json.error.code], [EXIT.refused, 'unknown-scope'])
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
   assert.deepEqual([stopped.exit, stopped.json.service.stopped], [EXIT.ok, true])
+  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+})
+
+test('the service is started in the root directory, whichever directory the command runs in', async (t) => {
+  const world = makeWorld(t)
+  const seen = []
+  const spawn = (command, args, options) => { seen.push(options?.cwd); return trackingSpawn(t)(command, args, options) }
+  const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn } }
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', CONSENT.actor], { seams })
+  assert.equal(started.json.service.state, 'healthy', JSON.stringify(started.json).slice(0, 300))
+  assert.deepEqual(seen, [path.parse(fs.realpathSync(TEST_SERVICE_ENTRY)).root], 'never the project folder the command was run in')
+  const record = readServiceRecord(world.workspace())
+  const stopped = await world.run(['service', 'stop', '--json'], { seams })
+  assert.equal(stopped.json.service.stopped, true)
   await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
 })
 
@@ -1746,7 +1917,9 @@ test('open restarts an owned service of an earlier release that refuses a tick n
   assert.deepEqual([reported.requested, reported.tick, reported.reason, isAlive(earlier.pid)], [true, null, 'service-outdated', true])
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
   const opened = await world.run(['open', '--consent-actor', CONSENT.actor], { seams, open: FAST_APP })
-  assert.ok(opened.stdout.split('\n').includes('service: restarted (outdated)'), opened.stdout)
+  // The lines of an answer that is not success go to stderr: `not-prepared` where no atomic exchange exists.
+  const shown = `${opened.stdout}\n${opened.stderr}`
+  assert.ok(shown.split('\n').includes('service: restarted (outdated)'), shown)
   await waitFor(() => !isAlive(earlier.pid), { label: 'the earlier runtime to end' })
   const record = readServiceRecord(world.workspace())
   assert.notEqual(record.runtimeId, runtimeId)

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import http from 'node:http'
+import { isContractIdentifier } from '../../projection/obsidian/contracts.mjs'
 import { requestHeader, sameOrigin } from '../../server/security.mjs'
 import { isPlainObject } from './documents.mjs'
 import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs'
@@ -25,11 +26,11 @@ import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs
 // Everything but health needs the per-runtime random bearer that exists only
 // in the owner-only record. A POST body is JSON of at most 1 KiB naming the
 // runtime it is meant for, so a request aimed at an earlier runtime on the
-// same port does nothing. A tick may also name one view (`scopeId`, a contract
-// identifier), which is then prepared and published once more on that tick.
+// same port does nothing (409). A tick may also name one view (`scopeId`, a
+// contract identifier), which is then prepared and published once more on
+// that tick; any other member is refused (400, `request-member-unknown`).
 
 export const MAX_REQUEST_BYTES = 1024
-const SCOPE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 export const SERVICE_OPERATIONS = Object.freeze({ '/health': 'GET', '/status': 'GET', '/tick': 'POST', '/stop': 'POST' })
 
 const digestOf = (value) => createHash('sha256').update(String(value)).digest()
@@ -98,8 +99,10 @@ export function createServiceServerForOracleTests({ identity, bearer, operations
     const payload = await readBoundedJson(request, rules.maxRequestBytes)
     if (!payload.ok) return send(response, payload.statusCode, { error: payload.code })
     const { runtimeId, scopeId, ...unknown } = payload.body
-    if (runtimeId !== identity.runtimeId || Object.keys(unknown).length > 0 || (scopeId !== undefined && request.url !== '/tick')) return send(response, 409, { error: 'request-names-another-runtime' })
-    if (scopeId !== undefined && (typeof scopeId !== 'string' || !SCOPE_IDENTIFIER.test(scopeId))) return send(response, 400, { error: 'request-invalid' })
+    if (runtimeId !== identity.runtimeId) return send(response, 409, { error: 'request-names-another-runtime' })
+    // A member the operation does not take: a view on a stop, or anything else.
+    if (Object.keys(unknown).length > 0 || (scopeId !== undefined && request.url !== '/tick')) return send(response, 400, { error: 'request-member-unknown' })
+    if (scopeId !== undefined && !isContractIdentifier(scopeId)) return send(response, 400, { error: 'request-invalid' })
     if (request.url === '/tick') return send(response, 200, await operations.tick(scopeId === undefined ? {} : { scopeId }))
     // The answer leaves first; the service then finishes its tick and exits.
     response.once('finish', () => { void operations.stop() })

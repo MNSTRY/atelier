@@ -29,8 +29,9 @@ export const MAX_OBSIDIAN_SETTINGS_BYTES = 4 * 1024 * 1024
 
 // The user-data directory of the app for this account: Electron's, for an app
 // named `obsidian`. Null where it is not known (another platform, no HOME). A
-// Flatpak or snap build keeps its own elsewhere and is not found here. Both
-// known platforms have POSIX paths, whatever platform asks.
+// Flatpak or snap build keeps its own elsewhere and is not found here (see
+// obsidianSandboxedBuild). Both known platforms have POSIX paths, whatever
+// platform asks.
 export function obsidianUserDataDir({ platform = process.platform, env = process.env } = {}) {
   const home = env.HOME
   if (platform !== 'darwin' && platform !== 'linux') return null
@@ -40,20 +41,47 @@ export function obsidianUserDataDir({ platform = process.platform, env = process
   return path.posix.join(config, 'obsidian')
 }
 
+// A Flatpak or snap build of Obsidian on Linux keeps its user-data directory
+// inside its sandbox (`~/.var/app/md.obsidian.Obsidian/config/obsidian`,
+// `~/snap/obsidian/<revision>/.config/obsidian`), where Atelier does not
+// write, and reads no file outside it. Which such build is installed or has
+// run for this account ('flatpak' or 'snap'), or null, including on any other
+// platform. `exists` answers whether a path exists.
+export function obsidianSandboxedBuild({ platform = process.platform, env = process.env, exists = fs.existsSync } = {}) {
+  if (platform !== 'linux') return null
+  const home = typeof env.HOME === 'string' && path.posix.isAbsolute(env.HOME) ? env.HOME : null
+  const under = (...parts) => (home === null ? [] : [path.posix.join(home, ...parts)])
+  const found = (paths) => paths.some((candidate) => { try { return exists(candidate) } catch { return false } })
+  if (found([...under('.var', 'app', 'md.obsidian.Obsidian'), ...under('.local', 'share', 'flatpak', 'app', 'md.obsidian.Obsidian'), '/var/lib/flatpak/app/md.obsidian.Obsidian'])) return 'flatpak'
+  if (found([...under('snap', 'obsidian'), '/snap/obsidian'])) return 'snap'
+  return null
+}
+
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const realOrResolved = (target) => { try { return fs.realpathSync(target) } catch { return path.resolve(target) } }
+const listedFolders = (vaults) => (isPlainObject(vaults) ? Object.entries(vaults).filter(([, entry]) => isPlainObject(entry) && typeof entry.path === 'string' && path.isAbsolute(entry.path)) : [])
 
-// The entry of the app's vault map whose folder is this vault root, compared
-// by real path; null when there is none. `vaults` is the map as the app keeps
+// A folder the list names, against a vault root spelled as given (`spelled`)
+// and as its real path (`target`). Compared as written first; the real path of
+// a listed folder is read only when its last component is the vault root's,
+// as it is for the root reached through a linked parent. So a vault on a
+// mount that does not answer is never waited on; a link to the vault root
+// under another name is not recognised.
+const namesFolder = (entryPath, { spelled, target }) => {
+  const written = path.resolve(entryPath)
+  if (written === spelled || written === target) return true
+  return path.basename(written) === path.basename(target) && realOrResolved(entryPath) === target
+}
+const rootOf = (vaultRoot) => ({ spelled: path.resolve(vaultRoot), target: realOrResolved(vaultRoot) })
+
+// The entry of the app's vault map whose folder is this vault root (see
+// namesFolder); null when there is none. `vaults` is the map as the app keeps
 // it, from its file or from the app itself.
 export function findVaultEntry(vaults, vaultRoot) {
   if (!isPlainObject(vaults) || typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return null
-  const target = realOrResolved(vaultRoot)
-  for (const [id, entry] of Object.entries(vaults)) {
-    if (!isPlainObject(entry) || typeof entry.path !== 'string' || !path.isAbsolute(entry.path)) continue
-    if (realOrResolved(entry.path) === target) return { id, path: entry.path, open: entry.open === true }
-  }
-  return null
+  const root = rootOf(vaultRoot)
+  const found = listedFolders(vaults).find(([, entry]) => namesFolder(entry.path, root))
+  return found === undefined ? null : { id: found[0], path: found[1].path, open: found[1].open === true }
 }
 
 const refused = (code, message) => ({ ok: false, code, message })
@@ -100,10 +128,8 @@ export function readObsidianSettings({ userDataDir, uid = currentUid() } = {}) {
   try { document = JSON.parse(bytes.toString('utf8')) } catch { return refused('obsidian-settings-unreadable', 'the Obsidian settings file is not JSON') }
   if (!isPlainObject(document)) return refused('obsidian-settings-not-object', 'the Obsidian settings file is not a JSON object')
   if (document.vaults !== undefined && !isPlainObject(document.vaults)) return refused('obsidian-settings-not-object', 'the vault list in the Obsidian settings file is not an object')
-  return { ok: true, file, document, vaults: document.vaults ?? {}, bytes, mode: leaf.mode & 0o777 }
+  return { ok: true, file, document, vaults: document.vaults ?? {}, bytes, mode: leaf.mode & 0o777, links: leaf.nlink }
 }
-
-const listedFolders = (vaults) => (isPlainObject(vaults) ? Object.entries(vaults).filter(([, entry]) => isPlainObject(entry) && typeof entry.path === 'string' && path.isAbsolute(entry.path)) : [])
 
 // Where a command-line call about this vault reaches the app, predicted from
 // the app's list as the app routes a call (see above):
@@ -118,9 +144,10 @@ const listedFolders = (vaults) => (isPlainObject(vaults) ? Object.entries(vaults
 // closed vault window is never reopened.
 export function vaultRoute({ vaults, vaultRoot, open = false } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return { how: 'unlisted' }
-  const target = realOrResolved(vaultRoot)
+  const root = rootOf(vaultRoot)
+  const { target } = root
   const listed = listedFolders(vaults)
-  const takes = ([, entry]) => realOrResolved(entry.path) === target && (!open || entry.open === true)
+  const takes = ([, entry]) => (!open || entry.open === true) && namesFolder(entry.path, root)
   const own = listed.filter(takes)
   if (own.length === 0) return { how: 'unlisted' }
   const byFolder = listed.find(([, entry]) => { const folder = path.resolve(entry.path); return target === folder || target.startsWith(folder + path.sep) })
@@ -130,14 +157,17 @@ export function vaultRoute({ vaults, vaultRoot, open = false } = {}) {
   return named === undefined ? { how: 'ambiguous' } : { how: 'id', id: named[0] }
 }
 
-// The listed vaults whose folder contains this vault root, by real path: the
-// app would show this vault's notes in their windows too, and a call run in
-// this vault's folder may reach them. No vault is added inside another one.
+// The listed vaults whose folder contains this vault root, as written, against
+// the root as given and as its real path: the app would show this vault's
+// notes in their windows too, and a call run in this vault's folder may reach
+// them. No vault is added inside another one. No listed folder's real path is
+// read, so a vault above the root only through a link is not found.
 export function enclosingVaults({ vaults, vaultRoot } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return []
-  const target = realOrResolved(vaultRoot)
+  const { spelled, target } = rootOf(vaultRoot)
+  const inside = (folder, root) => folder !== root && root.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep)
   return listedFolders(vaults).filter(([, entry]) => {
-    const folder = realOrResolved(entry.path)
-    return folder !== target && target.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep)
+    const folder = path.resolve(entry.path)
+    return !namesFolder(entry.path, { spelled, target }) && (inside(folder, target) || inside(folder, spelled))
   }).map(([id, entry]) => ({ id, path: entry.path }))
 }

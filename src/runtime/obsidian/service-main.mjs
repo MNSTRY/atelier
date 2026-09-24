@@ -23,20 +23,23 @@ import { runMaintenanceService } from './service.mjs'
 // selected them. The editor adapter is constructed only for an app that meets
 // the minimum version; below it, or when the version cannot be read, the
 // factory refuses, the engine records that reason and nothing is published.
-// An adapter qualified while no app ran carries that qualification and does
-// not coordinate with an app that starts before the next qualification. The
-// engine is told what the app looks like (whether it runs, how it qualified,
-// which vaults its list shows open), so a view that did not settle is tried
-// again as soon as that changes; the app's vault list is only read here.
+// The app is asked for its version only when a view is published, without
+// blocking the service. An adapter qualified while no app ran carries that
+// qualification and does not coordinate with an app that starts before the
+// next qualification. The engine is told what the app looks like from the
+// process table and the app's vault list alone (whether it runs, which vaults
+// its list shows open), so a view that did not settle is tried again as soon
+// as that changes, and the app is not asked anything to find out; the list is
+// only read here.
 const ADAPTERS = Object.freeze({
   'obsidian-cli': async () => {
-    const [{ createObsidianCliAdapter }, { createProductionAppProbe }, { createQualifiedAdapterFactory }, { obsidianUserDataDir, readObsidianSettings }, { appStateSignature }] = await Promise.all([
+    const [{ createObsidianCliAdapter, defaultObsidianProcessProbe }, { createProductionAppProbe }, { createQualifiedAdapterFactory }, { obsidianUserDataDir, readObsidianSettings }, { appStateSignature }] = await Promise.all([
       import('../../projection/obsidian/publication/transport.mjs'), import('./app-production-seams.mjs'), import('./app-capability.mjs'),
       import('../../projection/obsidian/publication/vault-list.mjs'), import('./app-registration.mjs'),
     ])
     const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe(), createAdapter: ({ qualification }) => createObsidianCliAdapter({ qualification }) })
     const userDataDir = obsidianUserDataDir()
-    const observeApp = () => appStateSignature({ qualification: adapterFactory.qualification(), settings: userDataDir === null ? null : readObsidianSettings({ userDataDir }) })
+    const observeApp = () => appStateSignature({ processes: defaultObsidianProcessProbe(), settings: userDataDir === null ? null : readObsidianSettings({ userDataDir }) })
     return {
       adapterFactory, engineOptions: { observeApp },
       appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } },
