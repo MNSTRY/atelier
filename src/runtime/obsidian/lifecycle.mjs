@@ -3,6 +3,7 @@ import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
+import { compareAppVersions } from './app-capability.mjs'
 import { isoTime } from './documents.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { ensureWorkspaceIdentity } from './machine-settings.mjs'
@@ -239,18 +240,31 @@ async function askProvenRuntime(options, rules, { method, operation, timeoutMs, 
   return { requested: true, state: 'healthy', answer, runtimeId: record.runtimeId }
 }
 
-// Whether the proven runtime runs another release than the installed one: an earlier release of the package,
-// typically, still running after an upgrade. It does when its entry module has another digest than `entryPath`, the
-// one this command would start, or when the release it recorded at its start (`executable.ext.release`, see
-// releaseIdentity: the package version and a digest of every runtime module) is not this package's. A record that
-// names no release comes from a release before this one recorded it. False when the installed side cannot be read.
-export function runsAnotherRelease(status, entryPath) {
-  if (status?.state !== 'healthy' || typeof status.record?.executable?.digest !== 'string' || typeof entryPath !== 'string') return false
+// Pure. How the release a runtime recorded at its start (`executable.ext.release`, see releaseIdentity: the package
+// version and a digest of every runtime module) stands to the installed one, `installed` being { entry, release }, the
+// digest of the entry this command would start and releaseIdentity():
+//   current   the same version, entry module and modules;
+//   outdated  an earlier version; the same version with another entry module or other modules; or no release named,
+//             as releases before the one that began recording it record none;
+//   later     a later version, or one that cannot be ordered. The installed release never replaces it, so two
+//             installations used on one workspace do not replace each other's runtime.
+// Versions are ordered as semantic versions, a prerelease below its release (0.2.0-alpha.11 < 0.2.0-alpha.12 < 0.2.0).
+export function releaseStanding(executable, installed) {
+  const recorded = executable?.ext?.release
+  if (recorded === undefined || recorded === null) return 'outdated'
+  const order = compareAppVersions(recorded.version, installed.release.version)
+  if (order === null || order > 0) return 'later'
+  if (order < 0) return 'outdated'
+  return executable.digest === installed.entry && recorded.digest === installed.release.digest ? 'current' : 'outdated'
+}
+
+// How the release the proven runtime runs stands to the installed one (releaseStanding), `entryPath` being the entry
+// this command would start. Null when the runtime is not proven, or the installed side cannot be read.
+export function runtimeRelease(status, entryPath) {
+  if (status?.state !== 'healthy' || typeof status.record?.executable?.digest !== 'string' || typeof entryPath !== 'string') return null
   let installed
-  try { installed = { entry: executableIdentity(entryPath).digest, release: releaseIdentity() } } catch { return false }
-  if (status.record.executable.digest !== installed.entry) return true
-  const recorded = status.record.executable.ext?.release
-  return recorded?.digest !== installed.release.digest || recorded?.version !== installed.release.version
+  try { installed = { entry: executableIdentity(entryPath).digest, release: releaseIdentity() } } catch { return null }
+  return releaseStanding(status.record.executable, installed)
 }
 
 // Stops the proven runtime of this workspace through its own listener and starts `entryPath` in its place, detached,
@@ -273,12 +287,13 @@ async function restartProvenRuntime(options, rules) {
 // `pending`, not an error. With `scopeId`, that view is prepared and published once more on the tick.
 //
 // `service`, the start options of the entry this command would start ({ entryPath, entryArgs, ... }), lets an
-// outdated runtime be replaced: one that runs another release (runsAnotherRelease) is restarted before it is asked,
+// outdated runtime be replaced: one that runs an earlier release (runtimeRelease) is restarted before it is asked,
 // and one that refuses a tick naming a view (a runtime of 0.2.0-alpha.11 or earlier, which knows no view in a tick)
 // is restarted and asked again, each time under the consent already recorded (`restarted: 'outdated'`). A listener
 // of now refuses a tick only when it names another runtime: when a concurrent command replaced the runtime between
-// the check and the request, the one that took its place is asked, and nothing is restarted. Without `service`, an
-// outdated runtime is only reported (`service-outdated`). `runtimeId` names the runtime that answered.
+// the check and the request, the one that took its place is asked, and nothing is restarted. A runtime of a later
+// release is never replaced by this one, nor asked: `service-other-release`. Without `service`, an outdated runtime
+// is only reported (`service-outdated`). `runtimeId` names the runtime that answered, or the one left running.
 export async function requestServiceTick(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   const { service = null, scopeId } = options
   const ask = () => askProvenRuntime(options, rules, { method: 'POST', operation: '/tick', timeoutMs: options.tickTimeoutMs ?? 60 * 1000, ...(scopeId === undefined ? {} : { body: { scopeId } }) })
@@ -288,17 +303,25 @@ export async function requestServiceTick(options = {}, rules = LIFECYCLE_PRIMITI
     if (renewed.ok || renewed.reason === 'restarted-service-in-its-first-tick') restarted = 'outdated'
     return renewed.ok ? null : { requested: false, state: renewed.state, reason: renewed.reason, ...(restarted === null ? {} : { restarted }) }
   }
-  if (typeof service?.entryPath === 'string' && runsAnotherRelease(await serviceStatus(options, rules), service.entryPath)) {
-    const failed = await restart()
-    if (failed) return failed
+  const later = (status) => ({ requested: false, state: 'healthy', runtimeId: status.record.runtimeId, reason: 'service-other-release' })
+  const replaces = typeof service?.entryPath === 'string'
+  if (replaces) {
+    const status = await serviceStatus(options, rules)
+    const standing = runtimeRelease(status, service.entryPath)
+    if (standing === 'later') return later(status)
+    if (standing === 'outdated') {
+      const failed = await restart()
+      if (failed) return failed
+    }
   }
   let asked = await ask()
   const refusesView = () => asked.requested && scopeId !== undefined && asked.answer.kind === 'response' && asked.answer.statusCode === 409
-  if (refusesView() && typeof service?.entryPath === 'string' && restarted === null) {
+  if (refusesView() && replaces && restarted === null) {
     // The record is read again first: a runtime that took this one's place meanwhile is asked, not replaced.
     const now = await serviceStatus(options, rules)
     if (now.state === 'healthy' && now.record?.runtimeId !== asked.runtimeId) asked = await ask()
     if (refusesView()) {
+      if (runtimeRelease(now, service.entryPath) === 'later') return later(now)
       const failed = await restart()
       if (failed) return failed
       asked = await ask()

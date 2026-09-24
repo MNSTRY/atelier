@@ -86,13 +86,18 @@ const namesFolder = (entryPath, { spelled, target }) => {
 }
 const rootOf = (vaultRoot) => ({ spelled: path.resolve(vaultRoot), target: realOrResolved(vaultRoot) })
 
+// The listed entries (listedFolders) whose folder is this vault root (see
+// namesFolder), in list order. One folder can be listed more than once, under
+// another letter case or through a link, say.
+const entriesOf = (listed, root) => listed.filter(([, entry]) => namesFolder(entry.path, root))
+
 // The entry of the app's vault map whose folder is this vault root (see
-// namesFolder); null when there is none. `vaults` is the map as the app keeps
-// it, from its file or from the app itself.
+// namesFolder), one the app lists open first; null when there is none. `vaults`
+// is the map as the app keeps it, from its file or from the app itself.
 export function findVaultEntry(vaults, vaultRoot) {
   if (!isPlainObject(vaults) || typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return null
-  const root = rootOf(vaultRoot)
-  const found = listedFolders(vaults).find(([, entry]) => namesFolder(entry.path, root))
+  const entries = entriesOf(listedFolders(vaults), rootOf(vaultRoot))
+  const found = entries.find(([, entry]) => entry.open === true) ?? entries[0]
   return found === undefined ? null : { id: found[0], path: found[1].path, open: found[1].open === true }
 }
 
@@ -151,18 +156,26 @@ export function readObsidianSettings({ userDataDir, uid = currentUid() } = {}) {
 //   { how: 'folder', cwd }  run in the vault's folder (its real path as stored, which the tool reports), when the id
 //                           names another vault first and the first listed vault that is or contains the folder is this one;
 //   { how: 'unlisted' }     the list has no entry for this folder (with `open`, none that the app lists open);
-//   { how: 'ambiguous' }    the id names another vault first, and a vault listed above it takes a call run in its folder.
+//   { how: 'ambiguous' }    the id names another vault first, and a vault listed above it takes a call run in its folder;
+//   { how: 'duplicated', entries }
+//                           the list has this folder open more than once, one window per entry ({ id, path }): each
+//                           window holds the vault, and a call reaches one of them only.
 //
 // With `open`, only an entry the app lists open may take the call, so a
-// closed vault window is never reopened.
+// closed vault window is never reopened. Without it, so does an entry the app
+// lists open when there is one: another entry of the same folder is not opened
+// beside it.
 export function vaultRoute({ vaults, vaultRoot, open = false } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return { how: 'unlisted' }
   const root = rootOf(vaultRoot)
   const { target } = root
   const listed = listedFolders(vaults)
-  const takes = ([, entry]) => (!open || entry.open === true) && namesFolder(entry.path, root)
-  const own = listed.filter(takes)
+  const entries = entriesOf(listed, root)
+  const windows = entries.filter(([, entry]) => entry.open === true)
+  if (windows.length > 1) return { how: 'duplicated', entries: windows.map(([id, entry]) => ({ id, path: entry.path })) }
+  const own = open || windows.length > 0 ? windows : entries
   if (own.length === 0) return { how: 'unlisted' }
+  const takes = ([id]) => own.some(([ownId]) => ownId === id)
   const byName = (value) => listed.find(([id, entry]) => id === value || path.basename(entry.path).toUpperCase() === value.toUpperCase())
   const named = own.find(([id]) => byName(id)?.[0] === id)
   if (named !== undefined) return { how: 'id', id: named[0] }

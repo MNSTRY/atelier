@@ -833,6 +833,17 @@ app or in the file: that vault would show its notes too, and a call run in
 its folder would reach that vault. `open` answers `launch-failed` with reason
 `vault-inside-another-vault`.
 
+**One folder open in several windows.** The list can name one folder more
+than once (under another letter case, or through a link), and the app opens
+one window per entry. When more than one of the entries that name the view's
+folder is open, each window holds the vault and a call reaches one of them
+only (`vaultRoute` answers `duplicated`): no publication call is made (the
+publisher refuses `vault-open-in-several-windows`, a `publisher-conflict`),
+and `open` answers `publisher-conflict` with that reason, names the entries
+(`duplicates`) and launches nothing. While one entry has a window, a call
+reaches only that entry, and `open` finds and launches it, so a closed entry of
+the same folder is never opened beside it.
+
 **A Flatpak or snap build** keeps its list inside its sandbox
 (`~/.var/app/md.obsidian.Obsidian/config/obsidian/`,
 `~/snap/obsidian/current/.config/obsidian/`) and never reads the file above.
@@ -917,9 +928,10 @@ vault in. Publication calls are routed from the file, and only while it lists
 the vault open; otherwise they run in a directory that is no vault and name
 none, so maintenance never reopens a vault window that was closed and never
 reaches another vault. The bridge still checks that the app answered for
-exactly this vault, both folders taken as the file system stores them: an app
-that holds the vault under another letter case or through a link holds this
-vault, and a store written under another spelling keeps its vault.
+exactly this vault, and `open` that the app answers for it, both folders taken
+as the file system stores them: an app that holds the vault under another
+letter case or through a link holds this vault, and a store written under
+another spelling keeps its vault.
 
 **Retries.** The maintenance service is told what the app looks like from
 the process table and the file alone (whether an Obsidian process runs, and

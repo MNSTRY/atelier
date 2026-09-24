@@ -68,7 +68,7 @@ export const LATE_WRITER_EVERY_TICK_WINDOW_MS = 60 * 60 * 1000
 
 // A refusal that means "someone else is publishing or editing here" rather
 // than "this machine cannot publish".
-const CONFLICT_REFUSALS = new Set(['publication-in-progress', 'generation-mismatch', 'editor-uncoordinated', 'state-mismatch'])
+const CONFLICT_REFUSALS = new Set(['publication-in-progress', 'generation-mismatch', 'editor-uncoordinated', 'vault-open-in-several-windows', 'state-mismatch'])
 const EDIT_OUTCOMES = new Set(['disk-changed', 'editor-edit'])
 const RETRIED_STATES = new Set(['stale', 'updating', 'publisher-conflict'])
 // A file changed or went away under a tick: everything is hashed again on the next one.

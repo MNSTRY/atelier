@@ -138,7 +138,8 @@
   the file system stores it, so on macOS a data root given in another letter
   case neither hides a vault listed above it nor routes a call there, and a
   store written before, or an app that holds the vault under another spelling
-  or through a link, keeps working. Publication calls do so only while the app's list
+  or through a link, keeps working: publication through the app, and `open`'s
+  check that the app answers for the vault. Publication calls do so only while the app's list
   shows the view's vault open; every other call runs in a directory that is
   no vault. Maintenance never reopens a vault window that was closed and never
   reaches another vault, and the directory a command or service was started
@@ -149,6 +150,15 @@
   when its last component is the vault root's, so a vault on a mount that
   does not answer is never waited on. The maintenance service is started in
   the root directory.
+- A view's vault that Obsidian has open in more than one window, one per
+  entry of its vault list that names the folder (under another letter case,
+  or through a link), is not published: a publication would coordinate with
+  one window only. The view reports `publisher-conflict` /
+  `vault-open-in-several-windows` (maintenance tries again once a window
+  closes), and `open` answers the same, names the entries (`open in Obsidian
+  as: …`, `duplicates` in JSON) and launches nothing. While one entry of the
+  folder has a window, calls and `open` reach only that entry, so a closed
+  entry of the same folder is never opened beside it.
 - Obsidian's settings file is not written larger than 4 MiB
   (`obsidian-settings-too-large`), nor through a second name (a hard link,
   `obsidian-settings-unsafe`). Of Atelier's backups beside it, the first (the
@@ -168,16 +178,23 @@
   package version and a digest of every runtime module it ships (`src/`,
   `contracts/`), in its record's `executable.ext.release`
   (`releaseIdentity()`). A service of the workspace that proves itself ours
-  but runs another entry module or another release than the installed one,
-  records no release, or refuses a tick that names a view (as 0.2.0-alpha.11
-  and earlier do), is stopped through its own listener and the installed
-  release is started under the consent already recorded; `open` shows
-  `service: restarted (outdated)` (`service.restarted` in JSON). A tick
-  refused because a concurrent command replaced the runtime just before is
-  asked of the runtime that took its place, and nothing is restarted. A busy
-  service is not stopped, and nothing that does not prove itself ours is
-  touched. `requestServiceTick` takes the start options of the installed
-  entry as `service` for this (`runsAnotherRelease`).
+  but runs an earlier version than the installed one, the same version with
+  another entry module or other modules, records no release, or refuses a
+  tick that names a view (as 0.2.0-alpha.11 and earlier do), is stopped
+  through its own listener and the installed release is started under the
+  consent already recorded; `open` shows `service: restarted (outdated)`
+  (`service.restarted` in JSON). A service of a later version (versions
+  ordered as semantic versions, 0.2.0-alpha.11 < 0.2.0-alpha.12 < 0.2.0), or
+  of one that cannot be ordered, is never replaced by an earlier release, so
+  two installations used on one workspace do not replace each other's service
+  on every open: `open` answers `service-unavailable` /
+  `service-other-release`, whose next step is `atelier obsidian service stop`,
+  then open again. A tick refused because a concurrent command replaced the
+  runtime just before is asked of the runtime that took its place, and
+  nothing is restarted. A busy service is not stopped, and nothing that does
+  not prove itself ours is touched. `requestServiceTick` takes the start
+  options of the installed entry as `service` for this (`runtimeRelease`,
+  `releaseStanding`).
 - The `status` next step for `publisher-conflict` / `editor-uncoordinated`
   names `atelier obsidian open` (which adds the vault to Obsidian and
   publishes through it) or quitting Obsidian; after `open` itself tried, it

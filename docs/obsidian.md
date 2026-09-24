@@ -321,14 +321,20 @@ The maintenance service can also be managed on its own:
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
 the earlier release. `open` replaces it: when the service of this workspace
-proves itself Atelier's own but runs another release than the installed one
+proves itself Atelier's own but runs an earlier release than the installed one
 (its record names the release it runs: the package version and a digest of
-its modules), or refuses a tick that names a view as releases up to
+its modules; an earlier version, the same version with other modules, or no
+release named), or refuses a tick that names a view as releases up to
 0.2.0-alpha.11 do,
 `open` stops it as `service stop` would and starts the installed release under
 the consent already recorded, and says `service: restarted (outdated)`. A
-service in a long tick is not stopped (`open` answers `busy`), and a listener
-that does not prove itself this workspace's service is never touched.
+service of a later release is never replaced by an earlier one, so two
+installations used on one workspace (a global and a project-local one, say)
+do not replace each other's service on every open: `open` answers
+`service-unavailable` / `service-other-release`; run `atelier obsidian service
+stop`, then open again, or open with the later release. A service in a long
+tick is not stopped (`open` answers `busy`), and a listener that does not
+prove itself this workspace's service is never touched.
 
 `open` and `status` answer with a freshness state, not a promise. `current`
 means the vault is the present generation, verified by read-back, and the app
@@ -405,6 +411,17 @@ remove that vault from Obsidian's vault list, or keep Atelier's data root
 outside that folder. A view's vault that Obsidian lists already, below such a
 vault, is reached by its id instead (see "Which window answers" in
 [Known limits](#known-limits)).
+
+Obsidian can list one folder more than once, under another letter case or
+through a link, and then open it in one window per entry. Each of those
+windows holds the view's vault, and a publication coordinates with one window
+only, so none is made: the view reports `publisher-conflict` with reason
+`vault-open-in-several-windows`, and `open` answers the same, names the
+entries (`open in Obsidian as: …`; `duplicates` in JSON) and launches nothing.
+Close the extra windows, or remove the extra entries from Obsidian's vault
+list, and open again; maintenance tries again by itself once a window closes.
+While one entry of the folder has a window, `open` reaches only that one and
+never opens another entry of the same folder beside it.
 
 The publisher still writes into a vault only when it can coordinate with every
 Obsidian that may hold it, or when the process table shows, positively, that

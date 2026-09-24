@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import {
+  OBSIDIAN_SETTINGS_FILE,
   PROTOCOL_ID,
   TransportTimeout,
   buildEvalCode,
@@ -20,7 +21,9 @@ import {
   createObsidianCliCall,
   defaultObsidianProcessProbe,
   exchangeFiles,
+  obsidianUserDataDir,
   probeExchange,
+  publicationRoute,
   publishView,
   resetExchangeProbeCache,
   resolveExchange,
@@ -1651,6 +1654,27 @@ test('the process table is read with a bounded wait: a ps that does not answer i
     const timedOut = Object.assign(new Error('spawnSync /bin/ps ETIMEDOUT'), { code: 'ETIMEDOUT' })
     assert.equal(defaultObsidianProcessProbe({ platform, run: () => { throw timedOut } }), 'unknown')
   }
+})
+
+test('an app whose list has this vault open in several windows, one per entry that names its folder, is refused as such: a publication through one window would leave the others uncoordinated; no call is made and nothing is written', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const before = snapshotTree(world)
+  const home = fs.mkdtempSync(path.join(TMP, 'atelier-twice-home-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const userDataDir = obsidianUserDataDir({ platform: 'darwin', env: { HOME: home } })
+  fs.mkdirSync(userDataDir, { recursive: true })
+  const list = (otherOpen) => fs.writeFileSync(path.join(userDataDir, OBSIDIAN_SETTINGS_FILE), JSON.stringify({ vaults: { cccccccccccccccc: { path: world.vault, ts: 1, open: true }, dddddddddddddddd: { path: `${world.vault}${path.sep}`, ts: 2, open: otherOpen } } }))
+  // A command-line tool that does not exist: any call that is made fails as a call.
+  const adapter = createObsidianCliAdapter({ cliPath: path.join(home, 'no-such-cli'), env: { HOME: home }, processProbe: () => 'running', route: publicationRoute({ env: { HOME: home }, platform: 'darwin' }) })
+  list(true)
+  const refused = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter)
+  assert.deepEqual([refused.state, refused.refusal?.code], ['refused', 'vault-open-in-several-windows'], JSON.stringify(refused))
+  assert.deepEqual(snapshotTree(world), before)
+  // Control: with one of the windows closed, the call is made, to the window left (and fails here, as nothing answers).
+  list(false)
+  const called = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter)
+  assert.deepEqual([called.state, called.refusal?.code, /CLI call failed/.test(called.refusal?.message)], ['refused', 'editor-uncoordinated', true], JSON.stringify(called))
+  assert.deepEqual(snapshotTree(world), before)
 })
 
 test('an adapter qualified while no app ran never coordinates with an app found running: it is uncoordinated and asks the app nothing', async () => {
