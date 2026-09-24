@@ -1,0 +1,161 @@
+{
+  "schema": "atelier-obsidian-generation-manifest/v2",
+  "layoutVersion": 2,
+  "generationId": "gen-0001",
+  "scopeId": "scope-topic",
+  "snapshotId": "snap-0001",
+  "notes": [
+    {
+      "repoId": "north",
+      "nodeId": "a",
+      "title": "Shared concept",
+      "path": "north/topics/Shared concept.md",
+      "noteDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "regions": {
+        "frontmatter": {
+          "start": 0,
+          "end": 120
+        },
+        "identity": {
+          "start": 40,
+          "end": 116
+        },
+        "body": {
+          "start": 120,
+          "end": 280
+        },
+        "generated": [
+          {
+            "kind": "relations",
+            "range": {
+              "start": 280,
+              "end": 340
+            }
+          }
+        ]
+      }
+    },
+    {
+      "repoId": "north",
+      "nodeId": "d",
+      "title": "Shared concept",
+      "path": "north/topics/Shared concept (shared-d).md",
+      "noteDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "regions": {
+        "frontmatter": {
+          "start": 0,
+          "end": 40
+        },
+        "body": {
+          "start": 40,
+          "end": 200
+        },
+        "generated": [
+          {
+            "kind": "relations",
+            "range": {
+              "start": 200,
+              "end": 260
+            }
+          },
+          {
+            "kind": "identity",
+            "range": {
+              "start": 260,
+              "end": 340
+            }
+          }
+        ],
+        "identity": {
+          "start": 260,
+          "end": 340
+        }
+      }
+    },
+    {
+      "repoId": "north",
+      "nodeId": "e",
+      "title": "Diagram",
+      "path": "north/figures/diagram.svg.md",
+      "noteDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+      "regions": {
+        "frontmatter": {
+          "start": 0,
+          "end": 80
+        },
+        "identity": {
+          "start": 0,
+          "end": 80
+        },
+        "body": {
+          "start": 240,
+          "end": 240
+        },
+        "generated": [
+          {
+            "kind": "representation",
+            "range": {
+              "start": 80,
+              "end": 240
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "links": [
+    {
+      "edgeId": "e4",
+      "sourceNodeId": "d",
+      "targetNodeId": "a",
+      "type": "links_to",
+      "origin": "markdown",
+      "targetState": "in-scope",
+      "inversions": [
+        {
+          "source": {
+            "start": 12,
+            "end": 30
+          },
+          "note": {
+            "start": 52,
+            "end": 96
+          }
+        }
+      ]
+    },
+    {
+      "edgeId": "e5",
+      "sourceNodeId": "a",
+      "targetNodeId": "d",
+      "type": "supersedes",
+      "origin": "declared",
+      "targetState": "in-scope"
+    },
+    {
+      "edgeId": "e1",
+      "sourceNodeId": "a",
+      "targetNodeId": "b",
+      "type": "related",
+      "origin": "declared",
+      "targetState": "outside-selection"
+    }
+  ],
+  "attachments": [
+    {
+      "path": "north/figures/diagram.svg",
+      "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "byteLength": 900
+    }
+  ],
+  "completeness": {
+    "status": "complete",
+    "expectedNotes": 3,
+    "writtenNotes": 3
+  },
+  "freshness": {
+    "status": "current",
+    "checkedAt": "2026-01-05T10:00:05Z"
+  },
+  "contractVersion": "1.0.0"
+}

@@ -204,6 +204,8 @@ export function scopeReport({ workspace, scopeId, repositoryRoots, serviceState,
     freshness: entry === null ? null : { state: entry.state, reason: entry.reason, verified: entry.verified, generationId: entry.generationId, preparedGenerationId: entry.preparedGenerationId, heldNoteCount: entry.heldNotes.length, retainedEdits: entry.retainedEdits, checkedAt: entry.checkedAt },
     readBack: { readable: verification.readable, reason: verification.reason, generationId: verification.generationId, intact: verification.intact, noteCount: verification.noteCount, differing: verification.differing, missing: verification.missing },
     pendingEdits: pendingSummary(stateStore, scopeId, applyAvailable),
+    // Notes of the view worth naming, and the rule concerned; see "Notes that were laid out anyway" in docs/obsidian-contract.md.
+    ...(entry?.diagnostics ? { diagnostics: entry.diagnostics } : {}),
     vaultRoot: verification.vaultRoot ?? null,
   }
 }

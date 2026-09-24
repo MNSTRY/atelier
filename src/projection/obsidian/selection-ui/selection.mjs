@@ -1,6 +1,6 @@
 import { refuse } from '../../../runtime/obsidian/errors.mjs'
 import { EXPANSION_DIRECTIONS, EXPANSION_ORDERS, MAX_EXPANSION_DEPTH, ObsidianContractRefusal, SCOPE_MODES, assertObsidianContract, selectScope } from '../contracts.mjs'
-import { allocateWorkspacePaths } from '../materialize/path-registry.mjs'
+import { allocateViewPaths, viewsOfRegistry } from '../materialize/path-registry.mjs'
 import { buildFocusQuery, focusBookmarkPayload } from './focus.mjs'
 
 // Selection: a requested scope (full, scoped or focus, with an optional
@@ -78,9 +78,14 @@ export function resolveSelection({ canonicalSnapshot, profile, scope, allowEmpty
 
   const workspaceId = typeof profile?.workspaceId === 'string' ? profile.workspaceId : 'ws-unnamed'
   const nodeById = new Map(canonicalSnapshot.nodes.map((node) => [node.id, node]))
-  const vaultNodes = result.vaultNodes.map((id) => nodeById.get(id))
+  // Paths are allocated among the view's own notes, as a prepared view allocates them, seeded from the view's last
+  // allocation in the registry: a name that collides takes a qualifier, so which name a note gets depends on the notes
+  // of the view.
   let pathOf
-  try { ({ pathOf } = allocateWorkspacePaths({ registry: pathRegistry, workspaceId, nodes: vaultNodes })) } catch (error) { contractRefusalToTyped(error) }
+  try {
+    const section = viewsOfRegistry(pathRegistry, workspaceId)[document.scopeId] ?? null
+    ;({ pathOf } = allocateViewPaths({ published: section, nodes: result.vaultNodes.map((id) => nodeById.get(id)) }))
+  } catch (error) { contractRefusalToTyped(error) }
   const notePaths = Object.fromEntries(result.nodes.map((id) => [id, pathOf(nodeById.get(id).repo, id)]))
 
   let focus = null

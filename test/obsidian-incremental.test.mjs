@@ -6,7 +6,6 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { buildCanonicalGraph, createGraphFileCache } from '../src/graph/graph.mjs'
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
-import { identitySuffix } from '../src/projection/obsidian/contracts.mjs'
 import { createPreparationCache, prepareView, sha256Digest, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { listSourceFiles, reconcile, sourceKey } from '../src/runtime/obsidian/observation.mjs'
 
@@ -172,16 +171,19 @@ test('fixture: a cached preparation equals a full one under both scopes, before 
   const beforeWithheld = { ...priors }
   withheld.add('south-desk:tide-table')
   run('a node withheld: every note that named it changes, the rest are reused', exact)
-  // The withheld note is gone from the cached view, and no generated text of the cached view names its identity.
-  const tideSuffix = identitySuffix('south-desk', 'south-desk:tide-table', 12)
+  // The withheld note is gone from the cached view, and no generated text of the cached view names its path or identity.
   for (const scope of [fullScope, scoped]) {
+    const tidePath = beforeWithheld[scope.scopeId].notes.find((note) => note.nodeId === 'south-desk:tide-table').path
     const cached = prepareView({ snapshot: snapshotOf({ dir, repositories: fixture.repositories, workspaceId, withheld }), profile, scope, clock, persistentPathRegistry: registry, priorManifest: beforeWithheld[scope.scopeId], cache: caches[scope.scopeId] })
     assert.equal(cached.manifest.notes.some((note) => note.nodeId === 'south-desk:tide-table'), false)
-    assert.ok(cached.changes.removed.some((notePath) => notePath.includes(`--${tideSuffix}`)), 'its removal is reported')
-    for (const file of cached.files) assert.equal(file.path.includes(tideSuffix), false, file.path)
+    assert.ok(cached.changes.removed.includes(tidePath), 'its removal is reported')
+    for (const file of cached.files) assert.notEqual(file.path, tidePath)
     for (const note of cached.manifest.notes) {
       const bytes = cached.files.find((file) => file.path === note.path).bytes
-      for (const region of note.regions.generated) assert.equal(bytes.subarray(region.range.start, region.range.end).toString('utf8').includes(tideSuffix), false, `${note.path}: generated text names the withheld note`)
+      for (const region of [...note.regions.generated.map((item) => item.range), note.regions.identity]) {
+        const text = bytes.subarray(region.start, region.end).toString('utf8')
+        for (const named of [tidePath, 'south-desk:tide-table', 'Tide table']) assert.equal(text.includes(named), false, `${note.path}: generated text names the withheld note`)
+      }
     }
   }
   withheld.delete('south-desk:tide-table')
@@ -577,10 +579,11 @@ test('mutation control: a cache entry whose bytes or manifest entry are wrong un
     return cache
   }
   const tidePath = full.manifest.notes.find((note) => note.nodeId === 'south-desk:tide-table').path
-  // Wrong bytes under the right key: the digest and the bytes both differ from the full preparation.
+  // Wrong bytes under the right key: the digest and the bytes both differ from the full preparation. (Bytes the
+  // redaction guard can still read: a byte after the note, every recorded region intact.)
   const wrongBytes = primed()
   const noteFile = wrongBytes.notes.get(tidePath).files.find((file) => file.kind === 'note')
-  noteFile.bytes = Buffer.from('not the note')
+  noteFile.bytes = Buffer.concat([noteFile.bytes, Buffer.from('not the note')])
   assert.throws(() => assertEqualPreparations(prepareView({ snapshot, profile, scope: fullScope, clock, cache: wrongBytes }), full, 'wrong bytes'), assert.AssertionError)
   // A wrong manifest entry under the right key.
   const wrongEntry = primed()
@@ -612,13 +615,13 @@ test('the redaction guard judges a reused note: a forged cache entry naming a wi
   const first = prepareView({ snapshot, profile, scope: fullScope, clock, cache })
   assert.ok(withheld.size > 0)
   const [withheldId] = withheld
-  const forbidden = identitySuffix(withheldId.split(':')[0], withheldId, 64).slice(0, 16)
-  // Forge: overwrite the first sixteen bytes of a generated region in one cached entry with the forbidden suffix.
-  const entry = [...cache.notes.values()].find((candidate) => candidate.note.regions.generated.some((region) => region.range.end - region.range.start > 16))
+  const forged = `\n${withheldId}\n`
+  // Forge: overwrite the first bytes of a generated region in one cached entry with the withheld identity, as its own line.
+  const entry = [...cache.notes.values()].find((candidate) => candidate.note.regions.generated.some((region) => region.range.end - region.range.start > forged.length))
   assert.ok(entry, 'a cached note with a generated region wide enough')
-  const region = entry.note.regions.generated.find((candidate) => candidate.range.end - candidate.range.start > 16)
+  const region = entry.note.regions.generated.find((candidate) => candidate.range.end - candidate.range.start > forged.length)
   const file = entry.files.find((candidate) => candidate.path === entry.note.path)
-  file.bytes.write(`--${forbidden}`.slice(0, 16), region.range.start, 16, 'utf8')
+  file.bytes.write(forged, region.range.start, Buffer.byteLength(forged), 'utf8')
   assert.throws(() => prepareView({ snapshot, profile, scope: fullScope, clock, cache }), { code: 'redaction-failure' })
   // The same inputs without the forged entry prepare as before.
   assert.deepEqual(comparable(prepareView({ snapshot, profile, scope: fullScope, clock, cache: createPreparationCache() })), comparable(first))

@@ -50,7 +50,7 @@
       "text": "---\ntitle: \"Twin links\"\nkg:\n  id: \"reading-room:twins\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Twin links\n\nPair: [one](topics/alpha.md) [two](./topics/alpha.md) end.\n\nApart: [left](topics/alpha.md), some words in between, [right](./topics/alpha.md) done.\n"
     },
     "reading-room/lookalike.md": {
-      "text": "---\ntitle: \"Lookalike paths\"\nkg:\n  id: \"reading-room:lookalike\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Lookalike paths\n\nThe source itself keeps a [list](notes/todo.md) and an ![image](attachments/missing.png) of its own.\n\nMore words follow.\n"
+      "text": "---\ntitle: \"Lookalike paths\"\nkg:\n  id: \"reading-room:lookalike\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Lookalike paths\n\nThe source itself keeps a [list](notes/todo.md), a [ledger](reading-room/ledger.md) and an ![image](attachments/missing.png) of its own.\n\nMore words follow.\n"
     },
     "reading-room/assets/plan.png": {
       "hex": "89504e470d0a1a0a73796e7468657469632d706c616e"

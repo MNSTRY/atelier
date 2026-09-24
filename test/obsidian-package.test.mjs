@@ -188,7 +188,7 @@ test('a consumer prepares a view of a synthetic workspace from the packed bytes,
   const projectFile = writeSyntheticWorkspace(path.join(dir, 'workspace'))
   const answer = runConsumer('prepare', PIPELINE_SOURCE, { PROOF_PROJECT: projectFile, PROOF_STATE: path.join(dir, 'state'), PROOF_VAULT: path.join(dir, 'vault'), PROOF_PUBLISH: '0' })
   assert.equal(answer.notes.length, 2, 'the two classified documents are notes; the unclassified one is withheld')
-  assert.ok(answer.notes.some((note) => /^notes\/Lantern survey--[0-9a-f]{12,}\.md$/.test(note)), answer.notes.join(', '))
+  assert.ok(answer.notes.includes('field-notes/notes/Lantern survey.md'), answer.notes.join(', '))
   assert.equal(answer.links, 1)
   assert.deepEqual(answer.manifestErrors, [], 'the generation manifest satisfies the packed schema')
   assert.equal(answer.published, null)
@@ -204,7 +204,8 @@ test('a consumer publishes that view into a temporary vault with no app, from th
   for (const note of answer.notes) assert.ok(fs.statSync(path.join(vaultRoot, note)).isFile(), `${note} exists in the vault`)
   const lantern = fs.readFileSync(path.join(vaultRoot, answer.notes.find((note) => note.includes('Lantern survey'))), 'utf8')
   assert.match(lantern, /Synthetic body of field-notes:lantern\./)
-  assert.match(lantern, /Harbour ledger--[0-9a-f]{12,}/, 'the declared relation is a link to the other note')
+  assert.ok(lantern.includes('[[field-notes/notes/Harbour ledger.md|Harbour ledger]]'), 'the declared relation is a link to the other note')
+  assert.ok(lantern.includes('atelier-id: "field-notes:lantern"'), 'the note names its identity')
   const walk = (current) => fs.readdirSync(current, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? walk(path.join(current, entry.name)) : [path.join(current, entry.name)])
   for (const file of walk(vaultRoot)) {
     assert.ok(!fs.readFileSync(file).toString('latin1').includes(WITHHELD_SENTINEL), `${path.relative(vaultRoot, file)} carries no withheld byte`)

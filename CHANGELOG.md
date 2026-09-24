@@ -4,6 +4,84 @@
 
 ### Changed
 
+- **Breaking:** Obsidian generation manifests of the new vault layout are
+  `atelier-obsidian-generation-manifest/v2`, a new contract major that records
+  `layoutVersion: 2` and each note's identity region, and a vault an earlier
+  release published is laid out again once (below). The v1 contract is
+  unchanged and still validates every generation an earlier release wrote; a
+  reader of generation manifests must accept both majors.
+- Obsidian views are laid out in vault layout 2, so a file name reads as the
+  note's title and the vault reads as the repositories. Folders mirror each
+  repository under a folder named after it, so a view's folders show the
+  repository identity and source directory chain of its notes, as its notes'
+  `atelier-repo` and `atelier-source` properties do; this is acceptable for
+  every vault, scoped ones included. A note's file name is its title (the
+  front-matter `title`, else its first H1, else the file stem as written),
+  with a trailing source extension dropped and made safe for macOS, Linux,
+  Windows and Obsidian links. Two notes of a view that would share a name in
+  one folder, compared case- and normalization-insensitively, are told apart
+  by the source file stem and then by a short stable id; a name that collides
+  with nothing carries no hash. A wrapped file keeps its own name beside its
+  note (`<file name>.md`), and an embedded file is copied to its mirrored
+  path. Links name their target by its full vault path. A repository folder
+  that would be `notes` or `attachments` spelled another way is told apart by
+  a short id, since an upgraded vault keeps those two folders of the earlier
+  layout.
+- Each view allocates its paths among its own notes, seeded from what its
+  prior generation published: a path does not change on retitle or when
+  other files come and go, a note that leaves the view releases its path
+  there (a renamed source takes its name back), a note of another view never
+  causes a qualifier, and a lost path registry costs no view its paths. One
+  identity may have different paths in different views. The registry keeps
+  each view's allocation in a section of its own, and drops the sections of
+  views the engine no longer maintains. `@mnstry/atelier/obsidian/materialize`
+  adds `allocateViewPaths`; `allocateWorkspacePaths` is deprecated: it still
+  allocates the earlier layout's paths for a whole workspace, exactly as
+  before, and Atelier no longer calls it.
+- A source that does not fit is laid out anyway and reported, never a reason
+  to refuse the workspace: a folder chain too long for the path budget keeps a
+  readable prefix and a short stable id, or, when not even that fits, the note
+  sits directly in its repository's folder; a source folder that meets a file
+  of the same name is qualified with an id. Only a name that does not fit even
+  in its repository's folder refuses the view. What is worth a look (these, an
+  author's own identity keys shadowing the generated ones, generated text that
+  names a note outside the view without refusing it) is recorded in the
+  manifest and the view's freshness entry, and shown by
+  `atelier obsidian status`, naming the note.
+- Every note names its identity in three generated front-matter properties,
+  `atelier-id`, `atelier-repo` and `atelier-source`, or, when its own front
+  matter could not take them unchanged in meaning, in a generated block at
+  its end. An edit to them is never applied to a source.
+- A vault published by an earlier release is laid out again once. Every
+  earlier path is retired through the publisher's remove units: moved to the
+  recovery area, or kept where it is when somebody edited it. The app's
+  bookmarks, open tabs and graph positions of the earlier paths are lost once.
+  A view that holds a note for an open edit keeps its earlier layout until the
+  edit is applied or withdrawn, and such an edit still applies; an edit that
+  closes on a tick (automatic mode applies on the tick it observes) keeps it
+  for that tick, so the file the person edited becomes the published note and
+  is retired like any other. See "Vault layout" in `docs/obsidian-contract.md`.
+- The redaction guard is re-based on the readable layout. Atelier never
+  generates a reference to a note outside a view: every path the emitter
+  writes must be one allocated to the view, and every identity block names
+  its own note. Generated prose repeats author text (the titles, summaries
+  and tags of in-view notes), which is carried as authored; the deny-list over
+  it, read as a reader sees it with the emitter's escapes removed and in NFC,
+  follows the audience, as defence in depth. For a note the audience may not
+  see it refuses an unambiguous identifier (an identity qualified by any
+  repository, a repository-qualified path, a repository-relative path with a
+  folder, a vault path) and reports a bare-word identity or a file name at a
+  repository's root (`README.md`); for a note the audience may see but the
+  view does not select it only reports. A view may newly refuse with
+  `redaction-failure`; the refusal names the rule and the in-view note, never
+  the value. Both rules run over every note, cached ones included. The deny
+  matcher is one automaton: building it takes time and memory linear in the
+  values it holds, on every preparation, and it reads each text once, however
+  many there are.
+- A focus query names each note by an anchored regular-expression path term
+  (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
+  exactly the selected notes; a focus persisted with the earlier version is
+  still read.
 - `atelier obsidian open` makes the first open of a view automatic: Obsidian
   no longer has to be quit, and no vault folder has to be opened by hand. It
   makes the app know the view's vault as one of its vaults before it opens

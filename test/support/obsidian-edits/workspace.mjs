@@ -15,7 +15,8 @@ export const WORKSPACE_ID = 'ws-synthetic-0003'
 const clock = () => '2026-01-05T10:00:05.000Z'
 const bytesOf = (file) => (file.hex ? Buffer.from(file.hex, 'hex') : Buffer.from(file.text, 'utf8'))
 
-export function prepareWorkspace(t, { repositories, files }) {
+// `layout` is the vault layout the view is prepared in (1 or 2; the current one by default).
+export function prepareWorkspace(t, { repositories, files }, { layout } = {}) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-edits-')))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   for (const [relative, file] of Object.entries(files)) {
@@ -65,7 +66,7 @@ export function prepareWorkspace(t, { repositories, files }) {
     readSource: read,
   }
   const scope = { schema: 'atelier-obsidian-scope/v1', scopeId: 'scope-full', mode: 'full', selector: { all: true } }
-  const prepared = prepareView({ snapshot, profile, scope, clock })
+  const prepared = prepareView({ snapshot, profile, scope, clock, ...(layout === undefined ? {} : { layout }) })
   // One case per Markdown or wrapper note, keyed by its source path.
   const cases = new Map()
   for (const note of prepared.manifest.notes) {
@@ -79,5 +80,5 @@ export function prepareWorkspace(t, { repositories, files }) {
       baseSourceBytes: read(note.repoId, record.path),
     })
   }
-  return { prepared, cases, dir }
+  return { prepared, cases, dir, inputs: { snapshot, profile, scope, clock } }
 }

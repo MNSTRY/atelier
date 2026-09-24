@@ -47,6 +47,9 @@ const isDigest = (value) => typeof value === 'string' && DIGEST.test(value)
 const isTimestamp = (value) => typeof value === 'string' && TIMESTAMP.test(value)
 const isRelative = (value) => typeof value === 'string' && value !== '' && !value.startsWith('/') && !value.includes('\\') && !value.split('/').some((part) => part === '' || part === '.' || part === '..')
 const isCount = (value) => Number.isInteger(value) && value >= 0
+const isShortCode = (value) => typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value)
+// What a scope entry may say about notes of the view: a code, the rule, and which note or file; never a value.
+export const MAX_FRESHNESS_DIAGNOSTICS = 100
 
 function check(condition, code, message) {
   if (!condition) refuse(code, message)
@@ -67,7 +70,7 @@ export function validateFreshness(document, workspaceId) {
   check(Array.isArray(document.scopes), code, 'scopes must be a list')
   const seen = new Set()
   for (const scope of document.scopes) {
-    closedObject(scope, { required: ['scopeId', 'state', 'reason', 'generationId', 'preparedGenerationId', 'verified', 'heldNotes', 'changeClasses', 'retainedEdits', 'checkedAt'] }, code, 'a scope freshness entry')
+    closedObject(scope, { required: ['scopeId', 'state', 'reason', 'generationId', 'preparedGenerationId', 'verified', 'heldNotes', 'changeClasses', 'retainedEdits', 'checkedAt'], optional: ['diagnostics'] }, code, 'a scope freshness entry')
     check(isIdentifier(scope.scopeId) && !seen.has(scope.scopeId), code, 'a scope identity is malformed or repeated')
     seen.add(scope.scopeId)
     check(FRESHNESS_STATES.includes(scope.state), code, 'a scope carries an unknown freshness state')
@@ -79,6 +82,15 @@ export function validateFreshness(document, workspaceId) {
     check(scope.state !== 'current' || (scope.verified && scope.generationId !== null && scope.generationId === scope.preparedGenerationId && scope.heldNotes.length === 0), code, 'a scope claims current without an exact verified generation')
     check(Array.isArray(scope.changeClasses) && scope.changeClasses.every((item) => CHANGE_CLASSES.includes(item)), code, 'changeClasses names an unknown class')
     check(isCount(scope.retainedEdits) && isTimestamp(scope.checkedAt), code, 'a scope entry is malformed')
+    if (scope.diagnostics !== undefined) {
+      check(Array.isArray(scope.diagnostics) && scope.diagnostics.length <= MAX_FRESHNESS_DIAGNOSTICS, code, 'diagnostics must be a short list')
+      for (const item of scope.diagnostics) {
+        closedObject(item, { required: ['code'], optional: ['rule', 'repoId', 'nodeId', 'assetPath', 'notePath', 'filePath'] }, code, 'a diagnostic')
+        check(isShortCode(item.code) && (item.rule === undefined || isShortCode(item.rule)), code, 'a diagnostic names a malformed code or rule')
+        check(['repoId', 'nodeId', 'assetPath'].every((key) => item[key] === undefined || (typeof item[key] === 'string' && item[key] !== '')), code, 'a diagnostic names a malformed identity')
+        check(['notePath', 'filePath'].every((key) => item[key] === undefined || isRelative(item[key])), code, 'a diagnostic names a path that is not vault-relative')
+      }
+    }
   }
   return document
 }
