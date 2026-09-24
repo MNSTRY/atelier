@@ -417,13 +417,14 @@ export async function publishView(options = {}) {
 // ---------------------------------------------------------------------------
 
 // Atelier's own plugin never waits on a person: a plugin path that cannot be
-// written safely, or a vault root not private enough for the bearer, is
-// reported and left for the person while every note converges, and its
-// candidate is retired at once. A plugin file that another writer changed
-// under this run is a race: it blocks like a note, so the view is tried again
-// and the file is planned from the disk anew. Nothing reads a plugin file as a
-// person's edit of a note: its outcomes carry their own names.
-const PLUGIN_LEFT_FOR_A_PERSON = new Set(['path-unsafe', 'vault-not-private'])
+// written safely, a vault root not private enough for the bearer, or a file
+// that could not be made or replaced there (a plugin folder the person can read
+// but not write, say) is reported and left for the person while every note
+// converges, and its candidate is retired at once. A plugin file that another
+// writer changed under this run is a race: it blocks like a note, so the view
+// is tried again and the file is planned from the disk anew. Nothing reads a
+// plugin file as a person's edit of a note: its outcomes carry their own names.
+const PLUGIN_LEFT_FOR_A_PERSON = new Set(['path-unsafe', 'vault-not-private', 'create-failed', 'exchange-failed'])
 // A leaf or a parent nobody may look into or read (another owner, mode 000) or a link loop: the person's to repair,
 // like a leaf that is not a file. It is reported, never thrown, so the rest of the view and every later view go on.
 const UNREADABLE_PATH = new Set(['EACCES', 'EPERM', 'ELOOP'])

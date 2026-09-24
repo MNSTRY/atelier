@@ -1432,6 +1432,31 @@ test('a plugin file the person repaired, changed or removed is written again whe
   assert.equal(fs.existsSync(world.full(PLUGIN_DIRECTORY)), false)
 })
 
+test('a plugin folder the person can read but not write is reported and holds no note back: a file that cannot be made or replaced there is typed', needsExchange, async (t) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) return t.skip('permission bits')
+  const world = publicationWorld(t)
+  assert.equal((await world.publish(pluginViewOf('gen-0001'))).state, 'committed')
+  // The data file is gone and the folder is read-only; a later plugin version wants to replace main.js there.
+  fs.rmSync(world.full(PLUGIN_DATA_PATH))
+  const folder = world.full(PLUGIN_DIRECTORY)
+  fs.chmodSync(folder, 0o555)
+  t.after(() => { try { fs.chmodSync(folder, 0o755) } catch { /* gone */ } })
+  const source = readPluginSource()
+  const newer = { version: '1.1.1', files: source.files.map((file) => (file.name === 'main.js' ? { ...file, bytes: Buffer.concat([file.bytes, Buffer.from('\n// 1.1.1\n')]) } : file)) }
+  const result = await world.publish(pluginViewOf('gen-0002', { source: newer, notes: { [NOTE]: `${NOTE_TEXT}Second.\n` } }))
+  assert.equal(result.state, 'committed', 'the notes are committed all the same')
+  assert.equal(world.read(NOTE).toString(), `${NOTE_TEXT}Second.\n`)
+  const replaced = outcomeOf(result, `${PLUGIN_DIRECTORY}/main.js`)
+  const created = outcomeOf(result, PLUGIN_DATA_PATH)
+  assert.deepEqual([replaced.outcome, replaced.blocking, created.outcome, created.blocking, created.errorCode], ['exchange-failed', false, 'create-failed', false, 'EACCES'])
+  assert.ok(world.read(`${PLUGIN_DIRECTORY}/main.js`).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))), 'the file there is left as it was')
+  assert.deepEqual(world.staged(), [], 'the candidates are retired, not left in staging')
+  // Writable again: the same generation is published again, and the files are written.
+  fs.chmodSync(folder, 0o755)
+  const again = await world.publish(pluginViewOf('gen-0002', { source: newer, notes: { [NOTE]: `${NOTE_TEXT}Second.\n` } }))
+  assert.deepEqual([again.state, outcomeOf(again, `${PLUGIN_DIRECTORY}/main.js`).outcome, outcomeOf(again, PLUGIN_DATA_PATH).outcome], ['committed', 'published', 'created'])
+})
+
 test('an unreadable plugin or settings file is left for a person and holds nothing back; an unreadable note is refused, typed, as before, and nothing throws', needsExchange, async (t) => {
   if (process.platform === 'win32' || process.getuid?.() === 0) return t.skip('permission bits')
   const world = publicationWorld(t)
