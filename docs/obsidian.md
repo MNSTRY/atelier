@@ -318,7 +318,9 @@ says why. "Browse vault in Restricted Mode" keeps every community plugin off
 in that vault, and nothing else changes: maintenance, `open` and `status` work
 without the plugin, as they always did. Obsidian keeps the answer per vault in
 its own storage and asks again the next time until the vault is trusted or
-restricted mode is switched on for good in its settings. What the plugin does
+restricted mode is switched on for good in its settings. Turning the plugin
+off in a vault, or uninstalling it there, is respected from then on;
+`atelier obsidian plugin on --scope ID` brings it back. What the plugin does
 and never does is in [obsidian-plugin.md](obsidian-plugin.md).
 
 `open` and `status` answer with a freshness state, not a promise. `current`
@@ -488,11 +490,11 @@ test reported as a pass.
 - Atelier's plugin (phase 1) reports presence and status and decides
   nothing: publication still coordinates with the app through its
   command-line tool, which must be enabled, and the plugin only supplies the
-  app version. The plugin's entry in `.obsidian/community-plugins.json` is
-  Atelier's: turning the plugin off in Obsidian's settings lasts until the
-  next publication, and restricted mode is the way to keep it off. Plugin
-  files are never removed from a vault. See
-  [obsidian-plugin.md](obsidian-plugin.md).
+  app version. A person who turns the plugin off in a vault, or uninstalls it
+  there, is followed: its entry is not added back and a deleted folder is not
+  made again until the person turns it on in Obsidian's settings or runs
+  `atelier obsidian plugin on --scope ID`. Plugin files are never removed from
+  a vault. See [obsidian-plugin.md](obsidian-plugin.md).
 - Acceptance: a schema-valid receipt closes no gate, the package proof closes
   no gate, and no adopter acceptance is recorded in this repository.
 

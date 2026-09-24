@@ -94,14 +94,55 @@ Upgrades replace the plugin files the same way. The plugin's version in
 two together: the app keeps running the `main.js` it loaded until it reloads
 the plugin, so one version must name one code.
 
-`community-plugins.json` is a list the person owns except for Atelier's own
-entry. Turning the plugin off in Settings removes the entry, and the next
-publication adds it back. To keep the plugin off, leave the vault in
-restricted mode (Settings, Community plugins): no community plugin runs, and
-Atelier works through the command-line path. A file that is not a list is the
-person's to repair; it is reported as `settings-invalid` and left alone.
+`community-plugins.json` is a list the person owns, with Atelier's entry in it
+only while the person wants the plugin in that vault (next section). A file
+that is not a list is the person's to repair; it is reported as
+`settings-invalid` and left alone. Atelier never removes plugin files from a
+vault.
 
-Phase 1 never removes plugin files from a vault.
+### Turning it off, and on again
+
+The person decides whether Atelier's plugin runs in a vault, and Atelier
+follows. The decision is the one Obsidian itself records: the
+`atelier-projection` entry of `community-plugins.json`.
+
+- The first publication of a vault offers the entry. Once it is confirmed in
+  place, a list without it is the person's decision: turning the plugin off
+  in Settings, Community plugins, removes the entry, and uninstalling it there
+  removes the entry and deletes the plugin's folder.
+- From then on the vault's plugin is `off`. Atelier leaves
+  `community-plugins.json` exactly as the person left it and never adds the
+  entry back. It creates no plugin file that is not there, so a folder the
+  person deleted stays deleted, and it keeps the files that are still there
+  current, so turning the plugin back on gets the current code. The vault
+  works through the command-line path, and `status`, `open` and
+  `atelier obsidian plugin show` report the plugin as not present with reason
+  `turned-off-in-this-vault` and the way back.
+- There are two ways back. Turning "Atelier" on again in Obsidian's settings
+  (possible while its folder is there) lists the entry again; the view's next
+  publication records the plugin as on and owns the entry again.
+  `atelier obsidian plugin on --scope ID` records a request instead; the view's
+  next publication adds the entry back and makes the plugin's files again,
+  which is the way back after an uninstall. The command publishes nothing by
+  itself: the next publication is the one the next change at the view's
+  sources causes, or the one when the maintenance service next starts.
+  Obsidian reads `community-plugins.json` when it opens a vault, so a plugin
+  brought back this way runs from the next time the vault is opened; one
+  turned on in Obsidian's settings runs at once.
+- The list is read before the view is prepared, and the entry is written only
+  over exactly the bytes it was read as. A change the person makes in
+  between, turning the plugin off while a publication runs for example, is
+  never written over: that settings unit stops (`settings-changed`), the
+  publication does not commit, and the view is tried again, when its
+  preparation reads the list as the person left it.
+- A list that is missing, or that is not a list, decides nothing. A missing
+  list is written again with the entry, unless the vault's plugin is `off`.
+  Restricted mode leaves the list alone, and needs nothing from Atelier: no
+  community plugin runs.
+
+The decision is kept owner-only in the workspace's private state, under
+`state/plugin/choices/<view>.json`, as `requested`, `on` or `off`. A record
+that cannot be read counts as `off`: nothing is added back on a guess.
 
 ### The data file and the privacy of the vault
 
@@ -231,11 +272,11 @@ hello again.
 ## When the plugin is not there
 
 If the plugin is not loaded (the person chose restricted mode or has not
-answered the prompt yet, the app is older than 1.13.7, or the plugin was
-turned off), nothing changes: the service coordinates through the
+answered the prompt yet, the app is older than 1.13.7, or the person turned it
+off in the vault), nothing changes: the service coordinates through the
 command-line path exactly as before, `open` asks the command-line tool for the
 app version, and `status` reports the plugin as not present with the reason
-(`no-live-lease` or `service-not-running`).
+(`no-live-lease`, `turned-off-in-this-vault` or `service-not-running`).
 
 ## The app version a plugin reports
 
@@ -333,11 +374,10 @@ closes gates G20 and G21 of the initiative. Nothing below is implemented.
    allocations, pending edits and recovery digests with the command-line path
    after each step.
 
-Open questions for phase 2: whether turning the plugin off should be
-respected rather than undone by the next publication; when, if ever, plugin
-files are removed from a vault; and how an upgraded service answers an older
-`main.js` that the app keeps running until it reloads the plugin (the hello
-carries the plugin version and the protocol for that).
+Open questions for phase 2: when, if ever, plugin files are removed from a
+vault; and how an upgraded service answers an older `main.js` that the app
+keeps running until it reloads the plugin (the hello carries the plugin
+version and the protocol for that).
 
 ### Deviations from the track plan
 

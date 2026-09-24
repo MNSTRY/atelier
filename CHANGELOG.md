@@ -14,8 +14,18 @@
   status" says why. The plugin writes nothing, runs nothing it is sent and
   reaches only the workspace's maintenance service on its literal loopback
   address. Without it (restricted mode, an app older than 1.13.7, before the
-  prompt is answered) everything works as before. See
-  `docs/obsidian-plugin.md`.
+  prompt is answered, or turned off in the vault) everything works as before.
+  See `docs/obsidian-plugin.md`.
+- A person who turns Atelier's plugin off in a vault, or uninstalls it there,
+  is followed. Once the plugin's entry was confirmed in
+  `community-plugins.json`, a list without it is recorded as the person's
+  decision (private state, `state/plugin/choices/`): the entry is not added
+  back, a deleted plugin folder is not made again, and the plugin files still
+  there are kept current. `status`, `open` and the new
+  `atelier obsidian plugin show` report `turned-off-in-this-vault`. Turning the
+  plugin on again in Obsidian's settings is followed the same way;
+  `atelier obsidian plugin on --scope ID` brings the entry and the files back
+  at the view's next publication (the way back after an uninstall).
 - The maintenance service answers four plugin commands (`/plugin/hello`,
   `/plugin/lease`, `/plugin/release`, `/plugin/status`) that need the random
   bearer of one vault, kept owner-only in private state and in that vault's
@@ -30,9 +40,12 @@
 ### Changed
 
 - The settings unit owns two more things in a vault: the `atelier-projection`
-  entry of `community-plugins.json` (appended; every other entry kept in
-  order) and the plugin's four files, whose digests are pinned in the
-  generation manifest under `ext["mnstry.atelier.obsidian"].settings`.
+  entry of `community-plugins.json` (appended while the person wants the
+  plugin there; every other entry kept in order; written only over the exact
+  bytes the decision was made on, so a change the person makes meanwhile
+  stops that unit as `settings-changed` and the view is tried again) and the
+  plugin's four files, whose digests are pinned in the generation manifest
+  under `ext["mnstry.atelier.obsidian"].settings`.
   Whatever occupies a plugin path is displaced to recovery, never lost; a
   plugin path a person has to repair never holds a view back, and another
   writer racing a plugin file makes the view try again.
