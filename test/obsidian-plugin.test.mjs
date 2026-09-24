@@ -1832,6 +1832,18 @@ function choiceWorld(world) {
   }
 }
 
+test('the service\'s plugin-aware adapter factory keeps the factory\'s own methods: a tick somebody asked for drops the remembered qualification', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const forgotten = []
+  const adapterFactory = Object.assign(() => absentAdapter(), { forget: () => { forgotten.push(true) } })
+  const service = await world.service({ adapterFactory })
+  assert.ok((await service.tickNow()).ok)
+  assert.deepEqual(forgotten, [], 'a tick nobody asked for keeps what was learned')
+  const asked = await requestLoopback({ host: '127.0.0.1', port: world.port, method: 'POST', path: '/tick', bearer: world.record.ext.bearer, payload: { runtimeId: world.record.runtimeId, scopeId: SCOPE } })
+  assert.equal(asked.statusCode, 200)
+  assert.deepEqual(forgotten, [true])
+})
+
 test('a person who turns the plugin off in a vault is followed: the entry is not added back, a removed folder is not made again, status says so, and both ways back work', needsExchange, async (t) => {
   const world = serviceWorld(t)
   const service = await world.service()

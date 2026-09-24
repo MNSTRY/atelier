@@ -156,7 +156,8 @@ export async function runMaintenanceService(options = {}) {
   // The app version a live plugin reports counts as checked for the view it holds open, while one launch of the plugin
   // alone holds it: with two apps holding the vault, which one the command-line tool reaches is unknown.
   const pluginReportOf = (scopeId) => { const report = pluginSessions.report(scopeId); return report?.instances === 1 ? report : null }
-  const pluginAwareAdapterFactory = (input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginReportOf(input.scope.scopeId) : null })
+  // The engine also asks the factory itself (`forget`, on a tick somebody asked for): the wrapper keeps its methods.
+  const pluginAwareAdapterFactory = Object.assign((input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginReportOf(input.scope.scopeId) : null }), adapterFactory)
   const engine = createEngine({
     watcherFactory: createFsWatcherFactory(), ...engineOptions, seams: { ...(engineOptions.seams ?? {}), prepareView: prepareWithPlugin, publishView: publishAndConfirm },
     loadProject, dataRoot, adapterFactory: pluginAwareAdapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId },
