@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Atelier's own Obsidian plugin (phase 1: presence and status). Every vault
+  the maintenance service publishes now carries it under
+  `.obsidian/plugins/atelier-projection/` with its entry in
+  `.obsidian/community-plugins.json`; the person never installs anything, and
+  Obsidian asks once per vault whether to trust the vault's plugins. Once
+  trusted, a status bar item says whether the view is current, updating, held
+  for an edit, stale or out of reach of the service, and "Atelier: show
+  status" says why. The plugin writes nothing, runs nothing it is sent and
+  reaches only the workspace's maintenance service on its literal loopback
+  address. Without it (restricted mode, an app older than 1.13.7, before the
+  prompt is answered) everything works as before. See
+  `docs/obsidian-plugin.md`.
+- The maintenance service answers four plugin commands (`/plugin/hello`,
+  `/plugin/lease`, `/plugin/release`, `/plugin/status`) that need the random
+  bearer of one vault, kept owner-only in private state and in that vault's
+  plugin data file, and grant presence and read-only status of that view
+  only. `status` reports which views a plugin holds open, and so do
+  `atelier obsidian status` and `open`.
+- While the plugin holds a view open, the app version it reports counts as
+  checked (reason `plugin-reported`): the service's adapter factory and
+  `open` no longer depend on the command-line tool's `version` answer, which
+  fails with no vault open and can hang.
+
+### Changed
+
+- The settings unit owns two more things in a vault: the `atelier-projection`
+  entry of `community-plugins.json` (appended; every other entry kept in
+  order) and the plugin's four files, whose digests are pinned in the
+  generation manifest under `ext["mnstry.atelier.obsidian"].settings`.
+  Whatever occupies a plugin path is displaced to recovery, never lost; a
+  plugin path a person has to repair never holds a view back, and another
+  writer racing a plugin file makes the view try again.
+  `isUserOwnedSettingsPath` answers `false` for these paths.
+- Vault roots that Atelier places under its data root are created private
+  (`0700`), and an existing one is made private before the plugin's bearer is
+  written into it. A vault root Atelier did not place never receives the
+  bearer unless it is already private.
+- `plugins/` is part of the egress scan, and the release audit requires the
+  plugin's three files in the package.
+
 ## 0.2.0-alpha.11
 
 ### Fixed

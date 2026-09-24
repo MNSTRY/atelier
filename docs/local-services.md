@@ -147,6 +147,7 @@ explicit consent that names its actor.
 | Status | `GET /status` | bearer | the health fields, loop state, last tick, last error code, and per-view freshness with held notes counted, not named |
 | Tick now | `POST /tick` | bearer | the state of the tick that ran |
 | Stop | `POST /stop` | bearer | an acknowledgement naming the runtime and PID, then the service ends |
+| Plugin hello, lease, release, status | `POST /plugin/hello`, `/plugin/lease`, `/plugin/release`, `/plugin/status` | the bearer of one vault | Atelier's Obsidian plugin inside that vault: presence and read-only status of that one view ([obsidian-plugin.md](obsidian-plugin.md)) |
 
 Health carries no path, no note title, no source name and no withheld
 identity. There is no other operation: no file serving, no command, no
@@ -159,13 +160,21 @@ The listener refuses a request before looking its operation up when:
   also refuses a name that resolves to loopback;
 - `Sec-Fetch-Site` is present and is neither `none` nor `same-origin`, or
   `Origin` is present and is not the listener itself;
-- the path is not one of the four, exactly and without a query, or the method
+- the path is not one of the eight, exactly and without a query, or the method
   is not that path's method.
 
 Status, tick and stop additionally refuse without the bearer of the running
 runtime. A `POST` payload is a JSON object of at most 1 KiB that names the
 runtime identifier it is meant for, so a request aimed at an earlier runtime on
 the same port does nothing.
+
+The plugin commands refuse without the bearer of a vault the workspace
+maintains. That bearer is random per view, kept owner-only in private state
+and in that vault's plugin data file, compared in constant time with every
+view's bearer before the body is read, and grants the four plugin commands for
+that view and nothing else; the runtime bearer is not accepted there, and a
+vault's bearer is not accepted by status, tick or stop. A plugin payload is a
+JSON object of at most 1 KiB with exactly the fields of its command.
 
 ### Status values and refusal cases
 
