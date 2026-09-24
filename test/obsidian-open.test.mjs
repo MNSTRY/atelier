@@ -15,31 +15,57 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 // way this process can start another one. Nothing in this file may start the
 // installed app, its command-line tool, an operating-system opener or a
 // service manager; an attempt throws here instead of running.
+//
+// A child that could reach a running Obsidian itself (the production service
+// entry with its command-line adapter, or anything that loads the production
+// app seams) must be given a private HOME: the command-line tool finds the
+// app through a socket under HOME, and the app keeps its settings under it.
+// With the developer's own HOME such a child would ask the developer's own
+// Obsidian, which is out of bounds for a test.
 // ---------------------------------------------------------------------------
 
 const BANNED_PROGRAMS = ['obsidian-cli', 'obsidian', 'open', 'xdg-open', 'launchctl', 'systemctl']
 const WRAPPERS = ['sh', 'bash', 'zsh', 'dash', 'env', 'cmd', 'powershell', 'pwsh', 'nohup', 'sudo']
+const REACHES_THE_APP = /--adapter=obsidian-cli|app-production-seams/
+const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
 const programName = (command) => path.basename(String(command).replaceAll('\\', '/')).toLowerCase().replace(/\.(exe|app|cmd|bat)$/, '')
 const guardErrors = []
-function guardSpawn(command, args) {
+function guardSpawn(command, args, options) {
   const words = [command, ...(Array.isArray(args) ? args : [])].map(String)
   // The program itself, always; its arguments too when the program only runs another one; an app link anywhere.
   const wrapper = WRAPPERS.includes(programName(command))
   const banned = words.find((word, index) => ((index === 0 || wrapper) && BANNED_PROGRAMS.includes(programName(word))) || /obsidian:\/\//i.test(word))
-  if (banned === undefined) return
-  const error = new Error(`spawn guard: this test suite may never start "${programName(banned)}"`)
-  guardErrors.push(error.message)
-  throw error
+  if (banned !== undefined) {
+    const error = new Error(`spawn guard: this test suite may never start "${programName(banned)}"`)
+    guardErrors.push(error.message)
+    throw error
+  }
+  // A child with no env of its own inherits this process's, and with it the developer's HOME.
+  const home = options?.env ? options.env.HOME : process.env.HOME
+  if (words.some((word) => REACHES_THE_APP.test(word)) && (typeof home !== 'string' || home === '' || REAL_HOMES.includes(path.resolve(home)))) {
+    const error = new Error('spawn guard: a child that can reach a running Obsidian needs a private HOME, never the developer\'s own')
+    guardErrors.push(error.message)
+    throw error
+  }
 }
 for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
   const original = childProcess[method]
   childProcess[method] = function guarded(command, args, ...rest) {
-    // exec and execSync take one shell line.
-    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/)); else guardSpawn(command, args)
+    // exec and execSync take one shell line, and their options come second.
+    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/), args)
+    else guardSpawn(command, args, Array.isArray(args) ? rest[0] : args)
     return original.call(this, command, args, ...rest)
   }
 }
 syncBuiltinESMExports()
+
+// The env of a child that may reach a running Obsidian: this process's, with a private HOME in `dir` and no XDG_CONFIG_HOME.
+function privateHomeEnv(dir, base = process.env) {
+  const home = path.join(dir, 'private-home')
+  fs.mkdirSync(home, { recursive: true })
+  const { XDG_CONFIG_HOME: _config, ...rest } = base
+  return { ...rest, HOME: home }
+}
 
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
 const { createEditorAdapter, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
@@ -318,6 +344,28 @@ test('the spawn guard throws before any banned program is started, whichever way
   assert.doesNotThrow(() => guardSpawn('node', ['--version']))
 })
 
+test('the spawn guard refuses a child that can reach a running Obsidian unless it has a private HOME, whichever way it is started', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-home-guard-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const before = guardErrors.length
+  const production = ['-e', '0', '--', '--adapter=obsidian-cli']
+  const seams = ['--input-type=module', '-e', `// ${path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')}`]
+  for (const args of [production, seams]) {
+    // No env of its own is this process's env, with the developer's HOME; so is an env that copies it.
+    assert.throws(() => childProcess.spawnSync(process.execPath, args), /needs a private HOME/)
+    assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: { ...process.env } }), /needs a private HOME/)
+    assert.throws(() => childProcess.execFileSync(process.execPath, args, { env: { ...process.env, HOME: '' } }), /needs a private HOME/)
+    assert.throws(() => childProcess.spawn(process.execPath, args, { env: { ...process.env, HOME: os.homedir() } }), /needs a private HOME/)
+    // A private HOME lets it run.
+    assert.equal(childProcess.spawnSync(process.execPath, args, { env: privateHomeEnv(dir) }).status, 0)
+  }
+  assert.throws(() => childProcess.execSync(`${JSON.stringify(process.execPath)} -e 0 -- --adapter=obsidian-cli`), /spawn guard/)
+  assert.equal(guardErrors.length, before + 9)
+  guardErrors.length = before
+  // Mutation control: a child that names neither passes whatever HOME it has.
+  assert.doesNotThrow(() => childProcess.spawnSync(process.execPath, ['-e', '0']))
+})
+
 test('the command never falls through to a real app: without seams it refuses, and as the real entry it refuses without an explicit adapter', async (t) => {
   const world = makeWorld(t)
   assert.equal(defaultCommand, runObsidianCommand)
@@ -352,8 +400,13 @@ test('the production seams are imported in exactly two places, dynamically, behi
   assert.equal((entry.match(/createObsidianCliAdapter\(/g) ?? []).length, 1)
   assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
   // Control: the trace exists. A child that only evaluates the module (it constructs and calls nothing) shows it.
-  const seen = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href)}); process.stdout.write(String(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')]))`], { encoding: 'utf8', windowsHide: true })
-  assert.equal(seen.stdout, 'true')
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-seams-trace-'))
+  try {
+    const seen = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href)}); process.stdout.write(String(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')]))`], { encoding: 'utf8', windowsHide: true, env: privateHomeEnv(dir) })
+    assert.equal(seen.stdout, 'true')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -469,7 +522,7 @@ for (const [stream, text, status] of ${JSON.stringify(cases)}) {
   seen.push({ sync: probe.inspectSync(), async: await probe.inspect() })
 }
 process.stdout.write(JSON.stringify(seen))`
-  const child = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 60000 })
+  const child = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 60000, env: privateHomeEnv(dir) })
   assert.equal(child.status, 0, child.stderr)
   const seen = JSON.parse(child.stdout)
   const expected = ['no-vault-open', 'no-vault-open', 'no-vault-open', 'no-vault-open', 'meets-minimum-version', 'version-unknown']
@@ -865,11 +918,7 @@ test('the real service entry starts and serves: loading the shipped contribution
   // The real entry with the obsidian-cli adapter reaches a running Obsidian
   // through the command-line tool's socket under HOME: the child gets a
   // private HOME, so the developer's own Obsidian is never contacted.
-  const home = path.join(world.dir, 'private-home')
-  fs.mkdirSync(home)
-  const { XDG_CONFIG_HOME: _config, ...rest } = world.env
-  const env = { ...rest, HOME: home }
-  assert.notEqual(path.resolve(env.HOME), path.resolve(os.homedir()), 'the spawned service must not see the real HOME')
+  const env = privateHomeEnv(world.dir, world.env)
   const entryPath = path.join(REPOSITORY_ROOT, 'src', 'runtime', 'obsidian', 'service-main.mjs')
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath, entryArgs: ['--adapter=obsidian-cli'], intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
   const started = await world.run(['service', 'start', '--json', '--consent-actor', CONSENT.actor], { seams, startTimeoutMs: 20000, env })
