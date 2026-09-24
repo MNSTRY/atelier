@@ -276,8 +276,8 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     } else {
       const lease = await this.request(channel, 'lease')
       if (!this.current(channel)) return
-      if (lease.kind === 'refused' && lease.error === 'session-unknown') {
-        // The service started again since, or the vault's key changed: shake hands once more.
+      if (lease.kind === 'refused' && (lease.error === 'session-unknown' || lease.statusCode === 401)) {
+        // The service started again since, the vault's key changed, or the session is not accepted: shake hands once more.
         this.session = null
         if (!(await this.handshake(channel))) return
       } else if (lease.kind !== 'sealed') {

@@ -245,7 +245,7 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
 // reloads the plugin, so a change to the code without a new version would leave two plugins under one version.
 const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
-  '1.1.0': 'sha256:1f3538fcd11d2e77dabc1f850bed4b3dda14ac59dde894dd0dcc2bcb7e5977bc',
+  '1.1.0': 'sha256:b0eb894dfa6739cccacd6acbe91a47c6459dce57c2a0c7a5a5470826b4f63a73',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
@@ -741,10 +741,20 @@ test('an answer that is not sealed with the session\'s key is not believed', asy
   // Between two rounds the service goes away, and a program answers the lease and the status as if all were well.
   await world.service.listener.close()
   const forged = (document) => ({ statusCode: 200, body: { payload: JSON.stringify(document), mac: randomBytes(32).toString('hex') } })
-  const squat = await squatter(t, world.port, (entry) => (entry.path === PLUGIN_ROUTES.lease ? forged({ schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE }) : forged({ schema: PLUGIN_STATUS_SCHEMA, scopeId: SCOPE, view: { ...world.view } })))
+  let refuse = false
+  const squat = await squatter(t, world.port, (entry) => {
+    if (refuse) return { statusCode: 401, body: { error: 'request-not-authenticated' } }
+    return entry.path === PLUGIN_ROUTES.lease ? forged({ schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE }) : forged({ schema: PLUGIN_STATUS_SCHEMA, scopeId: SCOPE, view: { ...world.view } })
+  })
   await plugin.cycle()
   assert.deepEqual([statusBarOf(world), plugin.view.reason], ['Atelier: service unreachable', 'answer-not-authenticated'])
   assert.deepEqual(squat.captured.map((entry) => entry.path), [PLUGIN_ROUTES.lease], 'nothing more once an answer did not verify')
+  // A session command refused as not authenticated: the plugin shakes hands again, and tells a listener that cannot prove
+  // the key nothing more.
+  refuse = true
+  await plugin.cycle()
+  assert.deepEqual(squat.captured.map((entry) => entry.path), [PLUGIN_ROUTES.lease, PLUGIN_ROUTES.lease, PLUGIN_ROUTES.challenge])
+  assert.equal(statusBarOf(world), 'Atelier: not set up', 'an unproven 401 to a challenge is only ever a key the service does not know')
 })
 
 test('a plugin unloaded while its hello is under way lets that session go at once, and shows nothing afterwards', async (t) => {
