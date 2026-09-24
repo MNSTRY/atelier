@@ -386,8 +386,9 @@ found." for every command, its version included. That is reported as outcome
 `app-version-unsupported` with reason `no-vault-open`, under `service.app` in
 `status` and by `open`. Opening any vault in Obsidian resolves it, because the
 version can then be read, and so does quitting Obsidian. While Atelier's plugin
-holds the view's vault open in the app, the version it reports is used instead
-(reason `plugin-reported`), whatever the command line answers.
+holds the view's vault open in the app and the command line gives no version,
+the version the plugin reports stands in (reason `plugin-reported`); a version
+the command line gives always decides.
 
 ## Known limits
 
@@ -490,9 +491,10 @@ test reported as a pass.
 - Atelier's plugin (phase 1) reports presence and status and decides
   nothing: publication still coordinates with the app through its
   command-line tool, which must be enabled, and the plugin only supplies the
-  app version. A person who turns the plugin off in a vault, or uninstalls it
-  there, is followed: its entry is not added back and a deleted folder is not
-  made again until the person turns it on in Obsidian's settings or runs
+  app version where that tool gives none. A person who turns the plugin off
+  in a vault, or uninstalls it there, is followed: its entry is not added
+  back and a deleted folder is not made again until the person turns it on
+  in Obsidian's settings or runs
   `atelier obsidian plugin on --scope ID`. Plugin files are never removed from
   a vault. See [obsidian-plugin.md](obsidian-plugin.md).
 - Acceptance: a schema-valid receipt closes no gate, the package proof closes

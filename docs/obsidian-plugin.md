@@ -439,7 +439,8 @@ note open in the editor.
   enable plugins" in that window through the command-line tool's `eval`, and
   asserts that the service sees the lease with the app's version, that the
   status bar item says `Atelier: current`, that a publication made while the
-  plugin holds the view qualifies the app with reason `plugin-reported`, that
+  plugin holds the view qualifies the app from the command-line tool's own
+  version (reason `meets-minimum-version`), that
   a rotated key reaches the running plugin, and that quitting the app ends the
   presence. The second declines the prompt and publishes through the
   command-line path as before. The third uninstalls the plugin in the app and
