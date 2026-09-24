@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
-import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
+import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
 import { PublicationRefusal } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
@@ -13,7 +13,7 @@ import {
   readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
 } from './machine-settings.mjs'
 import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
-import { dispatchAutomaticApply, heldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
+import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
@@ -362,10 +362,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const pending = stateStore.readPendingEdits()
     let edits = pending.edits
     const basesOf = new Map()
+    const earlierLayout = new Set()
     for (const { scope, store } of scopes) {
       const { manifest, bases } = trustedNoteBases(store)
       basesOf.set(scope.scopeId, bases)
       if (!manifest) continue
+      if (manifestLayoutVersion(manifest) === 1) earlierLayout.add(scope.scopeId)
       const vault = reconcile({ index, files: listVaultNotes({ scopeId: scope.scopeId, vaultRoot: store.vaultRoot, manifest }), prefix: vaultKey(scope.scopeId, ''), full, hinted, lstat })
       const digestOf = (notePath) => index.get(vaultKey(scope.scopeId, notePath))?.digest ?? null
       const observed = observeVaultEdits({ store, workspaceId, scopeId: scope.scopeId, manifest, bases, digestOf, edits, now, preserve: rules.preserve })
@@ -459,12 +461,16 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     }
     const attempt = new Map()
     const invalidate = (scopeId, changeClass) => attempt.set(scopeId, new Set([...(attempt.get(scopeId) ?? []), ...(changeClass ? [changeClass] : [])]))
+    // The notes that keep a view in the vault layout they were published in (see layoutHeldPaths).
+    const layoutHeldOf = (scopeId) => layoutHeldPaths(edits, scopeId, { bases: basesOf.get(scopeId) ?? new Map(), digestOf: (notePath) => index.get(vaultKey(scopeId, notePath))?.digest ?? null })
     for (const { scope } of scopes) {
       const entry = entries.get(scope.scopeId)
       // A view that did not settle is tried again, not on every tick: see the head of this file.
       const retried = RETRIED_STATES.has(entry.state)
         && (full || rules.isRetryDue({ nowMs, unsettled: unsettled.get(scope.scopeId), appState: appNow, retryMs: publicationRetryMs, maxMs: fullReconciliationIntervalMs }))
       if (firstTick || unseen.has(scope.scopeId) || requested.has(scope.scopeId) || retried) invalidate(scope.scopeId, null)
+      // A settled view still in the earlier vault layout is laid out again at the first tick where no note holds it.
+      if (earlierLayout.has(scope.scopeId) && entry.state === 'current' && layoutHeldOf(scope.scopeId).length === 0) invalidate(scope.scopeId, null)
     }
     for (const change of changes) for (const { scope } of scopes) if (change.scopeId === undefined || change.scopeId === scope.scopeId) invalidate(scope.scopeId, change.changeClass)
 
@@ -503,10 +509,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         const settle = (state, reason, extra = {}) => entries.set(scopeId, { ...entry, ...extra, state, reason, verified: extra.verified === true, checkedAt: now })
         try {
           const held = heldPaths(edits, scopeId)
-          // A view whose notes are held for an open edit keeps the vault layout they were published in.
           const prepared = seams.prepareView({
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
-            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId), heldNotePaths: held,
+            existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId), heldNotePaths: layoutHeldOf(scopeId),
           })
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
           const preparedGenerationId = prepared.manifest.generationId

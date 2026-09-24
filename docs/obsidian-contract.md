@@ -358,13 +358,15 @@ generation:
    area with a receipt; a note somebody edited is never removed: it stays
    where it is and is surfaced as a retained edit. Nothing is deleted.
 3. While a note of the view has an open edit, the view is not laid out again.
-   The engine passes the paths of held notes (`heldNotePaths`), and
-   `prepareView` prepares a view whose prior generation is in layout 1 and
-   holds one of them in layout 1, exactly as the earlier release did, a new
-   note included (`notes/<title>--<suffix>.md`). A held note therefore stays
-   under its layout 1 path and is held, applied and withdrawn by the rules it
-   was held under. The first preparation with no held note of the view lays
-   it out again.
+   The engine passes as `heldNotePaths` the paths of held notes and of notes
+   whose edit was applied while the file still holds the edited bytes and the
+   view has not published them yet. `prepareView` prepares a view whose prior
+   generation is in layout 1 and holds one of them in layout 1, exactly as
+   the earlier release did, a new note included
+   (`notes/<title>--<suffix>.md`). A held note therefore stays under its
+   layout 1 path and is held, applied and withdrawn by the rules it was held
+   under. The engine lays a settled layout 1 view out again at the first tick
+   where no note holds it.
 4. An edit made on a layout 1 note can be applied after the upgrade: apply
    and the proposal adapter prepare the generation the edit was made on in
    that generation's own layout (`layout`) to recover the note as it was
@@ -375,14 +377,13 @@ moves files, never folders, and a person may delete them. While a view waits
 for a held note, a selection resolved from the registry names layout 2 paths
 that the vault does not hold yet.
 
-In automatic mode a policy may apply a held edit in the very tick that lays
-the view out again: the edit is then closed as applied before the view is
-prepared, nothing holds the layout, and the note the person edited is not
-removed (it differs from what was published) but kept at its layout 1 path
-and surfaced as a retained edit. Its text is in the source and in the laid
-out note; nothing is lost, and the person may delete the copy. In manual mode
-the hold lifts first, the note is published over nothing, and it is then
-retired to recovery like any other.
+In automatic mode a policy may apply an edit in the very tick that would lay
+the view out again. The applied edit still holds the layout: the view is
+prepared in layout 1 once more, from the new source, so the note the person
+edited becomes the published note, and the next tick lays the view out again
+and retires that file to recovery like any other. It is never left in the
+vault unobserved. In manual mode the hold lifts when the observed note equals
+the published one, and the view is laid out again the same way.
 
 ## Graph behaviour changes since the shared link resolver
 

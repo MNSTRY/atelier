@@ -5,7 +5,7 @@ import test from 'node:test'
 import {
   fileNameParts, folderNameOf, identityLineTexts, isReadableVaultPath, joinFileName, noteNameOf, qualifierIdOf, vaultName, validateObsidianContract,
 } from '../src/projection/obsidian/contracts.mjs'
-import { applyEditLens } from '../src/projection/obsidian/edits/index.mjs'
+import { applyEditLens, createEngineApplyOperation } from '../src/projection/obsidian/edits/index.mjs'
 import { PATH_REGISTRY_SCHEMA, allocateWorkspacePaths, collisionKey, prepareView, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
 import { prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
@@ -600,6 +600,34 @@ test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is h
   assert.doesNotMatch(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /twice a minute/)
   assert.equal(fs.existsSync(path.join(world.vault(), edit.path)), false)
   assert.ok(new Set(Object.values(treeListing(world.recovery()))).has(digestOf(published)), 'the layout 1 note is retired to recovery')
+})
+
+test('upgrade in automatic mode: an edit applied on the tick that would lay the view out again keeps layout 1 until its note is published, and the edited file is then retired, never left unobserved', needsExchange, async (t) => {
+  const world = upgradeWorld(t)
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  await earlier.tick()
+  earlier.stop()
+  const edited = world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  world.installPolicy({ selector: { repo: 'east-wing' } })
+  world.configureMachine({ maintenanceMode: 'automatic' })
+  const engine = world.engine({ applyOperation: createEngineApplyOperation({ context: { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock } }) })
+
+  // One tick observes the edit, applies it, and publishes the note in layout 1 from the new source: the note the
+  // person edited is the published note.
+  world.advance(1000)
+  assert.deepEqual((await engine.tick()).dispatched.map((item) => item.status), ['applied'])
+  assert.match(fs.readFileSync(world.source('east-wing/notes/lantern.md'), 'utf8'), /twice a minute/)
+  const held = world.manifest()
+  assert.equal(held.schema, V1)
+  const lantern = held.notes.find((note) => note.nodeId === 'east-wing:lantern')
+  assert.equal(lantern.noteDigest, digestOf(edited))
+  // The next tick lays the view out again and retires every layout 1 file, the one the person edited included.
+  world.advance(1000)
+  await engine.tick()
+  assert.deepEqual([world.manifest().schema, world.manifest().layoutVersion], [V2, 2])
+  assert.deepEqual(Object.keys(vaultFiles(world)).filter((name) => name.startsWith('notes/') && !name.endsWith('/')), [], 'no layout 1 file is left behind')
+  assert.ok(new Set(Object.values(treeListing(world.recovery()))).has(digestOf(edited)), 'the edited file is retained in recovery')
+  assert.match(fs.readFileSync(world.noteFile('east-wing:lantern'), 'utf8'), /twice a minute/)
 })
 
 test('prepareView keeps layout 1 exactly while the prior generation is in layout 1 and holds a note, and lays out again otherwise', (t) => {
