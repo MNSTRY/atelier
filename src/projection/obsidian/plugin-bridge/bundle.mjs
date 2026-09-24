@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { refuse, sha256Digest } from '../materialize/byte-lens.mjs'
 import { PLUGIN_DATA_FILE, PLUGIN_DIRECTORY, PLUGIN_ID, PLUGIN_MINIMUM_APP_VERSION, PLUGIN_SOURCE_FILES, pluginDataBytes } from './channel.mjs'
@@ -19,7 +20,7 @@ let cached = null
 // must name this plugin, the protocol's app floor and a desktop-only plugin.
 export function readPluginSource({ root = PLUGIN_SOURCE_ROOT } = {}) {
   if (root === PLUGIN_SOURCE_ROOT && cached) return cached
-  const files = PLUGIN_SOURCE_FILES.map((name) => ({ name, bytes: fs.readFileSync(`${root}${root.endsWith('/') ? '' : '/'}${name}`) }))
+  const files = PLUGIN_SOURCE_FILES.map((name) => ({ name, bytes: fs.readFileSync(path.join(root, name)) }))
   let manifest
   try { manifest = JSON.parse(files.find((file) => file.name === 'manifest.json').bytes.toString('utf8')) } catch { refuse('plugin-source-invalid', 'the shipped plugin manifest is not JSON') }
   if (manifest?.id !== PLUGIN_ID || manifest.minAppVersion !== PLUGIN_MINIMUM_APP_VERSION || manifest.isDesktopOnly !== true || typeof manifest.version !== 'string' || manifest.version === '') {

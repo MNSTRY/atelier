@@ -491,7 +491,8 @@ test('the plugin sends the real path of the vault the app has open; another vaul
   const world = await channelWorld(t)
   // The app opened the vault through a symbolic link: the plugin resolves it.
   const link = path.join(world.dir, 'linked-vault')
-  fs.symlinkSync(world.vaultRoot, link)
+  // A junction on Windows needs no privilege; elsewhere the type is ignored.
+  fs.symlinkSync(world.vaultRoot, link, 'junction')
   const Plugin = loadPluginClass(world.fake, { requests: world.requests })
   const plugin = new Plugin(fakeApp(link, world.fake.record), shippedManifest())
   t.after(() => plugin.unload())
