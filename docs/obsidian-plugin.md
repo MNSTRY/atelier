@@ -86,9 +86,11 @@ rather than with an earlier generation, so whatever occupies a plugin path (a
 hand edit, an earlier release, something else entirely) is exchanged out into
 recovery with a receipt and is never lost. And a plugin path that a person has
 to repair never holds a view back: a symlinked folder, a directory where a
-file should be, or a file or folder nobody may read (`path-unsafe`), or a
-vault root that is not private enough for the bearer (`vault-not-private`),
-is reported and left alone while every note converges. Once it is repaired,
+file should be, or a file or folder nobody may read (`path-unsafe`), a vault
+root that is not private enough for the bearer (`vault-not-private`), or a
+file that cannot be made or replaced there, in a plugin folder the person can
+read but not write, say (`create-failed`, `exchange-failed`), is reported and
+left alone while every note converges. Once it is repaired,
 or when a person changed or removed a plugin file, the next time the view is
 prepared the file is written again: a generation that is already committed
 is published again, as it is, when a plugin file it pins is not on disk as
@@ -223,12 +225,18 @@ command, and none carries a credential in a header: the plugin proves it holds
 the vault's key without sending it, and the service proves it first
 (protocol `atelier-obsidian-plugin-channel/v2`).
 
-1. The plugin sends a fresh 32-byte nonce and a hint at its key: an HMAC of
-   the nonce under the key. The hint names no vault, and two hints of one vault
-   do not look alike. The service computes the hint for each vault's key it
-   holds, in constant time for every one of them, and answers only for a key
-   it holds: its own nonce, a handshake id, and a proof, an HMAC under the key
-   over the view, its own exact address, both nonces and the handshake id.
+1. The plugin sends a fresh 32-byte nonce, the time it made it, and a hint at
+   its key: an HMAC of both under the key. The hint names no vault, and two
+   hints of one vault do not look alike. The service computes the hint for
+   each vault's key it holds, in constant time for every one of them, and
+   answers only for a key it holds, only within thirty seconds of the time the
+   challenge names, and each nonce only once: its own nonce, a handshake id,
+   and a proof, an HMAC under the key over the view, its own exact address,
+   both nonces and the handshake id. At most four handshakes wait for their
+   hello per view, so a view's challenges never hold up another view's. A
+   challenge recorded by a program that took the port while the service was
+   down is therefore worth one answer, and only for thirty seconds, and the
+   answer leads nowhere without the key.
 2. The plugin checks that proof, in constant time, against the address in
    its data file. A listener that cannot make it (a program that took the
    port while the service was down, or one relaying a service that listens
@@ -270,7 +278,9 @@ listener's rules for every request). Then:
 | a field too many or missing, or of the wrong shape (a challenge that names the view, say) | 400 | `request-malformed` |
 | a challenge in another protocol | 409 | `protocol-unsupported` |
 | a challenge whose hint matches no key the service holds | 401 | `plugin-key-unknown` |
-| thirty-two handshakes already waiting for their hello | 429 | `too-many-handshakes` |
+| a challenge whose time is more than thirty seconds from the service's clock | 401 | `challenge-stale` |
+| a challenge whose nonce the service has already answered for that view | 401 | `challenge-replayed` |
+| four handshakes of that view already waiting for their hello | 429 | `too-many-handshakes` |
 | a hello for a handshake that is unknown, used, lapsed, or was made at another address | 401 | `handshake-unknown` |
 | a hello whose proof does not verify under the key | 401 | `plugin-not-authenticated` |
 | a hello that proves a vault path other than this view's | 409 | `wrong-vault` |
@@ -295,8 +305,9 @@ again knows neither; the plugin's next lease is refused with
   holds and proves it over its own exact address; the plugin proves the same
   key over the same values; every later request and answer is sealed with the
   session's key. Comparisons are constant time. A proof or a MAC cannot stand
-  in for another (each has its own label), a handshake is used once, and a
-  counter is accepted once, so nothing recorded can be replayed.
+  in for another (each has its own label), a challenge is answered once and
+  only while fresh, a handshake is used once, and a counter is accepted once,
+  so nothing recorded can be replayed for any use.
 - Secrecy. The key lives in two owner-only places, the private state of the
   workspace and the vault's `data.json` (`0600`, in a vault root that is
   `0700`), and never crosses the wire. Another user of the machine cannot read
@@ -320,8 +331,8 @@ again knows neither; the plugin's next lease is refused with
   the key reaches nothing of the service itself: not its status, tick or stop.
 - Cost. A request without a key costs the service one look at the bearer
   directory (the bearers are kept in memory and read again only when that
-  directory changed) and one HMAC per vault; at most thirty-two handshakes
-  wait at a time.
+  directory changed) and one HMAC per vault; at most four handshakes wait per
+  view, and recorded challenges cannot keep them filled.
 - Egress. `plugins/` is in the egress scan, which fails a request whose target
   is not a literal loopback address, and the release audit requires the three
   plugin files in the package and scans them in the tarball.
@@ -337,37 +348,34 @@ app version, and `status` reports the plugin as not present with the reason
 
 ## The app version a plugin reports
 
-The plugin runs inside the app whose version it reports, so while it holds a
-live lease on a view that version counts as checked:
+The plugin runs inside the app whose version it reports, so its version is
+the app's. The command-line tool, though, reaches the app a publication
+coordinates with, which may be another app holding the same vault, so its own
+answer decides wherever it gives one:
 
-- The service's adapter factory qualifies the app from the lease (reason
-  `plugin-reported`) while one launch of the plugin alone holds the view.
-  Whether the app is installed where Atelier looks and has its command-line
-  tool is still the probe's answer, from the files where the tool has a fixed
-  place (macOS), so the tool's `version` command is not run there; where only
-  running the tool shows it is there, it is run, and the version it answers
-  must meet the floor as well. The adapter still coordinates through the
-  command-line tool, which must answer for exactly this vault before anything
-  is published.
-- `open` takes the version from the lease as well where the command-line tool
-  gives none (it did not answer in time, say). A version the tool did answer
-  must meet the floor too. Installation and the command-line capability are
-  the probe's answer, because `open` and publication use that capability in
-  this phase. `open` asks the service about the plugin at most once a second
+- The service's adapter factory asks the probe as it would without a plugin,
+  through the same remembered answer. Where the tool answers with a version,
+  that version qualifies or refuses the app, whatever the plugin reports.
+  Where it gives none (no vault open yet, as it says while a vault is still
+  loading, or no answer in time), the version the plugin reports stands in,
+  reason `plugin-reported`, while one launch of the plugin alone holds the
+  view. Whether the app is installed where Atelier looks and has its
+  command-line tool is the probe's answer either way. The adapter still
+  coordinates through the command-line tool, which must answer for exactly
+  this vault before anything is published.
+- `open` does the same: the plugin's version stands in only where the tool
+  gives none. It asks the service about the plugin at most once a second
   while it waits for the app.
 - With two launches holding one view (two app profiles with the same vault
-  open, both running the plugin), neither version decides: the command-line
-  tool may reach either app, so the service asks the probe as it would without
-  a plugin.
+  open, both running the plugin), neither plugin's version decides.
 - An app below the floor refuses as before (`app-version-unsupported`,
   `below-minimum-version`), whoever reported the version.
 
-The limit that remains: two app profiles hold the same vault and only one runs
-the plugin (the other is in restricted mode, say). The service sees one
-launch, qualifies from its version and, where the tool has a fixed place, does
-not ask the tool, which may reach the other app. The in-app step still
-refuses an app without the saved-content field it relies on, for a note open
-in the editor.
+What remains: where the tool gives no version but still coordinates (its
+`version` call timed out, say), and a second app holds the same vault without
+the plugin, the plugin's version may belong to the other app. The in-app step
+still refuses an app without the saved-content field it relies on, for a
+note open in the editor.
 
 `atelier obsidian status` and `open` report the plugin for each view:
 `{ present, reason, appVersion, pluginVersion, sessions }`, and a line such as

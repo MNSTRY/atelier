@@ -36,14 +36,15 @@
   anything that names the vault, and every later request and answer is sealed
   with a key for that session and a counter that only goes up. A program that
   takes the service's port while the service is down learns nothing it can
-  use. `status` reports which views a plugin holds open, and so do
-  `atelier obsidian status` and `open`.
-- While one launch of the plugin holds a view open, the app version it
-  reports counts as checked (reason `plugin-reported`): on macOS the service's
-  adapter factory no longer runs the command-line tool's `version` command,
-  and `open` takes the plugin's version where the tool gives none. Whether the
-  app and its command-line tool are installed is still the probe's answer, and
-  a version the tool did give must meet the floor too.
+  use: a challenge is answered once and only within thirty seconds of the time
+  it names, and at most four handshakes wait per view. `status` reports which
+  views a plugin holds open, and so do `atelier obsidian status` and `open`.
+- While one launch of the plugin holds a view open and the command-line
+  tool gives no version (no vault open yet, or no answer in time), the app
+  version the plugin reports counts as checked (reason `plugin-reported`), in
+  the service's adapter factory and in `open`. A version the tool does give
+  decides, since the tool may reach another app holding the same vault, and
+  whether the app and its tool are installed is still the probe's answer.
 
 ### Changed
 
@@ -56,7 +57,7 @@
   under `ext["mnstry.atelier.obsidian"].settings`.
   Whatever occupies a plugin path is displaced to recovery, never lost; a
   plugin path a person has to repair (a link, a folder where a file goes, a
-  file nobody may read) never holds a view back, a generation whose plugin
+  file nobody may read, a folder nobody may write) never holds a view back, a generation whose plugin
   files the person repaired, changed or removed is published again as it is,
   and another writer racing a plugin file makes the view try again.
   `isUserOwnedSettingsPath` answers `false` for these paths.
