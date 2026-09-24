@@ -177,6 +177,9 @@ function planUnits({ files, priorManifest, pointer, ledger }) {
   for (const item of pointer?.retained ?? []) if (item.priorDigest && !item.movedToRecovery) trusted.set(item.path, item.priorDigest)
   for (const [notePath, digest] of ledger) { if (digest === null) trusted.delete(notePath); else trusted.set(notePath, digest) }
 
+  // A file leaves as an attachment when the prior generation listed it as one (layout 2 keeps files beside their
+  // notes), or when it is under `attachments/`, where layout 1 kept every file.
+  const priorAttachments = new Set((priorManifest?.attachments ?? []).map((attachment) => attachment.path))
   const units = []
   const present = new Set()
   for (const file of files) {
@@ -187,7 +190,7 @@ function planUnits({ files, priorManifest, pointer, ledger }) {
     units.push({ path: file.path, kind: file.kind, op, baseDigest: base ?? null, candidateDigest: file.digest, bytes: file.bytes })
   }
   for (const [notePath, digest] of [...trusted].sort(([left], [right]) => (left < right ? -1 : 1))) {
-    if (!present.has(notePath)) units.push({ path: notePath, kind: notePath.startsWith('attachments/') ? 'attachment' : 'note', op: 'remove', baseDigest: digest, candidateDigest: null })
+    if (!present.has(notePath)) units.push({ path: notePath, kind: priorAttachments.has(notePath) || notePath.startsWith('attachments/') ? 'attachment' : 'note', op: 'remove', baseDigest: digest, candidateDigest: null })
   }
   units.forEach((unit, index) => { unit.unit = index })
   return units

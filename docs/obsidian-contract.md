@@ -94,8 +94,10 @@ no detail. Three rules, in the vault layout the view is prepared in:
    repository-qualified source path (`<repository>/<path>`) or the allocated
    vault path of any census node or embedded asset outside this view:
    withheld, outside the selection, or an asset the view does not copy. A
-   token is a match that no letter, digit or one of `. _ : / -` precedes or
-   follows, compared exactly. A repository-relative path alone is not an
+   match is a whole token when no letter or digit is beside it, and no one of
+   `. _ : / -` joined to a letter or digit (a full stop that ends a sentence
+   is beside a whole token; `x.north-desk:a` is one longer token); it is
+   compared exactly, case included. A repository-relative path alone is not an
    identity (every repository may hold a `README.md`), so it is not denied on
    its own; the identity block, which is the one place a note names its own
    repository-relative path, is held to rule 1 instead.
@@ -165,7 +167,9 @@ The name of a note is:
   from the file name or equals it, and the file stem is used as written
   (`getting-started`, not `Getting Started`). The rule reads the node record
   only, so every allocation, and a selection resolved without the sources,
-  gives the same name.
+  gives the same name. The record does not say where its title came from, so
+  an author heading that is exactly the title-cased file name (`# Getting
+  Started` in `getting-started.md`) names the note by its stem as well.
 - for any other source, a wrapped file, the file name itself: the note is
   `<file name>.md` (`depth-chart.pdf.md`) and the file keeps its own name
   (`depth-chart.pdf`) in the same folder. The pairing is visible, a search

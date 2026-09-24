@@ -209,12 +209,11 @@ test('full selection is the whole authorized corpus, as an exact scope document'
   assert.equal(selection.focus, null)
   // The withheld node x is in no list and no path.
   assert.deepEqual(Object.keys(selection.notePaths), ['a', 'b', 'c', 'd'])
+  // Vault layout 2: the repository's folders, the title as the name, a wrapped file under its own name.
   assert.deepEqual(selection.notePaths, {
-    a: 'notes/Shared concept--82f6d012eaad.md', b: 'notes/Second concept--242ab15f42c6.md', c: 'notes/Third concept--f7e3c3e2b4b1.md'.replace('f7e3c3e2b4b1', selection.notePaths.c.slice(-15, -3)), d: selection.notePaths.d,
+    a: 'north/plans/Shared concept.md', b: 'south/notes/two.json.md', c: 'west/notes/three.html.md', d: 'north/notes/Shared concept.md',
   })
-  assert.match(selection.notePaths.c, /^notes\/Third concept--[0-9a-f]{12}\.md$/)
-  assert.match(selection.notePaths.d, /^notes\/Shared concept--[0-9a-f]{12}\.md$/)
-  assert.notEqual(selection.notePaths.a, selection.notePaths.d, 'duplicate titles stay distinct through the identity suffix')
+  assert.notEqual(selection.notePaths.a, selection.notePaths.d, 'duplicate titles stay distinct: here by their folders')
 })
 
 test('scoped selection: repository, path prefix and a set expression give exactly the oracle sets', () => {
@@ -247,10 +246,10 @@ test('focus selection keeps the full vault and derives the graph query from the 
   assert.deepEqual({ nodes: focus.nodes, edges: focus.edges, vault: focus.vaultNodes, vaultEdges: focus.vaultEdges }, { nodes: ['a', 'b'], edges: ['e1'], vault: ['a', 'b', 'c', 'd'], vaultEdges: ['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', 'e9'] })
   assert.deepEqual(focus.focus, {
     version: FOCUS_QUERY_VERSION,
-    query: 'path:"notes/Shared concept--82f6d012eaad.md" OR path:"notes/Second concept--242ab15f42c6.md"',
-    queryDigest: sha('path:"notes/Shared concept--82f6d012eaad.md" OR path:"notes/Second concept--242ab15f42c6.md"'),
-    paths: ['notes/Shared concept--82f6d012eaad.md', 'notes/Second concept--242ab15f42c6.md'],
-    bookmark: { type: 'graph', title: 'Atelier focus view-focus', options: { search: 'path:"notes/Shared concept--82f6d012eaad.md" OR path:"notes/Second concept--242ab15f42c6.md"' } },
+    query: 'path:"north/plans/Shared concept.md" OR path:"south/notes/two.json.md"',
+    queryDigest: sha('path:"north/plans/Shared concept.md" OR path:"south/notes/two.json.md"'),
+    paths: ['north/plans/Shared concept.md', 'south/notes/two.json.md'],
+    bookmark: { type: 'graph', title: 'Atelier focus view-focus', options: { search: 'path:"north/plans/Shared concept.md" OR path:"south/notes/two.json.md"' } },
   })
   // The same identity has the same path in the full view.
   const full = select({ scopeId: 'view-full', mode: 'full', selector: { all: true } })
@@ -261,14 +260,17 @@ test('focus selection keeps the full vault and derives the graph query from the 
 })
 
 test('a persisted path registry decides the paths a focus names', () => {
-  // A registry may hold a longer suffix of the same identity (a lengthened one after a collision); an undeserved suffix is refused.
-  const longer = identitySuffix('north', 'a', 16)
-  assert.equal(longer.slice(0, 12), '82f6d012eaad')
-  const registry = { schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, entries: [{ repoId: 'north', nodeId: 'a', path: `notes/Shared concept--${longer}.md` }] }
+  // A registry may hold a qualified name of the same identity (one allocated after a collision); a path no rule can produce is refused.
+  const registry = { schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, layout: 2, entries: [{ repoId: 'north', nodeId: 'a', path: 'north/plans/Shared concept (one).md' }], assets: [] }
   const focus = select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: registry })
-  assert.equal(focus.focus.query, `path:"notes/Shared concept--${longer}.md"`)
-  const forged = { ...registry, entries: [{ repoId: 'north', nodeId: 'a', path: 'notes/Shared concept--82f6d012eaad0000.md' }] }
-  assert.equal(refusalCode(() => select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: forged })), 'invalid-path-registry')
+  assert.equal(focus.focus.query, 'path:"north/plans/Shared concept (one).md"')
+  for (const path of ['north/plans/.Shared concept.md', 'north/plans/Shared [concept].md', 'Shared concept.md']) {
+    const forged = { ...registry, entries: [{ repoId: 'north', nodeId: 'a', path }] }
+    assert.equal(refusalCode(() => select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: forged })), 'invalid-path-registry', path)
+  }
+  // A layout 1 registry is the earlier layout's: the paths are allocated anew.
+  const earlier = { schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, entries: [{ repoId: 'north', nodeId: 'a', path: 'notes/Shared concept--82f6d012eaad.md' }] }
+  assert.equal(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: earlier }).focus.query, 'path:"north/plans/Shared concept.md"')
 })
 
 test('refusals: empty, withheld, unbounded expansion, focus of nothing, full mode with a subset', () => {
@@ -766,7 +768,7 @@ test('selection through the command: resolve, persist, show and list bind the de
   assert.equal(focus.exit, EXIT.ok, focus.stdout)
   assert.deepEqual({ persisted: focus.json.persisted, changed: focus.json.changed, file: focus.json.file }, { persisted: true, changed: true, file: 'state/selection/view-beacon.json' })
   const beaconPath = focus.json.selection.notePaths['harbor:beacon']
-  assert.match(beaconPath, /^notes\/Beacon north side--[0-9a-f]{12}\.md$/, 'the readable title drops the quote characters the filesystem rules remove')
+  assert.equal(beaconPath, 'harbor/notes/Beacon north side.md', 'the readable title drops the quote characters the filesystem rules remove')
   assert.equal(focus.json.selection.focus.query, `path:"${beaconPath}" OR path:"${focus.json.selection.notePaths['harbor:quay']}"`)
   assert.deepEqual(focus.json.selection.vaultNodes, ['harbor:beacon', 'harbor:quay', 'orchard:apple'], 'a focus keeps the full vault')
   const shown = await world.run(['selection', 'show', 'view-beacon'])
@@ -1250,8 +1252,9 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
   const vault = path.join(temp, 'vault')
   const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state'), vaultRoot: vault, withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
   assert.equal(derived.state, 'committed')
-  const names = fs.readdirSync(path.join(vault, 'notes'))
-  for (const sentinel of fixture.sentinels) assert.ok(!names.some((name) => name.includes(sentinel)), `${sentinel} must not name a note`)
+  const names = fs.readdirSync(vault, { recursive: true }).map((name) => name.split(path.sep).join('/')).filter((name) => !name.startsWith('.obsidian') && !name.startsWith('.atelier-publication'))
+  assert.ok(names.some((name) => name.endsWith('.md')), 'the vault holds notes')
+  for (const sentinel of fixture.sentinels) assert.ok(!names.some((name) => name.includes(sentinel)), `${sentinel} must not name a note or a folder`)
   // Control: without the withheld list the sentinel reaches the vault and the derivation refuses to be evidence.
   await assert.rejects(() => deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-2'), vaultRoot: path.join(temp, 'vault-2'), sentinels: fixture.sentinels }), /withheld sentinel/)
 })

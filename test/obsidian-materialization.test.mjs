@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url'
 import { buildCanonicalGraph } from '../src/graph/graph.mjs'
 import { scanMarkdownLinks, unclosedFenceAtEnd } from '../src/graph/knowledge-graph.mjs'
 import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
-import { identitySuffix, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
+import { identityLineTexts, identitySuffix, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import {
   POLICY_SETTINGS_PATH,
+  REDACTION_RULES,
   allocateWorkspacePaths,
   collisionKey,
+  createPreparationCache,
+  createViewPreparationForOracleTests,
   isUserOwnedSettingsPath,
   prepareSettings,
   prepareView,
@@ -120,6 +123,8 @@ function goldenOf(prepared) {
   }
 }
 
+// Layout 1 goldens are what the earlier release prepared from this fixture and
+// are never regenerated; layout 2 goldens may be, with the environment flag.
 function assertMatchesGolden(prepared, name, { mayUpdate = false } = {}) {
   const goldenPath = path.join(fixtureRoot, `expected-${name}.json`)
   if (mayUpdate && process.env.ATELIER_UPDATE_MATERIALIZATION_GOLDEN === '1') fs.writeFileSync(goldenPath, `${JSON.stringify(goldenOf(prepared), null, 2)}\n`)
@@ -156,7 +161,8 @@ function assertNothingWithheld(prepared) {
   }
 }
 
-// Applies the manifest's inversion map to one note and returns source bytes.
+// Applies the manifest's inversion map to one note and returns source bytes:
+// every rewrite inverted, then the generated identity lines removed.
 function invertNote(prepared, nodeId) {
   const note = noteOf(prepared, nodeId)
   const bytes = fileOf(prepared, note.path).bytes
@@ -170,6 +176,8 @@ function invertNote(prepared, nodeId) {
     assert.deepEqual(restored.subarray(inversion.note.start, inversion.note.end), Buffer.from(inversion.ext[EXT].emitted, 'base64url'))
     restored = Buffer.concat([restored.subarray(0, inversion.note.start), Buffer.from(inversion.ext[EXT].original, 'base64url'), restored.subarray(inversion.note.end)])
   }
+  const identity = note.regions.identity
+  if (identity && identity.end <= note.regions.body.start) restored = Buffer.concat([restored.subarray(0, identity.start), restored.subarray(identity.end)])
   return restored
 }
 
@@ -207,8 +215,17 @@ test('full view: exact nodes, edges, emitted bytes and attachment hashes', (t) =
     ['south-desk:tide-table', 'links_to', 'north-desk:harbor-plan'],
   ])
   const pdf = original('north-desk', 'charts/depth-chart.pdf')
+  // A wrapped file keeps its name, in its own folder, beside its note.
   assert.deepEqual(prepared.manifest.attachments, [
-    { path: `attachments/Depth chart--${identitySuffix('north-desk', 'north-desk:depth-chart')}.pdf`, digest: sha256Digest(pdf), byteLength: pdf.length },
+    { path: 'north-desk/charts/depth-chart.pdf', digest: sha256Digest(pdf), byteLength: pdf.length },
+  ])
+  assert.deepEqual(prepared.manifest.notes.map((note) => note.path), [
+    'north-desk/charts/depth-chart.pdf.md',
+    'north-desk/plans/Harbor plan.md',
+    'north-desk/journal/signal-log.md',
+    'north-desk/plans/Shared concept.md',
+    'north-desk/plans/Shared concept (shared-b).md',
+    'south-desk/tables/Tide table.md',
   ])
   assert.deepEqual(prepared.manifest.completeness, { status: 'complete', expectedNotes: 6, writtenNotes: 6 })
   assertMatchesGolden(prepared, 'full', { mayUpdate: true })
@@ -228,11 +245,23 @@ test('scoped view: exact nodes and edges; links leaving the selection stay as wr
   assert.ok(plan.includes('[shared](shared-a.md)'))
   // A selected-out target gives away neither its allocated path nor its title.
   const everything = emittedBytes(prepared).toString('utf8')
-  for (const hidden of ['Shared concept', 'Depth chart', 'Signal', identitySuffix('north-desk', 'north-desk:shared-a'), identitySuffix('north-desk', 'north-desk:depth-chart')]) {
+  // (What the author wrote about them, `[shared](shared-a.md)` or a relation to `north-desk:shared-a`, stays as written.)
+  for (const hidden of ['Shared concept', 'Depth chart', 'Signal', 'north-desk/charts/depth-chart.pdf', 'north-desk/plans/Shared concept', 'north-desk/journal/signal-log', 'north-desk:depth-chart']) {
     assert.equal(everything.includes(hidden), false, `${hidden} leaked into a scoped view`)
   }
   assert.ok(plan.includes('Relationships leading outside this view: 5\n'))
   assertMatchesGolden(prepared, 'scoped', { mayUpdate: true })
+})
+
+test('layout 1: a view prepared in the earlier layout is byte for byte what the earlier release prepared', (t) => {
+  const snapshot = makeWorkspace(t)
+  for (const [scope, name] of [[fullScope, 'full'], [scopedScope, 'scoped']]) {
+    const prepared = prepare(snapshot, scope, { layout: 1 })
+    assert.equal(prepared.manifest.schema, 'atelier-obsidian-generation-manifest/v1')
+    assertMatchesGolden(prepared, `${name}.layout-1`)
+    assertAuthoredBytesPreserved(prepared)
+    assertNothingWithheld(prepared)
+  }
 })
 
 test('the same identity has the same path in full and scoped views, with or without a shared registry', (t) => {
@@ -270,9 +299,9 @@ test('duplicate titles stay readable and distinct; duplicate identities refuse',
   const snapshot = makeWorkspace(t)
   const prepared = prepare(snapshot, fullScope)
   const [first, second] = ['north-desk:shared-a', 'north-desk:shared-b'].map((id) => noteOf(prepared, id).path)
-  assert.match(first, /^notes\/Shared concept--[0-9a-f]{12}\.md$/)
-  assert.match(second, /^notes\/Shared concept--[0-9a-f]{12}\.md$/)
-  assert.notEqual(first, second)
+  // The first in identity order keeps the title; the second is told apart by its source file, never by a hash.
+  assert.equal(first, 'north-desk/plans/Shared concept.md')
+  assert.equal(second, 'north-desk/plans/Shared concept (shared-b).md')
 
   const twin = snapshot.graph.nodes.find((node) => node.id === 'north-desk:shared-a')
   const repeated = { ...snapshot, graph: { ...snapshot.graph, nodes: [...snapshot.graph.nodes, { ...twin, path: 'plans/shared-b.md' }] } }
@@ -281,25 +310,34 @@ test('duplicate titles stay readable and distinct; duplicate identities refuse',
 
 test('path allocation detects case, normalization and length collisions', () => {
   const nodes = [
-    { repo: 'r', id: 'one', title: 'Résumé' },
-    { repo: 'r', id: 'two', title: 'Résumé' },
+    { repo: 'r', id: 'one', path: 'a/one.md', title: 'Résumé', extension: 'md' },
+    // The same title in decomposed form: one name to a normalization-insensitive file system.
+    { repo: 'r', id: 'two', path: 'A/two.md', title: 'Re\u0301sume\u0301', extension: 'md' },
   ]
   const { registry } = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes })
-  assert.equal(registry.entries[0].path.normalize('NFC'), registry.entries[0].path)
-  assert.equal(registry.entries[0].path.split('--')[0], registry.entries[1].path.split('--')[0])
+  // Folders mirror the source, spelled the way they were first allocated; names are NFC.
+  assert.deepEqual(registry.entries.map((entry) => entry.path), ['r/a/Résumé.md', 'r/a/Résumé (two).md'])
+  for (const entry of registry.entries) assert.equal(entry.path.normalize('NFC'), entry.path)
 
   // Names a case-insensitive or normalization-insensitive filesystem would merge share a key.
-  assert.equal(collisionKey('notes/Straße--0a'), collisionKey('notes/STRASSE--0A'))
-  assert.equal(collisionKey('notes/Re\u0301sume\u0301'), collisionKey('notes/RÉSUMÉ'))
+  assert.equal(collisionKey('r/Straße.md'), collisionKey('r/STRASSE.md'))
+  assert.equal(collisionKey('r/Re\u0301sume\u0301.md'), collisionKey('r/RÉSUMÉ.md'))
   assert.notEqual(collisionKey(registry.entries[0].path), collisionKey(registry.entries[1].path))
-  // A registry whose entry was not derived from its identity refuses.
-  const stolen = { ...registry, entries: [registry.entries[0], { repoId: 'r', nodeId: 'two', path: registry.entries[0].path }] }
-  assert.throws(() => allocateWorkspacePaths({ registry: stolen, workspaceId: 'ws', nodes: [] }), { code: 'invalid-path-registry' })
+  // A registry that gives one path to two identities refuses, and so does one of another workspace.
+  const stolen = { ...registry, entries: [registry.entries[0], { repoId: 'r', nodeId: 'two', path: 'r/a/RÉSUMÉ.md' }] }
+  assert.throws(() => allocateWorkspacePaths({ registry: stolen, workspaceId: 'ws', nodes: [] }), { code: 'path-collision' })
   assert.throws(() => allocateWorkspacePaths({ registry, workspaceId: 'other', nodes: [] }), { code: 'invalid-path-registry' })
+  const twoSpellings = { ...registry, entries: [registry.entries[0], { repoId: 'r', nodeId: 'two', path: 'r/A/Other.md' }] }
+  assert.throws(() => allocateWorkspacePaths({ registry: twoSpellings, workspaceId: 'ws', nodes: [] }), { code: 'invalid-path-registry' })
 
-  const long = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [{ repo: 'r', id: 'long', title: '語'.repeat(120) }] })
-  assert.ok(Buffer.byteLength(long.registry.entries[0].path.slice('notes/'.length)) <= 255)
-  assert.throws(() => allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes, vaultRootBytes: 1000 }), { code: 'path-too-long' })
+  // A long title is cut to 150 bytes on a character boundary.
+  const long = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [{ repo: 'r', id: 'long', path: 'long.md', title: '語'.repeat(120), extension: 'md' }] })
+  assert.equal(long.registry.entries[0].path, `r/${'語'.repeat(50)}.md`)
+  // A path over the full-path bound is shortened by cutting the title, never below 16 bytes.
+  const title = 'x'.repeat(150)
+  const fitted = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [{ repo: 'r', id: 'fit', path: 'a/fit.md', title, extension: 'md' }], vaultRootBytes: 1024 - 1 - 'r/a/.md'.length - 40 })
+  assert.equal(fitted.registry.entries[0].path, `r/a/${'x'.repeat(40)}.md`)
+  assert.throws(() => allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes, vaultRootBytes: 1010 }), { code: 'path-too-long' })
   assert.throws(() => allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [nodes[0], nodes[0]] }), { code: 'duplicate-identity' })
 })
 
@@ -311,27 +349,40 @@ test('CRLF, byte order prefix, missing final newline and non-ASCII sources are p
   const prepared = prepare(makeWorkspace(t), fullScope)
   assertAuthoredBytesPreserved(prepared)
 
+  // The identity lines close the source's own front matter, in its line ending; the rest of it is byte for byte the source's.
   const crlf = noteOf(prepared, 'north-desk:shared-a')
   const crlfSource = original('north-desk', 'plans/shared-a.md')
+  const crlfBytes = noteBytes(prepared, crlf.nodeId)
   assert.ok(crlfSource.includes('\r\n') && !crlfSource.toString('latin1').replace(/\r\n/g, '').includes('\n'))
-  assert.deepEqual(crlf.regions.frontmatter, readMarkdownLens(crlfSource).frontmatter)
-  assert.deepEqual(noteBytes(prepared, crlf.nodeId).subarray(0, crlf.regions.frontmatter.end), crlfSource.subarray(0, crlf.regions.frontmatter.end))
+  const sourceFrontmatter = readMarkdownLens(crlfSource).frontmatter
+  const identityBytes = Buffer.from(identityLineTexts({ id: 'north-desk:shared-a', repo: 'north-desk', path: 'plans/shared-a.md' }).map((line) => `${line}\r\n`).join(''))
+  assert.deepEqual(crlf.regions.frontmatter, { start: 0, end: sourceFrontmatter.end + identityBytes.length })
+  assert.deepEqual(crlfBytes.subarray(crlf.regions.identity.start, crlf.regions.identity.end), identityBytes)
+  assert.deepEqual(crlfBytes.subarray(crlf.regions.identity.end, crlf.regions.frontmatter.end), Buffer.from('---\r\n'))
+  assert.deepEqual(Buffer.concat([crlfBytes.subarray(0, crlf.regions.identity.start), crlfBytes.subarray(crlf.regions.identity.end, crlf.regions.frontmatter.end)]), crlfSource.subarray(0, sourceFrontmatter.end))
   assert.equal(crlf.ext[EXT].source.finalNewline, 'crlf')
 
+  // A source with a byte order prefix and no front matter gets a generated front matter after the prefix.
   const prefixed = noteOf(prepared, 'north-desk:journal-signal-log')
+  const prefixedSource = original('north-desk', 'journal/signal-log.md')
+  const generatedFrontmatter = `---\n${identityLineTexts({ id: 'north-desk:journal-signal-log', repo: 'north-desk', path: 'journal/signal-log.md' }).map((line) => `${line}\n`).join('')}---\n`
   assert.deepEqual(prefixed.ext[EXT].source.bom, { start: 0, end: 3 })
-  assert.deepEqual(prefixed.regions.body, { start: 3, end: original('north-desk', 'journal/signal-log.md').length })
-  assert.deepEqual(noteBytes(prepared, prefixed.nodeId), original('north-desk', 'journal/signal-log.md'))
+  assert.deepEqual(prefixed.regions.identity, { start: 3, end: 3 + generatedFrontmatter.length })
+  assert.deepEqual(prefixed.regions.frontmatter, prefixed.regions.identity)
+  assert.deepEqual(prefixed.regions.body, { start: 3 + generatedFrontmatter.length, end: prefixedSource.length + generatedFrontmatter.length })
+  assert.deepEqual(noteBytes(prepared, prefixed.nodeId), Buffer.concat([prefixedSource.subarray(0, 3), Buffer.from(generatedFrontmatter), prefixedSource.subarray(3)]))
 
   const unterminated = noteOf(prepared, 'north-desk:shared-b')
   const unterminatedSource = original('north-desk', 'plans/shared-b.md')
+  const identityLength = unterminated.regions.identity.end - unterminated.regions.identity.start
   assert.equal(unterminated.ext[EXT].source.finalNewline, 'none')
-  assert.equal(unterminated.regions.body.end, unterminatedSource.length)
-  assert.deepEqual(noteBytes(prepared, unterminated.nodeId).subarray(0, unterminatedSource.length), unterminatedSource)
-  assert.equal(unterminated.regions.generated[0].range.start, unterminatedSource.length)
+  assert.equal(unterminated.regions.body.end, unterminatedSource.length + identityLength)
+  assert.deepEqual(invertNote(prepared, unterminated.nodeId), unterminatedSource)
+  assert.equal(unterminated.regions.generated[0].range.start, unterminated.regions.body.end)
 
-  // Regions tile each note exactly: nothing unaccounted for, nothing shared.
+  // Regions tile each note exactly: nothing unaccounted for, nothing shared. The identity lies inside the front matter.
   for (const note of prepared.manifest.notes) {
+    assert.ok(note.regions.identity.start >= note.regions.frontmatter.start && note.regions.identity.end <= note.regions.frontmatter.end, `${note.nodeId}: the identity is inside the front matter`)
     const ranges = [note.ext[EXT].source.bom, note.regions.frontmatter, note.regions.body, ...note.regions.generated.map((region) => region.range)]
       .filter((range) => range && range.end > range.start)
       .sort((left, right) => left.start - right.start)
@@ -374,17 +425,17 @@ test('malformed encodings, ambiguous front matter and mixed reads refuse', (t) =
 test('only canonical resolved links are rewritten; a cross-repository link inverts exactly from the manifest', (t) => {
   const prepared = prepare(makeWorkspace(t), fullScope)
   const plan = noteBytes(prepared, 'north-desk:harbor-plan').toString('utf8')
-  const tide = noteOf(prepared, 'south-desk:tide-table').path.slice('notes/'.length)
-  const stem = tide.slice(0, -'.md'.length)
-  assert.ok(plan.includes(`[tide table](${encodeURIComponent(tide)}#spring)`))
-  assert.ok(plan.includes(`[[${stem}|Tide table]] or [[${stem}#Spring|spring tides]]`))
-  assert.ok(plan.includes(`[depth chart](${encodeURIComponent(noteOf(prepared, 'north-desk:depth-chart').path.slice('notes/'.length))})`))
+  // A rewritten target is the full vault path: a wikilink keeps `.md`, a Markdown link is percent-encoded per segment.
+  assert.equal(noteOf(prepared, 'south-desk:tide-table').path, 'south-desk/tables/Tide table.md')
+  assert.ok(plan.includes('[tide table](south-desk/tables/Tide%20table.md#spring)'))
+  assert.ok(plan.includes('[[south-desk/tables/Tide table.md|Tide table]] or [[south-desk/tables/Tide table.md#Spring|spring tides]]'))
+  assert.ok(plan.includes('[depth chart](north-desk/charts/depth-chart.pdf.md)'))
 
   // Code, unresolved, external and withheld targets are byte-identical.
   for (const untouched of ['[ledger](../sealed/ledger.md)', '[gone](missing.md)', '[site](https://example.invalid/page.md)', '`[[Tide table]]` in inline code', '```\n[fenced](../../south-desk/tables/tide-table.md)\n[[Tide table]]\n```']) {
     assert.ok(plan.includes(untouched), `${untouched} was altered`)
   }
-  assert.ok(noteBytes(prepared, 'south-desk:tide-table').toString('utf8').includes(`![[${noteOf(prepared, 'north-desk:harbor-plan').path.slice('notes/'.length, -3)}]]`))
+  assert.ok(noteBytes(prepared, 'south-desk:tide-table').toString('utf8').includes('![[north-desk/plans/Harbor plan.md]]'))
 
   const crossRepository = prepared.manifest.links.find((link) => link.sourceNodeId === 'north-desk:harbor-plan' && link.targetNodeId === 'south-desk:tide-table' && link.type === 'links_to')
   assert.equal(crossRepository.origin, 'markdown')
@@ -401,21 +452,21 @@ test('only canonical resolved links are rewritten; a cross-repository link inver
 
 test('typed relations are listed by type and direction; generated prose cannot create a link or a tag', (t) => {
   const prepared = prepare(makeWorkspace(t), fullScope)
-  const stem = (id) => noteOf(prepared, id).path.slice('notes/'.length, -3)
   const plan = noteBytes(prepared, 'north-desk:harbor-plan').toString('utf8')
   const section = plan.slice(plan.indexOf('## Relations (generated)'))
-  assert.ok(section.includes(`- supports → [[${stem('south-desk:tide-table')}|Tide table]]\n`))
-  assert.ok(section.includes(`- depends_on → [[${stem('north-desk:shared-a')}|Shared concept]]\n`))
-  assert.ok(section.includes(`- links_to → [[${stem('north-desk:depth-chart')}|Depth chart]]\n`))
+  assert.ok(section.includes('- supports → [[south-desk/tables/Tide table.md|Tide table]]\n'))
+  assert.ok(section.includes('- depends_on → [[north-desk/plans/Shared concept.md|Shared concept]]\n'))
+  assert.ok(section.includes('- links_to → [[north-desk/charts/depth-chart.pdf.md|Depth chart]]\n'))
   assert.ok(section.includes('- evidences ← Depth chart\n'))
   assert.equal(section.includes('related'), false, 'a relation to a withheld node was listed')
   const sharedA = noteBytes(prepared, 'north-desk:shared-a').toString('utf8')
   assert.ok(sharedA.includes('- contradicts ← Shared concept\n'))
 
   const wrapper = noteBytes(prepared, 'north-desk:depth-chart').toString('utf8')
-  assert.ok(wrapper.startsWith('# Depth chart\n'))
+  assert.ok(wrapper.startsWith(`---\n${identityLineTexts({ id: 'north-desk:depth-chart', repo: 'north-desk', path: 'charts/depth-chart.pdf' }).join('\n')}\n---\n# Depth chart\n`))
   assert.ok(wrapper.includes('with \\[\\[brackets\\]\\] and a \\#tag'))
-  assert.ok(wrapper.includes(`![[attachments/${stem('north-desk:depth-chart')}.pdf]]`))
+  assert.ok(wrapper.includes('- Original: [[north-desk/charts/depth-chart.pdf|Open the original file]]\n'))
+  assert.ok(wrapper.includes('![[north-desk/charts/depth-chart.pdf]]'))
   assert.deepEqual(noteOf(prepared, 'north-desk:depth-chart').regions.generated.map((region) => region.kind), ['representation', 'relations'])
   assert.deepEqual(fileOf(prepared, prepared.manifest.attachments[0].path).bytes, original('north-desk', 'charts/depth-chart.pdf'))
 })
@@ -605,14 +656,15 @@ function makeAssetSnapshot(t, { files = assetFiles(), assetEligible = sealedAsse
 
 const assetScope = { ...fullScope, scopeId: 'scope-assets' }
 const prepareAssets = (snapshot, scope = assetScope, extra = {}) => prepareView({ snapshot, profile: assetProfile, scope, clock, ...extra })
-const assetName = (repoId, relative, stem, extension) => `attachments/${stem}--${identitySuffix(repoId, `${repoId}:asset:${relative}`)}.${extension}`
+// An embedded file is copied to its own path, mirrored under its repository's folder, under its own name.
+const assetName = (repoId, relative) => `${repoId}/${relative}`
 const everyOutput = (prepared) => [prepared.files.map((file) => [file.path, file.kind, file.bytes.toString('hex')]), prepared.manifestBytes.toString('utf8'), prepared.diagnostics]
 
 function assertAssetsEmitted(prepared) {
-  const gauge = assetName('east-desk', 'pages/img/gauge.png', 'gauge', 'png')
-  const spaced = assetName('east-desk', 'pages/img/two words.png', 'two words', 'png')
-  const buoy = assetName('east-desk', 'pool/buoy.gif', 'buoy', 'gif')
-  const swell = assetName('west-desk', 'charts/swell.svg', 'swell', 'svg')
+  const gauge = assetName('east-desk', 'pages/img/gauge.png')
+  const spaced = assetName('east-desk', 'pages/img/two words.png')
+  const buoy = assetName('east-desk', 'pool/buoy.gif')
+  const swell = assetName('west-desk', 'charts/swell.svg')
   // One copy per asset: the gauge is embedded three times, from two notes.
   assert.deepEqual(prepared.manifest.attachments, [
     { path: buoy, digest: sha256Digest(Buffer.from('GIF89a')), byteLength: 6, ext: { [EXT]: { kind: 'embedded-asset', repoId: 'east-desk', assetPath: 'pool/buoy.gif' } } },
@@ -627,7 +679,7 @@ function assertAssetsEmitted(prepared) {
   const logbook = noteBytes(prepared, 'east-desk:logbook').toString('utf8')
   const encoded = (attachment) => attachment.split('/').map(encodeURIComponent).join('/')
   assert.ok(logbook.includes(`Gauge ![gauge](${gauge}) then spaced ![two words](${encoded(spaced)}#crop) then far ![swell](${swell}).`))
-  assert.ok(encoded(spaced).includes('two%20words--'))
+  assert.ok(encoded(spaced).endsWith('/two%20words.png'))
   assert.ok(logbook.includes(`Wiki ![[${gauge}|200]] and ![[${swell}]] and bare ![[${buoy}|120x80]] beside [[`))
   // A withheld asset and an embed inside code keep their authored bytes.
   assert.ok(logbook.includes('Sealed ![sealed](img/sealed.png) and ![[sealed.png]] stay as written.'))
@@ -796,7 +848,8 @@ test('an unclosed code fence at the end of a source is closed inside the first g
       // No generated section follows the lone note: nothing is emitted for it.
       const alone = noteOf(prepared, 'east-desk:alone')
       assert.deepEqual(alone.regions.generated, [])
-      assert.deepEqual(noteBytes(prepared, 'east-desk:alone'), snapshot.readSource('east-desk', 'pages/alone.md'))
+      assert.deepEqual(invertNote(prepared, 'east-desk:alone'), snapshot.readSource('east-desk', 'pages/alone.md'))
+      assert.equal(alone.regions.body.end, fileOf(prepared, alone.path).bytes.length, 'the lone note ends with its authored body')
     })
   }
 })
@@ -859,15 +912,36 @@ test('author text that merely looks like an identity suffix is not a redaction f
   assertNothingWithheld(prepared)
 })
 
+// A note that relates to the harbor plan, so its title reaches the plan's generated relation rows.
+const relatedNote = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Related\n\nBody.\n` })
+
 test('generated text that names a census identity outside the view is still refused', (t) => {
-  // An author title that literally carries the withheld node's suffix reaches the
-  // relations region, and the guard must refuse it: this is the mutation the
-  // benign case above must not have disabled.
+  // An author title that carries the withheld node's canonical identity, or its
+  // repository-qualified source path, reaches the relation rows of the notes
+  // it relates to, and the guard refuses it: this is the mutation the benign
+  // cases around it must not have disabled.
+  for (const title of ['Names north-desk:sealed-ledger', 'Replaces north-desk:sealed-ledger.', 'See north-desk/sealed/ledger.md first']) {
+    const snapshot = makeWorkspaceVariant(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', title) })
+    assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/, title)
+  }
+  // A whole token only: the identity inside a longer word, or a repository-relative path alone (which any repository may hold), is not an identity.
+  for (const title of ['Names xnorth-desk:sealed-ledger', 'Names north-desk:sealed-ledgers', 'Names north-desk:sealed-ledger.v2', 'See sealed/ledger.md']) {
+    const snapshot = makeWorkspaceVariant(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', title) })
+    assert.ok(prepare(snapshot, fullScope).manifest.notes.some((note) => note.nodeId === 'north-desk:naming'), title)
+  }
+  // In layout 1 the identity suffix of a withheld node is refused as well, as the earlier release refused it.
   const sealed = identitySuffix('north-desk', 'north-desk:sealed-ledger', 64)
-  const snapshot = makeWorkspaceVariant(t, {
-    'north-desk/notes/naming.md': { text: `---\ntitle: "Names it--${sealed.slice(0, 12)}"\nkg:\n  id: "north-desk:naming"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Names it\n\nBody.\n` },
-  })
-  assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
+  const suffixed = makeWorkspaceVariant(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', `Names it--${sealed.slice(0, 12)}`) })
+  assert.throws(() => prepare(suffixed, fullScope, { layout: 1 }), /redaction-failure/)
+  assert.ok(prepare(suffixed, fullScope).manifest.notes.length > 0, 'a suffix is no identity in layout 2, where no path carries one')
+})
+
+test('what an in-view author wrote about a withheld node stays authored and is not a redaction failure', (t) => {
+  // The harbor plan's front matter relates it to the withheld ledger and its body links to the ledger's path.
+  const prepared = prepare(makeWorkspace(t), fullScope)
+  const plan = noteBytes(prepared, 'north-desk:harbor-plan').toString('utf8')
+  assert.ok(plan.includes('- "north-desk:sealed-ledger"') && plan.includes('[ledger](../sealed/ledger.md)'))
+  assertNothingWithheld(prepared)
 })
 
 test('a wikilink whose author-chosen words look like an identity suffix is not a redaction failure', (t) => {
@@ -885,16 +959,19 @@ test('a wikilink whose author-chosen words look like an identity suffix is not a
 
 test('an asset the view does not copy is a forbidden identity in generated text', (t) => {
   // A real asset (id `<repo>:asset:<path>`), not a census node: only the asset
-  // branch of the deny-list can catch its suffix, so this is a control for it.
-  const swell = identitySuffix('west-desk', 'west-desk:asset:charts/swell.svg', 64)
-  const files = assetFiles()
-  files['east-desk/notes/naming.md'] = doc('east-desk:naming', `Names it--${swell.slice(0, 12)}`, '# Names it\n')
-  const snapshot = makeAssetSnapshot(t, { files })
-  // The full view copies the swell asset (the logbook embeds it): allowed there...
-  const full = prepare(snapshot, assetScope, { profile: assetProfile })
-  assert.ok(full.manifest.attachments.some((attachment) => attachment.ext[EXT].assetPath === 'charts/swell.svg'))
-  // ...and forbidden in a view that does not copy it.
-  assert.throws(() => prepare(snapshot, { ...assetScope, scopeId: 'scope-naming', mode: 'scoped', selector: { ids: ['east-desk:naming'] } }, { profile: assetProfile }), /redaction-failure/)
+  // branch of the deny-list can catch it, so this is a control for it.
+  for (const named of ['west-desk:asset:charts/swell.svg', 'west-desk/charts/swell.svg']) {
+    const files = assetFiles()
+    files['east-desk/notes/naming.md'] = doc('east-desk:naming', `Names ${named}`, '# Names it\n')
+    const snapshot = makeAssetSnapshot(t, { files })
+    // The full view copies the swell asset (the logbook embeds it): allowed there...
+    const full = prepare(snapshot, assetScope, { profile: assetProfile })
+    assert.ok(full.manifest.attachments.some((attachment) => attachment.ext[EXT].assetPath === 'charts/swell.svg'))
+    // ...and forbidden in a view that does not copy it, once the title reaches generated text.
+    const naming = { ...assetScope, scopeId: 'scope-naming', mode: 'scoped', selector: { ids: ['east-desk:naming', 'east-desk:logbook'] } }
+    const withRelation = makeAssetSnapshot(t, { files: { ...files, 'east-desk/notes/naming.md': doc('east-desk:naming', `Names ${named}`, '# Names it\n').replace('  audience: "team"\n', '  audience: "team"\n  relations:\n    supports:\n      - "east-desk:signal"\n') } })
+    assert.throws(() => prepare(withRelation, { ...naming, selector: { ids: ['east-desk:naming', 'east-desk:signal'] } }, { profile: assetProfile }), /redaction-failure/, named)
+  }
 })
 
 test('a census record with an empty repository or identity neither joins a view nor aborts it', (t) => {
@@ -913,19 +990,100 @@ test('a census record with an empty repository or identity neither joins a view 
 })
 
 test('a withheld identity that reaches only a relations row (never a path) is still refused', (t) => {
-  // A title longer than the basename budget is truncated in the allocated path,
-  // so the withheld suffix it carries appears only in the generated relations
-  // region of the notes that relate to it. Only the free-text scan can catch it.
-  const sealed = identitySuffix('north-desk', 'north-desk:sealed-ledger', 64).slice(0, 12)
-  const title = `${'Long name '.repeat(14)}--${sealed}`
-  const snapshot = makeWorkspaceVariant(t, {
-    'north-desk/notes/long.md': { text: `---\ntitle: "${title}"\nkg:\n  id: "north-desk:long"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Long\n` },
-  })
+  // A title longer than the name budget is cut in the allocated path, so the
+  // withheld identity it carries appears only in the generated relation rows of
+  // the notes that relate to it. Only the free-text scan can catch it.
+  const title = `${'Long name '.repeat(14)}north-desk:sealed-ledger`
+  const snapshot = makeWorkspaceVariant(t, { 'north-desk/notes/long.md': relatedNote('north-desk:long', title) })
   assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
-  // Control: the same title without the withheld suffix prepares, and its path does not carry the title's tail.
-  const benign = makeWorkspaceVariant(t, {
-    'north-desk/notes/long.md': { text: `---\ntitle: "${'Long name '.repeat(14)}--ffffffffffff"\nkg:\n  id: "north-desk:long"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "north-desk:harbor-plan"\n---\n\n# Long\n` },
-  })
+  // Control: the same title without the withheld identity prepares, and its path does not carry the title's tail.
+  const benign = makeWorkspaceVariant(t, { 'north-desk/notes/long.md': relatedNote('north-desk:long', `${'Long name '.repeat(14)}north-desk:ffffffffffff`) })
   const prepared = prepare(benign, fullScope)
-  assert.ok(!noteOf(prepared, 'north-desk:long').path.includes('ffffffffffff'), 'the long title is truncated before the allocated suffix')
+  assert.ok(!noteOf(prepared, 'north-desk:long').path.includes('ffffffffffff'), 'the long title is cut before its tail')
+})
+
+// ---------------------------------------------------------------------------
+// The redaction guard, rule by rule. Each mutation control removes one rule
+// through createViewPreparationForOracleTests and shows that the view that
+// rule refuses is then accepted, and leaks.
+// ---------------------------------------------------------------------------
+
+// Rewrites one cached note in place, keeping every recorded range, digest and
+// inversion consistent with the new bytes, so only the guard stands between
+// the forged entry and the result.
+function forgeCachedNote(cache, notePath, from, to) {
+  const entry = cache.notes.get(notePath)
+  const file = entry.files.find((item) => item.path === notePath)
+  const at = file.bytes.indexOf(Buffer.from(from))
+  assert.notEqual(at, -1, `the cached note no longer holds ${from}`)
+  const delta = Buffer.byteLength(to) - Buffer.byteLength(from)
+  file.bytes = Buffer.concat([file.bytes.subarray(0, at), Buffer.from(to), file.bytes.subarray(at + Buffer.byteLength(from))])
+  file.digest = sha256Digest(file.bytes)
+  entry.note.noteDigest = file.digest
+  const shift = (range) => { if (range.start > at) range.start += delta; if (range.end > at) range.end += delta }
+  const { frontmatter, identity, body, generated } = entry.note.regions
+  for (const range of [frontmatter, identity, body, ...generated.map((region) => region.range)].filter(Boolean)) shift(range)
+  for (const [, inversions] of entry.edgeInversions) for (const inversion of inversions) shift(inversion.note)
+  for (const embed of entry.note.ext[EXT].assetEmbeds ?? []) for (const inversion of embed.inversions) shift(inversion.note)
+}
+
+const withoutRule = (rule) => createViewPreparationForOracleTests({ [rule]: () => {} })
+const judgingEmittedOnly = createViewPreparationForOracleTests({ judged: ({ notes, reused }) => notes.filter((note) => !reused.has(note.path)) })
+
+test('rule 1, allow-list: a generated link, a rewritten link or an identity block that names a file or note outside the view refuses', (t) => {
+  const snapshot = makeWorkspace(t)
+  const primed = () => { const cache = createPreparationCache(); prepare(snapshot, scopedScope, { cache }); return cache }
+  const plan = 'north-desk/plans/Harbor plan.md'
+  const outside = 'north-desk/plans/Shared concept.md'
+  const forgeries = {
+    'a relation row to a note outside the view': (cache) => forgeCachedNote(cache, plan, '- supports → [[south-desk/tables/Tide table.md|', `- supports → [[${outside}|`),
+    'a rewritten link to a note outside the view': (cache) => {
+      forgeCachedNote(cache, plan, '[[south-desk/tables/Tide table.md|Tide table]] or', `[[${outside}|Tide table]] or`)
+      const [, inversions] = cache.notes.get(plan).edgeInversions.find(([edgeKey]) => edgeKey === 'south-desk:tide-table')
+      const forged = inversions.find((inversion) => Buffer.from(inversion.ext[EXT].emitted, 'base64url').toString() === 'south-desk/tables/Tide table.md' && fileOf({ files: cache.notes.get(plan).files }, plan).bytes.subarray(inversion.note.start, inversion.note.end).toString() !== 'south-desk/tables/Tide table.md')
+      forged.ext[EXT].emitted = Buffer.from(outside).toString('base64url')
+      forged.note.end = forged.note.start + Buffer.byteLength(outside)
+    },
+    'an identity block naming another note': (cache) => forgeCachedNote(cache, plan, 'atelier-id: "north-desk:harbor-plan"', 'atelier-id: "north-desk:shared-a"'),
+  }
+  for (const [label, forge] of Object.entries(forgeries)) {
+    const forged = primed()
+    forge(forged)
+    assert.throws(() => prepare(snapshot, scopedScope, { cache: forged }), { code: 'redaction-failure' }, label)
+    // Mutation control: without the allow-list the forged note is served.
+    const leaky = primed()
+    forge(leaky)
+    const served = withoutRule('allowList')({ snapshot, profile, scope: scopedScope, clock, cache: leaky })
+    assert.ok(noteBytes(served, 'north-desk:harbor-plan').toString('utf8').includes(label.startsWith('an identity') ? 'north-desk:shared-a' : outside), label)
+  }
+})
+
+test('rule 2, deny-list: a withheld identity in generated free text refuses; without the rule it is emitted', (t) => {
+  const snapshot = makeWorkspaceVariant(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'Names north-desk:sealed-ledger') })
+  assert.throws(() => prepare(snapshot, fullScope), { code: 'redaction-failure' })
+  const leaked = withoutRule('denyList')({ snapshot, profile, scope: fullScope, clock })
+  const plan = noteOf(leaked, 'north-desk:harbor-plan')
+  const bytes = noteBytes(leaked, 'north-desk:harbor-plan')
+  const generated = plan.regions.generated.map((region) => bytes.subarray(region.range.start, region.range.end).toString('utf8')).join('')
+  assert.ok(generated.includes('north-desk:sealed-ledger'), 'without the deny-list the withheld identity reaches generated text')
+  // The allow-list alone does not catch it: the words are free text, not a link.
+  assert.throws(() => withoutRule('allowList')({ snapshot, profile, scope: fullScope, clock }), { code: 'redaction-failure' })
+})
+
+test('rule 3, coverage: a reused note is judged like an emitted one; a guard that skipped the cache would serve a forged entry', (t) => {
+  const snapshot = makeWorkspace(t)
+  const primed = () => { const cache = createPreparationCache(); prepare(snapshot, fullScope, { cache }); return cache }
+  const forge = (cache) => forgeCachedNote(cache, 'north-desk/plans/Harbor plan.md', '- evidences ← Depth chart', '- evidences ← Depth chart north-desk:sealed-ledger')
+  const forged = primed()
+  forge(forged)
+  const refused = (() => { try { prepare(snapshot, fullScope, { cache: forged }); return null } catch (error) { return error.code } })()
+  assert.equal(refused, 'redaction-failure')
+  const leaky = primed()
+  forge(leaky)
+  const served = judgingEmittedOnly({ snapshot, profile, scope: fullScope, clock, cache: leaky })
+  assert.equal(served.preparation.emitted, 0, 'every note was reused')
+  assert.ok(noteBytes(served, 'north-desk:harbor-plan').toString('utf8').includes('north-desk:sealed-ledger'))
+  // The production rules judge every note: the same inputs without the forged entry prepare as before.
+  assert.deepEqual(prepare(snapshot, fullScope, { cache: createPreparationCache() }).manifestBytes, prepare(snapshot, fullScope).manifestBytes)
+  assert.equal(REDACTION_RULES.judged({ notes: [1, 2], reused: new Set([1]) }).length, 2)
 })

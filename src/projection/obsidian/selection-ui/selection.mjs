@@ -78,9 +78,13 @@ export function resolveSelection({ canonicalSnapshot, profile, scope, allowEmpty
 
   const workspaceId = typeof profile?.workspaceId === 'string' ? profile.workspaceId : 'ws-unnamed'
   const nodeById = new Map(canonicalSnapshot.nodes.map((node) => [node.id, node]))
-  const vaultNodes = result.vaultNodes.map((id) => nodeById.get(id))
+  // Paths are allocated over every visible node of the workspace, as a prepared view allocates them: a name that
+  // collides takes a qualifier, so which name a note gets depends on the notes allocated with it.
   let pathOf
-  try { ({ pathOf } = allocateWorkspacePaths({ registry: pathRegistry, workspaceId, nodes: vaultNodes })) } catch (error) { contractRefusalToTyped(error) }
+  try {
+    const visible = selectScope({ canonicalSnapshot, profile, selector: { all: true }, mode: 'scoped' }).nodes.map((id) => nodeById.get(id))
+    ;({ pathOf } = allocateWorkspacePaths({ registry: pathRegistry, workspaceId, nodes: visible }))
+  } catch (error) { contractRefusalToTyped(error) }
   const notePaths = Object.fromEntries(result.nodes.map((id) => [id, pathOf(nodeById.get(id).repo, id)]))
 
   let focus = null

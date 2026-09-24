@@ -1,0 +1,39 @@
+{
+  "nodes": [
+    "north-desk:harbor-plan",
+    "south-desk:tide-table"
+  ],
+  "edges": [
+    [
+      "north-desk:harbor-plan",
+      "links_to",
+      "south-desk:tide-table"
+    ],
+    [
+      "north-desk:harbor-plan",
+      "supports",
+      "south-desk:tide-table"
+    ],
+    [
+      "south-desk:tide-table",
+      "links_to",
+      "north-desk:harbor-plan"
+    ]
+  ],
+  "attachments": [],
+  "files": {
+    ".obsidian/core-plugins.json": {
+      "digest": "sha256:9cc6bb2c8a1f7a0af211504020926be7a210d0c7d5fe4ea35ed0586f13e32a84",
+      "text": "{\n  \"publish\": false,\n  \"sync\": false\n}\n"
+    },
+    "notes/Harbor plan--6ec5d50e7b5a.md": {
+      "digest": "sha256:1213e251d98af10f7bad73a0a6d00c75111a2d87439a77ac3eb0c7b8007c4f2b",
+      "text": "---\ntitle: \"Harbor plan\"\nkg:\n  id: \"north-desk:harbor-plan\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    supports:\n      - \"south-desk:tide-table\"\n    depends_on:\n      - \"north-desk:shared-a\"\n    related:\n      - \"north-desk:sealed-ledger\"\n---\n\n# Harbor plan\n\nÜberblick — café ☕ first, so byte offsets and character offsets differ.\n\nSee the [tide table](Tide%20table--8a198323462b.md#spring) and again as [[Tide table--8a198323462b|Tide table]] or [[Tide table--8a198323462b#Spring|spring tides]].\nThe [depth chart](../charts/depth-chart.pdf) is a wrapped source. The concept is in [shared](shared-a.md).\n\nLeft alone: [ledger](../sealed/ledger.md), [gone](missing.md), [site](https://example.invalid/page.md) and `[[Tide table]]` in inline code.\n\n```\n[fenced](../../south-desk/tables/tide-table.md)\n[[Tide table]]\n```\n\n## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n- supports → [[Tide table--8a198323462b|Tide table]]\n- links_to → [[Tide table--8a198323462b|Tide table]]\n\nRelationships leading outside this view: 5\n"
+    },
+    "notes/Tide table--8a198323462b.md": {
+      "digest": "sha256:cf03259cf3b29765d3299d327aed1f5e0d9fe000c706bf1e9a7eec18e3dbe80a",
+      "text": "---\ntitle: \"Tide table\"\nkg:\n  id: \"south-desk:tide-table\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Tide table\n\n## Spring\n\nUsed by [[Harbor plan--6ec5d50e7b5a|the plan]]; embedded: ![[Harbor plan--6ec5d50e7b5a]]\n\n## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n- supports ← Harbor plan\n- links_to → [[Harbor plan--6ec5d50e7b5a|Harbor plan]]\n"
+    }
+  },
+  "manifestDigest": "sha256:0f11177e4cd9a9aa82409dafd33209b860f8248ff0fb9bd0abe1041895591e4a"
+}
