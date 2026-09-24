@@ -11,6 +11,7 @@ import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { assertOutsideRepositories, protectedRoots, readLocalPointer, resolveDataRoot, workspaceStateRoot } from './machine-settings.mjs'
 import { createPluginChannel, createPluginSessions, ensurePluginBearer, pluginPresence } from './plugin-channel.mjs'
 import { confirmPluginEntry, confirmPluginSeen, currentPluginChoice, decidePluginChoice, vaultFilePresent, viewVaultRoot } from './plugin-choice.mjs'
+import { createPluginDriftObserver } from './plugin-drift.mjs'
 import { isProcessAlive } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import {
@@ -184,11 +185,21 @@ export async function runMaintenanceService(options = {}) {
     writeLastServiceError({ workspaceRoot, workspaceId, document: { schema: SERVICE_ERROR_SCHEMA, workspaceId, runtimeId, code: errorCode(outcome.error), name: errorName(outcome.error), at, consecutiveFailures, totalFailures: (previous?.totalFailures ?? 0) + 1, resolvedAt: null } })
   }
 
+  // A plugin file a view's committed generation pins that is not on disk as pinned has the view prepared again, so the
+  // publisher writes it again; a drift is asked about once, not at every tick.
+  const pluginDrift = createPluginDriftObserver({ workspaceRoot, workspaceId })
+  const askForDriftedViews = () => {
+    try { for (const scopeId of pluginDrift.observe([...pluginChannel.bearers().keys()])) engine.requestPreparation(scopeId) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-drift-not-read', code: errorCode(error), name: errorName(error) })
+    }
+  }
+
   const loop = createTickLoop({
     intervalMs, maxBackoffMs, onOutcome: recordOutcome,
     async tick() {
       // The service runs only while its record names it: a replaced or removed record ends it, cleanly.
       if (!recordIsOurs()) { void shutdown('record-no-longer-names-this-runtime'); return { state: 'stopping', reason: 'record-no-longer-names-this-runtime' } }
+      askForDriftedViews()
       return engine.tick()
     },
   })

@@ -94,11 +94,15 @@ root that is not private enough for the bearer (`vault-not-private`), or a
 file that cannot be made or replaced there, in a plugin folder the person can
 read but not write, say (`create-failed`, `exchange-failed`), is reported and
 left alone while every note converges. Once it is repaired,
-or when a person changed or removed a plugin file, the next time the view is
-prepared the file is written again: a generation that is already committed
-is published again, as it is, when a plugin file it pins is not on disk as
-pinned, with its notes kept. (The settings files are held to the same rule
-for a file nobody may read.) A plugin file that another program changes while a publication runs
+or when a person changed or removed a plugin file, the file is written again
+at the maintenance service's next tick, with nothing changed at the view's
+sources: the service compares the plugin files each committed generation pins
+with the disk, has a view whose files differ prepared again, and a generation
+that is already committed is published again, as it is, with its notes kept.
+A drift left for the person is asked about once, and again once it changes;
+where the plugin is turned off in the vault, a pinned file that is gone is no
+drift. (The settings files are held to the same rule for a file nobody may
+read.) A plugin file that another program changes while a publication runs
 is a race and is handled like one on a note: that publication does not
 commit, the view is tried again, and the file is planned from the disk anew
 (`plugin-file-changed`); nothing reads a plugin file as an edit of a note.
@@ -450,7 +454,9 @@ note open in the editor.
   until the plugin runs there; `plugin on` publishing the view at once while
   the service runs),
   displaced bytes kept in recovery, the privacy rule of the vault root, a
-  linked vault root, unreadable files, a drifted plugin file written again,
+  linked vault root, unreadable files, a drifted plugin file written again
+  (at the service's next tick, with nothing changed at the sources, and a
+  drift left for the person asked about once),
   and an upgrade; the service publishing the plugin and the plugin it
   published holding the view; qualification from a plugin report, with one
   launch or two; and `status` and `open` reporting it. A spawn guard refuses

@@ -156,9 +156,10 @@
   under `ext["mnstry.atelier.obsidian"].settings`.
   Whatever occupies a plugin path is displaced to recovery, never lost; a
   plugin path a person has to repair (a link, a folder where a file goes, a
-  file nobody may read, a folder nobody may write) never holds a view back, a generation whose plugin
-  files the person repaired, changed or removed is published again as it is,
-  and another writer racing a plugin file makes the view try again.
+  file nobody may read, a folder nobody may write) never holds a view back; a
+  generation whose plugin files the person repaired, changed or removed is
+  published again as it is at the maintenance service's next tick; and
+  another writer racing a plugin file makes the view try again.
   `isUserOwnedSettingsPath` answers `false` for these paths.
 - Vault roots that Atelier places under its data root are created private
   (`0700`), and an existing one is made private before the plugin's key is

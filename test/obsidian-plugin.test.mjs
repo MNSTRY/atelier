@@ -1922,6 +1922,50 @@ test('a person who turns the plugin off in a vault is followed: the entry is not
   assert.deepEqual([offline.exit, offline.json.choice.state, offline.json.takesEffect, offline.json.service.asked], [0, 'requested', 'next-publication', false])
 })
 
+test('a plugin file that drifted is written again at the service\'s next tick, with nothing changed at the view\'s sources; a drift left for the person is asked about once', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const published = []
+  const service = await world.service({ seams: { publishView: (input) => { published.push(input.recoveryStore.scopeId); return publishView(input) } } })
+  const vault = choiceWorld(world)
+  const folder = path.join(world.vault, PLUGIN_DIRECTORY)
+  const shipped = (name) => fs.readFileSync(path.join(PLUGIN_SOURCE, name))
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return published.length }
+  await tick()
+  const generation = world.freshness().generationId
+  const first = await tick()
+  assert.equal(await tick(), first, 'nothing changed, nothing published')
+
+  // The person removes a plugin file, or changes one: the next tick writes it again, as the same generation.
+  fs.rmSync(path.join(folder, 'main.js'))
+  assert.equal(await tick(), first + 1)
+  assert.ok(fs.readFileSync(path.join(folder, 'main.js')).equals(shipped('main.js')))
+  fs.writeFileSync(path.join(folder, 'styles.css'), '/* changed */\n')
+  assert.equal(await tick(), first + 2)
+  assert.ok(fs.readFileSync(path.join(folder, 'styles.css')).equals(shipped('styles.css')))
+  assert.deepEqual([world.freshness().state, world.freshness().generationId], ['current', generation])
+
+  // A drift left for the person (a folder where the data file goes) is asked about once, and again once it changes.
+  const data = path.join(folder, 'data.json')
+  fs.rmSync(data)
+  fs.mkdirSync(data)
+  assert.equal(await tick(), first + 3)
+  assert.ok(fs.statSync(data).isDirectory(), 'left for the person')
+  assert.equal(await tick(), first + 3, 'asked about once')
+  fs.rmdirSync(data)
+  assert.equal(await tick(), first + 4)
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE)
+
+  // Turned off in the vault: a pinned file that is gone is no drift, since the publisher never makes one again.
+  fs.writeFileSync(vault.list, JSON.stringify(['dataview']))
+  fs.appendFileSync(world.source('harbor/notes/tides.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  const off = await tick()
+  assert.deepEqual(vault.choice(), ['off', 'entry-removed-by-person'])
+  fs.rmSync(path.join(folder, 'main.js'))
+  assert.equal(await tick(), off)
+  assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
+})
+
 test('an entry written while an app held the vault is only offered: that app writing back its list without it is no decision of the person\'s, until the plugin ran there', needsExchange, async (t) => {
   const world = serviceWorld(t)
   // An app that answers for the vault: every publication is made through it.
