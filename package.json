@@ -87,6 +87,7 @@
     "./contracts/atelier-obsidian-edit-operation.v1.schema.json": "./contracts/atelier-obsidian-edit-operation.v1.schema.json",
     "./contracts/atelier-obsidian-ext-settings.v1.schema.json": "./contracts/atelier-obsidian-ext-settings.v1.schema.json",
     "./contracts/atelier-obsidian-generation-manifest.v1.schema.json": "./contracts/atelier-obsidian-generation-manifest.v1.schema.json",
+    "./contracts/atelier-obsidian-generation-manifest.v2.schema.json": "./contracts/atelier-obsidian-generation-manifest.v2.schema.json",
     "./contracts/atelier-obsidian-proposal-receipt.v1.schema.json": "./contracts/atelier-obsidian-proposal-receipt.v1.schema.json",
     "./contracts/atelier-obsidian-publication-journal.v1.schema.json": "./contracts/atelier-obsidian-publication-journal.v1.schema.json",
     "./contracts/atelier-obsidian-scope.v1.schema.json": "./contracts/atelier-obsidian-scope.v1.schema.json",
