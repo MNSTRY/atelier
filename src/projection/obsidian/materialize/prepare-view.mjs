@@ -867,41 +867,57 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // What was laid out anyway and should be known, naming the note: a layout 2 generation records it.
   const noteDiagnostics = legacy ? [] : [...readable.diagnostics, ...authorKeyNotes]
 
-  // The redaction guard, over the whole result. Its deny-list: identifiers of
-  // every census node and asset outside this view, refused where they are
-  // unambiguous (a repository-qualified identity, a repository-qualified path,
-  // a repository-relative path with a folder, a vault path) and reported where
-  // they are a bare word (an identity, or a file name at a repository's root,
-  // such as README.md); an identifier this view's own notes share names nothing
-  // outside it.
+  // The redaction guard, over the whole result. Its deny-list holds the
+  // identifiers of every census node and asset outside this view, and follows
+  // the audience. Of one the audience may not see (withheld), an unambiguous
+  // identifier refuses the view (an identity qualified by any repository of
+  // the census, a repository-qualified path, a repository-relative path with a
+  // folder, a vault path) and an ambiguous one is reported (a bare-word
+  // identity, a file name at a repository's root, such as README.md). Of one
+  // the audience may see but this view does not select, every identifier is
+  // reported. An identifier this view's own notes share names nothing outside
+  // it.
   const viewAttachments = new Set(attachments.map((item) => item.path))
+  const visible = new Set(universe.nodes)
+  const censusRepositories = new Set([...canonical.nodes, ...censusAssets].filter(usable).map((item) => item.repo))
+  const qualified = (id) => id.indexOf(':') > 0 && censusRepositories.has(id.slice(0, id.indexOf(':')))
   const refused = []
   const reported = []
-  const identifierOf = (item) => {
+  const unselected = []
+  const identifierOf = (item, withheld) => {
     const id = String(item.id)
-    ;(id.startsWith(`${item.repo}:`) ? refused : reported).push(id)
-    refused.push(`${item.repo}/${item.path}`)
-    ;(item.path.includes('/') ? refused : reported).push(item.path)
+    for (const [value, unambiguous] of [[id, qualified(id)], [`${item.repo}/${item.path}`, true], [item.path, item.path.includes('/')]]) {
+      ;(!withheld ? unselected : unambiguous ? refused : reported).push(value)
+    }
   }
   for (const item of canonical.nodes) {
     if (!usable(item) || vault.has(item.id) || typeof item.path !== 'string') continue
-    identifierOf(item)
+    const withheld = !visible.has(item.id)
+    identifierOf(item, withheld)
     const allocated = legacy ? legacy.pathOf(item.repo, item.id) : null
-    if (allocated !== null) refused.push(allocated)
+    if (allocated !== null) (withheld ? refused : unselected).push(allocated)
   }
-  for (const item of censusAssets) if (usable(item) && typeof item.path === 'string' && !embeddedAssets.has(item.id)) identifierOf(item)
-  // Vault paths of notes and files outside this view: what other views hold for them, and what this view held before.
+  for (const item of censusAssets) if (usable(item) && typeof item.path === 'string' && !embeddedAssets.has(item.id)) identifierOf(item, !assets.has(item.id))
+  // Vault paths of notes and files outside this view, what other views hold for them and what this view held
+  // before: refused for what the audience may not see, reported otherwise (a note gone from the census included).
   const inView = (repoId, nodeId) => vault.has(nodeId) && nodeById.get(nodeId)?.repo === repoId
+  const withheldNode = (repoId, nodeId) => nodeById.get(nodeId)?.repo === repoId && !visible.has(nodeId)
   const copied = new Set([...embeddedAssets.values()].map((asset) => `${asset.repo}\u0000${asset.path}`))
+  const withheldAssets = new Set(censusAssets.filter((item) => usable(item) && typeof item.path === 'string' && !assets.has(item.id)).map((item) => `${item.repo}\u0000${item.path}`))
   for (const section of Object.values(views)) {
-    for (const entry of section.entries) if (!inView(entry?.repoId, entry?.nodeId)) refused.push(entry?.path, ...(entry?.attachment ? [entry.attachment] : []))
-    for (const entry of section.assets) if (!copied.has(`${entry?.repoId}\u0000${entry?.assetPath}`)) refused.push(entry?.path)
+    for (const entry of section.entries) {
+      if (!inView(entry?.repoId, entry?.nodeId)) (withheldNode(entry?.repoId, entry?.nodeId) ? refused : unselected).push(entry?.path, ...(entry?.attachment ? [entry.attachment] : []))
+    }
+    for (const entry of section.assets) {
+      const key = `${entry?.repoId}\u0000${entry?.assetPath}`
+      if (!copied.has(key)) (withheldAssets.has(key) ? refused : unselected).push(entry?.path)
+    }
   }
-  for (const note of priorManifest?.notes ?? []) if (!inView(note.repoId, note.nodeId)) refused.push(note.path)
+  for (const note of priorManifest?.notes ?? []) if (!inView(note.repoId, note.nodeId)) (withheldNode(note.repoId, note.nodeId) ? refused : unselected).push(note.path)
   const own = new Set()
-  for (const node of orderedNodes) own.add(node.id).add(`${node.repo}/${node.path}`).add(node.path).add(pathOf(node)).add(attachmentOf(node))
-  for (const asset of embeddedAssets.values()) own.add(asset.id).add(`${asset.repo}/${asset.path}`).add(asset.path).add(assetPaths.get(asset.id))
-  const outside = (values) => values.filter((value) => typeof value === 'string' && value !== '' && !own.has(value.normalize('NFC')) && !own.has(value))
+  for (const node of orderedNodes) for (const value of [node.id, `${node.repo}/${node.path}`, node.path, pathOf(node), attachmentOf(node)]) if (typeof value === 'string') own.add(value.normalize('NFC'))
+  for (const asset of embeddedAssets.values()) for (const value of [asset.id, `${asset.repo}/${asset.path}`, asset.path, assetPaths.get(asset.id)]) if (typeof value === 'string') own.add(value.normalize('NFC'))
+  const outside = (values) => values.filter((value) => typeof value === 'string' && value !== '' && !own.has(value.normalize('NFC')))
   const linkTargets = new Set()
   for (const node of orderedNodes) {
     const target = noteLinkTarget(layout, pathOf(node))
@@ -918,7 +934,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     nodeOf: (nodeId) => nodeById.get(nodeId),
     ownOf: (nodeId) => wrapperLines(nodeById.get(nodeId)),
     view: { allocatedPathOf: (nodeId) => allocatedInView.get(nodeId) ?? null, attachments: allowedAttachments, linkTargets },
-    deny: createDenyMatcher({ refuse: outside(refused), diagnose: outside(reported) }),
+    deny: createDenyMatcher({ refuse: outside(refused), diagnose: outside(reported), notice: outside(unselected) }),
     layoutVersion: layout.version,
   }, guard)
   if (!legacy) noteDiagnostics.push(...guardReported)

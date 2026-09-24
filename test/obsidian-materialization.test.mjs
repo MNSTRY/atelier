@@ -22,7 +22,7 @@ import {
   withEligibility,
 } from '../src/projection/obsidian/materialize/index.mjs'
 import { createViewPreparationForOracleTests } from '../src/projection/obsidian/materialize/prepare-view.mjs'
-import { REDACTION_RULES, createDenyMatcher } from '../src/projection/obsidian/materialize/redaction.mjs'
+import { REDACTION_RULES, assertViewRedaction, createDenyMatcher } from '../src/projection/obsidian/materialize/redaction.mjs'
 
 // Invented fixtures only. The workspace is written into a temporary directory,
 // read by the real canonical graph builder, and prepared in memory.
@@ -961,20 +961,22 @@ test('a wikilink whose author-chosen words look like an identity suffix is not a
   assertNothingWithheld(prepared)
 })
 
-test('an asset the view does not copy is a forbidden identity in generated text', (t) => {
+test('an asset the view does not copy, named in generated text, refuses the view when the audience may not see it and is reported when it may', (t) => {
   // A real asset (id `<repo>:asset:<path>`), not a census node: only the asset
   // branch of the deny-list can catch it, so this is a control for it.
+  const swellWithheld = (asset) => sealedAsset(asset) && asset.path !== 'charts/swell.svg'
+  const naming = { ...assetScope, scopeId: 'scope-naming', mode: 'scoped', selector: { ids: ['east-desk:naming', 'east-desk:signal'] } }
   for (const named of ['west-desk:asset:charts/swell.svg', 'west-desk/charts/swell.svg']) {
-    const files = assetFiles()
-    files['east-desk/notes/naming.md'] = doc('east-desk:naming', `Names ${named}`, '# Names it\n')
+    const files = { ...assetFiles(), 'east-desk/notes/naming.md': doc('east-desk:naming', `Names ${named}`, '# Names it\n').replace('  audience: "team"\n', '  audience: "team"\n  relations:\n    supports:\n      - "east-desk:signal"\n') }
     const snapshot = makeAssetSnapshot(t, { files })
-    // The full view copies the swell asset (the logbook embeds it): allowed there...
+    // The full view copies the swell asset (the logbook embeds it): the title names it there, and that is allowed...
     const full = prepare(snapshot, assetScope, { profile: assetProfile })
     assert.ok(full.manifest.attachments.some((attachment) => attachment.ext[EXT].assetPath === 'charts/swell.svg'))
-    // ...and forbidden in a view that does not copy it, once the title reaches generated text.
-    const naming = { ...assetScope, scopeId: 'scope-naming', mode: 'scoped', selector: { ids: ['east-desk:naming', 'east-desk:logbook'] } }
-    const withRelation = makeAssetSnapshot(t, { files: { ...files, 'east-desk/notes/naming.md': doc('east-desk:naming', `Names ${named}`, '# Names it\n').replace('  audience: "team"\n', '  audience: "team"\n  relations:\n    supports:\n      - "east-desk:signal"\n') } })
-    assert.throws(() => prepare(withRelation, { ...naming, selector: { ids: ['east-desk:naming', 'east-desk:signal'] } }, { profile: assetProfile }), /redaction-failure/, named)
+    // ...a view that does not copy it reports the title, since the audience may see the asset...
+    const reported = prepare(snapshot, naming, { profile: assetProfile })
+    assert.deepEqual((reported.manifest.ext[EXT].diagnostics ?? []).map((item) => [item.code, item.nodeId]), [['unselected-identity-in-generated-text', 'east-desk:signal']], named)
+    // ...and when the audience may not see it, the title refuses the view.
+    assert.throws(() => prepare(makeAssetSnapshot(t, { files, assetEligible: swellWithheld }), naming, { profile: assetProfile }), /redaction-failure/, named)
   }
 })
 
@@ -1054,12 +1056,13 @@ test('a title that reaches generated text only in a sanitized form is carried as
   assert.equal(noteOf(prepared, 'north-desk:target').path, 'north-desk/notes/About north-desk q3_layoffs.md')
 })
 
-test('the deny matcher refuses before it reports: a refused value wins over a reported one, and both sides are compared in NFC', () => {
-  const deny = createDenyMatcher({ refuse: ['north-desk:re\u0301sume\u0301'], diagnose: ['harbor'] })
-  assert.equal(deny('the harbor'), 'diagnose')
+test('the deny matcher answers the strongest class a text holds: a refused value, then a bare one, then an unselected one, compared in NFC', () => {
+  const deny = createDenyMatcher({ refuse: ['north-desk:re\u0301sume\u0301'], diagnose: ['harbor'], notice: ['docs/README.md'] })
+  assert.equal(deny('update docs/README.md'), 'notice')
+  assert.equal(deny('the harbor and docs/README.md'), 'diagnose')
   assert.equal(deny('the harbor and north-desk:r\u00e9sum\u00e9'), 'refuse')
   assert.equal(deny('north-desk:re\u0301sume\u0301'), 'refuse')
-  assert.equal(deny('harbors'), null)
+  assert.equal(deny('harbors and xdocs/README.md'), null)
 })
 
 test('the deny-list refuses unambiguous identifiers of notes outside the view, reports a bare word, and names the in-view note and the rule, never the value', (t) => {
@@ -1099,6 +1102,53 @@ test('a withheld README.md at a repository root never refuses a view whose notes
   }
   // With its repository, the same file names the withheld note unambiguously.
   assert.throws(() => prepare(withReadme('See north-desk/README.md first'), scoped), /redaction-failure/)
+})
+
+test('the deny-list follows the audience: an identifier of a note the audience may see but the view does not select is reported, never refused', (t) => {
+  const doc = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
+  const files = { 'north-desk/docs/README.md': doc('north-desk:docs-readme', 'Docs'), 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'Update docs/README.md') }
+  const scoped = { ...scopedScope, scopeId: 'scope-naming', selector: { ids: ['north-desk:harbor-plan', 'north-desk:naming'] } }
+  // Every view of a workspace has one audience today, so a note outside the selection is no secret from it.
+  const visible = makeWorkspaceWithheld(t, files)
+  assert.deepEqual(prepare(visible, scoped).manifest.ext[EXT].diagnostics, [{ code: 'unselected-identity-in-generated-text', rule: 'deny-list', repoId: 'north-desk', nodeId: 'north-desk:harbor-plan', notePath: 'north-desk/plans/Harbor plan.md' }])
+  assert.equal(prepare(visible, fullScope).manifest.ext[EXT].diagnostics, undefined, 'the full view holds that note')
+  // The same text refuses when the audience may not see the note it names.
+  assert.throws(() => prepare(makeWorkspaceWithheld(t, files, ['north-desk:docs-readme']), scoped), /redaction-failure/)
+})
+
+test('an identity qualified by any repository of the census is unambiguous, whichever repository holds its note', (t) => {
+  const doc = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
+  const snapshot = makeWorkspaceWithheld(t, { 'north-desk/sealed/cross.md': doc('south-desk:sealed-cross', 'Sealed'), 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'Follows south-desk:sealed-cross') }, ['south-desk:sealed-cross'])
+  assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/)
+})
+
+test('a value this view holds names nothing outside it, compared in NFC: an in-view path in NFD beside the same path withheld in NFC', (t) => {
+  const doc = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
+  const snapshot = makeWorkspaceWithheld(t, {
+    'north-desk/Réunions/plan.md': doc('north-desk:reunion-plan', 'Reunion plan'),
+    'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'See Réunions/plan.md'),
+    'south-desk/Réunions/plan.md': doc('south-desk:reunion-plan', 'Sealed reunion plan'),
+  }, ['south-desk:reunion-plan'])
+  const prepared = prepare(snapshot, fullScope)
+  assert.ok(prepared.manifest.notes.some((note) => note.nodeId === 'north-desk:reunion-plan'))
+  assert.equal(prepared.manifest.ext[EXT].diagnostics, undefined)
+})
+
+test('an allow-list refusal names the note by its allocated path, or the rule alone, never the path in question', () => {
+  const view = { allocatedPathOf: (id) => (id === 'r:in' ? 'r/In.md' : null), attachments: new Set(), linkTargets: new Set(['r/In.md']) }
+  const base = { files: [], reused: new Set(), nodeOf: () => ({ id: 'r:in', repo: 'r', path: 'in.md' }), ownOf: () => ({}), view, deny: () => null, layoutVersion: 1 }
+  const refusalOf = (manifest) => { try { assertViewRedaction({ ...base, manifest }); return null } catch (error) { return error } }
+  const note = (nodeId) => ({ nodeId, path: 'r/sealed/Layoffs Q3 plan.md', regions: { generated: [] }, ext: {} })
+  const cases = [
+    [{ notes: [], links: [], attachments: [{ path: 'r/sealed/Layoffs Q3 plan.pdf' }] }, { rule: 'allow-list' }],
+    [{ notes: [note('r:in')], links: [], attachments: [] }, { rule: 'allow-list', notePath: 'r/In.md' }],
+    [{ notes: [note('r:out')], links: [], attachments: [] }, { rule: 'allow-list' }],
+  ]
+  for (const [manifest, detail] of cases) {
+    const error = refusalOf(manifest)
+    assert.deepEqual([error?.code, error?.detail], ['redaction-failure', detail])
+    assert.equal(/Layoffs|r:out/.test(error.message), false, error.message)
+  }
 })
 
 test('the published materialization subpath carries no test seam of the redaction guard', async () => {

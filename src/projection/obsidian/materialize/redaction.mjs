@@ -12,8 +12,10 @@ import { refuse } from './byte-lens.mjs'
 //               regions) is one allocated to this view, and each identity
 //               block names exactly its own note
 //   deny-list   the free text of the generated regions, read as a reader
-//               sees it, names no unambiguous identifier of anything outside
-//               this view (refused) and no bare word that is one (reported)
+//               sees it, names no unambiguous identifier of anything the
+//               audience may not see (refused); an ambiguous one, and any
+//               identifier of what the audience may see but the view does
+//               not select, is reported
 //   coverage    both run over every note of the view
 //
 // REDACTION_RULES are the rules production uses. The mutation controls in
@@ -60,16 +62,18 @@ const isAlnumAt = (text, index) => ALNUM.test(codePointAt(text, index))
 const continuesAfter = (text, end) => isAlnumAt(text, end) || (JOINERS.has(text[end]) && isAlnumAt(text, end + 1))
 const continuesBefore = (text, start) => isAlnumAt(text, start - 1) || (JOINERS.has(text[start - 1]) && isAlnumAt(text, start - 2))
 
-const REFUSE = 2
-const DIAGNOSE = 1
+const REFUSE = 3
+const DIAGNOSE = 2
+const NOTICE = 1
 const UNITS = 0x10000
 
 // One Aho–Corasick automaton over every value, read in UTF-16 code units, with
-// the token boundary tested at each hit: linear in the text, whatever the
-// number of values. `refuse` values refuse a view, `diagnose` values are
-// reported; the matcher answers the stronger of what a text holds ('refuse',
-// 'diagnose' or null). Values and texts are compared in NFC.
-export function createDenyMatcher({ refuse: refused = [], diagnose = [] } = {}) {
+// the token boundary tested at each hit: building it is linear in the values,
+// and a text is read once, whatever their number. `refuse` values refuse a
+// view; `diagnose` and `notice` values are reported, each under its own code.
+// The matcher answers the strongest of what a text holds ('refuse', 'diagnose',
+// 'notice' or null). Values and texts are compared in NFC.
+export function createDenyMatcher({ refuse: refused = [], diagnose = [], notice = [] } = {}) {
   const next = new Map()
   const parent = [0]
   const unit = [0]
@@ -97,6 +101,7 @@ export function createDenyMatcher({ refuse: refused = [], diagnose = [] } = {}) 
   }
   for (const value of refused) add(value, REFUSE)
   for (const value of diagnose) add(value, DIAGNOSE)
+  for (const value of notice) add(value, NOTICE)
   // Failure and output links, state by state in order of depth.
   const fail = new Int32Array(parent.length)
   const outputLink = new Int32Array(parent.length).fill(-1)
@@ -129,7 +134,7 @@ export function createDenyMatcher({ refuse: refused = [], diagnose = [] } = {}) 
         if (found === REFUSE) return 'refuse'
       }
     }
-    return found === REFUSE ? 'refuse' : found === DIAGNOSE ? 'diagnose' : null
+    return found === REFUSE ? 'refuse' : found === DIAGNOSE ? 'diagnose' : found === NOTICE ? 'notice' : null
   }
 }
 
@@ -189,8 +194,11 @@ export function readNoteForRedaction({ note, bytes, node, own }) {
   }
 }
 
-// A refusal names the in-view note (or file) and the rule, never the value.
-const refuseAt = (rule, where, message) => refuse('redaction-failure', `${message} (${rule}, ${where})`, { rule, ...(where.endsWith('.md') ? { notePath: where } : { filePath: where }) })
+// A refusal names the rule and the in-view note (or file) it concerns, never
+// the value: `where` is a path allocated to this view, or null when the only
+// path at hand is the one in question.
+const refuseAt = (rule, where, message) => refuse('redaction-failure', where === null ? `${message} (${rule})` : `${message} (${rule}, ${where})`,
+  { rule, ...(where === null ? {} : where.endsWith('.md') ? { notePath: where } : { filePath: where }) })
 
 // Rule 1. `view.allocatedPathOf(nodeId)` is the path allocated to a node of
 // this view (null for any other), `view.attachments` the files it holds and
@@ -200,13 +208,13 @@ function allowList({ manifest, notes, read, view, layoutVersion }) {
   const judgedIds = new Set(notes.map((note) => note.nodeId))
   const pathOfNode = new Map(manifest.notes.map((note) => [note.nodeId, note.path]))
   for (const note of notes) {
-    if (view.allocatedPathOf(note.nodeId) !== note.path) refuseAt('allow-list', note.path, 'a note path is not the one allocated to a note of this view')
+    if (view.allocatedPathOf(note.nodeId) !== note.path) refuseAt('allow-list', view.allocatedPathOf(note.nodeId), 'a note path is not the one allocated to a note of this view')
     for (const embed of note.ext?.[EXT]?.assetEmbeds ?? []) {
       if (!view.attachments.has(embed.attachment)) refuseAt('allow-list', note.path, 'an embed names a file that is not part of this view')
     }
   }
   for (const attachment of manifest.attachments) {
-    if (!view.attachments.has(attachment.path)) refuseAt('allow-list', attachment.path, 'an attachment is not a file of this view')
+    if (!view.attachments.has(attachment.path)) refuseAt('allow-list', null, 'an attachment is not a file of this view')
   }
   for (const link of manifest.links.filter((item) => judgedIds.has(item.sourceNodeId))) {
     for (const inversion of link.inversions ?? []) checkInversion(inversion, pathOfNode.get(link.sourceNodeId), view)
@@ -228,17 +236,24 @@ function checkInversion(inversion, notePath, view) {
   if (!view.linkTargets.has(emitted)) refuseAt('allow-list', notePath, 'an emitted link names a file that is not part of this view')
 }
 
-// Rule 2. A refused value refuses the view; a reported one (an identity that
-// is a bare word) is recorded through `report` and the view goes on.
+// Rule 2. A refused value refuses the view and names the note whose generated
+// region holds it; a reported one is recorded through `report`, once a note
+// and code, and the view goes on: an ambiguous identifier of what the audience
+// may not see (a bare word, a root file name) as bare-identity-in-generated-text,
+// an identifier of what the audience may see but the view does not select as
+// unselected-identity-in-generated-text.
+const REPORTED = { diagnose: 'bare-identity-in-generated-text', notice: 'unselected-identity-in-generated-text' }
+
 function denyList({ read, deny, report }) {
   for (const entry of read) {
-    let reported = false
+    const reported = new Set()
     for (const text of entry.freeText) {
       const found = deny(text)
       if (found === 'refuse') refuseAt('deny-list', entry.note.path, 'generated text names an identity that is not part of this view')
-      if (found === 'diagnose' && !reported) {
-        reported = true
-        report({ code: 'bare-identity-in-generated-text', rule: 'deny-list', repoId: entry.note.repoId, nodeId: entry.note.nodeId, notePath: entry.note.path })
+      const code = REPORTED[found]
+      if (code !== undefined && !reported.has(code)) {
+        reported.add(code)
+        report({ code, rule: 'deny-list', repoId: entry.note.repoId, nodeId: entry.note.nodeId, notePath: entry.note.path })
       }
     }
   }
