@@ -24,7 +24,10 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
   the first answer it says `Atelier: connecting`; without channel data, or in
   a copy of the vault rather than the vault Atelier maintains, it says
   `Atelier: not set up`; in an app older than 1.13.7 it says
-  `Atelier: needs a newer Obsidian`.
+  `Atelier: needs a newer Obsidian`. Between `not set up` and
+  `service unreachable` it moves only when two rounds in a row agree, so a
+  listener that answers one way and then the other does not make it flip;
+  every other change shows at once.
 - The command "Atelier: show status", or a click on the status bar item, opens
   a window with the view, its state and the reason in words, the committed and
   the prepared generation, when freshness was last checked, the held, retained
@@ -410,7 +413,8 @@ note open in the editor.
   session and sets no app version; an answer relayed from a service at
   another address; answers that are not sealed, and a listener that answers
   every command with an error, which gets one renewal of a session and
-  nothing more of it; an unload while a hello is
+  nothing more of it; answers that alternate between the two failures, which
+  do not make the status bar flip; an unload while a hello is
   under way; the refusal table above with mutation controls that must fail
   it; bearer minting, rotation and the bearer cache; publication of the
   plugin files, entries and data file, with a person's settings kept, the

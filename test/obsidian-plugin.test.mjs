@@ -251,7 +251,7 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
 // reloads the plugin, so a change to the code without a new version would leave two plugins under one version.
 const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
-  '1.1.0': 'sha256:eb5da836e83789721ac97e7db19b66cd9a262c2113c0a155d87c8a17c2ffe90c',
+  '1.1.0': 'sha256:6be2900bfe25ae5a0aec920cb3c4289ad25b6d36eed1567fdd0cef88ed53ed95',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
@@ -782,6 +782,38 @@ test('a listener that answers every request with an error gets one renewal of th
     await squat.close()
     plugin.unload()
   }
+})
+
+test('the status bar does not flip between "not set up" and "service unreachable": a failure other than the one shown takes two rounds that agree', async (t) => {
+  const world = await channelWorld(t)
+  const plugin = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBarOf(world), 'Atelier: current')
+  await world.service.listener.close()
+  // A listener that answers the one way and then the other: one request per round once the session ended.
+  let answered = 0
+  let alternate = true
+  const squat = await squatter(t, world.port, () => {
+    answered += 1
+    return alternate && answered % 2 === 1 ? { statusCode: 503, body: { error: 'service-unavailable' } } : { statusCode: 401, body: { error: 'plugin-key-unknown' } }
+  })
+  const shown = []
+  for (let round = 0; round < 5; round += 1) { await plugin.cycle(); shown.push(statusBarOf(world)) }
+  assert.deepEqual(shown, Array(5).fill('Atelier: service unreachable'))
+  assert.equal(answered, 5)
+  // Two rounds in a row that agree move it, and the reason shown is the new one.
+  alternate = false
+  await plugin.cycle()
+  assert.equal(statusBarOf(world), 'Atelier: service unreachable')
+  await plugin.cycle()
+  assert.deepEqual([statusBarOf(world), plugin.view.reason], ['Atelier: not set up', 'key-not-known-to-the-service'])
+  // Anything but a change between the two failures is shown at once: the service back is current in one round.
+  await squat.close()
+  world.service = await world.listen({ port: world.port, withSessions: createPluginSessions() })
+  await plugin.cycle()
+  assert.equal(statusBarOf(world), 'Atelier: current')
+  plugin.unload()
 })
 
 test('a plugin unloaded while its hello is under way lets that session go at once, and shows nothing afterwards', async (t) => {

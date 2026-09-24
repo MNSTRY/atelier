@@ -110,6 +110,9 @@ function labelOf(view) {
 
 const plural = (count, one, many) => (count === 1 ? one : many)
 
+// The two ways a round can fail to reach the view. Between them the status bar moves only once two rounds agree.
+const ROUND_FAILURES = new Set(['not-set-up', 'unreachable'])
+
 // Notices on a transition into a state that needs a person, and back out of one.
 const ATTENTION = Object.freeze({
   held: (view) => `Atelier kept ${plural(view.held, 'an edit', `${view.held} edits`)} you made. This view is not updated over ${plural(view.held, 'it', 'them')} until ${plural(view.held, 'it is', 'they are')} applied or withdrawn.`,
@@ -198,6 +201,8 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     this.unloaded = false
     this.view = { state: 'connecting', reason: 'not-yet-asked', report: null }
     this.shownState = null
+    // A round's failure that differs from the failure shown, not yet seen twice in a row.
+    this.pendingFailure = null
     this.appVersion = typeof obsidian.apiVersion === 'string' ? obsidian.apiVersion : null
     this.statusBarEl = this.addStatusBarItem()
     this.statusBarEl.addClass('atelier-projection-status-bar')
@@ -281,7 +286,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
         // starts a handshake, which only the service can answer. An unproven listener gets no second request of it.
         this.session = null
         if (!(lease.kind === 'refused' && (lease.error === 'session-unknown' || lease.statusCode === 401))) {
-          this.setView(this.unreachable(lease))
+          this.showRound(this.unreachable(lease))
           return
         }
         // The service started again since, the vault's key changed, or the session is not accepted: shake hands at once.
@@ -291,7 +296,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     const status = await this.request(channel, 'status')
     if (!this.current(channel)) return
     if (status.kind !== 'sealed') this.session = null
-    this.setView(status.kind === 'sealed' ? viewOfStatus(status.document) : this.unreachable(status))
+    this.showRound(status.kind === 'sealed' ? viewOfStatus(status.document) : this.unreachable(status))
   }
 
   // The handshake. Nothing that names this vault is sent before the listener proved it holds the vault's key.
@@ -299,7 +304,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     let vaultPath = null
     try { vaultPath = this.fs.realpathSync(this.app.vault.adapter.getBasePath()) } catch { vaultPath = null }
     if (typeof vaultPath !== 'string') {
-      this.setView({ state: 'not-set-up', reason: 'vault-path-unknown', report: null })
+      this.showRound({ state: 'not-set-up', reason: 'vault-path-unknown', report: null })
       return false
     }
     const crypto = this.crypto
@@ -309,14 +314,14 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     if (!this.current(channel)) return false
     const offer = challenge.kind === 'response' && challenge.statusCode === 200 ? challenge.body : null
     if (offer === null) {
-      this.setView(challenge.kind === 'response' && challenge.statusCode === 401 ? { state: 'not-set-up', reason: 'key-not-known-to-the-service', report: null } : this.unreachable(challenge))
+      this.showRound(challenge.kind === 'response' && challenge.statusCode === 401 ? { state: 'not-set-up', reason: 'key-not-known-to-the-service', report: null } : this.unreachable(challenge))
       return false
     }
     const bound = [channel.scopeId, authorityOf(channel), clientNonce, offer.serverNonce, offer.handshakeId]
     if (offer.protocol !== CHANNEL.protocol || typeof offer.handshakeId !== 'string' || !HANDSHAKE_ID.test(offer.handshakeId) || typeof offer.serverNonce !== 'string' || !NONCE.test(offer.serverNonce)
       || !sameMac(offer.serverProof, hmacHex(crypto, channel.bearer, 'server-proof', bound))) {
       // Whatever answers there does not hold this vault's key: it is told nothing more.
-      this.setView({ state: 'unreachable', reason: 'listener-not-proven', report: null })
+      this.showRound({ state: 'unreachable', reason: 'listener-not-proven', report: null })
       return false
     }
     const key = hmac(crypto, channel.bearer, 'session-key', bound)
@@ -337,8 +342,8 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     }
     if (!this.current(channel)) return false
     // A copy of a vault carries its data file, but the service maintains the original only.
-    if (sealed.kind === 'refused' && sealed.statusCode === 409 && sealed.error === 'wrong-vault') this.setView({ state: 'not-set-up', reason: 'not-the-vault-atelier-maintains', report: null })
-    else this.setView(this.unreachable(sealed))
+    if (sealed.kind === 'refused' && sealed.statusCode === 409 && sealed.error === 'wrong-vault') this.showRound({ state: 'not-set-up', reason: 'not-the-vault-atelier-maintains', report: null })
+    else this.showRound(this.unreachable(sealed))
     return false
   }
 
@@ -377,9 +382,21 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     return { state: 'unreachable', reason, report: null }
   }
 
+  // What a round found. A failure other than the one shown ('not set up' where 'service unreachable' is shown, or the other
+  // way round) is shown only when the next round finds it too, so answers that alternate between them do not make the
+  // status bar flip. Anything else is shown at once.
+  showRound(view) {
+    if (ROUND_FAILURES.has(view.state) && ROUND_FAILURES.has(this.shownState) && view.state !== this.shownState && this.pendingFailure !== view.state) {
+      this.pendingFailure = view.state
+      return
+    }
+    this.setView(view)
+  }
+
   setView(view) {
     // Nothing is shown once the plugin unloaded.
     if (this.unloaded) return
+    this.pendingFailure = null
     const previous = this.shownState
     this.view = view
     this.statusBarEl.setText(labelOf(view))
