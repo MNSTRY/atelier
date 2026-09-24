@@ -14,7 +14,7 @@ import {
 } from './machine-settings.mjs'
 import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
-import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
+import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import { FRESHNESS_SCHEMA, LATE_WRITERS_SCHEMA, createMaintenanceStateStore } from './state-store.mjs'
@@ -171,7 +171,8 @@ function journalsToRecheck(store, { nowMs, full, windowMs }) {
 export function createMaintenanceEngineForOracleTests(options = {}, primitives = ENGINE_PRIMITIVES) {
   const {
     loadProject, dataRoot, adapterFactory, clock,
-    watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility = DEFAULT_ELIGIBILITY,
+    // Which notes may enter a view: what the machine settings decide at each tick (eligibilityFor), unless a test fixes it.
+    watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility: fixedEligibility = null,
     fullReconciliationIntervalMs = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS, lateWriterWindowMs = DEFAULT_LATE_WRITER_WINDOW_MS,
     publicationRetryMs = DEFAULT_PUBLICATION_RETRY_MS, observeApp = null,
     // Reads the app's own vault list without asking the app (readAppVaultListForAllocation): { ok: true, vaults } with
@@ -361,6 +362,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (!lock.acquired) return { state: 'busy', reason: 'engine-lock-held', lock: { reason: lock.reason, holder: lock.holder ?? null }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
     const machine = readMachineSettings({ workspaceRoot, workspaceId })
       ?? writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: defaultMachineSettings({ workspaceId, updatedAt: now }) })
+    const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }
     // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never

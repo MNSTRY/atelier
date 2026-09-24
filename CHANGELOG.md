@@ -73,6 +73,18 @@
   allocation record that cannot be read or names a folder inside a
   repository, each stops its own view only. `location show`
   and `status` (`scopes[].vault`) say where each view's vault is.
+- A vault that is only yours shows the notes that carry no classification:
+  `atelier obsidian audience set me` now records `unclassified: shown` with
+  "only you", and every path that builds a view (the engine, source apply,
+  the proposal adapter, `selection`) admits them through one rule,
+  `eligibilityFor`. A list of audiences never shows them, even one that names
+  every audience "only you" stands for. Such a note is shown only when its
+  bytes read as a note the way the emitter reads every note, so a file that
+  cannot be published stays withheld instead of stopping the vault. Deciding
+  it changes the eligibility revision, so every view is rebuilt at the next
+  tick. A decision recorded as "only you" with them withheld keeps them
+  withheld until `audience set me` is run again.
+
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the

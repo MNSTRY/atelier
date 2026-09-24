@@ -76,7 +76,8 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
                                        notes they link to (DEPTH steps, MAX notes in all). Shows the change and how many
                                        notes the view would show, and asks at a terminal.
   audience show | set me|A,B | clear   The audiences this machine lets into a view (private; none by default).
-                                       \`me\` is only you: every audience but sensitive, which is added by name.
+                                       \`me\` is only you: every audience but sensitive, which is added by name, and
+                                       the notes without a classification, which no other list shows.
   location show | set DIR [--allow-synced-location]
                                        Where this workspace's vaults live, as "<project> (<view>)"; each is allocated
                                        there at its first publication. A vault published already stays where it is.
@@ -586,14 +587,18 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const choice = named.length === 1 && named[0] === 'me' ? 'only-you' : 'custom'
         const { workspace, repositoryRoots, now } = writable()
         const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
-        const changed = JSON.stringify(current.audienceAllow) !== JSON.stringify(audienceAllow)
-        // Notes without a classification stay withheld: no release shows them yet.
-        const decided = withDecision({ ...current, audienceAllow }, 'audience', { choice, unclassified: 'withheld' }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
+        // A vault that is only yours shows the notes that carry no classification too; any other list withholds them.
+        const unclassified = choice === 'only-you' ? 'shown' : 'withheld'
+        const changed = JSON.stringify(current.audienceAllow) !== JSON.stringify(audienceAllow) || (current.decisions.audience?.unclassified ?? 'withheld') !== unclassified
+        const decided = withDecision({ ...current, audienceAllow }, 'audience', { choice, unclassified }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
         writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
         // The engine compares a digest of these on every tick: a change invalidates every view at the next one.
         return {
-          exit: EXIT.ok, document: { audienceAllow, choice, unclassified: 'withheld', changed, takesEffect: 'next-tick' },
-          human: [`audiences: ${choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.join(', ') || 'none'}; notes without a classification withheld; views are rebuilt at the next tick`],
+          exit: EXIT.ok, document: { audienceAllow, choice, unclassified, changed, takesEffect: 'next-tick' },
+          human: [
+            `audiences: ${choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.join(', ') || 'none'}; notes without a classification ${unclassified}; views are rebuilt at the next tick`,
+            ...(choice === 'only-you' ? [] : ['Notes without a classification are shown only in a vault that is only yours: `atelier obsidian audience set me`.']),
+          ],
         }
       },
 

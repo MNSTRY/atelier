@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
-import { EMITTER_VERSION, createPreparationCache, prepareView, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
+import { EMITTER_VERSION, createPreparationCache, prepareView, readMarkdownLens, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
 import { createRecoveryStore, readFileBytes } from '../../projection/obsidian/recovery/store.mjs'
@@ -30,6 +30,31 @@ export const DEFAULT_ELIGIBILITY = Object.freeze({
   revision: () => 'classified-documents/v2+assets-embedded-by-eligible-documents/v1',
   isEligible: (node) => node.classification === 'classified',
 })
+
+// A vault that is the person's own also shows the notes that carry no classification, when they decided so: the
+// audience decision `only-you` with `unclassified: 'shown'`, which no other audience decision may carry. Those notes
+// are the person's own files, in a vault only they see. One is admitted only when its bytes read as a note (the byte
+// lens the emitter reads it with), so a file the emitter would refuse never stops the vault: it stays withheld, as does
+// one that cannot be read. Assets follow the documents that embed them, as always.
+export function onlyYouEligibility({ project }) {
+  const roots = new Map((project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => [repo.name, repo.path]))
+  const readsAsNote = (node) => {
+    const root = roots.get(node.repo)
+    if (root === undefined || node.extension !== 'md' || typeof node.path !== 'string') return false
+    try { readMarkdownLens(readFileBytes(path.join(root, ...node.path.split('/')))); return true } catch { return false }
+  }
+  return Object.freeze({
+    revision: () => 'classified-documents/v2+unclassified-notes-read-as-notes-for-only-you/v1+assets-embedded-by-eligible-documents/v1',
+    isEligible: (node) => node.classification === 'classified' || (node.classification === 'unclassified' && readsAsNote(node)),
+  })
+}
+
+// The eligibility a workspace's machine settings decide: the one above only for "only you" with unclassified notes
+// shown, and the default, which withholds them, for every other decision and for none.
+export function eligibilityFor({ machine, project }) {
+  const audience = machine?.decisions?.audience
+  return audience?.choice === 'only-you' && audience.unclassified === 'shown' ? onlyYouEligibility({ project }) : DEFAULT_ELIGIBILITY
+}
 
 export function assetEligibilityFor({ graph, eligibility }) {
   const eligibleSources = new Set(graph.nodes.filter((node) => eligibility.isEligible(node) === true).map((node) => node.id))

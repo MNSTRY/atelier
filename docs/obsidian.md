@@ -298,14 +298,14 @@ Obsidian.
 2. Set the private machine settings. They live outside every repository and
    are never committed:
    - `atelier obsidian audience set me` lets "only you" into a view: every
-     audience of a note but `sensitive`, which a vault takes only by name
-     (`audience set me,sensitive`); `audience set A,B` names the audiences
-     instead. No audience is admitted by default, so a view is empty until one
-     is set; `audience clear` empties it again. Notes that carry no
-     classification (no `kg` block) are withheld from every vault in this
-     release, "only you" included; the decision already records whether they
-     are shown, and a later change lets an "only you" vault show them. A list
-     of audiences never shows them.
+     audience of a note but `sensitive`, and the notes that carry no
+     classification, which only a vault that is yours alone shows.
+     `audience set A,B` names the audiences instead, and never shows notes
+     without a classification; `sensitive` is added by name
+     (`audience set me,sensitive`, which is such a list). No audience is
+     admitted by default, so a view is empty until one is set;
+     `audience clear` empties it again. See
+     [Notes without a classification](#notes-without-a-classification).
    - `atelier obsidian mode set manual` keeps every queued edit waiting for a
      person. `mode set automatic` is refused until an active automatic policy
      is installed.
@@ -376,6 +376,30 @@ atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo 
   `html`), not its `kg.type`, so `view add` does not offer it; a view by
   `kg.type` needs a contract change.
 
+### Notes without a classification
+
+A note whose front matter carries no `kg` block (or that has no front matter)
+is unclassified: the knowledge graph gives it the `private` audience, and by
+default no view shows it. A vault that is only yours shows it: the audience
+decision `only-you` with `unclassified: shown`, which `audience set me`
+records. A list of audiences never shows one, even a list that names every
+audience "only you" stands for, so a vault for anyone else can never carry
+them.
+
+In an "only you" vault such a note is shown only when its bytes read as a note
+the way the emitter reads every note, so one file that cannot be published
+(front matter that opens and never closes, closes at once, or carries a
+trailing space on its first line; bytes that are not UTF-8) never stops the
+vault: it stays withheld, as does a file that cannot be read. A shown note is
+part of the view in every respect: links to it are links inside the view,
+generated text may name it, the selection operation resolves it, and an edit
+to it is applied to its source like any other.
+
+A decision recorded before this release, "only you" with those notes
+withheld, keeps them withheld until `audience set me` is run again. Changing
+the decision rebuilds every view at the next tick (the eligibility revision
+changes).
+
 ### What this machine remembers
 
 A workspace's machine settings (`atelier-obsidian-machine-settings/v2`, owner
@@ -388,7 +412,7 @@ defaults (`defaults`), or carried over from an earlier release (`v1`).
 
 | Decision | Holds | Made today by |
 | --- | --- | --- |
-| `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you) or `audience set A,B` / `audience clear`; each withholds unclassified notes for now |
+| `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you, shown) or `audience set A,B` / `audience clear` (withheld) |
 | `location` | the absolute folder that holds this workspace's vaults | `location set DIR` |
 | `loginItem` | `on` or `off` | not yet: the first-run flow |
 | `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open` or `service start` |
