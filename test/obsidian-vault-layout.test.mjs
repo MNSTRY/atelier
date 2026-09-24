@@ -573,7 +573,7 @@ test('files held in the vault, their folders in any spelling, never make an allo
   let seed = 777
   const random = (n) => { seed = (seed + 0x6D2B79F5) | 0; let x = Math.imul(seed ^ (seed >>> 15), 1 | seed); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) % n }
   const pick = (values) => values[random(values.length)]
-  const pieces = ['a', 'Data', 'data', 'DATA', 'CON', 'com1', 'x'.repeat(40), 'é', 'é', '\u{1F600}', ' ', '.', '..x', 'Guide.md', 'notes', 'Notes', '語'.repeat(20), 'a:b', 'q?', '#h', 'z'.repeat(119), '-', '_']
+  const pieces = ['a', 'Data', 'data', 'DATA', 'CON', 'com1', 'x'.repeat(40), '\u00e9', 'e\u0301', '\u{1F600}', ' ', '.', '..x', 'Guide.md', 'notes', 'Notes', '\u8a9e'.repeat(20), 'a:b', 'q?', '#h', 'z'.repeat(119), '-', '_']
   const segment = () => { let value = ''; for (let count = 1 + random(4); count > 0; count -= 1) value += pick(pieces); return value.replace(/\//g, '') || 'x' }
   const problems = []
   for (let round = 0; round < 1500; round += 1) {

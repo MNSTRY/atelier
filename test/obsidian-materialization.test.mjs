@@ -1125,9 +1125,9 @@ test('an identity qualified by any repository of the census is unambiguous, whic
 test('a value this view holds names nothing outside it, compared in NFC: an in-view path in NFD beside the same path withheld in NFC', (t) => {
   const doc = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
   const snapshot = makeWorkspaceWithheld(t, {
-    'north-desk/Réunions/plan.md': doc('north-desk:reunion-plan', 'Reunion plan'),
-    'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'See Réunions/plan.md'),
-    'south-desk/Réunions/plan.md': doc('south-desk:reunion-plan', 'Sealed reunion plan'),
+    'north-desk/Re\u0301unions/plan.md': doc('north-desk:reunion-plan', 'Reunion plan'),
+    'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'See Re\u0301unions/plan.md'),
+    'south-desk/R\u00e9unions/plan.md': doc('south-desk:reunion-plan', 'Sealed reunion plan'),
   }, ['south-desk:reunion-plan'])
   const prepared = prepare(snapshot, fullScope)
   assert.ok(prepared.manifest.notes.some((note) => note.nodeId === 'north-desk:reunion-plan'))
