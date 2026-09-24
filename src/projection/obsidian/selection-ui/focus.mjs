@@ -3,8 +3,11 @@ import { refuse } from '../../../runtime/obsidian/errors.mjs'
 
 // Focus: the full vault stays on disk and the native Graph view is filtered
 // with a "Search files" query derived from the selected set. The query names
-// every selected note by its exact vault-relative path, quoted and escaped
-// the way the app's search syntax reads a quoted term, joined with OR.
+// every selected note by its exact vault-relative path, as an anchored regular
+// expression in the app's `path:/…/` search, joined with OR: a path search
+// matches substrings, and with titles as names one path can lie inside
+// another (`r/a/Plan.md` inside `qr/a/Plan.md`), so only an anchored term
+// matches exactly one note.
 //
 // Nothing here writes a file. The query and the core-Bookmark payload are
 // values a person, an agent or the acceptance procedure applies in the app;
@@ -13,7 +16,9 @@ import { refuse } from '../../../runtime/obsidian/errors.mjs'
 // Atelier. Whether the installed app applies the query as built is an
 // acceptance question (AP-02), not something this module can answer.
 
-export const FOCUS_QUERY_VERSION = 'obsidian-graph-search-paths/v1'
+export const FOCUS_QUERY_VERSION = 'obsidian-graph-search-paths/v2'
+// Versions a persisted focus may carry and still be read: v1 quoted each path as a substring term.
+export const FOCUS_QUERY_VERSIONS_READ = Object.freeze(['obsidian-graph-search-paths/v1', FOCUS_QUERY_VERSION])
 export const FOCUS_BOOKMARK_TYPE = 'graph'
 // The files under .obsidian/ the app's UI owns. Atelier reads none of them
 // and writes none of them; a focus is applied through the app, never by
@@ -21,14 +26,16 @@ export const FOCUS_BOOKMARK_TYPE = 'graph'
 export const UI_OWNED_SETTINGS_FILES = Object.freeze(['workspace.json', 'graph.json', 'bookmarks.json'])
 export const MAX_FOCUS_PATHS = 100000
 
-// A quoted search term: backslash and double quote are escaped; anything
-// that is not printable text cannot be typed into a search box and refuses.
+// An anchored regular-expression term: every metacharacter and the `/`
+// delimiter escaped, a space and a double quote written as hexadecimal escapes
+// so the search box neither splits nor quotes the term; anything that is not
+// printable text cannot be typed into a search box and refuses.
 export const FOCUS_QUERY_PRIMITIVES = Object.freeze({
   escape(value) {
-    return value.replace(/[\\"]/g, (character) => `\\${character}`)
+    return value.replace(/[\\^$.*+?()[\]{}|/]/g, (character) => `\\${character}`).replace(/ /g, '\\x20').replace(/"/g, '\\x22')
   },
   term(path) {
-    return `path:"${path}"`
+    return `path:/^${path}$/`
   },
   join(terms) {
     return terms.join(' OR ')
