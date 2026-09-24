@@ -6,20 +6,21 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
-const roots = ['bin', 'src']
+// Package modules, and the scripts of Atelier's Obsidian plugin, which run inside the app.
+const roots = [['bin', '.mjs'], ['src', '.mjs'], ['plugins', '.js']]
 
-function collectModules(directory, files = []) {
+function collectModules(directory, extension, files = []) {
   if (!fs.existsSync(directory)) return files
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const absolute = path.join(directory, entry.name)
-    if (entry.isDirectory()) collectModules(absolute, files)
-    else if (entry.isFile() && entry.name.endsWith('.mjs')) files.push(absolute)
+    if (entry.isDirectory()) collectModules(absolute, extension, files)
+    else if (entry.isFile() && entry.name.endsWith(extension)) files.push(absolute)
   }
   return files
 }
 
 const files = roots
-  .flatMap((root) => collectModules(path.join(packageRoot, root)))
+  .flatMap(([root, extension]) => collectModules(path.join(packageRoot, root), extension))
   .sort((left, right) => left.localeCompare(right))
 
 let failures = 0

@@ -161,6 +161,9 @@
     "skills/",
     "src/",
     "templates/",
+    "plugins/obsidian/manifest.json",
+    "plugins/obsidian/main.js",
+    "plugins/obsidian/styles.css",
     "docs/",
     "announcements/",
     "!fixtures/projects/source-formats-workspace/content/logo.png"

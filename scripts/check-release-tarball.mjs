@@ -42,6 +42,8 @@ const allowedFiles = [
   // Other declaration paths still require their own reviewed admission.
   /^src\/decisions\/contracts\.d\.mts$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.?gitignore)$/,
+  // Atelier's own Obsidian plugin, copied byte for byte into the vaults it manages.
+  /^plugins\/obsidian\/(?:manifest\.json|main\.js|styles\.css)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
   /^announcements\/(keys\/)?[A-Za-z0-9.-]+\.json$/,
 ]

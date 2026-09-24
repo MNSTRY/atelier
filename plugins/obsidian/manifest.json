@@ -1,0 +1,9 @@
+{
+  "id": "atelier-projection",
+  "name": "Atelier",
+  "version": "1.0.0",
+  "minAppVersion": "1.13.7",
+  "description": "Shows whether this Atelier view is current and tells Atelier's maintenance service that the vault is open. Shipped by Atelier into the vaults it manages.",
+  "author": "MNSTRY",
+  "isDesktopOnly": true
+}
