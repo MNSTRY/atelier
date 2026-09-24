@@ -555,7 +555,8 @@ test('the production seams are imported in exactly two places, dynamically, behi
   for (const [seam, loaded] of [['const serviceSeam', "import('../runtime/obsidian/service-entry-path.mjs')"], ['const appSeams', "import('../runtime/obsidian/app-production-seams.mjs')"]]) {
     const body = command.slice(command.indexOf(seam), command.indexOf(loaded))
     assert.ok(command.indexOf(seam) > 0 && body.length > 0 && body.length < 600, `${seam} loads ${loaded}`)
-    assert.match(body, /\n\s+chooseAdapter\(\)\n/, `${seam} selects the adapter before it loads anything`)
+    // A line of its own; a checkout with CRLF line endings (Windows) ends it with \r.
+    assert.match(body, /^\s*chooseAdapter\(\)\s*$/m, `${seam} selects the adapter before it loads anything`)
   }
   assert.match(command, /const chooseAdapter = \(\) => selectAdapter\(/, 'the selection is the one pure rule')
   const entry = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/service-main.mjs'), 'utf8')
@@ -2189,16 +2190,18 @@ test('isInteractive: a person is at a terminal only when both streams are termin
 test('a person at a terminal allows the first start by their account\'s name; a recorded consent is never replaced by one, and without a person a consent is still named', async (t) => {
   const world = makeWorld(t)
   const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
-  const person = { terminal: { stdin: true, stdout: true }, account: () => 'someone' }
+  // A person's environment: none of what says nobody is at a terminal, whatever the runner itself has (CI sets CI).
+  const { CI: _ci, ATELIER_NONINTERACTIVE: _nonInteractive, ...personEnv } = world.env
+  const person = { terminal: { stdin: true, stdout: true }, account: () => 'someone', env: personEnv }
   const spawned = () => SPAWNED.filter((entry) => entry.test === t.name).length
   for (const [argv, extra, label] of [
     [['service', 'start', '--json'], person, 'JSON is for a program'],
     [['service', 'start', '--no-input'], person, 'no input'],
-    [['service', 'start'], { ...person, env: { ...world.env, CI: 'true' } }, 'a CI environment'],
-    [['service', 'start'], { ...person, env: { ...world.env, ATELIER_NONINTERACTIVE: '1' } }, 'ATELIER_NONINTERACTIVE'],
+    [['service', 'start'], { ...person, env: { ...personEnv, CI: 'true' } }, 'a CI environment'],
+    [['service', 'start'], { ...person, env: { ...personEnv, ATELIER_NONINTERACTIVE: '1' } }, 'ATELIER_NONINTERACTIVE'],
     [['service', 'start'], { ...person, terminal: { stdin: false, stdout: true } }, 'input that is no terminal'],
     [['service', 'start'], { ...person, account: () => 'some one' }, 'an account name that is no identifier'],
-    [['service', 'start'], {}, 'no terminal injected: under the runner the process\'s own is never looked at'],
+    [['service', 'start'], { env: personEnv }, 'no terminal injected: under the runner the process\'s own is never looked at'],
   ]) {
     const result = await world.run(argv, { seams, ...extra })
     assert.equal(result.exit, EXIT.refused, label)
@@ -2218,7 +2221,7 @@ test('a person at a terminal allows the first start by their account\'s name; a 
   await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
 
   // Another account at a terminal later: the consent recorded stays; only --consent-actor names another actor.
-  const again = await world.run(['service', 'start'], { seams, terminal: { stdin: true, stdout: true }, account: () => 'another' })
+  const again = await world.run(['service', 'start'], { seams, ...person, account: () => 'another' })
   assert.equal(again.exit, EXIT.ok, again.stderr)
   assert.match(again.stdout, /^healthy \(started\)$/m)
   assert.doesNotMatch(again.stdout, /allowed by/)
