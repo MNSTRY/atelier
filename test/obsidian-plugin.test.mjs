@@ -1604,38 +1604,45 @@ test('with two launches of the plugin holding one view, neither version decides:
   assert.deepEqual([reports.at(-1)?.instances, reports.at(-1)?.appVersion], [1, '1.13.7'])
 })
 
-test('qualification: a live plugin\'s version is the checked version, the probe says whether app and tool are installed without being asked the version, and without a plugin the probe decides', () => {
+test('qualification: the command-line tool\'s version decides wherever it gives one, a live plugin\'s stands in where it gives none, and without a plugin the probe decides', () => {
+  let at = 0
   const built = []
   const asked = []
   let observation = { installed: true, cli: true, running: true, version: null, noVaultOpen: true }
-  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: (options) => { asked.push(options?.askVersion ?? true); return { ...observation } } }, createAdapter: (input) => { built.push(input.qualification); return { kind: 'fake' } } })
+  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => { asked.push(at); return { ...observation } } }, createAdapter: (input) => { built.push(input.qualification); return { kind: 'fake' } }, now: () => at })
   const report = (appVersion) => ({ scopeId: SCOPE, appVersion, pluginVersion: '1.1.0', sessions: 1, instances: 1, renewedAt: '2026-01-05T10:00:00.000Z' })
-  factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') })
+  // A new answer from the app, after the remembered one has aged out.
+  const next = (seen) => { observation = seen; at += 60_000 }
+  const scope = { scopeId: SCOPE }
+
+  // The tool gives no version (it says no vault is open, as it does while a vault is still loading): the plugin's stands in.
+  factory({ scope, pluginReport: report('1.13.7') })
   assert.deepEqual(built.at(-1), { floor: MINIMUM_APP_VERSION, version: '1.13.7', running: true, versionSource: 'plugin', outcome: 'qualified', reason: 'plugin-reported', versionChecked: true })
-  assert.deepEqual(asked, [false], 'the probe is asked what is installed, not the version: the plugin runs inside that app')
   assert.equal(factory.lastQualification().reason, 'plugin-reported')
-  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.6') }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'below-minimum-version')
-  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: { scopeId: SCOPE } }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'version-unknown', 'a report without a version is not an app that is missing')
+  assert.throws(() => factory({ scope, pluginReport: report('1.13.6') }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'below-minimum-version')
+  assert.throws(() => factory({ scope, pluginReport: { scopeId: SCOPE } }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'version-unknown', 'a report without a version is not an app that is missing')
+  assert.deepEqual(asked, [0], 'the tool is asked with a plugin as without one, through the remembered answer')
+
+  // The tool gives a version: it reaches the app a publication coordinates with, so it decides, whatever the plugin reports.
+  next({ installed: true, cli: true, running: true, version: '1.13.5' })
+  assert.throws(() => factory({ scope, pluginReport: report('1.13.7') }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'below-minimum-version' && error.detail.version === '1.13.5')
+  next({ installed: true, cli: true, running: true, version: '1.13.7' })
+  factory({ scope, pluginReport: report('1.13.8') })
+  assert.deepEqual([built.at(-1).reason, built.at(-1).version, built.at(-1).versionSource], ['meets-minimum-version', '1.13.7', undefined])
+
   // Installation and the command-line tool are the probe's answer, with a plugin as without one.
-  observation = { installed: true, cli: false, running: true, version: null }
-  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') }), (error) => error.code === 'app-cli-unavailable' && error.detail.reason === 'cli-capability-absent')
-  observation = { installed: false, cli: false, running: true, version: null }
-  factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') })
+  next({ installed: true, cli: false, running: true, version: null })
+  assert.throws(() => factory({ scope, pluginReport: report('1.13.7') }), (error) => error.code === 'app-cli-unavailable' && error.detail.reason === 'cli-capability-absent')
+  next({ installed: false, cli: false, running: true, version: null })
+  factory({ scope, pluginReport: report('1.13.7') })
   assert.deepEqual([built.at(-1).outcome, built.at(-1).versionChecked], ['app-missing', undefined], 'not where Atelier looks: an adapter that coordinates with no running app')
-  // A probe that had to ask the tool (it has no fixed place) also has its version, and that one must meet the floor too.
-  observation = { installed: true, cli: true, running: true, version: '1.13.5' }
-  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'below-minimum-version' && error.detail.version === '1.13.5')
-  observation = { installed: true, cli: true, running: true, version: '1.13.7' }
-  factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.8') })
-  assert.deepEqual([built.at(-1).reason, built.at(-1).version], ['plugin-reported', '1.13.8'])
-  assert.ok(asked.every((value) => value === false))
+
   // Without a plugin, the command-line tool decides, as before: with no vault open it cannot tell the version.
-  observation = { installed: true, cli: true, running: true, version: null, noVaultOpen: true }
-  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: null }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'no-vault-open')
-  assert.equal(asked.at(-1), true)
+  next({ installed: true, cli: true, running: true, version: null, noVaultOpen: true })
+  assert.throws(() => factory({ scope, pluginReport: null }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'no-vault-open')
   assert.equal(factory.lastQualification().reason, 'no-vault-open')
   // The plugin's answer is never reused for a call without one.
-  assert.throws(() => factory({ scope: { scopeId: SCOPE } }), (error) => error.detail.reason === 'no-vault-open')
+  assert.throws(() => factory({ scope }), (error) => error.detail.reason === 'no-vault-open')
   assert.deepEqual(qualifyApp({ versionSource: 'plugin', installed: true, cli: true, version: '1.14.2' }).reason, 'plugin-reported')
   assert.deepEqual(qualifyApp({ versionSource: 'plugin', installed: true, cli: true, version: 'soon' }).reason, 'version-unreadable')
   assert.deepEqual(qualifyApp({ versionSource: 'plugin', version: '1.14.2' }).outcome, 'app-missing', 'a plugin report alone does not say where the app is installed')
@@ -1852,11 +1859,8 @@ async function realAppWorld(t) {
   real.world = serviceWorld(t)
   real.adapterFactory = createQualifiedAdapterFactory({
     appProbe: {
-      // As the production probe does on this host: the tool has a fixed place, so with a plugin in the app the version is
-      // not asked for.
-      inspectSync({ askVersion = true } = {}) {
+      inspectSync() {
         if (!real.appRunning) return { installed: true, cli: true, running: false, version: null }
-        if (!askVersion) return { installed: true, cli: fs.existsSync(cliPath), running: true, version: null }
         const reply = spawnSync(cliPath, ['version'], { env: real.instance.env, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' })
         const answer = readVersionAnswer({ stdout: reply.stdout, stderr: reply.stderr, exited: reply.error === undefined && reply.status === 0 })
         real.versionCalls.push(answer)
@@ -1968,14 +1972,15 @@ test('real isolated Obsidian: the vault the service published asks for trust, an
     const statusBar = await waitFor(async () => { const text = await real.statusBar(); return text === 'Atelier: current' ? text : null }, { timeoutMs: 20000, everyMs: 250, label: 'the status bar item' })
     real.note('status-bar', { text: statusBar })
 
-    // A change at the source while the plugin holds the view: published through the app, qualified by the plugin's version.
-    const callsBefore = real.versionCalls.length
+    // A change at the source while the plugin holds the view: published through the app. The command-line tool answers
+    // with a version, so its answer qualifies the app, as it would without a plugin; both name the same app here.
     await real.change('Low water at six.')
     const qualification = real.adapterFactory.lastQualification()
-    real.note('published-with-plugin', { freshness: real.world.freshness().state, reason: real.world.freshness().reason, qualification: { outcome: qualification.outcome, reason: qualification.reason, version: qualification.version }, probe: real.probes.at(-1), versionCallsDuringPublication: real.versionCalls.length - callsBefore })
-    assert.deepEqual([qualification.outcome, qualification.reason], ['qualified', 'plugin-reported'])
-    assert.equal(real.versionCalls.length, callsBefore, 'the command-line tool was not asked for the version')
-    assert.deepEqual(real.probes.at(-1), { state: 'coordinated', qualification: 'plugin-reported' })
+    real.note('published-with-plugin', { freshness: real.world.freshness().state, reason: real.world.freshness().reason, qualification: { outcome: qualification.outcome, reason: qualification.reason, version: qualification.version }, probe: real.probes.at(-1), versionCalls: real.versionCalls.length })
+    assert.deepEqual([qualification.outcome, qualification.reason], ['qualified', 'meets-minimum-version'])
+    assert.equal(parseAppVersion(qualification.version).minor, parseAppVersion(presence.appVersion).minor, 'the tool and the plugin name the same app')
+    assert.ok(real.versionCalls.length > 0, 'the command-line tool was asked for the version')
+    assert.deepEqual(real.probes.at(-1), { state: 'coordinated', qualification: 'meets-minimum-version' })
     assert.equal(real.world.freshness().state, 'current')
     const after = await waitFor(async () => { const text = await real.statusBar(); return text === 'Atelier: current' ? text : null }, { timeoutMs: 20000, everyMs: 250, label: 'the status bar after publication' })
     real.note('status-bar-after-publication', { text: after })

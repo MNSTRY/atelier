@@ -52,12 +52,11 @@ const observationOf = ({ platform, cliPath, processes, answer }) => {
 export function createProductionAppProbe({ platform = process.platform, env = process.env, cliPath = defaultCliPath(platform) } = {}) {
   const options = { env, timeout: CLI_TIMEOUT_MS, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }
   return {
-    // For the service's adapter factory, which is synchronous. The version is asked for only while an app runs, and not
-    // at all with `askVersion: false` (a plugin inside the app told it) where the tool's place alone shows it installed.
+    // For the service's adapter factory, which is synchronous. The version is asked for only while an app runs.
     // Both output streams are read, whatever the exit status: the answer with no vault open is not a version.
-    inspectSync({ askVersion = true } = {}) {
+    inspectSync() {
       const processes = defaultObsidianProcessProbe({ platform })
-      if (processes === 'absent' || (!askVersion && path.isAbsolute(cliPath))) return observationOf({ platform, cliPath, processes, answer: NOT_ASKED })
+      if (processes === 'absent') return observationOf({ platform, cliPath, processes, answer: NOT_ASKED })
       let answer = NOT_ASKED
       try {
         const reply = spawnSync(cliPath, ['version'], { ...options, stdio: ['ignore', 'pipe', 'pipe'] })
