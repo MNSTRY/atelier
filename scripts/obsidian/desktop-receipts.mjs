@@ -165,6 +165,21 @@ export async function assertIsolatedInstance(instance, { userHome = os.homedir()
   return { vaultRoot: layout.vault, vaultsOutput: output }
 }
 
+// A vault the maintenance service publishes carries Atelier's plugin, so the
+// app asks once per vault whether to trust it. These procedures prove the
+// command-line path, on which the publication protocol was qualified with no
+// community plugin: a prompt that appears is answered "Browse vault in
+// Restricted Mode", as a person who declines would. No prompt, no action.
+export async function declineTrustPrompt(instance, { waitMs = 5000, everyMs = 250 } = {}) {
+  const press = "(()=>{const b=[...document.querySelectorAll('.modal.mod-trust-folder button')].find(x=>x.textContent==='Browse vault in Restricted Mode');if(!b)return 'no-prompt';b.click();return 'declined'})()"
+  for (const until = Date.now() + waitMs; Date.now() < until;) {
+    const reply = String(await instance.cli('eval', `code=${press}`))
+    if (reply.includes('=> declined')) return 'declined'
+    await new Promise((resolve) => { setTimeout(resolve, everyMs) })
+  }
+  return 'no-prompt'
+}
+
 // Eval probes are fixed scripts; the only variable input travels as a JSON
 // payload in base64, never spliced into code.
 const evalCode = (script, payload = {}) => {
@@ -455,6 +470,7 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
     const launchedAtMs = Date.now()
     await app.launch(options)
     await assertIsolatedInstance(app)
+    await declineTrustPrompt(app)
     instances.push(app)
     return { app, launchedAtMs }
   }
