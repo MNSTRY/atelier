@@ -109,7 +109,7 @@ const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await impor
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { LIFECYCLE_PRIMITIVES, releaseStanding, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
-const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
@@ -2345,6 +2345,114 @@ test('`audience set me` is only you; any other list is the person\'s own; either
   const status = await world.run(['status', '--json'])
   assert.deepEqual(status.json.machine.decisions.audience.choice, 'only-you')
   assert.match((await world.run(['status'])).stdout, /^remembered: who may see only you$/m)
+})
+
+// ---------------------------------------------------------------------------
+// Where the vaults live
+// ---------------------------------------------------------------------------
+
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+test('`location set` decides where vaults live: an absolute folder, `~/` only against a home folder the test names, never inside a repository, and a synced folder only when asked', async (t) => {
+  const world = makeWorld(t)
+  const home = path.join(world.dir, 'home')
+  const before = await world.run(['location', 'show', '--json'])
+  assert.deepEqual([before.json.location, before.json.views], [null, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId), origin: 'legacy-data-root' }]])
+  const tilde = await world.run(['location', 'set', '~/Atelier', '--json'])
+  assert.deepEqual([tilde.exit, tilde.json.error.code], [EXIT.refused, 'real-vault-location-under-test'])
+  const named = await world.run(['location', 'set', '~/Atelier', '--json'], { homedir: home, account: () => 'someone' })
+  assert.deepEqual(named.json.location, { parent: path.join(home, 'Atelier'), decidedAt: iso(START), decidedBy: 'someone', via: 'command' })
+  assert.deepEqual(named.json.views, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(home, 'Atelier', 'opening-fixture (scope-whole)'), origin: 'to-be-allocated' }])
+  assert.equal(fs.existsSync(path.join(home, 'Atelier')), false, 'deciding creates nothing: the next tick allocates')
+  const relative = await world.run(['location', 'set', 'vaults-here', '--json'], { cwd: world.dir })
+  assert.equal(relative.json.location.parent, path.join(world.dir, 'vaults-here'))
+  const inside = await world.run(['location', 'set', path.join(world.projectDir, 'east-wing', 'vaults'), '--json'])
+  assert.deepEqual([inside.exit, inside.json.error.code], [EXIT.refused, 'vault-location-inside-repository'])
+  assert.equal(readMachineSettings(world.workspace()).decisions.location.parent, path.join(world.dir, 'vaults-here'), 'a refusal decides nothing')
+  fs.mkdirSync(path.join(home, 'Dropbox'), { recursive: true })
+  const synced = await world.run(['location', 'set', path.join(home, 'Dropbox', 'Atelier'), '--json'], { homedir: home })
+  assert.deepEqual([synced.exit, synced.json.error.code], [EXIT.refused, 'vault-location-synced'])
+  const allowed = await world.run(['location', 'set', path.join(home, 'Dropbox', 'Atelier'), '--json', '--allow-synced-location'], { homedir: home })
+  assert.deepEqual(allowed.json.warnings, { synced: 'Dropbox', protected: null })
+  const documents = await world.run(['location', 'set', path.join(home, 'Documents', 'Atelier')], { homedir: home, platform: 'darwin' })
+  assert.equal(documents.exit, EXIT.ok, documents.stderr)
+  assert.match(documents.stdout, /^Warning: macOS asks before Obsidian or the maintenance service may read your Documents folder\.$/m)
+  const words = await world.run(['settings'])
+  assert.match(words.stdout, new RegExp(`^where vaults live: ${escaped(path.join(home, 'Documents', 'Atelier'))} \\(given on the command line, `, 'm'))
+  assert.match(words.stdout, /^Change: `atelier obsidian location set DIR`/m)
+})
+
+test('each view not published yet gets `<project> (<view>)` where the vaults live, at its first publication; a view published before stays under the data root', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  const engine = world.engine()
+  const stateOf = (report, scopeId) => report.scopes.find((entry) => entry.scopeId === scopeId)
+  assert.equal(stateOf(await engine.tick(), FULL_SCOPE.scopeId).state, 'current')
+  const legacyVault = path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)
+  const decided = await world.run(['location', 'set', parent, '--json'])
+  assert.deepEqual(decided.json.views, [{ scopeId: FULL_SCOPE.scopeId, path: legacyVault, origin: 'legacy-data-root' }])
+
+  world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+  const eastVault = path.join(parent, 'opening-fixture (scope-east)')
+  assert.deepEqual((await world.run(['location', 'show', '--json'])).json.views.find((view) => view.scopeId === EAST_SCOPE.scopeId), { scopeId: EAST_SCOPE.scopeId, path: eastVault, origin: 'to-be-allocated' })
+  const report = await engine.tick()
+  assert.deepEqual([stateOf(report, FULL_SCOPE.scopeId).state, stateOf(report, EAST_SCOPE.scopeId).state], ['current', 'current'])
+  const eastNotes = world.manifest(EAST_SCOPE.scopeId).notes
+  assert.ok(eastNotes.length > 0)
+  for (const { path: notePath } of eastNotes) assert.equal(fs.existsSync(path.join(eastVault, notePath)), true, notePath)
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'vaults', EAST_SCOPE.scopeId)), false, 'nothing under the data root for it')
+  for (const { path: notePath } of world.manifest(FULL_SCOPE.scopeId).notes) assert.equal(fs.existsSync(path.join(legacyVault, notePath)), true, 'the vault published before stays where it was')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(eastVault).mode & 0o777, 0o700)
+
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual(status.json.scopes.map((scope) => [scope.scopeId, scope.vault.origin, scope.vault.path]), [[FULL_SCOPE.scopeId, 'legacy-data-root', legacyVault], [EAST_SCOPE.scopeId, 'allocated', eastVault]])
+  // Another location later moves nothing: the allocation is made once.
+  await world.run(['location', 'set', path.join(world.dir, 'Elsewhere'), '--json'])
+  world.advance(10 * 60 * 1000)
+  await engine.tick()
+  assert.equal(fs.existsSync(path.join(world.dir, 'Elsewhere')), false)
+  assert.deepEqual((await world.run(['location', 'show', '--json'])).json.views.map((view) => view.origin), ['legacy-data-root', 'allocated'])
+})
+
+test('a vault folder is never allocated under a name a vault the app lists already has, nor inside one; a folder that cannot be allocated keeps its view from publishing and says why', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'])
+  const listed = { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'elsewhere', 'Opening-Fixture (Scope-Whole)'), ts: 1 } }
+  const engine = world.engine({ readAppVaultList: () => listed })
+  assert.equal((await engine.tick()).scopes[0].state, 'current')
+  assert.deepEqual((await world.run(['location', 'show', '--json'])).json.views, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(parent, 'opening-fixture (scope-whole 2)'), origin: 'allocated' }])
+
+  // A decision the command would refuse, left by hand: the view is not published, says why, and nothing is made there.
+  const other = makeWorld(t)
+  const inside = path.join(other.projectDir, 'east-wing', 'vaults')
+  writeMachineSettings({ ...other.workspace(), repositoryRoots: [], settings: withDecision(other.machine(), 'location', { parent: inside }, { decidedAt: iso(START), decidedBy: null, via: 'command' }) })
+  const refused = await other.engine().tick()
+  assert.deepEqual([refused.state, refused.scopes[0].state, refused.scopes[0].reason], ['ticked', 'stale', 'vault-location-inside-repository'])
+  assert.equal(fs.existsSync(inside), false)
+  assert.equal(fs.existsSync(path.join(other.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)), false, 'nor under the data root')
+  // An app that lists a vault above the folder: the same.
+  const third = makeWorld(t)
+  await third.run(['location', 'set', path.join(third.dir, 'Atelier'), '--json'])
+  const enclosing = await third.engine({ readAppVaultList: () => ({ bbbbbbbbbbbbbbbb: { path: third.dir, ts: 1 } }) }).tick()
+  assert.deepEqual([enclosing.scopes[0].state, enclosing.scopes[0].reason], ['stale', 'vault-location-inside-vault'])
+})
+
+test('open adds the view\'s allocated vault to the app and opens it there', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'])
+  const app = fakeApp()
+  const seams = { ...UNREACHABLE_SEAMS, ...app, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const opened = await world.run(openArgs(), { seams })
+  assert.equal(opened.json.outcome, 'current', JSON.stringify(opened.json).slice(0, 400))
+  const vault = path.join(parent, 'opening-fixture (scope-whole)')
+  assert.deepEqual(app.registrations.map((entry) => entry.vaultRoot), [vault])
+  assert.deepEqual(app.launches, [vault])
+  assert.equal(opened.json.readBack.intact, true)
+  const record = readServiceRecord(world.workspace())
+  await world.run(['service', 'stop', '--json'], { seams })
+  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
 })
 
 test('the service is started in the root directory, whichever directory the command runs in', async (t) => {

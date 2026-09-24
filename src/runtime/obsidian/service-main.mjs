@@ -40,8 +40,11 @@ const ADAPTERS = Object.freeze({
     const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe(), createAdapter: ({ qualification }) => createObsidianCliAdapter({ qualification }) })
     const userDataDir = obsidianUserDataDir()
     const observeApp = () => appStateSignature({ processes: defaultObsidianProcessProbe(), settings: userDataDir === null ? null : readObsidianSettings({ userDataDir }) })
+    // The app's own vault list, read and never written, so a new vault's folder is never allocated inside a vault it
+    // lists nor under a name one of its vaults has.
+    const readAppVaultList = () => { if (userDataDir === null) return null; const settings = readObsidianSettings({ userDataDir }); return settings.ok ? settings.vaults : null }
     return {
-      adapterFactory, engineOptions: { observeApp },
+      adapterFactory, engineOptions: { observeApp, readAppVaultList },
       appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } },
     }
   },

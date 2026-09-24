@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { enclosingVaults, findVaultEntry, vaultRoute } from '../../projection/obsidian/publication/vault-list.mjs'
-import { createRecoveryStore as createStore, readFileBytes, sha256Digest } from '../../projection/obsidian/recovery/store.mjs'
+import { createRecoveryStore as createStore, readFileBytes, sha256Digest, vaultRootFor } from '../../projection/obsidian/recovery/store.mjs'
 import { inspectApp, qualifyApp } from './app-capability.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
@@ -140,7 +140,7 @@ export const OPENING_PRIMITIVES = Object.freeze({
 })
 
 const segment = (identifier) => identifier.replaceAll(':', '_')
-const STORE_AREAS = (scopeId) => [['vaults', segment(scopeId)], ['state', 'manifests', segment(scopeId)], ['state', 'journals', segment(scopeId)], ['state', 'locks'], ['recovery', 'objects'], ['staging']]
+const STORE_AREAS = (scopeId) => [['state', 'manifests', segment(scopeId)], ['state', 'journals', segment(scopeId)], ['state', 'locks'], ['recovery', 'objects'], ['staging']]
 
 // Reads the trusted pointer of a view and every note of its vault. Read-only:
 // the store is only constructed when everything it would create already exists.
@@ -148,7 +148,13 @@ const STORE_AREAS = (scopeId) => [['vaults', segment(scopeId)], ['state', 'manif
 // store could be constructed, even before a first generation.
 export function readBackTrustedGeneration({ workspaceRoot, workspaceId, scopeId, repositoryRoots, createRecoveryStore = createStore }) {
   const unreadable = (reason) => ({ readable: false, reason, generationId: null, intact: false, noteCount: 0, differing: 0, missing: 0 })
-  if (!STORE_AREAS(scopeId).every((parts) => fs.existsSync(path.join(workspaceRoot, ...parts)))) return unreadable('no-published-vault')
+  // The view's vault wherever it is: allocated for the view, or under the data root.
+  let vault
+  try { vault = vaultRootFor({ workspaceRoot, workspaceId, scopeId }) } catch (error) {
+    if (typeof error?.code === 'string') return unreadable(error.code)
+    throw error
+  }
+  if (!fs.existsSync(vault.path) || !STORE_AREAS(scopeId).every((parts) => fs.existsSync(path.join(workspaceRoot, ...parts)))) return unreadable('no-published-vault')
   let store
   let trusted
   try {
@@ -204,8 +210,14 @@ export function scopeReport({ workspace, scopeId, repositoryRoots, serviceState,
     reason = edited ? 'vault-differs-from-trusted-generation' : verification.readable ? 'trusted-generation-differs' : verification.reason
   } else if (serviceState !== 'healthy') { outcome = 'stale-readable'; reason = serviceState === 'busy' ? 'maintenance-busy-not-rechecked' : 'maintenance-not-running' }
   else { outcome = 'current'; reason = entry.reason }
+  // Where the view's vault is, published or not: allocated for the view, or under the data root.
+  let vault
+  try { const found = vaultRootFor({ ...workspace, scopeId }); vault = { path: found.path, origin: found.origin } } catch (error) {
+    if (typeof error?.code !== 'string') throw error
+    vault = { path: null, origin: 'unreadable', reason: error.code }
+  }
   return {
-    scopeId, ...describeOutcome(outcome), next: nextStep(outcome, reason), reason,
+    scopeId, ...describeOutcome(outcome), next: nextStep(outcome, reason), reason, vault,
     freshness: entry === null ? null : { state: entry.state, reason: entry.reason, verified: entry.verified, generationId: entry.generationId, preparedGenerationId: entry.preparedGenerationId, heldNoteCount: entry.heldNotes.length, retainedEdits: entry.retainedEdits, checkedAt: entry.checkedAt },
     readBack: { readable: verification.readable, reason: verification.reason, generationId: verification.generationId, intact: verification.intact, noteCount: verification.noteCount, differing: verification.differing, missing: verification.missing },
     pendingEdits: pendingSummary(stateStore, scopeId, applyAvailable),

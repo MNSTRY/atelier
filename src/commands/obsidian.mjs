@@ -24,6 +24,8 @@ import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '.
 import { readServiceSettings, serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
+import { checkVaultParent, projectDisplayName, vaultFolderName } from '../runtime/obsidian/vault-location.mjs'
+import { hasCommittedGeneration, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
 
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
@@ -63,6 +65,9 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   scope list | scope show ID           The views this project declares. Read-only.
   audience show | set me|A,B | clear   The audiences this machine lets into a view (private; none by default).
                                        \`me\` is only you: every audience but sensitive, which is added by name.
+  location show | set DIR [--allow-synced-location]
+                                       Where this workspace's vaults live, as "<project> (<view>)"; each is allocated
+                                       there at its first publication. A vault published already stays where it is.
   mode show | set manual|automatic     Whether queued edits wait for a person or are applied under the policy.
   policy show | install FILE | revoke  The private apply policy. Automatic mode needs an installed, active one.
   policy digest FILE                   The digest FILE has to carry to be installed. Reads FILE; writes nothing.
@@ -98,7 +103,7 @@ Pending edits additionally report ${APPLY_UNAVAILABLE} while no apply operation 
 Minimum Obsidian version: ${MINIMUM_APP_VERSION}.
 Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer is not success.`
 
-const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
+const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', 'allow-synced-location': 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
@@ -133,7 +138,7 @@ export const accountActor = (username) => (typeof username === 'string' && IDENT
 // How each remembered answer is changed; null where no command changes it.
 const DECISION_CHANGES = Object.freeze({
   audience: '`atelier obsidian audience set me|A,B` decides who may see the vaults again',
-  location: null,
+  location: '`atelier obsidian location set DIR` decides where the vaults of views not published yet live',
   loginItem: null,
   adapter: null,
   consent: '`atelier obsidian service stop`, then `service start --consent-actor ID`, records another actor',
@@ -207,6 +212,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // under the test runner the process's own terminal is never looked at.
     terminal = env.NODE_TEST_CONTEXT === undefined ? { stdin: tty.isatty(0), stdout: tty.isatty(1) } : { stdin: false, stdout: false },
     account = accountName,
+    // The home folder a location is read against (`~/`) and checked for sync clients; a test names its own.
+    homedir = env.NODE_TEST_CONTEXT === undefined ? os.homedir() : null,
   } = options
   let json = argv.includes('--json')
   let operationName = null
@@ -387,6 +394,50 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             `reaching the app: ${decisionWords('adapter', decisions.adapter)}`,
             `maintenance allowed by: ${consent === null ? 'nobody yet' : `${consent.actor} (${consent.coverage}, since ${consent.grantedAt})`}`,
             ...Object.values(DECISION_CHANGES).filter((change) => change !== null).map((change) => `Change: ${change}`),
+          ],
+        }
+      },
+
+      // Where this workspace's vaults live. Deciding it places the vaults of views not published yet; a vault published
+      // already, under the data root or where an earlier decision placed it, stays where it is.
+      async location() {
+        const where = (workspace, scopeId, decided, projectName) => {
+          if (workspace === null) return { path: null, origin: 'workspace-not-prepared' }
+          const found = vaultRootFor({ ...workspace, scopeId })
+          // A view that the next tick will place: where it would go, if that name is still free then.
+          if (found.origin === 'legacy-data-root' && decided !== null && !hasCommittedGeneration({ ...workspace, scopeId })) {
+            return { path: path.join(decided.parent, vaultFolderName({ projectName, scopeId })), origin: 'to-be-allocated' }
+          }
+          return { path: found.path, origin: found.origin }
+        }
+        const views = (project, enablement, workspace, decided) => enablement.scopes.map(({ scopeId }) => ({ scopeId, ...where(workspace, scopeId, decided, projectDisplayName(project)) }))
+        const lines = (list) => list.map((view) => `view ${view.scopeId}: ${view.path ?? 'no vault yet'} (${view.origin})`)
+        if (sub === 'show' || sub === undefined) {
+          const { project, enablement, workspace } = readable()
+          const { decisions } = shownMachine(machineOf(workspace), workspace)
+          const shown = views(project, enablement, workspace, decisions.location)
+          return { exit: EXIT.ok, document: { location: decisions.location, views: shown }, human: [`where vaults live: ${decisionWords('location', decisions.location)}`, ...lines(shown)] }
+        }
+        if (sub !== 'set' || value === undefined) refuse('usage', 'location show | location set DIR [--allow-synced-location]')
+        // `~/` is read against the home folder, which a shell does not do after `--x=`; under the test runner a home
+        // folder is only ever one the test named.
+        const tilde = value === '~' || value.startsWith('~/')
+        if (tilde && typeof homedir !== 'string') refuse('real-vault-location-under-test', 'a location under the home folder is never used under the test runner; name an absolute folder')
+        const parent = tilde ? path.join(homedir, value.slice(1)) : path.resolve(cwd, value)
+        const { project, enablement, workspace, repositoryRoots, now } = writable()
+        const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultRootFor({ ...workspace, scopeId })).filter((found) => found.origin === 'allocated').map((found) => found.path)
+        const warnings = checkVaultParent({ parent, workspaceRoot: workspace.workspaceRoot, repositoryRoots, allocatedPaths, allowSynced: flags['allow-synced-location'] === true, homedir: homedir ?? undefined, platform })
+        const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
+        const decided = withDecision(current, 'location', { parent }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
+        writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
+        const placed = views(project, enablement, workspace, decided.decisions.location)
+        return {
+          exit: EXIT.ok, document: { location: decided.decisions.location, warnings, views: placed, takesEffect: 'next-tick' },
+          human: [
+            `where vaults live: ${parent}; a view's vault is allocated there at its first publication, as "${projectDisplayName(project)} (<view>)"`,
+            ...(warnings.synced === null ? [] : [`Warning: ${warnings.synced} keeps this folder in step with other machines.`]),
+            ...(warnings.protected === null ? [] : [`Warning: macOS asks before Obsidian or the maintenance service may read your ${warnings.protected} folder.`]),
+            ...lines(placed),
           ],
         }
       },

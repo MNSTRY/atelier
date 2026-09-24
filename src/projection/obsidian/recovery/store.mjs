@@ -7,7 +7,8 @@ import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularF
 
 // Private per-workspace state for one Obsidian view:
 //
-//   <workspaceRoot>/vaults/<scopeId>/                 the editable vault (or an explicit vaultRoot)
+//   <workspaceRoot>/vaults/<scopeId>/                 the editable vault, unless it was allocated elsewhere or a vaultRoot is named
+//   <workspaceRoot>/state/allocations/<scopeId>.json  where the view's vault was allocated, when it was (see below)
 //   <workspaceRoot>/state/manifests/<scopeId>/        trusted manifests and the current pointer
 //   <workspaceRoot>/state/journals/<scopeId>/<id>/    publication journals
 //   <workspaceRoot>/recovery/objects/<sha256>.bin     immutable content-addressed bytes
@@ -111,11 +112,87 @@ function publishOnce(file, bytes) {
   return true
 }
 
+// ---------------------------------------------------------------------------
+// Where a view's vault is
+// ---------------------------------------------------------------------------
+
+// A view of a workspace that decided where its vaults live gets a folder
+// there, allocated once at its first publication (by the maintenance engine)
+// and recorded, owner only, in the workspace's private state:
+//
+//   <workspaceRoot>/state/allocations/<scopeId>.json   atelier-obsidian-vault-allocation/v1
+//
+// A view without a record has its vault where every earlier release put it,
+// `<workspaceRoot>/vaults/<scopeId>`: a vault published there stays there
+// until it is moved, and a workspace that decided no place publishes there as
+// before. The record is the one thing that names another folder, and the
+// store reads it, so every reader of a view's vault (the engine, source apply,
+// the proposal adapter, `open`) finds the same one.
+
+export const VAULT_ALLOCATION_SCHEMA = 'atelier-obsidian-vault-allocation/v1'
+export const VAULT_ORIGINS = Object.freeze(['allocated', 'legacy-data-root'])
+
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
+const CONTROL = /[\u0000-\u001f\u007f]/
+const ALLOCATION_KEYS = Object.freeze(['schema', 'workspaceId', 'scopeId', 'path', 'name', 'parent', 'allocatedAt'])
+const isPlainPath = (value) => typeof value === 'string' && value.length <= 4096 && !CONTROL.test(value) && path.isAbsolute(value) && path.resolve(value) === value
+
+export const allocationFile = (workspaceRoot, scopeId) => path.join(workspaceRoot, 'state', 'allocations', `${segment(scopeId)}.json`)
+export const legacyVaultRoot = (workspaceRoot, scopeId) => path.join(workspaceRoot, 'vaults', segment(scopeId))
+
+export function validateVaultAllocation(document, { workspaceId, scopeId }) {
+  const code = 'invalid-vault-allocation'
+  if (document === null || typeof document !== 'object' || Array.isArray(document)) refuse(code, 'a vault allocation is an object')
+  const unknown = Object.keys(document).filter((key) => !ALLOCATION_KEYS.includes(key))
+  if (unknown.length > 0 || ALLOCATION_KEYS.some((key) => !Object.hasOwn(document, key))) refuse(code, 'a vault allocation carries exactly its own members', { unknown: unknown.sort() })
+  if (document.schema !== VAULT_ALLOCATION_SCHEMA) refuse(code, 'a vault allocation names an unknown schema')
+  if (document.workspaceId !== workspaceId || document.scopeId !== scopeId || !IDENTIFIER.test(String(scopeId))) refuse(code, 'the vault allocation belongs to another workspace or view')
+  if (!isPlainPath(document.path) || !isPlainPath(document.parent)) refuse(code, 'the vault allocation names a folder that is not an absolute, plainly written path')
+  if (path.dirname(document.path) !== document.parent || path.basename(document.path) !== document.name) refuse(code, 'the vault allocation names its folder inconsistently')
+  if (typeof document.allocatedAt !== 'string' || !TIMESTAMP.test(document.allocatedAt)) refuse(code, 'the vault allocation needs a UTC time')
+  return document
+}
+
+// The record of a view, validated, or null when it has none. Reads only.
+export function readVaultAllocation({ workspaceRoot, workspaceId, scopeId }) {
+  let text
+  try { text = readRegularTextNoFollow(allocationFile(workspaceRoot, scopeId)) } catch (error) {
+    if (error.code === 'ENOENT') return null
+    return refuse('invalid-vault-allocation', 'the vault allocation cannot be read', { cause: error.code ?? String(error.message) })
+  }
+  let document
+  try { document = JSON.parse(text) } catch { return refuse('invalid-vault-allocation', 'the vault allocation is not JSON') }
+  return validateVaultAllocation(document, { workspaceId, scopeId })
+}
+
+// Written only by the maintenance engine, under its lock, and by what moves a vault under the same lock.
+export function writeVaultAllocation({ workspaceRoot, allocation }) {
+  validateVaultAllocation(allocation, allocation)
+  const directory = ensureContainedPrivateDirectory({ workspaceRoot, directory: path.dirname(allocationFile(workspaceRoot, allocation.scopeId)), label: 'Obsidian vault allocations' })
+  atomicReplacePrivateText(path.join(directory, path.basename(allocationFile(workspaceRoot, allocation.scopeId))), `${JSON.stringify(allocation, null, 2)}\n`)
+  return allocation
+}
+
+// Where a view's vault is, without creating anything: { path, origin, allocation }.
+export function vaultRootFor({ workspaceRoot, workspaceId, scopeId }) {
+  const allocation = readVaultAllocation({ workspaceRoot, workspaceId, scopeId })
+  return allocation === null
+    ? { path: legacyVaultRoot(workspaceRoot, scopeId), origin: 'legacy-data-root', allocation: null }
+    : { path: allocation.path, origin: 'allocated', allocation }
+}
+
+// Whether a view has a committed generation, whichever folder it was published into.
+export const hasCommittedGeneration = ({ workspaceRoot, scopeId }) => fs.existsSync(path.join(workspaceRoot, 'state', 'manifests', segment(scopeId), 'current.json'))
+
 // `repositoryRoots` is required: every enrolled repository root of the loaded
 // project. Neither the workspace state nor the vault may overlap one of them,
 // in either direction, lexically or by real path; the store refuses before it
 // creates anything. A caller with no enrolled repository (a test in a
 // temporary directory) says so with an explicit empty list.
+//
+// Without `vaultRoot` the vault is where the view's allocation says, else in
+// the workspace's `vaults/` (vaultRootFor). An allocated folder that has gone
+// is made again, private to this user, as a vault under the data root is.
 export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vaultRoot, repositoryRoots } = {}) {
   if (typeof workspaceRoot !== 'string' || !path.isAbsolute(workspaceRoot)) throw new TypeError('workspaceRoot must be an absolute path')
   for (const [label, value] of [['workspaceId', workspaceId], ['scopeId', scopeId]]) {
@@ -125,15 +202,18 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
     throw new TypeError('repositoryRoots must list the absolute root of every enrolled repository; pass an explicit empty list when there is none')
   }
   if (vaultRoot !== undefined && (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot))) throw new TypeError('vaultRoot must be an absolute path')
-  const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(vaultRoot === undefined ? [] : [vaultRoot])], repositoryRoots })
+  const allocation = vaultRoot === undefined ? readVaultAllocation({ workspaceRoot, workspaceId, scopeId }) : null
+  const namedVault = vaultRoot ?? allocation?.path
+  const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(namedVault === undefined ? [] : [namedVault])], repositoryRoots })
   if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
   // Both as the file system stores them: the vault root is what the app is told, and what it compares its own
   // working-directory spelling with.
   const root = realPathAsStored(workspaceRoot)
   const privateDir = (...parts) => ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, ...parts), label: 'Obsidian publication state' })
-  const requestedVault = vaultRoot ?? path.join(root, 'vaults', segment(scopeId))
-  // A vault this store places itself is private to this user from the start: it will hold the plugin's bearer.
+  const requestedVault = namedVault ?? legacyVaultRoot(root, scopeId)
+  // A vault this store places itself, under the data root or where the view's vault was allocated, is private to this
+  // user from the start: it will hold the plugin's bearer.
   fs.mkdirSync(requestedVault, { recursive: true, ...(vaultRoot === undefined ? { mode: 0o700 } : {}) })
   const vault = realPathAsStored(requestedVault)
   const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
@@ -152,10 +232,14 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
     workspaceId,
     scopeId,
     vaultRoot: vault,
-    // Placed by this store under the workspace state, rather than named by the caller, and really there: a vault path
-    // that is a link leads to a folder someone else chose, which is only looked at and never receives the bearer.
+    // Placed by this store under the workspace state or where the view's vault was allocated, rather than named by the
+    // caller, and really there: a vault path that is a link leads to a folder someone else chose, which is only looked
+    // at and never receives the bearer.
     managedVaultRoot: vaultRoot === undefined && vault === requestedVault,
     linkedVaultRoot: vaultRoot === undefined && vault !== requestedVault,
+    // Where the vault is and why: named by the caller, allocated for the view, or under the data root.
+    vaultOrigin: vaultRoot !== undefined ? 'explicit' : allocation === null ? 'legacy-data-root' : 'allocated',
+    allocation,
     journalsRoot: journals,
     lockPath: path.join(locks, `${segment(scopeId)}.lock`),
     // One publisher per vault, whichever view or workspace state it belongs to.
