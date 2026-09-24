@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { refuse, sha256Digest } from '../materialize/byte-lens.mjs'
-import { PLUGIN_DATA_FILE, PLUGIN_DIRECTORY, PLUGIN_ID, PLUGIN_MINIMUM_APP_VERSION, PLUGIN_SOURCE_FILES, pluginDataBytes } from './channel.mjs'
+import { PLUGIN_DATA_FILE, PLUGIN_DATA_MODE, PLUGIN_DIRECTORY, PLUGIN_ID, PLUGIN_MINIMUM_APP_VERSION, PLUGIN_SOURCE_FILES, PLUGIN_SOURCE_MODE, pluginDataBytes } from './channel.mjs'
 
 // The files of Atelier's plugin as they go into one vault: the three shipped
 // source files, byte for byte, and that vault's data file. Pure apart from
@@ -10,9 +10,7 @@ import { PLUGIN_DATA_FILE, PLUGIN_DIRECTORY, PLUGIN_ID, PLUGIN_MINIMUM_APP_VERSI
 
 export const PLUGIN_SOURCE_ROOT = fileURLToPath(new URL('../../../../plugins/obsidian/', import.meta.url))
 
-// The data file names a bearer: only the person who runs the vault reads it.
-export const PLUGIN_DATA_MODE = 0o600
-export const PLUGIN_SOURCE_MODE = 0o644
+export { PLUGIN_DATA_MODE, PLUGIN_SOURCE_MODE }
 
 let cached = null
 

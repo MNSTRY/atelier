@@ -18,7 +18,10 @@ import { refuse } from './errors.mjs'
 // lease runs inside the app and reports `apiVersion`, the version of exactly
 // that app. Such an observation carries `versionSource: 'plugin'`; it
 // qualifies with reason `plugin-reported`, and it needs no answer from the
-// command-line tool's `version` command.
+// command-line tool's `version` command. Whether the app is installed where
+// Atelier looks, with its command-line tool, is still the probe's answer, and
+// a version the tool gave as well (`cliVersion`) must meet the floor too: the
+// tool may reach another app that holds the same vault.
 
 // The publication protocol sets the view's undocumented `lastSavedData` field.
 // 1.13.7 is the only app version that protocol was proven on, so it is the
@@ -90,11 +93,16 @@ export function qualifyApp(observation, { requireVersion = true, floor = MINIMUM
   const seen = observation !== null && typeof observation === 'object' ? observation : {}
   const base = { floor, version: typeof seen.version === 'string' ? seen.version.slice(0, 80) : null, running: seen.running === true ? true : seen.running === false ? false : null }
   if (seen.versionSource === 'plugin') {
-    // The plugin runs inside the app it reports: the app is installed, runs, and has a vault open.
+    // The plugin runs inside the app it reports: that app runs and has a vault open.
     const reported = { ...base, running: true, versionSource: 'plugin' }
+    if (seen.installed !== true) return { ...reported, outcome: 'app-missing', reason: 'no-app-found' }
+    if (seen.cli !== true) return { ...reported, outcome: 'app-cli-unavailable', reason: 'cli-capability-absent' }
     if (reported.version === null) return { ...reported, outcome: 'app-version-unsupported', reason: 'version-unknown' }
     if (parseAppVersion(reported.version) === null) return { ...reported, outcome: 'app-version-unsupported', reason: 'version-unreadable' }
     if (!meetsMinimumAppVersion(reported.version, floor)) return { ...reported, outcome: 'app-version-unsupported', reason: 'below-minimum-version' }
+    if (typeof seen.cliVersion === 'string' && !meetsMinimumAppVersion(seen.cliVersion, floor)) {
+      return { ...reported, version: seen.cliVersion.slice(0, 80), outcome: 'app-version-unsupported', reason: 'below-minimum-version' }
+    }
     return { ...reported, outcome: 'qualified', reason: 'plugin-reported', versionChecked: true }
   }
   if (seen.installed !== true) return { ...base, outcome: 'app-missing', reason: 'no-app-found' }
@@ -123,11 +131,13 @@ export async function inspectApp(appProbe) {
 // a version, and an adapter built on that answer must not coordinate with an
 // app started since (see createEditorAdapter).
 //
-// When the service passes `pluginReport` (a plugin holds a live lease on the
-// view), the version it reports is the qualification and the probe is not
-// asked; such an answer is never reused for another view or a later call. The
-// adapter still coordinates through its own channel, which must answer for
-// the vault before anything is published.
+// When the service passes `pluginReport` (one launch of the plugin holds a
+// live lease on the view), the version it reports is the qualification and
+// the probe is asked only whether the app and its command-line tool are
+// installed (`inspectSync({ askVersion: false })`); such an answer is never
+// reused for another view or a later call. The adapter still coordinates
+// through its own channel, which must answer for the vault before anything is
+// published.
 export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor = MINIMUM_APP_VERSION, maxAgeMs = 10_000, now = () => Date.now() } = {}) {
   if (typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspectSync()')
   if (typeof createAdapter !== 'function') throw new TypeError('the qualified adapter factory needs createAdapter')
@@ -145,7 +155,16 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
     }
     return last.result
   }
-  const fromPlugin = (report) => qualifyApp({ version: typeof report?.appVersion === 'string' ? report.appVersion : null, versionSource: 'plugin' }, { requireVersion: true, floor })
+  const fromPlugin = (report) => {
+    let observation
+    try { observation = appProbe.inspectSync({ askVersion: false }) } catch { observation = null }
+    const seen = observation !== null && typeof observation === 'object' ? observation : {}
+    return qualifyApp({
+      installed: seen.installed, cli: seen.cli, version: typeof report?.appVersion === 'string' ? report.appVersion : null, versionSource: 'plugin',
+      // A probe that had to ask the tool to know it is there also has its version.
+      ...(typeof seen.version === 'string' ? { cliVersion: seen.version } : {}),
+    }, { requireVersion: true, floor })
+  }
   let shown = null
   const factory = (input) => {
     const report = input?.pluginReport ?? null

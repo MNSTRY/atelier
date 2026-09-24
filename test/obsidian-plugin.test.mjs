@@ -1080,9 +1080,11 @@ function pluginViewOf(generationId, { port = 43123, bearer = 'b'.repeat(43), sou
   return { manifest, files }
 }
 
-function publicationWorld(t, { vaultRoot } = {}) {
+// `before(workspaceRoot)` runs before the store is made, for what must be there when it is.
+function publicationWorld(t, { vaultRoot, before = () => {} } = {}) {
   const workspaceRoot = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-publication-'))
   t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  before(workspaceRoot)
   const store = createRecoveryStore({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE, repositoryRoots: [], ...(vaultRoot ? { vaultRoot } : {}) })
   return {
     store,
@@ -1327,6 +1329,79 @@ test('the bearer goes into a private vault root only: a vault Atelier placed is 
   assert.equal(named.recovered().some((bytes) => bytes.includes('b'.repeat(43))), false, 'nor a copy of it anywhere in recovery')
 })
 
+test('a vault path Atelier placed that is a link is never made private and never receives the bearer', needsExchange, async (t) => {
+  if (process.platform === 'win32') return t.skip('permission bits')
+  const elsewhere = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-linked-vault-'))
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }))
+  fs.chmodSync(elsewhere, 0o755)
+  const world = publicationWorld(t, { before: (workspaceRoot) => { fs.mkdirSync(path.join(workspaceRoot, 'vaults'), { recursive: true, mode: 0o700 }); fs.symlinkSync(elsewhere, path.join(workspaceRoot, 'vaults', SCOPE)) } })
+  assert.deepEqual([world.store.managedVaultRoot, world.store.linkedVaultRoot, world.store.vaultRoot], [false, true, fs.realpathSync(elsewhere)])
+  const result = await world.publish(pluginViewOf('gen-0001'))
+  assert.equal(result.state, 'committed', 'the notes and the rest of the plugin are published')
+  assert.deepEqual([outcomeOf(result, PLUGIN_DATA_PATH).outcome, outcomeOf(result, PLUGIN_DATA_PATH).reason, outcomeOf(result, PLUGIN_DATA_PATH).blocking], ['vault-not-private', 'vault-root-is-a-link', false])
+  assert.equal(fs.statSync(elsewhere).mode & 0o777, 0o755, 'the folder the link leads to is not changed')
+  assert.equal(world.read(PLUGIN_DATA_PATH), null)
+  // Private behind the link or not: the folder was chosen elsewhere, and the bearer does not go there.
+  fs.chmodSync(elsewhere, 0o700)
+  const again = await world.publish(pluginViewOf('gen-0002', { notes: { [NOTE]: `${NOTE_TEXT}Second.\n` } }))
+  assert.deepEqual([again.state, outcomeOf(again, PLUGIN_DATA_PATH).reason, world.read(PLUGIN_DATA_PATH)], ['committed', 'vault-root-is-a-link', null])
+})
+
+test('a plugin file the person repaired, changed or removed is written again when the same generation is published again', needsExchange, async (t) => {
+  const world = publicationWorld(t)
+  const second = () => pluginViewOf('gen-0002', { notes: { [NOTE]: `${NOTE_TEXT}Second.\n` } })
+  assert.equal((await world.publish(pluginViewOf('gen-0001'))).state, 'committed')
+  // A folder where the data file goes: left for the person, and the generation commits without it.
+  fs.rmSync(world.full(PLUGIN_DATA_PATH))
+  fs.mkdirSync(world.full(PLUGIN_DATA_PATH))
+  const withheld = await world.publish(second())
+  assert.deepEqual([withheld.state, outcomeOf(withheld, PLUGIN_DATA_PATH).outcome], ['committed', 'path-unsafe'])
+  // The person repairs it. Nothing else of the view changed, so it is the same generation, and it is published again.
+  fs.rmdirSync(world.full(PLUGIN_DATA_PATH))
+  const repaired = await world.publish(second())
+  assert.deepEqual([repaired.state, repaired.alreadyCommitted ?? false, repaired.generationId, outcomeOf(repaired, PLUGIN_DATA_PATH).outcome], ['committed', false, 'gen-0002', 'created'])
+  assert.ok(world.read(PLUGIN_DATA_PATH))
+  assert.equal(outcomeOf(repaired, NOTE).outcome, 'unchanged', 'the notes are kept as they are')
+  // With nothing drifted, the same generation is not published again.
+  assert.equal((await world.publish(second())).alreadyCommitted, true)
+  // A plugin file changed by hand is written again, and what it held is kept in recovery; a removed folder comes back.
+  fs.writeFileSync(world.full(`${PLUGIN_DIRECTORY}/main.js`), '// changed by hand\n')
+  const edited = await world.publish(second())
+  assert.deepEqual([edited.alreadyCommitted ?? false, outcomeOf(edited, `${PLUGIN_DIRECTORY}/main.js`).outcome], [false, 'published'])
+  assert.ok(world.read(`${PLUGIN_DIRECTORY}/main.js`).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))))
+  assert.ok(world.recovered().some((bytes) => bytes.toString() === '// changed by hand\n'))
+  fs.rmSync(world.full(PLUGIN_DIRECTORY), { recursive: true })
+  assert.equal((await world.publish(second())).state, 'committed')
+  assert.deepEqual(fs.readdirSync(world.full(PLUGIN_DIRECTORY)).sort(), [...PLUGIN_SOURCE_FILES, 'data.json'].sort())
+  // A file prepared only where present that is gone is the person's decision, not a drift.
+  fs.rmSync(world.full(PLUGIN_DIRECTORY), { recursive: true })
+  const off = { community: { entry: 'withheld', reason: 'turned-off-in-this-vault' }, onlyIfPresent: true, notes: { [NOTE]: `${NOTE_TEXT}Second.\n` } }
+  assert.equal((await world.publish(pluginViewOf('gen-0003', off))).state, 'committed')
+  assert.equal((await world.publish(pluginViewOf('gen-0003', off))).alreadyCommitted, true)
+  assert.equal(fs.existsSync(world.full(PLUGIN_DIRECTORY)), false)
+})
+
+test('an unreadable plugin or settings file is left for a person and holds nothing back; an unreadable note is refused, typed, as before, and nothing throws', needsExchange, async (t) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) return t.skip('permission bits')
+  const world = publicationWorld(t)
+  assert.equal((await world.publish(pluginViewOf('gen-0001'))).state, 'committed')
+  const locked = (relative) => { const file = world.full(relative); fs.chmodSync(file, 0o000); t.after(() => { try { fs.chmodSync(file, 0o644) } catch { /* gone */ } }); return file }
+  locked(`${PLUGIN_DIRECTORY}/main.js`)
+  locked(POLICY_SETTINGS_PATH)
+  const second = await world.publish(pluginViewOf('gen-0002', { notes: { [NOTE]: `${NOTE_TEXT}Second.\n` } }))
+  assert.equal(second.state, 'committed')
+  for (const relative of [`${PLUGIN_DIRECTORY}/main.js`, POLICY_SETTINGS_PATH]) {
+    const unit = outcomeOf(second, relative)
+    assert.deepEqual([unit.outcome, unit.blocking, unit.errorCode], ['path-unsafe', false, 'EACCES'], relative)
+  }
+  assert.equal(world.read(NOTE).toString(), `${NOTE_TEXT}Second.\n`, 'the notes are published all the same')
+  // A note nobody may read keeps its view from committing, as before: refused while its candidate is staged, typed.
+  locked(NOTE)
+  const third = await world.publish(pluginViewOf('gen-0003', { notes: { [NOTE]: `${NOTE_TEXT}Third.\n` } }))
+  assert.deepEqual([third.state, third.refusal?.code, third.refusal?.detail?.cause], ['refused', 'staging-failed', 'EACCES'])
+  assert.equal(world.store.readCurrent().generationId, 'gen-0002')
+})
+
 // ---------------------------------------------------------------------------
 // 5. The maintenance service: it publishes the plugin, holds its channel, and
 //    a live plugin's app version is the checked one
@@ -1453,41 +1528,82 @@ test('the service publishes the plugin into the vault it maintains, and the plug
   await waitFor(async () => (await world.statusDocument()).plugins.scopes[0].present === false, { label: 'the released lease' })
 })
 
-test('qualification: a live plugin\'s version is the checked version and the probe is not asked; below the floor it refuses; without a plugin the probe decides', () => {
+test('with two launches of the plugin holding one view, neither version decides: the probe is asked as if no plugin were there', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const reports = []
+  const service = await world.service({ adapterFactory: (input) => { reports.push(input.pluginReport); return absentAdapter() } })
+  assert.ok((await service.tickNow()).ok)
+  const change = async (line) => {
+    fs.appendFileSync(world.source('harbor/notes/tides.md'), `\n${line}\n`)
+    world.advance(1000)
+    assert.ok((await service.tickNow()).ok)
+  }
+  const first = world.plugin()
+  await first.plugin.load()
+  await first.plugin.cycle()
+  const second = world.plugin()
+  await second.plugin.load()
+  await second.plugin.cycle()
+  assert.equal((await world.statusDocument()).plugins.scopes[0].sessions, 2)
+  await change('Low water at six.')
+  assert.equal(reports.at(-1), null, 'two apps hold the vault: which one the command-line tool reaches is not known')
+  second.plugin.unload()
+  await waitFor(async () => (await world.statusDocument()).plugins.scopes[0].sessions === 1, { label: 'one launch left' })
+  await change('Slack water at three.')
+  assert.deepEqual([reports.at(-1)?.instances, reports.at(-1)?.appVersion], [1, '1.13.7'])
+})
+
+test('qualification: a live plugin\'s version is the checked version, the probe says whether app and tool are installed without being asked the version, and without a plugin the probe decides', () => {
   const built = []
   const asked = []
-  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => { asked.push(1); return { installed: true, cli: true, running: true, version: null, noVaultOpen: true } } }, createAdapter: (input) => { built.push(input.qualification); return { kind: 'fake' } } })
-  const report = (appVersion) => ({ scopeId: SCOPE, appVersion, pluginVersion: '1.0.0', sessions: 1, renewedAt: '2026-01-05T10:00:00.000Z' })
+  let observation = { installed: true, cli: true, running: true, version: null, noVaultOpen: true }
+  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: (options) => { asked.push(options?.askVersion ?? true); return { ...observation } } }, createAdapter: (input) => { built.push(input.qualification); return { kind: 'fake' } } })
+  const report = (appVersion) => ({ scopeId: SCOPE, appVersion, pluginVersion: '1.1.0', sessions: 1, instances: 1, renewedAt: '2026-01-05T10:00:00.000Z' })
   factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') })
   assert.deepEqual(built.at(-1), { floor: MINIMUM_APP_VERSION, version: '1.13.7', running: true, versionSource: 'plugin', outcome: 'qualified', reason: 'plugin-reported', versionChecked: true })
-  assert.deepEqual(asked, [], 'no command-line call: the plugin runs inside that app')
+  assert.deepEqual(asked, [false], 'the probe is asked what is installed, not the version: the plugin runs inside that app')
   assert.equal(factory.lastQualification().reason, 'plugin-reported')
   assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.6') }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'below-minimum-version')
   assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: { scopeId: SCOPE } }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'version-unknown', 'a report without a version is not an app that is missing')
-  assert.deepEqual(asked, [])
+  // Installation and the command-line tool are the probe's answer, with a plugin as without one.
+  observation = { installed: true, cli: false, running: true, version: null }
+  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') }), (error) => error.code === 'app-cli-unavailable' && error.detail.reason === 'cli-capability-absent')
+  observation = { installed: false, cli: false, running: true, version: null }
+  factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') })
+  assert.deepEqual([built.at(-1).outcome, built.at(-1).versionChecked], ['app-missing', undefined], 'not where Atelier looks: an adapter that coordinates with no running app')
+  // A probe that had to ask the tool (it has no fixed place) also has its version, and that one must meet the floor too.
+  observation = { installed: true, cli: true, running: true, version: '1.13.5' }
+  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.7') }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'below-minimum-version' && error.detail.version === '1.13.5')
+  observation = { installed: true, cli: true, running: true, version: '1.13.7' }
+  factory({ scope: { scopeId: SCOPE }, pluginReport: report('1.13.8') })
+  assert.deepEqual([built.at(-1).reason, built.at(-1).version], ['plugin-reported', '1.13.8'])
+  assert.ok(asked.every((value) => value === false))
   // Without a plugin, the command-line tool decides, as before: with no vault open it cannot tell the version.
+  observation = { installed: true, cli: true, running: true, version: null, noVaultOpen: true }
   assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: null }), (error) => error.code === 'app-version-unsupported' && error.detail.reason === 'no-vault-open')
-  assert.deepEqual(asked, [1])
+  assert.equal(asked.at(-1), true)
   assert.equal(factory.lastQualification().reason, 'no-vault-open')
   // The plugin's answer is never reused for a call without one.
   assert.throws(() => factory({ scope: { scopeId: SCOPE } }), (error) => error.detail.reason === 'no-vault-open')
-  assert.deepEqual(qualifyApp({ versionSource: 'plugin', version: '1.14.2' }).reason, 'plugin-reported')
-  assert.deepEqual(qualifyApp({ versionSource: 'plugin', version: 'soon' }).reason, 'version-unreadable')
+  assert.deepEqual(qualifyApp({ versionSource: 'plugin', installed: true, cli: true, version: '1.14.2' }).reason, 'plugin-reported')
+  assert.deepEqual(qualifyApp({ versionSource: 'plugin', installed: true, cli: true, version: 'soon' }).reason, 'version-unreadable')
+  assert.deepEqual(qualifyApp({ versionSource: 'plugin', version: '1.14.2' }).outcome, 'app-missing', 'a plugin report alone does not say where the app is installed')
 })
 
 test('status and open report the plugin, and open takes the app version from it where the command-line tool cannot tell', needsExchange, async (t) => {
   const world = serviceWorld(t)
   const service = await world.service()
   await service.tickNow()
-  // The app runs with a vault open that the command-line tool does not answer for: it says "Vault not found.".
+  // The app runs with the vault open, and the command-line tool answers for it, but its version call gives no answer
+  // (it timed out, say): the version cannot be told from the tool.
   const launches = []
   const seams = {
-    appProbe: { inspect: async () => ({ installed: true, cli: true, running: true, version: null, noVaultOpen: true }), vaultState: async () => ({ answered: true, indexReady: true }) },
+    appProbe: { inspect: async () => ({ installed: true, cli: true, running: true, version: null }), vaultState: async () => ({ answered: true, indexReady: true }) },
     launcher: { open: async ({ vaultRoot }) => { launches.push(vaultRoot); return { launched: true, reason: 'fake' } } },
     service: { entryPath: TEST_SERVICE_ENTRY, spawn() { throw new Error('a service was started') } },
   }
   const without = await world.run(['open', '--json', '--consent-actor', CONSENT.actor], { seams })
-  assert.deepEqual([without.json.outcome, without.json.reason, without.json.plugin], ['app-version-unsupported', 'no-vault-open', { present: false, reason: 'no-live-lease' }])
+  assert.deepEqual([without.json.outcome, without.json.reason, without.json.plugin], ['app-version-unsupported', 'version-unknown', { present: false, reason: 'no-live-lease' }])
   const quiet = await world.run(['status', '--json'], { seams })
   assert.deepEqual(quiet.json.scopes[0].plugin, { present: false, reason: 'no-live-lease' })
 
@@ -1627,6 +1743,18 @@ test('the plugin supplies the version only: an app without the command-line capa
   assert.equal((await qualified({ installed: false, cli: false, running: null, version: null }, live)).reason, 'no-app-found')
   assert.equal((await qualified(new Error('probe failed'), live)).reason, 'no-app-found')
   assert.equal((await qualified({ installed: true, cli: true, running: true, version: null }, Promise.reject(new Error('status unreadable')))).reason, 'version-unknown')
+  // A version the tool did answer must meet the floor as well: the tool may reach another app that holds the vault.
+  const older = await qualified({ installed: true, cli: true, running: true, version: '1.13.5' }, live)
+  assert.deepEqual([older.reason, older.version], ['below-minimum-version', '1.13.5'])
+  // The presence costs a round trip to the service: it is asked at most once a second, however often the app is.
+  let now = 0
+  let reads = 0
+  const polled = withPluginReportedVersion(probe({ installed: true, cli: true, running: true, version: null, noVaultOpen: true }), async () => { reads += 1; return live }, { now: () => now })
+  for (let poll = 0; poll < 10; poll += 1) { assert.equal((await polled.inspect()).versionSource, 'plugin'); now += 50 }
+  assert.equal(reads, 1)
+  now += 1000
+  await polled.inspect()
+  assert.equal(reads, 2)
   assert.deepEqual(pluginPresenceOf(null, SCOPE), { present: false, reason: 'service-not-running' })
   assert.deepEqual(pluginPresenceOf({ schema: 'atelier-obsidian-service-status/v1' }, SCOPE), { present: false, reason: 'service-reports-no-plugin-channel' })
   assert.deepEqual(pluginPresenceOf({ plugins: { scopes: [{ scopeId: 'scope-other', present: true, appVersion: '1.13.7' }] } }, SCOPE), { present: false, reason: 'no-live-lease' })
@@ -1673,8 +1801,11 @@ async function realAppWorld(t) {
   real.world = serviceWorld(t)
   real.adapterFactory = createQualifiedAdapterFactory({
     appProbe: {
-      inspectSync() {
+      // As the production probe does on this host: the tool has a fixed place, so with a plugin in the app the version is
+      // not asked for.
+      inspectSync({ askVersion = true } = {}) {
         if (!real.appRunning) return { installed: true, cli: true, running: false, version: null }
+        if (!askVersion) return { installed: true, cli: fs.existsSync(cliPath), running: true, version: null }
         const reply = spawnSync(cliPath, ['version'], { env: real.instance.env, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' })
         const answer = readVersionAnswer({ stdout: reply.stdout, stderr: reply.stderr, exited: reply.error === undefined && reply.status === 0 })
         real.versionCalls.push(answer)

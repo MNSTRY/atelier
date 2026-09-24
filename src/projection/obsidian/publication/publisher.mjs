@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { acquirePrivateLock, publishPrivateFile, syncPrivateDirectory } from '../../../project/durable-state.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract } from '../contracts.mjs'
 import { isPluginOwnedPath, isPolicySettingsPath, isUserOwnedSettingsPath, preparePolicySettingsFile } from '../materialize/settings.mjs'
-import { PLUGIN_DATA_PATH } from '../plugin-bridge/channel.mjs'
+import { PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_SOURCE_MODE } from '../plugin-bridge/channel.mjs'
 import { createJournal, newJournalId } from '../recovery/journal.mjs'
 import { recheckDisplacedFiles } from '../recovery/late-writer.mjs'
 import { publishedSinceCommit, reconcileUnit, recordDisplaced, recoverPublicationsLocked, retireStagedFile } from '../recovery/restart.mjs'
@@ -85,6 +85,8 @@ function validatePreparedView(preparedView, store) {
       if (!isPluginOwnedPath(file.path) || !Buffer.isBuffer(file.bytes) || sha256Digest(file.bytes) !== file.digest || pinned.get(file.path) !== file.digest) {
         refuse('invalid-prepared-view', 'a plugin file, its digest and the digest the manifest pins disagree')
       }
+      // Read by the app, never run by anyone: the data file owner-only, the others readable.
+      if (file.mode !== (file.path === PLUGIN_DATA_PATH ? PLUGIN_DATA_MODE : PLUGIN_SOURCE_MODE)) refuse('invalid-prepared-view', 'a plugin file has a mode Atelier never gives one')
       pinned.delete(file.path)
       continue
     }
@@ -201,6 +203,20 @@ function currentDigestOf(vaultRoot, relativePath) {
   try { return readFileDigest(path.join(vaultRoot, relativePath)) } catch { return null }
 }
 
+// A generation that is already committed is published again, as it is, when a
+// plugin file it carries is not on disk as it pins it: the person repaired a
+// path Atelier had to leave, or removed or changed a file. The bytes are
+// Atelier's and nothing else of the view changed, so the generation stays the
+// same; its notes are kept, and its plugin units are planned from the disk as
+// ever. A file prepared only where present that is gone is not a drift.
+function pluginFilesDrifted(preparedView, store) {
+  return preparedView.files.some((file) => {
+    if (file.kind !== 'plugin') return false
+    const current = currentDigestOf(store.vaultRoot, file.path)
+    return current !== file.digest && !(current === null && file.onlyIfPresent === true)
+  })
+}
+
 function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = new Map() }) {
   const trusted = new Map()
   for (const note of priorManifest?.notes ?? []) trusted.set(note.path, note.noteDigest)
@@ -264,7 +280,7 @@ export async function publishView(options = {}) {
     acquire(store.vaultLockPath, () => acquireVaultLock(store), 'into this vault')
     const recovered = recoverPublicationsLocked({ store, clock })
     const pointer = store.readCurrent()
-    if (pointer?.generationId === manifest.generationId) {
+    if (pointer?.generationId === manifest.generationId && !pluginFilesDrifted(preparedView, store)) {
       return { state: 'committed', alreadyCommitted: true, generationId: manifest.generationId, journalId: pointer.journalId, notes: [], retainedEdits: pointer.retained ?? [], lateWriters: [], recovered }
     }
     if ((pointer?.generationId ?? null) !== expectedGeneration) refuse('generation-mismatch', 'the committed generation is not the one this publication expects', { committed: pointer?.generationId ?? null })
@@ -408,6 +424,9 @@ export async function publishView(options = {}) {
 // and the file is planned from the disk anew. Nothing reads a plugin file as a
 // person's edit of a note: its outcomes carry their own names.
 const PLUGIN_LEFT_FOR_A_PERSON = new Set(['path-unsafe', 'vault-not-private'])
+// A leaf or a parent nobody may look into or read (another owner, mode 000) or a link loop: the person's to repair,
+// like a leaf that is not a file. It is reported, never thrown, so the rest of the view and every later view go on.
+const UNREADABLE_PATH = new Set(['EACCES', 'EPERM', 'ELOOP'])
 const PLUGIN_FILE_CHANGED = new Set(['edit-kept', 'disk-changed', 'editor-edit'])
 
 async function publishUnit(unit, context) {
@@ -421,8 +440,10 @@ async function publishUnit(unit, context) {
 
 // The vault root holds the plugin's bearer once its data file is there, so it
 // must be private to this user. A vault root Atelier placed under its own data
-// root is made private here; any other one is only looked at.
+// root is made private here; any other one is only looked at, and a vault path
+// under the data root that is a link to somewhere else never receives it.
 function ensurePrivateVaultRoot(store) {
+  if (store.linkedVaultRoot === true) return { private: false, reason: 'vault-root-is-a-link' }
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
   let stat = fs.lstatSync(store.vaultRoot, { throwIfNoEntry: false })
   if (!stat?.isDirectory() || uid === null || stat.uid !== uid) return { private: false, reason: 'vault-root-not-owned' }
@@ -444,8 +465,12 @@ async function publishOneUnit(unit, context) {
   // say) is reported and left alone; it must not keep every note from
   // converging while the person repairs it. Notes and attachments block.
   const unsafeBlocks = unit.op !== 'settings'
-  if (!ensureParents(store.vaultRoot, unit.path)) return outcome('path-unsafe', { blocking: unsafeBlocks })
-  const leaf = fs.lstatSync(note, { throwIfNoEntry: false })
+  const unreadable = (error) => { if (!UNREADABLE_PATH.has(error?.code)) throw error; return outcome('path-unsafe', { blocking: unsafeBlocks, errorCode: error.code }) }
+  let leaf
+  try {
+    if (!ensureParents(store.vaultRoot, unit.path)) return outcome('path-unsafe', { blocking: unsafeBlocks })
+    leaf = fs.lstatSync(note, { throwIfNoEntry: false })
+  } catch (error) { return unreadable(error) }
   if (leaf && !leaf.isFile()) return outcome('path-unsafe', { blocking: unsafeBlocks })
 
   let plan = unit
@@ -453,7 +478,8 @@ async function publishOneUnit(unit, context) {
     plan = planSettings(unit, context)
     if (plan.outcome) return plan
   }
-  const current = readNote(note)
+  let current
+  try { current = readNote(note) } catch (error) { return unreadable(error) }
   const currentDigest = current === null ? null : sha256Digest(current)
 
   if (plan.op === 'keep') {
@@ -641,7 +667,11 @@ function stageLate(plan, { store, journal, journalId, crash, updating }) {
 // alone.
 function planSettings(unit, context) {
   const note = path.join(context.store.vaultRoot, unit.path)
-  const existing = readNote(note)
+  let existing
+  try { existing = readNote(note) } catch (error) {
+    if (!UNREADABLE_PATH.has(error?.code)) throw error
+    return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'path-unsafe', blocking: false, errorCode: error.code }
+  }
   // Prepared from other bytes than these: the person changed the file since, and whatever Atelier decided from the old
   // bytes is not written over the change. The view is tried again, and the next preparation reads the file as it is.
   if (Object.hasOwn(unit, 'expectedDigest') && (existing === null ? null : sha256Digest(existing)) !== unit.expectedDigest) {

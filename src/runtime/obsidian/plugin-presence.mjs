@@ -22,16 +22,25 @@ export function pluginPresenceOf(statusDocument, scopeId) {
 }
 
 // An app probe that takes the version from the plugin when one holds the view:
-// that plugin runs inside the app, so its version is the app's, whatever the
-// command-line tool answers or fails to answer. Whether the app is installed
-// and has its command-line capability is still the probe's answer; that
-// capability opens and coordinates the vault in this phase.
-export function withPluginReportedVersion(appProbe, readPresence) {
+// that plugin runs inside the app, so its version is the app's, where the
+// command-line tool fails to answer. Whether the app is installed and has its
+// command-line capability is still the probe's answer; that capability opens
+// and coordinates the vault in this phase. A version the tool did answer must
+// meet the floor as well (`cliVersion`): the tool may reach another app.
+// The presence is asked at most once per `maxAgeMs`: open's wait loop asks the
+// app far more often, and each answer about the plugin costs a round trip to
+// the service.
+export function withPluginReportedVersion(appProbe, readPresence, { maxAgeMs = 1000, now = () => Date.now() } = {}) {
+  let last = null
+  const presenceNow = () => {
+    if (last === null || now() - last.at >= maxAgeMs) last = { at: now(), presence: Promise.resolve().then(readPresence).catch(() => null) }
+    return last.presence
+  }
   return {
     async inspect() {
-      const [observation, presence] = await Promise.all([appProbe.inspect(), Promise.resolve().then(readPresence).catch(() => null)])
+      const [observation, presence] = await Promise.all([appProbe.inspect(), presenceNow()])
       if (presence?.present !== true || observation?.installed !== true || observation?.cli !== true) return observation
-      return { ...observation, running: true, version: presence.appVersion, noVaultOpen: false, versionSource: 'plugin' }
+      return { ...observation, running: true, version: presence.appVersion, noVaultOpen: false, versionSource: 'plugin', ...(typeof observation.version === 'string' ? { cliVersion: observation.version } : {}) }
     },
     vaultState: (input) => appProbe.vaultState(input),
   }

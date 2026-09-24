@@ -150,8 +150,10 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
     workspaceId,
     scopeId,
     vaultRoot: vault,
-    // Placed by this store under the workspace state, rather than named by the caller.
-    managedVaultRoot: vaultRoot === undefined,
+    // Placed by this store under the workspace state, rather than named by the caller, and really there: a vault path
+    // that is a link leads to a folder someone else chose, which is only looked at and never receives the bearer.
+    managedVaultRoot: vaultRoot === undefined && vault === requestedVault,
+    linkedVaultRoot: vaultRoot === undefined && vault !== requestedVault,
     journalsRoot: journals,
     lockPath: path.join(locks, `${segment(scopeId)}.lock`),
     // One publisher per vault, whichever view or workspace state it belongs to.

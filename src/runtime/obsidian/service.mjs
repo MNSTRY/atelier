@@ -151,8 +151,10 @@ export async function runMaintenanceService(options = {}) {
     }
     return result
   }
-  // The app version a live plugin reports counts as checked for the view it holds open.
-  const pluginAwareAdapterFactory = (input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginSessions.report(input.scope.scopeId) : null })
+  // The app version a live plugin reports counts as checked for the view it holds open, while one launch of the plugin
+  // alone holds it: with two apps holding the vault, which one the command-line tool reaches is unknown.
+  const pluginReportOf = (scopeId) => { const report = pluginSessions.report(scopeId); return report?.instances === 1 ? report : null }
+  const pluginAwareAdapterFactory = (input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginReportOf(input.scope.scopeId) : null })
   const engine = createEngine({
     watcherFactory: createFsWatcherFactory(), ...engineOptions, seams: { ...(engineOptions.seams ?? {}), prepareView: prepareWithPlugin, publishView: publishAndConfirm },
     loadProject, dataRoot, adapterFactory: pluginAwareAdapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId },
