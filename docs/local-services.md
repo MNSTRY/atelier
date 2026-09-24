@@ -145,7 +145,7 @@ explicit consent that names its actor.
 | --- | --- | --- | --- |
 | Health | `GET /health` | none | service name, workspace identity, runtime identifier, PID, loopback host and port, executable digest, start time, status |
 | Status | `GET /status` | bearer | the health fields, loop state, last tick, last error code, and per-view freshness with held notes counted, not named |
-| Tick now | `POST /tick` | bearer | the state of the tick that ran |
+| Tick now | `POST /tick` | bearer | the state of the tick that ran. The body may also name one view (`scopeId`, a contract identifier), which that tick prepares and publishes once more, asking the app again |
 | Stop | `POST /stop` | bearer | an acknowledgement naming the runtime and PID, then the service ends |
 
 Health carries no path, no note title, no source name and no withheld
@@ -165,7 +165,9 @@ The listener refuses a request before looking its operation up when:
 Status, tick and stop additionally refuse without the bearer of the running
 runtime. A `POST` payload is a JSON object of at most 1 KiB that names the
 runtime identifier it is meant for, so a request aimed at an earlier runtime on
-the same port does nothing.
+the same port does nothing. A tick may also name one view by its `scopeId`;
+any other member, or a `scopeId` that is not a contract identifier, is refused
+and nothing runs.
 
 ### Status values and refusal cases
 
@@ -261,7 +263,7 @@ error, 3 the operation ran and its answer is not success.
 | `policy show`, `policy install FILE`, `policy revoke` | `install` validates against the apply-policy contract and stores the policy owner-only beside the machine settings, never in a project, a repository or a note. `revoke` marks the stored policy revoked, which the engine reads before its very next dispatch, and returns the mode to manual | private machine settings |
 | `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start needs `--consent-actor ID` | what the lifecycle writes |
 | `service unit --print` | the text `buildStartupAdapter` returns. Installing a unit is not offered | nothing |
-| `open [--scope ID]` | starts or reconnects the owned service, asks it for a tick, reads the view back, qualifies the installed app, has the vault opened | what the service writes |
+| `open [--scope ID]` | starts or reconnects the owned service, asks it for a tick, reads the view back, qualifies the installed app, makes the app know the vault (through the app while it runs; in its settings while none runs), has the vault opened, and asks again for a view the app kept from publication | what the service writes; the app's vault list (see [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list)) |
 
 Reaching the installed app or the operating system is never a default.
 `open`, `service start` and `service unit` refuse with
@@ -276,14 +278,14 @@ step. Only `current` is success:
 
 | Outcome | Meaning |
 | --- | --- |
-| `current` | the proven service ticked after the request; the view's persisted freshness is `current`; read back independently, the trusted generation is the prepared one and every note has the bytes it was published with; the app meets the minimum version, was asked to open this vault, answers for exactly this vault and has finished reading it |
+| `current` | the proven service ticked after the request; the view's persisted freshness is `current`; read back independently, the trusted generation is the prepared one and every note has the bytes it was published with; the app meets the minimum version, knows this vault as one of its vaults, was asked to open it, answers for exactly this vault and has finished reading it |
 | `updating` | a publication is under way, a tick outlasted the wait, or a note differs from the trusted generation and has not been looked at yet |
 | `held-for-your-edit` | an edited note is preserved and held |
 | `stale-readable` | a last good vault exists and reads back, but is not proven to be the present generation |
 | `not-prepared` | no generation of this view has been published |
 | `publisher-conflict` | another publisher or an uncoordinated editor holds the vault |
 | `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability; below the minimum version, or a version that cannot be read (reason `no-vault-open` when the app runs with no vault open and its command line answers nothing else) |
-| `launch-failed` | the operating system refused, or the app never answered for this vault |
+| `launch-failed` | the vault could not be added to the app's list (a typed reason names why), the operating system refused, or the app never answered for this vault |
 | `indexing` | the app answers for this vault and has not finished reading it |
 | `service-unavailable` | the service could not be started or is not provably ours (`occupied`, no consent yet, a start that never proved ownership) |
 | `busy` | the service is ours and in a long tick |

@@ -272,9 +272,10 @@ What the tarball must and must not carry, and the package proof, are in
 
 ## First vault: what to expect
 
-This is the path an adopter walks on one machine, in the order the command
-requires it. Every operation and flag below is the shipped `atelier obsidian`
-usage text; `atelier obsidian --help` prints it.
+This is the path an adopter walks on one machine. Every operation and flag
+below is the shipped `atelier obsidian` usage text; `atelier obsidian --help`
+prints it. There are three steps, and none of them is done by hand in
+Obsidian.
 
 1. Enable the projection in the project configuration. The member
    `ext["mnstry.atelier.obsidian"]` is an `atelier-obsidian-ext-settings/v1`
@@ -295,19 +296,23 @@ usage text; `atelier obsidian --help` prints it.
      has to carry; `policy install FILE` installs it and leaves the mode
      unchanged; `policy revoke` returns the mode to `manual` and stops every
      later apply.
-3. Start the maintenance service:
-   `atelier obsidian service start --consent-actor ID --adapter=obsidian-cli`.
-   Reaching the installed app is never a default, so `--adapter=obsidian-cli`
-   is required, and the consent actor records who allowed the service to run.
-   `service status` and `service stop` manage it; `service unit --print
-   --adapter=obsidian-cli` prints a startup unit and installs nothing.
-4. Open a view: `atelier obsidian open --scope ID --adapter=obsidian-cli`.
-   The command starts or reconnects maintenance, verifies the vault by reading
-   it back, and asks the app (version 1.13.7 or later) to open it. Quit
-   Obsidian before a view's first publication (on Linux, also any app that
-   runs on a system Electron): while a process that may be Obsidian runs, the
-   first publication stops, and `open` and `status` say so; see
-   [First publication while Obsidian is running](#first-publication-while-obsidian-is-running).
+3. Open a view:
+   `atelier obsidian open --scope ID --consent-actor ID --adapter=obsidian-cli`.
+   That's it. Reaching the installed app is never a default, so
+   `--adapter=obsidian-cli` is required, and the first open of a workspace
+   records who allowed the maintenance service to run (`--consent-actor`;
+   later opens reconnect to it and need no consent). `open` starts or
+   reconnects maintenance and asks it for a tick, makes Obsidian (version
+   1.13.7 or later) know the view's vault as one of its vaults, opens it,
+   publishes the view, verifies the vault by reading it back, and waits until
+   the app answers for exactly that vault. It does this in whatever state
+   Obsidian is in; see
+   [What `open` does in each state of Obsidian](#what-open-does-in-each-state-of-obsidian).
+
+The maintenance service can also be managed on its own:
+`atelier obsidian service start --consent-actor ID --adapter=obsidian-cli`,
+`service status` and `service stop`; `service unit --print
+--adapter=obsidian-cli` prints a startup unit and installs nothing.
 
 `open` and `status` answer with a freshness state, not a promise. `current`
 means the vault is the present generation, verified by read-back, and the app
@@ -342,34 +347,61 @@ absolute directory. Private state inside an enrolled repository is refused.
 Publication is proven on macOS arm64 only and is refused on Windows; see
 [Known limits](#known-limits).
 
-### First publication while Obsidian is running
+### What `open` does in each state of Obsidian
 
-The publisher writes into a vault only when it can coordinate with every
+Obsidian opens a vault by path (`obsidian://open?path=`) only when the folder
+is in its own vault list, the `vaults` of `obsidian.json` in its user-data
+directory. `open` puts the view's vault there first, and never asks a person
+to open a folder by hand:
+
+- **Obsidian runs and answers its command line (any vault is open).** `open`
+  reads the app's vault list through its command line. A vault the app does
+  not list is added and opened in a new window through the app itself (it
+  writes its own settings), and read back from its list by real path. `open`
+  then waits, bounded, until the app answers for exactly this vault, and asks
+  maintenance for the view again: the publication runs through the app, which
+  now holds the vault, with every editor check of the publication protocol.
+  Obsidian does not have to be quit.
+- **Obsidian is not running.** The view is published on the path with no app,
+  as before. `open` then adds the vault to the app's settings file (see
+  [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list) for
+  exactly when and how that one file is written) and starts Obsidian on it.
+  An Obsidian that never ran on this account has no settings file yet, and
+  `open` does not create one: start Obsidian once, then open again.
+- **Obsidian runs with no vault open.** Its command line then answers every
+  command with "Vault not found.", so nothing can be asked of it, and its
+  settings file belongs to the running app, so it is only read. A vault the
+  app already lists is opened by path and published through the app as
+  above. A vault it does not list yet is answered as outcome
+  `app-version-unsupported` with reason `no-vault-open`: open any vault in
+  Obsidian, or quit it, and open again. This is the one state of a running
+  Obsidian that `open` cannot get through alone.
+
+Only `open` adds a vault to Obsidian: the maintenance service never does, so
+it never opens a window nobody asked for. A declared view that was never
+opened is published while Obsidian is quit, and `open --scope ID` adds it.
+
+The publisher still writes into a vault only when it can coordinate with every
 Obsidian that may hold it, or when the process table shows, positively, that
 none runs. Otherwise it stops, and the view reports `publisher-conflict` with
 reason `editor-uncoordinated`. That reason has several causes, and the report
 does not say which: Obsidian runs without this vault open, or with it open but
 its command line did not answer; the process table could not be read, or on
 Linux shows an app that runs on a system Electron, which may be Obsidian; the
-app's version was not checked when the publication began (it started just
-then, or on macOS it is installed outside `/Applications`; see "Known
-limits"); or an app started while the view was being published with the app
-closed, which stops that publication partway. Before a first publication no
-app has the vault open, so only the first way on applies: quit Obsidian (on
-Linux, also any app that runs on a system Electron). The service then
-publishes the view directly, and
-`atelier obsidian open --scope ID --adapter=obsidian-cli` starts Obsidian on
-it. `status` and `open` give that as the next step. Once a view
-has been published, the last published vault stays in place and there is a
-second way on: open it in the running app as it is with
-`atelier obsidian open --allow-stale`, which waits, bounded, until the app
-answers for it. The publication is retried automatically either way.
+app's version was not checked when the publication began; or an app started
+while the view was being published with the app closed. `status` gives
+`atelier obsidian open` as the next step (it adds the vault to Obsidian and
+publishes through it), or quitting Obsidian (on Linux, also any app that runs
+on a system Electron). When `open` itself already did that and the
+publication still stopped, it says to quit Obsidian and open again.
 
-An Obsidian with no vault open at all answers its command line with "Vault not
-found." for every command, its version included. That is reported as outcome
-`app-version-unsupported` with reason `no-vault-open`, under `service.app` in
-`status` and by `open`. Opening any vault in Obsidian resolves it, because the
-version can then be read, and so does quitting Obsidian.
+The tick `open` asks for prepares and publishes its view once more, whatever
+state the view is in. A view whose last publication did not settle (refused,
+stale or still updating) is also tried again without waiting for a change: as
+soon as the app looks different (it quit or started, qualified differently,
+or opened or closed a vault in its list), and otherwise after a delay that
+starts at 30 seconds and doubles per attempt, up to the full reconciliation
+every five minutes.
 
 ## Known limits
 
@@ -402,8 +434,10 @@ test reported as a pass.
   built on it does not coordinate with any app it then finds running, and
   asks it nothing. That publication stops as `publisher-conflict` with reason
   `editor-uncoordinated`, and the next publication asks again and reads the
-  version. A view that stopped is tried again on its next change, or at the
-  next full reconciliation, every five minutes.
+  version. A view that stopped is tried again on the next tick `open` asks
+  for, as soon as the app looks different, and otherwise after a delay that
+  starts at 30 seconds and doubles, up to the full reconciliation every five
+  minutes. A tick `open` asks for never reuses a remembered app answer.
 - Install location (macOS): the app is found only at
   `/Applications/Obsidian.app`, and its command-line tool only inside it. An
   Obsidian installed elsewhere, or a renamed bundle, is `app-missing`.
@@ -417,9 +451,34 @@ test reported as a pass.
   published through the app. `status` (under `service.app`) and `open` say what
   to do: open any vault in Obsidian, or quit Obsidian. With the app quit,
   maintenance publishes on its own path again; with a vault open, it reads
-  the version again on a later tick. `open` launches nothing while the app
-  runs with no vault open, and after its own launch it waits, bounded, while
-  the app is still opening the vault.
+  the version again on a later tick. While the app runs with no vault open,
+  `open` has it open a vault only when its list already knows that vault,
+  by path; one it does not know cannot be added then (see below). After its
+  own launch `open` waits, bounded, while the app is still opening the vault;
+  an app whose vault window is still loading answers a command with `Error:
+  Command "…" not found`, which is read as not up yet, never as a version.
+- Obsidian's settings file: `open` adds a view's vault to the app's own list,
+  `obsidian.json` in its user-data directory: `~/Library/Application
+  Support/obsidian` on macOS and `$XDG_CONFIG_HOME/obsidian` (else
+  `~/.config/obsidian`) on Linux. It is written only while the process table
+  shows, positively, that no Obsidian runs, only when Obsidian created it
+  before, and with a backup beside it; see
+  [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list). A
+  Flatpak or snap build keeps its settings elsewhere and is not found there:
+  with such a build, leave it running with any vault open and `open` adds the
+  vault through the app instead. On Windows no location is known, and the
+  same applies.
+- Which window answers: Obsidian answers a command-line call in the window of
+  the vault that contains the tool's working directory, opening that vault
+  when it is closed, and otherwise in the vault window that had focus last.
+  Publication calls therefore run inside the view's vault folder while the
+  app's list shows that vault open, and in a directory that is no vault
+  otherwise. A vault window you closed while Obsidian keeps running is not
+  reopened by maintenance: publication then stops as `publisher-conflict`
+  until `atelier obsidian open` opens it again or Obsidian quits. An
+  Obsidian vault registered at a folder above the view's vault (your home
+  folder, say) can take its calls instead; the bridge then answers for
+  another vault and publication stops, safely.
 - Detecting the app: the process table is read with `ps -A -o comm=`
   (`pid=,comm=` on Linux), and the app is recognised by the executable a
   process runs, never by its arguments, so a path argument that contains an
@@ -482,3 +541,9 @@ The test suite proves each oracle can fail:
 - `createReceiptValidatorForOracleTests` accepts a rule table with one rule
   switched off; every negative case that depends on that rule then passes,
   and even that closes nothing.
+- `openScopeForOracleTests` with an `OPENING_PRIMITIVES.keptByApp` that
+  never holds: an open with Obsidian running without the vault reports the
+  publisher conflict it could have cleared, and the first-open oracle fails.
+- `createMaintenanceEngineForOracleTests` with an
+  `ENGINE_PRIMITIVES.isRetryDue` that never holds: a refused view waits for
+  the full reconciliation, and the retry oracle fails.

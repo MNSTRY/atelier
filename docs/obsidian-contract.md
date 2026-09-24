@@ -345,6 +345,99 @@ each open item is discharged with its own evidence.
 | Link-then-rename | Rejected. It leaves a window in which a concurrent replacement is destroyed. |
 | App-driven save after replacement | Rejected. Observed losing an outside writer's bytes; kept as a negative control. |
 
+## Obsidian's vault list
+
+Obsidian opens a vault by path (`obsidian://open?path=`) only when the folder
+is in its own vault list. `atelier obsidian open` puts the view's vault there.
+Outside its own storage (the data root, which holds the vaults and their
+policy-owned `.obsidian/core-plugins.json`), the list is the only file of
+another application that Atelier writes; to write it, Atelier writes nothing
+else outside the app's user-data directory, and no vault note.
+
+**The file.** `obsidian.json` in the app's user-data directory:
+`$HOME/Library/Application Support/obsidian/` on macOS and
+`$XDG_CONFIG_HOME/obsidian/` (else `$HOME/.config/obsidian/`) on Linux; no
+location is known on other platforms. Its shape is
+`{ "vaults": { "<16 hex>": { "path", "ts", "open"? } }, …other settings }`.
+The app reads it when it starts and rewrites all of it, with
+`JSON.stringify`, whenever its list changes; `open` is true while a window of
+that vault is open and stays true for the vaults open when the app quit.
+Modules: `src/projection/obsidian/publication/vault-list.mjs` (read only) and
+`src/runtime/obsidian/app-registration.mjs` (the write).
+
+**While Obsidian runs and answers its command line**, the file is the running
+app's and is only read. `open` asks the app instead, through `obsidian-cli
+eval` with constant scripts: `vault-list` (the app's own map) and `vault-open`
+with the folder and `false`, which adds an existing folder to the list (the app
+writes its own file) and opens it in a window; `true`, which would create a
+folder, is never sent. The folder travels as a base64-encoded JSON payload, as
+in the publication bridge, so a path never becomes code. The addition is
+verified by reading the app's list again and finding an entry whose real path
+is the vault root's real path (asked again, a bounded number of times, while
+the window the app just opened is still loading and answers that a command
+does not exist yet); `open` then waits, bounded, until the app answers for
+exactly that vault.
+
+**While Obsidian runs with no vault open**, its command line answers nothing
+and the file is still the running app's: it is read, never written. A vault
+it already lists is opened by path; one it does not is refused as
+`no-vault-open`.
+
+**While no Obsidian runs**, the vault is added to the file itself, and only
+then:
+
+1. The process table is read and must say, positively, `absent`. `running` or
+   `unknown` refuses (`app-may-be-running`).
+2. The user-data directory and the file must exist, be this user's own, and be
+   a real directory and a regular file (neither a link), and the file must be
+   a JSON object whose `vaults`, when present, is an object. A missing
+   directory or file means Obsidian has not run on this account and is
+   refused (`obsidian-settings-missing`): the file is never created. The other
+   refusals are `obsidian-settings-unsafe`, `obsidian-settings-not-owned`,
+   `obsidian-settings-unreadable` and `obsidian-settings-not-object`.
+3. A vault whose real path an entry already has is left as it is; nothing is
+   written.
+4. The new document is the file's object with one entry added under a fresh
+   random 16-hex id that no entry has: `{ path: <the vault root's real path>,
+   ts: <now, ms>, open: true }`. Every other key and every other entry is kept
+   in its place, as values.
+5. A temporary file in the same directory is written with the file's mode and
+   fsynced; the bytes as they were are written, fsynced, to
+   `obsidian.json.atelier-backup-<UTC time>` beside it.
+6. Immediately before the rename, the process table must still say `absent`
+   and the file must still hold the bytes that were read; otherwise both new
+   files are removed and the write is refused (`app-may-be-running`,
+   `obsidian-settings-changed`).
+7. The temporary file is renamed over `obsidian.json` and the directory is
+   fsynced. The process table is read once more: an app that appeared just
+   then may have read the list before the rename, so the addition is
+   reported unconfirmed and `open` answers `launch-failed` with reason
+   `app-started-during-registration` instead of launching; the next `open`
+   adds the vault through the app if it missed it.
+
+Every refusal writes nothing and leaves nothing behind. The backups are not
+removed by Atelier. `open` then asks the operating system to open
+`obsidian://open?path=<the vault root>`, as before.
+
+**Which window answers.** The command line answers a call in the window of the
+vault that contains the tool's working directory, opening that vault when it is
+closed, and otherwise in the vault window that had focus last. Calls about no
+vault (the version, the vault list, the addition) run in a directory that is no
+vault. `open`'s check that the app answers for the vault runs inside the vault
+folder. Publication calls run inside the vault folder while the file lists
+that vault open, and in a directory that is no vault otherwise, so maintenance
+never reopens a vault window that was closed. The bridge still checks that the
+app answered for exactly this vault.
+
+**Retries.** The maintenance service is told what the app looks like (whether
+it runs, how it qualified, and which vaults the file shows open; the file is
+read, never written, by the service). A tick requested over the service's
+listener for one view (`open` names its own) prepares and publishes that view
+once more, with the app's qualification asked again. A view whose last
+publication did not settle is also tried again as soon as that picture
+changes, and otherwise after a delay that starts at 30 seconds and doubles per
+attempt, up to the full reconciliation interval.
+
 Source application back into canonical files carries the same conditional-write
 obligation against other source writers; its protocol follows.
 

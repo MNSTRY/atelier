@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `atelier obsidian open` makes the first open of a view automatic: Obsidian
+  no longer has to be quit, and no vault folder has to be opened by hand. It
+  makes the app know the view's vault as one of its vaults before it opens
+  it. With Obsidian running and
+  answering its command line, the vault is added through the app itself
+  (`vault-open` through `obsidian-cli eval`, a constant script with the folder
+  as a base64 JSON payload), verified in the app's own vault list by real
+  path, and opened; `open` waits until the app answers for exactly that vault
+  and then asks for the view again, so the first publication runs through the
+  app with every editor check. Quitting Obsidian is no longer needed. With
+  Obsidian not running, the view is published on the path with no app, and
+  the vault is added to the app's `obsidian.json` before the app is started
+  on it: only while the process table shows, positively, that no Obsidian
+  runs (read again immediately before the rename), only a file Obsidian
+  created, owned by this user and not a link, atomically (a temporary file in
+  the same directory, fsynced, renamed), keeping every other key and entry,
+  and with a timestamped backup beside it; an Obsidian that never ran on the
+  account (no such file) is asked to be started once. With Obsidian running
+  and no vault open, a vault the app already lists is opened by path; one it
+  does not list is answered as `app-version-unsupported` / `no-vault-open`
+  (open any vault, or quit Obsidian, then open again) and nothing is
+  written. Every failure is typed and names its next step. See "What `open`
+  does in each state of Obsidian" in docs/obsidian.md and "Obsidian's vault
+  list" in docs/obsidian-contract.md.
+- A tick requested over the service's listener may name one view
+  (`POST /tick` with `scopeId`; `requestServiceTick({ scopeId })`), which the
+  engine then prepares and publishes once more, whatever its state
+  (`engine.requestPreparation(scopeId)`, a one-shot request consumed at the
+  next tick), with the app's qualification asked again. `open` names its view
+  on both ticks it requests. A view whose last publication did not settle is
+  also tried again without a request: as soon as the app looks different (it
+  quit or started, qualified differently, or opened or closed a vault in its
+  list), and otherwise after a delay that starts at 30 seconds
+  (`DEFAULT_PUBLICATION_RETRY_MS`) and doubles, up to the full reconciliation
+  interval. Before, it waited for a change or the five-minute reconciliation.
+- Command-line calls to the app run in a chosen directory: publication calls
+  in the view's vault folder while the app's list shows that vault open, so
+  they reach its window whichever window has focus, and every other call in a
+  directory that is no vault. Maintenance never reopens a vault window that
+  was closed, and the directory a command or service was started in no longer
+  picks, or opens, a vault.
+- The `status` next step for `publisher-conflict` / `editor-uncoordinated`
+  names `atelier obsidian open` (which adds the vault to Obsidian and
+  publishes through it) or quitting Obsidian; after `open` itself tried, it
+  names quitting Obsidian. `launch-failed` no longer asks for a vault folder
+  to be opened by hand.
+
+### Fixed
+
+- After a refused publication, the tick `open` asked for did not try the view
+  again (the engine attempted only views with changes), so `open` reported the
+  old conflict until the five-minute reconciliation.
+- `open` launched `obsidian://open?path=` for a vault the app did not know,
+  and Obsidian showed "Vault not found. Unable to find a vault for the URL";
+  `open` then answered `launch-failed` / `app-did-not-answer-for-this-vault`.
+- The production check that the app answers for a vault parsed the app's
+  answer twice and so never saw an answer; it now reads it once (twice only
+  for a quoted string), compares real paths, and asks from inside the vault
+  folder.
+- An app whose vault window is still loading answers a command with `Error:
+  Command "version" not found`; that was read as an unreadable version and
+  ended `open` as `app-version-unsupported`. It is now read as not up yet.
+
 ## 0.2.0-alpha.11
 
 ### Fixed
