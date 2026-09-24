@@ -251,7 +251,7 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
 // reloads the plugin, so a change to the code without a new version would leave two plugins under one version.
 const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
-  '1.1.0': 'sha256:1e5ce052b41d68d88ee2c26dfe03e4c2157bd41676d700677a0fe35b7f34180c',
+  '1.1.0': 'sha256:eb5da836e83789721ac97e7db19b66cd9a262c2113c0a155d87c8a17c2ffe90c',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
@@ -760,12 +760,28 @@ test('an answer that is not sealed with the session\'s key is not believed', asy
   await plugin.cycle()
   assert.deepEqual([statusBarOf(world), plugin.view.reason], ['Atelier: service unreachable', 'answer-not-authenticated'])
   assert.deepEqual(squat.captured.map((entry) => entry.path), [PLUGIN_ROUTES.lease], 'nothing more once an answer did not verify')
-  // A session command refused as not authenticated: the plugin shakes hands again, and tells a listener that cannot prove
-  // the key nothing more.
+  // That session is over: the next round starts a handshake, which the listener cannot answer.
   refuse = true
   await plugin.cycle()
-  assert.deepEqual(squat.captured.map((entry) => entry.path), [PLUGIN_ROUTES.lease, PLUGIN_ROUTES.lease, PLUGIN_ROUTES.challenge])
-  assert.equal(statusBarOf(world), 'Atelier: not set up', 'an unproven 401 to a challenge is only ever a key the service does not know')
+  assert.deepEqual(squat.captured.map((entry) => entry.path), [PLUGIN_ROUTES.lease, PLUGIN_ROUTES.challenge])
+})
+
+test('a listener that answers every request with an error gets one renewal of the session and nothing more of it', async (t) => {
+  for (const failing of [{ statusCode: 503, body: { error: 'service-unavailable' } }, { statusCode: 401, body: { error: 'request-not-authenticated' } }, { statusCode: 500, body: {} }]) {
+    const world = await channelWorld(t)
+    const plugin = world.plugin()
+    await plugin.load()
+    await plugin.cycle()
+    assert.equal(statusBarOf(world), 'Atelier: current')
+    await world.service.listener.close()
+    const squat = await squatter(t, world.port, () => failing)
+    for (let round = 0; round < 5; round += 1) await plugin.cycle()
+    const paths = squat.captured.map((entry) => entry.path)
+    assert.deepEqual([paths[0], paths.filter((route) => route === PLUGIN_ROUTES.lease).length], [PLUGIN_ROUTES.lease, 1], `${failing.statusCode}: one renewal`)
+    assert.ok(paths.slice(1).every((route) => route === PLUGIN_ROUTES.challenge), `${failing.statusCode}: then only challenges`)
+    await squat.close()
+    plugin.unload()
+  }
 })
 
 test('a plugin unloaded while its hello is under way lets that session go at once, and shows nothing afterwards', async (t) => {

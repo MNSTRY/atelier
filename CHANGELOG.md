@@ -39,8 +39,10 @@
   anything that names the vault, and every later request and answer is sealed
   with a key for that session and a counter that only goes up. A program that
   takes the service's port while the service is down learns nothing it can
-  use: a challenge is answered once and only within thirty seconds of the time
-  it names, and at most four handshakes wait per view. `status` reports which
+  use: an answer the session's key does not seal ends the session in the
+  plugin, so such a program receives one command of a session at most; a
+  challenge is answered once and only within thirty seconds of the time it
+  names, and at most four handshakes wait per view. `status` reports which
   views a plugin holds open, and so do `atelier obsidian status` and `open`.
 - While one launch of the plugin holds a view open and the command-line
   tool gives no version (no vault open yet, or no answer in time), the app

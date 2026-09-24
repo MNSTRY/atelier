@@ -276,17 +276,21 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     } else {
       const lease = await this.request(channel, 'lease')
       if (!this.current(channel)) return
-      if (lease.kind === 'refused' && (lease.error === 'session-unknown' || lease.statusCode === 401)) {
-        // The service started again since, the vault's key changed, or the session is not accepted: shake hands once more.
+      if (lease.kind !== 'sealed') {
+        // Whatever answered did not seal its answer with the session's key: the session ends here, and the next request
+        // starts a handshake, which only the service can answer. An unproven listener gets no second request of it.
         this.session = null
+        if (!(lease.kind === 'refused' && (lease.error === 'session-unknown' || lease.statusCode === 401))) {
+          this.setView(this.unreachable(lease))
+          return
+        }
+        // The service started again since, the vault's key changed, or the session is not accepted: shake hands at once.
         if (!(await this.handshake(channel))) return
-      } else if (lease.kind !== 'sealed') {
-        this.setView(this.unreachable(lease))
-        return
       }
     }
     const status = await this.request(channel, 'status')
     if (!this.current(channel)) return
+    if (status.kind !== 'sealed') this.session = null
     this.setView(status.kind === 'sealed' ? viewOfStatus(status.document) : this.unreachable(status))
   }
 

@@ -261,10 +261,15 @@ the vault's key without sending it, and the service proves it first
    the session key over the command, the session and the counter; every
    answer the service gives is the exact text of its document with a MAC over
    it, the command and the request's counter. The plugin believes no answer
-   that does not verify, and an error, which nobody vouches for, only ever
-   makes it shake hands again. A session ends when its lease lapses, when it
-   is released, after fifteen minutes (the plugin shakes hands again), or at
-   its next request after its vault's key was rotated.
+   that does not verify. Any answer to a command that is not sealed (an
+   error, which nobody vouches for, a timeout, or an answer that does not
+   verify) ends the session in the plugin, which shakes hands again: at once
+   when a renewal is refused as an unknown session or as not authenticated,
+   at its next round otherwise. A listener that cannot seal therefore
+   receives one command of a session at most, besides its release. A session
+   ends when its lease lapses, when it is released, after fifteen minutes (the
+   plugin shakes hands again), or at its next request after its vault's key
+   was rotated.
 
 | Command | Fields | Answer |
 | --- | --- | --- |
@@ -321,9 +326,10 @@ again knows neither; the plugin's next lease is refused with
   workspace and the vault's `data.json` (`0600`, in a vault root that is
   `0700`), and never crosses the wire. Another user of the machine cannot read
   it, and a program of any user that takes the service's port while it is
-  down learns a nonce, a hint it cannot link to a vault, and at most one
-  sealed renewal of a session that ended with the service: no key, no view, no
-  path, no session and no app version it can use (the squatter test in
+  down learns a nonce, a hint it cannot link to a vault, and of a session
+  that ended with the service one sealed renewal or status request at most
+  (and its release, when the plugin unloads meanwhile): no key, no view, no
+  path, no session and no app version it can use (the squatter tests in
   "Evidence"). Any process that runs as this user can read the data file,
   including other community plugins in the same app: the key separates vaults
   and processes of one person, it does not authenticate a person. That is the
@@ -402,7 +408,9 @@ note open in the editor.
   the service's address, which learns no key, no view and no path and, with
   everything it received replayed against the restarted service, opens no
   session and sets no app version; an answer relayed from a service at
-  another address; answers that are not sealed; an unload while a hello is
+  another address; answers that are not sealed, and a listener that answers
+  every command with an error, which gets one renewal of a session and
+  nothing more of it; an unload while a hello is
   under way; the refusal table above with mutation controls that must fail
   it; bearer minting, rotation and the bearer cache; publication of the
   plugin files, entries and data file, with a person's settings kept, the
