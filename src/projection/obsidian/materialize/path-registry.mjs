@@ -212,7 +212,8 @@ const folderIdOf = (repoId, sourceFolder, length = 6) => createHash('sha256').up
 // segment that meets an allocated file carries the id of its source folder. A
 // chain that leaves less than `reserve` bytes for the name keeps as many
 // leading folders as fit, and its last kept folder, cut, carries the id of the
-// whole source directory.
+// whole source directory; when not even that fits, the note sits directly in
+// its repository's folder.
 function mirroredFolder(state, { repoFolder, repoId, sourcePath, limits, reserve }) {
   const sourceSegments = sourcePath.split('/').slice(0, -1)
   const sourceOf = (count) => sourceSegments.slice(0, count).join('/')
@@ -247,7 +248,8 @@ function mirroredFolder(state, { repoFolder, repoId, sourcePath, limits, reserve
     const tail = under(walked[count], `${head}${suffix}`.trim(), sourceOf(sourceSegments.length))
     if (bytesOf(tail.folder) <= budget) return { folder: tail.folder, shortened: true, qualified: qualified || tail.qualified }
   }
-  return refuse('path-too-long', 'the vault root leaves no room for this folder')
+  if (bytesOf(repoFolder) <= budget) return { folder: repoFolder, shortened: true, qualified: false }
+  return refuse('path-too-long', 'the vault root leaves no room for a name in this repository folder')
 }
 
 // Fits a file name into the limits by cutting the title part `base` further,

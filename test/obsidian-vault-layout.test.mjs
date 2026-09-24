@@ -531,6 +531,24 @@ test('a source folder chain too deep for the path budget keeps a readable prefix
   }
 })
 
+test('a note that cannot keep even a shortened folder chain sits directly in its repository folder; only a name that fits nowhere there refuses the view', () => {
+  // The reviewer's E9b: a directory chain of almost 1,000 bytes under a vault root that leaves 23 bytes for a path.
+  // A folder is kept only where a name of 16 bytes still fits in it, so here even `plans` gives way.
+  const deep = Array.from({ length: 12 }, (_, index) => `generated-reference-section-${String(index).padStart(2, '0')}-${'x'.repeat(50)}`).join('/')
+  const nodes = [node('r', 'r:a', 'plans/a.md', 'Harbor plan'), node('r', 'r:deep', `${deep}/leaf.md`, 'Leaf'), node('r', 'r:deep2', `${deep}/leaf-two.md`, 'Leaf')]
+  const tight = allocateViewPaths({ nodes, vaultRootBytes: 1000 })
+  assert.deepEqual(pathsOf(tight), { 'r:a': 'r/Harbor plan.md', 'r:deep': 'r/leaf.md', 'r:deep2': 'r/Leaf (leaf-two).md' })
+  assert.deepEqual(tight.diagnostics.map((item) => [item.code, item.nodeId]), [['folder-shortened', 'r:a'], ['folder-shortened', 'r:deep'], ['folder-shortened', 'r:deep2']])
+  for (const entry of tight.section.entries) assert.ok(1000 + 1 + bytes(entry.path) <= 1024, entry.path)
+  // A repository folder of 120 bytes: the note sits in it, its title cut, while a name of 16 bytes fits there...
+  const repo = 'R'.repeat(120)
+  const long = allocateViewPaths({ nodes: [node(repo, `${repo}:x`, 'a/b/c/leaf.md', 'A reasonably long title for a note')], vaultRootBytes: 880 })
+  assert.equal(long.pathOf(repo, `${repo}:x`), `${repo}/A reasonably long t.md`)
+  assert.deepEqual(long.diagnostics.map((item) => item.code), ['folder-shortened'])
+  // ...and only when none fits there is the view refused.
+  assert.throws(() => allocateViewPaths({ nodes: [node(repo, `${repo}:x`, 'a/b/c/leaf.md', 'A title')], vaultRootBytes: 890 }), { code: 'path-too-long' })
+})
+
 test('a source folder that meets a file of the same name is qualified with a short stable id, in either order, and nothing is refused', (t) => {
   const odd = workspaceOf(t, { 'r/docs/setup.md': titled('r:a-guide', 'Guide'), 'r/docs/Guide.md/inner.md': titled('r:b-inner', 'Inner note') })
   const prepared = prepareView(odd)
