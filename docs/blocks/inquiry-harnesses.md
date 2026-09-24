@@ -13,6 +13,7 @@ skills. Skill Steward governs its version and repository adoption. Provider
 execution, hosted collaboration and specialized proprietary methods can use the
 same handoff and evidence contracts through separately authorized adapters.
 
-This is next-release source functionality. Published alpha.7 does not include
-the `inquiry` command. The bundled readiness title is now Discovery Harness;
-its existing `discovery-engine` identifiers remain compatible.
+The architecture catalog calls the workflow Discovery Harness and resolves
+Discovery Engine as its historical alias. The immutable bundled v1 readiness
+pack retains its Discovery Engine title, identifiers and original digest, so
+existing release locks can use the governed upgrade path without a separate repin.

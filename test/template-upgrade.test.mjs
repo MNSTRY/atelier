@@ -76,6 +76,37 @@ const read = (f, name) => fs.readFileSync(path.join(f.root, name))
 const state = f => hashObject(inventory(f.root, { exclude: ['.git', '.atelier-local'] }))
 const update = f => { const profile = structuredClone(profileSample); profile.version = '1.1.0'; profile.purpose = 'An updated invented reading shelf.'; put(f.root, 'next-profile.json', profile); commit(f) }
 
+transactionTest('prior-release lock upgrades through the template v3 transaction without a separate repin', (t) => {
+  const f = fixture(t)
+  const bytes = fs.readFileSync(new URL('./fixtures/upgrade/alpha10-lock.json', import.meta.url))
+  const previous = JSON.parse(bytes)
+  fs.writeFileSync(path.join(f.root, 'atelier.lock.json'), bytes)
+  commit(f)
+  const source = read(f, 'seed.md')
+  const prepared = prepare(f)
+  assert.equal(prepared.plan.schema, 'mnstry.atelier-upgrade-plan@v3')
+  assert.deepEqual(read(f, 'atelier.lock.json'), bytes)
+  const applied = apply(f.project, prepared)
+  assert.equal(applied.ok, true, JSON.stringify(applied))
+  const next = JSON.parse(read(f, 'atelier.lock.json'))
+  assert.deepEqual(next.extensionPacks, previous.extensionPacks)
+  assert.notEqual(next.package.version, previous.package.version)
+  assert.equal(next.template.id, profileSample.id)
+  assert.deepEqual(next.appliedMigrations, previous.appliedMigrations)
+  assert.deepEqual(read(f, 'seed.md'), source)
+  assert.equal(upgradeOperationStatus({ project: f.project, operationId: applied.operationId }).status, 'completed')
+})
+
+transactionTest('prior-release lock with a changed pack digest still refuses template preparation', (t) => {
+  const f = fixture(t)
+  const previous = JSON.parse(fs.readFileSync(new URL('./fixtures/upgrade/alpha10-lock.json', import.meta.url)))
+  previous.extensionPacks[0].digest = 'sha256:' + '0'.repeat(64)
+  put(f.root, 'atelier.lock.json', previous)
+  commit(f)
+  assert.throws(() => prepare(f), /pack adoption requires a separate participant/)
+  assert.deepEqual(JSON.parse(read(f, 'atelier.lock.json')), previous)
+})
+
 transactionTest('template epoch metadata is optional and reserved extensions cannot enable behavior', t => {
   const f = fixture(t), { plan } = prepare(f)
   const adoption = JSON.parse(Buffer.from(plan.writes.find(entry => entry.path === 'atelier-template/adoption.json').content, 'base64'))

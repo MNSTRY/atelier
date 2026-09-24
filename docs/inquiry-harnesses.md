@@ -201,7 +201,11 @@ credentials, budgets and disclosure belong to the host. This release contains
 the manual handoff and return contract; it does not ship hosted runners, a paid
 service, a registry, or an authenticated review system.
 
-The readiness protocol's display title is Discovery Harness. Its stable
-`mnstry.readiness:discovery-engine` ID and question identifiers are preserved;
-the readiness protocol remains a planning entry point. No historical IDs or
-previous release digests are rewritten by the name change.
+The architecture catalog uses Discovery Harness and resolves Discovery Engine
+as a historical alias. The bundled `mnstry-readiness-pack@v1` is immutable:
+its Discovery Engine title, `mnstry.readiness:discovery-engine` ID, question
+identifiers and digest all retain their original release values. The protocol
+remains a planning entry point. Keeping the rename outside that object lets
+existing release locks enter both exact upgrade participants without an
+out-of-band lock rewrite. A future change to the bundled object requires a new
+pack version and an explicit upgrade path.

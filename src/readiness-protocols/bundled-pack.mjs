@@ -493,7 +493,7 @@ export const bundledReadinessProtocols = [
   }),
   protocol({
     id: 'discovery-engine',
-    title: 'Discovery Harness',
+    title: 'Discovery Engine',
     purpose: 'Define discovery prompts, intake signals, scoring notes, and next-step suggestions as local review artifacts.',
     questions: [
       {

@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.11",
+  "version": "0.2.0-alpha.12",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
@@ -147,7 +147,7 @@
     "collaboration:test": "node --test test/collaboration-ledger.test.mjs test/server-proposals.test.mjs",
     "sync:test": "node --test test/runtime-git-adapter.test.mjs test/runtime-observation.test.mjs test/runtime-supervisor.test.mjs",
     "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-content-rules.test.mjs test/boundary-guard.test.mjs",
-    "obsidian:test": "node --test --test-concurrency=1 test/obsidian-acceptance.test.mjs test/obsidian-contract.test.mjs test/obsidian-edits.test.mjs test/obsidian-maintenance.test.mjs test/obsidian-materialization.test.mjs test/obsidian-open.test.mjs test/obsidian-package.test.mjs test/obsidian-proposals.test.mjs test/obsidian-publication-feasibility.test.mjs test/obsidian-recovery.test.mjs",
+    "obsidian:test": "node --test --test-concurrency=1 test/obsidian-acceptance.test.mjs test/obsidian-contract.test.mjs test/obsidian-edits.test.mjs test/obsidian-first-open-real-app.test.mjs test/obsidian-maintenance.test.mjs test/obsidian-materialization.test.mjs test/obsidian-open.test.mjs test/obsidian-package.test.mjs test/obsidian-proposals.test.mjs test/obsidian-publication-feasibility.test.mjs test/obsidian-recovery.test.mjs",
     "upgrade:test": "node --test test/upgrade-contract.test.mjs test/upgrade.test.mjs",
     "release:audit": "node scripts/check-release-tarball.mjs",
     "release:candidate": "node scripts/release-candidate.mjs",

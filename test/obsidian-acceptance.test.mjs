@@ -12,25 +12,60 @@ import { fileURLToPath } from 'node:url'
 // 0. The spawn guard, installed before anything else is imported: nothing in
 // this file may start the installed app, its command-line tool, an
 // operating-system opener or a service manager. An attempt throws here.
+// A child that could reach a running Obsidian itself (the production service
+// entry with its command-line adapter, as the service-world harness starts it
+// by default, or anything that loads the production app seams) must have an
+// environment that leads to no app of the developer's: the command-line tool
+// finds the app through a socket under HOME on macOS and under
+// XDG_RUNTIME_DIR on Linux, and the app keeps its settings under HOME (under
+// XDG_CONFIG_HOME on Linux, when set). On Windows the app listens on a named
+// pipe of the user account, which no environment changes, so no such child is
+// started there. With the developer's environment it would ask the
+// developer's Obsidian.
 // ---------------------------------------------------------------------------
 
 const BANNED_PROGRAMS = ['obsidian-cli', 'obsidian', 'open', 'xdg-open', 'launchctl', 'systemctl']
 const WRAPPERS = ['sh', 'bash', 'zsh', 'dash', 'env', 'cmd', 'powershell', 'pwsh', 'nohup', 'sudo']
+const REACHES_THE_APP = /--adapter=obsidian-cli|app-production-seams/
+const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
+const REAL_RUNTIME_DIRS = [process.env.XDG_RUNTIME_DIR, typeof process.getuid === 'function' ? `/run/user/${process.getuid()}` : ''].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
+const REAL_CONFIG_HOMES = [process.env.XDG_CONFIG_HOME, ...REAL_HOMES.map((home) => path.join(home, '.config'))].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
+const oneOf = (value, list) => typeof value === 'string' && value !== '' && list.includes(path.resolve(value))
+// Why a child with this env could reach the developer's own Obsidian on this platform; null when it cannot.
+function reachesOwnApp(env, platform = process.platform) {
+  if (platform !== 'darwin' && platform !== 'linux') return 'a child that can reach a running Obsidian is never started on this platform: the app listens on a pipe of the user account, which no environment isolates'
+  if (typeof env?.HOME !== 'string' || env.HOME === '' || oneOf(env.HOME, REAL_HOMES)) return 'a child that can reach a running Obsidian needs a private HOME, never the developer\'s own'
+  if (platform === 'linux') {
+    const runtime = env.XDG_RUNTIME_DIR
+    if (typeof runtime !== 'string' || runtime === '' || oneOf(runtime, REAL_RUNTIME_DIRS) || /^\/run\/user\//.test(runtime)) return 'a child that can reach a running Obsidian needs a private XDG_RUNTIME_DIR on Linux, never the session\'s own'
+    if (oneOf(env.XDG_CONFIG_HOME, REAL_CONFIG_HOMES)) return 'a child that can reach a running Obsidian needs no XDG_CONFIG_HOME on Linux, or a private one'
+  }
+  return null
+}
 const programName = (command) => path.basename(String(command).replaceAll('\\', '/')).toLowerCase().replace(/\.(exe|app|cmd|bat)$/, '')
 const guardErrors = []
-function guardSpawn(command, args) {
+function guardSpawn(command, args, options) {
   const words = [command, ...(Array.isArray(args) ? args : [])].map(String)
   const wrapper = WRAPPERS.includes(programName(command))
   const banned = words.find((word, index) => ((index === 0 || wrapper) && BANNED_PROGRAMS.includes(programName(word))) || /obsidian:\/\//i.test(word))
-  if (banned === undefined) return
-  const error = new Error(`spawn guard: this test suite may never start "${programName(banned)}"`)
-  guardErrors.push(error.message)
-  throw error
+  if (banned !== undefined) {
+    const error = new Error(`spawn guard: this test suite may never start "${programName(banned)}"`)
+    guardErrors.push(error.message)
+    throw error
+  }
+  // A child with no env of its own inherits this process's, and with it the developer's HOME.
+  const refusal = words.some((word) => REACHES_THE_APP.test(word)) ? reachesOwnApp(options?.env ?? process.env) : null
+  if (refusal !== null) {
+    const error = new Error(`spawn guard: ${refusal}`)
+    guardErrors.push(error.message)
+    throw error
+  }
 }
 for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
   const original = childProcess[method]
   childProcess[method] = function guarded(command, args, ...rest) {
-    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/)); else guardSpawn(command, args)
+    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/), args)
+    else guardSpawn(command, args, Array.isArray(args) ? rest[0] : args)
     return original.call(this, command, args, ...rest)
   }
 }
@@ -133,6 +168,32 @@ const select = (scope, extra = {}) => resolveSelection({ canonicalSnapshot: SNAP
 // ---------------------------------------------------------------------------
 // 1. Selection: literal expected scopes
 // ---------------------------------------------------------------------------
+
+test('the spawn guard refuses a child that can reach a running Obsidian unless nothing in its environment leads to the developer\'s own app', (t) => {
+  const dir = tempDir(t, 'home-guard')
+  const [home, runtime] = [path.join(dir, 'private-home'), path.join(dir, 'private-runtime')]
+  fs.mkdirSync(home)
+  fs.mkdirSync(runtime, { mode: 0o700 })
+  const { XDG_CONFIG_HOME: _config, ...inherited } = process.env
+  const isolated = { ...inherited, HOME: home, XDG_RUNTIME_DIR: runtime }
+  // macOS needs a private HOME; Linux a private XDG_RUNTIME_DIR too; on Windows no such child is started at all.
+  assert.deepEqual([reachesOwnApp(isolated, 'darwin'), reachesOwnApp(isolated, 'linux')], [null, null])
+  assert.equal(reachesOwnApp({ ...isolated, XDG_RUNTIME_DIR: '/run/user/501' }, 'darwin'), null)
+  assert.match(String(reachesOwnApp({ ...isolated, XDG_RUNTIME_DIR: '/run/user/1000' }, 'linux')), /private XDG_RUNTIME_DIR/)
+  assert.match(String(reachesOwnApp({ HOME: home }, 'linux')), /private XDG_RUNTIME_DIR/)
+  assert.match(String(reachesOwnApp({ ...isolated, HOME: os.homedir() }, 'darwin')), /private HOME/)
+  assert.match(String(reachesOwnApp(isolated, 'win32')), /never started on this platform/)
+  const before = guardErrors.length
+  // The service-world harness starts the production entry with `--adapter=obsidian-cli` unless told otherwise.
+  const args = ['-e', '0', '--', '--adapter=obsidian-cli']
+  assert.throws(() => childProcess.spawnSync(process.execPath, args), /spawn guard/)
+  assert.throws(() => childProcess.spawnSync(process.execPath, ['-e', '0', '--', '--entry-args=--adapter=obsidian-cli'], { env: { ...process.env } }), /spawn guard/)
+  assert.equal(guardErrors.length, before + 2)
+  guardErrors.length = before
+  if (reachesOwnApp(isolated) === null) assert.equal(childProcess.spawnSync(process.execPath, args, { env: isolated }).status, 0)
+  else assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: isolated }), /never started on this platform/)
+  guardErrors.length = before
+})
 
 test('full selection is the whole authorized corpus, as an exact scope document', () => {
   const selection = select({ scopeId: 'view-full', mode: 'full', selector: { all: true } })

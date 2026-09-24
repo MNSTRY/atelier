@@ -9,7 +9,14 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
-## Upgrading to 0.2.0-alpha.11
+## Upgrading to 0.2.0-alpha.12
+
+The bundled readiness pack retains its original v1 content and digest. Existing
+locks, including the prior alpha.10 release fixture, can prepare and apply both
+ordinary v2 and template v3 exact plans without first rewriting the lock.
+Discovery Harness is the architecture name; the persisted readiness entry still
+uses Discovery Engine. Actual external pack changes still require their own
+adoption procedure and are not accepted by either participant.
 
 This candidate adds the responsibility workflows, source-current ingestion,
 Trackables, governed instruction adoption and local template profiles. Template
@@ -25,6 +32,15 @@ cannot be established. Preserve historical records and use the documented
 Regenerate local graph/projection artifacts through the ordinary upgrade process
 and qualify each consuming host independently. A package update supplies no
 publication permission or runtime activation.
+
+## Upgrading to 0.2.0-alpha.11
+
+This release tightens the Obsidian projection's app checks after independent
+review of 0.2.0-alpha.10: Atelier never coordinates with an Obsidian whose version it
+has not checked, the advice for a refused publication is true for every cause
+and appears in `status` as well as `open`, Linux resolves an app started
+through a differently named launcher, and the process check has a timeout.
+No project or machine setting needs to change.
 
 ## Upgrading to 0.2.0-alpha.10
 
@@ -193,7 +209,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.11
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 

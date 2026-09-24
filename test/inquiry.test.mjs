@@ -11,6 +11,7 @@ import * as capability from '../src/capabilities/index.mjs'
 import { digest } from '../src/capabilities/files.mjs'
 import { buildKnowledgeGraph, REPO_ACCESS_SCHEMA } from '../src/graph/knowledge-graph.mjs'
 import { getBundledReadinessProtocol } from '../src/readiness-protocols/bundled-pack.mjs'
+import { architectureEntry } from '../src/architecture/index.mjs'
 import { validateJsonSchema } from '../src/export/atelier-export-contract.mjs'
 
 const CLI = fileURLToPath(new URL('../bin/atelier.mjs', import.meta.url))
@@ -220,10 +221,11 @@ capabilityWriteTest('CLI exercises append, handoff, export, replay and graph wit
   assert.equal(result.status, 1)
 })
 
-test('discovery display rename retains the persisted readiness identity', () => {
+test('Discovery Harness naming preserves the immutable readiness pack entry', () => {
   const p = getBundledReadinessProtocol('discovery-engine')
-  assert.equal(p.title, 'Discovery Harness'); assert.equal(p.id, 'mnstry.readiness:discovery-engine')
+  assert.equal(p.title, 'Discovery Engine'); assert.equal(p.id, 'mnstry.readiness:discovery-engine')
   assert.ok(p.questions.every(q => q.id.includes('discovery-engine')))
+  assert.equal(architectureEntry('Discovery Engine').label, 'Discovery Harness')
 })
 
 test('feedback preserves causes the older Steward vocabulary cannot represent', () => {

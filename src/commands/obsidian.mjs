@@ -33,7 +33,7 @@ import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
 // that did not start, a stop that was refused).
 //
 // Reaching the installed app or the operating system goes through seams
-// (`appProbe`, `launcher`, `service`). A caller passes them. The production
+// (`appProbe`, `launcher`, `registry`, `service`). A caller passes them. The production
 // seams are constructed only when this module runs as the real command-line
 // entry (`production: true`) AND `--adapter=obsidian-cli` was given, the same
 // explicit rule the service entry has; there is no default.
@@ -58,7 +58,7 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   service unit --print --adapter=${PRODUCTION_ADAPTER}
                                        Print an operating-system startup unit. Writes and installs nothing.
   open [--scope ID] [--consent-actor ID] [--allow-stale] --adapter=${PRODUCTION_ADAPTER}
-                                       Start or reconnect maintenance, verify the view, open it in Obsidian.
+                                       Start or reconnect maintenance, verify the view, add it to Obsidian and open it.
 
 Contributed operations, registered by the modules shipped under src/runtime/obsidian/contributions/:
   apply list | show EDIT | run EDIT [--actor ID] | recover
@@ -147,7 +147,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       return { entryPath: SERVICE_ENTRY_PATH, entryArgs: [`--adapter=${PRODUCTION_ADAPTER}`] }
     }
     const appSeams = async () => {
-      if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher }
+      if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher, registry: seams.registry }
       if (flags.adapter !== PRODUCTION_ADAPTER) refuse('app-adapter-not-selected', 'no editor adapter was selected; reaching the installed app is never a default')
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
@@ -331,7 +331,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           ...(flags['wait-ms'] === undefined ? {} : { tickTimeoutMs: Number(flags['wait-ms']) || undefined }), ...(options.open ?? {}),
         }, openingRules, lifecycleRules)
         const { ok: _ok, ...document } = result
-        return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
+        return {
+          exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
+          human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])],
+        }
       },
 
       // The placeholder that answers when no contribution registered an apply operation; the shipped source-apply contribution replaces it.

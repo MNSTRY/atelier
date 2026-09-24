@@ -1,5 +1,8 @@
 import { execFile, execFileSync } from 'node:child_process'
+import { readlinkSync } from 'node:fs'
+import path from 'node:path'
 import { POLICY_SETTINGS_PATH, buildEvalCode, createInProcessHost, runInProcess, validatePayload } from './bridge-script.mjs'
+import { obsidianUserDataDir, readObsidianSettings, vaultRoute } from './vault-list.mjs'
 
 // Editor coordination adapter.
 //
@@ -26,9 +29,16 @@ export class TransportTimeout extends Error {
 
 const READ_RETRIES = 2
 
-export function createEditorAdapter({ call, processProbe, kind = 'custom' }) {
+// `qualification`, when given, is the app qualification this adapter was
+// constructed under (`qualifyApp`). An adapter qualified while no app ran was
+// never shown a version, so it never coordinates with an app found running
+// later, whose version nobody checked: it is `uncoordinated` until an adapter
+// qualified with a checked version replaces it. Without a qualification the
+// adapter coordinates as before.
+export function createEditorAdapter({ call, processProbe, kind = 'custom', qualification }) {
   if (typeof call !== 'function') throw new TypeError('createEditorAdapter needs a call function')
   if (typeof processProbe !== 'function') throw new TypeError('createEditorAdapter needs a processProbe function')
+  const versionUnchecked = qualification !== undefined && qualification?.versionChecked !== true
   const retries = []
   let tail = Promise.resolve()
   const serialized = (operation) => {
@@ -62,11 +72,13 @@ export function createEditorAdapter({ call, processProbe, kind = 'custom' }) {
     }),
     // Path selection. `absent` is returned only when the process probe says,
     // positively, that no Obsidian is running. A running or unknowable app
-    // that does not answer for this exact vault is `uncoordinated`.
+    // that does not answer for this exact vault is `uncoordinated`, and so is
+    // any app while this adapter's qualification checked no version.
     probe: ({ vaultRoot }) => serialized(async () => {
       let processes
       try { processes = await processProbe() } catch { processes = 'unknown' }
       if (processes === 'absent') return { state: 'absent', reason: 'no Obsidian process is running' }
+      if (versionUnchecked) return { state: 'uncoordinated', reason: 'app-version-unchecked: an Obsidian process may be running, and this adapter was qualified while none ran, so its version was never checked' }
       try {
         const reply = await readOnly({ op: 'inspect', vaultRoot, path: POLICY_SETTINGS_PATH })
         // `path-unsafe` for the probe path still proves the app answered for this vault; the settings unit reports the path.
@@ -101,13 +113,51 @@ export function defaultCliPath(platform = process.platform) {
   return 'obsidian-cli'
 }
 
+// A directory that is no vault, for a call that must not choose one by where it runs.
+export const NEUTRAL_DIRECTORY = (() => { try { return path.parse(process.cwd()).root } catch { return path.sep } })()
+
+// The working directory and leading arguments of a call that goes where a
+// `vaultRoute` says: into the vault's folder, or naming the vault's id first
+// from a directory that is no vault (`neutral`), or, for any other route, from
+// that directory naming no vault.
+export function routedCall(route, neutral = NEUTRAL_DIRECTORY) {
+  if (route?.how === 'folder') return { cwd: route.cwd, args: [] }
+  if (route?.how === 'id') return { cwd: neutral, args: [`vault=${route.id}`] }
+  return { cwd: neutral, args: [] }
+}
+
+// Which window a publication call reaches. The app answers a command in the
+// window of the vault its list routes the call to (see vault-list.mjs),
+// opening that vault first when it is closed, and otherwise in the vault
+// window that had focus last, which may be any vault the person uses. While
+// the app lists this vault as open, a call therefore runs in its folder, or,
+// when a vault listed at a folder above it would take a call run there, names
+// its id; when neither reaches only this vault, no call is made (the error
+// says `vault-inside-another-vault`). Otherwise a call runs in a directory
+// that is no vault and names none: a closed vault is never reopened by
+// maintenance, no other vault is reached through this one's folder, and the
+// working directory of whoever started the service never picks a vault. The
+// script still checks that it answered for exactly this vault.
+export function publicationRoute({ env = process.env, platform = process.platform } = {}) {
+  const userDataDir = obsidianUserDataDir({ platform, env })
+  return (payload) => {
+    const settings = readObsidianSettings({ userDataDir })
+    const route = settings.ok ? vaultRoute({ vaults: settings.vaults, vaultRoot: payload.vaultRoot, open: true }) : { how: 'unlisted' }
+    if (route.how === 'ambiguous') throw new Error('vault-inside-another-vault: Obsidian lists a vault at a folder above this one, and no call reaches only this vault; no call was made')
+    return routedCall(route)
+  }
+}
+
 // The CLI reaches the app through a socket under $HOME, so `env` selects the
 // app instance. It is passed explicitly and never edited here. A call that
 // outlives its timeout is killed with SIGKILL: the CLI ignores SIGTERM while
-// it waits on the app.
-export function createObsidianCliCall({ cliPath = defaultCliPath(), env = process.env, timeoutMs = 20000 } = {}) {
+// it waits on the app. `route(payload)` says where a call runs and what it
+// names first ({ cwd, args }); a route that throws makes no call.
+export function createObsidianCliCall({ cliPath = defaultCliPath(), env = process.env, timeoutMs = 20000, route = () => routedCall(null) } = {}) {
   return (payload) => new Promise((resolve, reject) => {
-    execFile(cliPath, ['eval', `code=${buildEvalCode(payload)}`], { env, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    let where
+    try { where = route(payload) } catch (error) { return reject(error) }
+    execFile(cliPath, [...where.args, 'eval', `code=${buildEvalCode(payload)}`], { env, cwd: where.cwd, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) return reject(error.killed ? new TransportTimeout(`CLI call timed out: ${payload.op}`) : new Error(`CLI call failed: ${String(error.message).slice(0, 300)}`))
       const out = stdout || stderr || ''
       const start = out.indexOf('=> ')
@@ -127,13 +177,48 @@ export function createObsidianCliCall({ cliPath = defaultCliPath(), env = proces
 //          directory: a moved or renamed bundle still counts, and so does a
 //          process whose path ps cannot read and names by its short name.
 //   Linux  `obsidian`, the executable of the .deb, snap, AppImage and Flatpak
-//          builds. A distribution that runs the app under a system Electron
-//          shows only `electron`, and which app it hosts is not known.
+//          builds, by name or, for a name that is not recognised, by the
+//          executable it resolves to. A distribution that runs the app under
+//          a system Electron shows only `electron`, and which app it hosts is
+//          not known.
 //
 // The command-line tool is a client of the app, not the app: counting it would
 // make every call this package makes through it look like a running app.
 const APP_EXECUTABLE = Object.freeze({ darwin: /^obsidian(?: helper\b.*)?$/i, linux: /^obsidian$/i })
 const ELECTRON_HOST = /^\.?electron(?:\d+|-wrap.*)?$/i
+// A `ps` that has not answered by then is killed, and the reading is unknown.
+const PS_TIMEOUT_MS = 5000
+// A process that exited since the table was read, or whose executable this
+// user may not read: another user's process, or one of this user's that hides
+// it from tracing (ssh-agent, a sandboxed renderer). Such a process is judged
+// by its name alone.
+const EXECUTABLE_UNREADABLE = new Set(['ENOENT', 'ESRCH', 'EACCES', 'EPERM'])
+
+const baseName = (text) => text.slice(text.lastIndexOf('/') + 1)
+const readProcessExecutable = (pid) => readlinkSync(`/proc/${pid}/exe`)
+
+// Linux names a process after the path it was started through, so an app
+// started through a differently named link or launcher shows another name.
+// The executable `/proc/<pid>/exe` resolves to does not change with the name.
+// Any failure other than the expected ones is unknown, and so is a table in
+// which no executable could be resolved at all: without `/proc`, nothing
+// below the names can be established.
+function resolveLinuxExecutables(rows, readExe) {
+  let resolved = 0
+  let unknown = false
+  for (const { pid } of rows) {
+    let target
+    try { target = String(readExe(pid)) } catch (error) {
+      if (!EXECUTABLE_UNREADABLE.has(error?.code)) unknown = true
+      continue
+    }
+    resolved += 1
+    const name = baseName(target.replace(/ \(deleted\)$/, ''))
+    if (APP_EXECUTABLE.linux.test(name)) return 'running'
+    if (ELECTRON_HOST.test(name)) unknown = true
+  }
+  return unknown || resolved === 0 ? 'unknown' : 'absent'
+}
 
 // Default process probe: 'absent' only when the process table was read and
 // holds no Obsidian. Limits: it sees this machine's processes as this user
@@ -141,20 +226,27 @@ const ELECTRON_HOST = /^\.?electron(?:\d+|-wrap.*)?$/i
 // vault through a shared or synchronized folder, an app packaged under another
 // executable name, or an app that starts after the probe. Anything it cannot
 // establish is 'unknown', which the adapter treats as a running app: an empty
-// table, a failed read, and on Linux a system Electron process.
-export function defaultObsidianProcessProbe({ platform = process.platform, run = execFileSync } = {}) {
+// table, a failed or slow read, and on Linux a system Electron process or an
+// executable that cannot be resolved for an unexpected reason.
+export function defaultObsidianProcessProbe({ platform = process.platform, run = execFileSync, readExe = readProcessExecutable } = {}) {
   if (!Object.hasOwn(APP_EXECUTABLE, platform)) return 'unknown'
+  const linux = platform === 'linux'
   try {
-    const table = run('/bin/ps', ['-A', '-o', 'comm='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024 })
+    const table = run('/bin/ps', ['-A', '-o', linux ? 'pid=,comm=' : 'comm='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024, timeout: PS_TIMEOUT_MS, killSignal: 'SIGKILL' })
     if (typeof table !== 'string' || table.trim() === '') return 'unknown'
-    const names = table.split('\n').map((line) => line.trim()).filter((line) => line !== '').map((line) => line.slice(line.lastIndexOf('/') + 1))
-    if (names.some((name) => APP_EXECUTABLE[platform].test(name))) return 'running'
-    return platform === 'linux' && names.some((name) => ELECTRON_HOST.test(name)) ? 'unknown' : 'absent'
+    const rows = table.split('\n').map((line) => line.trim()).filter((line) => line !== '').map((line) => {
+      const match = linux ? /^(\d+)\s+(.*)$/.exec(line) : null
+      return match ? { pid: Number(match[1]), comm: match[2] } : { pid: null, comm: line }
+    })
+    if (rows.some((row) => APP_EXECUTABLE[platform].test(baseName(row.comm)))) return 'running'
+    if (!linux) return 'absent'
+    if (rows.some((row) => row.pid === null || ELECTRON_HOST.test(baseName(row.comm)))) return 'unknown'
+    return resolveLinuxExecutables(rows, readExe)
   } catch {
     return 'unknown'
   }
 }
 
-export function createObsidianCliAdapter({ cliPath, env, timeoutMs, processProbe = () => defaultObsidianProcessProbe() } = {}) {
-  return createEditorAdapter({ call: createObsidianCliCall({ cliPath, env, timeoutMs }), processProbe, kind: 'obsidian-cli' })
+export function createObsidianCliAdapter({ cliPath, env = process.env, timeoutMs, processProbe = () => defaultObsidianProcessProbe(), qualification, route = publicationRoute({ env }) } = {}) {
+  return createEditorAdapter({ call: createObsidianCliCall({ cliPath, env, timeoutMs, route }), processProbe, kind: 'obsidian-cli', qualification })
 }

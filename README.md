@@ -69,7 +69,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.11
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -305,9 +305,10 @@ skills. Skill Steward governs its version and repository adoption. Provider
 execution, hosted collaboration and specialized proprietary methods can use the
 same handoff and evidence contracts through separately authorized adapters.
 
-This is next-release source functionality. Published alpha.7 does not include
-the `inquiry` command. The bundled readiness title is now Discovery Harness;
-its existing `discovery-engine` identifiers remain compatible.
+The architecture catalog calls the workflow Discovery Harness and resolves
+Discovery Engine as its historical alias. The immutable bundled v1 readiness
+pack retains its Discovery Engine title, identifiers and original digest, so
+existing release locks can use the governed upgrade path without a separate repin.
 <!-- atelier:block:inquiry-harnesses:end -->
 
 See [Discovery and Research Harnesses](docs/inquiry-harnesses.md) for the local workflow.
@@ -442,7 +443,7 @@ Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
 remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.11
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
 ```
 
 Then choose the path that matches what you are building:
@@ -461,7 +462,7 @@ Then choose the path that matches what you are building:
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.11`.
+Current package: `@mnstry/atelier@0.2.0-alpha.12`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.

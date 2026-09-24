@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-## 0.2.0-alpha.11
+## 0.2.0-alpha.12
+
+- Preserve the bundled readiness pack's immutable v1 content and digest so
+  previous release locks can use both exact upgrade participants without a
+  separate lock rewrite. Keep Discovery Harness naming in the architecture
+  catalog; retain Discovery Engine in the persisted readiness pack. Add a
+  real alpha.10 lock fixture, plan/application regressions and digest refusal
+  controls.
 
 - Add portable template profiles, digest-bound project bindings, staged structural
   validation and canonical read-only presentation through installed package APIs.
@@ -30,7 +37,8 @@
   portable research handoffs, reproducible basic belief calculations, evidence
   dependence and withdrawal checks, and reviewable graph proposals. Add separate
   capability packages and version-bound Skill Steward feedback. Rename the
-  discovery readiness display title while retaining all persisted identifiers.
+  discovery workflow through the architecture catalog while retaining the
+  bundled readiness pack's persisted title, identifiers and digest.
 - Add an experimental progressive local ingestion runner with exact plans,
   bounded deterministic text/CSV/JSON extraction, immutable intake reuse,
   resumable attempt accounting and source-verified lexical queries. Add a
@@ -46,6 +54,161 @@
   retain execution and access authority.
 
 - Recompile cached JSON Schema validators when caller-owned schemas change; preserve unchanged-schema reuse and fresh compilation for non-JSON schemas.
+
+
+### Changed
+
+- `atelier obsidian open` makes the first open of a view automatic: Obsidian
+  no longer has to be quit, and no vault folder has to be opened by hand. It
+  makes the app know the view's vault as one of its vaults before it opens
+  it. With Obsidian running and
+  answering its command line, the vault is added through the app itself
+  (`vault-open` through `obsidian-cli eval`, a constant script with the folder
+  as a base64 JSON payload), verified in the app's own vault list by real
+  path, and opened; `open` waits until the app answers for exactly that vault
+  and then asks for the view again, so the first publication runs through the
+  app with every editor check. Quitting Obsidian is no longer needed. With
+  Obsidian not running, the view is published on the path with no app, and
+  the vault is added to the app's `obsidian.json` before the app is started
+  on it: only while the process table shows, positively, that no Obsidian
+  runs (read again immediately before the rename), only a file Obsidian
+  created, owned by this user and not a link, atomically (a temporary file in
+  the same directory, fsynced, renamed), keeping every other key and entry,
+  and with a timestamped backup beside it; a write that fails at any step
+  leaves the file as it was and nothing beside it; an Obsidian that never ran
+  on the account (no such file) is asked to be started once. With Obsidian running
+  and no vault open, a vault the app already lists is opened by path; one it
+  does not list is answered as `app-version-unsupported` / `no-vault-open`
+  (open any vault, or quit Obsidian, then open again) and nothing is
+  written. Every failure is typed and names its next step. See "What `open`
+  does in each state of Obsidian" in docs/obsidian.md and "Obsidian's vault
+  list" in docs/obsidian-contract.md.
+- A tick requested over the service's listener may name one view
+  (`POST /tick` with `scopeId`; `requestServiceTick({ scopeId })`), which the
+  engine then prepares and publishes once more, whatever its state
+  (`engine.requestPreparation(scopeId)`, a one-shot request consumed at the
+  next tick), with the app's qualification asked again. `open` names its view
+  on both ticks it requests. A view whose last publication did not settle is
+  also tried again without a request: as soon as the app looks different (it
+  quit or started, or opened or closed a vault in its list), and otherwise
+  after a delay that starts at 30 seconds (`DEFAULT_PUBLICATION_RETRY_MS`) and
+  doubles, up to the full reconciliation interval. Before, it waited for a
+  change or the five-minute reconciliation. What the app looks like is read
+  from the process table and its vault list alone (`appStateSignature({
+  processes, settings })`), so nothing runs in Obsidian to find out; the app
+  is asked for its version only when a view is about to be published, and
+  the service's adapter factory asks it without blocking
+  (`createQualifiedAdapterFactory` answers a promise for an app probe with
+  `inspect()`). `engine.requestPreparation` takes a request only for a view
+  the project declared at the last tick (at most 64 before the first), and
+  answers whether it did. The service listener answers a POST member it does
+  not know, or a view on a stop, with 400 `request-member-unknown` instead of
+  409, and checks a view against the scope contract's own identifier.
+- Command-line calls to the app reach only the vault they are about. A call
+  about a vault runs in its folder, so it reaches that vault's window
+  whichever window has focus, or names the vault first (`vault=<id>`) when a
+  vault the app lists before it at a folder above it (a home folder, say)
+  would take a call run there; when that id would name another vault first
+  too, no call is made. Publication calls do so only while the app's list
+  shows the view's vault open; every other call runs in a directory that is
+  no vault. Maintenance never reopens a vault window that was closed and never
+  reaches another vault, and the directory a command or service was started
+  in no longer picks, or opens, a vault. `open` never adds a view's vault
+  inside a folder Obsidian already lists as a vault, which would show the
+  view's notes too: it answers `launch-failed` / `vault-inside-another-vault`.
+  A listed folder is compared as written first; its real path is read only
+  when its last component is the vault root's, so a vault on a mount that
+  does not answer is never waited on. The maintenance service is started in
+  the root directory.
+- Obsidian's settings file is not written larger than 4 MiB
+  (`obsidian-settings-too-large`), nor through a second name (a hard link,
+  `obsidian-settings-unsafe`). Of Atelier's backups beside it, the first (the
+  list as it was before Atelier wrote it) and the latest are kept. A write
+  that cannot be read back is `registration-not-read-back`, no longer
+  `app-started-during-registration`. A Flatpak or snap build of Obsidian on
+  Linux, which never reads that file, is recognised and the file is neither
+  read nor written for it (`obsidian-sandboxed`); the vault is added through
+  the running app. An addition the running app did not answer is looked up in
+  its list, and is `addition-not-answered` when it is not there, no longer
+  `app-did-not-list-its-vaults`. Adding a vault through the app also puts its
+  folder in the operating system's recent documents (Recent Items on macOS),
+  as Obsidian's own "open folder as vault" does.
+- A maintenance service still running an earlier release after an upgrade
+  is replaced by `open`: a service of the workspace that proves itself ours
+  but runs another entry module than the installed one, or refuses a tick
+  that names a view (as 0.2.0-alpha.11 and earlier do), is stopped through
+  its own listener and the installed release is started under the consent
+  already recorded; `open` shows `service: restarted (outdated)`
+  (`service.restarted` in JSON). A busy service is not stopped, and nothing
+  that does not prove itself ours is touched. `requestServiceTick` takes the
+  start options of the installed entry as `service` for this.
+- The `status` next step for `publisher-conflict` / `editor-uncoordinated`
+  names `atelier obsidian open` (which adds the vault to Obsidian and
+  publishes through it) or quitting Obsidian; after `open` itself tried, it
+  names quitting Obsidian. `launch-failed` no longer asks for a vault folder
+  to be opened by hand.
+
+### Fixed
+
+- A view whose prepared generation was already the committed one (on the
+  first tick of a service, or prepared again on request) was marked `stale`
+  when the app could not be qualified, for example while it ran with no vault
+  open: the editor adapter was built before the publisher found nothing to
+  publish. That adapter is now built only when the publisher needs one.
+- After a refused publication, the tick `open` asked for did not try the view
+  again (the engine attempted only views with changes), so `open` reported the
+  old conflict until the five-minute reconciliation.
+- `open` launched `obsidian://open?path=` for a vault the app did not know,
+  and Obsidian showed "Vault not found. Unable to find a vault for the URL";
+  `open` then answered `launch-failed` / `app-did-not-answer-for-this-vault`.
+- The production check that the app answers for a vault parsed the app's
+  answer twice and so never saw an answer; it now reads it once (twice only
+  for a quoted string), compares real paths, and asks from inside the vault
+  folder.
+- An app whose vault window is still loading answers a command with `Error:
+  Command "version" not found`; that was read as an unreadable version and
+  ended `open` as `app-version-unsupported`. It is now read as not up yet.
+
+## 0.2.0-alpha.11
+
+### Fixed
+
+- `status` now gives the same reason-specific next step as `open` for a
+  publication that stopped because an Obsidian that may hold the vault could
+  not be coordinated with (`publisher-conflict`, reason
+  `editor-uncoordinated`). The text no longer names one cause, since the
+  reason has several: another vault open, a command line that did not answer,
+  an unknown process table (on Linux, any app on a system Electron), or an app
+  started during an app-closed publication. The advice depends on whether the
+  view was ever published. Before a first publication: quit Obsidian (on
+  Linux, also any app that runs on a system Electron) so the view is
+  published, then `atelier obsidian open` starts Obsidian on it. After one:
+  the same, or open the view in the app as it is with `atelier obsidian open
+  --allow-stale`. A concurrent publisher keeps its advice.
+- The service's app qualification checks no version for an app that is not
+  running, and that answer is remembered for up to ten seconds. An editor
+  adapter built on it could coordinate with an Obsidian started inside that
+  window, whose version nobody had checked, and publish through it in-app.
+  The adapter now receives the qualification and does not coordinate, or ask
+  the app anything, unless a version was checked. An answer that checked no
+  version (the app was not running, or none was found) is no longer reused,
+  so the next publication after the app starts reads its version and
+  coordinates. A publication that stops this way is tried again on the next
+  change or at the next full reconciliation, every five minutes.
+- On macOS the app is found only at `/Applications/Obsidian.app`. An
+  Obsidian installed elsewhere is `app-missing`: nothing is published through
+  it, and publication waits while it runs. This is now documented.
+- On Linux an app started through a differently named link or launcher was
+  read as absent, because the process name is the name it was started
+  through. A process whose name is not recognised is now identified by the
+  executable `/proc/<pid>/exe` resolves to. A read failure other than a
+  process that exited or whose executable this user may not read, or a table
+  in which nothing resolves, is `unknown`.
+- The `ps` call of the process probe had no timeout, so a hung `ps` blocked
+  the service. It is killed after five seconds and the reading is `unknown`.
+- Documented that from 0.2.0-alpha.10 the app-free publication path runs in
+  production, with its re-probe window of up to two seconds plus one note
+  while Obsidian is not running (see "Known limits" in `docs/obsidian.md`).
 
 ## 0.2.0-alpha.10
 
