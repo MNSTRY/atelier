@@ -10,11 +10,9 @@ import { resolveProjectConfig, writeJson } from '../src/project/config.mjs'
 import { identityLineTexts, identitySuffix, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import {
   POLICY_SETTINGS_PATH,
-  REDACTION_RULES,
   allocateViewPaths,
   collisionKey,
   createPreparationCache,
-  createViewPreparationForOracleTests,
   isUserOwnedSettingsPath,
   prepareSettings,
   prepareView,
@@ -23,7 +21,8 @@ import {
   stagePreparedView,
   withEligibility,
 } from '../src/projection/obsidian/materialize/index.mjs'
-import { createDenyMatcher } from '../src/projection/obsidian/materialize/redaction.mjs'
+import { createViewPreparationForOracleTests } from '../src/projection/obsidian/materialize/prepare-view.mjs'
+import { REDACTION_RULES, createDenyMatcher } from '../src/projection/obsidian/materialize/redaction.mjs'
 
 // Invented fixtures only. The workspace is written into a temporary directory,
 // read by the real canonical graph builder, and prepared in memory.
@@ -1083,6 +1082,14 @@ test('the deny-list refuses unambiguous identifiers of notes outside the view, r
   // (The sealed ledger is `north-desk/sealed/ledger.md`; an in-view note of another repository has the same repository-relative path.)
   const shared = makeWorkspaceWithheld(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'See sealed/ledger.md'), 'south-desk/sealed/ledger.md': doc('south-desk:ledger', 'Tide ledger') })
   assert.ok(prepare(shared, fullScope).manifest.notes.some((note) => note.nodeId === 'south-desk:ledger'))
+})
+
+test('the published materialization subpath carries no test seam of the redaction guard', async () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+  assert.equal(pkg.exports['./obsidian/materialize'], './src/projection/obsidian/materialize/index.mjs')
+  const published = await import('../src/projection/obsidian/materialize/index.mjs')
+  assert.equal('createViewPreparationForOracleTests' in published, false)
+  assert.equal(typeof createViewPreparationForOracleTests, 'function', 'the tests reach it in its own module')
 })
 
 // ---------------------------------------------------------------------------

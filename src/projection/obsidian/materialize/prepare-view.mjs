@@ -283,22 +283,26 @@ function blockMappingKey(line) {
 // Whether identity lines can be appended to this front matter without changing
 // what it means: a block mapping at column 0 (blank and comment lines aside,
 // every line at column 0 is `key:`, everything else is indented under one) that
-// does not already use one of the identity keys. Anything else (a flow or
-// sequence root, an indented root, a directive, a repeated key) is not.
-function acceptsIdentityLines(yaml) {
+// does not already use one of the identity keys. Answers 'fits', 'author-keys'
+// (the author wrote one of the three keys, which would then show in Properties
+// instead of the generated one) or 'shape' (a flow or sequence root, an
+// indented root, a directive or document marker, or a line that is no key).
+function identityLinesFit(yaml) {
   let first = true
+  let authorKeys = false
   for (const raw of yaml.split('\n')) {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
     if (line.trim() === '' || /^[ \t]*#/.test(line)) continue
     if (/^[ \t]/.test(line)) {
-      if (first || line.startsWith('\t')) return false
+      if (first || line.startsWith('\t')) return 'shape'
       continue
     }
     first = false
     const key = blockMappingKey(line)
-    if (key === null || IDENTITY_KEYS.includes(key)) return false
+    if (key === null) return 'shape'
+    if (IDENTITY_KEYS.includes(key)) authorKeys = true
   }
-  return true
+  return authorKeys ? 'author-keys' : 'fits'
 }
 
 // Where the identity lines of a Markdown note go, decided from the source
@@ -313,7 +317,8 @@ function identityPlacement(source, lens) {
   const { start, end } = lens.frontmatter
   const openingEnd = source.indexOf(0x0a, start) + 1
   const closingStart = source.lastIndexOf(0x0a, end - 2) + 1
-  if (!acceptsIdentityLines(source.subarray(openingEnd, closingStart).toString('utf8'))) return { kind: 'tail' }
+  const fit = identityLinesFit(source.subarray(openingEnd, closingStart).toString('utf8'))
+  if (fit !== 'fits') return { kind: 'tail', authorKeys: fit === 'author-keys' }
   return { kind: 'frontmatter-lines', at: closingStart, eol: source[closingStart - 2] === 0x0d ? '\r\n' : '\n' }
 }
 
@@ -449,11 +454,13 @@ function emitNote({ layout, node, notePathValue, attachmentPathValue, source: { 
   let regions
   let closure = null
   let identityAtEnd = null
+  let placementOf = null
 
   if (node.extension === 'md') {
     const lens = readMarkdownLens(source, { repoId: node.repo, nodeId: node.id })
     const edits = linkEdits({ source, lens, occurrences, emittedTarget })
     const placement = layout.version === 1 ? null : identityPlacement(source, lens)
+    placementOf = placement
     let prefix = source.subarray(0, lens.body.start)
     let frontmatter = lens.frontmatter
     let identity = null
@@ -532,7 +539,11 @@ function emitNote({ layout, node, notePathValue, attachmentPathValue, source: { 
     },
   }
   // Only the closure that precedes a generated section is emitted; one before the end-of-note identity block counts.
-  return { key, files, attachment, note, edgeInversions: [...edgeInversions], fenceClosed: Boolean(closure && generated.regions.length > 0) }
+  return {
+    key, files, attachment, note, edgeInversions: [...edgeInversions], fenceClosed: Boolean(closure && generated.regions.length > 0),
+    // The author wrote an identity key of their own: it, not the generated block, is what Properties shows.
+    authorIdentityKeys: placementOf?.authorKeys === true,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +762,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   const nextCache = reusable ? new Map() : null
   const preparation = { emitted: 0, reused: 0 }
   const reusedPaths = new Set()
+  const authorKeyNotes = []
   const titles = titleRenderings()
 
   for (const node of orderedNodes) {
@@ -773,6 +785,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
       entry = emitNote({ layout, node, notePathValue, attachmentPathValue, source: read(node.repo, node.path), rows, outsideCount, occurrences, emittedTarget, key })
       preparation.emitted += 1
     }
+    if (entry.authorIdentityKeys) authorKeyNotes.push({ code: 'author-identity-properties', repoId: node.repo, nodeId: node.id, notePath: notePathValue })
     if (nextCache) nextCache.set(notePathValue, entry)
     // The result never aliases the cache: a caller may change what it was handed, bytes included.
     for (const file of entry.files) files.push({ ...file, bytes: Buffer.from(file.bytes) })
@@ -840,7 +853,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   }
   assertObsidianContract('generation-manifest', manifest)
   // What was laid out anyway and should be known, naming the note: a layout 2 generation records it.
-  const noteDiagnostics = legacy ? [] : [...readable.diagnostics]
+  const noteDiagnostics = legacy ? [] : [...readable.diagnostics, ...authorKeyNotes]
 
   // The redaction guard, over the whole result. Its deny-list: identifiers of
   // every census node and asset outside this view, refused where they are

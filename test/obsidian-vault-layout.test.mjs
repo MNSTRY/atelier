@@ -9,6 +9,7 @@ import { applyEditLens, createEngineApplyOperation } from '../src/projection/obs
 import { PATH_REGISTRY_SCHEMA, allocateViewPaths, collisionKey, prepareView, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { viewsOfRegistry } from '../src/projection/obsidian/materialize/path-registry.mjs'
 import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
+import { planUnits } from '../src/projection/obsidian/publication/publisher.mjs'
 import { protectedRoots } from '../src/runtime/obsidian/machine-settings.mjs'
 import { scopeReport } from '../src/runtime/obsidian/opening.mjs'
 import { FRESHNESS_SCHEMA, validateFreshness } from '../src/runtime/obsidian/state-store.mjs'
@@ -275,8 +276,10 @@ test('the identity closes a plain front matter, in its line ending; a source wit
     const own = `atelier-id: ${JSON.stringify(context.nodeId)}`
     assert.equal(text.split(own).length - 1, 1, `${sourcePath}: one identity block, naming its own note`)
   }
-  // The author's own key of that name is left as written, beside the generated block at the end.
+  // The author's own key of that name is left as written, beside the generated block at the end; it, not the generated
+  // one, is what Properties shows, so the note is named in the manifest. Other front matter at the end is not.
   assert.ok(cases.get('notes/taken.md').publishedNoteBytes.toString('utf8').startsWith('---\ntitle: "Taken key"\natelier-id: "mine"\n'))
+  assert.deepEqual(first.manifest.ext[EXT].diagnostics, [{ code: 'author-identity-properties', repoId: 'tide-desk', nodeId: 'tide-desk:taken', notePath: cases.get('notes/taken.md').note.path }])
 })
 
 test('the lens: an unedited note and a body edit invert to exact source bytes in every placement; the identity lines are never applied', (t) => {
@@ -546,6 +549,16 @@ test('a source folder that meets a file of the same name is qualified with a sho
   const asset = allocateViewPaths({ nodes: [node('r', 'r:x', 'img/logo/readme.md', 'Read me first')], assets: [{ repo: 'r', id: 'r:asset:img/logo', path: 'img/logo' }] })
   assert.equal(asset.pathOf('r', 'r:x'), 'r/img/logo/Read me first.md')
   assert.match(asset.assetPathOf('r', 'img/logo'), /^r\/img\/logo \([0-9a-f]{6}\)$/)
+})
+
+test('a file leaves a layout 2 vault under the kind its generation recorded: a repository named attachments holds notes', () => {
+  const digest = `sha256:${'a'.repeat(64)}`
+  const prior = (schema, extra) => ({ schema, notes: [{ path: 'attachments/notes/Plan.md', noteDigest: digest }], attachments: [{ path: 'attachments/charts/chart.pdf', digest }], ...extra })
+  const kinds = (priorManifest) => Object.fromEntries(planUnits({ files: [], priorManifest, pointer: null, ledger: new Map() }).map((unit) => [unit.path, unit.kind]))
+  assert.deepEqual(kinds(prior('atelier-obsidian-generation-manifest/v2', { layoutVersion: 2 })), { 'attachments/charts/chart.pdf': 'attachment', 'attachments/notes/Plan.md': 'note' })
+  // Layout 1 kept every file under attachments/, and a file published by an interrupted run is known by that folder alone.
+  const interrupted = planUnits({ files: [], priorManifest: prior('atelier-obsidian-generation-manifest/v1'), pointer: null, ledger: new Map([['attachments/Late--0123456789ab.png', digest]]) })
+  assert.deepEqual(Object.fromEntries(interrupted.map((unit) => [unit.path, unit.kind]))['attachments/Late--0123456789ab.png'], 'attachment')
 })
 
 // ---------------------------------------------------------------------------
