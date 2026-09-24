@@ -83,9 +83,12 @@ export function viewsOfRegistry(registry, workspaceId) {
   return registry.views
 }
 
-// The registry document with one view's allocation replaced.
-export function withViewSection(registry, { workspaceId, scopeId, section }) {
-  return { ...emptyPathRegistry(workspaceId), views: { ...viewsOfRegistry(registry, workspaceId), [scopeId]: section } }
+// The registry document with one view's allocation replaced. With `keep`, the
+// sections of views it does not name (views no longer maintained) are dropped;
+// this view's own section is always kept.
+export function withViewSection(registry, { workspaceId, scopeId, section, keep = null }) {
+  const kept = Object.entries(viewsOfRegistry(registry, workspaceId)).filter(([id]) => keep === null || keep.includes(id))
+  return { ...emptyPathRegistry(workspaceId), views: { ...Object.fromEntries(kept), [scopeId]: section } }
 }
 
 // ---------------------------------------------------------------------------

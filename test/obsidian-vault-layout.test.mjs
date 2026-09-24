@@ -610,6 +610,18 @@ test('a repository named like a folder of layout 1 is told apart from it, since 
   assert.equal(result.pathOf('attachments', 'attachments:d'), 'attachments/Delta.md')
 })
 
+test('the registry keeps only the sections of the views still maintained, and always the view\'s own', (t) => {
+  const inputs = workspaceOf(t, { 'r/a/one.md': titled('r:1', 'Plan') })
+  const a = prepareView({ ...inputs, scope: scopeOf('scope-a', { repo: 'r' }) })
+  const b = prepareView({ ...inputs, scope: scopeOf('scope-b', { repo: 'r' }), persistentPathRegistry: a.persistentPathRegistry })
+  assert.deepEqual(Object.keys(b.persistentPathRegistry.views).sort(), ['scope-a', 'scope-b'])
+  const pruned = prepareView({ ...inputs, scope: scopeOf('scope-b', { repo: 'r' }), persistentPathRegistry: b.persistentPathRegistry, viewScopeIds: ['scope-b'] })
+  assert.deepEqual(Object.keys(pruned.persistentPathRegistry.views), ['scope-b'])
+  const own = prepareView({ ...inputs, scope: scopeOf('scope-a', { repo: 'r' }), persistentPathRegistry: b.persistentPathRegistry, viewScopeIds: [] })
+  assert.deepEqual(Object.keys(own.persistentPathRegistry.views), ['scope-a'])
+  assert.throws(() => prepareView({ ...inputs, viewScopeIds: 'scope-a' }), { code: 'invalid-view-scopes' })
+})
+
 test('a file whose edit closed on this tick holds a layout 1 view once more, but takes no name in layout 2', (t) => {
   const files = { 'r/a/one.md': titled('r:1', 'Plan') }
   const first = prepareView(workspaceOf(t, files))
@@ -827,7 +839,7 @@ test('upgrade in a workspace with a repository named like the layout 1 folder: e
   assert.deepEqual(fs.readdirSync(path.join(world.vault(), folder)), [name])
 })
 
-test('the engine hands prepareView the files of open edits as held, and those of edits closed on the tick only as holding the layout', needsExchange, async (t) => {
+test('the engine hands prepareView the files of open edits as held, those of edits closed on the tick only as holding the layout, and the views it maintains', needsExchange, async (t) => {
   const world = upgradeWorld(t)
   const earlier = world.engine({ seams: EARLIER_RELEASE })
   await earlier.tick()
@@ -836,13 +848,13 @@ test('the engine hands prepareView the files of open edits as held, and those of
   world.installPolicy({ selector: { repo: 'east-wing' } })
   world.configureMachine({ maintenanceMode: 'automatic' })
   const calls = []
-  const spy = { prepareView(input) { calls.push({ heldNotePaths: input.heldNotePaths, layoutHeldNotePaths: input.layoutHeldNotePaths }); return prepareView(input) } }
+  const spy = { prepareView(input) { calls.push({ heldNotePaths: input.heldNotePaths, layoutHeldNotePaths: input.layoutHeldNotePaths, viewScopeIds: input.viewScopeIds }); return prepareView(input) } }
   const engine = world.engine({ seams: spy, applyOperation: createEngineApplyOperation({ context: { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock } }) })
   world.advance(1000)
   assert.deepEqual((await engine.tick()).dispatched.map((item) => item.status), ['applied'])
   const closed = world.pendingEdits().find((item) => item.identity.nodeId === 'east-wing:lantern')
   assert.notEqual(closed.closedAt, null)
-  assert.deepEqual(calls.at(-1), { heldNotePaths: [], layoutHeldNotePaths: [closed.path] })
+  assert.deepEqual(calls.at(-1), { heldNotePaths: [], layoutHeldNotePaths: [closed.path], viewScopeIds: ['scope-whole'] })
 })
 
 test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is held and on the tick its edit closes, and is laid out again once the person restores the note', needsExchange, async (t) => {

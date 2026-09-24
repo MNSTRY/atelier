@@ -651,8 +651,9 @@ export function createViewPreparationForOracleTests(rules = REDACTION_RULES) {
 // `heldNotePaths` are the vault files held for an open edit: they stay in the
 // vault, so their names stay taken. `layoutHeldNotePaths`, when given, are the
 // notes that hold a layout 1 view in layout 1 (open edits and edits closed on
-// this tick); without it, `heldNotePaths` do.
-function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, layout: requestedLayout } = {}) {
+// this tick); without it, `heldNotePaths` do. `viewScopeIds`, when given, are
+// the views still maintained: the registry drops the sections of any other.
+function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, viewScopeIds = null, layout: requestedLayout } = {}) {
   if (cache !== null && !isPreparationCache(cache)) refuse('invalid-preparation-cache', 'the preparation cache must come from createPreparationCache')
   assertObsidianContract('corpus-profile', profile)
   assertObsidianContract('scope', scope)
@@ -666,6 +667,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   for (const [name, value] of [['heldNotePaths', heldNotePaths], ['layoutHeldNotePaths', layoutHeldNotePaths]]) {
     if (value !== null && !Array.isArray(value)) refuse('invalid-held-notes', `${name} must be an array of note paths`)
   }
+  if (viewScopeIds !== null && !(Array.isArray(viewScopeIds) && viewScopeIds.every((id) => typeof id === 'string'))) refuse('invalid-view-scopes', 'viewScopeIds must be an array of scope identities')
   const layout = layoutOf({ layout: requestedLayout, priorManifest, layoutHeld: layoutHeldNotePaths ?? heldNotePaths ?? [] })
   const checkedAt = timestampFrom(clock)
   const canonical = canonicalSnapshotOf(snapshot.graph)
@@ -953,7 +955,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     manifest,
     manifestBytes: utf8(`${JSON.stringify(manifest, null, 2)}\n`),
     files,
-    persistentPathRegistry: withViewSection(persistentPathRegistry, { workspaceId: profile.workspaceId, scopeId: scope.scopeId, section: readable.section }),
+    persistentPathRegistry: withViewSection(persistentPathRegistry, { workspaceId: profile.workspaceId, scopeId: scope.scopeId, section: readable.section, keep: viewScopeIds }),
     changes,
     // How many notes were emitted on this call and how many were reused from the cache; without a cache every note is emitted.
     preparation,

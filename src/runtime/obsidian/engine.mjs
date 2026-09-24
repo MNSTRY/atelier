@@ -517,7 +517,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           const prepared = seams.prepareView({
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
             existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId),
-            heldNotePaths: held, layoutHeldNotePaths: layoutHeldOf(scopeId),
+            heldNotePaths: held, layoutHeldNotePaths: layoutHeldOf(scopeId), viewScopeIds: scopes.map((item) => item.scope.scopeId),
           })
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
           diagnostics = (prepared.manifest.ext?.[OBSIDIAN_EXT_KEY]?.diagnostics ?? []).slice(0, 100)
