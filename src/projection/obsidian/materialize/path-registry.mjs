@@ -44,6 +44,11 @@ const MAX_QUALIFIER_ID = 16
 // the shortest title and the extensions: nothing at first, and room for both
 // qualifiers at their longest when the name had to be qualified.
 const QUALIFIED_NAME_BYTES = (QUALIFIER_STEM_BYTES + 3) + (MAX_QUALIFIER_ID + 3)
+// The folders layout 1 kept every note and file in. An upgrade retires their
+// files but leaves the folders, so a repository folder that differs from one
+// only in case or normalization, which a case-insensitive file system would
+// merge with it, is told apart; a repository named exactly `notes` uses it.
+const LAYOUT_1_FOLDERS = ['notes', 'attachments']
 
 const compare = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
 export const identityKey = (repoId, nodeId) => `${repoId}\u0000${nodeId}`
@@ -338,6 +343,10 @@ export function allocateViewPaths({ published = null, nodes, assets = [], occupi
   for (const filePath of [...new Set(occupied)].sort()) {
     if (typeof filePath !== 'string' || !isReadableVaultPath(filePath) || state.files.has(collisionKey(filePath)) || !claimable(state, filePath)) continue
     claimFile(state, filePath, 'occupied')
+  }
+  for (const folder of LAYOUT_1_FOLDERS) {
+    const key = collisionKey(folder)
+    if (!state.folders.has(key) && !state.files.has(key)) state.folders.set(key, folder)
   }
   const diagnostics = []
   for (const node of sortedNodes) {

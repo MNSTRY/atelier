@@ -602,6 +602,14 @@ test('files held in the vault, their folders in any spelling, never make an allo
   assert.deepEqual([...new Set(problems)].slice(0, 10), [])
 })
 
+test('a repository named like a folder of layout 1 is told apart from it, since the upgrade leaves that folder in the vault; one named exactly so uses it', () => {
+  const result = allocateViewPaths({ nodes: [node('Notes', 'Notes:a', 'a.md', 'Alpha'), node('notes', 'notes:b', 'b.md', 'Beta'), node('ATTACHMENTS', 'ATTACHMENTS:c', 'c.md', 'Gamma'), node('attachments', 'attachments:d', 'd.md', 'Delta')] })
+  assert.match(result.pathOf('Notes', 'Notes:a'), /^Notes \([0-9a-f]{6}\)\/Alpha\.md$/)
+  assert.equal(result.pathOf('notes', 'notes:b'), 'notes/Beta.md')
+  assert.match(result.pathOf('ATTACHMENTS', 'ATTACHMENTS:c'), /^ATTACHMENTS \([0-9a-f]{6}\)\/Gamma\.md$/)
+  assert.equal(result.pathOf('attachments', 'attachments:d'), 'attachments/Delta.md')
+})
+
 test('a file whose edit closed on this tick holds a layout 1 view once more, but takes no name in layout 2', (t) => {
   const files = { 'r/a/one.md': titled('r:1', 'Plan') }
   const first = prepareView(workspaceOf(t, files))
@@ -791,13 +799,32 @@ test('upgrade with a held edit in a repository named like the layout 1 folder: t
   const result = await world.sourceApply().apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
   assert.deepEqual([result.status, result.code], ['applied', 'applied'])
 
-  // The hold lifts, and the view is laid out again: the repository takes its own name once no layout 1 file holds it.
+  // The hold lifts, and the view is laid out again, the repository's folder told apart from the one layout 1 left.
   for (let tick = 0; tick < 3; tick += 1) { world.advance(1000); await engine.tick() }
   const after = world.manifest()
   assert.deepEqual([after.schema, after.layoutVersion], [V2, 2])
-  assert.deepEqual(after.notes.map((note) => note.path).sort(), ['Notes/Compass rose.md', 'Notes/Lantern room.md'])
+  const folder = after.notes[0].path.split('/')[0]
+  assert.match(folder, /^Notes \([0-9a-f]{6}\)$/)
+  assert.deepEqual(after.notes.map((note) => note.path).sort(), [`${folder}/Compass rose.md`, `${folder}/Lantern room.md`])
   assert.equal(world.pendingEdits().some((item) => item.closedAt === null), false, 'no edit is left queued')
   assert.match(fs.readFileSync(world.noteFile('Notes:lantern'), 'utf8'), /twice a minute/)
+})
+
+test('upgrade in a workspace with a repository named like the layout 1 folder: every note is on disk under the folder its manifest names', needsExchange, async (t) => {
+  const world = makeApplyWorld(t, { repositories: ['Notes'], files: { 'Notes/lantern.md': noteText({ id: 'Notes:lantern', title: 'Lantern room', body: 'The lamp turns once a minute.' }) } })
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  await earlier.tick()
+  earlier.stop()
+  const engine = world.engine()
+  world.advance(1000)
+  assert.equal((await engine.tick()).scopes[0].state, 'current')
+  const [lantern] = world.manifest().notes.map((note) => note.path)
+  const [folder, name] = lantern.split('/')
+  // The `notes` folder the upgrade leaves behind and the repository's folder are two folders, on a file system that
+  // compares names case-insensitively too, so the app reports the note under exactly the path the manifest records.
+  assert.match(folder, /^Notes \([0-9a-f]{6}\)$/)
+  assert.ok(fs.readdirSync(world.vault()).includes(folder), JSON.stringify(fs.readdirSync(world.vault())))
+  assert.deepEqual(fs.readdirSync(path.join(world.vault(), folder)), [name])
 })
 
 test('the engine hands prepareView the files of open edits as held, and those of edits closed on the tick only as holding the layout', needsExchange, async (t) => {
