@@ -9,8 +9,11 @@ import { applyEditLens, createEngineApplyOperation } from '../src/projection/obs
 import { PATH_REGISTRY_SCHEMA, allocateViewPaths, collisionKey, prepareView, withEligibility } from '../src/projection/obsidian/materialize/index.mjs'
 import { viewsOfRegistry } from '../src/projection/obsidian/materialize/path-registry.mjs'
 import { resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
+import { protectedRoots } from '../src/runtime/obsidian/machine-settings.mjs'
+import { scopeReport } from '../src/runtime/obsidian/opening.mjs'
+import { FRESHNESS_SCHEMA, validateFreshness } from '../src/runtime/obsidian/state-store.mjs'
 import { prepareWorkspace } from './support/obsidian-edits/workspace.mjs'
-import { digestOf, makeApplyWorld, noteText, treeListing } from './support/obsidian-edits/apply-world.mjs'
+import { APPLY_WORKSPACE_ID, digestOf, makeApplyWorld, noteText, treeListing } from './support/obsidian-edits/apply-world.mjs'
 
 // Vault layout 2: file names are titles, folders mirror the repository, and
 // each note names its identity in generated properties. Invented, synthetic
@@ -543,6 +546,49 @@ test('a source folder that meets a file of the same name is qualified with a sho
   const asset = allocateViewPaths({ nodes: [node('r', 'r:x', 'img/logo/readme.md', 'Read me first')], assets: [{ repo: 'r', id: 'r:asset:img/logo', path: 'img/logo' }] })
   assert.equal(asset.pathOf('r', 'r:x'), 'r/img/logo/Read me first.md')
   assert.match(asset.assetPathOf('r', 'img/logo'), /^r\/img\/logo \([0-9a-f]{6}\)$/)
+})
+
+// ---------------------------------------------------------------------------
+// Status names the note and the rule
+// ---------------------------------------------------------------------------
+
+test('status names the note and the rule: a bare word is reported on a current view, and a refused view says which note and rule, never the value', needsExchange, async (t) => {
+  const keeper = (title) => `---\ntitle: "${title}"\nkg:\n  id: "east-wing:keeper"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "east-wing:lantern"\n---\n\n# ${title}\n\nBody.\n`
+  const world = makeApplyWorld(t, {
+    repositories: ['east-wing'],
+    files: {
+      'east-wing/notes/lantern.md': noteText({ id: 'east-wing:lantern', title: 'Lantern room', body: 'The lamp turns.' }),
+      'east-wing/notes/keeper.md': keeper('Keeper by the harbor'),
+      // Outside every view (its audience is not allowed), with an identity that is a bare word.
+      'east-wing/notes/harbor.md': noteText({ id: 'harbor', title: 'Harbor', body: 'Private.', audience: 'private' }),
+    },
+  })
+  const engine = world.engine()
+  const report = await engine.tick()
+  const lanternNote = 'east-wing/notes/Lantern room.md'
+  const reported = [{ code: 'bare-identity-in-generated-text', rule: 'deny-list', repoId: 'east-wing', nodeId: 'east-wing:lantern', notePath: lanternNote }]
+  assert.deepEqual([report.scopes[0].state, report.scopes[0].diagnostics], ['current', reported])
+  assert.deepEqual(world.stateStore().readFreshness().scopes[0].diagnostics, reported)
+  const status = () => scopeReport({ workspace: { workspaceRoot: world.workspaceRoot(), workspaceId: APPLY_WORKSPACE_ID }, scopeId: 'scope-whole', repositoryRoots: protectedRoots(world.loadProject()), serviceState: 'healthy' })
+  assert.deepEqual(status().diagnostics, reported)
+  // The keeper's title now names the private note by its repository-qualified path: the view is refused, and says where.
+  fs.writeFileSync(world.source('east-wing/notes/keeper.md'), keeper('Keeper of east-wing/notes/harbor.md'))
+  world.advance(1000)
+  const refused = await engine.tick()
+  assert.deepEqual([refused.scopes[0].state, refused.scopes[0].reason], ['stale', 'redaction-failure'])
+  assert.deepEqual(refused.scopes[0].diagnostics, [{ code: 'redaction-failure', rule: 'deny-list', notePath: lanternNote }])
+  assert.deepEqual(status().diagnostics, refused.scopes[0].diagnostics)
+  assert.equal(JSON.stringify(world.stateStore().readFreshness()).includes('notes/harbor.md'), false, 'the value is named nowhere')
+})
+
+test('a freshness entry may carry diagnostics naming notes and rules; anything else in them refuses', () => {
+  const entry = { scopeId: 'scope-a', state: 'current', reason: 'published-and-verified', generationId: 'gen-a', preparedGenerationId: 'gen-a', verified: true, heldNotes: [], changeClasses: [], retainedEdits: 0, checkedAt: '2026-01-05T10:00:00.000Z' }
+  const document = (scope) => ({ schema: FRESHNESS_SCHEMA, workspaceId: 'ws-a', enablement: 'enabled', maintenanceMode: 'manual', lastTickAt: '2026-01-05T10:00:00.000Z', lastFullReconciliationAt: null, scopes: [scope] })
+  validateFreshness(document(entry), 'ws-a')
+  validateFreshness(document({ ...entry, diagnostics: [{ code: 'folder-shortened', repoId: 'r', nodeId: 'r:a', notePath: 'r/a (1a2b3c)/A.md' }, { code: 'redaction-failure', rule: 'deny-list', notePath: 'r/B.md' }] }), 'ws-a')
+  for (const diagnostics of ['x', [{}], [{ code: 'folder-shortened', value: 'withheld text' }], [{ code: 'x', notePath: '/abs.md' }], Array.from({ length: 101 }, () => ({ code: 'x' }))]) {
+    assert.throws(() => validateFreshness(document({ ...entry, diagnostics }), 'ws-a'), { code: 'invalid-freshness-state' }, JSON.stringify(diagnostics).slice(0, 60))
+  }
 })
 
 // ---------------------------------------------------------------------------

@@ -506,7 +506,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       for (const { scope, store } of built ? scopes.filter((item) => attempt.has(item.scope.scopeId)) : []) {
         const { scopeId } = scope
         const entry = entries.get(scopeId)
-        const settle = (state, reason, extra = {}) => entries.set(scopeId, { ...entry, ...extra, state, reason, verified: extra.verified === true, checkedAt: now })
+        // What this attempt found worth naming: notes and rules (see "Notes that were laid out anyway" in docs/obsidian-contract.md).
+        let diagnostics = []
+        const settle = (state, reason, extra = {}) => {
+          const { diagnostics: _earlier, ...rest } = { ...entry, ...extra, state, reason, verified: extra.verified === true, checkedAt: now }
+          entries.set(scopeId, diagnostics.length > 0 ? { ...rest, diagnostics } : rest)
+        }
         try {
           const held = heldPaths(edits, scopeId)
           const prepared = seams.prepareView({
@@ -514,6 +519,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId), heldNotePaths: layoutHeldOf(scopeId),
           })
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
+          diagnostics = (prepared.manifest.ext?.[OBSIDIAN_EXT_KEY]?.diagnostics ?? []).slice(0, 100)
           const preparedGenerationId = prepared.manifest.generationId
           const trusted = () => store.readCurrent()
           const observed = new Map(held.map((notePath) => [notePath, rules.heldNoteDigest({ file: path.join(store.vaultRoot, notePath), indexed: index.get(vaultKey(scopeId, notePath))?.digest ?? null })]))
@@ -558,6 +564,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
         } catch (error) {
           if (!isTypedRefusal(error)) { settle('stale', 'publisher-error'); persist(); throw error }
+          // A redaction refusal names the note and the rule it concerns, never the value.
+          const where = error.code === 'redaction-failure' ? error.detail ?? {} : {}
+          diagnostics = typeof where.rule === 'string' ? [{ code: error.code, rule: where.rule, ...(typeof where.notePath === 'string' ? { notePath: where.notePath } : {}), ...(typeof where.filePath === 'string' ? { filePath: where.filePath } : {}) }] : []
           settle('stale', error.code)
           if (REREAD_CODES.has(error.code)) forceFull = true
         }

@@ -208,7 +208,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             `service: ${service.state} (${service.reason ?? 'no reason'})${app ? `; app ${app.outcome} (${app.reason})` : ''}`,
             ...(app?.next ? [`Next for the app: ${app.next}`] : []),
             `apply: ${applyShown.state}`,
-            ...scopes.map((scope) => `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}`),
+            ...scopes.flatMap((scope) => [
+              `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}`,
+              ...(scope.diagnostics ?? []).map((item) => `  ${item.notePath ?? item.filePath ?? item.assetPath ?? item.nodeId ?? ''}: ${item.code}${item.rule ? ` (${item.rule})` : ''}`),
+            ]),
           ],
         }
       },
