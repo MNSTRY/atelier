@@ -443,7 +443,11 @@ While Atelier's plugin holds the view's vault open in the app and the command
 line gives no version (as it answers while a vault is still loading), the
 version the plugin reports stands in (reason `plugin-reported`); a version the
 command line gives always decides, and while the process table shows no app
-running, a plugin's report counts for nothing.
+running, a plugin's report counts for nothing. `open` then asks the command
+line nothing: a vault the app's settings file lists is opened by path, and one
+it does not show is answered as `app-cli-unavailable` with reason
+`vault-open-cli-silent` (the app has the vault open; make sure its
+command-line interface is turned on).
 
 ## Known limits
 

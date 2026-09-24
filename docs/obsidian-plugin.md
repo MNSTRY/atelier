@@ -404,7 +404,13 @@ answer decides wherever it gives one:
   this vault before anything is published.
 - `open` does the same: the plugin's version stands in only where the tool
   gives none. It asks the service about the plugin at most once a second
-  while it waits for the app.
+  while it waits for the app. A version only the plugin reported is not the
+  command line answering, so `open` then asks the command line nothing to
+  find the vault: it reads the app's settings file, as with no vault open,
+  and opens by path the vault the app lists. Where the settings file does
+  not show it (a sandboxed build, say), `open` answers
+  `app-cli-unavailable` / `vault-open-cli-silent`: the plugin shows the vault
+  open, so the command line is what did not answer.
 - Whether an app runs is the process table's answer, which says no only when
   it finds no Obsidian process at all. A lease outlives its app by up to the
   lease time (six seconds after a crash), and any process that holds the

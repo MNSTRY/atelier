@@ -1805,15 +1805,18 @@ test('status and open report the plugin, and open takes the app version from it 
   // The app runs with the vault open, and the command-line tool answers for it, but its version call gives no answer
   // (it timed out, say): the version cannot be told from the tool.
   const launches = []
+  const asked = []
+  let listed = true
   const seams = {
     appProbe: { inspect: async () => ({ installed: true, cli: true, running: true, version: null }), vaultState: async () => ({ answered: true, indexReady: true }) },
     launcher: { open: async ({ vaultRoot }) => { launches.push(vaultRoot); return { launched: true, reason: 'fake' } } },
-    // The app lists the view's vault already, so `open` has nothing to add to its list.
+    // The app lists the view's vault already. With a version only the plugin reported, the command line gave none, so it
+    // is asked nothing: the app's settings file is read, and the vault is opened by path.
     registry: {
-      listThroughApp: async () => ({ answered: true, vaults: { 'atelier-plugin-view': { path: fs.realpathSync(world.vault), ts: 1, open: true } } }),
-      registerThroughApp: async () => { throw new Error('the app lists the vault already') },
-      readSettings: () => { throw new Error('the settings file is not read while the app answers') },
-      registerInSettings: () => { throw new Error('the settings file is not written while the app runs') },
+      listThroughApp: async () => { asked.push('listThroughApp'); throw new Error('the command line was asked for the vault list') },
+      registerThroughApp: async () => { asked.push('registerThroughApp'); throw new Error('the command line was asked to add the vault') },
+      readSettings: () => { asked.push('readSettings'); return { ok: true, vaults: listed ? { 'atelier-plugin-view': { path: fs.realpathSync(world.vault), ts: 1, open: true } } : {} } },
+      registerInSettings: () => { asked.push('registerInSettings'); throw new Error('the settings file is not written while the app runs') },
     },
     service: { entryPath: TEST_SERVICE_ENTRY, spawn() { throw new Error('a service was started') } },
   }
@@ -1829,6 +1832,14 @@ test('status and open report the plugin, and open takes the app version from it 
   assert.deepEqual(status.json.scopes[0].plugin, { present: true, reason: 'live-lease', appVersion: '1.13.7', pluginVersion: shippedManifest().version, sessions: 1 })
   const opened = await world.run(['open', '--json', '--consent-actor', CONSENT.actor], { seams })
   assert.deepEqual([opened.exit, opened.json.outcome, opened.json.app.outcome, opened.json.app.reason, opened.json.app.version], [0, 'current', 'qualified', 'plugin-reported', '1.13.7'])
+  assert.deepEqual(asked, ['readSettings'], 'the vault is found in the settings file; the command line is asked nothing')
+  // A settings file that does not show the vault (a sandboxed build, say) while the plugin shows it open: the command line
+  // is what is missing, and the answer says so rather than that no vault is open.
+  listed = false
+  asked.length = 0
+  const silent = await world.run(['open', '--json', '--consent-actor', CONSENT.actor], { seams })
+  assert.deepEqual([silent.json.outcome, silent.json.reason, asked, launches.length], ['app-cli-unavailable', 'vault-open-cli-silent', ['readSettings'], 1])
+  assert.match(silent.json.next, /has this view's vault open, as Atelier's plugin in it shows, but its command line did not answer/)
   assert.deepEqual(opened.json.plugin, { present: true, reason: 'live-lease', appVersion: '1.13.7', pluginVersion: shippedManifest().version, sessions: 1 })
   assert.deepEqual(launches, [fs.realpathSync(world.vault)])
 
