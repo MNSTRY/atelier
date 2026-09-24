@@ -170,15 +170,25 @@ export async function assertIsolatedInstance(instance, { userHome = os.homedir()
 // command-line path, on which the publication protocol was qualified with no
 // community plugin: a prompt that appears is answered "Browse vault in
 // Restricted Mode", as a person who declines would. No prompt, no action.
+// 'declined'; 'declined-reply-lost' (a press's reply was lost, the prompt is
+// gone and the app says restricted mode is on); 'not-declined' (a reply was
+// lost and the prompt is gone, but community plugins are on: it was answered
+// the other way); or 'no-prompt'.
 export async function declineTrustPrompt(instance, { waitMs = 5000, everyMs = 250 } = {}) {
   const press = "(()=>{const b=[...document.querySelectorAll('.modal.mod-trust-folder button')].find(x=>x.textContent==='Browse vault in Restricted Mode');if(!b)return 'no-prompt';b.click();return 'declined'})()"
   let lost = false
   for (const until = Date.now() + waitMs; Date.now() < until;) {
-    // The command-line transport sometimes loses a reply while the app stays responsive: the press is judged by what follows.
+    // The command-line transport sometimes loses a reply while the app stays responsive. A prompt gone after a lost
+    // reply proves no press: the app's own restricted mode says how the prompt was answered.
     let reply = ''
     try { reply = String(await instance.cli('eval', `code=${press}`)) } catch { lost = true }
     if (reply.includes('=> declined')) return 'declined'
-    if (lost && reply.includes('=> no-prompt')) return 'declined-reply-lost'
+    if (lost && reply.includes('=> no-prompt')) {
+      let restricted = null
+      try { restricted = await evalValue(instance, PROBES.restrictedMode) } catch { restricted = null }
+      if (restricted === 'true') return 'declined-reply-lost'
+      if (restricted === 'false') return 'not-declined'
+    }
     await new Promise((resolve) => { setTimeout(resolve, everyMs) })
   }
   return 'no-prompt'
@@ -193,6 +203,7 @@ const evalCode = (script, payload = {}) => {
 export const PROBES = Object.freeze({
   indexReady: 'String(app.metadataCache.initialized===true)',
   layoutReady: 'String(app.workspace.layoutReady===true)',
+  restrictedMode: 'String(!app.plugins.isEnabled())',
   basePath: 'JSON.stringify({basePath:app.vault.adapter.basePath})',
   markdownFiles: 'JSON.stringify(app.vault.getMarkdownFiles().map(f=>f.path).sort())',
   resolvedLinks: 'JSON.stringify({resolved:app.metadataCache.resolvedLinks,unresolved:app.metadataCache.unresolvedLinks})',
@@ -472,10 +483,11 @@ async function runIsolated({ plan, args, candidate, operator, host, receiptDir }
   const launch = async (layout, options = {}) => {
     const app = new Instance(layout)
     const launchedAtMs = Date.now()
+    // Registered before it is checked, so an instance this runner started is ended whatever the checks find.
+    instances.push(app)
     await app.launch(options)
     await assertIsolatedInstance(app)
-    await declineTrustPrompt(app)
-    instances.push(app)
+    if (await declineTrustPrompt(app) === 'not-declined') throw new IsolationRefusal('community-plugins-on', 'the vault\'s trust prompt was answered with community plugins on; these procedures prove the command-line path')
     return { app, launchedAtMs }
   }
   const appRss = (app) => () => new Promise((resolve, reject) => execFile('/bin/ps', ['-o', 'rss=', '-p', String(app.child.pid)], { encoding: 'utf8' }, (error, stdout) => (error ? reject(error) : resolve(Number.parseInt(stdout.trim(), 10) * 1024))))

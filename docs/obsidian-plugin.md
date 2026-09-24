@@ -444,14 +444,18 @@ note open in the editor.
   command-line path as before. The third uninstalls the plugin in the app and
   follows it until `atelier obsidian plugin on` brings it back, offered while
   that app holds the vault and confirmed when the plugin runs after a
-  restart. They never
-  touch another app profile, and they end each disposable instance by its
-  profile path.
+  restart. They never touch another app profile, and they end each disposable
+  instance by its profile path.
 
   The disposable window takes focus when it opens, so input meant for another
   window can answer its prompt before the test looks. The first test then
   fails and says so; the third, whose subject comes after trust, accepts a
-  vault trusted that way.
+  vault trusted that way. The desktop procedures
+  (`scripts/obsidian/desktop-receipts.mjs`) decline the prompt as the second
+  test does. When the command-line tool loses the reply to that press, a
+  prompt that is gone proves nothing by itself: the app's own restricted mode
+  says how it was answered, and a procedure refuses to run with community
+  plugins on (`community-plugins-on`), ending the instance it started.
 
   Pressing the button in the prompt was chosen over the alternatives because
   it exercises the prompt a person sees and needs no knowledge of the app's

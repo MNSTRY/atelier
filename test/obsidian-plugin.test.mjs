@@ -2118,6 +2118,38 @@ test('real isolated Obsidian: the vault the service published asks for trust, an
   }
 })
 
+test('the desktop procedures decline the trust prompt; after a lost reply the app\'s own restricted mode says how it was answered', async () => {
+  const { declineTrustPrompt } = await import('../scripts/obsidian/desktop-receipts.mjs')
+  // A scripted command-line tool: the first press's reply is lost, the prompt is gone after it, and the app answers
+  // for its own restricted mode.
+  const replyLost = (restricted) => {
+    let presses = 0
+    const asked = []
+    return {
+      asked,
+      async cli(command, code) {
+        assert.equal(command, 'eval')
+        if (code.includes('mod-trust-folder')) {
+          presses += 1
+          asked.push('press')
+          if (presses === 1) throw new Error('the reply was lost')
+          return '=> no-prompt'
+        }
+        if (code.includes('app.plugins.isEnabled()')) { asked.push('restricted-mode'); return `=> ${restricted}` }
+        throw new Error(`no answer for ${code.slice(0, 60)}`)
+      },
+    }
+  }
+  const declined = replyLost(true)
+  assert.equal(await declineTrustPrompt(declined, { everyMs: 1 }), 'declined-reply-lost')
+  assert.deepEqual(declined.asked, ['press', 'press', 'restricted-mode'])
+  // The prompt gone with community plugins on: someone answered it the other way, and that is no decline.
+  assert.equal(await declineTrustPrompt(replyLost(false), { everyMs: 1 }), 'not-declined')
+  // A press whose reply arrives is the decline itself; no prompt at all is no action.
+  assert.equal(await declineTrustPrompt({ cli: async () => '=> declined' }, { everyMs: 1 }), 'declined')
+  assert.equal(await declineTrustPrompt({ cli: async () => '=> no-prompt' }, { waitMs: 20, everyMs: 1 }), 'no-prompt')
+})
+
 test('real isolated Obsidian: in restricted mode nothing runs in the vault and the command-line path publishes as before', realApp, async (t) => {
   const { declineTrustPrompt } = await import('../scripts/obsidian/desktop-receipts.mjs')
   const real = await realAppWorld(t)
