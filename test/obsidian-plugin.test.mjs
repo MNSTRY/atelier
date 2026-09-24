@@ -648,7 +648,9 @@ const PLUGIN_FILES = [...PLUGIN_SOURCE_FILES, 'data.json'].map((name) => `${PLUG
 // A prepared view as prepareView returns it for a vault that receives the
 // plugin: one note, the policy settings, the plugin files, and the settings
 // unit's record pinning them in the manifest.
-function pluginViewOf(generationId, { port = 43123, bearer = 'b'.repeat(43), source, notes = { [NOTE]: NOTE_TEXT } } = {}) {
+// `community` and `onlyIfPresent` are what the service decides per vault (plugin-choice.mjs); without them the entry is
+// offered and the list merged when it is published.
+function pluginViewOf(generationId, { port = 43123, bearer = 'b'.repeat(43), source, notes = { [NOTE]: NOTE_TEXT }, community, onlyIfPresent = false, keep = null } = {}) {
   const files = []
   const manifest = {
     schema: 'atelier-obsidian-generation-manifest/v1', generationId, scopeId: SCOPE, snapshotId: 'snap-synthetic', notes: [], links: [], attachments: [],
@@ -660,7 +662,9 @@ function pluginViewOf(generationId, { port = 43123, bearer = 'b'.repeat(43), sou
     files.push({ path: notePath, kind: 'note', bytes, digest: digest(bytes) })
     manifest.notes.push({ repoId: 'harbor', nodeId: `node-${digest(notePath).slice(7, 15)}`, path: notePath, title: 'Harbor plan', noteDigest: digest(bytes), regions: { body: { start: 0, end: bytes.length }, generated: [] } })
   }
-  const plugin = preparePluginFiles({ channel: { host: '127.0.0.1', port }, scopeId: SCOPE, bearer, ...(source ? { source } : {}) })
+  const prepared = preparePluginFiles({ channel: { host: '127.0.0.1', port }, scopeId: SCOPE, bearer, onlyIfPresent, ...(source ? { source } : {}) })
+  const kept = keep === null ? prepared.files : prepared.files.filter((file) => keep.includes(file.path))
+  const plugin = { files: kept, ownership: { ...prepared.ownership, files: prepared.ownership.files.filter((entry) => kept.some((file) => file.path === entry.path)) }, ...(community === undefined ? {} : { community }) }
   const settings = prepareSettings({ plugin })
   files.push(...settings.files)
   manifest.ext = { [OBSIDIAN_EXT_KEY]: { emitterVersion: '1.0.0', mode: 'full', settings: settings.ownership } }
@@ -750,7 +754,8 @@ test('a person\'s settings are never clobbered: their community plugins stay in 
   assert.deepEqual(['.obsidian/plugins/dataview/data.json', '.obsidian/plugins/dataview/main.js'].map((filePath) => world.read(filePath)), before)
   assert.ok(world.recovered().some((bytes) => bytes.toString() === JSON.stringify(['dataview', 'calendar'])), 'the list as the person left it is kept in recovery')
 
-  // The person turns the plugin off in the app: the entry is Atelier's and returns with the next publication.
+  // A view prepared without the service's decision offers the entry: a list without it gets it appended. (The service
+  // always decides; a vault that turned the plugin off is withheld, see the plugin choice tests.)
   fs.writeFileSync(world.full(COMMUNITY_PLUGINS_PATH), JSON.stringify(['dataview', 'calendar']))
   const next = await world.publish(pluginViewOf('gen-0002', { notes: { [NOTE]: `${NOTE_TEXT}Next.\n` } }))
   assert.equal(next.state, 'committed')
@@ -819,6 +824,78 @@ test('a plugin file another writer changes under a publication is a race: the vi
   assert.equal(again.state, 'committed')
   assert.ok(world.read(target).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'styles.css'))))
   assert.ok(world.recovered().some((bytes) => bytes.toString() === '/* written meanwhile */\n'), 'the replaced bytes are kept')
+})
+
+test('the community list is written only over the bytes the decision was made on; withheld, it is never touched', needsExchange, async (t) => {
+  const world = publicationWorld(t)
+  fs.mkdirSync(world.full('.obsidian'), { recursive: true })
+  const theirs = Buffer.from(JSON.stringify(['dataview']))
+  fs.writeFileSync(world.full(COMMUNITY_PLUGINS_PATH), theirs)
+
+  // Owned from exactly these bytes, and they have not changed: the entry is appended to them.
+  const owned = pluginViewOf('gen-0001', { community: { entry: 'owned', existing: theirs } })
+  const pinned = owned.manifest.ext[OBSIDIAN_EXT_KEY].settings
+  assert.deepEqual([pinned.policyOwned[1].expectedDigest, pinned.pluginOwned.entry], [digest(theirs), 'owned'])
+  assert.equal((await world.publish(owned)).state, 'committed')
+  assert.deepEqual(JSON.parse(world.read(COMMUNITY_PLUGINS_PATH)), ['dataview', PLUGIN_ID])
+
+  // Prepared while the list held the entry; the person turned the plugin off before the publication ran. The decision
+  // was made on bytes that are gone: nothing is written over the person's change, and the view is tried again.
+  const seen = world.read(COMMUNITY_PLUGINS_PATH)
+  const stale = pluginViewOf('gen-0002', { community: { entry: 'owned', existing: seen }, notes: { [NOTE]: `${NOTE_TEXT}Two.\n` } })
+  const turnedOff = Buffer.from(JSON.stringify(['dataview']))
+  fs.writeFileSync(world.full(COMMUNITY_PLUGINS_PATH), turnedOff)
+  const raced = await world.publish(stale)
+  assert.equal(raced.state, 'updating')
+  assert.deepEqual([outcomeOf(raced, COMMUNITY_PLUGINS_PATH).outcome, outcomeOf(raced, COMMUNITY_PLUGINS_PATH).blocking], ['settings-changed', true])
+  assert.ok(world.read(COMMUNITY_PLUGINS_PATH).equals(turnedOff), 'the person\'s change stands')
+  assert.equal(world.read(NOTE).toString(), `${NOTE_TEXT}Two.\n`, 'the notes are published all the same')
+
+  // Absent when prepared, and still absent: the list is created. Present by now: the person made it meanwhile, so it is left.
+  fs.rmSync(world.full(COMMUNITY_PLUGINS_PATH))
+  const absent = pluginViewOf('gen-0002', { community: { entry: 'owned', existing: null }, notes: { [NOTE]: `${NOTE_TEXT}Two.\n` } })
+  fs.writeFileSync(world.full(COMMUNITY_PLUGINS_PATH), '["calendar"]')
+  const appeared = await world.publish(absent)
+  assert.deepEqual([appeared.state, outcomeOf(appeared, COMMUNITY_PLUGINS_PATH).outcome], ['updating', 'settings-changed'])
+  assert.equal(world.read(COMMUNITY_PLUGINS_PATH).toString(), '["calendar"]')
+
+  // Withheld (the person turned the plugin off in this vault): the list is not carried, not pinned and not touched.
+  const withheld = pluginViewOf('gen-0002', { community: { entry: 'withheld', reason: 'turned-off-in-this-vault' }, notes: { [NOTE]: `${NOTE_TEXT}Two.\n` } })
+  assert.equal(withheld.files.some((file) => file.path === COMMUNITY_PLUGINS_PATH), false)
+  assert.deepEqual(withheld.manifest.ext[OBSIDIAN_EXT_KEY].settings.policyOwned.map((entry) => entry.path), [POLICY_SETTINGS_PATH])
+  assert.deepEqual([withheld.manifest.ext[OBSIDIAN_EXT_KEY].settings.pluginOwned.entry, withheld.manifest.ext[OBSIDIAN_EXT_KEY].settings.pluginOwned.withheldBecause], ['withheld', 'turned-off-in-this-vault'])
+  const left = await world.publish(withheld)
+  assert.equal(left.state, 'committed')
+  assert.equal(outcomeOf(left, COMMUNITY_PLUGINS_PATH), undefined)
+  assert.equal(world.read(COMMUNITY_PLUGINS_PATH).toString(), '["calendar"]')
+  assert.throws(() => prepareSettings({ plugin: { files: [], ownership: {}, community: { entry: 'owned' } } }), (error) => error.code === 'invalid-settings', 'owned from bytes it does not name')
+  assert.throws(() => prepareSettings({ plugin: { files: [], ownership: {}, community: { entry: 'maybe' } } }), (error) => error.code === 'invalid-settings')
+})
+
+test('while the plugin is off in a vault, the plugin files still there are kept current and a removed one is never made again', needsExchange, async (t) => {
+  const world = publicationWorld(t)
+  assert.equal((await world.publish(pluginViewOf('gen-0001'))).state, 'committed')
+  // The person uninstalled the plugin in Obsidian: its folder is gone. Then only data.json came back somehow.
+  fs.rmSync(world.full(PLUGIN_DIRECTORY), { recursive: true })
+  const off = { community: { entry: 'withheld', reason: 'turned-off-in-this-vault' }, onlyIfPresent: true }
+  const gone = await world.publish(pluginViewOf('gen-0002', { ...off, keep: [], notes: { [NOTE]: `${NOTE_TEXT}Two.\n` } }))
+  assert.equal(gone.state, 'committed')
+  assert.equal(fs.existsSync(world.full(PLUGIN_DIRECTORY)), false, 'the folder the person removed stays removed')
+
+  // Prepared while main.js and styles.css were there; styles.css was removed before the publication ran: it is not made
+  // again, and main.js, still there, is kept current.
+  fs.mkdirSync(world.full(PLUGIN_DIRECTORY), { recursive: true })
+  fs.writeFileSync(world.full(`${PLUGIN_DIRECTORY}/main.js`), '// an older release\n')
+  const racing = pluginViewOf('gen-0003', { ...off, keep: [`${PLUGIN_DIRECTORY}/main.js`, `${PLUGIN_DIRECTORY}/styles.css`], notes: { [NOTE]: `${NOTE_TEXT}Three.\n` } })
+  const updated = await world.publish(racing)
+  assert.equal(updated.state, 'committed')
+  assert.deepEqual([outcomeOf(updated, `${PLUGIN_DIRECTORY}/main.js`).outcome, outcomeOf(updated, `${PLUGIN_DIRECTORY}/styles.css`).outcome], ['published', 'left-absent'])
+  assert.ok(world.read(`${PLUGIN_DIRECTORY}/main.js`).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))), 'a file still there is kept current')
+  assert.equal(world.read(`${PLUGIN_DIRECTORY}/styles.css`), null)
+  assert.equal(world.read(PLUGIN_DATA_PATH), null)
+  assert.ok(world.recovered().some((bytes) => bytes.toString() === '// an older release\n'))
+  const journal = JSON.parse(fs.readFileSync(path.join(world.store.journalsRoot, world.store.readCurrent().journalId, 'header.json'), 'utf8'))
+  assert.equal(JSON.stringify(journal).includes('left-absent') || JSON.stringify(journal).includes('leave-absent'), false, 'a file left absent is no unit of the journal')
 })
 
 test('the bearer goes into a private vault root only: a vault Atelier placed is made private, any other root keeps the data file out', needsExchange, async (t) => {

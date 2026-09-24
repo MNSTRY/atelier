@@ -1,3 +1,4 @@
+import { ObsidianContractRefusal } from '../contracts.mjs'
 import { PLUGIN_DATA_FILE, PLUGIN_DIRECTORY, PLUGIN_ID, PLUGIN_SOURCE_FILES } from '../plugin-bridge/channel.mjs'
 import { refuse, sha256Digest } from './byte-lens.mjs'
 
@@ -17,6 +18,12 @@ import { refuse, sha256Digest } from './byte-lens.mjs'
 // The two settings files are merged with the bytes on disk when they are
 // published; the plugin files are Atelier's bytes and their digests are pinned
 // in the generation manifest.
+//
+// The community entry is Atelier's only while the person wants the plugin in
+// that vault. The caller says so per view (see plugin-choice.mjs): the list is
+// then prepared from the exact bytes it held when that was decided, and it is
+// published only over exactly those bytes; or the list is withheld and never
+// touched.
 
 export const SETTINGS_ROOT = '.obsidian'
 export const POLICY_SETTINGS_PATH = `${SETTINGS_ROOT}/core-plugins.json`
@@ -86,20 +93,42 @@ export function preparePolicySettingsFile(relativePath, existing = null) {
   return { path: relativePath, kind: 'settings', bytes, digest: sha256Digest(bytes) }
 }
 
+// The community plugin list as it will be published from the bytes it held
+// when the decision was made. `expectedDigest` binds the publication to those
+// bytes (null: to the file being absent). A list whose shape the policy does
+// not know is left alone when it is published; its own bytes stand for it here.
+function prepareCommunityFile(existing) {
+  let file
+  try { file = preparePolicySettingsFile(COMMUNITY_PLUGINS_PATH, existing) } catch (error) {
+    if (!(error instanceof ObsidianContractRefusal) || existing === null) throw error
+    file = { path: COMMUNITY_PLUGINS_PATH, kind: 'settings', bytes: existing, digest: sha256Digest(existing) }
+  }
+  return { ...file, expectedDigest: existing === null ? null : sha256Digest(existing) }
+}
+
 // `existing` is the current bytes of core-plugins.json when the vault already
 // has one, so keys the person set survive. `plugin`, when given, is Atelier's
-// plugin for this vault (preparePluginFiles): its files are carried, its
-// community plugin entry is owned, and its digests are pinned.
+// plugin for this vault (preparePluginFiles): its files are carried and their
+// digests are pinned. `plugin.community` says what happens to its entry:
+//
+//   absent                                  the entry is offered; the list is merged with the bytes on disk when published
+//   { entry: 'owned', existing: bytes|null }  the entry is owned; the list is prepared from these bytes and published only over them
+//   { entry: 'withheld', reason }           the list is not carried at all: the person turned the plugin off, or it cannot be read
 export function prepareSettings({ existing = null, plugin = null } = {}) {
-  const settings = [preparePolicySettingsFile(POLICY_SETTINGS_PATH, existing), ...(plugin === null ? [] : [preparePolicySettingsFile(COMMUNITY_PLUGINS_PATH, null)])]
   if (plugin !== null && (!Array.isArray(plugin.files) || plugin.files.some((file) => file.kind !== 'plugin' || !isPluginOwnedPath(file.path)))) {
     refuse('invalid-settings', 'plugin files must be Atelier\'s own plugin files')
   }
+  const community = plugin?.community ?? null
+  if (community !== null && !((community.entry === 'owned' && (community.existing === null || Buffer.isBuffer(community.existing))) || community.entry === 'withheld')) {
+    refuse('invalid-settings', 'the community entry is owned from known bytes, or withheld')
+  }
+  const listed = plugin === null ? [] : community === null ? [preparePolicySettingsFile(COMMUNITY_PLUGINS_PATH, null)] : community.entry === 'owned' ? [prepareCommunityFile(community.existing)] : []
+  const settings = [preparePolicySettingsFile(POLICY_SETTINGS_PATH, existing), ...listed]
   return {
     files: [...settings, ...(plugin === null ? [] : plugin.files)],
     ownership: {
-      policyOwned: settings.map((file) => ({ path: file.path, ...OWNED[file.path], digest: file.digest, byteLength: file.bytes.length })),
-      ...(plugin === null ? {} : { pluginOwned: plugin.ownership }),
+      policyOwned: settings.map((file) => ({ path: file.path, ...OWNED[file.path], digest: file.digest, byteLength: file.bytes.length, ...(Object.hasOwn(file, 'expectedDigest') ? { expectedDigest: file.expectedDigest } : {}) })),
+      ...(plugin === null ? {} : { pluginOwned: { ...plugin.ownership, entry: community?.entry === 'withheld' ? 'withheld' : 'owned', ...(community?.entry === 'withheld' ? { withheldBecause: String(community.reason ?? 'unstated') } : {}) } }),
       userOwnedRoot: SETTINGS_ROOT,
       rule: 'every-other-path-and-key-is-user-owned',
     },

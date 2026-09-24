@@ -33,13 +33,16 @@ export function readPluginSource({ root = PLUGIN_SOURCE_ROOT } = {}) {
 
 // Prepared files of kind `plugin` for one vault, and the record that pins
 // their digests in the generation manifest. `channel` is where the service of
-// the workspace listens; `bearer` is this vault's.
-export function preparePluginFiles({ channel, scopeId, bearer, source = readPluginSource() }) {
+// the workspace listens; `bearer` is this vault's. With `onlyIfPresent` every
+// file is kept current where it exists and never created: the person turned
+// the plugin off, and a folder they removed stays removed.
+export function preparePluginFiles({ channel, scopeId, bearer, source = readPluginSource(), onlyIfPresent = false }) {
+  const presence = onlyIfPresent ? { onlyIfPresent: true } : {}
   const files = [
-    ...source.files.map(({ name, bytes }) => ({ path: `${PLUGIN_DIRECTORY}/${name}`, kind: 'plugin', bytes, digest: sha256Digest(bytes), mode: PLUGIN_SOURCE_MODE })),
+    ...source.files.map(({ name, bytes }) => ({ path: `${PLUGIN_DIRECTORY}/${name}`, kind: 'plugin', bytes, digest: sha256Digest(bytes), mode: PLUGIN_SOURCE_MODE, ...presence })),
     (() => {
       const bytes = pluginDataBytes({ host: channel?.host, port: channel?.port, scopeId, bearer })
-      return { path: `${PLUGIN_DIRECTORY}/${PLUGIN_DATA_FILE}`, kind: 'plugin', bytes, digest: sha256Digest(bytes), mode: PLUGIN_DATA_MODE }
+      return { path: `${PLUGIN_DIRECTORY}/${PLUGIN_DATA_FILE}`, kind: 'plugin', bytes, digest: sha256Digest(bytes), mode: PLUGIN_DATA_MODE, ...presence }
     })(),
   ]
   return {

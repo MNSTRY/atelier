@@ -213,9 +213,12 @@ function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = new Map
   const present = new Set()
   for (const file of files) {
     present.add(file.path)
-    if (file.kind === 'settings') { units.push({ path: file.path, kind: 'settings', op: 'settings' }); continue }
+    // A settings file prepared from the bytes it held when the view was prepared carries their digest: it is written only over them.
+    if (file.kind === 'settings') { units.push({ path: file.path, kind: 'settings', op: 'settings', ...(Object.hasOwn(file, 'expectedDigest') ? { expectedDigest: file.expectedDigest } : {}) }); continue }
     if (file.kind === 'plugin') {
       const current = pluginDisk.get(file.path) ?? null
+      // A plugin file the person removed while the plugin is off in this vault stays removed.
+      if (current === null && file.onlyIfPresent === true) { units.push({ path: file.path, kind: 'plugin', op: 'leave-absent' }); continue }
       units.push({ path: file.path, kind: 'plugin', op: current === null ? 'create' : current === file.digest ? 'keep' : 'replace', baseDigest: current, candidateDigest: file.digest, bytes: file.bytes, mode: file.mode })
       continue
     }
@@ -308,7 +311,7 @@ export async function publishView(options = {}) {
         detail: { mode, manifestRef: store.ref(manifestFile), manifestDigest: sha256Digest(manifestBytes),
           // The units this run may write. A kept note is compared and never written; the one case that writes
           // it after all (a kept note gone missing) is a late candidate with its own write-ahead entry.
-          units: units.filter((item) => item.op !== 'keep').map(({ unit, path: unitPath, kind, op }) => ({ unit, path: unitPath, kind, op })),
+          units: units.filter((item) => item.op !== 'keep' && item.op !== 'leave-absent').map(({ unit, path: unitPath, kind, op }) => ({ unit, path: unitPath, kind, op })),
           staged: units.filter((item) => item.stagedPath).map((item) => ({ unit: item.unit, path: item.path, candidateDigest: item.candidateDigest, stagedRef: store.ref(item.stagedPath),
             ...(item.stagedPath === item.preparedPath ? {} : { preparedRef: store.ref(item.preparedPath) }) })) } })
       crash('before-candidate-move')
@@ -434,6 +437,7 @@ async function publishOneUnit(unit, context) {
   const { store, journal, journalId, clock } = context
   const note = path.join(store.vaultRoot, unit.path)
   const outcome = (code, extra = {}) => ({ path: unit.path, kind: unit.kind, op: unit.op, outcome: code, blocking: false, ...extra })
+  if (unit.op === 'leave-absent') return outcome('left-absent')
   const observe = (bytes) => store.retainObject(bytes)
   if (context.uncoordinated) return outcome('editor-uncoordinated', { blocking: unit.op !== 'keep' })
   // A settings path that cannot be written safely (a symlinked `.obsidian`,
@@ -638,6 +642,11 @@ function stageLate(plan, { store, journal, journalId, crash, updating }) {
 function planSettings(unit, context) {
   const note = path.join(context.store.vaultRoot, unit.path)
   const existing = readNote(note)
+  // Prepared from other bytes than these: the person changed the file since, and whatever Atelier decided from the old
+  // bytes is not written over the change. The view is tried again, and the next preparation reads the file as it is.
+  if (Object.hasOwn(unit, 'expectedDigest') && (existing === null ? null : sha256Digest(existing)) !== unit.expectedDigest) {
+    return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'settings-changed', blocking: true }
+  }
   let file
   try { file = preparePolicySettingsFile(unit.path, existing) } catch (error) {
     if (error instanceof ObsidianContractRefusal) return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'settings-invalid', blocking: false }
