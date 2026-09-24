@@ -177,9 +177,10 @@ function seed(state, published, { nodeKeys, assetKeys, limits }) {
   }
 }
 
-// The folder of a repository: its identity made safe, or, when another
-// repository of the view already has that folder, the same with a short stable
-// id.
+// The folder of a repository: its identity made safe, or, when that name is
+// taken (by another repository of the view, a file, or a folder spelled
+// another way, such as the `notes` folder of a held layout 1 file), the same
+// with a short stable id.
 function repositoryFolder(state, repoId) {
   const known = state.repoFolders.get(repoId)
   if (known !== undefined) return known
@@ -188,7 +189,7 @@ function repositoryFolder(state, repoId) {
   for (let length = 0; length <= MAX_QUALIFIER_ID; length += length === 0 ? 6 : 2) {
     const candidate = length === 0 ? plain : `${plain} (${hex.slice(0, length)})`
     const key = collisionKey(candidate)
-    if (!state.repoFolderOwners.has(key) && !state.files.has(key)) return candidate
+    if (!state.repoFolderOwners.has(key) && !state.files.has(key) && (state.folders.get(key) ?? candidate) === candidate) return candidate
   }
   return refuse('path-collision', 'unable to allocate a distinct repository folder')
 }

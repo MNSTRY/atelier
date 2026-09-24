@@ -697,6 +697,44 @@ test('upgrade with a held edit: the view keeps layout 1 while a note is held, th
   assert.equal(fs.existsSync(path.join(world.vault(), edit.path)), false)
 })
 
+test('upgrade with a held edit in a repository named like the layout 1 folder: the held file never stops the view, and after the edit applies it is laid out again', needsExchange, async (t) => {
+  // `Notes` is one folder with `notes`, where layout 1 keeps every note, on a case-insensitive file system.
+  const world = makeApplyWorld(t, {
+    repositories: ['Notes'],
+    files: {
+      'Notes/lantern.md': noteText({ id: 'Notes:lantern', title: 'Lantern room', body: 'The lamp turns once a minute.' }),
+      'Notes/compass.md': noteText({ id: 'Notes:compass', title: 'Compass rose', body: 'North is painted red.' }),
+    },
+  })
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  await earlier.tick()
+  world.editNote('Notes:lantern', 'once a minute', 'twice a minute')
+  world.advance(1000)
+  const heldEarlier = (await earlier.tick()).scopes[0]
+  assert.equal(heldEarlier.state, 'held-for-your-edit', JSON.stringify(heldEarlier))
+  earlier.stop()
+  const edit = world.editOf('Notes:lantern')
+  assert.match(edit.path, /^notes\/Lantern room--[0-9a-f]{12}\.md$/)
+
+  // The held file keeps its folder, spelled `notes`; the repository's folder is told apart from it, and nothing refuses.
+  const engine = world.engine()
+  for (let tick = 0; tick < 2; tick += 1) {
+    world.advance(1000)
+    const report = await engine.tick()
+    assert.deepEqual([report.scopes[0].state, world.manifest().schema], ['held-for-your-edit', V1], JSON.stringify(report.scopes[0]))
+  }
+  const result = await world.sourceApply().apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
+  assert.deepEqual([result.status, result.code], ['applied', 'applied'])
+
+  // The hold lifts, and the view is laid out again: the repository takes its own name once no layout 1 file holds it.
+  for (let tick = 0; tick < 3; tick += 1) { world.advance(1000); await engine.tick() }
+  const after = world.manifest()
+  assert.deepEqual([after.schema, after.layoutVersion], [V2, 2])
+  assert.deepEqual(after.notes.map((note) => note.path).sort(), ['Notes/Compass rose.md', 'Notes/Lantern room.md'])
+  assert.equal(world.pendingEdits().some((item) => item.closedAt === null), false, 'no edit is left queued')
+  assert.match(fs.readFileSync(world.noteFile('Notes:lantern'), 'utf8'), /twice a minute/)
+})
+
 test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is held and on the tick its edit closes, and is laid out again once the person restores the note', needsExchange, async (t) => {
   const world = upgradeWorld(t)
   const earlier = world.engine({ seams: EARLIER_RELEASE })
