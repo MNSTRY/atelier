@@ -17,11 +17,14 @@
   prompt is answered, or turned off in the vault) everything works as before.
   See `docs/obsidian-plugin.md`.
 - A person who turns Atelier's plugin off in a vault, or uninstalls it there,
-  is followed. Once the plugin's entry was confirmed in
-  `community-plugins.json`, a list without it is recorded as the person's
+  is followed. Once the app has the plugin's entry in
+  `community-plugins.json` (it was in place before an app opened the vault,
+  or the plugin ran there), a list without it is recorded as the person's
   decision (private state, `state/plugin/choices/`): the entry is not added
   back, a deleted plugin folder is not made again, and the plugin files still
-  there are kept current. `status`, `open` and the new
+  there are kept current. An entry published while an app held the vault is
+  only offered until then, since that app may write back the list it read
+  before, and a list without it is no decision of the person's. `status`, `open` and the new
   `atelier obsidian plugin show` report `turned-off-in-this-vault`. Turning the
   plugin on again in Obsidian's settings is followed the same way;
   `atelier obsidian plugin on --scope ID` brings the entry and the files back

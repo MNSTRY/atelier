@@ -116,10 +116,16 @@ The person decides whether Atelier's plugin runs in a vault, and Atelier
 follows. The decision is the one Obsidian itself records: the
 `atelier-projection` entry of `community-plugins.json`.
 
-- The first publication of a vault offers the entry. Once it is confirmed in
-  place, a list without it is the person's decision: turning the plugin off
-  in Settings, Community plugins, removes the entry, and uninstalling it there
-  removes the entry and deletes the plugin's folder.
+- The first publication of a vault offers the entry. Once the app has it, a
+  list without it is the person's decision: turning the plugin off in
+  Settings, Community plugins, removes the entry, and uninstalling it there
+  removes the entry and deletes the plugin's folder. The app has the entry
+  when it was in place before an app next opened the vault (published while
+  no app held the vault), or once the plugin has run there. An entry
+  published while an app holds the vault is only `offered`: that app keeps
+  the list it read when it opened the vault and may write it back without the
+  entry, which is no decision of the person's, so the next publication offers
+  the entry again.
 - From then on the vault's plugin is `off`. Atelier leaves
   `community-plugins.json` exactly as the person left it and never adds the
   entry back. It creates no plugin file that is not there, so a folder the
@@ -154,8 +160,11 @@ follows. The decision is the one Obsidian itself records: the
   community plugin runs.
 
 The decision is kept owner-only in the workspace's private state, under
-`state/plugin/choices/<view>.json`, as `requested`, `on` or `off`. A record
-that cannot be read counts as `off`: nothing is added back on a guess.
+`state/plugin/choices/<view>.json`, as `requested`, `offered`, `on` or `off`,
+with the reason (`entry-confirmed` or `entry-seen-by-the-app` for `on`,
+`entry-removed-by-person` for `off`), so an entry the app never had is never
+taken for the person's decision. A record that cannot be read counts as
+`off`: nothing is added back on a guess.
 
 ### The data file and the privacy of the vault
 
@@ -396,7 +405,10 @@ note open in the editor.
   another address; answers that are not sealed; an unload while a hello is
   under way; the refusal table above with mutation controls that must fail
   it; bearer minting, rotation and the bearer cache; publication of the
-  plugin files, entries and data file, with a person's settings kept,
+  plugin files, entries and data file, with a person's settings kept, the
+  person's choice followed (an entry the app had and the person removed is
+  not added back; one published while an app held the vault is only offered
+  until the plugin runs there),
   displaced bytes kept in recovery, the privacy rule of the vault root, a
   linked vault root, unreadable files, a drifted plugin file written again,
   and an upgrade; the service publishing the plugin and the plugin it
@@ -418,7 +430,9 @@ note open in the editor.
   a rotated key reaches the running plugin, and that quitting the app ends the
   presence. The second declines the prompt and publishes through the
   command-line path as before. The third uninstalls the plugin in the app and
-  follows it until `atelier obsidian plugin on` brings it back. They never
+  follows it until `atelier obsidian plugin on` brings it back, offered while
+  that app holds the vault and confirmed when the plugin runs after a
+  restart. They never
   touch another app profile, and they end each disposable instance by its
   profile path.
 

@@ -154,6 +154,8 @@ export function createPluginSessions({ now = () => Date.now(), ttlMs = PLUGIN_LE
 export function createPluginChannelForOracleTests({
   workspaceRoot, workspaceId, runtimeId, sessions, statusOf, serviceStatus, now = () => Date.now(), randomBytes = cryptoRandomBytes,
   bearers = createPluginBearerCache({ workspaceRoot, workspaceId }),
+  // Told each time a plugin opened a session for a view: the app it runs in has the view's entry.
+  onSessionOpened = () => {},
 }, primitives = PLUGIN_CHANNEL_PRIMITIVES) {
   const rules = { ...PLUGIN_CHANNEL_PRIMITIVES, ...primitives }
   const vaultRootOf = (scopeId) => { try { return fs.realpathSync(path.join(workspaceRoot, 'vaults', segment(scopeId))) } catch { return null } }
@@ -226,6 +228,7 @@ export function createPluginChannelForOracleTests({
       if (vaultRoot === null || !rules.macMatches(body.vaultProof, pluginVaultProof({ sessionKey, vaultPath: vaultRoot }))) return answer(409, { error: 'wrong-vault' })
       const session = sessions.open({ scopeId, pluginVersion: body.pluginVersion, appVersion: body.appVersion, instanceId: body.instanceId, sessionKey, keyDigest: keyDigestOf(bearer) })
       if (session === null) return answer(429, { error: 'too-many-sessions' })
+      onSessionOpened(scopeId)
       return sealed({ sessionKey, command: 'hello', sessionId: session.sessionId, counter: 0 }, {
         schema: PLUGIN_CHANNEL_PROTOCOL, scopeId, sessionId: session.sessionId, runtimeId, leaseTtlMs: session.expiresAt - session.openedAt, renewEveryMs: PLUGIN_RENEW_INTERVAL_MS,
       })

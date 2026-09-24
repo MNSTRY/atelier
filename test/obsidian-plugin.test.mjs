@@ -1791,6 +1791,42 @@ test('a person who turns the plugin off in a vault is followed: the entry is not
   assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.reason, 'no-live-lease')
 })
 
+test('an entry written while an app held the vault is only offered: that app writing back its list without it is no decision of the person\'s, until the plugin ran there', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  // An app that answers for the vault: every publication is made through it.
+  const inApp = () => createEditorAdapter({ processProbe: () => 'running', call: async (payload) => runInProcess(payload, createInProcessHost()) })
+  const service = await world.service({ adapterFactory: inApp })
+  const vault = choiceWorld(world)
+  const change = async (line) => {
+    fs.appendFileSync(world.source('harbor/notes/tides.md'), `\n${line}\n`)
+    world.advance(1000)
+    assert.ok((await service.tickNow()).ok)
+    assert.equal(world.freshness().state, 'current', `after "${line}"`)
+  }
+  assert.ok((await service.tickNow()).ok)
+  assert.equal(world.freshness().state, 'current')
+  assert.deepEqual(vault.listed(), [PLUGIN_ID])
+  assert.deepEqual(vault.choice(), ['offered', 'entry-offered-while-the-app-runs'])
+
+  // The app writes back the list it read before the entry was there: not the person's decision, and the entry is offered again.
+  fs.writeFileSync(vault.list, JSON.stringify(['dataview']))
+  await change('Low water at six.')
+  assert.deepEqual(vault.choice(), ['offered', 'entry-offered-while-the-app-runs'])
+  assert.deepEqual(vault.listed(), ['dataview', PLUGIN_ID])
+  assert.notEqual((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.reason, 'turned-off-in-this-vault')
+
+  // The plugin runs in the app: the app has the entry, and from now on a list without it is the person's.
+  const { plugin } = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.deepEqual(vault.choice(), ['on', 'entry-seen-by-the-app'])
+  plugin.unload()
+  fs.writeFileSync(vault.list, JSON.stringify(['dataview']))
+  await change('Slack water at three.')
+  assert.deepEqual(vault.choice(), ['off', 'entry-removed-by-person'])
+  assert.deepEqual(vault.listed(), ['dataview'])
+})
+
 test('a change the person makes to the list while a publication runs is never written over; the next preparation reads it as their decision', needsExchange, async (t) => {
   const world = serviceWorld(t)
   let during = null
@@ -2091,7 +2127,8 @@ test('real isolated Obsidian: uninstalling the plugin in the app is followed unt
     await real.change('Slack water at three.')
     const back = { choice: choice(), listed: JSON.parse(fs.readFileSync(list, 'utf8')), files: fs.existsSync(folder) ? fs.readdirSync(folder).sort() : null }
     real.note('plugin-on', back)
-    assert.deepEqual([back.choice.state, back.listed.includes(PLUGIN_ID), back.files], ['on', true, [...PLUGIN_SOURCE_FILES, 'data.json'].sort()])
+    // Published through the running app, which read its list before: offered, not yet confirmed.
+    assert.deepEqual([back.choice.state, back.choice.reason, back.listed.includes(PLUGIN_ID), back.files], ['offered', 'entry-offered-while-the-app-runs', true, [...PLUGIN_SOURCE_FILES, 'data.json'].sort()])
 
     // The app reads its plugin list when it starts: after a restart the plugin runs again, and the vault's trust was kept.
     await real.instance.quit()
@@ -2100,8 +2137,9 @@ test('real isolated Obsidian: uninstalling the plugin in the app is followed unt
     await waitFor(real.pluginLoaded, { timeoutMs: 30000, everyMs: 250, label: 'the plugin to load after the restart' })
     const again = await waitFor(async () => { const scope = await real.presence(); return scope.present ? scope : null }, { timeoutMs: 20000, everyMs: 250, label: 'the lease after the restart' })
     const promptAgain = await real.read("String(Boolean(document.querySelector('.modal.mod-trust-folder')))")
-    real.note('restarted', { presence: again, promptShownAgain: promptAgain })
+    real.note('restarted', { presence: again, promptShownAgain: promptAgain, choice: choice() })
     assert.equal(promptAgain, 'false')
+    assert.deepEqual([choice().state, choice().reason], ['on', 'entry-seen-by-the-app'], 'the plugin running in the app confirms the entry')
     await real.instance.quit()
     real.appRunning = false
   } finally {

@@ -11,8 +11,14 @@ import { canonicalJson, isPlainObject, isoTime } from './documents.mjs'
 //
 //   (no record)   nothing decided yet: Atelier offers the entry and the files
 //   requested     `atelier obsidian plugin on` asked for it: offered again
-//   on            the entry was confirmed in place after a publication; from
-//                 now on a list without it is the person's decision
+//   offered       the entry is in place, but it was written while an app held
+//                 the vault; that app keeps the list it read in memory and may
+//                 write it back without the entry, so a list without it is no
+//                 decision of the person's yet: the entry is offered again
+//   on            the app has the entry: it was in place before an app next
+//                 opened the vault (published while none ran), or the plugin
+//                 ran in the app; from now on a list without it is the
+//                 person's decision
 //   off           the person removed the entry (turned the plugin off, or
 //                 uninstalled it, in Obsidian): Atelier never adds it back and
 //                 never creates a plugin file that is not there; it only keeps
@@ -28,8 +34,10 @@ import { canonicalJson, isPlainObject, isoTime } from './documents.mjs'
 // person did before the view's next preparation records it.
 
 export const PLUGIN_CHOICE_SCHEMA = 'atelier-obsidian-plugin-choice/v1'
-export const PLUGIN_CHOICE_STATES = Object.freeze(['requested', 'on', 'off'])
-const REASONS = Object.freeze(['requested-by-command', 'entry-confirmed', 'entry-removed-by-person', 'entry-restored-by-person'])
+export const PLUGIN_CHOICE_STATES = Object.freeze(['requested', 'offered', 'on', 'off'])
+const REASONS = Object.freeze(['requested-by-command', 'entry-offered-while-the-app-runs', 'entry-confirmed', 'entry-seen-by-the-app', 'entry-removed-by-person', 'entry-restored-by-person'])
+// The states in which a list without the entry is not the person's decision: the entry is offered again.
+const NOT_YET_CONFIRMED = Object.freeze(['undecided', 'requested', 'offered'])
 const MAX_SETTINGS_BYTES = 256 * 1024
 const segment = (identifier) => identifier.replaceAll(':', '_')
 
@@ -44,7 +52,7 @@ function validChoice(document, { workspaceId, scopeId }) {
     && PLUGIN_CHOICE_STATES.includes(document.state) && REASONS.includes(document.reason) && typeof document.since === 'string'
 }
 
-// { state: 'undecided' | 'requested' | 'on' | 'off', reason, since, unreadable? }
+// { state: 'undecided' | 'requested' | 'offered' | 'on' | 'off', reason, since, unreadable? }
 export function readPluginChoice({ workspaceRoot, workspaceId, scopeId }) {
   let text
   try { text = readRegularTextNoFollow(choiceFile(workspaceRoot, scopeId)) } catch (error) {
@@ -138,12 +146,25 @@ export function currentPluginChoice({ workspaceRoot, workspaceId, scopeId }) {
   return change === null ? recorded : { ...change, since: null, pending: true }
 }
 
-// After a publication: an offered entry that is now in place is confirmed.
+// After a publication: an offered entry that is now in place. Published while
+// no app ran, it is confirmed: an app reads the list, entry and all, when it
+// next opens the vault. Published through a running app, it is only offered:
+// that app may not have read it, and the plugin running there confirms it
+// (confirmPluginSeen).
 const IN_PLACE = new Set(['policy-satisfied', 'created', 'published', 'published-external-captured', 'already-current'])
 export function confirmPluginEntry({ workspaceRoot, workspaceId, scopeId, result, clock }) {
   const unit = (result?.notes ?? []).find((entry) => entry.path === COMMUNITY_PLUGINS_PATH)
   if (!unit || !IN_PLACE.has(unit.outcome) || unit.changedAfterPublication === true) return null
   const choice = readPluginChoice({ workspaceRoot, workspaceId, scopeId })
-  if (choice.state !== 'undecided' && choice.state !== 'requested') return null
-  return writePluginChoice({ workspaceRoot, workspaceId, scopeId, state: 'on', reason: 'entry-confirmed', clock })
+  if (!NOT_YET_CONFIRMED.includes(choice.state)) return null
+  if (result.mode === 'direct') return writePluginChoice({ workspaceRoot, workspaceId, scopeId, state: 'on', reason: 'entry-confirmed', clock })
+  if (choice.state === 'offered') return null
+  return writePluginChoice({ workspaceRoot, workspaceId, scopeId, state: 'offered', reason: 'entry-offered-while-the-app-runs', clock })
+}
+
+// The plugin said hello from the vault: the app it runs in has the entry, so it is confirmed.
+export function confirmPluginSeen({ workspaceRoot, workspaceId, scopeId, clock }) {
+  const choice = readPluginChoice({ workspaceRoot, workspaceId, scopeId })
+  if (!NOT_YET_CONFIRMED.includes(choice.state)) return null
+  return writePluginChoice({ workspaceRoot, workspaceId, scopeId, state: 'on', reason: 'entry-seen-by-the-app', clock })
 }

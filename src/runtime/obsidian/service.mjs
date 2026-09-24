@@ -10,7 +10,7 @@ import { createMaintenanceEngine } from './engine.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { assertOutsideRepositories, protectedRoots, readLocalPointer, resolveDataRoot, workspaceStateRoot } from './machine-settings.mjs'
 import { createPluginChannel, createPluginSessions, ensurePluginBearer, pluginPresence } from './plugin-channel.mjs'
-import { confirmPluginEntry, currentPluginChoice, decidePluginChoice, vaultFilePresent, viewVaultRoot } from './plugin-choice.mjs'
+import { confirmPluginEntry, confirmPluginSeen, currentPluginChoice, decidePluginChoice, vaultFilePresent, viewVaultRoot } from './plugin-choice.mjs'
 import { isProcessAlive } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import {
@@ -218,7 +218,13 @@ export async function runMaintenanceService(options = {}) {
     }
     return { view, pendingEdits: open === null ? null : { open } }
   }
-  const pluginChannel = createPluginChannel({ workspaceRoot, workspaceId, runtimeId, sessions: pluginSessions, statusOf: pluginStatusOf, serviceStatus: healthStatus })
+  // A plugin that holds a view open shows that its app has the view's entry: an entry only offered so far is confirmed.
+  const pluginSeen = (scopeId) => {
+    try { confirmPluginSeen({ workspaceRoot, workspaceId, scopeId, clock }) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-entry-not-confirmed', code: errorCode(error), name: errorName(error) })
+    }
+  }
+  const pluginChannel = createPluginChannel({ workspaceRoot, workspaceId, runtimeId, sessions: pluginSessions, statusOf: pluginStatusOf, serviceStatus: healthStatus, onSessionOpened: pluginSeen })
   const server = createServiceServer({
     identity, bearer,
     operations: {
