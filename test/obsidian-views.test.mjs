@@ -29,6 +29,7 @@ const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, pro
 const { DEFAULT_VIEW, planViewAdd, unifiedDiff, viewFromRequest, writeViewPlan } = await import('../src/runtime/obsidian/project-views.mjs')
 const { askGoAhead, createQuestioner } = await import('../src/runtime/obsidian/questions.mjs')
 const { viewCounts } = await import('../src/runtime/obsidian/view-counts.mjs')
+const { onlyYouEligibility } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { resolveGitExecutable, runGit } = await import('../src/runtime/git-adapter.mjs')
 
 const TMP = fs.realpathSync(os.tmpdir())
@@ -372,6 +373,10 @@ test('a view\'s counts are the notes it would show here, and why the others it n
   assert.equal(counts(viewFromRequest({ scopeId: 'north', folders: ['notes'], expand: '1:10', repositories })).shown, 4, 'with the notes they link to')
   assert.equal(counts(viewFromRequest({ scopeId: 'north', folders: ['notes'], expand: '1:3', repositories })).truncated, true)
   assert.equal(counts(viewFromRequest({ scopeId: 'beacons', tag: 'lighthouse', repositories })).shown, 1)
+  // A vault that is only yours shows the notes without a classification that read as notes, as the engine would.
+  const mine = (scope) => viewCounts({ project, audienceAllow: ONLY_YOU_AUDIENCES, scope, eligibility: onlyYouEligibility({ project }) })
+  assert.deepEqual(mine(DEFAULT_VIEW), { corpus: 7, named: 7, shown: 6, withheld: { unclassified: 0, audience: 1 }, truncated: false })
+  assert.equal(mine(viewFromRequest({ scopeId: 'drafts', folders: ['drafts'], repositories })).shown, 2)
 })
 
 test('an agent adds a view with one command, which is its consent: the change is made and shown, and nothing is asked', async (t) => {
@@ -418,7 +423,7 @@ test('a person at a terminal sees the change and what the view would show, and i
   assert.equal(declined.asked, 'Write this change? [Y/n] ')
   assert.match(declined.stdout, /^Atelier will add the view "everything" to atelier\.project\.json, and \.atelier-local\/ to \.gitignore \(you commit it\):$/m)
   assert.match(declined.stdout, /^ {2}\+\.atelier-local\/$/m)
-  assert.match(declined.stdout, /^view everything would show 4 note\(s\) \(who may see: only you, until you decide\); of the 7 note\(s\) it names, 2 carry no classification and 1 an audience not admitted$/m)
+  assert.match(declined.stdout, /^view everything would show 6 note\(s\) \(who may see: only you, until you decide\); of the 7 note\(s\) it names, 1 an audience not admitted$/m, 'counted as "only you" shows them: with the notes without a classification')
   assert.match(declined.stderr, /^Nothing was written\.$/m, 'an answer that is not success is told on stderr')
 
   const unanswered = await world.run(['view', 'add', 'everything', '--all'], { person: true, answers: [] })
@@ -441,6 +446,8 @@ test('a person at a terminal sees the change and what the view would show, and i
 
 test('`view add` refuses, and writes nothing, for a view that would be empty, a name taken, or a file it cannot rewrite', async (t) => {
   const world = makeWorld(t, { ext: settingsOf([{ scopeId: 'north', mode: 'scoped', selector: { repo: 'harbor', pathPrefix: 'notes' } }]) })
+  // A list of audiences: the notes without a classification are withheld, so a folder of them would show nothing.
+  world.decideAudience(['team'], 'custom')
   const before = world.text()
   const cases = [
     [['view', 'add', 'drafts', '--folder', 'drafts'], 'view-would-be-empty', (detail) => detail.counts.named === 2 && detail.counts.withheld.unclassified === 2],
@@ -459,7 +466,7 @@ test('`view add` refuses, and writes nothing, for a view that would be empty, a 
     assert.equal(world.text(), before, `${argv.join(' ')}: nothing was written`)
   }
   const empty = await world.run(['view', 'add', 'drafts', '--folder', 'drafts'])
-  assert.match(empty.stderr, /^\[view-would-be-empty\] view drafts would show no note \(who may see: only you, until you decide\); of the 2 note\(s\) it names, 2 carry no classification; nothing was written$/m)
+  assert.match(empty.stderr, /^\[view-would-be-empty\] view drafts would show no note \(who may see: team\); of the 2 note\(s\) it names, 2 carry no classification; nothing was written$/m)
   const declared = await world.run(['view', 'add', 'drafts', '--folder', 'drafts', '--allow-empty', '--json'])
   assert.equal(declared.exit, EXIT.ok, '--allow-empty declares it anyway')
   assert.equal(world.loadProject().config.ext[EXT].defaultScopeId, undefined, 'a later view is not the default unless asked')
