@@ -1285,9 +1285,12 @@ async function realAppWorld(t) {
   const profile = JSON.parse(fs.readFileSync(profileFile, 'utf8'))
   profile.vaults = { atelierg00synthetic: { path: fs.realpathSync(real.world.vault), ts: Date.now(), open: true } }
   fs.writeFileSync(profileFile, JSON.stringify(profile))
-  real.instance = new Instance({ ...layout, vault: fs.realpathSync(real.world.vault) })
-  await real.instance.launch({ readyTimeoutMs: 60000 })
-  real.appRunning = true
+  real.launch = async () => {
+    real.instance = new Instance({ ...layout, vault: fs.realpathSync(real.world.vault) })
+    await real.instance.launch({ readyTimeoutMs: 60000 })
+    real.appRunning = true
+  }
+  await real.launch()
   real.appVersion = (await real.instance.version()).trim()
   real.note('app-started', { appVersion: real.appVersion, profileProcesses: processesOfProfile(layout.profile).length })
   real.evaluate = async (code) => {
@@ -1295,12 +1298,42 @@ async function realAppWorld(t) {
     const start = out.indexOf('=> ')
     return start < 0 ? out.trim() : out.slice(start + 3).trim()
   }
-  real.prompt = () => waitFor(async () => {
-    const text = await real.evaluate("(()=>{const m=document.querySelector('.modal.mod-trust-folder');return m?JSON.stringify({title:m.querySelector('.modal-title')?.textContent??null,buttons:[...m.querySelectorAll('button')].map(b=>b.textContent)}):''})()")
-    return text && text !== '' ? JSON.parse(text) : null
-  }, { timeoutMs: 30000, everyMs: 500, label: 'the trust prompt' })
-  real.pluginLoaded = async () => (await real.evaluate(`String(Boolean(app.plugins.plugins['${PLUGIN_ID}']))`)) === 'true'
-  real.statusBar = () => real.evaluate("document.querySelector('.atelier-projection-status-bar')?.textContent ?? ''")
+  // A read the command-line transport lost (it happens while the app stays responsive) is asked again: by the caller's
+  // poll (peek), or here, twice (read).
+  real.peek = async (code) => { try { return await real.evaluate(code) } catch { real.note('transport-reply-lost', { code: code.slice(0, 60) }); return null } }
+  real.read = async (code) => {
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await real.evaluate(code) } catch (error) { if (attempt >= 2) throw error; real.note('transport-reply-lost', { code: code.slice(0, 60) }) }
+    }
+  }
+  // Every change of what the window shows is noted. The window takes focus when it starts, so input from outside the
+  // harness can answer the prompt before the first look: the failure says so instead of only timing out. A test whose
+  // subject comes after trust passes `orTrusted`, and a vault already trusted that way will do for it.
+  real.prompt = async ({ orTrusted = false } = {}) => {
+    let last = null
+    try {
+      return await waitFor(async () => {
+        const text = await real.peek("(()=>{const m=document.querySelector('.modal.mod-trust-folder');return JSON.stringify({prompt:m?{title:m.querySelector('.modal-title')?.textContent??null,buttons:[...m.querySelectorAll('button')].map(b=>b.textContent)}:null,modals:[...document.querySelectorAll('.modal')].map(x=>x.className),answer:localStorage.getItem('enable-plugin-'+app.appId),loaded:Object.keys(app.plugins.plugins)})})()")
+        if (text && text !== last) { real.note('prompt-poll', { seen: text }); last = text }
+        const seen = text ? JSON.parse(text) : null
+        if (seen?.prompt) return seen.prompt
+        return orTrusted && seen?.answer === 'true' ? { trustedBeforeTheHarnessLooked: true } : null
+      }, { timeoutMs: 60000, everyMs: 500, label: 'the trust prompt' })
+    } catch (error) {
+      const answered = last !== null && JSON.parse(last).answer !== null
+      throw new Error(`${error.message}; the app shows ${last}${answered ? ' (the prompt was answered before the harness looked, by input from outside the harness)' : ''}`)
+    }
+  }
+  real.pluginLoaded = async () => (await real.peek(`String(Boolean(app.plugins.plugins['${PLUGIN_ID}']))`)) === 'true'
+  real.statusBar = () => real.read("document.querySelector('.atelier-projection-status-bar')?.textContent ?? ''")
+  // Pressing a button is not repeated blindly: a lost reply is judged by what followed it.
+  real.trust = async () => {
+    let pressed
+    try { pressed = await real.evaluate("(()=>{const b=[...document.querySelectorAll('.modal.mod-trust-folder button')].find(x=>x.textContent==='Trust author and enable plugins');if(!b)return 'no-button';b.click();return 'pressed'})()") } catch { pressed = 'reply-lost' }
+    await waitFor(real.pluginLoaded, { timeoutMs: 30000, everyMs: 250, label: 'the plugin to load' })
+    await real.peek('(app.setting.close(),"closed")')
+    return pressed
+  }
   real.presence = async () => (await real.world.statusDocument()).plugins.scopes[0]
   // A change at the source, published by the service while the app runs.
   real.change = async (line) => {
@@ -1325,13 +1358,11 @@ test('real isolated Obsidian: the vault the service published asks for trust, an
     assert.equal(await real.pluginLoaded(), false)
     assert.equal((await real.presence()).present, false, 'no plugin runs before trust')
 
-    // Answer it the way a person does: press "Trust author and enable plugins" in that window.
-    const pressed = await real.evaluate("(()=>{const b=[...document.querySelectorAll('.modal.mod-trust-folder button')].find(x=>x.textContent==='Trust author and enable plugins');if(!b)return 'no-button';b.click();return 'pressed'})()")
-    assert.equal(pressed, 'pressed')
-    await waitFor(real.pluginLoaded, { timeoutMs: 30000, everyMs: 250, label: 'the plugin to load' })
-    // Trusting opens the community plugin settings; close them so the window shows the vault.
-    await real.evaluate('(app.setting.close(),"closed")')
-    real.note('trusted', { loaded: true, restrictedMode: await real.evaluate('String(!app.plugins.isEnabled())') })
+    // Answer it the way a person does: press "Trust author and enable plugins" in that window. Trusting opens the
+    // community plugin settings, which are closed again so the window shows the vault.
+    const pressed = await real.trust()
+    assert.ok(['pressed', 'reply-lost'].includes(pressed), pressed)
+    real.note('trusted', { pressed, loaded: true, restrictedMode: await real.peek('String(!app.plugins.isEnabled())') })
 
     const presence = await waitFor(async () => { const scope = await real.presence(); return scope.present ? scope : null }, { timeoutMs: 20000, everyMs: 250, label: 'the lease' })
     real.note('lease-seen-by-service', presence)
@@ -1383,8 +1414,8 @@ test('real isolated Obsidian: in restricted mode nothing runs in the vault and t
   try {
     await real.prompt()
     // The desktop procedures answer the prompt this way: they prove the command-line path.
-    assert.equal(await declineTrustPrompt(real.instance), 'declined')
-    const state = { restrictedMode: await real.evaluate('String(!app.plugins.isEnabled())'), loaded: await real.pluginLoaded(), prompt: await real.evaluate("String(Boolean(document.querySelector('.modal.mod-trust-folder')))"), statusBarItem: await real.statusBar() }
+    assert.ok(['declined', 'declined-reply-lost'].includes(await declineTrustPrompt(real.instance)))
+    const state = { restrictedMode: await real.read('String(!app.plugins.isEnabled())'), loaded: await real.pluginLoaded(), prompt: await real.read("String(Boolean(document.querySelector('.modal.mod-trust-folder')))"), statusBarItem: await real.statusBar() }
     real.note('declined', state)
     assert.deepEqual(state, { restrictedMode: 'true', loaded: false, prompt: 'false', statusBarItem: '' })
     await sleep(PLUGIN_RENEW_INTERVAL_MS * 2)
@@ -1398,6 +1429,53 @@ test('real isolated Obsidian: in restricted mode nothing runs in the vault and t
     assert.ok(real.versionCalls.length > callsBefore)
     assert.deepEqual(real.probes.at(-1), { state: 'coordinated', qualification: 'meets-minimum-version' })
     assert.equal(real.world.freshness().state, 'current')
+    await real.instance.quit()
+    real.appRunning = false
+  } finally {
+    t.diagnostic(`trace ${JSON.stringify(real.trace)}`)
+  }
+})
+
+test('real isolated Obsidian: uninstalling the plugin in the app is followed until `atelier obsidian plugin on` brings it back', realApp, async (t) => {
+  const real = await realAppWorld(t)
+  const list = path.join(real.world.vault, COMMUNITY_PLUGINS_PATH)
+  const folder = path.join(real.world.vault, PLUGIN_DIRECTORY)
+  const choice = () => readPluginChoice({ workspaceRoot: real.world.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE })
+  try {
+    // Trust is where this test starts, not what it proves (the first real-app test proves the prompt).
+    if ((await real.prompt({ orTrusted: true })).trustedBeforeTheHarnessLooked !== true) await real.trust()
+    await waitFor(async () => (await real.presence()).present, { timeoutMs: 20000, everyMs: 250, label: 'the lease' })
+    real.note('trusted', { choice: choice().state })
+    assert.equal(choice().state, 'on')
+
+    // The person uninstalls it from Settings, Community plugins: Obsidian removes the entry and deletes the folder.
+    // Not repeated if its reply is lost: what the app wrote is looked at next.
+    try { await real.evaluate(`(app.plugins.uninstallPlugin('${PLUGIN_ID}').then(()=>'uninstalled'))`) } catch { real.note('transport-reply-lost', { code: 'uninstallPlugin' }) }
+    await waitFor(() => !fs.existsSync(folder) && fs.existsSync(list) && !JSON.parse(fs.readFileSync(list, 'utf8')).includes(PLUGIN_ID), { timeoutMs: 20000, everyMs: 250, label: 'the app to write its list' })
+    const theirs = fs.readFileSync(list)
+    await waitFor(async () => ((await real.presence()).present === false ? true : null), { timeoutMs: PLUGIN_LEASE_TTL_MS + 10000, everyMs: 250, label: 'the end of the presence' })
+    await real.change('Low water at six.')
+    const off = { choice: choice(), listUntouched: fs.readFileSync(list).equals(theirs), folderMadeAgain: fs.existsSync(folder), entry: (await real.presence()).entry, freshness: real.world.freshness().state }
+    real.note('uninstalled-and-followed', { ...off, list: JSON.parse(theirs.toString('utf8')) })
+    assert.deepEqual([off.choice.state, off.choice.reason, off.listUntouched, off.folderMadeAgain, off.entry, off.freshness], ['off', 'entry-removed-by-person', true, false, 'off', 'current'])
+
+    // `atelier obsidian plugin on`, then the view's next publication: the entry and the folder come back.
+    const on = await real.world.run(['plugin', 'on', '--json'], { seams: QUIET_SEAMS })
+    assert.equal(on.json.choice.state, 'requested')
+    await real.change('Slack water at three.')
+    const back = { choice: choice(), listed: JSON.parse(fs.readFileSync(list, 'utf8')), files: fs.existsSync(folder) ? fs.readdirSync(folder).sort() : null }
+    real.note('plugin-on', back)
+    assert.deepEqual([back.choice.state, back.listed.includes(PLUGIN_ID), back.files], ['on', true, [...PLUGIN_SOURCE_FILES, 'data.json'].sort()])
+
+    // The app reads its plugin list when it starts: after a restart the plugin runs again, and the vault's trust was kept.
+    await real.instance.quit()
+    real.appRunning = false
+    await real.launch()
+    await waitFor(real.pluginLoaded, { timeoutMs: 30000, everyMs: 250, label: 'the plugin to load after the restart' })
+    const again = await waitFor(async () => { const scope = await real.presence(); return scope.present ? scope : null }, { timeoutMs: 20000, everyMs: 250, label: 'the lease after the restart' })
+    const promptAgain = await real.read("String(Boolean(document.querySelector('.modal.mod-trust-folder')))")
+    real.note('restarted', { presence: again, promptShownAgain: promptAgain })
+    assert.equal(promptAgain, 'false')
     await real.instance.quit()
     real.appRunning = false
   } finally {

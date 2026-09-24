@@ -172,9 +172,13 @@ export async function assertIsolatedInstance(instance, { userHome = os.homedir()
 // Restricted Mode", as a person who declines would. No prompt, no action.
 export async function declineTrustPrompt(instance, { waitMs = 5000, everyMs = 250 } = {}) {
   const press = "(()=>{const b=[...document.querySelectorAll('.modal.mod-trust-folder button')].find(x=>x.textContent==='Browse vault in Restricted Mode');if(!b)return 'no-prompt';b.click();return 'declined'})()"
+  let lost = false
   for (const until = Date.now() + waitMs; Date.now() < until;) {
-    const reply = String(await instance.cli('eval', `code=${press}`))
+    // The command-line transport sometimes loses a reply while the app stays responsive: the press is judged by what follows.
+    let reply = ''
+    try { reply = String(await instance.cli('eval', `code=${press}`)) } catch { lost = true }
     if (reply.includes('=> declined')) return 'declined'
+    if (lost && reply.includes('=> no-prompt')) return 'declined-reply-lost'
     await new Promise((resolve) => { setTimeout(resolve, everyMs) })
   }
   return 'no-prompt'
