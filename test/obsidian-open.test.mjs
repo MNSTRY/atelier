@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 
 // ---------------------------------------------------------------------------
 // 0. The spawn guard. Installed before anything else is imported, for every
@@ -50,12 +51,13 @@ function guardSpawn(command, args, options) {
 }
 for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
   const original = childProcess[method]
-  childProcess[method] = function guarded(command, args, ...rest) {
-    // exec and execSync take one shell line, and their options come second.
-    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/), args)
-    else guardSpawn(command, args, Array.isArray(args) ? rest[0] : args)
-    return original.call(this, command, args, ...rest)
-  }
+  // exec and execSync take one shell line, and their options come second.
+  const check = (command, args, rest) => (method === 'exec' || method === 'execSync' ? guardSpawn('sh', String(command).split(/\s+/), args) : guardSpawn(command, args, Array.isArray(args) ? rest[0] : args))
+  const guarded = function guarded(command, args, ...rest) { check(command, args, rest); return original.call(this, command, args, ...rest) }
+  // exec and execFile have a promisified form of their own ({ stdout, stderr }); it is kept, and guarded the same way.
+  const custom = original[promisify.custom]
+  if (typeof custom === 'function') guarded[promisify.custom] = function guardedPromise(command, args, ...rest) { check(command, args, rest); return custom.call(this, command, args, ...rest) }
+  childProcess[method] = guarded
 }
 syncBuiltinESMExports()
 
@@ -344,7 +346,7 @@ test('the spawn guard throws before any banned program is started, whichever way
   assert.doesNotThrow(() => guardSpawn('node', ['--version']))
 })
 
-test('the spawn guard refuses a child that can reach a running Obsidian unless it has a private HOME, whichever way it is started', (t) => {
+test('the spawn guard refuses a child that can reach a running Obsidian unless it has a private HOME, whichever way it is started', async (t) => {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-home-guard-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const before = guardErrors.length
@@ -360,8 +362,12 @@ test('the spawn guard refuses a child that can reach a running Obsidian unless i
     assert.equal(childProcess.spawnSync(process.execPath, args, { env: privateHomeEnv(dir) }).status, 0)
   }
   assert.throws(() => childProcess.execSync(`${JSON.stringify(process.execPath)} -e 0 -- --adapter=obsidian-cli`), /spawn guard/)
-  assert.equal(guardErrors.length, before + 9)
+  // The promisified execFile keeps its own form ({ stdout, stderr }), and is guarded too.
+  assert.throws(() => promisify(childProcess.execFile)(process.execPath, production), /needs a private HOME/)
+  assert.equal(guardErrors.length, before + 10)
   guardErrors.length = before
+  const answered = await promisify(childProcess.execFile)(process.execPath, ['-e', 'process.stdout.write("ok")', '--', '--adapter=obsidian-cli'], { env: privateHomeEnv(dir) })
+  assert.deepEqual(answered, { stdout: 'ok', stderr: '' })
   // Mutation control: a child that names neither passes whatever HOME it has.
   assert.doesNotThrow(() => childProcess.spawnSync(process.execPath, ['-e', '0']))
 })
