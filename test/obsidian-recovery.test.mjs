@@ -1086,6 +1086,17 @@ test('a lost publish reply is re-read from the app and the publish is never rese
   assert.equal(refusedWorld.read(NOTE), BASE)
 })
 
+// Resolves with the milliseconds it waited.
+async function volumeHasRoom(mount, bytes, { timeoutMs = 30_000 } = {}) {
+  const started = Date.now()
+  for (;;) {
+    const { bavail, bsize } = fs.statfsSync(mount)
+    if (bavail * bsize >= bytes) return Date.now() - started
+    if (Date.now() - started > timeoutMs) assert.fail(`the volume did not report ${bytes} free bytes within ${timeoutMs} ms of the delete (${bavail * bsize} free)`)
+    await sleep(100)
+  }
+}
+
 test('I11 full disk: staging refuses and touches nothing, a partial staged file is refused by digest, a pre-staged exchange is all-or-nothing, and publication converges when space returns',
   { skip: process.platform !== 'darwin' && 'the disk-full case needs a macOS disk image (hdiutil); on this platform it is not exercised' }, async (t) => {
     const root = fs.mkdtempSync(path.join(TMP, 'atelier-full-'))
@@ -1129,6 +1140,11 @@ test('I11 full disk: staging refuses and touches nothing, a partial staged file 
 
       fs.rmSync(filler)
       fs.rmSync(partial, { force: true })
+      // APFS can report a deleted file's space as free a moment after the
+      // delete returns, and later still on a loaded host. "When space returns"
+      // is the premise, so wait (bounded) until the volume says it has.
+      const waitedMs = await volumeHasRoom(mount, 8 << 20)
+      t.diagnostic(`I11 the volume reported room ${waitedMs} ms after the delete`)
       const converged = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: BASE } }), absentAdapter())
       assert.equal(converged.state, 'committed', JSON.stringify(converged))
       assert.equal(world.read(NOTE), CANDIDATE)
