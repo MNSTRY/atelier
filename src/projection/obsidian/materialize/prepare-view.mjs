@@ -623,14 +623,16 @@ function publishedOf(priorManifest) {
   }
 }
 
-function layoutOf({ layout, priorManifest, heldNotePaths }) {
+// `layoutHeld` are the notes that hold a layout 1 view in layout 1: those of
+// open edits and of edits closed on this tick (see layoutHeldPaths in
+// src/runtime/obsidian/pending-edits.mjs).
+function layoutOf({ layout, priorManifest, layoutHeld }) {
   if (layout !== undefined && layout !== null) {
     if (!Object.hasOwn(VAULT_LAYOUTS, layout)) refuse('invalid-layout', 'the vault layout must be 1 or 2')
     return VAULT_LAYOUTS[layout]
   }
-  if (heldNotePaths !== null && heldNotePaths !== undefined && !Array.isArray(heldNotePaths)) refuse('invalid-held-notes', 'heldNotePaths must be an array of note paths')
-  // A layout 1 view that holds a note for an open edit stays in layout 1 until no note of it is held.
-  const held = new Set(heldNotePaths ?? [])
+  // A layout 1 view that holds a note stays in layout 1 until no note of it is held.
+  const held = new Set(layoutHeld)
   if (priorManifest && manifestLayoutVersion(priorManifest) === 1 && priorManifest.notes.some((note) => held.has(note.path))) return VAULT_LAYOUTS[1]
   return VAULT_LAYOUTS[CURRENT_VAULT_LAYOUT]
 }
@@ -646,7 +648,11 @@ export function createViewPreparationForOracleTests(rules = REDACTION_RULES) {
   return (options = {}) => prepareWithRules(guard, options)
 }
 
-function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layout: requestedLayout } = {}) {
+// `heldNotePaths` are the vault files held for an open edit: they stay in the
+// vault, so their names stay taken. `layoutHeldNotePaths`, when given, are the
+// notes that hold a layout 1 view in layout 1 (open edits and edits closed on
+// this tick); without it, `heldNotePaths` do.
+function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, layout: requestedLayout } = {}) {
   if (cache !== null && !isPreparationCache(cache)) refuse('invalid-preparation-cache', 'the preparation cache must come from createPreparationCache')
   assertObsidianContract('corpus-profile', profile)
   assertObsidianContract('scope', scope)
@@ -657,7 +663,10 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     assertObsidianContract('generation-manifest', priorManifest)
     if (priorManifest.scopeId !== scope.scopeId) refuse('prior-manifest-mismatch', 'the prior manifest belongs to another scope')
   }
-  const layout = layoutOf({ layout: requestedLayout, priorManifest, heldNotePaths })
+  for (const [name, value] of [['heldNotePaths', heldNotePaths], ['layoutHeldNotePaths', layoutHeldNotePaths]]) {
+    if (value !== null && !Array.isArray(value)) refuse('invalid-held-notes', `${name} must be an array of note paths`)
+  }
+  const layout = layoutOf({ layout: requestedLayout, priorManifest, layoutHeld: layoutHeldNotePaths ?? heldNotePaths ?? [] })
   const checkedAt = timestampFrom(clock)
   const canonical = canonicalSnapshotOf(snapshot.graph)
 
@@ -699,14 +708,15 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   }
 
   // Layout 2 paths are allocated for this view alone, seeded from what its
-  // prior generation published; a file held for an edit keeps its path out of
-  // reach. The registry keeps the result as this view's section, whichever
-  // layout the view is prepared in.
+  // prior generation published; a file held for an open edit keeps its name
+  // taken. A view prepared in layout 1 holds layout 1 files, none of which is a
+  // layout 2 path. The registry keeps the result as this view's section,
+  // whichever layout the view is prepared in.
   const readable = allocateViewPaths({
     published: publishedOf(priorManifest),
     nodes: [...vault].map((id) => nodeById.get(id)),
     assets: [...embeddedAssets.values()],
-    occupied: Array.isArray(heldNotePaths) ? heldNotePaths : [],
+    occupied: layout.version === 1 ? [] : heldNotePaths ?? [],
     ...limits,
   })
   const legacy = layout.version === 1

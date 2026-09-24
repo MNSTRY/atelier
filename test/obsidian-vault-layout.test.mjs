@@ -551,6 +551,71 @@ test('a source folder that meets a file of the same name is qualified with a sho
   assert.match(asset.assetPathOf('r', 'img/logo'), /^r\/img\/logo \([0-9a-f]{6}\)$/)
 })
 
+test('files held in the vault, their folders in any spelling, never make an allocation refuse: a fuzz over odd sources, held files and vault roots', () => {
+  let seed = 777
+  const random = (n) => { seed = (seed + 0x6D2B79F5) | 0; let x = Math.imul(seed ^ (seed >>> 15), 1 | seed); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) % n }
+  const pick = (values) => values[random(values.length)]
+  const pieces = ['a', 'Data', 'data', 'DATA', 'CON', 'com1', 'x'.repeat(40), 'é', 'é', '\u{1F600}', ' ', '.', '..x', 'Guide.md', 'notes', 'Notes', '語'.repeat(20), 'a:b', 'q?', '#h', 'z'.repeat(119), '-', '_']
+  const segment = () => { let value = ''; for (let count = 1 + random(4); count > 0; count -= 1) value += pick(pieces); return value.replace(/\//g, '') || 'x' }
+  const problems = []
+  for (let round = 0; round < 1500; round += 1) {
+    const vaultRootBytes = pick([0, 0, 100, 300, 600, 800, 900])
+    const nodes = []
+    const assets = []
+    const count = 1 + random(8)
+    for (let index = 0; index < count; index += 1) {
+      const dirs = Array.from({ length: random(3) === 0 ? 6 + random(9) : random(4) }, segment)
+      const wrapped = random(4) === 0
+      const name = wrapped ? `${segment()}${pick(['', '.csv', '.pdf', '.PNG', '.tar.gz'])}` : `${segment()}.md`
+      const repo = pick(['r', 'r', 'Notes', 'notes'])
+      const sourcePath = [...dirs, name].join('/')
+      if (nodes.some((item) => item.repo === repo && item.path === sourcePath)) continue
+      nodes.push({ repo, id: `${repo}:n${index}-${round}`, path: sourcePath, title: random(2) ? segment() : '', extension: wrapped ? (name.includes('.') ? name.split('.').at(-1) : '') : 'md' })
+      if (random(5) === 0) assets.push({ repo, id: `${repo}:asset:${index}`, path: [...dirs.slice(0, random(dirs.length + 1)), `${segment()}.png`].join('/') })
+    }
+    const occupied = [pick(['notes/Held--0123456789ab.md', 'NOTES/Held.md', 'r/Held.md', 'R/sub/Held.md', 'r/a/Data']), ...(random(2) ? ['notes/Other--abcdefabcdef.md'] : [])]
+    let first
+    try { first = allocateViewPaths({ nodes, assets, vaultRootBytes, occupied }) } catch (error) { problems.push(`refused ${error.code} at vault root ${vaultRootBytes}`); continue }
+    const all = [...first.section.entries.flatMap((entry) => [entry.path, ...(entry.attachment ? [entry.attachment] : [])]), ...first.section.assets.map((entry) => entry.path)]
+    const files = new Map(occupied.map((filePath) => [collisionKey(filePath), filePath]))
+    const folders = new Map()
+    for (const filePath of all) {
+      if (!isReadableVaultPath(filePath)) problems.push(`unreadable ${JSON.stringify(filePath)}`)
+      if (vaultRootBytes + 1 + bytes(filePath) > 1024 || filePath.split('/').some((part) => bytes(part) > 255)) problems.push(`over the limits at vault root ${vaultRootBytes}`)
+      if (files.has(collisionKey(filePath))) problems.push(`collision ${JSON.stringify(filePath)} ${JSON.stringify(files.get(collisionKey(filePath)))}`)
+      files.set(collisionKey(filePath), filePath)
+      const parts = filePath.split('/')
+      for (let index = 1; index < parts.length; index += 1) {
+        const folder = parts.slice(0, index).join('/')
+        if (folders.has(collisionKey(folder)) && folders.get(collisionKey(folder)) !== folder) problems.push(`two spellings ${JSON.stringify(folder)} ${JSON.stringify(folders.get(collisionKey(folder)))}`)
+        folders.set(collisionKey(folder), folder)
+      }
+    }
+    for (const filePath of all) if (folders.has(collisionKey(filePath))) problems.push(`a file is also a folder ${JSON.stringify(filePath)}`)
+    const again = allocateViewPaths({ nodes: [...nodes].reverse(), assets: [...assets].reverse(), vaultRootBytes, occupied: [...occupied].reverse() })
+    if (JSON.stringify(again.section) !== JSON.stringify(first.section)) problems.push('the result depends on the listing order')
+    try {
+      const seeded = allocateViewPaths({ published: first.section, nodes, assets, vaultRootBytes, occupied })
+      if (JSON.stringify(seeded.section) !== JSON.stringify(first.section)) problems.push('a seeded allocation moved a path')
+    } catch (error) { problems.push(`a seeded allocation refused ${error.code}`) }
+  }
+  assert.deepEqual([...new Set(problems)].slice(0, 10), [])
+})
+
+test('a file whose edit closed on this tick holds a layout 1 view once more, but takes no name in layout 2', (t) => {
+  const files = { 'r/a/one.md': titled('r:1', 'Plan') }
+  const first = prepareView(workspaceOf(t, files))
+  assert.deepEqual(pathsIn(first), { 'r:1': 'r/a/Plan.md' })
+  // r:1 leaves the view on the tick its edit closes, and r:3 of the same title arrives.
+  const later = withheldIn(workspaceOf(t, { ...files, 'r/a/three.md': titled('r:3', 'Plan') }), ['r:1'])
+  const closed = prepareView({ ...later, priorManifest: first.manifest, heldNotePaths: [], layoutHeldNotePaths: ['r/a/Plan.md'] })
+  assert.deepEqual([closed.manifest.layoutVersion, pathsIn(closed)], [2, { 'r:3': 'r/a/Plan.md' }])
+  // A file held for an open edit keeps its name taken.
+  const open = prepareView({ ...later, priorManifest: first.manifest, heldNotePaths: ['r/a/Plan.md'] })
+  assert.deepEqual(pathsIn(open), { 'r:3': 'r/a/Plan (three).md' })
+  assert.throws(() => prepareView({ ...later, layoutHeldNotePaths: 'r/a/Plan.md' }), { code: 'invalid-held-notes' })
+})
+
 test('a file leaves a layout 2 vault under the kind its generation recorded: a repository named attachments holds notes', () => {
   const digest = `sha256:${'a'.repeat(64)}`
   const prior = (schema, extra) => ({ schema, notes: [{ path: 'attachments/notes/Plan.md', noteDigest: digest }], attachments: [{ path: 'attachments/charts/chart.pdf', digest }], ...extra })
@@ -733,6 +798,24 @@ test('upgrade with a held edit in a repository named like the layout 1 folder: t
   assert.deepEqual(after.notes.map((note) => note.path).sort(), ['Notes/Compass rose.md', 'Notes/Lantern room.md'])
   assert.equal(world.pendingEdits().some((item) => item.closedAt === null), false, 'no edit is left queued')
   assert.match(fs.readFileSync(world.noteFile('Notes:lantern'), 'utf8'), /twice a minute/)
+})
+
+test('the engine hands prepareView the files of open edits as held, and those of edits closed on the tick only as holding the layout', needsExchange, async (t) => {
+  const world = upgradeWorld(t)
+  const earlier = world.engine({ seams: EARLIER_RELEASE })
+  await earlier.tick()
+  earlier.stop()
+  world.editNote('east-wing:lantern', 'once a minute', 'twice a minute')
+  world.installPolicy({ selector: { repo: 'east-wing' } })
+  world.configureMachine({ maintenanceMode: 'automatic' })
+  const calls = []
+  const spy = { prepareView(input) { calls.push({ heldNotePaths: input.heldNotePaths, layoutHeldNotePaths: input.layoutHeldNotePaths }); return prepareView(input) } }
+  const engine = world.engine({ seams: spy, applyOperation: createEngineApplyOperation({ context: { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, clock: world.clock } }) })
+  world.advance(1000)
+  assert.deepEqual((await engine.tick()).dispatched.map((item) => item.status), ['applied'])
+  const closed = world.pendingEdits().find((item) => item.identity.nodeId === 'east-wing:lantern')
+  assert.notEqual(closed.closedAt, null)
+  assert.deepEqual(calls.at(-1), { heldNotePaths: [], layoutHeldNotePaths: [closed.path] })
 })
 
 test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is held and on the tick its edit closes, and is laid out again once the person restores the note', needsExchange, async (t) => {
