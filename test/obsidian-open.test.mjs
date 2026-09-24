@@ -68,9 +68,10 @@ function privateHomeEnv(dir, base = process.env) {
 }
 
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
-const { NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, obsidianUserDataDir, openVaultDirectory, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
+const { NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, findVaultEntry, obsidianUserDataDir, openVaultDirectory, readObsidianSettings, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
 const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
+const { appStateSignature, registerVaultInObsidianSettings } = await import('../src/runtime/obsidian/app-registration.mjs')
 const { loadContributions } = await import('../src/runtime/obsidian/contributions.mjs')
 const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await import('../src/runtime/obsidian/engine.mjs')
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
@@ -812,6 +813,139 @@ test('the same refusal after a view was published says to quit the app or open t
 // 4d. Obsidian's settings file: written only while no Obsidian runs, atomically, keeping everything else
 // ---------------------------------------------------------------------------
 
+const SETTINGS_BEFORE = { cli: true, vaults: { aaaaaaaaaaaaaaaa: { path: '/somewhere/else', ts: 1700000000000, open: true } }, updateDisabled: true, frame: 'hidden', nested: { list: [1, 2, { deep: null }], flag: false } }
+
+function settingsWorld(t, { document = SETTINGS_BEFORE, text } = {}) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-obsidian-settings-')))
+  t.after(() => { try { fs.chmodSync(path.join(dir, 'user-data'), 0o700) } catch { /* gone */ } fs.rmSync(dir, { recursive: true, force: true }) })
+  const userDataDir = path.join(dir, 'user-data')
+  const vaultRoot = path.join(dir, 'vaults', 'scope-whole')
+  fs.mkdirSync(userDataDir, { recursive: true })
+  fs.mkdirSync(vaultRoot, { recursive: true })
+  const file = path.join(userDataDir, OBSIDIAN_SETTINGS_FILE)
+  if (text !== null) fs.writeFileSync(file, text ?? JSON.stringify(document), { mode: 0o640 })
+  if (text !== null) fs.chmodSync(file, 0o640)
+  // The process table, as a list of answers; the last one repeats.
+  const probeOf = (answers, onCall = () => {}) => { let calls = 0; return () => { const answer = answers[Math.min(calls, answers.length - 1)]; calls += 1; onCall(calls); return answer } }
+  const bytes = () => (fs.existsSync(file) ? fs.readFileSync(file) : null)
+  return { dir, userDataDir, vaultRoot, file, probeOf, bytes, names: () => fs.readdirSync(userDataDir).sort() }
+}
+
+test('the settings file is written only while no Obsidian runs: the new vault is added, every other key and entry is kept in its place, a backup is kept, and the replacement is atomic', (t) => {
+  const world = settingsWorld(t)
+  const before = world.bytes()
+  const result = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: world.vaultRoot, processProbe: world.probeOf(['absent']), now: () => START })
+  assert.deepEqual([result.ok, result.registered, result.confirmed], [true, 'written', true], JSON.stringify(result))
+  const after = JSON.parse(world.bytes().toString('utf8'))
+  assert.deepEqual(Object.keys(after), Object.keys(SETTINGS_BEFORE), 'keys keep their order')
+  const { vaults, ...rest } = after
+  const { vaults: vaultsBefore, ...restBefore } = SETTINGS_BEFORE
+  assert.deepEqual(rest, restBefore, 'every other key is kept as it was')
+  const added = Object.keys(vaults).filter((id) => !Object.hasOwn(vaultsBefore, id))
+  assert.equal(added.length, 1)
+  assert.match(added[0], /^[0-9a-f]{16}$/)
+  assert.deepEqual(vaults[added[0]], { path: world.vaultRoot, ts: START, open: true })
+  assert.deepEqual(Object.fromEntries(Object.entries(vaults).filter(([id]) => id !== added[0])), vaultsBefore, 'every other vault entry is kept')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(world.file).mode & 0o777, 0o640, 'the file keeps its mode')
+  assert.deepEqual(world.names(), [OBSIDIAN_SETTINGS_FILE, `${OBSIDIAN_SETTINGS_FILE}.atelier-backup-20260105T100000000Z`], 'the backup, and no temporary file, is left beside it')
+  assert.deepEqual(fs.readFileSync(result.backupPath), before, 'the backup holds the bytes as they were')
+  assert.deepEqual([result.entry.id, result.entry.path], [added[0], world.vaultRoot])
+  // Read back, the app would find it by path.
+  assert.equal(findVaultEntry(readObsidianSettings({ userDataDir: world.userDataDir }).vaults, world.vaultRoot).id, added[0])
+  // A second registration, and one through a link to the same folder, find it and write nothing.
+  const written = world.bytes()
+  const alias = path.join(world.dir, 'alias')
+  if (process.platform !== 'win32') fs.symlinkSync(world.vaultRoot, alias)
+  for (const vaultRoot of process.platform === 'win32' ? [world.vaultRoot] : [world.vaultRoot, alias]) {
+    const again = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot, processProbe: world.probeOf(['absent']), now: () => START + 1 })
+    assert.deepEqual([again.ok, again.registered, again.entry.id], [true, 'already', added[0]])
+  }
+  assert.deepEqual([world.bytes(), world.names().length], [written, 2])
+})
+
+test('the settings file takes several vaults of one workspace, one after the other, each under its own id, and keeps the first when the second is added', (t) => {
+  const world = settingsWorld(t)
+  const second = path.join(world.dir, 'vaults', 'scope-east')
+  fs.mkdirSync(second, { recursive: true })
+  const first = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: world.vaultRoot, processProbe: world.probeOf(['absent']), now: () => START })
+  const next = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: second, processProbe: world.probeOf(['absent']), now: () => START + 1000 })
+  assert.deepEqual([first.registered, next.registered], ['written', 'written'])
+  assert.notEqual(first.entry.id, next.entry.id)
+  const { vaults } = readObsidianSettings({ userDataDir: world.userDataDir })
+  assert.deepEqual([findVaultEntry(vaults, world.vaultRoot).id, findVaultEntry(vaults, second).id], [first.entry.id, next.entry.id])
+  assert.equal(Object.keys(vaults).length, 3, 'the vault that was there, and the two added')
+  assert.equal(world.names().filter((name) => name.includes('atelier-backup')).length, 2, 'each write kept its own backup')
+})
+
+test('the settings file is refused, typed and with nothing written, while an app may run, when it is a link, not this user\'s, not a JSON object, unreadable or missing', (t) => {
+  const refusedWith = (world, options, code) => {
+    const before = world.bytes()
+    const namesBefore = fs.existsSync(world.userDataDir) ? world.names() : null
+    const result = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: world.vaultRoot, processProbe: world.probeOf(['absent']), now: () => START, ...options })
+    assert.deepEqual([result.ok, result.code], [false, code], JSON.stringify(result))
+    assert.deepEqual(world.bytes(), before, `${code}: the file is unchanged`)
+    assert.deepEqual(fs.existsSync(world.userDataDir) ? world.names() : null, namesBefore, `${code}: nothing is left beside it`)
+  }
+  for (const answer of ['running', 'unknown']) { const world = settingsWorld(t); refusedWith(world, { processProbe: world.probeOf([answer]) }, 'app-may-be-running') }
+  { const world = settingsWorld(t); refusedWith(world, { processProbe: () => { throw new Error('ps failed') } }, 'app-may-be-running') }
+  // An app that appears after the file was read and before the rename: the prepared files are removed again.
+  { const world = settingsWorld(t); refusedWith(world, { processProbe: world.probeOf(['absent', 'running']) }, 'app-may-be-running') }
+  // A file that changes after it was read (the app started and quit, a sync tool): it is not replaced, and the change stays.
+  {
+    const world = settingsWorld(t)
+    const changed = Buffer.from(JSON.stringify({ ...SETTINGS_BEFORE, frame: 'native' }))
+    const result = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: world.vaultRoot, now: () => START, processProbe: world.probeOf(['absent'], (calls) => { if (calls === 2) fs.writeFileSync(world.file, changed) }) })
+    assert.deepEqual([result.ok, result.code, world.bytes(), world.names()], [false, 'obsidian-settings-changed', changed, [OBSIDIAN_SETTINGS_FILE]])
+  }
+  if (process.platform !== 'win32') {
+    const world = settingsWorld(t)
+    const real = path.join(world.dir, 'real-settings.json')
+    fs.renameSync(world.file, real)
+    fs.symlinkSync(real, world.file)
+    const target = fs.readFileSync(real)
+    refusedWith(world, {}, 'obsidian-settings-unsafe')
+    assert.deepEqual(fs.readFileSync(real), target, 'the file a link points at is not written either')
+  }
+  if (process.platform !== 'win32') {
+    const world = settingsWorld(t)
+    const real = path.join(world.dir, 'real-user-data')
+    fs.renameSync(world.userDataDir, real)
+    fs.symlinkSync(real, world.userDataDir)
+    refusedWith(world, {}, 'obsidian-settings-unsafe')
+  }
+  if (typeof process.getuid === 'function') { const world = settingsWorld(t); refusedWith(world, { uid: process.getuid() + 1 }, 'obsidian-settings-not-owned') }
+  for (const text of ['[]', '"vaults"', '{"vaults":[]}', '{"vaults":"none"}', 'null']) refusedWith(settingsWorld(t, { text }), {}, 'obsidian-settings-not-object')
+  for (const text of ['not json', '{"vaults":', '']) refusedWith(settingsWorld(t, { text }), {}, 'obsidian-settings-unreadable')
+  // Obsidian has not run here: the file is never created, and neither is its directory.
+  { const world = settingsWorld(t, { text: null }); refusedWith(world, {}, 'obsidian-settings-missing'); assert.equal(fs.existsSync(world.file), false) }
+  { const world = settingsWorld(t); fs.rmSync(world.userDataDir, { recursive: true }); refusedWith(world, {}, 'obsidian-settings-missing'); assert.equal(fs.existsSync(world.userDataDir), false) }
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    const world = settingsWorld(t)
+    fs.chmodSync(world.userDataDir, 0o500)
+    refusedWith(world, {}, 'obsidian-settings-unwritable')
+    fs.chmodSync(world.userDataDir, 0o700)
+  }
+  // The location of the settings is not known (another platform, no HOME).
+  { const world = settingsWorld(t); refusedWith({ ...world, userDataDir: null, names: () => world.names() }, {}, 'obsidian-settings-location-unknown') }
+})
+
+test('the settings file: an app that appears right after the rename leaves the entry unconfirmed, a colliding id is drawn again, and a list without vaults gains one', (t) => {
+  const late = settingsWorld(t)
+  const result = registerVaultInObsidianSettings({ userDataDir: late.userDataDir, vaultRoot: late.vaultRoot, now: () => START, processProbe: late.probeOf(['absent', 'absent', 'running']) })
+  assert.deepEqual([result.ok, result.registered, result.confirmed, result.reason], [true, 'written', false, 'app-started-during-registration'])
+
+  const colliding = settingsWorld(t)
+  const draws = [Buffer.from('aaaaaaaaaaaaaaaa', 'hex'), Buffer.from('0123456789abcdef', 'hex'), Buffer.from('feedfacecafe', 'hex')]
+  const collided = registerVaultInObsidianSettings({ userDataDir: colliding.userDataDir, vaultRoot: colliding.vaultRoot, now: () => START, processProbe: colliding.probeOf(['absent']), randomBytes: (size) => draws.shift() ?? randomBytes(size) })
+  assert.equal(collided.entry.id, '0123456789abcdef', 'an id an entry already has is never used')
+  assert.equal(JSON.parse(colliding.bytes()).vaults.aaaaaaaaaaaaaaaa.path, '/somewhere/else')
+
+  const empty = settingsWorld(t, { document: { cli: true } })
+  const gained = registerVaultInObsidianSettings({ userDataDir: empty.userDataDir, vaultRoot: empty.vaultRoot, now: () => START, processProbe: empty.probeOf(['absent']) })
+  assert.equal(gained.ok, true)
+  assert.deepEqual(Object.keys(JSON.parse(empty.bytes())), ['cli', 'vaults'])
+})
+
 test('where the app keeps its settings: under HOME on macOS, under XDG_CONFIG_HOME or ~/.config on Linux, unknown elsewhere or without an absolute HOME', () => {
   assert.equal(obsidianUserDataDir({ platform: 'darwin', env: { HOME: '/home/someone' } }), '/home/someone/Library/Application Support/obsidian')
   assert.equal(obsidianUserDataDir({ platform: 'linux', env: { HOME: '/home/someone' } }), '/home/someone/.config/obsidian')
@@ -823,6 +957,19 @@ test('where the app keeps its settings: under HOME on macOS, under XDG_CONFIG_HO
 // ---------------------------------------------------------------------------
 // 4e. The command line of the app: its answers, and the window a call reaches
 // ---------------------------------------------------------------------------
+
+test('what the app looks like changes when it quits or starts, when it qualifies differently, and when a vault opens or closes', () => {
+  const settings = (open) => ({ ok: true, vaults: { a: { path: '/one', open: open.includes('/one') }, b: { path: '/two', open: open.includes('/two') } } })
+  const running = { running: true, outcome: 'qualified', reason: 'meets-minimum-version' }
+  const base = appStateSignature({ qualification: running, settings: settings(['/one']) })
+  assert.equal(appStateSignature({ qualification: running, settings: settings(['/one']) }), base)
+  for (const other of [
+    appStateSignature({ qualification: { running: false, outcome: 'qualified', reason: 'app-not-running-version-not-needed' }, settings: settings(['/one']) }),
+    appStateSignature({ qualification: { running: true, outcome: 'app-version-unsupported', reason: 'no-vault-open' }, settings: settings(['/one']) }),
+    appStateSignature({ qualification: running, settings: settings(['/one', '/two']) }),
+    appStateSignature({ qualification: running, settings: { ok: false, code: 'obsidian-settings-missing' } }),
+  ]) assert.notEqual(other, base)
+})
 
 test('a publication call runs inside the vault\'s folder while the app lists that vault open, and otherwise in a directory that is no vault', { skip: process.platform === 'win32' && 'no location of the app\'s settings is known on Windows: every call runs in a directory that is no vault' }, (t) => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-cli-cwd-')))
