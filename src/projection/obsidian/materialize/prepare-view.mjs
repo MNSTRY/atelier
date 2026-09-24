@@ -461,7 +461,7 @@ function seededRegistry({ registry, priorManifest, workspaceId }) {
   return { ...base, entries: [...base.entries, ...recovered] }
 }
 
-export function prepareView({ snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null } = {}) {
+export function prepareView({ snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, plugin = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null } = {}) {
   if (cache !== null && !isPreparationCache(cache)) refuse('invalid-preparation-cache', 'the preparation cache must come from createPreparationCache')
   assertObsidianContract('corpus-profile', profile)
   assertObsidianContract('scope', scope)
@@ -611,7 +611,7 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     })
     .sort((left, right) => compare(left.edgeId, right.edgeId))
 
-  const settings = prepareSettings({ existing: existingSettings })
+  const settings = prepareSettings({ existing: existingSettings, plugin })
   files.push(...settings.files)
   const occupied = new Set()
   for (const file of files) {

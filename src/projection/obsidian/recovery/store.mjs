@@ -131,7 +131,8 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
   const root = fs.realpathSync(workspaceRoot)
   const privateDir = (...parts) => ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, ...parts), label: 'Obsidian publication state' })
   const requestedVault = vaultRoot ?? path.join(root, 'vaults', segment(scopeId))
-  fs.mkdirSync(requestedVault, { recursive: true })
+  // A vault this store places itself is private to this user from the start: it will hold the plugin's bearer.
+  fs.mkdirSync(requestedVault, { recursive: true, ...(vaultRoot === undefined ? { mode: 0o700 } : {}) })
   const vault = fs.realpathSync(requestedVault)
   const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
   for (const area of ['state', 'recovery', 'staging']) {
@@ -149,6 +150,8 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
     workspaceId,
     scopeId,
     vaultRoot: vault,
+    // Placed by this store under the workspace state, rather than named by the caller.
+    managedVaultRoot: vaultRoot === undefined,
     journalsRoot: journals,
     lockPath: path.join(locks, `${segment(scopeId)}.lock`),
     // One publisher per vault, whichever view or workspace state it belongs to.
