@@ -2,7 +2,7 @@ import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { MAX_OBSIDIAN_SETTINGS_BYTES, OBSIDIAN_SETTINGS_FILE, enclosingVaults, findVaultEntry, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
-import { openRegularFileNoFollow, syncPrivateDirectory } from '../../project/private-state.mjs'
+import { openRegularFileNoFollow, realPathAsStored, syncPrivateDirectory } from '../../project/private-state.mjs'
 
 // Adding a view's vault to Obsidian's own vault list while Obsidian is not
 // running, so that `obsidian://open?path=` finds it when the app starts.
@@ -105,7 +105,7 @@ export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, proces
   if (enclosingVaults({ vaults: settings.vaults, vaultRoot }).length > 0) return refused('vault-inside-another-vault', 'Obsidian lists a vault at a folder that contains this vault\'s folder')
 
   let folder
-  try { folder = fs.realpathSync(vaultRoot) } catch { return refused('vault-root-missing', 'the view\'s vault folder does not exist') }
+  try { folder = realPathAsStored(vaultRoot) } catch { return refused('vault-root-missing', 'the view\'s vault folder does not exist') }
   if (!fs.statSync(folder).isDirectory()) return refused('vault-root-missing', 'the view\'s vault folder is not a directory')
   let id
   do { id = randomBytes(8).toString('hex') } while (Object.hasOwn(settings.vaults, id))

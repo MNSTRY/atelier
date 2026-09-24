@@ -9,7 +9,7 @@ import { assertOutsideRepositories, protectedRoots, readLocalPointer, resolveDat
 import { isProcessAlive } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import {
-  SERVICE_ERROR_SCHEMA, executableIdentity, readLastServiceError, readServiceRecord, readServiceSettings, removeServiceRecord, serviceNameFor, servicePaths,
+  SERVICE_ERROR_SCHEMA, executableIdentity, readLastServiceError, readServiceRecord, readServiceSettings, releaseIdentity, removeServiceRecord, serviceNameFor, servicePaths,
   writeLastServiceError, writeServiceRecord,
 } from './service-record.mjs'
 import { createServiceServer } from './service-server.mjs'
@@ -204,7 +204,7 @@ export async function runMaintenanceService(options = {}) {
       workspaceRoot, workspaceId,
       record: {
         schema: 'atelier-obsidian-service-state/v1', contractVersion: '1.0.0', workspaceId, serviceName: identity.serviceName, host, port, runtimeId, pid,
-        executable: { path: executable.path, digest: executable.digest, ext: { runner: process.execPath } }, stateLocation: servicePaths(workspaceRoot).stateLocation,
+        executable: { path: executable.path, digest: executable.digest, ext: { runner: process.execPath, release: releaseIdentity() } }, stateLocation: servicePaths(workspaceRoot).stateLocation,
         health: { status: 'healthy', checkedAt: startedAt }, consent: settings.consent, ext: { bearer },
       },
     })

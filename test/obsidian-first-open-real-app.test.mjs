@@ -107,7 +107,7 @@ test('real isolated Obsidian: open adds the view\'s vault and publishes, with th
         assert.ok(Object.hasOwn(listed.vaults, unrelated), 'the unrelated vault stays in the app\'s list')
         assert.equal(listed.vaults[unrelated].open, true, 'the unrelated vault\'s window stayed open: the view\'s vault opened in a new window')
         const route = vaultRoute({ vaults: listed.vaults, vaultRoot: store.vaultRoot })
-        assert.deepEqual(route, { how: 'folder', cwd: store.vaultRoot })
+        assert.equal(route.how, 'id', JSON.stringify(route))
         assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route }), { answered: true, indexReady: true })
         assert.equal(fs.readdirSync(app.userDataDir).some((name) => name.includes('atelier-backup')), false, 'the running app\'s settings file was not written by Atelier')
         assert.equal(opened.readBack.intact, true)

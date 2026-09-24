@@ -321,8 +321,10 @@ The maintenance service can also be managed on its own:
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
 the earlier release. `open` replaces it: when the service of this workspace
-proves itself Atelier's own but runs another entry module than the installed
-one, or refuses a tick that names a view as releases up to 0.2.0-alpha.11 do,
+proves itself Atelier's own but runs another release than the installed one
+(its record names the release it runs: the package version and a digest of
+its modules), or refuses a tick that names a view as releases up to
+0.2.0-alpha.11 do,
 `open` stops it as `service stop` would and starts the installed release under
 the consent already recorded, and says `service: restarted (outdated)`. A
 service in a long tick is not stopped (`open` answers `busy`), and a listener
@@ -490,8 +492,10 @@ test reported as a pass.
   before, and with a backup beside it; see
   [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list). A
   Flatpak or snap build keeps its list inside its sandbox and never reads that
-  file. Such a build is recognised by its sandbox in HOME or by its
-  installation, and the file is then neither read nor written: `open` answers
+  file. Which build is in use is read from which vault list was written last
+  (every build rewrites its own when a vault window opens or closes), and only
+  when no build wrote one from its installation; for a Flatpak or snap build
+  the file is then neither read nor written: `open` answers
   `obsidian-sandboxed` and says to start Obsidian with any vault open, then
   open again, and adds the vault through the app. On Windows no location is
   known, and `open` adds the vault through the app in the same way.
@@ -503,10 +507,12 @@ test reported as a pass.
   window of the first vault in its list whose folder is the tool's working
   directory or contains it, and otherwise in the vault window that had focus
   last. A vault that takes a call is opened when it is closed. Calls about a
-  vault therefore run inside its folder while no vault listed before it at a
-  folder above it (your home folder, say) would take them there, and name its
-  id otherwise; when that id would name another vault first too (one whose
-  folder has the id as its name), no call is made. Publication calls do this
+  vault therefore name its id; only when that id would name another vault
+  first (one whose folder has the id as its name) do they run inside its
+  folder instead, and not at all when a vault listed before it at a folder
+  above it (your home folder, say) would take them there. The vault root is
+  taken in the spelling the file system stores, so a data root given in
+  another letter case on macOS changes nothing. Publication calls do this
   only while the app's list shows the view's vault open, and run in a
   directory that is no vault otherwise. So maintenance never reopens a vault
   window you closed while Obsidian keeps running, and never reaches another

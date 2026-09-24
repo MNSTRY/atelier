@@ -205,17 +205,23 @@ opt-in and is proven again immediately before the signal.
 
 A runtime of an earlier release is replaced by a command that asks for a tick
 with the start options of the installed entry (`requestServiceTick({ service
-})`; `open` does). Such a runtime proves itself `healthy` but either records
-an entry module whose digest differs from the installed entry, or refuses a
-tick that names a view, as releases up to 0.2.0-alpha.11 do (their `POST`
-payload has exactly one member). It is stopped as `stop` stops it and the
-installed entry is started, detached, under the consent already recorded; the
-answer carries `restarted: "outdated"`, and `open` shows `service: restarted
-(outdated)`. A `busy` runtime is not stopped, and anything that is not a
-proven runtime of this workspace is never stopped. Without the start options
-the runtime is only reported (`service-outdated`). The digest covers the
-entry module only, so a release that changes other modules and keeps the
-entry is recognised by the tick alone.
+})`; `open` does). Every runtime records at its start the release it runs
+(`executable.ext.release` in its record): the package version and a digest of
+every runtime module it ships (`src/` and `contracts/`, by path and content).
+A runtime of an earlier release proves itself `healthy` but records an entry
+module whose digest differs from the installed entry, another release than
+this package's, or no release at all (releases up to the one that began
+recording it); or it refuses a tick that names a view, as releases up to
+0.2.0-alpha.11 do (their `POST` payload has exactly one member). It is stopped
+as `stop` stops it and the installed entry is started, detached, under the
+consent already recorded; the answer carries `restarted: "outdated"`, and
+`open` shows `service: restarted (outdated)`. A listener of now refuses a tick
+only when it names another runtime, which happens when a concurrent command
+replaced the runtime between the check and the request: the record is read
+again, the runtime that took its place is asked, and nothing is restarted. A
+`busy` runtime is not stopped, and anything that is not a proven runtime of
+this workspace is never stopped. Without the start options the runtime is
+only reported (`service-outdated`).
 
 The service itself refuses to start beside a runtime of the same workspace
 that proves itself, and ends cleanly when its record no longer names it. Two

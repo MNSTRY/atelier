@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
+import { realPathAsStored } from '../../project/private-state.mjs'
 import { readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
 import { registerVaultInObsidianSettings } from './app-registration.mjs'
 
@@ -89,7 +90,7 @@ export function createProductionAppProbe({ platform = process.platform, env = pr
     // reaches only this vault nothing is asked. Both sides are compared by real path.
     vaultState({ vaultRoot, route }) {
       let target
-      try { target = fs.realpathSync(vaultRoot) } catch { return Promise.resolve({ answered: false, indexReady: false }) }
+      try { target = realPathAsStored(vaultRoot) } catch { return Promise.resolve({ answered: false, indexReady: false }) }
       if (route?.how !== 'folder' && route?.how !== 'id') return Promise.resolve({ answered: false, indexReady: false })
       const where = routedCall(route, workingDirectory)
       return new Promise((resolve) => {

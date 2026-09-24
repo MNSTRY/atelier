@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { openRegularFileNoFollow } from '../../../project/private-state.mjs'
+import { openRegularFileNoFollow, realPathAsStored } from '../../../project/private-state.mjs'
 
 // Obsidian's own list of the folders it knows as vaults, read only.
 //
@@ -43,22 +43,34 @@ export function obsidianUserDataDir({ platform = process.platform, env = process
 
 // A Flatpak or snap build of Obsidian on Linux keeps its user-data directory
 // inside its sandbox (`~/.var/app/md.obsidian.Obsidian/config/obsidian`,
-// `~/snap/obsidian/<revision>/.config/obsidian`), where Atelier does not
-// write, and reads no file outside it. Which such build is installed or has
-// run for this account ('flatpak' or 'snap'), or null, including on any other
-// platform. `exists` answers whether a path exists.
-export function obsidianSandboxedBuild({ platform = process.platform, env = process.env, exists = fs.existsSync } = {}) {
+// `~/snap/obsidian/current/.config/obsidian`), where Atelier does not write,
+// and reads no file outside it. Which build this account uses: the one whose
+// vault list was written last, since every build rewrites its own whenever a
+// vault window opens or closes ('flatpak', 'snap', or null for the native
+// build); only when no build wrote one, a Flatpak or snap installation, or a
+// Flatpak or snap left by one. Null on any other platform. `exists` answers
+// whether a path exists, `modified` when a file was last written (or null).
+const modifiedAt = (file) => { try { return fs.statSync(file).mtimeMs } catch { return null } }
+export function obsidianSandboxedBuild({ platform = process.platform, env = process.env, exists = fs.existsSync, modified = modifiedAt } = {}) {
   if (platform !== 'linux') return null
   const home = typeof env.HOME === 'string' && path.posix.isAbsolute(env.HOME) ? env.HOME : null
   const under = (...parts) => (home === null ? [] : [path.posix.join(home, ...parts)])
+  const native = obsidianUserDataDir({ platform, env })
+  const lists = [
+    [null, native === null ? [] : [path.posix.join(native, OBSIDIAN_SETTINGS_FILE)]],
+    ['flatpak', under('.var', 'app', 'md.obsidian.Obsidian', 'config', 'obsidian', OBSIDIAN_SETTINGS_FILE)],
+    ['snap', under('snap', 'obsidian', 'current', '.config', 'obsidian', OBSIDIAN_SETTINGS_FILE)],
+  ].flatMap(([build, files]) => files.map((file) => { let at; try { at = modified(file) } catch { at = null } return { build, at } })).filter(({ at }) => typeof at === 'number')
+  if (lists.length > 0) return lists.reduce((latest, list) => (list.at > latest.at ? list : latest)).build
   const found = (paths) => paths.some((candidate) => { try { return exists(candidate) } catch { return false } })
   if (found([...under('.var', 'app', 'md.obsidian.Obsidian'), ...under('.local', 'share', 'flatpak', 'app', 'md.obsidian.Obsidian'), '/var/lib/flatpak/app/md.obsidian.Obsidian'])) return 'flatpak'
-  if (found([...under('snap', 'obsidian'), '/snap/obsidian'])) return 'snap'
+  if (found([...under('snap', 'obsidian'), '/snap/obsidian', '/var/lib/snapd/snap/obsidian'])) return 'snap'
   return null
 }
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-const realOrResolved = (target) => { try { return fs.realpathSync(target) } catch { return path.resolve(target) } }
+// The real path as stored (realPathAsStored): what the operating system reports as a working directory.
+const realOrResolved = (target) => { try { return realPathAsStored(target) } catch { return path.resolve(target) } }
 const listedFolders = (vaults) => (isPlainObject(vaults) ? Object.entries(vaults).filter(([, entry]) => isPlainObject(entry) && typeof entry.path === 'string' && path.isAbsolute(entry.path)) : [])
 
 // A folder the list names, against a vault root spelled as given (`spelled`)
@@ -134,11 +146,12 @@ export function readObsidianSettings({ userDataDir, uid = currentUid() } = {}) {
 // Where a command-line call about this vault reaches the app, predicted from
 // the app's list as the app routes a call (see above):
 //
-//   { how: 'folder', cwd }  run in the vault's folder (its real path, which the tool reports): the first listed vault
-//                           that is or contains it is this one;
-//   { how: 'id', id }       run in a directory that is no vault, with `vault=<id>` first: the id names this vault first;
+//   { how: 'id', id }       run in a directory that is no vault, with `vault=<id>` first: the id names this vault first.
+//                           Preferred: it does not depend on how a working directory is spelled;
+//   { how: 'folder', cwd }  run in the vault's folder (its real path as stored, which the tool reports), when the id
+//                           names another vault first and the first listed vault that is or contains the folder is this one;
 //   { how: 'unlisted' }     the list has no entry for this folder (with `open`, none that the app lists open);
-//   { how: 'ambiguous' }    a vault listed above it takes a call run in its folder, and the id names another vault first.
+//   { how: 'ambiguous' }    the id names another vault first, and a vault listed above it takes a call run in its folder.
 //
 // With `open`, only an entry the app lists open may take the call, so a
 // closed vault window is never reopened.
@@ -150,11 +163,11 @@ export function vaultRoute({ vaults, vaultRoot, open = false } = {}) {
   const takes = ([, entry]) => (!open || entry.open === true) && namesFolder(entry.path, root)
   const own = listed.filter(takes)
   if (own.length === 0) return { how: 'unlisted' }
-  const byFolder = listed.find(([, entry]) => { const folder = path.resolve(entry.path); return target === folder || target.startsWith(folder + path.sep) })
-  if (byFolder !== undefined && takes(byFolder)) return { how: 'folder', cwd: target }
   const byName = (value) => listed.find(([id, entry]) => id === value || path.basename(entry.path).toUpperCase() === value.toUpperCase())
   const named = own.find(([id]) => byName(id)?.[0] === id)
-  return named === undefined ? { how: 'ambiguous' } : { how: 'id', id: named[0] }
+  if (named !== undefined) return { how: 'id', id: named[0] }
+  const byFolder = listed.find(([, entry]) => { const folder = path.resolve(entry.path); return target === folder || target.startsWith(folder + path.sep) })
+  return byFolder !== undefined && takes(byFolder) ? { how: 'folder', cwd: target } : { how: 'ambiguous' }
 }
 
 // The listed vaults whose folder contains this vault root, as written, against

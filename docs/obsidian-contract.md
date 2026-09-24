@@ -835,12 +835,16 @@ its folder would reach that vault. `open` answers `launch-failed` with reason
 
 **A Flatpak or snap build** keeps its list inside its sandbox
 (`~/.var/app/md.obsidian.Obsidian/config/obsidian/`,
-`~/snap/obsidian/<revision>/.config/obsidian/`) and never reads the file above.
-Such a build is recognised on Linux by its sandbox in HOME or its
-installation (`~/.local/share/flatpak/app/md.obsidian.Obsidian`,
-`/var/lib/flatpak/app/md.obsidian.Obsidian`, `/snap/obsidian`); the file is
-then neither read nor written, `open` answers `obsidian-sandboxed`, and the
-vault is added through the running app only.
+`~/snap/obsidian/current/.config/obsidian/`) and never reads the file above.
+On Linux the build in use is the one whose `obsidian.json` (native, Flatpak or
+snap) was written last, since every build rewrites its own when a vault window
+opens or closes; only when none was ever written, a Flatpak or snap
+installation or leftover decides (`~/.var/app/md.obsidian.Obsidian`,
+`~/.local/share/flatpak/app/md.obsidian.Obsidian`,
+`/var/lib/flatpak/app/md.obsidian.Obsidian`, `~/snap/obsidian`,
+`/snap/obsidian`, `/var/lib/snapd/snap/obsidian`). For a Flatpak or snap
+build the file is neither read nor written, `open` answers
+`obsidian-sandboxed`, and the vault is added through the running app only.
 
 **While no Obsidian runs**, the vault is added to the file itself, and only
 then:
@@ -899,10 +903,15 @@ listed before the view's vault at a folder above it would take every call run
 in the view's folder. Calls about no vault (the version, the vault list, the
 addition) run in a directory that is no vault and name none. A call about the
 view's vault goes where the list says only that vault takes it
-(`vaultRoute` in `vault-list.mjs`): in its folder (its real path) when the
-first listed vault that is or contains that folder is this vault, and
-otherwise from a directory that is no vault with `vault=<id>` first, when that
-id names this vault first; when neither holds, no call is made. `open`'s check
+(`vaultRoute` in `vault-list.mjs`): from a directory that is no vault with
+`vault=<id>` first when that id names this vault first, which does not depend
+on how a working directory is spelled; otherwise in its folder when the first
+listed vault that is or contains that folder is this vault; when neither
+holds, no call is made. The vault root is taken in the spelling the file
+system stores (`realpathSync.native` on macOS and Linux), which is how the
+operating system reports the tool's working directory: on a volume that folds
+letter case, a data root given in another case neither hides a vault listed
+above it nor routes a call there. `open`'s check
 that the app answers for the vault is routed from the list it verified the
 vault in. Publication calls are routed from the file, and only while it lists
 the vault open; otherwise they run in a directory that is no vault and name

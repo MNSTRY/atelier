@@ -129,11 +129,14 @@
   not know, or a view on a stop, with 400 `request-member-unknown` instead of
   409, and checks a view against the scope contract's own identifier.
 - Command-line calls to the app reach only the vault they are about. A call
-  about a vault runs in its folder, so it reaches that vault's window
-  whichever window has focus, or names the vault first (`vault=<id>`) when a
-  vault the app lists before it at a folder above it (a home folder, say)
-  would take a call run there; when that id would name another vault first
-  too, no call is made. Publication calls do so only while the app's list
+  about a vault names it first (`vault=<id>`), so it reaches that vault's
+  window whichever window has focus; only when that id would name another
+  vault first does it run in the vault's folder, and not at all when a vault
+  the app lists before it at a folder above it (a home folder, say) would take
+  a call run there. The vault root, the settings entry and the vault check use
+  the path as the file system stores it, so on macOS a data root given in
+  another letter case neither hides a vault listed above it nor routes a call
+  there. Publication calls do so only while the app's list
   shows the view's vault open; every other call runs in a directory that is
   no vault. Maintenance never reopens a vault window that was closed and never
   reaches another vault, and the directory a command or service was started
@@ -150,22 +153,29 @@
   list as it was before Atelier wrote it) and the latest are kept. A write
   that cannot be read back is `registration-not-read-back`, no longer
   `app-started-during-registration`. A Flatpak or snap build of Obsidian on
-  Linux, which never reads that file, is recognised and the file is neither
-  read nor written for it (`obsidian-sandboxed`); the vault is added through
-  the running app. An addition the running app did not answer is looked up in
+  Linux, which never reads that file, is recognised (the build whose vault
+  list was written last; its installation only when no build wrote one), and
+  the file is neither read nor written for it (`obsidian-sandboxed`); the
+  vault is added through the running app. An addition the running app did not answer is looked up in
   its list, and is `addition-not-answered` when it is not there, no longer
   `app-did-not-list-its-vaults`. Adding a vault through the app also puts its
   folder in the operating system's recent documents (Recent Items on macOS),
   as Obsidian's own "open folder as vault" does.
 - A maintenance service still running an earlier release after an upgrade
-  is replaced by `open`: a service of the workspace that proves itself ours
-  but runs another entry module than the installed one, or refuses a tick
-  that names a view (as 0.2.0-alpha.11 and earlier do), is stopped through
-  its own listener and the installed release is started under the consent
-  already recorded; `open` shows `service: restarted (outdated)`
-  (`service.restarted` in JSON). A busy service is not stopped, and nothing
-  that does not prove itself ours is touched. `requestServiceTick` takes the
-  start options of the installed entry as `service` for this.
+  is replaced by `open`. Every service records the release it runs, the
+  package version and a digest of every runtime module it ships (`src/`,
+  `contracts/`), in its record's `executable.ext.release`
+  (`releaseIdentity()`). A service of the workspace that proves itself ours
+  but runs another entry module or another release than the installed one,
+  records no release, or refuses a tick that names a view (as 0.2.0-alpha.11
+  and earlier do), is stopped through its own listener and the installed
+  release is started under the consent already recorded; `open` shows
+  `service: restarted (outdated)` (`service.restarted` in JSON). A tick
+  refused because a concurrent command replaced the runtime just before is
+  asked of the runtime that took its place, and nothing is restarted. A busy
+  service is not stopped, and nothing that does not prove itself ours is
+  touched. `requestServiceTick` takes the start options of the installed
+  entry as `service` for this (`runsAnotherRelease`).
 - The `status` next step for `publisher-conflict` / `editor-uncoordinated`
   names `atelier obsidian open` (which adds the vault to Obsidian and
   publishes through it) or quitting Obsidian; after `open` itself tried, it
