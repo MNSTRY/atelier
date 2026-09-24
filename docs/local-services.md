@@ -200,6 +200,20 @@ to end and removes only the generated record. It never looks a process up by
 port, name or pattern. Ending a proven runtime that ignores the request is
 opt-in and is proven again immediately before the signal.
 
+A runtime of an earlier release is replaced by a command that asks for a tick
+with the start options of the installed entry (`requestServiceTick({ service
+})`; `open` does). Such a runtime proves itself `healthy` but either records
+an entry module whose digest differs from the installed entry, or refuses a
+tick that names a view, as releases up to 0.2.0-alpha.11 do (their `POST`
+payload has exactly one member). It is stopped as `stop` stops it and the
+installed entry is started, detached, under the consent already recorded; the
+answer carries `restarted: "outdated"`, and `open` shows `service: restarted
+(outdated)`. A `busy` runtime is not stopped, and anything that is not a
+proven runtime of this workspace is never stopped. Without the start options
+the runtime is only reported (`service-outdated`). The digest covers the
+entry module only, so a release that changes other modules and keeps the
+entry is recognised by the tick alone.
+
 The service itself refuses to start beside a runtime of the same workspace
 that proves itself, and ends cleanly when its record no longer names it. Two
 engines can never tick one workspace together: each tick holds a private

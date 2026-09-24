@@ -331,7 +331,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           ...(flags['wait-ms'] === undefined ? {} : { tickTimeoutMs: Number(flags['wait-ms']) || undefined }), ...(options.open ?? {}),
         }, openingRules, lifecycleRules)
         const { ok: _ok, ...document } = result
-        return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
+        return {
+          exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
+          human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])],
+        }
       },
 
       // The placeholder that answers when no contribution registered an apply operation; the shipped source-apply contribution replaces it.

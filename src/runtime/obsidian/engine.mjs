@@ -127,6 +127,18 @@ export const ENGINE_PRIMITIVES = Object.freeze({
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
 const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
 
+// An editor adapter that `build` makes the first time the publisher calls it; a refusal of `build` is thrown from that call.
+function builtOnFirstUse(build) {
+  let adapter = null
+  const built = () => (adapter ??= build())
+  return {
+    probe: (input) => built().probe(input),
+    inspect: (payload) => built().inspect(payload),
+    collect: (payload) => built().collect(payload),
+    publish: (payload) => built().publish(payload),
+  }
+}
+
 function journalTime(journalId) {
   const match = /^journal-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{3})-/.exec(journalId)
   return match ? Date.UTC(+match[1], +match[2] - 1, +match[3], +match[4], +match[5], +match[6], +match[7]) : null
@@ -499,8 +511,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
           settle('updating', 'publishing', { generationId: trusted()?.generationId ?? null, preparedGenerationId, heldNotes: held })
           persist()
+          // A generation that is already the committed one needs no app: the publisher settles it after its own restart
+          // recovery, before it would probe. Its adapter is then built only if the publisher asks for one, so an app
+          // that cannot be qualified never makes a current view stale. Any other publication builds the adapter first,
+          // and an app that does not qualify keeps the publisher from being reached at all.
+          const adapter = trusted()?.generationId === preparedGenerationId ? builtOnFirstUse(() => adapterFactory({ store, scope })) : adapterFactory({ store, scope })
           const result = await seams.publishView({
-            preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter: adapterFactory({ store, scope }), clock,
+            preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
             ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
           })
           const pointerNow = trusted()

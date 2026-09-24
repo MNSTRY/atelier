@@ -52,6 +52,15 @@
   in no longer picks, or opens, a vault. `open` never adds a view's vault
   inside a folder Obsidian already lists as a vault, which would show the
   view's notes too: it answers `launch-failed` / `vault-inside-another-vault`.
+- A maintenance service still running an earlier release after an upgrade
+  is replaced by `open`: a service of the workspace that proves itself ours
+  but runs another entry module than the installed one, or refuses a tick
+  that names a view (as 0.2.0-alpha.11 and earlier do), is stopped through
+  its own listener and the installed release is started under the consent
+  already recorded; `open` shows `service: restarted (outdated)`
+  (`service.restarted` in JSON). A busy service is not stopped, and nothing
+  that does not prove itself ours is touched. `requestServiceTick` takes the
+  start options of the installed entry as `service` for this.
 - The `status` next step for `publisher-conflict` / `editor-uncoordinated`
   names `atelier obsidian open` (which adds the vault to Obsidian and
   publishes through it) or quitting Obsidian; after `open` itself tried, it
@@ -60,6 +69,11 @@
 
 ### Fixed
 
+- A view whose prepared generation was already the committed one (on the
+  first tick of a service, or prepared again on request) was marked `stale`
+  when the app could not be qualified, for example while it ran with no vault
+  open: the editor adapter was built before the publisher found nothing to
+  publish. That adapter is now built only when the publisher needs one.
 - After a refused publication, the tick `open` asked for did not try the view
   again (the engine attempted only views with changes), so `open` reported the
   old conflict until the five-minute reconciliation.

@@ -95,6 +95,8 @@ export const REASON_NEXT = Object.freeze({
   'app-did-not-list-its-vaults': 'Obsidian runs but did not answer with its vault list; open again, or quit Obsidian and open again',
   'app-refused-registration': 'Obsidian did not accept this view\'s vault folder as a vault; quit Obsidian and open again',
   'registration-not-verified': 'Obsidian answered, but its vault list does not show this view\'s vault; quit Obsidian and open again',
+  'restarted-service-in-its-first-tick': 'the maintenance service ran an earlier release and was restarted on the installed one, which is still in its first tick; run `obsidian open` again in a moment',
+  'service-outdated': 'the maintenance service runs an earlier release of Atelier that could not be replaced; run `atelier obsidian service stop`, then open again',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 
@@ -302,7 +304,8 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   const scopeId = resolveScope(enablement, requestedScope)
   const lifecycle = { loadProject, dataRoot, env, platform, ...(probeTimeoutMs === undefined ? {} : { probeTimeoutMs }) }
 
-  // 1. The owned service: reconnect, or start. Never adopt, never replace.
+  // 1. The owned service: reconnect, or start. Never adopt; a runtime of ours is replaced only when it runs an earlier
+  //    release, under the consent already recorded, when a tick is asked of it (requestServiceTick).
   let status = await serviceStatus(lifecycle, lifecycleRules)
   if (status.state === 'busy') return finish('busy', { scopeId, reason: status.reason, service: { state: status.state } })
   if (status.state !== 'healthy') {
@@ -317,15 +320,18 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     if (started.state !== 'healthy') return finish('service-unavailable', { scopeId, reason: started.reason ?? started.state, service: { state: started.state } })
     status = started
   }
-  const runtimeId = status.record?.runtimeId ?? null
+  let runtimeId = status.record?.runtimeId ?? null
+  let restarted = null
   const workspace = resolveServiceWorkspace({ project, dataRoot, env, platform })
   const report = (freshnessOverride) => scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: 'healthy', applyAvailable, ...(freshnessOverride === undefined ? {} : { freshness: freshnessOverride }) }, rules)
 
   // A tick that starts after this request, bounded, which prepares and publishes this view once more, and the view as
   // it left it. { view, serviceShown } or { answer }.
   const tickAndReport = async () => {
-    const asked = await requestServiceTick({ ...lifecycle, tickTimeoutMs, scopeId }, lifecycleRules)
-    const serviceShown = { state: asked.state, runtimeId }
+    const asked = await requestServiceTick({ ...lifecycle, tickTimeoutMs, scopeId, service }, lifecycleRules)
+    if (asked.restarted) restarted = asked.restarted
+    if (typeof asked.runtimeId === 'string') runtimeId = asked.runtimeId
+    const serviceShown = { state: asked.state, runtimeId, ...(restarted === null ? {} : { restarted }) }
     if (asked.state === 'busy') return { answer: { outcome: 'busy', extra: { scopeId, reason: asked.reason, service: serviceShown } } }
     if (!asked.requested) return { answer: { outcome: 'service-unavailable', extra: { scopeId, reason: asked.reason, service: serviceShown } } }
     let view = report()

@@ -314,6 +314,15 @@ The maintenance service can also be managed on its own:
 `service status` and `service stop`; `service unit --print
 --adapter=obsidian-cli` prints a startup unit and installs nothing.
 
+After an upgrade of Atelier, a maintenance service started earlier still runs
+the earlier release. `open` replaces it: when the service of this workspace
+proves itself Atelier's own but runs another entry module than the installed
+one, or refuses a tick that names a view as releases up to 0.2.0-alpha.11 do,
+`open` stops it as `service stop` would and starts the installed release under
+the consent already recorded, and says `service: restarted (outdated)`. A
+service in a long tick is not stopped (`open` answers `busy`), and a listener
+that does not prove itself this workspace's service is never touched.
+
 `open` and `status` answer with a freshness state, not a promise. `current`
 means the vault is the present generation, verified by read-back, and the app
 has it open. `updating` means maintenance is publishing or has not finished.

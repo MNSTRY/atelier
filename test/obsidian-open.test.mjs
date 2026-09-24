@@ -105,7 +105,7 @@ const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await im
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
-const { readServiceRecord, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
+const { readServiceRecord, readServiceSettings, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { maintenanceNoticeFor } = await import('../src/runtime/obsidian/sync-notice.mjs')
@@ -1214,6 +1214,42 @@ test('a requested tick asks the app again: an adapter-factory refusal remembered
   assert.equal(adapterFactory.lastQualification().outcome, 'qualified')
 })
 
+test('a view prepared again whose generation is the committed one is settled by the publisher without an adapter: an app that cannot be qualified never makes it stale, and a publication still asks the app first', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+  let qualifies = true
+  const built = []
+  const published = []
+  const adapterFactory = (input) => { built.push(input.scope.scopeId); if (!qualifies) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'stub', { reason: 'no-vault-open' }); return absentAdapter(input) }
+  const engine = world.engine({ adapterFactory, fullReconciliationIntervalMs: 60 * 1000, seams: { publishView: (input) => { published.push(input.preparedView.manifest.generationId); return publishView(input) } } })
+  const view = async () => (await engine.tick()).scopes[0]
+  assert.deepEqual([(await view()).state, built.length, published.length], ['current', 1, 1])
+  // The app now runs with no vault open, and cannot be qualified.
+  qualifies = false
+  engine.requestPreparation(FULL_SCOPE.scopeId)
+  const again = await view()
+  assert.deepEqual([again.state, again.reason, built.length, published.length], ['current', 'verified-by-read-back', 1, 2], 'the publisher settled it, and no adapter was built')
+  // A change that needs a publication builds the adapter first: its refusal is what the view reports, and the publisher is not reached.
+  fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
+  world.advance(61 * 1000)
+  const changed = await view()
+  assert.deepEqual([changed.state, changed.reason, built.length, published.length], ['stale', 'app-version-unsupported', 2, 2])
+})
+
+test('open, with the app running and no vault open, leaves a view published while the app was quit current: the tick it asks for does not make it stale, and status says so afterwards', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const app = fakeApp({ running: false })
+  const adapterFactory = (input) => { if (app.noVaultNow()) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'stub', { reason: 'no-vault-open' }); return absentAdapter(input) }
+  await world.service({ adapterFactory })
+  assert.equal((await world.run(['status', '--json'])).json.scopes[0].outcome, 'current')
+  // The app starts with no vault open, and its list does not have the view's vault: open cannot add it.
+  Object.assign(app.state, { running: true, noVaultAnswers: Number.POSITIVE_INFINITY })
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.launched, opened.json.freshness?.state], ['app-version-unsupported', 'no-vault-open', false, 'current'], JSON.stringify(opened.json).slice(0, 400))
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual([status.json.scopes[0].outcome, status.json.scopes[0].reason], ['current', 'verified-by-read-back'])
+})
+
 // ---------------------------------------------------------------------------
 // 4d. Obsidian's settings file: written only while no Obsidian runs, atomically, keeping everything else
 // ---------------------------------------------------------------------------
@@ -1625,6 +1661,98 @@ test('open starts the owned service the first time only with a consent, reconnec
   assert.deepEqual([unknown.exit, unknown.json.error.code], [EXIT.refused, 'unknown-scope'])
   const stopped = await world.run(['service', 'stop', '--json'], { seams })
   assert.deepEqual([stopped.exit, stopped.json.service.stopped], [EXIT.ok, true])
+  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+})
+
+// A copy of the test service entry: another file with other bytes, so to the lifecycle the entry of an earlier release.
+// Its imports name the repository's modules by absolute URL.
+function earlierEntry(dir) {
+  const source = fs.readFileSync(TEST_SERVICE_ENTRY, 'utf8').replaceAll("'../../../src/", `'${pathToFileURL(path.join(REPOSITORY_ROOT, 'src')).href}/`)
+  assert.ok(!source.includes("'../"), 'every import of the copy is absolute')
+  const file = path.join(dir, 'earlier-service-entry.mjs')
+  fs.writeFileSync(file, `${source}\n// the entry of an earlier release\n`)
+  return file
+}
+
+test('open restarts the owned service when it runs another entry than the installed one, under the consent already recorded, and says so; the next open finds it current', async (t) => {
+  const world = makeWorld(t)
+  const spawn = trackingSpawn(t)
+  const seams = (entryPath) => ({ ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath, intervalMs: IDLE_INTERVAL, spawn } })
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', 'first-actor'], { seams: seams(earlierEntry(world.dir)) })
+  assert.equal(started.json.service.state, 'healthy', JSON.stringify(started.json).slice(0, 400))
+  const before = readServiceRecord(world.workspace())
+  const consent = readServiceSettings(world.workspace()).consent
+  const opened = await world.run(openArgs(), { seams: seams(TEST_SERVICE_ENTRY), open: FAST_APP })
+  const after = readServiceRecord(world.workspace())
+  assert.deepEqual([opened.json.service?.restarted, opened.json.service?.runtimeId, opened.json.outcome], ['outdated', after.runtimeId, EXCHANGE_HERE ? 'current' : 'not-prepared'], JSON.stringify(opened.json).slice(0, 600))
+  assert.notEqual(after.runtimeId, before.runtimeId)
+  assert.equal(after.executable.digest, digest(fs.readFileSync(TEST_SERVICE_ENTRY)), 'the installed entry runs now')
+  await waitFor(() => !isAlive(before.pid), { label: 'the earlier runtime to end' })
+  assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded, not the one open was given')
+  const again = await world.run(openArgs(), { seams: seams(TEST_SERVICE_ENTRY), open: FAST_APP })
+  assert.deepEqual([again.json.service?.restarted, again.json.service?.runtimeId], [undefined, after.runtimeId], 'nothing is restarted twice')
+  const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
+  assert.equal(stopped.json.service.stopped, true)
+  await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
+})
+
+// A runtime of an earlier release, as far as a tick is concerned: the listener of 0.2.0-alpha.11 takes a POST body
+// with exactly one member, the runtime it is meant for, and so refuses a tick that names a view. It claims the
+// installed entry, so its digest tells nothing. Health and stop answer as a service's.
+const EARLIER_RUNTIME = `import http from 'node:http'
+const [port, runtimeId, bearer, identity] = process.argv.slice(2)
+const health = { ...JSON.parse(identity), pid: process.pid }
+const send = (response, status, body) => { response.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' }); response.end(JSON.stringify(body)) }
+const server = http.createServer((request, response) => {
+  let text = ''
+  request.on('data', (chunk) => { text += chunk })
+  request.on('end', () => {
+    if (request.method === 'GET' && request.url === '/health') return send(response, 200, health)
+    if (request.headers.authorization !== 'Bearer ' + bearer) return send(response, 401, { error: 'bearer-required' })
+    let body = null
+    try { body = JSON.parse(text) } catch { body = null }
+    if (body === null || Object.keys(body).length !== 1 || body.runtimeId !== runtimeId) return send(response, 409, { error: 'request-names-another-runtime' })
+    if (request.url === '/tick') return send(response, 200, { ok: true, state: 'ticked', scopes: [] })
+    if (request.url === '/stop') { send(response, 202, { runtimeId, pid: process.pid }); server.close(); setTimeout(() => process.exit(0), 20); return }
+    send(response, 404, { error: 'unknown-operation' })
+  })
+})
+server.listen(Number(port), '127.0.0.1')
+`
+
+test('open restarts an owned service of an earlier release that refuses a tick naming a view, and says so; without the installed entry to start, such a service is only reported', async (t) => {
+  const world = makeWorld(t)
+  const port = await freePort()
+  const consent = { grantedAt: iso(START), actor: 'first-actor', coverage: 'service' }
+  writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent, updatedAt: iso(START) } })
+  const runtimeId = 'rt-earlier-release'
+  const bearer = randomBytes(32).toString('base64url')
+  const installed = { path: fs.realpathSync(TEST_SERVICE_ENTRY), digest: digest(fs.readFileSync(TEST_SERVICE_ENTRY)) }
+  const script = path.join(world.dir, 'earlier-runtime.mjs')
+  fs.writeFileSync(script, EARLIER_RUNTIME)
+  const identity = { schema: HEALTH_SCHEMA, serviceName: serviceNameFor(WORKSPACE_ID), workspaceId: WORKSPACE_ID, runtimeId, host: '127.0.0.1', port, executableDigest: installed.digest, startedAt: iso(START), status: 'running' }
+  const earlier = trackingSpawn(t)(process.execPath, [script, String(port), runtimeId, bearer, JSON.stringify(identity)], { stdio: 'ignore', windowsHide: true })
+  writeServiceRecord({
+    ...world.workspace(),
+    record: {
+      schema: 'atelier-obsidian-service-state/v1', contractVersion: '1.0.0', workspaceId: WORKSPACE_ID, serviceName: serviceNameFor(WORKSPACE_ID), host: '127.0.0.1', port, runtimeId, pid: earlier.pid,
+      executable: installed, stateLocation: path.join(world.workspaceRoot(), 'state'), health: { status: 'healthy', checkedAt: iso(START) }, consent, ext: { bearer },
+    },
+  })
+  await waitFor(async () => (await probeHealth({ host: '127.0.0.1', port, timeoutMs: 1000 })).kind === 'health', { label: 'the earlier runtime to listen' })
+  const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE }
+  assert.equal((await serviceStatus(lifecycle)).state, 'healthy', 'it proves itself ours')
+  const reported = await requestServiceTick({ ...lifecycle, scopeId: FULL_SCOPE.scopeId })
+  assert.deepEqual([reported.requested, reported.tick, reported.reason, isAlive(earlier.pid)], [true, null, 'service-outdated', true])
+  const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const opened = await world.run(['open', '--consent-actor', CONSENT.actor], { seams, open: FAST_APP })
+  assert.ok(opened.stdout.split('\n').includes('service: restarted (outdated)'), opened.stdout)
+  await waitFor(() => !isAlive(earlier.pid), { label: 'the earlier runtime to end' })
+  const record = readServiceRecord(world.workspace())
+  assert.notEqual(record.runtimeId, runtimeId)
+  assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded')
+  const stopped = await world.run(['service', 'stop', '--json'], { seams })
+  assert.equal(stopped.json.service.stopped, true)
   await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
 })
 
