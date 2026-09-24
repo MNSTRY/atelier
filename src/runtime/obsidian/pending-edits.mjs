@@ -92,16 +92,13 @@ export function heldPaths(edits, scopeId) {
 }
 
 // The notes a view must keep in the vault layout they were published in: those
-// held for an open edit, and those whose edit was applied (automatic mode
-// applies on a tick) while the file still holds the edited bytes and the view
-// has not published them yet. Once the view publishes the applied text, the
-// file is an ordinary published note again and can be retired by a new layout.
-// `bases` are the view's trusted note digests, `digestOf(path)` what the file
-// holds now.
-export function layoutHeldPaths(edits, scopeId, { bases, digestOf }) {
-  const applied = edits.filter((edit) => edit.scopeId === scopeId && edit.state === 'applied' && bases.has(edit.path)
-    && bases.get(edit.path).digest !== edit.observedDigest && digestOf(edit.path) === edit.observedDigest)
-  return [...new Set([...heldPaths(edits, scopeId), ...applied.map((edit) => edit.path)])].sort(compareText)
+// held for an open edit, and those whose edit closed on this tick (automatic
+// mode applies and closes an edit on the tick it observes it). The view is
+// prepared in that layout once more, so the file the person edited becomes the
+// published note, and a later tick lays the view out again and retires it.
+export function layoutHeldPaths(edits, scopeId, now) {
+  const closedNow = edits.filter((edit) => edit.scopeId === scopeId && edit.closedAt !== null && edit.closedAt === now)
+  return [...new Set([...heldPaths(edits, scopeId), ...closedNow.map((edit) => edit.path)])].sort(compareText)
 }
 
 // Automatic dispatch. `authorize()` reads the machine settings and the policy

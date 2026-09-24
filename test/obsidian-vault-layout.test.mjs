@@ -684,7 +684,7 @@ test('upgrade with a held edit: the view keeps layout 1 while a note is held, th
   assert.equal(fs.existsSync(path.join(world.vault(), edit.path)), false)
 })
 
-test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is held, and is laid out again once the person restores the note', needsExchange, async (t) => {
+test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is held and on the tick its edit closes, and is laid out again once the person restores the note', needsExchange, async (t) => {
   const world = upgradeWorld(t)
   const earlier = world.engine({ seams: EARLIER_RELEASE })
   await earlier.tick()
@@ -699,9 +699,14 @@ test('upgrade with a withdrawn edit: the view keeps layout 1 while the note is h
   world.advance(1000)
   assert.equal((await engine.tick()).scopes[0].state, 'held-for-your-edit')
   assert.equal(world.manifest().schema, V1)
-  // The person puts the note back as it was published: the edit is withdrawn, the hold lifts, and the view is laid out again.
+  // The person puts the note back as it was published: the edit is withdrawn and the hold lifts. The tick that closes
+  // the edit still prepares layout 1, and the next one lays the view out again.
   fs.writeFileSync(path.join(world.vault(), edit.path), published)
-  for (let tick = 0; tick < 3; tick += 1) { world.advance(1000); await engine.tick() }
+  world.advance(1000)
+  await engine.tick()
+  assert.equal(world.pendingEdits().find((item) => item.editId === edit.editId).state, 'withdrawn')
+  assert.equal(world.manifest().schema, V1, 'an edit closed on this tick holds the layout on this tick')
+  for (let tick = 0; tick < 2; tick += 1) { world.advance(1000); await engine.tick() }
   const after = world.manifest()
   assert.deepEqual([after.schema, after.layoutVersion], [V2, 2])
   assert.equal(world.pendingEdits().find((item) => item.editId === edit.editId).state, 'withdrawn')

@@ -462,7 +462,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const attempt = new Map()
     const invalidate = (scopeId, changeClass) => attempt.set(scopeId, new Set([...(attempt.get(scopeId) ?? []), ...(changeClass ? [changeClass] : [])]))
     // The notes that keep a view in the vault layout they were published in (see layoutHeldPaths).
-    const layoutHeldOf = (scopeId) => layoutHeldPaths(edits, scopeId, { bases: basesOf.get(scopeId) ?? new Map(), digestOf: (notePath) => index.get(vaultKey(scopeId, notePath))?.digest ?? null })
+    const layoutHeldOf = (scopeId) => layoutHeldPaths(edits, scopeId, now)
     for (const { scope } of scopes) {
       const entry = entries.get(scope.scopeId)
       // A view that did not settle is tried again, not on every tick: see the head of this file.
