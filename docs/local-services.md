@@ -298,8 +298,9 @@ that no app runs, in temporary directories, on ephemeral loopback ports.
 
 ### The `obsidian` command
 
-`atelier obsidian <operation>` is the noninteractive surface over all of the
-above. With `--json` it prints exactly one JSON document, for a refusal too.
+`atelier obsidian <operation>` is the command-line surface over all of the
+above. Every input is an argument. With `--json` it prints exactly one JSON
+document, for a refusal too.
 Exit codes: 0 done, 1 an error nobody typed, 2 a typed refusal or a usage
 error, 3 the operation ran and its answer is not success.
 
@@ -307,7 +308,8 @@ error, 3 the operation ran and its answer is not success.
 | --- | --- | --- |
 | `status` | enablement, machine settings, what was decided, proven service state, per-view freshness with its diagnostics (a code, the rule and the in-view note concerned, never a value; see [the Obsidian contract](obsidian-contract.md#notes-that-were-laid-out-anyway)), whether an apply operation exists | nothing |
 | `settings` | what this machine remembers for the workspace (who may see, where vaults live, start at login, the adapter), who allowed the service, and how each answer is changed | nothing |
-| `scope list`, `scope show ID` | the declared views | nothing |
+| `scope list`, `scope show ID` (also `view list`, `view show ID`) | the declared views | nothing |
+| `view add ID (--all \| --folder PATH [--folder PATH ...] [--repo R] \| --tag T) [--expand DEPTH:MAX] [--default] [--allow-empty] [--yes]` | adds a view to the project configuration, after showing the change and how many notes the view would show; refuses a view that would show no note unless `--allow-empty` (see [Adding a view](obsidian.md#adding-a-view)) | `atelier.project.json`, and `.gitignore` when `.atelier-local/` is not ignored. Never committed |
 | `audience show`, `audience set me\|A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. `me` is only you: every audience but `sensitive`, which is added by name. The answer is remembered as the person's decision. A change invalidates every view at the next tick | private machine settings |
 | `location show`, `location set DIR [--allow-synced-location]` | where this workspace's vaults live; each view not published yet gets `<project> (<view>)` there at its first publication, and a vault published already stays where it is | private machine settings |
 | `mode show`, `mode set manual\|automatic` | `automatic` refuses without an installed, matching, active automatic policy | private machine settings |
@@ -329,7 +331,9 @@ app, its command-line tool, an operating-system opener or a service manager,
 or starts the `obsidian` command's `open` or `service` outside the test
 runner's context with an environment that leads to the developer's app.
 
-A person at a terminal is never asked anything by these operations, but the
+A person at a terminal is asked one thing, by `view add` only: whether to
+write the change it shows to a file they commit. `--yes` answers beforehand,
+and a question gets no answer after 10 minutes, which writes nothing. The
 first start of the maintenance service records the account's name as the
 actor that allowed it when no `--consent-actor` is given. A person is at a
 terminal when standard input and output are both terminals and neither

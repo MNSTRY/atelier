@@ -21,6 +21,8 @@ import {
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
 import { currentPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
 import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
+import { planViewAdd, viewFromRequest, writeViewPlan } from '../runtime/obsidian/project-views.mjs'
+import { askGoAhead, createQuestioner } from '../runtime/obsidian/questions.mjs'
 import { readServiceSettings, serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
@@ -31,8 +33,11 @@ import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } fro
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
 //
-// Noninteractive: every input is an argument, nothing is ever asked. With
-// `--json` exactly one JSON document is printed on stdout, for a refusal too.
+// Every input is an argument. A person at a terminal (`isInteractive`) is
+// asked before a change to a file they commit, and can answer with --yes
+// beforehand; anyone else is never asked, and their command is their consent.
+// With `--json` exactly one JSON document is printed on stdout, for a refusal
+// too.
 //
 // Exit codes: 0 done (for `open`: the view is current and open); 1 an error
 // nobody typed; 2 a typed refusal or a usage error; 3 the operation ran and
@@ -63,7 +68,13 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
 
   status                               Enablement, machine settings, service and per-view freshness. Read-only.
   settings                             What this machine remembers for this workspace, and how to change it. Read-only.
-  scope list | scope show ID           The views this project declares. Read-only.
+  scope list | scope show ID           The views this project declares. Read-only. (\`view list | show ID\` too.)
+  view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default]
+      [--allow-empty] [--yes]
+                                       Add a view to the project's configuration, which you commit: every note, the
+                                       notes under folders of one repository, or those with a tag, optionally with the
+                                       notes they link to (DEPTH steps, MAX notes in all). Shows the change and how many
+                                       notes the view would show, and asks at a terminal.
   audience show | set me|A,B | clear   The audiences this machine lets into a view (private; none by default).
                                        \`me\` is only you: every audience but sensitive, which is added by name.
   location show | set DIR [--allow-synced-location]
@@ -104,7 +115,11 @@ Pending edits additionally report ${APPLY_UNAVAILABLE} while no apply operation 
 Minimum Obsidian version: ${MINIMUM_APP_VERSION}.
 Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer is not success.`
 
-const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', 'allow-synced-location': 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
+const FLAGS = Object.freeze({
+  json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', 'allow-synced-location': 'flag', all: 'flag', default: 'flag', 'allow-empty': 'flag', yes: 'flag',
+  project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value', repo: 'value', tag: 'value',
+  expand: 'value', folder: 'values',
+})
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
@@ -182,7 +197,8 @@ function parse(argv) {
     if (FLAGS[name] === 'flag') { if (inline !== undefined) refuse('usage', `--${name} takes no value`); flags[name] = true; continue }
     const value = inline ?? argv[index += 1]
     if (value === undefined || value === '' || (inline === undefined && value.startsWith('--'))) refuse('usage', `--${name} needs a value`)
-    flags[name] = value
+    // An option that takes several values is given once for each.
+    flags[name] = FLAGS[name] === 'values' ? [...(flags[name] ?? []), value] : value
   }
   return { positionals, flags }
 }
@@ -198,8 +214,27 @@ const NEXT = Object.freeze({
   'automatic-mode-refused': 'install an active automatic policy with `obsidian policy install FILE`',
   [APPLY_UNAVAILABLE]: 'no apply operation is registered on this command; edits stay preserved and queued',
   'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
-  disabled: 'declare the Obsidian settings in the project configuration',
+  disabled: 'declare the Obsidian settings in the project configuration: `atelier obsidian view add everything --all` does it',
+  'view-would-be-empty': 'check the folders or the tag; a note is shown once it carries a classification (a kg block) with an admitted audience; --allow-empty declares the view anyway',
+  'view-exists': 'choose another name; `atelier obsidian view list` shows the views declared',
+  'view-repository-ambiguous': 'name the repository the folders are in with --repo',
+  'project-config-format-unknown': 'add the member shown under "detail" to the project configuration by hand, under "ext"',
+  'project-config-changed': 'run the command again',
+  'canonical-graph-invalid': '`atelier graph --check` names the errors in the project\'s notes; fix them, then run the command again',
+  unanswered: 'run the command again at a terminal, or pass --yes',
 })
+
+// What a view would show, in words: `counts` of viewCounts, and who they were counted for.
+function viewCountWords(scopeId, counts, audience) {
+  const who = audience.decided ? (audience.allow.length === 0 ? 'no audience' : audience.allow.join(', ')) : 'only you, until you decide'
+  const reasons = [
+    ...(counts.withheld.unclassified > 0 ? [`${counts.withheld.unclassified} carry no classification`] : []),
+    ...(counts.withheld.audience > 0 ? [`${counts.withheld.audience} an audience not admitted`] : []),
+  ]
+  const shown = `view ${scopeId} would show ${counts.shown === 0 ? 'no note' : `${counts.shown} note(s)`} (who may see: ${who})`
+  if (counts.named === 0) return `${shown}: it names no note`
+  return reasons.length === 0 ? shown : `${shown}; of the ${counts.named} note(s) it names, ${reasons.join(' and ')}`
+}
 
 // The decisions the command's oracles are sensitive to are those of opening and of the lifecycle; tests substitute
 // broken ones here to prove the oracles can fail. `runObsidianCommand` always uses the production ones.
@@ -215,9 +250,16 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     account = accountName,
     // The home folder a location is read against (`~/`) and checked for sync clients; a test names its own.
     homedir = env.NODE_TEST_CONTEXT === undefined ? os.homedir() : null,
+    // Where a person at a terminal is asked, and answers; a test types into its own.
+    input = env.NODE_TEST_CONTEXT === undefined ? process.stdin : null, output = env.NODE_TEST_CONTEXT === undefined ? process.stdout : null,
   } = options
   let json = argv.includes('--json')
   let operationName = null
+  let questions = null
+  const questioner = () => {
+    if (input === null || output === null) throw new Error('a question needs an input and an output')
+    return (questions ??= createQuestioner({ input, output }))
+  }
   const emit = ({ exit, document, human }) => {
     const complete = { schema: COMMAND_SCHEMA, ok: exit === EXIT.ok, operation: operationName, ...document }
     if (json) stdout(JSON.stringify(complete, null, 2))
@@ -477,6 +519,50 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         }
       },
 
+      // One more view in the project's configuration. A person at a terminal sees the change and how many notes the view
+      // would show, and is asked; --yes answers beforehand. Anyone else gets the change made, and shown.
+      async view() {
+        if (sub === 'list' || sub === 'show' || sub === undefined) return operations.scope()
+        if (sub !== 'add' || value === undefined) refuse('usage', 'view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default] [--allow-empty] [--yes]')
+        const { project, workspace, workspaceId } = readable()
+        const repositories = project.repos.filter((repo) => !repo.external && typeof repo.name === 'string').map((repo) => repo.name)
+        const scope = viewFromRequest({ scopeId: value, all: flags.all === true, folders: flags.folder ?? [], repo: flags.repo, tag: flags.tag, expand: flags.expand, repositories })
+        const plan = planViewAdd(project, { scope, makeDefault: flags.default === true })
+        // Counted for the audiences this machine admits; for "only you", the answer offered first, while nobody decided.
+        const machine = machineOf(workspace)
+        const decided = machine?.decisions.audience ?? null
+        const audience = { allow: decided === null ? ONLY_YOU_AUDIENCES : machine.audienceAllow, decided: decided !== null }
+        const { viewCounts } = await import('../runtime/obsidian/view-counts.mjs')
+        const counts = viewCounts({ project, audienceAllow: audience.allow, scope, ...(workspaceId === null ? {} : { workspaceId }) })
+        const countLine = viewCountWords(scope.scopeId, counts, audience)
+        if (counts.shown === 0 && flags['allow-empty'] !== true) refuse('view-would-be-empty', `${countLine}; nothing was written`, { scopeId: scope.scopeId, counts, audience })
+        const file = path.basename(project.configPath)
+        const shownPlan = [
+          `Atelier will add the view "${scope.scopeId}" to ${file}${plan.ignore.needed ? ', and .atelier-local/ to .gitignore' : ''} (you commit it):`,
+          ...plan.diff.trimEnd().split('\n').map((line) => `  ${line}`),
+          countLine,
+        ]
+        const asked = interactive && flags.yes !== true
+        if (asked) {
+          for (const line of shownPlan) stdout(line)
+          const yes = await askGoAhead(questioner(), 'Write this change? [Y/n] ')
+          if (yes === null) refuse('unanswered', 'no answer came; nothing was written')
+          if (!yes) return { exit: EXIT.notSuccess, document: { scope, declined: true, written: [], diff: plan.diff, counts, audience }, human: ['Nothing was written.'] }
+        }
+        const { written } = writeViewPlan(plan)
+        const committed = written.map((item) => path.relative(project.configDir, item).split(path.sep).join('/'))
+        return {
+          exit: EXIT.ok,
+          document: { scope, defaultScopeId: plan.settings.defaultScopeId ?? null, declined: false, written: committed, diff: plan.diff, counts, audience },
+          human: [
+            ...(asked ? [] : shownPlan),
+            `Added the view ${scope.scopeId}${plan.settings.defaultScopeId === scope.scopeId ? ', the default' : ''}. Commit ${committed.join(' and ')} when you are ready; Atelier commits nothing.`,
+            ...(plan.settings.enabled === true ? [] : ['The projection is turned off in this project ("enabled": false), so nothing is published until it is turned on.']),
+            `Next: \`atelier obsidian open${plan.settings.defaultScopeId === scope.scopeId ? '' : ` --scope ${scope.scopeId}`}\` shows it in Obsidian`,
+          ],
+        }
+      },
+
       async scope() {
         const { enablement } = readable()
         if (sub === 'list' || sub === undefined) return { exit: EXIT.ok, document: { defaultScopeId: enablement.defaultScopeId, scopes: enablement.scopes }, human: enablement.scopes.map((scope) => `${scope.scopeId}\t${scope.mode}${scope.scopeId === enablement.defaultScopeId ? '\tdefault' : ''}`) }
@@ -705,6 +791,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     }
     const next = NEXT[error.code] ?? error.hint ?? 'see `atelier obsidian status`'
     return emit({ exit: EXIT.refused, document: { error: { code: error.code, message: plainMessage(error), next, detail: error.detail ?? {} } }, human: [`[${error.code}] ${plainMessage(error)}`, `Next: ${next}`] })
+  } finally {
+    questions?.close()
   }
 }
 

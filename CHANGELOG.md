@@ -201,6 +201,22 @@
   vouches for no version). A version the tool does give
   decides, since the tool may reach another app holding the same vault, and
   whether the app and its tool are installed is still the probe's answer.
+- Views can be declared without editing JSON:
+  `atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default]`
+  adds a view to `atelier.project.json` (and `.atelier-local/` to
+  `.gitignore` when that folder is not ignored), and never commits. It shows
+  the change as a diff and how many notes the view would show on this machine,
+  with how many of the notes it selects are withheld for carrying no
+  classification or an audience that is not admitted. A view that would show
+  no note is refused with `view-would-be-empty` unless `--allow-empty`. A
+  person at a terminal is asked before anything is written (`--yes` answers
+  beforehand; no answer within 10 minutes writes nothing); for anyone else the
+  command is the consent. The file is rewritten only when it is in the form
+  Atelier writes JSON in, so the change is the view and nothing else
+  (`project-config-format-unknown` names the member to add by hand
+  otherwise), atomically, keeping its mode, and only over the bytes it read
+  (`project-config-changed`). The first view is the default. `view list` and
+  `view show ID` are `scope list` and `scope show ID`.
 
 ### Changed
 
