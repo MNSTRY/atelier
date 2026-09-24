@@ -68,7 +68,10 @@ confidentiality boundary against what visible authors wrote (owner decision,
 2026-09-22). A redaction boundary over authored bytes cannot coexist with
 byte-faithful emission; it would be a separate mode with its own evidence.
 The deny-list below is defence in depth over the author text that generated
-regions repeat, not the guarantee.
+regions repeat, not the guarantee, and it follows the audience: a note outside
+the selection that the view's audience may see is not withheld from the
+vault's readers, so text naming it is reported, not refused (see "The
+redaction guard").
 
 A layout 2 vault shows, in its folder names, the repository identity and the
 source directory chain of the notes in the view, and every note names its
@@ -86,10 +89,12 @@ dropped before the count is taken.
 
 A collision qualifier is the qualified note's own source file stem, or a
 short id of its own identity (see "Collisions"); a qualified folder carries a
-short id of its own source folder. A qualifier appears only because something
-this vault shows took the name first: another note of the view, an asset the
-view copies, or a file held for an edit, which stays in the vault while its
-edit is open, also after its note has left the view. It stays while the
+short id of its own source folder or repository. A qualifier appears only
+because something this vault shows took the name first: another note of the
+view, an asset the view copies, or a file held for an open edit, which stays
+in the vault while its edit is open, also after its note has left the view.
+The one exception is fixed and names no note: a repository whose folder would
+be `notes` or `attachments` spelled another way (see "Folders"). It stays while the
 qualified note is in the view, also after the other has left, because a path
 never moves while its note is in the view. A note of another view, a withheld
 note, or one that was never in this view never causes a qualifier by itself:
@@ -101,10 +106,16 @@ Before anything is returned, `prepareView` checks the whole result, every
 note included, whether it was emitted on this call or reused from the
 preparation cache. Any failure refuses the view with `redaction-failure`,
 whose detail names the rule (`allow-list`, `identity-block` or `deny-list`)
-and the in-view note or file it concerns (`notePath` or `filePath`), never the
-value that was found; the engine records the same in the view's freshness
-entry, and `atelier obsidian status` shows it. Three rules, in the vault
-layout the view is prepared in:
+and, where there is one, the note or file of this view it concerns: a path
+allocated to this view (`notePath` or `filePath`), never the value that was
+found and never a path in question. A deny-list refusal names the note whose
+generated region holds the text, which for an incoming relation row is the
+note the row is in, not the note whose title it repeats. An allow-list
+refusal names the note by its allocated path, or the rule alone when the path
+in question is the only one at hand (an attachment that is not the view's, a
+manifest entry of no note of the view). The engine records the same in the
+view's freshness entry, and `atelier obsidian status` shows it. Three rules,
+in the vault layout the view is prepared in:
 
 1. Allow-list. Every path the emitter wrote must be a path allocated to this
    view: every note and attachment path of the manifest, every rewritten link
@@ -116,22 +127,36 @@ layout the view is prepared in:
    embed of its file). The identity block of each note must name exactly that
    note's own repository, identity and source path, and nothing else may
    appear in it.
-2. Deny-list, defence in depth. The free text of the generated regions (the
-   titles in relation rows, a wrapper's title, summary and tags), the link
-   targets excluded, is read as a reader sees it, with the backslashes the
-   emitter adds to escape Markdown removed, and compared in NFC. It must not
-   contain, as a whole token, an unambiguous identifier of a census node or
-   embedded asset outside this view (withheld, outside the selection, or an
-   asset the view does not copy): a repository-qualified identity
-   (`<repository>:…`), a repository-qualified source path
-   (`<repository>/<path>`), a repository-relative path that holds a folder
-   (a `/`), or a vault path the node has in another view or had in this one.
-   An identity that is a bare word, and a file name at a repository's root
-   (`README.md`, `index.md`), are reported, not refused (see "Notes that were
-   laid out anyway"): in-view text names such words and files all the time. A
-   value that also identifies a note of this view names nothing outside it
-   and is neither. A match is a whole token when no letter or digit is beside
-   it, and no one of `. _ : / -` joined to a letter or digit (a full stop that
+2. Deny-list, defence in depth, following the audience. The free text of the
+   generated regions (the titles in relation rows, a wrapper's title, summary
+   and tags), the link targets excluded, is read as a reader sees it, with the
+   backslashes the emitter adds to escape Markdown removed, and compared in
+   NFC, against the identifiers of every census node and embedded asset
+   outside this view:
+   - Of a node or asset the view's audience may not see (withheld), an
+     unambiguous identifier refuses the view: an identity qualified by any
+     repository of the census (`<repository>:…`, whichever repository holds
+     the note), a repository-qualified source path (`<repository>/<path>`), a
+     repository-relative path that holds a folder (a `/`), or a vault path the
+     node has in another view or had in this one. An identity that is a bare
+     word, and a file name at a repository's root (`README.md`, `index.md`),
+     are ambiguous and only reported: in-view text names such words and files
+     all the time.
+   - Of a node or asset the audience may see but this view does not hold (not
+     selected, or an asset the view does not copy), every identifier, a vault
+     path of it in another view included, is only reported: every view of a
+     workspace has one audience today, so such a note is not withheld from
+     anyone who reads this vault (decided 2026-09-24 under the owner decision
+     of 2026-09-22). So is a vault path of a note no longer in the census.
+     The rule follows the audience: a view with an audience of its own would
+     refuse for whatever that audience may not see, with no change to this
+     rule.
+   - A value that also identifies a note of this view names nothing outside it
+     and is neither.
+
+   What is reported is recorded as a diagnostic (see "Notes that were laid out
+   anyway"). A match is a whole token when no letter or digit is beside it,
+   and no one of `. _ : / -` joined to a letter or digit (a full stop that
    ends a sentence is beside a whole token; `x.north-desk:a` is one longer
    token); it is compared exactly, case included. The identity block, the one
    place a note names its own repository-relative path, is held to rule 1.
@@ -149,14 +174,28 @@ have become spaces and runs of whitespace one space; that form is the
 author's text carried as authored, and rule 2 does not match it: there is no
 fuzzy matching (the residual of the 2026-09-22 decision above).
 
+A refusing deny-list is itself a signal. Someone who can edit the text of an
+in-view note and watch the view go stale learns that the words they wrote name
+something the audience may not see; the refusal never says which note or
+value. That existence oracle is open only to a person who can already edit
+in-view text, and is accepted with the rule.
+
+The vault paths that other views hold come from the persistent registry, and
+those of this view's prior generation from that generation. After the
+registry is lost, a vault path another view held is not denied until that view
+is prepared again and writes its section; the identities and source paths of
+the same notes still are.
+
 Identities are what the graph records. A sidecar's identity is checked for its
 form, but a Markdown note's `kg.id` may be any non-empty string, a bare word
 included; Atelier's own documents use repository-qualified identities
-(`<repository>:<name>`). A bare word could be any word of a title, and a root
-file name such as `README.md` any repository's, so both are reported, never
-refused. The matcher is one Aho–Corasick automaton over every value with the
-token boundary tested at each hit: it reads a text once, however many values
-it denies.
+(`<repository>:<name>`). An identity qualified by any repository of the census
+is unambiguous, whichever repository holds its note. A bare word could be any
+word of a title, and a root file name such as `README.md` any repository's, so
+both are reported, never refused. The matcher is one Aho–Corasick automaton
+over every value, with the token boundary tested at each hit: building it is
+linear in the total length of the values, and it then reads a text once,
+however many values there are.
 
 In layout 1 the guard additionally refuses any `--<hex>` identity suffix of a
 census identity outside the view, anywhere in generated text or emitted paths,
@@ -201,7 +240,17 @@ first 6 hexadecimal characters of the SHA-256 of its identity. A source folder
 whose mirrored folder would take the name of a file already allocated (a
 source directory `docs/Guide.md/` after a note `docs/Guide.md`, or `a/Data/`
 after a wrapped file `a/data`) is qualified the same way, with the id of the
-source folder: `docs/Guide.md (1a2b3c)/`.
+source folder: `docs/Guide.md (1a2b3c)/`. So is a repository folder whose name
+a file held for an edit already spells another way in its folder (a layout 1
+file under `notes/` and a repository named `Notes`).
+
+The folders `notes` and `attachments`, where layout 1 kept every note and file,
+count as taken in every vault: an upgrade retires their files but leaves the
+folders, and on a case-insensitive file system a repository folder named
+`Notes` would otherwise be merged into `notes`, spelled as the disk has it and
+not as the manifest does. A repository whose folder differs from either only
+in case or normalization gets ` (<id>)`; a repository named exactly `notes` or
+`attachments` uses the folder as it is.
 
 ### File names
 
@@ -299,9 +348,10 @@ views: each view allocates among its own notes, with its own vault root.
 
 The persistent path registry keeps each view's last allocation in a section of
 its own (`views.<scopeId>`); a selection resolved without the view's
-generation reads it. Preparation seeds from the prior generation itself, so a
-lost registry costs no view its paths and is written again on the next
-preparation.
+generation reads it. The engine passes the views it maintains
+(`viewScopeIds`), and the registry drops the section of any other view.
+Preparation seeds from the prior generation itself, so a lost registry costs
+no view its paths and is written again on the next preparation.
 
 ### Notes that were laid out anyway
 
@@ -319,7 +369,11 @@ and `filePath` instead of `nodeId` and `notePath`):
   "Identity in the note");
 - `bare-identity-in-generated-text` (rule `deny-list`): generated text of the
   note holds, as a whole token, the bare-word identity or the root file name
-  (`README.md`) of a note outside the view (see "The redaction guard").
+  (`README.md`) of a note the audience may not see (see "The redaction
+  guard");
+- `unselected-identity-in-generated-text` (rule `deny-list`): generated text of
+  the note holds an identifier of a note or asset the audience may see but the
+  view does not hold.
 
 A view refused by the redaction guard records `{ code: "redaction-failure",
 rule, notePath | filePath }` in its freshness entry the same way.
@@ -396,10 +450,12 @@ generation:
    area with a receipt; a note somebody edited is never removed: it stays
    where it is and is surfaced as a retained edit. Nothing is deleted.
 3. While a note of the view has an open edit, the view is not laid out again.
-   The engine passes as `heldNotePaths` the paths of held notes and of notes
-   whose edit closed on this tick. `prepareView` prepares a view whose prior
-   generation is in layout 1 and holds one of them in layout 1, exactly as
-   the earlier release did, a new note included
+   The engine passes as `heldNotePaths` the files of open edits, which stay in
+   the vault and keep their names taken in layout 2, and as
+   `layoutHeldNotePaths` those and the files whose edit closed on this tick.
+   `prepareView` prepares a view whose prior generation is in layout 1 and
+   holds one of the latter in layout 1, exactly as the earlier release did,
+   a new note included
    (`notes/<title>--<suffix>.md`). A held note therefore stays under its
    layout 1 path and is held, applied and withdrawn by the rules it was held
    under. The engine lays a settled layout 1 view out again at the first tick

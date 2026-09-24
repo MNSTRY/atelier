@@ -9,9 +9,7 @@
   `layoutVersion: 2` and each note's identity region, and a vault an earlier
   release published is laid out again once (below). The v1 contract is
   unchanged and still validates every generation an earlier release wrote; a
-  reader of generation manifests must accept both majors. In
-  `@mnstry/atelier/obsidian/materialize`, `allocateWorkspacePaths` is replaced
-  by `allocateViewPaths`.
+  reader of generation manifests must accept both majors.
 - Obsidian views are laid out in vault layout 2, so a file name reads as the
   note's title and the vault reads as the repositories. Folders mirror each
   repository under a folder named after it, so a view's folders show the
@@ -25,21 +23,29 @@
   by the source file stem and then by a short stable id; a name that collides
   with nothing carries no hash. A wrapped file keeps its own name beside its
   note (`<file name>.md`), and an embedded file is copied to its mirrored
-  path. Links name their target by its full vault path.
+  path. Links name their target by its full vault path. A repository folder
+  that would be `notes` or `attachments` spelled another way is told apart by
+  a short id, since an upgraded vault keeps those two folders of the earlier
+  layout.
 - Each view allocates its paths among its own notes, seeded from what its
   prior generation published: a path does not change on retitle or when
   other files come and go, a note that leaves the view releases its path
   there (a renamed source takes its name back), a note of another view never
   causes a qualifier, and a lost path registry costs no view its paths. One
   identity may have different paths in different views. The registry keeps
-  each view's allocation in a section of its own.
+  each view's allocation in a section of its own, and drops the sections of
+  views the engine no longer maintains. `@mnstry/atelier/obsidian/materialize`
+  adds `allocateViewPaths`; `allocateWorkspacePaths` is deprecated: it still
+  allocates the earlier layout's paths for a whole workspace, exactly as
+  before, and Atelier no longer calls it.
 - A source that does not fit is laid out anyway and reported, never a reason
   to refuse the workspace: a folder chain too long for the path budget keeps
   a readable prefix and a short stable id, and a source folder that meets a
   file of the same name is qualified with one. What is worth a look (these,
-  an author's own identity keys shadowing the generated ones, a bare-word
-  identity in generated text) is recorded in the manifest and the view's
-  freshness entry, and shown by `atelier obsidian status`, naming the note.
+  an author's own identity keys shadowing the generated ones, generated text
+  that names a note outside the view without refusing it) is recorded in the
+  manifest and the view's freshness entry, and shown by
+  `atelier obsidian status`, naming the note.
 - Every note names its identity in three generated front-matter properties,
   `atelier-id`, `atelier-repo` and `atelier-source`, or, when its own front
   matter could not take them unchanged in meaning, in a generated block at
@@ -59,14 +65,16 @@
   its own note. Generated prose repeats author text (the titles, summaries
   and tags of in-view notes), which is carried as authored; the deny-list over
   it, read as a reader sees it with the emitter's escapes removed and in NFC,
-  refuses an unambiguous identifier of a note outside the view (a
-  repository-qualified identity or path, a repository-relative path with a
+  follows the audience, as defence in depth. For a note the audience may not
+  see it refuses an unambiguous identifier (an identity qualified by any
+  repository, a repository-qualified path, a repository-relative path with a
   folder, a vault path) and reports a bare-word identity or a file name at a
-  repository's root (`README.md`), as defence in depth. A view may newly
-  refuse with `redaction-failure`; the refusal names the rule and the in-view
-  note, never the value. Both rules run over every note, cached ones included,
-  and the deny matcher is one automaton whose cost does not grow with the
-  number of withheld values.
+  repository's root (`README.md`); for a note the audience may see but the
+  view does not select it only reports. A view may newly refuse with
+  `redaction-failure`; the refusal names the rule and the in-view note, never
+  the value. Both rules run over every note, cached ones included. The deny
+  matcher is one automaton: building it is linear in the values it holds, and
+  it reads each text once, however many there are.
 - A focus query names each note by an anchored regular-expression path term
   (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
   exactly the selected notes; a focus persisted with the earlier version is
