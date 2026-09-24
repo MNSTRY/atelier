@@ -13,6 +13,7 @@ export { APPLY_RESULT_STATUSES, BUILT_IN_OPERATIONS, EXTENSION_KINDS, REPLACEABL
 export { CONTRIBUTIONS_DIRECTORY, loadContributions } from './contributions.mjs'
 export { APP_OUTCOMES, MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp } from './app-capability.mjs'
 export { OPENING_OUTCOMES, describeOutcome, openScope, scopeReport } from './opening.mjs'
+export { appStateSignature, registerVaultInObsidianSettings } from './app-registration.mjs'
 export {
   CHANGE_CLASSES, CLOSED_EDIT_STATES, EDIT_STATES, FRESHNESS_SCHEMA, FRESHNESS_STATES, LATE_WRITERS_SCHEMA, OPEN_EDIT_STATES, PENDING_EDITS_SCHEMA,
   createMaintenanceStateStore, validateFreshness, validateLateWriters, validatePendingEdits,
@@ -20,7 +21,7 @@ export {
 export { listConfigFiles, listSourceFiles, listVaultNotes, reconcile } from './observation.mjs'
 export { createFsWatcherFactory, createNullWatcherFactory } from './watchers.mjs'
 export { DEFAULT_ELIGIBILITY, assetEligibilityFor, createProductionSeams } from './pipeline.mjs'
-export { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, DEFAULT_LATE_WRITER_WINDOW_MS, DEFAULT_RETRY_INTERVAL_MS, createMaintenanceEngine } from './engine.mjs'
+export { DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, DEFAULT_LATE_WRITER_WINDOW_MS, DEFAULT_PUBLICATION_RETRY_MS, DEFAULT_RETRY_INTERVAL_MS, createMaintenanceEngine } from './engine.mjs'
 export { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock, createAbandonmentProof, inspectPrivateGenerationLock } from './private-lock.mjs'
 export { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
 export { HEALTH_SCHEMA, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'

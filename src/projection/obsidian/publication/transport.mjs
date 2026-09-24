@@ -1,6 +1,8 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { readlinkSync } from 'node:fs'
+import path from 'node:path'
 import { POLICY_SETTINGS_PATH, buildEvalCode, createInProcessHost, runInProcess, validatePayload } from './bridge-script.mjs'
+import { obsidianUserDataDir, readObsidianSettings, vaultRoute } from './vault-list.mjs'
 
 // Editor coordination adapter.
 //
@@ -111,13 +113,51 @@ export function defaultCliPath(platform = process.platform) {
   return 'obsidian-cli'
 }
 
+// A directory that is no vault, for a call that must not choose one by where it runs.
+export const NEUTRAL_DIRECTORY = (() => { try { return path.parse(process.cwd()).root } catch { return path.sep } })()
+
+// The working directory and leading arguments of a call that goes where a
+// `vaultRoute` says: into the vault's folder, or naming the vault's id first
+// from a directory that is no vault (`neutral`), or, for any other route, from
+// that directory naming no vault.
+export function routedCall(route, neutral = NEUTRAL_DIRECTORY) {
+  if (route?.how === 'folder') return { cwd: route.cwd, args: [] }
+  if (route?.how === 'id') return { cwd: neutral, args: [`vault=${route.id}`] }
+  return { cwd: neutral, args: [] }
+}
+
+// Which window a publication call reaches. The app answers a command in the
+// window of the vault its list routes the call to (see vault-list.mjs),
+// opening that vault first when it is closed, and otherwise in the vault
+// window that had focus last, which may be any vault the person uses. While
+// the app lists this vault as open, a call therefore runs in its folder, or,
+// when a vault listed at a folder above it would take a call run there, names
+// its id; when neither reaches only this vault, no call is made (the error
+// says `vault-inside-another-vault`). Otherwise a call runs in a directory
+// that is no vault and names none: a closed vault is never reopened by
+// maintenance, no other vault is reached through this one's folder, and the
+// working directory of whoever started the service never picks a vault. The
+// script still checks that it answered for exactly this vault.
+export function publicationRoute({ env = process.env, platform = process.platform } = {}) {
+  const userDataDir = obsidianUserDataDir({ platform, env })
+  return (payload) => {
+    const settings = readObsidianSettings({ userDataDir })
+    const route = settings.ok ? vaultRoute({ vaults: settings.vaults, vaultRoot: payload.vaultRoot, open: true }) : { how: 'unlisted' }
+    if (route.how === 'ambiguous') throw new Error('vault-inside-another-vault: Obsidian lists a vault at a folder above this one, and no call reaches only this vault; no call was made')
+    return routedCall(route)
+  }
+}
+
 // The CLI reaches the app through a socket under $HOME, so `env` selects the
 // app instance. It is passed explicitly and never edited here. A call that
 // outlives its timeout is killed with SIGKILL: the CLI ignores SIGTERM while
-// it waits on the app.
-export function createObsidianCliCall({ cliPath = defaultCliPath(), env = process.env, timeoutMs = 20000 } = {}) {
+// it waits on the app. `route(payload)` says where a call runs and what it
+// names first ({ cwd, args }); a route that throws makes no call.
+export function createObsidianCliCall({ cliPath = defaultCliPath(), env = process.env, timeoutMs = 20000, route = () => routedCall(null) } = {}) {
   return (payload) => new Promise((resolve, reject) => {
-    execFile(cliPath, ['eval', `code=${buildEvalCode(payload)}`], { env, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    let where
+    try { where = route(payload) } catch (error) { return reject(error) }
+    execFile(cliPath, [...where.args, 'eval', `code=${buildEvalCode(payload)}`], { env, cwd: where.cwd, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) return reject(error.killed ? new TransportTimeout(`CLI call timed out: ${payload.op}`) : new Error(`CLI call failed: ${String(error.message).slice(0, 300)}`))
       const out = stdout || stderr || ''
       const start = out.indexOf('=> ')
@@ -207,6 +247,6 @@ export function defaultObsidianProcessProbe({ platform = process.platform, run =
   }
 }
 
-export function createObsidianCliAdapter({ cliPath, env, timeoutMs, processProbe = () => defaultObsidianProcessProbe(), qualification } = {}) {
-  return createEditorAdapter({ call: createObsidianCliCall({ cliPath, env, timeoutMs }), processProbe, kind: 'obsidian-cli', qualification })
+export function createObsidianCliAdapter({ cliPath, env = process.env, timeoutMs, processProbe = () => defaultObsidianProcessProbe(), qualification, route = publicationRoute({ env }) } = {}) {
+  return createEditorAdapter({ call: createObsidianCliCall({ cliPath, env, timeoutMs, route }), processProbe, kind: 'obsidian-cli', qualification })
 }

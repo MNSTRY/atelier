@@ -2,8 +2,9 @@ import childProcess from 'node:child_process'
 import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
+import path from 'node:path'
 import { isoTime } from './documents.mjs'
-import { refuse } from './errors.mjs'
+import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { ensureWorkspaceIdentity } from './machine-settings.mjs'
 import { acquirePrivateGenerationLock, createAbandonmentProof, isProcessAlive } from './private-lock.mjs'
 import { processRunsRecordedExecutable } from './process-identity.mjs'
@@ -162,8 +163,9 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
     const log = openServiceLog(workspaceRoot)
     try {
       const args = [executable.path, `--project=${project.configPath}`, ...(dataRoot === undefined ? [] : [`--data-root=${dataRoot}`]), `--runtime-id=${runtimeId}`, ...(intervalMs === undefined ? [] : [`--interval-ms=${intervalMs}`]), ...entryArgs]
-      // No shell. Detached only when the service is meant to outlive the command that starts it.
-      child = spawn(execPath, args, { detached, shell: false, windowsHide: true, stdio: ['ignore', log.descriptor, log.descriptor], env })
+      // No shell. Detached only when the service is meant to outlive the command that starts it. It runs in the root
+      // directory, never in the one the command was started in, which may be a vault or a folder somebody removes.
+      child = spawn(execPath, args, { detached, shell: false, windowsHide: true, stdio: ['ignore', log.descriptor, log.descriptor], env, cwd: path.parse(executable.path).root })
     } finally {
       fs.closeSync(log.descriptor)
     }
@@ -226,26 +228,78 @@ export async function stopService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
 
 // One authenticated request to the proven runtime, and to nothing else: anything but a healthy status is answered
 // with that status and no request is made.
-async function askProvenRuntime(options, rules, { method, operation, timeoutMs }) {
+async function askProvenRuntime(options, rules, { method, operation, timeoutMs, body = {} }) {
   const { loadProject, dataRoot, probeTimeoutMs, env = process.env, platform = process.platform, alive = isProcessAlive } = options
   const { workspace } = context({ loadProject, dataRoot, env, platform })
   if (!workspace?.workspaceRoot) return { requested: false, state: 'stopped', reason: 'workspace-not-prepared' }
   const status = await evaluate(workspace, { probeTimeoutMs, alive, rules })
   if (status.state !== 'healthy') return { requested: false, state: status.state, reason: status.reason }
   const { record } = status
-  const answer = await requestLoopback({ host: record.host, port: record.port, method, path: operation, bearer: record.ext.bearer, payload: method === 'POST' ? { runtimeId: record.runtimeId } : null, timeoutMs })
-  return { requested: true, state: 'healthy', answer }
+  const answer = await requestLoopback({ host: record.host, port: record.port, method, path: operation, bearer: record.ext.bearer, payload: method === 'POST' ? { runtimeId: record.runtimeId, ...body } : null, timeoutMs })
+  return { requested: true, state: 'healthy', answer, runtimeId: record.runtimeId }
+}
+
+// Whether the proven runtime runs another entry module than `entryPath`, the one this command would start: an
+// earlier release of the package, typically, still running after an upgrade. Compared by digest; false when either
+// side cannot be read. Another module of the package can have changed under the same entry: a tick shows that
+// (requestServiceTick).
+export function runsAnotherEntry(status, entryPath) {
+  if (status?.state !== 'healthy' || typeof status.record?.executable?.digest !== 'string' || typeof entryPath !== 'string') return false
+  try { return executableIdentity(entryPath).digest !== status.record.executable.digest } catch { return false }
+}
+
+// Stops the proven runtime of this workspace through its own listener and starts `entryPath` in its place, detached,
+// under the consent already recorded. Only a runtime that proves itself ours is ever stopped (stopService).
+// { ok: true } or { ok: false, state, reason }.
+async function restartProvenRuntime(options, rules) {
+  const { consent: _given, ...rest } = options
+  const stopped = await stopService(rest, rules)
+  if (!stopped.stopped) return { ok: false, state: stopped.state, reason: stopped.reason ?? 'the-runtime-was-not-stopped' }
+  let started
+  try { started = await startService({ ...rest, detached: true }, rules) } catch (error) {
+    if (!(error instanceof ObsidianMaintenanceRefusal)) throw error
+    return { ok: false, state: 'stopped', reason: error.code }
+  }
+  if (started.state === 'healthy') return { ok: true }
+  return { ok: false, state: started.state, reason: started.state === 'busy' ? 'restarted-service-in-its-first-tick' : started.reason ?? started.state }
 }
 
 // Asks the proven runtime for one tick now and returns what that tick reported. A tick that outlasts the wait is
-// `pending`, not an error.
+// `pending`, not an error. With `scopeId`, that view is prepared and published once more on the tick.
+//
+// `service`, the start options of the entry this command would start ({ entryPath, entryArgs, ... }), lets an
+// outdated runtime be replaced: one that runs another entry module is restarted before it is asked, and one that
+// refuses a tick naming a view (a runtime of 0.2.0-alpha.11 or earlier, which knows no view in a tick) is restarted
+// and asked again, each time under the consent already recorded (`restarted: 'outdated'`). Without `service`, such
+// a runtime is only reported (`service-outdated`). `runtimeId` names the runtime that answered.
 export async function requestServiceTick(options = {}, rules = LIFECYCLE_PRIMITIVES) {
-  const asked = await askProvenRuntime(options, rules, { method: 'POST', operation: '/tick', timeoutMs: options.tickTimeoutMs ?? 60 * 1000 })
-  if (!asked.requested) return asked
-  const { answer } = asked
-  if (answer.kind === 'timeout') return { requested: true, state: 'healthy', pending: true, tick: null, reason: 'tick-still-running' }
-  if (answer.kind !== 'response' || answer.statusCode !== 200 || answer.body === null) return { requested: true, state: 'healthy', pending: false, tick: null, reason: 'tick-was-not-answered' }
-  return { requested: true, state: 'healthy', pending: false, tick: answer.body, reason: 'tick-ran' }
+  const { service = null, scopeId } = options
+  const ask = () => askProvenRuntime(options, rules, { method: 'POST', operation: '/tick', timeoutMs: options.tickTimeoutMs ?? 60 * 1000, ...(scopeId === undefined ? {} : { body: { scopeId } }) })
+  let restarted = null
+  const restart = async () => {
+    const renewed = await restartProvenRuntime({ ...options, ...service }, rules)
+    if (renewed.ok || renewed.reason === 'restarted-service-in-its-first-tick') restarted = 'outdated'
+    return renewed.ok ? null : { requested: false, state: renewed.state, reason: renewed.reason, ...(restarted === null ? {} : { restarted }) }
+  }
+  if (typeof service?.entryPath === 'string' && runsAnotherEntry(await serviceStatus(options, rules), service.entryPath)) {
+    const failed = await restart()
+    if (failed) return failed
+  }
+  let asked = await ask()
+  const refusesView = () => asked.requested && scopeId !== undefined && asked.answer.kind === 'response' && asked.answer.statusCode === 409
+  if (refusesView() && typeof service?.entryPath === 'string' && restarted === null) {
+    const failed = await restart()
+    if (failed) return failed
+    asked = await ask()
+  }
+  const shown = restarted === null ? {} : { restarted }
+  if (!asked.requested) return { ...asked, ...shown }
+  const { answer, runtimeId } = asked
+  const base = { requested: true, state: 'healthy', runtimeId, ...shown }
+  if (refusesView()) return { ...base, pending: false, tick: null, reason: 'service-outdated' }
+  if (answer.kind === 'timeout') return { ...base, pending: true, tick: null, reason: 'tick-still-running' }
+  if (answer.kind !== 'response' || answer.statusCode !== 200 || answer.body === null) return { ...base, pending: false, tick: null, reason: 'tick-was-not-answered' }
+  return { ...base, pending: false, tick: answer.body, reason: 'tick-ran' }
 }
 
 // The status document of the proven runtime: loop, last tick, last error code, freshness summary and, where the
