@@ -80,9 +80,9 @@
     {
       "match": "Obsidian generation manifests of the new vault layout are",
       "disposition": "exempt",
-      "reason": "The generation manifest is machine-private state that Atelier's Obsidian runtime writes and reads. The runtime reads both majors, keeps a view in layout 1 while a note of it is held for an edit, and lays every other earlier vault out again once, retiring the earlier paths through the publisher's remove units. The v1 contract is unchanged and still validates every generation an earlier release wrote; a consumer that validates generation manifests itself must accept the v2 contract, which ships beside v1.",
+      "reason": "Alpha: the Obsidian generation manifest has no external consumer yet, and existing vaults are re-laid out automatically once on upgrade (layout 1 to layout 2)",
       "date": "2026-09-24",
-      "reviewer": "PENDING-OWNER-ATTESTATION"
+      "reviewer": "erik@mnstry.ai (owner attestation, 2026-09-24, seamless redesign)"
     }
   ]
 }

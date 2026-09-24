@@ -273,7 +273,7 @@ error, 3 the operation ran and its answer is not success.
 
 | Operation | What it does | Writes |
 | --- | --- | --- |
-| `status` | enablement, machine settings, proven service state, per-view freshness, whether an apply operation exists | nothing |
+| `status` | enablement, machine settings, proven service state, per-view freshness with its diagnostics (a code, the rule and the in-view note concerned, never a value; see [the Obsidian contract](obsidian-contract.md#notes-that-were-laid-out-anyway)), whether an apply operation exists | nothing |
 | `scope list`, `scope show ID` | the declared views | nothing |
 | `audience show`, `audience set A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. A change invalidates every view at the next tick | private machine settings |
 | `mode show`, `mode set manual\|automatic` | `automatic` refuses without an installed, matching, active automatic policy | private machine settings |
