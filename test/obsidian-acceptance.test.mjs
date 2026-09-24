@@ -259,16 +259,19 @@ test('focus selection keeps the full vault and derives the graph query from the 
   assert.deepEqual(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a', 'b'] } }), focus)
 })
 
-test('a persisted path registry decides the paths a focus names', () => {
-  // A registry may hold a qualified name of the same identity (one allocated after a collision); a path no rule can produce is refused.
-  const registry = { schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, layout: 2, entries: [{ repoId: 'north', nodeId: 'a', path: 'north/plans/Shared concept (one).md' }], assets: [] }
+test('a persisted path registry decides the paths a focus names, through the view\'s own section', () => {
+  // The view's section may hold a qualified name of the same identity (one allocated after a collision); a path no rule can produce is refused.
+  const sectionOf = (entries) => ({ schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, layout: 2, entries: [], assets: [], views: { 'view-focus': { entries, assets: [] } } })
+  const registry = sectionOf([{ repoId: 'north', nodeId: 'a', path: 'north/plans/Shared concept (one).md' }])
   const focus = select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: registry })
   assert.equal(focus.focus.query, 'path:"north/plans/Shared concept (one).md"')
   for (const path of ['north/plans/.Shared concept.md', 'north/plans/Shared [concept].md', 'Shared concept.md']) {
-    const forged = { ...registry, entries: [{ repoId: 'north', nodeId: 'a', path }] }
-    assert.equal(refusalCode(() => select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: forged })), 'invalid-path-registry', path)
+    assert.equal(refusalCode(() => select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: sectionOf([{ repoId: 'north', nodeId: 'a', path }]) })), 'invalid-path-registry', path)
   }
-  // A layout 1 registry is the earlier layout's: the paths are allocated anew.
+  // Another view's section decides nothing for this one.
+  const elsewhere = { ...registry, views: { 'view-other': registry.views['view-focus'] } }
+  assert.equal(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: elsewhere }).focus.query, 'path:"north/plans/Shared concept.md"')
+  // A layout 1 registry holds no view: the paths are allocated anew.
   const earlier = { schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, entries: [{ repoId: 'north', nodeId: 'a', path: 'notes/Shared concept--82f6d012eaad.md' }] }
   assert.equal(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: earlier }).focus.query, 'path:"north/plans/Shared concept.md"')
 })

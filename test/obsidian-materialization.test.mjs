@@ -11,7 +11,7 @@ import { identityLineTexts, identitySuffix, validateObsidianContract } from '../
 import {
   POLICY_SETTINGS_PATH,
   REDACTION_RULES,
-  allocateWorkspacePaths,
+  allocateViewPaths,
   collisionKey,
   createPreparationCache,
   createViewPreparationForOracleTests,
@@ -265,19 +265,23 @@ test('layout 1: a view prepared in the earlier layout is byte for byte what the 
   }
 })
 
-test('the same identity has the same path in full and scoped views, with or without a shared registry', (t) => {
+test('each view allocates its own paths, with or without a shared registry, and keeps them in its own section', (t) => {
   const snapshot = makeWorkspace(t)
   const full = prepare(snapshot, fullScope)
   const scoped = prepare(snapshot, scopedScope, { persistentPathRegistry: full.persistentPathRegistry })
   const independent = prepare(snapshot, scopedScope)
+  // Nothing collides in the scoped view, so its notes have the names they have in the full view.
   for (const note of scoped.manifest.notes) {
     assert.equal(note.path, noteOf(full, note.nodeId).path)
     assert.equal(note.path, noteOf(independent, note.nodeId).path)
   }
-  // The registry is allocated for the workspace, not for the view.
-  assert.deepEqual(independent.persistentPathRegistry, full.persistentPathRegistry)
-  assert.deepEqual(scoped.persistentPathRegistry, full.persistentPathRegistry)
-  assert.deepEqual(full.persistentPathRegistry.entries.map((entry) => entry.nodeId), [...full.persistentPathRegistry.entries.map((entry) => entry.nodeId)].sort())
+  // A view's section names its own notes only; a shared registry keeps every view's section.
+  const sectionIds = (prepared, scopeId) => prepared.persistentPathRegistry.views[scopeId].entries.map((entry) => entry.nodeId)
+  assert.deepEqual(sectionIds(full, 'scope-full'), full.manifest.notes.map((note) => note.nodeId).sort())
+  assert.deepEqual(sectionIds(independent, 'scope-harbor'), ['north-desk:harbor-plan', 'south-desk:tide-table'])
+  assert.deepEqual(Object.keys(scoped.persistentPathRegistry.views).sort(), ['scope-full', 'scope-harbor'])
+  assert.deepEqual(scoped.persistentPathRegistry.views['scope-harbor'], independent.persistentPathRegistry.views['scope-harbor'])
+  assert.deepEqual([scoped.persistentPathRegistry.entries, scoped.persistentPathRegistry.assets], [[], []])
 })
 
 test('a source title change keeps the allocated path and shows the new title', (t) => {
@@ -315,34 +319,31 @@ test('path allocation detects case, normalization and length collisions', () => 
     // The same title in decomposed form: one name to a normalization-insensitive file system.
     { repo: 'r', id: 'two', path: 'A/two.md', title: 'Re\u0301sume\u0301', extension: 'md' },
   ]
-  const { registry } = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes })
+  const { section } = allocateViewPaths({ nodes })
   // Folders mirror the source, spelled the way they were first allocated; names are NFC.
-  assert.deepEqual(registry.entries.map((entry) => entry.path), ['r/a/Résumé.md', 'r/a/Résumé (two).md'])
-  for (const entry of registry.entries) assert.equal(entry.path.normalize('NFC'), entry.path)
+  assert.deepEqual(section.entries.map((entry) => entry.path), ['r/a/Résumé.md', 'r/a/Résumé (two).md'])
+  for (const entry of section.entries) assert.equal(entry.path.normalize('NFC'), entry.path)
 
   // Names a case-insensitive or normalization-insensitive filesystem would merge share a key.
   assert.equal(collisionKey('r/Straße.md'), collisionKey('r/STRASSE.md'))
   assert.equal(collisionKey('r/Re\u0301sume\u0301.md'), collisionKey('r/RÉSUMÉ.md'))
-  assert.notEqual(collisionKey(registry.entries[0].path), collisionKey(registry.entries[1].path))
-  // A registry that gives one path to two identities refuses, and so does one of another workspace.
-  const stolen = { ...registry, entries: [registry.entries[0], { repoId: 'r', nodeId: 'two', path: 'r/a/RÉSUMÉ.md' }] }
-  assert.throws(() => allocateWorkspacePaths({ registry: stolen, workspaceId: 'ws', nodes: [] }), { code: 'path-collision' })
-  assert.throws(() => allocateWorkspacePaths({ registry, workspaceId: 'other', nodes: [] }), { code: 'invalid-path-registry' })
-  const twoSpellings = { ...registry, entries: [registry.entries[0], { repoId: 'r', nodeId: 'two', path: 'r/A/Other.md' }] }
-  assert.throws(() => allocateWorkspacePaths({ registry: twoSpellings, workspaceId: 'ws', nodes: [] }), { code: 'invalid-path-registry' })
+  assert.notEqual(collisionKey(section.entries[0].path), collisionKey(section.entries[1].path))
+  // Published paths that give one path to two identities, or spell one folder two ways, refuse.
+  const stolen = { ...section, entries: [section.entries[0], { repoId: 'r', nodeId: 'two', path: 'r/a/RÉSUMÉ.md' }] }
+  assert.throws(() => allocateViewPaths({ published: stolen, nodes }), { code: 'path-collision' })
+  const twoSpellings = { ...section, entries: [section.entries[0], { repoId: 'r', nodeId: 'two', path: 'r/A/Other.md' }] }
+  assert.throws(() => allocateViewPaths({ published: twoSpellings, nodes }), { code: 'invalid-path-registry' })
 
   // A long title is cut to 150 bytes on a character boundary.
-  const long = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [{ repo: 'r', id: 'long', path: 'long.md', title: '語'.repeat(120), extension: 'md' }] })
-  assert.equal(long.registry.entries[0].path, `r/${'語'.repeat(50)}.md`)
-  // A path over the full-path bound is shortened by cutting the title, never below 16 bytes; a node whose path still
-  // does not fit is parked, and nothing else is refused.
+  const long = allocateViewPaths({ nodes: [{ repo: 'r', id: 'long', path: 'long.md', title: '語'.repeat(120), extension: 'md' }] })
+  assert.equal(long.section.entries[0].path, `r/${'語'.repeat(50)}.md`)
+  // A path over the full-path bound is shortened by cutting the title, never below 16 bytes; a vault root that leaves
+  // no room for any name refuses the view.
   const title = 'x'.repeat(150)
-  const fitted = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [{ repo: 'r', id: 'fit', path: 'a/fit.md', title, extension: 'md' }], vaultRootBytes: 1024 - 1 - 'r/a/.md'.length - 40 })
-  assert.equal(fitted.registry.entries[0].path, `r/a/${'x'.repeat(40)}.md`)
-  const tooLong = allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes, vaultRootBytes: 1010 })
-  assert.deepEqual(tooLong.parked, [{ repoId: 'r', nodeId: 'one', reason: 'path-too-long' }, { repoId: 'r', nodeId: 'two', reason: 'path-too-long' }])
-  assert.deepEqual([tooLong.registry.entries, tooLong.pathOf('r', 'one')], [[], null])
-  assert.throws(() => allocateWorkspacePaths({ registry: null, workspaceId: 'ws', nodes: [nodes[0], nodes[0]] }), { code: 'duplicate-identity' })
+  const fitted = allocateViewPaths({ nodes: [{ repo: 'r', id: 'fit', path: 'a/fit.md', title, extension: 'md' }], vaultRootBytes: 1024 - 1 - 'r/a/.md'.length - 40 })
+  assert.equal(fitted.section.entries[0].path, `r/a/${'x'.repeat(40)}.md`)
+  assert.throws(() => allocateViewPaths({ nodes, vaultRootBytes: 1010 }), { code: 'path-too-long' })
+  assert.throws(() => allocateViewPaths({ nodes: [nodes[0], nodes[0]] }), { code: 'duplicate-identity' })
 })
 
 // ---------------------------------------------------------------------------

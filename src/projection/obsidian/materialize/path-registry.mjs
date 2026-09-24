@@ -1,66 +1,91 @@
 import { createHash } from 'node:crypto'
 import {
-  MIN_NAME_BYTES, ObsidianContractRefusal, QUALIFIER_STEM_BYTES, collisionKey, cutName, extensionOf, fileNameParts, fileStemOf, folderNameOf, identitySuffix,
+  FOLDER_NAME_BYTES, MIN_NAME_BYTES, QUALIFIER_STEM_BYTES, collisionKey, cutName, extensionOf, fileNameParts, fileStemOf, folderNameOf, identitySuffix,
   isReadableVaultPath, joinFileName, notePath, noteNameOf, qualifierIdOf, vaultName,
 } from '../contracts.mjs'
 import { refuse } from './byte-lens.mjs'
 
 export { collisionKey }
 
-// The persistent path registry: one vault path per canonical identity,
-// allocated once per workspace and reused by every scope and generation. A
-// path, once allocated, never changes: not because a source title changed,
-// not because another file came or went.
-//
-// The registry is workspace-wide, not view-wide: preparing any view allocates
-// for every visible node and embedded asset of the workspace and returns the
-// whole grown registry to the caller, which holds it as machine-private
-// trusted state. It therefore names visible nodes outside the view's
-// selection. Allocation never runs over a withheld node. A view's manifest and
-// notes carry only the paths of the files the view holds.
-//
-// Layout 2 (see "Vault layout" in docs/obsidian-contract.md):
+// Vault paths of layout 2 (see "Vault layout" in docs/obsidian-contract.md):
 //
 //   <repository folder>/<source directory>/<title>.md           a Markdown note
 //   <repository folder>/<source directory>/<file name>          a wrapped file
 //   <repository folder>/<source directory>/<file name>.md       its note
 //   <repository folder>/<source directory>/<file name>          an embedded asset
 //
-// The registry document is { schema, workspaceId, layout: 2, entries, assets }
-// with entries { repoId, nodeId, path[, attachment][, provisional] } and
-// assets { repoId, assetPath, path[, provisional] }. A registry without
-// `layout: 2` is a layout 1 registry (`notes/<title>--<suffix>.md`); layout 2
-// starts over without it.
+// Each view allocates among its own notes and embedded assets only, seeded
+// from what its own prior generation published. A path stays while its note
+// is in the view; a note that leaves the view releases its path there; a
+// note of another view, or one that was never in this one, never causes a
+// qualifier. One identity may have different paths in different views.
+// Paths the caller names as occupied (files held for an edit, which stay in
+// the vault) are never taken.
 //
-// Three rules keep the registry true to what views published:
+// A source that does not fit is laid out anyway, and reported: a folder chain
+// too long for the path budget keeps a readable prefix and a short stable id,
+// and a source folder that meets a file of the same name is qualified with
+// one. Each is a diagnostic naming the note.
 //
-//   census       an identity that has left the census (deleted, or renamed
-//                into a new identity) releases its paths; one that is only
-//                withheld or unselected keeps them
-//   provisional  a path allocated while the registry was lost is provisional
-//                until a view's published generation confirms it; a view
-//                whose generation recorded another path for its note takes
-//                that path back when nothing confirmed holds it
-//   parking      a node that cannot be laid out (a path too long for the file
-//                system, a source folder named like an allocated file) gets no
-//                path and is reported; nothing else is refused because of it
+// The persistent path registry holds each view's last allocation, for a
+// selection resolved without the view's generation: { schema, workspaceId,
+// layout: 2, entries: [], assets: [], views: { <scopeId>: { entries, assets }
+// } }, entries { repoId, nodeId, path[, attachment] }, assets { repoId,
+// assetPath, path }. The top-level `entries` and `assets` stay empty; they
+// held the workspace-wide allocation of an earlier revision. A registry
+// without `layout: 2` is a layout 1 registry and holds no view.
 
 export const PATH_REGISTRY_SCHEMA = 'atelier-obsidian-path-registry/v1'
 export const PATH_REGISTRY_LAYOUT = 2
 export const DEFAULT_MAX_FULL_PATH_BYTES = 1024
 const MAX_COMPONENT_BYTES = 255
 const MAX_QUALIFIER_ID = 16
+// What a folder chain leaves for the name after it, beyond the separator,
+// the shortest title and the extensions: nothing at first, and room for both
+// qualifiers at their longest when the name had to be qualified.
+const QUALIFIED_NAME_BYTES = (QUALIFIER_STEM_BYTES + 3) + (MAX_QUALIFIER_ID + 3)
 
 const compare = (left, right) => (left < right ? -1 : left > right ? 1 : 0)
 export const identityKey = (repoId, nodeId) => `${repoId}\u0000${nodeId}`
 const assetKey = (repoId, assetPath) => `${repoId}\u0000${assetPath}`
 const bytesOf = (value) => Buffer.byteLength(value, 'utf8')
-const parentOf = (filePath) => filePath.slice(0, filePath.lastIndexOf('/'))
 const baseOf = (filePath) => filePath.slice(filePath.lastIndexOf('/') + 1)
+const byIdentity = (left, right) => compare(left.repoId, right.repoId) || compare(left.nodeId, right.nodeId)
+const byAsset = (left, right) => compare(left.repoId, right.repoId) || compare(left.assetPath, right.assetPath)
+
+// ---------------------------------------------------------------------------
+// The registry document
+// ---------------------------------------------------------------------------
 
 export function emptyPathRegistry(workspaceId) {
-  return { schema: PATH_REGISTRY_SCHEMA, workspaceId, layout: PATH_REGISTRY_LAYOUT, entries: [], assets: [] }
+  return { schema: PATH_REGISTRY_SCHEMA, workspaceId, layout: PATH_REGISTRY_LAYOUT, entries: [], assets: [], views: {} }
 }
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+// The views of a registry document, or {} for none (no registry, a layout 1
+// registry, or one written before views). A document of another shape or
+// another workspace refuses.
+export function viewsOfRegistry(registry, workspaceId) {
+  if (registry === undefined || registry === null) return {}
+  if (registry.schema !== PATH_REGISTRY_SCHEMA || !Array.isArray(registry.entries)) refuse('invalid-path-registry', 'path registry has an unknown shape')
+  if (registry.workspaceId !== workspaceId) refuse('invalid-path-registry', 'path registry belongs to another workspace')
+  if (registry.layout !== PATH_REGISTRY_LAYOUT || registry.views === undefined) return {}
+  if (!isPlainObject(registry.views)) refuse('invalid-path-registry', 'path registry has an unknown shape')
+  for (const section of Object.values(registry.views)) {
+    if (!isPlainObject(section) || !Array.isArray(section.entries) || !Array.isArray(section.assets)) refuse('invalid-path-registry', 'path registry has an unknown shape')
+  }
+  return registry.views
+}
+
+// The registry document with one view's allocation replaced.
+export function withViewSection(registry, { workspaceId, scopeId, section }) {
+  return { ...emptyPathRegistry(workspaceId), views: { ...viewsOfRegistry(registry, workspaceId), [scopeId]: section } }
+}
+
+// ---------------------------------------------------------------------------
+// Allocation of one view
+// ---------------------------------------------------------------------------
 
 // Everything allocated so far: files and folders by collision key, so a
 // newcomer is compared the way a case- and normalization-insensitive file
@@ -79,14 +104,14 @@ function claimFolders(state, filePath) {
       if (state.files.has(key)) refuse('path-collision', 'a folder would take the name of an allocated file')
       state.folders.set(key, folder)
     } else if (spelled !== folder) {
-      refuse('invalid-path-registry', 'the path registry spells one folder two ways')
+      refuse('invalid-path-registry', 'the published paths spell one folder two ways')
     }
   }
 }
 
 function claimFile(state, filePath, owner) {
   const key = collisionKey(filePath)
-  if (state.files.has(key) || state.folders.has(key)) refuse('path-collision', 'the path registry allocates one path to more than one file')
+  if (state.files.has(key) || state.folders.has(key)) refuse('path-collision', 'the published paths give one path to more than one file')
   claimFolders(state, filePath)
   state.files.set(key, owner)
 }
@@ -94,64 +119,16 @@ function claimFile(state, filePath, owner) {
 function claimRepositoryFolder(state, repoId, folder) {
   const known = state.repoFolders.get(repoId)
   if (known !== undefined) {
-    if (known !== folder) refuse('invalid-path-registry', 'the path registry gives one repository two folders')
+    if (known !== folder) refuse('invalid-path-registry', 'the published paths give one repository two folders')
     return
   }
-  if (state.repoFolderOwners.has(collisionKey(folder))) refuse('invalid-path-registry', 'the path registry gives two repositories one folder')
+  if (state.repoFolderOwners.has(collisionKey(folder))) refuse('invalid-path-registry', 'the published paths give two repositories one folder')
   state.repoFolders.set(repoId, folder)
   state.repoFolderOwners.set(collisionKey(folder), repoId)
 }
 
-function indexRegistry(registry, workspaceId, census) {
-  const state = newState()
-  if (registry === undefined || registry === null) return state
-  if (registry.schema !== PATH_REGISTRY_SCHEMA || !Array.isArray(registry.entries)) refuse('invalid-path-registry', 'path registry has an unknown shape')
-  if (registry.workspaceId !== workspaceId) refuse('invalid-path-registry', 'path registry belongs to another workspace')
-  // A layout 1 registry: its paths are the earlier layout's, and layout 2 allocates anew.
-  if (registry.layout !== PATH_REGISTRY_LAYOUT) return state
-  if (!Array.isArray(registry.assets)) refuse('invalid-path-registry', 'path registry has an unknown shape')
-  const seen = new Set()
-  for (const entry of registry.entries) {
-    const wellFormed = typeof entry?.repoId === 'string' && entry.repoId !== '' && typeof entry.nodeId === 'string' && entry.nodeId !== ''
-      && isReadableVaultPath(entry.path) && entry.path.endsWith('.md') && entry.path.includes('/')
-      && (entry.attachment === undefined || (isReadableVaultPath(entry.attachment) && entry.path === `${entry.attachment}.md`))
-      && (entry.provisional === undefined || entry.provisional === true)
-    if (!wellFormed) refuse('invalid-path-registry', 'path registry entry is malformed')
-    const key = identityKey(entry.repoId, entry.nodeId)
-    if (seen.has(key)) refuse('duplicate-identity', 'path registry repeats a canonical identity')
-    seen.add(key)
-    if (census.nodes !== null && !census.nodes.has(key)) continue
-    claimRepositoryFolder(state, entry.repoId, entry.path.split('/')[0])
-    claimFile(state, entry.path, key)
-    if (entry.attachment !== undefined) claimFile(state, entry.attachment, key)
-    state.byIdentity.set(key, { path: entry.path, ...(entry.attachment === undefined ? {} : { attachment: entry.attachment }), provisional: entry.provisional === true })
-  }
-  const seenAssets = new Set()
-  for (const asset of registry.assets) {
-    const wellFormed = typeof asset?.repoId === 'string' && asset.repoId !== '' && typeof asset.assetPath === 'string' && asset.assetPath !== ''
-      && isReadableVaultPath(asset.path) && asset.path.includes('/') && (asset.provisional === undefined || asset.provisional === true)
-    if (!wellFormed) refuse('invalid-path-registry', 'path registry asset entry is malformed')
-    const key = assetKey(asset.repoId, asset.assetPath)
-    if (seenAssets.has(key)) refuse('duplicate-identity', 'path registry repeats an asset')
-    seenAssets.add(key)
-    if (census.assets !== null && !census.assets.has(key)) continue
-    claimRepositoryFolder(state, asset.repoId, asset.path.split('/')[0])
-    claimFile(state, asset.path, `asset\u0000${key}`)
-    state.byAsset.set(key, { path: asset.path, provisional: asset.provisional === true })
-  }
-  return state
-}
-
-// Undoes the claims of one allocation. Folder spellings stay: other files may
-// be in those folders.
-function release(state, paths) {
-  for (const filePath of paths) state.files.delete(collisionKey(filePath))
-}
-
-// Whether `filePath` can be claimed as it is spelled: free, every folder of
-// it either unclaimed and not a file's name or claimed with this spelling, and
-// its top folder the repository's own.
-function claimable(state, repoId, filePath) {
+// Whether `filePath` could be claimed as spelled, without claiming it.
+function claimable(state, filePath) {
   const key = collisionKey(filePath)
   if (state.files.has(key) || state.folders.has(key)) return false
   const parts = filePath.split('/').slice(0, -1)
@@ -160,13 +137,49 @@ function claimable(state, repoId, filePath) {
     const spelled = state.folders.get(collisionKey(folder))
     if (spelled === undefined ? state.files.has(collisionKey(folder)) : spelled !== folder) return false
   }
-  const known = state.repoFolders.get(repoId)
-  const owner = state.repoFolderOwners.get(collisionKey(parts[0]))
-  return known === undefined ? owner === undefined : known === parts[0]
+  return true
+}
+
+// How many bytes the longest of `paths` is over a limit: 255 bytes a name, and
+// `maxFullPathBytes` with the vault root and its separator.
+function overflowOf(paths, { vaultRootBytes, maxFullPathBytes }) {
+  return Math.max(0, ...paths.map((filePath) => Math.max(bytesOf(baseOf(filePath)) - MAX_COMPONENT_BYTES, vaultRootBytes + 1 + bytesOf(filePath) - maxFullPathBytes)))
+}
+
+// What a view's prior generation published, taken as it is for every note and
+// asset still in the view. A path that no longer fits the limits (a vault root
+// that grew) is allocated again. `published.notes` are { repoId, nodeId, path[,
+// attachment] }, `published.assets` { repoId, assetPath, path }.
+function seed(state, published, { nodeKeys, assetKeys, limits }) {
+  for (const note of [...published.notes].sort(byIdentity)) {
+    const wellFormed = typeof note?.repoId === 'string' && note.repoId !== '' && typeof note.nodeId === 'string' && note.nodeId !== ''
+      && isReadableVaultPath(note.path) && note.path.endsWith('.md') && note.path.includes('/')
+      && (note.attachment === undefined || (isReadableVaultPath(note.attachment) && note.path === `${note.attachment}.md`))
+    if (!wellFormed) refuse('invalid-path-registry', 'a published path is malformed')
+    const key = identityKey(note.repoId, note.nodeId)
+    if (state.byIdentity.has(key)) refuse('duplicate-identity', 'the published paths repeat a canonical identity')
+    const paths = [note.path, ...(note.attachment === undefined ? [] : [note.attachment])]
+    if (!nodeKeys.has(key) || overflowOf(paths, limits) > 0) continue
+    claimRepositoryFolder(state, note.repoId, note.path.split('/')[0])
+    for (const filePath of paths) claimFile(state, filePath, key)
+    state.byIdentity.set(key, { path: note.path, ...(note.attachment === undefined ? {} : { attachment: note.attachment }) })
+  }
+  for (const asset of [...published.assets].sort(byAsset)) {
+    const wellFormed = typeof asset?.repoId === 'string' && asset.repoId !== '' && typeof asset.assetPath === 'string' && asset.assetPath !== ''
+      && isReadableVaultPath(asset.path) && asset.path.includes('/')
+    if (!wellFormed) refuse('invalid-path-registry', 'a published path is malformed')
+    const key = assetKey(asset.repoId, asset.assetPath)
+    if (state.byAsset.has(key)) refuse('duplicate-identity', 'the published paths repeat an asset')
+    if (!assetKeys.has(key) || overflowOf([asset.path], limits) > 0) continue
+    claimRepositoryFolder(state, asset.repoId, asset.path.split('/')[0])
+    claimFile(state, asset.path, `asset\u0000${key}`)
+    state.byAsset.set(key, asset.path)
+  }
 }
 
 // The folder of a repository: its identity made safe, or, when another
-// repository already has that folder, the same with a short stable id.
+// repository of the view already has that folder, the same with a short stable
+// id.
 function repositoryFolder(state, repoId) {
   const known = state.repoFolders.get(repoId)
   if (known !== undefined) return known
@@ -180,22 +193,52 @@ function repositoryFolder(state, repoId) {
   return refuse('path-collision', 'unable to allocate a distinct repository folder')
 }
 
-// The mirrored folder of a source directory. Each segment takes the spelling a
-// folder already allocated under the same parent has, when the two differ only
-// in case or normalization, so the vault spells every folder one way.
-function mirroredFolder(state, repoFolder, sourcePath) {
-  let folder = repoFolder
-  for (const segment of sourcePath.split('/').slice(0, -1)) {
-    const candidate = `${folder}/${folderNameOf(segment)}`
-    folder = state.folders.get(collisionKey(candidate)) ?? candidate
-  }
-  return folder
-}
+// The short stable id of a source folder: hexadecimal characters of the
+// SHA-256 of the repository identity and the folder's source path.
+const folderIdOf = (repoId, sourceFolder, length = 6) => createHash('sha256').update(`${repoId}\u0000${sourceFolder}`).digest('hex').slice(0, length)
 
-// How many bytes the longest of `paths` is over a limit: 255 bytes a name, and
-// `maxFullPathBytes` with the vault root and its separator.
-function overflowOf(paths, { vaultRootBytes, maxFullPathBytes }) {
-  return Math.max(0, ...paths.map((filePath) => Math.max(bytesOf(baseOf(filePath)) - MAX_COMPONENT_BYTES, vaultRootBytes + 1 + bytesOf(filePath) - maxFullPathBytes)))
+// The folder a source directory mirrors to. Each segment is the source
+// folder's name made safe, spelled as a folder already allocated under the
+// same parent is spelled when the two differ only in case or normalization; a
+// segment that meets an allocated file carries the id of its source folder. A
+// chain that leaves less than `reserve` bytes for the name keeps as many
+// leading folders as fit, and its last kept folder, cut, carries the id of the
+// whole source directory.
+function mirroredFolder(state, { repoFolder, repoId, sourcePath, limits, reserve }) {
+  const sourceSegments = sourcePath.split('/').slice(0, -1)
+  const sourceOf = (count) => sourceSegments.slice(0, count).join('/')
+  // One segment under `folder`: its spelling, qualified when it meets a file.
+  const under = (folder, segment, source) => {
+    let candidate = `${folder}/${segment}`
+    let qualified = false
+    for (let length = 6; state.files.has(collisionKey(candidate)); length += 2) {
+      if (length > MAX_QUALIFIER_ID) refuse('path-collision', 'unable to allocate a distinct folder')
+      qualified = true
+      candidate = `${folder}/${cutName(segment, FOLDER_NAME_BYTES - (length + 3))} (${folderIdOf(repoId, source, length)})`
+    }
+    return { folder: state.folders.get(collisionKey(candidate)) ?? candidate, qualified }
+  }
+  const budget = limits.maxFullPathBytes - limits.vaultRootBytes - 1 - reserve
+  let folder = repoFolder
+  let qualified = false
+  const walked = [repoFolder]
+  sourceSegments.forEach((segment, index) => {
+    const next = under(folder, folderNameOf(segment), sourceOf(index + 1))
+    folder = next.folder
+    qualified ||= next.qualified
+    walked.push(folder)
+  })
+  if (bytesOf(folder) <= budget) return { folder, shortened: false, qualified }
+  // Too long: the longest walked prefix that leaves room for a cut folder carrying the id of the whole directory.
+  const suffix = ` (${folderIdOf(repoId, sourceOf(sourceSegments.length))})`
+  for (let count = sourceSegments.length - 1; count >= 0; count -= 1) {
+    const room = Math.min(budget - bytesOf(walked[count]) - 1, FOLDER_NAME_BYTES) - bytesOf(suffix)
+    const head = room > 0 ? cutName(folderNameOf(sourceSegments[count]), room) : ''
+    if (head === '' && count > 0) continue
+    const tail = under(walked[count], `${head}${suffix}`.trim(), sourceOf(sourceSegments.length))
+    if (bytesOf(tail.folder) <= budget) return { folder: tail.folder, shortened: true, qualified: qualified || tail.qualified }
+  }
+  return refuse('path-too-long', 'the vault root leaves no room for this folder')
 }
 
 // Fits a file name into the limits by cutting the title part `base` further,
@@ -249,171 +292,94 @@ function allocate(state, { folder, candidates, build, limits }) {
   return refuse('path-collision', 'unable to allocate a distinct vault path')
 }
 
-// Refusals that concern one node's path, not the registry: the node is parked.
-const PARKABLE = new Set(['path-too-long', 'path-collision'])
-const parkable = (error) => error instanceof ObsidianContractRefusal && PARKABLE.has(error.code)
-const sortedNodes = (nodes) => [...nodes].sort((left, right) => compare(left.repo, right.repo) || compare(left.id, right.id))
-
-// The paths one node would take, without claiming anything: every refusal
-// happens before the state changes.
-function candidatePaths(state, node, limits) {
-  const repoFolder = repositoryFolder(state, node.repo)
-  const folder = mirroredFolder(state, repoFolder, node.path)
-  if (!claimable(state, node.repo, `${folder}/_`)) refuse('path-collision', 'a source folder takes the name of an allocated file')
-  if (extensionOf(node) === 'md') return { repoFolder, paths: allocate(state, { folder, candidates: noteCandidates(node), build: (base) => [`${base}.md`], limits }) }
-  return { repoFolder, paths: allocate(state, { folder, candidates: fileCandidates(node.path, node.repo, node.id), build: (base) => [base, `${base}.md`], limits }) }
-}
-
-// A view's published allocations, taken back where the registry lost them or
-// holds only a provisional allocation instead, and confirmed where it agrees.
-// A confirmed allocation elsewhere stands: that note moves, and nothing is
-// refused. `published.notes` are { repoId, nodeId, path[, attachment] },
-// `published.assets` { repoId, assetPath, path }.
-function adoptPublished(state, published, census) {
-  const claims = []
-  for (const note of [...published.notes].sort((left, right) => compare(left.repoId, right.repoId) || compare(left.nodeId, right.nodeId))) {
-    const wellFormed = isReadableVaultPath(note.path) && note.path.endsWith('.md') && note.path.includes('/')
-      && (note.attachment === undefined || (isReadableVaultPath(note.attachment) && note.path === `${note.attachment}.md`))
-    if (!wellFormed) refuse('invalid-path-registry', 'the prior generation records a malformed path')
-    const key = identityKey(note.repoId, note.nodeId)
-    if (census.nodes !== null && !census.nodes.has(key)) continue
-    const paths = [note.path, ...(note.attachment === undefined ? [] : [note.attachment])]
-    const current = state.byIdentity.get(key)
-    if (current && current.path === note.path && current.attachment === note.attachment) { current.provisional = false; continue }
-    if (current && !current.provisional) continue
-    claims.push({ key, repoId: note.repoId, paths, current })
-  }
-  for (const claim of claims) if (claim.current) { release(state, [claim.current.path, ...(claim.current.attachment ? [claim.current.attachment] : [])]); state.byIdentity.delete(claim.key) }
-  const provisionalHolders = new Map([...state.byIdentity].filter(([, allocated]) => allocated.provisional).flatMap(([key, allocated]) => [allocated.path, ...(allocated.attachment ? [allocated.attachment] : [])].map((filePath) => [collisionKey(filePath), key])))
-  const displaced = new Set()
-  for (const claim of claims) {
-    // A provisional allocation of an identity this view did not publish there gives way.
-    for (const filePath of claim.paths) {
-      const holder = provisionalHolders.get(collisionKey(filePath))
-      if (holder === undefined || holder === claim.key || !state.byIdentity.has(holder)) continue
-      const allocated = state.byIdentity.get(holder)
-      release(state, [allocated.path, ...(allocated.attachment ? [allocated.attachment] : [])])
-      state.byIdentity.delete(holder)
-      displaced.add(holder)
-    }
-    if (!claim.paths.every((filePath) => claimable(state, claim.repoId, filePath))) { if (claim.current?.provisional) displaced.add(claim.key); continue }
-    claimRepositoryFolder(state, claim.repoId, claim.paths[0].split('/')[0])
-    for (const filePath of claim.paths) claimFile(state, filePath, claim.key)
-    state.byIdentity.set(claim.key, { path: claim.paths[0], ...(claim.paths.length > 1 ? { attachment: claim.paths[1] } : {}), provisional: false })
-  }
-  for (const asset of [...published.assets].sort((left, right) => compare(left.repoId, right.repoId) || compare(left.assetPath, right.assetPath))) {
-    if (!isReadableVaultPath(asset.path) || !asset.path.includes('/')) refuse('invalid-path-registry', 'the prior generation records a malformed path')
-    const key = assetKey(asset.repoId, asset.assetPath)
-    if (census.assets !== null && !census.assets.has(key)) continue
-    const current = state.byAsset.get(key)
-    if (current && current.path === asset.path) { current.provisional = false; continue }
-    if (current && !current.provisional) continue
-    if (current) { release(state, [current.path]); state.byAsset.delete(key) }
-    if (!claimable(state, asset.repoId, asset.path)) { if (current) displaced.add(`asset\u0000${key}`); continue }
-    claimRepositoryFolder(state, asset.repoId, asset.path.split('/')[0])
-    claimFile(state, asset.path, `asset\u0000${key}`)
-    state.byAsset.set(key, { path: asset.path, provisional: false })
-  }
-  return displaced
-}
-
-const censusOf = (census) => ({
-  nodes: Array.isArray(census?.nodes) ? new Set(census.nodes.map((item) => identityKey(item.repo, item.id))) : null,
-  assets: Array.isArray(census?.assets) ? new Set(census.assets.map((item) => assetKey(item.repo, item.path))) : null,
-})
-
-// Allocates a path for every node and embedded asset that lacks one and
-// returns the grown registry. `nodes` are canonical nodes ({ repo, id, path,
-// title, extension }), `assets` canonical assets ({ repo, id, path }).
-// `census`, when given, is every node and asset of the workspace ({ nodes:
-// [{ repo, id }], assets: [{ repo, path }] }), withheld ones included: an
-// allocation of anything else is released. `published`, when given, is what
-// the prior generation of the view being prepared allocated (see
-// adoptPublished). Published allocations come first, then new nodes and then
-// new assets, each in canonical identity order, so the result depends on the
-// inputs alone and never on the order they are listed in. A node or asset
-// that cannot be laid out is parked: `parked` names it and why, `pathOf` and
-// `assetPathOf` answer null for it, and the rest is allocated.
-export function allocateWorkspacePaths({ registry, workspaceId, nodes, assets = [], census = null, published = null, vaultRootBytes = 0, maxFullPathBytes = DEFAULT_MAX_FULL_PATH_BYTES }) {
-  const known = censusOf(census)
-  const state = indexRegistry(registry, workspaceId, known)
-  const limits = { vaultRootBytes, maxFullPathBytes }
-  // Allocated while the registry was lost: provisional until a published generation confirms it.
-  const lost = registry === undefined || registry === null || registry.layout !== PATH_REGISTRY_LAYOUT
-  const displaced = published ? adoptPublished(state, { notes: published.notes ?? [], assets: published.assets ?? [] }, known) : new Set()
-  const parked = []
-  const seen = new Set()
-  for (const node of sortedNodes(nodes)) {
-    const key = identityKey(node.repo, node.id)
-    if (seen.has(key)) refuse('duplicate-identity', 'more than one node carries the same canonical identity')
-    seen.add(key)
-    if (state.byIdentity.has(key)) continue
-    let allocated
-    try { allocated = candidatePaths(state, node, limits) } catch (error) {
-      if (!parkable(error)) throw error
-      parked.push({ repoId: node.repo, nodeId: node.id, reason: error.code })
-      continue
-    }
-    claimRepositoryFolder(state, node.repo, allocated.repoFolder)
-    for (const filePath of allocated.paths) claimFile(state, filePath, key)
-    const provisional = lost || displaced.has(key)
-    // A wrapped file's paths are [file, note]; a Markdown note's [note].
-    state.byIdentity.set(key, allocated.paths.length === 1 ? { path: allocated.paths[0], provisional } : { path: allocated.paths[1], attachment: allocated.paths[0], provisional })
-  }
-  const parkedAssets = new Set()
-  const seenAssets = new Set()
-  for (const asset of [...assets].sort((left, right) => compare(left.repo, right.repo) || compare(left.path, right.path))) {
-    const key = assetKey(asset.repo, asset.path)
-    if (seenAssets.has(key)) continue
-    seenAssets.add(key)
-    if (state.byAsset.has(key)) continue
-    let allocated
+// The paths of one file (a note, a wrapped file and its note, or an asset),
+// allocated fresh and claimed, and what was degraded to lay it out. The folder
+// leaves room for the shortest name first; a name that then has to be
+// qualified and no longer fits is laid out again under a shorter folder.
+function place(state, { repoId, sourcePath, owner, candidates, build, nameBytes, limits }) {
+  const repoFolder = repositoryFolder(state, repoId)
+  let placed = null
+  for (const reserve of [nameBytes, nameBytes + QUALIFIED_NAME_BYTES]) {
+    const { folder, shortened, qualified } = mirroredFolder(state, { repoFolder, repoId, sourcePath, limits, reserve })
     try {
-      const repoFolder = repositoryFolder(state, asset.repo)
-      const folder = mirroredFolder(state, repoFolder, asset.path)
-      if (!claimable(state, asset.repo, `${folder}/_`)) refuse('path-collision', 'a source folder takes the name of an allocated file')
-      const [assetPathValue] = allocate(state, { folder, candidates: fileCandidates(asset.path, asset.repo, asset.id ?? `${asset.repo}:asset:${asset.path}`), build: (base) => [base], limits })
-      allocated = { repoFolder, assetPathValue }
+      placed = { paths: allocate(state, { folder, candidates, build, limits }), shortened, qualified }
+      break
     } catch (error) {
-      if (!parkable(error)) throw error
-      parkedAssets.add(key)
-      continue
-    }
-    claimRepositoryFolder(state, asset.repo, allocated.repoFolder)
-    claimFile(state, allocated.assetPathValue, `asset\u0000${key}`)
-    state.byAsset.set(key, { path: allocated.assetPathValue, provisional: lost || displaced.has(`asset\u0000${key}`) })
-  }
-  // An allocation made under another vault root is checked against this one: what does not fit here is parked here
-  // and keeps its allocation.
-  const unavailable = new Set()
-  for (const [key, allocated] of state.byIdentity) {
-    if (overflowOf([allocated.path, ...(allocated.attachment ? [allocated.attachment] : [])], limits) === 0) continue
-    unavailable.add(key)
-    if (seen.has(key) && !parked.some((item) => identityKey(item.repoId, item.nodeId) === key)) {
-      const [repoId, nodeId] = key.split('\u0000')
-      parked.push({ repoId, nodeId, reason: 'path-too-long' })
+      if (error?.code !== 'path-too-long' || reserve !== nameBytes) throw error
     }
   }
-  for (const [key, allocated] of state.byAsset) if (overflowOf([allocated.path], limits) > 0) parkedAssets.add(key)
+  claimRepositoryFolder(state, repoId, repoFolder)
+  for (const filePath of placed.paths) claimFile(state, filePath, owner)
+  return { paths: placed.paths, degraded: [...(placed.shortened ? ['folder-shortened'] : []), ...(placed.qualified ? ['folder-qualified'] : [])] }
+}
+
+// Allocates the paths of one view: `nodes` are the view's canonical nodes ({
+// repo, id, path, title, extension }), `assets` the assets its notes embed ({
+// repo, id, path }), `published` what the view's prior generation published (or
+// null), `occupied` vault paths that must stay free (files held for an edit).
+// Published paths come first, then new nodes and new assets, each in canonical
+// identity order, so the result depends on the inputs alone and never on the
+// order they are listed in. Returns the view's registry section, the lookups,
+// and a diagnostic for every note or asset whose folder was degraded.
+export function allocateViewPaths({ published = null, nodes, assets = [], occupied = [], vaultRootBytes = 0, maxFullPathBytes = DEFAULT_MAX_FULL_PATH_BYTES }) {
+  const state = newState()
+  const limits = { vaultRootBytes, maxFullPathBytes }
+  const sortedNodes = [...nodes].sort((left, right) => compare(left.repo, right.repo) || compare(left.id, right.id))
+  const nodeKeys = new Set()
+  for (const node of sortedNodes) {
+    const key = identityKey(node.repo, node.id)
+    if (nodeKeys.has(key)) refuse('duplicate-identity', 'more than one node carries the same canonical identity')
+    nodeKeys.add(key)
+  }
+  const sortedAssets = [...new Map(assets.map((asset) => [assetKey(asset.repo, asset.path), asset])).values()].sort((left, right) => compare(left.repo, right.repo) || compare(left.path, right.path))
+  const assetKeys = new Set(sortedAssets.map((asset) => assetKey(asset.repo, asset.path)))
+  seed(state, { notes: published?.notes ?? published?.entries ?? [], assets: published?.assets ?? [] }, { nodeKeys, assetKeys, limits })
+  for (const filePath of [...new Set(occupied)].sort()) {
+    if (typeof filePath !== 'string' || !isReadableVaultPath(filePath) || state.files.has(collisionKey(filePath)) || !claimable(state, filePath)) continue
+    claimFile(state, filePath, 'occupied')
+  }
+  const diagnostics = []
+  for (const node of sortedNodes) {
+    const key = identityKey(node.repo, node.id)
+    if (state.byIdentity.has(key)) continue
+    const wrapped = extensionOf(node) !== 'md'
+    const { paths, degraded } = place(state, {
+      repoId: node.repo, sourcePath: node.path, owner: key, limits,
+      candidates: wrapped ? fileCandidates(node.path, node.repo, node.id) : noteCandidates(node),
+      build: wrapped ? (base) => [base, `${base}.md`] : (base) => [`${base}.md`],
+      nameBytes: 1 + MIN_NAME_BYTES + (wrapped ? bytesOf(joinFileName({ stem: '', extension: fileNameParts(node.path).extension })) : 0) + '.md'.length,
+    })
+    // A wrapped file's paths are [file, note]; a Markdown note's [note].
+    const allocated = wrapped ? { path: paths[1], attachment: paths[0] } : { path: paths[0] }
+    state.byIdentity.set(key, allocated)
+    for (const code of degraded) diagnostics.push({ code, repoId: node.repo, nodeId: node.id, notePath: allocated.path })
+  }
+  for (const asset of sortedAssets) {
+    const key = assetKey(asset.repo, asset.path)
+    if (state.byAsset.has(key)) continue
+    const { paths, degraded } = place(state, {
+      repoId: asset.repo, sourcePath: asset.path, owner: `asset\u0000${key}`, limits,
+      candidates: fileCandidates(asset.path, asset.repo, asset.id ?? `${asset.repo}:asset:${asset.path}`), build: (base) => [base],
+      nameBytes: 1 + MIN_NAME_BYTES + bytesOf(joinFileName({ stem: '', extension: fileNameParts(asset.path).extension })),
+    })
+    state.byAsset.set(key, paths[0])
+    for (const code of degraded) diagnostics.push({ code, repoId: asset.repo, assetPath: asset.path, filePath: paths[0] })
+  }
 
   const entries = [...state.byIdentity].map(([key, allocated]) => {
     const [repoId, nodeId] = key.split('\u0000')
-    return { repoId, nodeId, path: allocated.path, ...(allocated.attachment === undefined ? {} : { attachment: allocated.attachment }), ...(allocated.provisional ? { provisional: true } : {}) }
-  }).sort((left, right) => compare(left.repoId, right.repoId) || compare(left.nodeId, right.nodeId))
-  const assetEntries = [...state.byAsset].map(([key, allocated]) => {
+    return { repoId, nodeId, path: allocated.path, ...(allocated.attachment === undefined ? {} : { attachment: allocated.attachment }) }
+  }).sort(byIdentity)
+  const assetEntries = [...state.byAsset].map(([key, allocatedPath]) => {
     const [repoId, assetPath] = key.split('\u0000')
-    return { repoId, assetPath, path: allocated.path, ...(allocated.provisional ? { provisional: true } : {}) }
-  }).sort((left, right) => compare(left.repoId, right.repoId) || compare(left.assetPath, right.assetPath))
-  const available = (key) => (unavailable.has(key) ? null : state.byIdentity.get(key) ?? null)
+    return { repoId, assetPath, path: allocatedPath }
+  }).sort(byAsset)
   return {
-    registry: { schema: PATH_REGISTRY_SCHEMA, workspaceId, layout: PATH_REGISTRY_LAYOUT, entries, assets: assetEntries },
-    pathOf: (repoId, nodeId) => available(identityKey(repoId, nodeId))?.path ?? null,
-    attachmentOf: (repoId, nodeId) => available(identityKey(repoId, nodeId))?.attachment ?? null,
-    assetPathOf: (repoId, assetPathValue) => {
-      const key = assetKey(repoId, assetPathValue)
-      return parkedAssets.has(key) ? null : state.byAsset.get(key)?.path ?? null
-    },
-    parked: parked.sort((left, right) => compare(left.repoId, right.repoId) || compare(left.nodeId, right.nodeId)),
+    section: { entries, assets: assetEntries },
+    pathOf: (repoId, nodeId) => state.byIdentity.get(identityKey(repoId, nodeId))?.path ?? null,
+    attachmentOf: (repoId, nodeId) => state.byIdentity.get(identityKey(repoId, nodeId))?.attachment ?? null,
+    assetPathOf: (repoId, assetPathValue) => state.byAsset.get(assetKey(repoId, assetPathValue)) ?? null,
+    diagnostics,
   }
 }
 
