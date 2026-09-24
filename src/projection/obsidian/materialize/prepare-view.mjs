@@ -845,20 +845,38 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     ext: { [EXT_KEY]: { emitterVersion: layout.emitterVersion, mode: selection.mode, settings: settings.ownership } },
   }
   assertObsidianContract('generation-manifest', manifest)
+  // What was laid out anyway and should be known, naming the note: a layout 2 generation records it.
+  const noteDiagnostics = []
 
-  // The redaction guard, over the whole result.
+  // The redaction guard, over the whole result. Its deny-list: identifiers of
+  // every census node and asset outside this view, refused where they are
+  // unambiguous (a repository-qualified identity, a repository-qualified path,
+  // a repository-relative path with a folder or an extension, a vault path) and
+  // reported where they are a bare word; an identifier this view's own notes
+  // share names nothing outside it.
   const viewAttachments = new Set(attachments.map((item) => item.path))
-  const deny = []
-  for (const item of canonical.nodes) {
-    if (!usable(item) || vault.has(item.id)) continue
-    deny.push(item.id, `${item.repo}/${item.path}`)
-    const allocated = allocatedPath(item.repo, item.id)
-    if (allocated !== null) deny.push(allocated)
+  const refused = []
+  const reported = []
+  const identifierOf = (item) => {
+    const id = String(item.id)
+    ;(id.startsWith(`${item.repo}:`) ? refused : reported).push(id)
+    refused.push(`${item.repo}/${item.path}`)
+    ;(item.path.includes('/') || /\.[^./]+$/.test(item.path) ? refused : reported).push(item.path)
   }
-  for (const item of censusAssets) if (usable(item) && !embeddedAssets.has(item.id)) deny.push(item.id, `${item.repo}/${item.path}`)
-  for (const entry of readable.registry.entries) if (!(vault.has(entry.nodeId) && nodeById.get(entry.nodeId)?.repo === entry.repoId)) deny.push(entry.path, ...(entry.attachment ? [entry.attachment] : []))
+  for (const item of canonical.nodes) {
+    if (!usable(item) || vault.has(item.id) || typeof item.path !== 'string') continue
+    identifierOf(item)
+    const allocated = allocatedPath(item.repo, item.id)
+    if (allocated !== null) refused.push(allocated)
+  }
+  for (const item of censusAssets) if (usable(item) && typeof item.path === 'string' && !embeddedAssets.has(item.id)) identifierOf(item)
+  for (const entry of readable.registry.entries) if (!(vault.has(entry.nodeId) && nodeById.get(entry.nodeId)?.repo === entry.repoId)) refused.push(entry.path, ...(entry.attachment ? [entry.attachment] : []))
   const copied = new Set([...embeddedAssets.values()].map((asset) => `${asset.repo}\u0000${asset.path}`))
-  for (const entry of readable.registry.assets) if (!copied.has(`${entry.repoId}\u0000${entry.assetPath}`)) deny.push(entry.path)
+  for (const entry of readable.registry.assets) if (!copied.has(`${entry.repoId}\u0000${entry.assetPath}`)) refused.push(entry.path)
+  const own = new Set()
+  for (const node of orderedNodes) own.add(node.id).add(`${node.repo}/${node.path}`).add(node.path).add(pathOf(node)).add(attachmentOf(node))
+  for (const asset of embeddedAssets.values()) own.add(asset.id).add(`${asset.repo}/${asset.path}`).add(asset.path).add(assetPaths.get(asset.id))
+  const outside = (values) => values.filter((value) => typeof value === 'string' && value !== '' && !own.has(value.normalize('NFC')) && !own.has(value))
   const linkTargets = new Set()
   for (const node of orderedNodes) {
     const target = noteLinkTarget(layout, pathOf(node))
@@ -868,16 +886,17 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   const allocatedInView = new Map(orderedNodes.map((node) => [node.id, pathOf(node)]))
   const wrapperAttachments = new Set(orderedNodes.filter((node) => node.extension !== 'md').map((node) => (legacy ? `attachments/${legacyBasename(pathOf(node))}.${/^[a-z0-9]{1,16}$/.test(String(node.extension).toLowerCase()) ? String(node.extension).toLowerCase() : 'bin'}` : attachmentOf(node))))
   const allowedAttachments = new Set([...wrapperAttachments, ...assetPaths.values()])
-  assertViewRedaction({
+  const guardReported = assertViewRedaction({
     manifest,
     files,
     reused: reusedPaths,
     nodeOf: (nodeId) => nodeById.get(nodeId),
     ownOf: (nodeId) => wrapperLines(nodeById.get(nodeId)),
     view: { allocatedPathOf: (nodeId) => allocatedInView.get(nodeId) ?? null, attachments: allowedAttachments, linkTargets },
-    deny: createDenyMatcher(deny),
+    deny: createDenyMatcher({ refuse: outside(refused), diagnose: outside(reported) }),
     layoutVersion: layout.version,
   }, guard)
+  if (!legacy) noteDiagnostics.push(...guardReported)
   if (legacy) {
     const vaultSuffixes = new Set([...orderedNodes, ...embeddedAssets.values()].map((item) => identitySuffix(item.repo, item.id, 64)))
     assertOnlyVaultIdentities({
@@ -905,6 +924,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
   // The cache is replaced only by a preparation that passed every check, and
   // holds exactly the notes of this view.
   if (nextCache) cache.notes = nextCache
+  if (noteDiagnostics.length > 0) manifest.ext[EXT_KEY].diagnostics = noteDiagnostics
 
   return {
     manifest,

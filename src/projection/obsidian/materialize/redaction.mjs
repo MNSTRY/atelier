@@ -4,16 +4,16 @@ import { refuse } from './byte-lens.mjs'
 // The redaction guard: the last check before a prepared view is returned. It
 // judges the assembled result, every note included, whether the note was
 // emitted on this call or reused from the preparation cache, and refuses the
-// view with `redaction-failure` and no detail. See "The redaction guard" in
-// docs/obsidian-contract.md.
+// view with `redaction-failure`, naming the in-view note (or file) and the
+// rule, never the value. See "The redaction guard" in docs/obsidian-contract.md.
 //
 //   allow-list  every path the emitter wrote (note and attachment paths,
 //               rewritten link and embed targets, link targets in generated
 //               regions) is one allocated to this view, and each identity
 //               block names exactly its own note
-//   deny-list   the free text of the generated regions names no canonical
-//               identity, repository-qualified source path or allocated vault
-//               path of anything outside this view, as a whole token
+//   deny-list   the free text of the generated regions, read as a reader
+//               sees it, names no unambiguous identifier of anything outside
+//               this view (refused) and no bare word that is one (reported)
 //   coverage    both run over every note of the view
 //
 // REDACTION_RULES are the rules production uses. The mutation controls in
@@ -46,8 +46,6 @@ const asRead = (text) => text.replace(ESCAPED, '$1')
 // one. A letter or digit beside the match, or one of `. _ : / -` joined to a
 // letter or digit beside it, continues the token; sentence punctuation after
 // it (a full stop, a colon before a space) does not.
-const WORD = /[\p{L}\p{N}]+/gu
-const FIRST_WORD = /[\p{L}\p{N}]+/u
 const ALNUM = /^[\p{L}\p{N}]$/u
 const JOINERS = new Set(['.', '_', ':', '/', '-'])
 
@@ -62,53 +60,76 @@ const isAlnumAt = (text, index) => ALNUM.test(codePointAt(text, index))
 const continuesAfter = (text, end) => isAlnumAt(text, end) || (JOINERS.has(text[end]) && isAlnumAt(text, end + 1))
 const continuesBefore = (text, start) => isAlnumAt(text, start - 1) || (JOINERS.has(text[start - 1]) && isAlnumAt(text, start - 2))
 
-// A matcher for whole-token occurrences of any of `values`, linear in the
-// text whatever the number of values. A whole-token match always has the
-// value's first word (its first run of letters and digits) on a word of the
-// text, so each value is filed under that word, where the word starts in the
-// value and the character that follows it, and within that under its length.
-// A word of the text then costs a few lookups, and a candidate is compared
-// only where its length ends on a token boundary. A value with no letter or
-// digit at all is looked for directly.
-export function createDenyMatcher(values) {
-  const filed = new Map()
-  const offsets = new Set()
-  const bare = []
-  for (const value of new Set(values)) {
-    if (typeof value !== 'string' || value === '') continue
-    const first = FIRST_WORD.exec(value)
-    if (first === null) { bare.push(value); continue }
-    const key = `${first.index}\u0000${first[0]}\u0000${codePointAt(value, first.index + first[0].length)}`
-    offsets.add(first.index)
-    if (!filed.has(key)) filed.set(key, new Map())
-    const byLength = filed.get(key)
-    if (!byLength.has(value.length)) byLength.set(value.length, new Set())
-    byLength.get(value.length).add(value)
-  }
-  const whole = (text, at, length) => !continuesBefore(text, at) && !continuesAfter(text, at + length)
-  const candidatesAt = (text, start, byLength) => {
-    for (const [length, candidates] of byLength) {
-      if (start + length <= text.length && whole(text, start, length) && candidates.has(text.slice(start, start + length))) return true
+const REFUSE = 2
+const DIAGNOSE = 1
+const UNITS = 0x10000
+
+// One Aho–Corasick automaton over every value, read in UTF-16 code units, with
+// the token boundary tested at each hit: linear in the text, whatever the
+// number of values. `refuse` values refuse a view, `diagnose` values are
+// reported; the matcher answers the stronger of what a text holds ('refuse',
+// 'diagnose' or null). Values and texts are compared in NFC.
+export function createDenyMatcher({ refuse: refused = [], diagnose = [] } = {}) {
+  const next = new Map()
+  const parent = [0]
+  const unit = [0]
+  const depth = [0]
+  const output = [null]
+  const add = (raw, strength) => {
+    if (typeof raw !== 'string' || raw === '') return
+    const value = raw.normalize('NFC')
+    let state = 0
+    for (let index = 0; index < value.length; index += 1) {
+      const key = state * UNITS + value.charCodeAt(index)
+      let child = next.get(key)
+      if (child === undefined) {
+        child = parent.length
+        next.set(key, child)
+        parent.push(state)
+        unit.push(value.charCodeAt(index))
+        depth.push(depth[state] + 1)
+        output.push(null)
+      }
+      state = child
     }
-    return false
+    if (output[state] === null) output[state] = { length: value.length, strength }
+    else output[state].strength = Math.max(output[state].strength, strength)
   }
-  return function matches(text) {
-    for (const word of text.matchAll(WORD)) {
-      const next = codePointAt(text, word.index + word[0].length)
-      for (const offset of offsets) {
-        const start = word.index - offset
-        if (start < 0) continue
-        // The value's word is followed by what follows it in the text, or the value ends with it.
-        for (const after of next === '' ? [''] : [next, '']) {
-          const byLength = filed.get(`${offset}\u0000${word[0]}\u0000${after}`)
-          if (byLength !== undefined && candidatesAt(text, start, byLength)) return true
-        }
+  for (const value of refused) add(value, REFUSE)
+  for (const value of diagnose) add(value, DIAGNOSE)
+  // Failure and output links, state by state in order of depth.
+  const fail = new Int32Array(parent.length)
+  const outputLink = new Int32Array(parent.length).fill(-1)
+  const byDepth = []
+  for (let state = 1; state < parent.length; state += 1) (byDepth[depth[state]] ??= []).push(state)
+  for (const states of byDepth) {
+    for (const state of states ?? []) {
+      let target = 0
+      if (parent[state] !== 0) {
+        let from = fail[parent[state]]
+        while (from !== 0 && !next.has(from * UNITS + unit[state])) from = fail[from]
+        target = next.get(from * UNITS + unit[state]) ?? 0
+      }
+      fail[state] = target
+      outputLink[state] = output[target] !== null ? target : outputLink[target]
+    }
+  }
+  return function match(raw) {
+    const text = String(raw).normalize('NFC')
+    let state = 0
+    let found = 0
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index)
+      while (state !== 0 && !next.has(state * UNITS + code)) state = fail[state]
+      state = next.get(state * UNITS + code) ?? 0
+      for (let hit = output[state] !== null ? state : outputLink[state]; hit > 0; hit = outputLink[hit]) {
+        const { length, strength } = output[hit]
+        if (strength <= found || continuesBefore(text, index - length + 1) || continuesAfter(text, index + 1)) continue
+        found = strength
+        if (found === REFUSE) return 'refuse'
       }
     }
-    for (const value of bare) {
-      for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) if (whole(text, at, value.length)) return true
-    }
-    return false
+    return found === REFUSE ? 'refuse' : found === DIAGNOSE ? 'diagnose' : null
   }
 }
 
@@ -168,10 +189,8 @@ export function readNoteForRedaction({ note, bytes, node, own }) {
   }
 }
 
-const inversionsOf = (manifest, judgedIds) => [
-  ...manifest.links.filter((link) => judgedIds.has(link.sourceNodeId)).flatMap((link) => link.inversions ?? []),
-  ...manifest.notes.filter((note) => judgedIds.has(note.nodeId)).flatMap((note) => (note.ext?.[EXT]?.assetEmbeds ?? []).flatMap((embed) => embed.inversions)),
-]
+// A refusal names the in-view note (or file) and the rule, never the value.
+const refuseAt = (rule, where, message) => refuse('redaction-failure', `${message} (${rule}, ${where})`, { rule, ...(where.endsWith('.md') ? { notePath: where } : { filePath: where }) })
 
 // Rule 1. `view.allocatedPathOf(nodeId)` is the path allocated to a node of
 // this view (null for any other), `view.attachments` the files it holds and
@@ -179,32 +198,49 @@ const inversionsOf = (manifest, judgedIds) => [
 // view may use.
 function allowList({ manifest, notes, read, view, layoutVersion }) {
   const judgedIds = new Set(notes.map((note) => note.nodeId))
+  const pathOfNode = new Map(manifest.notes.map((note) => [note.nodeId, note.path]))
   for (const note of notes) {
-    if (view.allocatedPathOf(note.nodeId) !== note.path) refuse('redaction-failure', 'a note path is not the one allocated to a note of this view')
+    if (view.allocatedPathOf(note.nodeId) !== note.path) refuseAt('allow-list', note.path, 'a note path is not the one allocated to a note of this view')
     for (const embed of note.ext?.[EXT]?.assetEmbeds ?? []) {
-      if (!view.attachments.has(embed.attachment)) refuse('redaction-failure', 'an embed names a file that is not part of this view')
+      if (!view.attachments.has(embed.attachment)) refuseAt('allow-list', note.path, 'an embed names a file that is not part of this view')
     }
   }
   for (const attachment of manifest.attachments) {
-    if (!view.attachments.has(attachment.path)) refuse('redaction-failure', 'an attachment is not a file of this view')
+    if (!view.attachments.has(attachment.path)) refuseAt('allow-list', attachment.path, 'an attachment is not a file of this view')
   }
-  for (const inversion of inversionsOf(manifest, judgedIds)) {
-    const ext = inversion.ext?.[EXT] ?? {}
-    const emitted = Buffer.from(ext.emitted ?? '', 'base64url').toString('utf8')
-    // The words an author chose, appended after a rewritten wikilink target: authored bytes, not a path.
-    if ((ext.original ?? '') === '' && emitted.startsWith('|')) continue
-    if (!view.linkTargets.has(emitted)) refuse('redaction-failure', 'an emitted link names a file that is not part of this view')
+  for (const link of manifest.links.filter((item) => judgedIds.has(item.sourceNodeId))) {
+    for (const inversion of link.inversions ?? []) checkInversion(inversion, pathOfNode.get(link.sourceNodeId), view)
+  }
+  for (const note of notes) {
+    for (const embed of note.ext?.[EXT]?.assetEmbeds ?? []) for (const inversion of embed.inversions) checkInversion(inversion, note.path, view)
   }
   for (const entry of read) {
-    for (const target of entry.links) if (!view.linkTargets.has(target)) refuse('redaction-failure', 'a generated link names a file that is not part of this view')
-    if (layoutVersion >= 2 && (entry.identity === null || !entry.identity.own)) refuse('redaction-failure', 'an identity block does not name exactly its own note')
+    for (const target of entry.links) if (!view.linkTargets.has(target)) refuseAt('allow-list', entry.note.path, 'a generated link names a file that is not part of this view')
+    if (layoutVersion >= 2 && (entry.identity === null || !entry.identity.own)) refuseAt('identity-block', entry.note.path, 'an identity block does not name exactly its own note')
   }
 }
 
-// Rule 2.
-function denyList({ read, deny }) {
+function checkInversion(inversion, notePath, view) {
+  const ext = inversion.ext?.[EXT] ?? {}
+  const emitted = Buffer.from(ext.emitted ?? '', 'base64url').toString('utf8')
+  // The words an author chose, appended after a rewritten wikilink target: authored bytes, not a path.
+  if ((ext.original ?? '') === '' && emitted.startsWith('|')) return
+  if (!view.linkTargets.has(emitted)) refuseAt('allow-list', notePath, 'an emitted link names a file that is not part of this view')
+}
+
+// Rule 2. A refused value refuses the view; a reported one (an identity that
+// is a bare word) is recorded through `report` and the view goes on.
+function denyList({ read, deny, report }) {
   for (const entry of read) {
-    for (const text of entry.freeText) if (deny(text)) refuse('redaction-failure', 'generated output names an identity that is not part of this view')
+    let reported = false
+    for (const text of entry.freeText) {
+      const found = deny(text)
+      if (found === 'refuse') refuseAt('deny-list', entry.note.path, 'generated text names an identity that is not part of this view')
+      if (found === 'diagnose' && !reported) {
+        reported = true
+        report({ code: 'bare-identity-in-generated-text', rule: 'deny-list', repoId: entry.note.repoId, nodeId: entry.note.nodeId, notePath: entry.note.path })
+      }
+    }
   }
 }
 
@@ -215,12 +251,15 @@ export const REDACTION_RULES = Object.freeze({
   denyList,
 })
 
+// Returns what rule 2 reported.
 export function assertViewRedaction({ manifest, files, reused, nodeOf, ownOf, view, deny, layoutVersion }, rules = REDACTION_RULES) {
   const notes = rules.judged({ notes: manifest.notes, reused })
   const byPath = new Map(files.map((file) => [file.path, file.bytes]))
   const read = notes.map((note) => readNoteForRedaction({ note, bytes: byPath.get(note.path), node: nodeOf(note.nodeId), own: ownOf(note.nodeId) }))
+  const reported = []
   rules.allowList({ manifest, notes, read, view, layoutVersion })
-  rules.denyList({ read, deny })
+  rules.denyList({ read, deny, report: (item) => reported.push(item) })
+  return reported
 }
 
 // Layout 1 only, as the earlier release checked it. Two rules, because the two

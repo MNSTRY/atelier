@@ -924,12 +924,12 @@ test('generated text that names a census identity outside the view is still refu
   // repository-qualified source path, reaches the relation rows of the notes
   // it relates to, and the guard refuses it: this is the mutation the benign
   // cases around it must not have disabled.
-  for (const title of ['Names north-desk:sealed-ledger', 'Replaces north-desk:sealed-ledger.', 'See north-desk/sealed/ledger.md first']) {
+  for (const title of ['Names north-desk:sealed-ledger', 'Replaces north-desk:sealed-ledger.', 'See north-desk/sealed/ledger.md first', 'See sealed/ledger.md']) {
     const snapshot = makeWorkspaceVariant(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', title) })
     assert.throws(() => prepare(snapshot, fullScope), /redaction-failure/, title)
   }
-  // A whole token only: the identity inside a longer word, or a repository-relative path alone (which any repository may hold), is not an identity.
-  for (const title of ['Names xnorth-desk:sealed-ledger', 'Names north-desk:sealed-ledgers', 'Names north-desk:sealed-ledger.v2', 'See sealed/ledger.md']) {
+  // A whole token only: the identity inside a longer word is not the identity.
+  for (const title of ['Names xnorth-desk:sealed-ledger', 'Names north-desk:sealed-ledgers', 'Names north-desk:sealed-ledger.v2', 'See sealed/ledger.mdx']) {
     const snapshot = makeWorkspaceVariant(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', title) })
     assert.ok(prepare(snapshot, fullScope).manifest.notes.some((note) => note.nodeId === 'north-desk:naming'), title)
   }
@@ -1011,11 +1011,11 @@ test('a withheld identity that reaches only a relations row (never a path) is st
 const SEALED_UNDERSCORE = {
   'north-desk/sealed/q3_layoffs.md': { text: '---\ntitle: "Q3 plan"\nkg:\n  id: "north-desk:q3_layoffs"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# Q3 plan\n' },
 }
-function makeWorkspaceWithheld(t, extraFiles) {
+function makeWorkspaceWithheld(t, extraFiles, extraWithheld = []) {
   const savedFiles = workspace.files
   const savedWithheld = workspace.withheldByEligibility
   workspace.files = { ...savedFiles, ...SEALED_UNDERSCORE, ...extraFiles }
-  workspace.withheldByEligibility = [...savedWithheld, 'north-desk:q3_layoffs']
+  workspace.withheldByEligibility = [...savedWithheld, 'north-desk:q3_layoffs', ...extraWithheld]
   try { return makeWorkspace(t) } finally { workspace.files = savedFiles; workspace.withheldByEligibility = savedWithheld }
 }
 const sidecarWith = (fields) => ({ text: JSON.stringify({ ...JSON.parse(workspace.files['north-desk/charts/depth-chart.pdf.kg.json'].text), ...fields }) })
@@ -1052,6 +1052,36 @@ test('a title that reaches generated text only in a sanitized form is carried as
   const pointer = noteBytes(prepared, 'north-desk:pointer').toString('utf8')
   assert.ok(pointer.includes('|About north-desk q3_layoffs]]\n'), pointer)
   assert.equal(noteOf(prepared, 'north-desk:target').path, 'north-desk/notes/About north-desk q3_layoffs.md')
+})
+
+test('the deny matcher refuses before it reports: a refused value wins over a reported one, and both sides are compared in NFC', () => {
+  const deny = createDenyMatcher({ refuse: ['north-desk:re\u0301sume\u0301'], diagnose: ['harbor'] })
+  assert.equal(deny('the harbor'), 'diagnose')
+  assert.equal(deny('the harbor and north-desk:r\u00e9sum\u00e9'), 'refuse')
+  assert.equal(deny('north-desk:re\u0301sume\u0301'), 'refuse')
+  assert.equal(deny('harbors'), null)
+})
+
+test('the deny-list refuses unambiguous identifiers of notes outside the view, reports a bare word, and names the in-view note and the rule, never the value', (t) => {
+  const refusalOf = (snapshot, scope = fullScope) => { try { prepare(snapshot, scope); return null } catch (error) { if (error.code !== 'redaction-failure') throw error; return error } }
+  const doc = (id, title) => ({ text: `---\ntitle: "${title}"\nkg:\n  id: "${id}"\n  type: "document"\n  status: "active"\n  audience: "team"\n---\n\n# ${title}\n` })
+  const sealed = { 'north-desk/sealed/bare.md': doc('harbor', 'Bare'), 'north-desk/q3_budget.md': doc('north-desk:q3_budget', 'Budget') }
+  const withheld = ['harbor', 'north-desk:q3_budget']
+  // Refused: a repository-qualified identity, a repository-qualified path, and a repository-relative path with a folder or an extension.
+  for (const named of ['north-desk:q3_layoffs', 'north-desk/sealed/q3_layoffs.md', 'sealed/q3_layoffs.md', 'q3_budget.md']) {
+    const error = refusalOf(makeWorkspaceWithheld(t, { ...sealed, 'north-desk/notes/naming.md': relatedNote('north-desk:naming', `See ${named}`) }, withheld))
+    assert.ok(error, named)
+    assert.deepEqual(error.detail, { rule: 'deny-list', notePath: 'north-desk/plans/Harbor plan.md' }, named)
+    assert.equal(/q3_(layoffs|budget)/.test(`${error.message} ${JSON.stringify(error.detail)}`), false, 'the refusal never names the withheld value')
+  }
+  // Reported, not refused: an identity that is a bare word, and a repository-relative path that is one.
+  const bare = makeWorkspaceWithheld(t, { ...sealed, 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'Lights by the harbor') }, withheld)
+  const prepared = prepare(bare, fullScope)
+  assert.deepEqual(prepared.manifest.ext[EXT].diagnostics, [{ code: 'bare-identity-in-generated-text', rule: 'deny-list', repoId: 'north-desk', nodeId: 'north-desk:harbor-plan', notePath: 'north-desk/plans/Harbor plan.md' }])
+  // A value that is also an identifier of a note in the view is no identifier of the one outside it.
+  // (The sealed ledger is `north-desk/sealed/ledger.md`; an in-view note of another repository has the same repository-relative path.)
+  const shared = makeWorkspaceWithheld(t, { 'north-desk/notes/naming.md': relatedNote('north-desk:naming', 'See sealed/ledger.md'), 'south-desk/sealed/ledger.md': doc('south-desk:ledger', 'Tide ledger') })
+  assert.ok(prepare(shared, fullScope).manifest.notes.some((note) => note.nodeId === 'south-desk:ledger'))
 })
 
 // ---------------------------------------------------------------------------
@@ -1123,7 +1153,8 @@ test('rule 2, deny-list: a withheld identity in generated free text refuses; wit
 })
 
 test('the deny matcher finds whole tokens only, wherever a value starts, and in any text', () => {
-  const matches = createDenyMatcher(['north-desk:sealed-ledger', 'north-desk/sealed/q3_layoffs.md', '_drafts/notes/n-1.md', '.hidden:x', 'harbor', 'north-desk/plans/Plan (b).md', '___'])
+  const deny = createDenyMatcher({ refuse: ['north-desk:sealed-ledger', 'north-desk/sealed/q3_layoffs.md', '_drafts/notes/n-1.md', '.hidden:x', 'harbor', 'north-desk/plans/Plan (b).md', '___'] })
+  const matches = (text) => deny(text) === 'refuse'
   for (const text of [
     'Names north-desk:sealed-ledger', 'north-desk:sealed-ledger.', '(north-desk:sealed-ledger)', 'see north-desk/sealed/q3_layoffs.md, then',
     'a _drafts/notes/n-1.md b', '.hidden:x', 'the harbor', 'Harbor, harbor.', 'at north-desk/plans/Plan (b).md', 'a ___ b', '___',
@@ -1151,7 +1182,8 @@ test('the deny matcher agrees with a direct search for every occurrence of every
   const word = (length) => Array.from({ length }, () => alphabet[Math.floor(random() * alphabet.length)]).join('')
   for (let round = 0; round < 400; round += 1) {
     const values = Array.from({ length: 1 + Math.floor(random() * 6) }, () => word(1 + Math.floor(random() * 5))).filter((value) => value.trim() !== '')
-    const matches = createDenyMatcher(values)
+    const deny = createDenyMatcher({ refuse: values })
+    const matches = (text) => deny(text) === 'refuse'
     for (let sample = 0; sample < 20; sample += 1) {
       const text = word(Math.floor(random() * 24))
       assert.equal(matches(text), reference(values, text), JSON.stringify({ values, text }))
@@ -1159,22 +1191,28 @@ test('the deny matcher agrees with a direct search for every occurrence of every
   }
 })
 
-test('the deny matcher costs a few lookups per word, however many values: 15,000 to 30,000 values against titles that use a repository word', (t) => {
-  // Repository identities that are ordinary words, and one whose name starts with `_`: every value shares a first word
-  // with the text, which a matcher that compares candidates one by one pays for on every occurrence.
+test('the deny matcher is one automaton, linear in the text: 15,000 to 30,000 values of repositories named like words, `_archive` and `.github`', (t) => {
+  // Repository identities that are ordinary words the titles use (`notes`), or that start with neither a letter nor a
+  // digit: every value shares its start with the text, which a matcher that compares candidates one by one pays for.
   const values = []
-  for (let index = 0; index < 10000; index += 1) values.push(`harbor:note-${index}`, `harbor/notes/note ${index}.md`, `_drafts/notes/n-${index}.md`)
-  const texts = Array.from({ length: 4000 }, (_, index) => `Harbor lights ${index} over the harbor wall, _drafts of harbor plans and harbor: notes`)
+  for (let index = 0; index < 10000; index += 1) {
+    const repo = ['notes', '_archive', '.github'][index % 3]
+    values.push(`${repo}:note-${index}`, `${repo}/notes/b${index % 50}/note ${index}.md`, `${repo}/notes/b${index % 50}/Title ${index}.md`)
+  }
+  const texts = Array.from({ length: 4000 }, (_, index) => `Weekly notes ${index}: notes on the notes wall, _archive of .github notes and notes: ${index}`)
   const elapsed = {}
   for (const count of [15000, 30000]) {
     const started = performance.now()
-    const matches = createDenyMatcher(values.slice(0, count))
-    for (const text of texts) assert.equal(matches(text), false)
+    const deny = createDenyMatcher({ refuse: values.slice(0, count) })
+    for (const text of texts) assert.equal(deny(text), null)
     elapsed[count] = Math.round(performance.now() - started)
   }
-  t.diagnostic(`deny matcher: 15,000 values ${elapsed[15000]} ms, 30,000 values ${elapsed[30000]} ms, over ${texts.length} titles`)
+  t.diagnostic(`deny matcher: 15,000 values ${elapsed[15000]} ms, 30,000 values ${elapsed[30000]} ms, over ${texts.length} titles, build included`)
   // Generous bounds, far below what a candidate-by-candidate matcher takes here (seconds to tens of seconds).
-  assert.ok(elapsed[15000] < 1500 && elapsed[30000] < 1500, JSON.stringify(elapsed))
+  assert.ok(elapsed[15000] < 2000 && elapsed[30000] < 2000, JSON.stringify(elapsed))
+  // The same automaton finds each value where it is a whole token.
+  const deny = createDenyMatcher({ refuse: values })
+  for (const value of [values[0], values[4], values[29998]]) assert.equal(deny(`See ${value}, then`), 'refuse', value)
 })
 
 test('rule 3, coverage: a reused note is judged like an emitted one; a guard that skipped the cache would serve a forged entry', (t) => {
