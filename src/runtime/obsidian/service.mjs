@@ -2,10 +2,13 @@ import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
+import { prepareView as productionPrepareView } from '../../projection/obsidian/materialize/index.mjs'
+import { preparePluginFiles } from '../../projection/obsidian/plugin-bridge/bundle.mjs'
 import { isoTime } from './documents.mjs'
 import { createMaintenanceEngine } from './engine.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { assertOutsideRepositories, protectedRoots, readLocalPointer, resolveDataRoot, workspaceStateRoot } from './machine-settings.mjs'
+import { createPluginChannel, createPluginSessions, ensurePluginBearer, pluginPresence } from './plugin-channel.mjs'
 import { isProcessAlive } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import {
@@ -13,7 +16,7 @@ import {
   writeLastServiceError, writeServiceRecord,
 } from './service-record.mjs'
 import { createServiceServer } from './service-server.mjs'
-import { createMaintenanceStateStore } from './state-store.mjs'
+import { OPEN_EDIT_STATES, createMaintenanceStateStore } from './state-store.mjs'
 import { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
 import { createFsWatcherFactory } from './watchers.mjs'
 
@@ -32,6 +35,11 @@ import { createFsWatcherFactory } from './watchers.mjs'
 // shutdown the tick in flight is allowed to finish; nothing is swept, and a
 // publication that was cut short is settled by the publisher's own restart
 // recovery on a later tick, never by deleting what it left behind.
+//
+// It also holds the plugin channel (plugin-channel.mjs). Every view it
+// prepares carries Atelier's plugin, whose data file names this listener and
+// the view's bearer, and a plugin that holds a view open is reported by
+// status and tells the adapter factory the app version it runs in.
 //
 // `adapterFactory` has no default here either: whoever starts the service
 // decides whether it may reach a running app.
@@ -98,6 +106,8 @@ export async function runMaintenanceService(options = {}) {
   const identity = { serviceName: serviceNameFor(workspaceId), workspaceId, runtimeId, pid, host, port, executableDigest: executable.digest, startedAt }
   const bearer = randomBytes(32).toString('base64url')
   const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
+  // Session identities live in memory only and are always random, whatever `randomBytes` the service was given.
+  const pluginSessions = createPluginSessions()
 
   let stopping = false
   let consecutiveFailures = 0
@@ -105,7 +115,21 @@ export async function runMaintenanceService(options = {}) {
   let settleDone
   const done = new Promise((resolve) => { settleDone = resolve })
 
-  const engine = createEngine({ watcherFactory: createFsWatcherFactory(), ...engineOptions, loadProject, dataRoot, adapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId } })
+  // Every prepared view carries the plugin with this listener's address and the view's bearer. A bearer that cannot be
+  // kept leaves that view without the plugin for this tick; the view itself is prepared as ever.
+  const pluginFor = (scopeId) => {
+    try { return preparePluginFiles({ channel: { host, port }, scopeId, bearer: ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock }) }) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-not-prepared', code: errorCode(error), name: errorName(error) })
+      return null
+    }
+  }
+  const prepareWithPlugin = (input) => (engineOptions.seams?.prepareView ?? productionPrepareView)({ ...input, plugin: pluginFor(input.scope.scopeId) })
+  // The app version a live plugin reports counts as checked for the view it holds open.
+  const pluginAwareAdapterFactory = (input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginSessions.report(input.scope.scopeId) : null })
+  const engine = createEngine({
+    watcherFactory: createFsWatcherFactory(), ...engineOptions, seams: { ...(engineOptions.seams ?? {}), prepareView: prepareWithPlugin },
+    loadProject, dataRoot, adapterFactory: pluginAwareAdapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId },
+  })
 
   const recordIsOurs = () => {
     try { const record = readServiceRecord({ workspaceRoot, workspaceId }); return record !== null && record.runtimeId === runtimeId && record.pid === pid } catch { return false }
@@ -150,6 +174,20 @@ export async function runMaintenanceService(options = {}) {
   }
 
   const healthStatus = () => (stopping ? 'stopped' : consecutiveFailures > 0 ? 'degraded' : 'healthy')
+
+  // One view as the plugin is told about it: its freshness entry with held notes counted, and its open pending edits.
+  function pluginStatusOf(scopeId) {
+    let entry = null
+    try { entry = stateStore.readFreshness()?.scopes.find((item) => item.scopeId === scopeId) ?? null } catch (error) { if (!isTyped(error)) throw error; return { view: null, pendingEdits: null } }
+    let open = null
+    try { open = stateStore.readPendingEdits().edits.filter((edit) => edit.scopeId === scopeId && OPEN_EDIT_STATES.includes(edit.state)).length } catch (error) { if (!isTyped(error)) throw error }
+    const view = entry === null ? null : {
+      state: entry.state, reason: entry.reason, verified: entry.verified, generationId: entry.generationId, preparedGenerationId: entry.preparedGenerationId,
+      heldNoteCount: entry.heldNotes.length, retainedEdits: entry.retainedEdits, checkedAt: entry.checkedAt,
+    }
+    return { view, pendingEdits: open === null ? null : { open } }
+  }
+  const pluginChannel = createPluginChannel({ workspaceRoot, workspaceId, runtimeId, sessions: pluginSessions, statusOf: pluginStatusOf, serviceStatus: healthStatus })
   const server = createServiceServer({
     identity, bearer,
     operations: {
@@ -158,7 +196,10 @@ export async function runMaintenanceService(options = {}) {
         let lastError = null
         try { lastError = readLastServiceError({ workspaceRoot, workspaceId }) } catch (error) { if (!isTyped(error)) throw error; lastError = { unreadable: error.code } }
         if (lastError?.schema) { const { schema: _schema, workspaceId: _workspace, ...shown } = lastError; lastError = shown }
-        return { schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(), ...(typeof appStatus === 'function' ? { app: appStatus() } : {}) }
+        return {
+          schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(),
+          plugins: pluginPresence({ sessions: pluginSessions, scopeIds: [...pluginChannel.bearers().keys()] }), ...(typeof appStatus === 'function' ? { app: appStatus() } : {}),
+        }
       },
       async tick() {
         const outcome = await loop.tickNow()
@@ -166,6 +207,8 @@ export async function runMaintenanceService(options = {}) {
         return outcome.ok ? { ok: true, ...summary(outcome.report) } : { ok: false, error: { code: errorCode(outcome.error), name: errorName(outcome.error) } }
       },
       stop: () => shutdown('stop-requested'),
+      pluginBearers: () => pluginChannel.bearers(),
+      plugin: (command, request) => pluginChannel.handle(command, request),
     },
   })
 

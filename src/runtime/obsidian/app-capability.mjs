@@ -13,6 +13,12 @@ import { refuse } from './errors.mjs'
 // is true when the command-line tool answered that no vault is open. The
 // production probe is a separate module that only the real command-line
 // entries load; every test passes its own.
+//
+// A version can also come from Atelier's plugin: a plugin that holds a live
+// lease runs inside the app and reports `apiVersion`, the version of exactly
+// that app. Such an observation carries `versionSource: 'plugin'`; it
+// qualifies with reason `plugin-reported`, and it needs no answer from the
+// command-line tool's `version` command.
 
 // The publication protocol sets the view's undocumented `lastSavedData` field.
 // 1.13.7 is the only app version that protocol was proven on, so it is the
@@ -83,6 +89,14 @@ export function readVersionAnswer({ stdout = '', stderr = '', exited = true } = 
 export function qualifyApp(observation, { requireVersion = true, floor = MINIMUM_APP_VERSION } = {}) {
   const seen = observation !== null && typeof observation === 'object' ? observation : {}
   const base = { floor, version: typeof seen.version === 'string' ? seen.version.slice(0, 80) : null, running: seen.running === true ? true : seen.running === false ? false : null }
+  if (seen.versionSource === 'plugin') {
+    // The plugin runs inside the app it reports: the app is installed, runs, and has a vault open.
+    const reported = { ...base, running: true, versionSource: 'plugin' }
+    if (reported.version === null) return { ...reported, outcome: 'app-version-unsupported', reason: 'version-unknown' }
+    if (parseAppVersion(reported.version) === null) return { ...reported, outcome: 'app-version-unsupported', reason: 'version-unreadable' }
+    if (!meetsMinimumAppVersion(reported.version, floor)) return { ...reported, outcome: 'app-version-unsupported', reason: 'below-minimum-version' }
+    return { ...reported, outcome: 'qualified', reason: 'plugin-reported', versionChecked: true }
+  }
   if (seen.installed !== true) return { ...base, outcome: 'app-missing', reason: 'no-app-found' }
   if (seen.cli !== true) return { ...base, outcome: 'app-cli-unavailable', reason: 'cli-capability-absent' }
   if (seen.noVaultOpen === true) return { ...base, outcome: 'app-version-unsupported', reason: 'no-vault-open' }
@@ -108,6 +122,12 @@ export async function inspectApp(appProbe) {
 // qualification with its input: an app that was not running qualified without
 // a version, and an adapter built on that answer must not coordinate with an
 // app started since (see createEditorAdapter).
+//
+// When the service passes `pluginReport` (a plugin holds a live lease on the
+// view), the version it reports is the qualification and the probe is not
+// asked; such an answer is never reused for another view or a later call. The
+// adapter still coordinates through its own channel, which must answer for
+// the vault before anything is published.
 export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor = MINIMUM_APP_VERSION, maxAgeMs = 10_000, now = () => Date.now() } = {}) {
   if (typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspectSync()')
   if (typeof createAdapter !== 'function') throw new TypeError('the qualified adapter factory needs createAdapter')
@@ -125,14 +145,18 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
     }
     return last.result
   }
+  const fromPlugin = (report) => qualifyApp({ version: typeof report?.appVersion === 'string' ? report.appVersion : null, versionSource: 'plugin' }, { requireVersion: true, floor })
+  let shown = null
   const factory = (input) => {
-    const result = qualification()
+    const report = input?.pluginReport ?? null
+    const result = report === null ? qualification() : fromPlugin(report)
+    shown = result
     // No app at all is not an unqualified app: the publisher's own path needs none, and its adapter finds no process.
     if (result.outcome !== 'qualified' && result.outcome !== 'app-missing') refuse(result.outcome, 'the installed Obsidian does not qualify; nothing is published through it', { reason: result.reason, floor: result.floor, version: result.version })
     return createAdapter({ ...input, qualification: result })
   }
   factory.qualification = qualification
-  // What was last learned, without asking again: for a status answer.
-  factory.lastQualification = () => last?.result ?? null
+  // What was last learned, from the probe or from a plugin, without asking again: for a status answer.
+  factory.lastQualification = () => shown ?? last?.result ?? null
   return factory
 }

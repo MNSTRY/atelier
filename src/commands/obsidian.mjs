@@ -17,6 +17,7 @@ import {
   revokeApplyPolicy, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
+import { pluginPresenceOf, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
 import { serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
@@ -152,6 +153,9 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
     }
+    // Atelier's plugin as the running service sees it, for one view.
+    const pluginOf = async (scopeId) => pluginPresenceOf((await readServiceStatusDocument(lifecycle, lifecycleRules)).document, scopeId)
+    const pluginLine = (plugin) => (plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : `; plugin not present (${plugin.reason})`)
 
     const configured = () => {
       const project = loadProject()
@@ -193,7 +197,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           ? enablement.scopes.map(({ scopeId }) => ({ scopeId, outcome: enablement.state === 'disabled' ? 'disabled' : 'not-prepared', reason: enablement.state === 'disabled' ? enablement.reason : 'workspace-not-prepared' }))
           : enablement.scopes.map(({ scopeId }) => {
             const { vaultRoot: _vault, summary: _summary, ...report } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
-            return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next } : report
+            const plugin = pluginPresenceOf(running, scopeId)
+            return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next, plugin } : { ...report, plugin }
           })
         const document = {
           enablement: { state: enablement.state, reason: enablement.reason, defaultScopeId: enablement.defaultScopeId }, workspace: { workspaceId, prepared: workspace !== null },
@@ -208,7 +213,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             `service: ${service.state} (${service.reason ?? 'no reason'})${app ? `; app ${app.outcome} (${app.reason})` : ''}`,
             ...(app?.next ? [`Next for the app: ${app.next}`] : []),
             `apply: ${applyShown.state}`,
-            ...scopes.map((scope) => `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}`),
+            ...scopes.map((scope) => `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}${scope.plugin ? pluginLine(scope.plugin) : ''}`),
           ],
         }
       },
@@ -326,12 +331,19 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
 
       async open() {
         const seam = await serviceSeam()
+        const { appProbe, launcher } = await appSeams()
+        // The view whose plugin may report the app version; an unknown one is refused by open itself.
+        const requested = () => { try { return resolveScope(readObsidianEnablement(loadProject()), flags.scope) } catch { return null } }
         const result = await openScopeForOracleTests({
-          ...lifecycle, ...(await appSeams()), service: seam, scopeId: flags.scope, consent, allowStale: flags['allow-stale'] === true, extensions: registry.extensions,
+          ...lifecycle, launcher,
+          appProbe: typeof appProbe?.inspect === 'function' && typeof appProbe?.vaultState === 'function' ? withPluginReportedVersion(appProbe, async () => { const scopeId = requested(); return scopeId === null ? null : pluginOf(scopeId) }) : appProbe,
+          service: seam, scopeId: flags.scope, consent, allowStale: flags['allow-stale'] === true, extensions: registry.extensions,
           ...(flags['wait-ms'] === undefined ? {} : { tickTimeoutMs: Number(flags['wait-ms']) || undefined }), ...(options.open ?? {}),
         }, openingRules, lifecycleRules)
-        const { ok: _ok, ...document } = result
-        return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
+        const { ok: _ok, ...opened } = result
+        const plugin = typeof result.scopeId === 'string' ? await pluginOf(result.scopeId) : null
+        const document = plugin === null ? opened : { ...opened, plugin }
+        return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
       },
 
       // The placeholder that answers when no contribution registered an apply operation; the shipped source-apply contribution replaces it.
