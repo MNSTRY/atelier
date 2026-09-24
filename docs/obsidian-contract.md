@@ -383,6 +383,12 @@ and the file is still the running app's: it is read, never written. A vault
 it already lists is opened by path; one it does not is refused as
 `no-vault-open`.
 
+**Never inside another vault.** In every state, a vault inside a folder the
+list has as a vault already (compared by real path) is not added, through the
+app or in the file: that vault would show its notes too, and a call run in
+its folder would reach that vault. `open` answers `launch-failed` with reason
+`vault-inside-another-vault`.
+
 **While no Obsidian runs**, the vault is added to the file itself, and only
 then:
 
@@ -396,7 +402,8 @@ then:
    refusals are `obsidian-settings-unsafe`, `obsidian-settings-not-owned`,
    `obsidian-settings-unreadable` and `obsidian-settings-not-object`.
 3. A vault whose real path an entry already has is left as it is; nothing is
-   written.
+   written. A vault inside a folder an entry has is refused
+   (`vault-inside-another-vault`).
 4. The new document is the file's object with one entry added under a fresh
    random 16-hex id that no entry has: `{ path: <the vault root's real path>,
    ts: <now, ms>, open: true }`. Every other key and every other entry is kept
@@ -415,19 +422,32 @@ then:
    `app-started-during-registration` instead of launching; the next `open`
    adds the vault through the app if it missed it.
 
-Every refusal writes nothing and leaves nothing behind. The backups are not
-removed by Atelier. `open` then asks the operating system to open
-`obsidian://open?path=<the vault root>`, as before.
+Every refusal writes nothing and leaves nothing behind: a temporary file or
+backup created on the way is removed again whichever later step fails. The
+backups are not removed by Atelier. `open` then asks the operating system to
+open `obsidian://open?path=<the vault root>`, as before.
 
-**Which window answers.** The command line answers a call in the window of the
-vault that contains the tool's working directory, opening that vault when it is
-closed, and otherwise in the vault window that had focus last. Calls about no
-vault (the version, the vault list, the addition) run in a directory that is no
-vault. `open`'s check that the app answers for the vault runs inside the vault
-folder. Publication calls run inside the vault folder while the file lists
-that vault open, and in a directory that is no vault otherwise, so maintenance
-never reopens a vault window that was closed. The bridge still checks that the
-app answered for exactly this vault.
+**Which window answers.** The command line (1.13.7) answers a call whose first
+argument is `vault=<value>` in the window of the first listed vault whose id is
+the value, or whose folder's name is the value in any letter case; any other
+call in the window of the first listed vault whose folder is the tool's working
+directory or contains it, the folders compared as written; and otherwise in the
+vault window that had focus last. It opens a vault that takes a call when it is
+closed. The first match in list order wins, not the deepest folder, so a vault
+listed before the view's vault at a folder above it would take every call run
+in the view's folder. Calls about no vault (the version, the vault list, the
+addition) run in a directory that is no vault and name none. A call about the
+view's vault goes where the list says only that vault takes it
+(`vaultRoute` in `vault-list.mjs`): in its folder (its real path) when the
+first listed vault that is or contains that folder is this vault, and
+otherwise from a directory that is no vault with `vault=<id>` first, when that
+id names this vault first; when neither holds, no call is made. `open`'s check
+that the app answers for the vault is routed from the list it verified the
+vault in. Publication calls are routed from the file, and only while it lists
+the vault open; otherwise they run in a directory that is no vault and name
+none, so maintenance never reopens a vault window that was closed and never
+reaches another vault. The bridge still checks that the app answered for
+exactly this vault.
 
 **Retries.** The maintenance service is told what the app looks like (whether
 it runs, how it qualified, and which vaults the file shows open; the file is

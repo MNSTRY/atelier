@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { findVaultEntry } from '../../projection/obsidian/publication/vault-list.mjs'
+import { enclosingVaults, findVaultEntry, vaultRoute } from '../../projection/obsidian/publication/vault-list.mjs'
 import { createRecoveryStore as createStore, readFileBytes, sha256Digest } from '../../projection/obsidian/recovery/store.mjs'
 import { inspectApp, qualifyApp } from './app-capability.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
@@ -95,6 +95,7 @@ export const REASON_NEXT = Object.freeze({
   'app-did-not-list-its-vaults': 'Obsidian runs but did not answer with its vault list; open again, or quit Obsidian and open again',
   'app-refused-registration': 'Obsidian did not accept this view\'s vault folder as a vault; quit Obsidian and open again',
   'registration-not-verified': 'Obsidian answered, but its vault list does not show this view\'s vault; quit Obsidian and open again',
+  'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 
 // What `open` answers when it could not clear the refusal itself (the app held the vault and the publication still
@@ -229,8 +230,12 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 //     that started just after that write may have read its list before it, and
 //     would then not find the vault by path: that is answered, never launched.
 //
-// { ok: true, path, how } with the path the app knows the vault by, or
-// { ok: false, reason }.
+// A vault inside a folder the list has as a vault already is never added
+// (`vault-inside-another-vault`): the app would show its notes in that vault
+// too, and a call run in its folder would reach that vault.
+//
+// { ok: true, path, how, vaults } with the path the app knows the vault by and
+// the list it was found in, or { ok: false, reason }.
 //
 // The window the app opens for an added vault takes the next command-line
 // call while it may still be loading, and can then answer that a command
@@ -238,23 +243,27 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 // before an addition counts as not verified.
 const VERIFY_ATTEMPTS = 10
 async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, pollMs }) {
+  const inside = (vaults) => enclosingVaults({ vaults, vaultRoot }).length > 0
   if (observation.noVaultOpen === true) {
     const settings = await attempt(() => registry.readSettings())
-    const entry = settings?.ok === true ? findVaultEntry(settings.vaults, vaultRoot) : null
-    return entry ? { ok: true, path: entry.path, how: 'listed' } : { ok: false, reason: 'no-vault-open' }
+    const vaults = settings?.ok === true ? settings.vaults : null
+    const entry = findVaultEntry(vaults, vaultRoot)
+    if (entry) return { ok: true, path: entry.path, how: 'listed', vaults }
+    return { ok: false, reason: inside(vaults) ? 'vault-inside-another-vault' : 'no-vault-open' }
   }
   if (observation.answering === true) {
     const listed = await attempt(() => registry.listThroughApp())
     if (listed?.answered !== true) return { ok: false, reason: listed?.reason === 'no-vault-open' ? 'no-vault-open' : 'app-did-not-list-its-vaults' }
     const known = findVaultEntry(listed.vaults, vaultRoot)
-    if (known) return { ok: true, path: known.path, how: 'listed' }
+    if (known) return { ok: true, path: known.path, how: 'listed', vaults: listed.vaults }
+    if (inside(listed.vaults)) return { ok: false, reason: 'vault-inside-another-vault' }
     const asked = await attempt(() => registry.registerThroughApp({ vaultRoot }))
     if (asked?.answered !== true) return { ok: false, reason: asked?.reason === 'no-vault-open' ? 'no-vault-open' : 'app-did-not-list-its-vaults' }
     if (asked.result !== true) return { ok: false, reason: 'app-refused-registration' }
     for (let attempts = 1; ; attempts += 1) {
       const again = await attempt(() => registry.listThroughApp())
       const added = again?.answered === true ? findVaultEntry(again.vaults, vaultRoot) : null
-      if (added) return { ok: true, path: added.path, how: 'added-through-app' }
+      if (added) return { ok: true, path: added.path, how: 'added-through-app', vaults: again.vaults }
       if (attempts >= VERIFY_ATTEMPTS) return { ok: false, reason: 'registration-not-verified' }
       await sleep(pollMs)
     }
@@ -263,7 +272,7 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
   if (written === null) return { ok: false, reason: 'obsidian-settings-unwritable' }
   if (written.ok !== true) return { ok: false, reason: typeof written.code === 'string' ? written.code : 'obsidian-settings-unwritable' }
   if (written.confirmed !== true) return { ok: false, reason: 'app-started-during-registration' }
-  return { ok: true, path: written.entry.path, how: written.registered === 'already' ? 'listed' : 'added-to-settings' }
+  return { ok: true, path: written.entry.path, how: written.registered === 'already' ? 'listed' : 'added-to-settings', vaults: written.vaults }
 }
 
 // Starts or reconnects the owned service, asks it for a tick, reads the view
@@ -352,12 +361,17 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     return finish(before.outcome, { ...common, reason: before.reason, app: app(before) })
   }
 
-  // 4. The app knows this vault as one of its vaults: the folder the view is published into, wherever that is.
+  // 4. The app knows this vault as one of its vaults: the folder the view is published into, wherever that is. Every
+  //    call about it then reaches it and no other vault: in its folder, or by its id when a vault listed at a folder
+  //    above it would take a call run there.
   const { vaultRoot } = view
   if (typeof vaultRoot !== 'string') return finish('not-prepared', { ...common, reason: 'no-vault-folder', app: app(before) })
   const known = await ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string', noVaultOpen }, vaultRoot, sleep, pollMs: appPollMs })
-  if (!known.ok) return finish(known.reason === 'no-vault-open' ? before.outcome : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
+  // An app that answered its version and then closed its last vault window is one with no vault open.
+  if (!known.ok) return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
   const registration = { how: known.how }
+  const route = vaultRoute({ vaults: known.vaults, vaultRoot })
+  if (route.how !== 'folder' && route.how !== 'id') return finish('launch-failed', { ...common, reason: route.how === 'ambiguous' ? 'vault-inside-another-vault' : 'registration-not-verified', app: app(before), registration })
 
   // 5. Launch, then wait, bounded, for the app to answer for exactly this vault.
   let launch
@@ -371,7 +385,7 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     // A running app below the floor is final; an app that has not come up yet, or not yet opened a vault, is asked again.
     if (!rules.appQualifies(after) && !NOT_UP_YET.has(after.reason)) return finish(after.outcome, { ...common, launched: true, reason: after.reason, app: app(after), registration })
     if (rules.appQualifies(after)) {
-      try { vault = await appProbe.vaultState({ vaultRoot }) } catch { vault = { answered: false, indexReady: false } }
+      try { vault = await appProbe.vaultState({ vaultRoot, route }) } catch { vault = { answered: false, indexReady: false } }
       if (vault?.answered === true && vault.indexReady === true) break
     }
     if (monotonic() >= deadline) break

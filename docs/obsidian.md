@@ -381,6 +381,15 @@ Only `open` adds a vault to Obsidian: the maintenance service never does, so
 it never opens a window nobody asked for. A declared view that was never
 opened is published while Obsidian is quit, and `open --scope ID` adds it.
 
+In no state does `open` add a view's vault inside a folder Obsidian already
+lists as a vault (your home folder, say): that vault would show the view's
+notes too, and a command-line call run in the view's folder would reach it.
+`open` answers `launch-failed` with reason `vault-inside-another-vault`:
+remove that vault from Obsidian's vault list, or keep Atelier's data root
+outside that folder. A view's vault that Obsidian lists already, below such a
+vault, is reached by its id instead (see "Which window answers" in
+[Known limits](#known-limits)).
+
 The publisher still writes into a vault only when it can coordinate with every
 Obsidian that may hold it, or when the process table shows, positively, that
 none runs. Otherwise it stops, and the view reports `publisher-conflict` with
@@ -468,17 +477,20 @@ test reported as a pass.
   with such a build, leave it running with any vault open and `open` adds the
   vault through the app instead. On Windows no location is known, and the
   same applies.
-- Which window answers: Obsidian answers a command-line call in the window of
-  the vault that contains the tool's working directory, opening that vault
-  when it is closed, and otherwise in the vault window that had focus last.
-  Publication calls therefore run inside the view's vault folder while the
-  app's list shows that vault open, and in a directory that is no vault
-  otherwise. A vault window you closed while Obsidian keeps running is not
-  reopened by maintenance: publication then stops as `publisher-conflict`
-  until `atelier obsidian open` opens it again or Obsidian quits. An
-  Obsidian vault registered at a folder above the view's vault (your home
-  folder, say) can take its calls instead; the bridge then answers for
-  another vault and publication stops, safely.
+- Which window answers: Obsidian answers a command-line call that names a
+  vault (`vault=<id>` first) in that vault's window; any other call in the
+  window of the first vault in its list whose folder is the tool's working
+  directory or contains it, and otherwise in the vault window that had focus
+  last. A vault that takes a call is opened when it is closed. Calls about a
+  vault therefore run inside its folder while no vault listed before it at a
+  folder above it (your home folder, say) would take them there, and name its
+  id otherwise; when that id would name another vault first too (one whose
+  folder has the id as its name), no call is made. Publication calls do this
+  only while the app's list shows the view's vault open, and run in a
+  directory that is no vault otherwise. So maintenance never reopens a vault
+  window you closed while Obsidian keeps running, and never reaches another
+  vault: publication then stops as `publisher-conflict` until `atelier
+  obsidian open` opens the vault again or Obsidian quits.
 - Detecting the app: the process table is read with `ps -A -o comm=`
   (`pid=,comm=` on Linux), and the app is recognised by the executable a
   process runs, never by its arguments, so a path argument that contains an

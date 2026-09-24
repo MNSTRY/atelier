@@ -1,7 +1,7 @@
 import { execFile, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe } from '../../projection/obsidian/publication/transport.mjs'
+import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
 import { obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
 import { readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
 import { registerVaultInObsidianSettings } from './app-registration.mjs'
@@ -24,10 +24,11 @@ import { registerVaultInObsidianSettings } from './app-registration.mjs'
 // every answer it cannot establish is the failing one.
 //
 // Where each call runs matters: the app answers a command in the window of the
-// vault that contains the tool's working directory, opening that vault when it
-// is closed. A call about one vault runs in its folder; every other call runs
-// in a directory that is no vault, so the directory this process was started
-// in never picks, or opens, a vault.
+// vault its list routes the call to, opening that vault when it is closed (see
+// vault-list.mjs). A call about one vault goes where its route says, in its
+// folder or naming its id, and is not made without a route that reaches only
+// that vault; every other call runs in a directory that is no vault, so the
+// directory this process was started in never picks, or opens, a vault.
 globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')] = true
 
 const CLI_TIMEOUT_MS = 5000
@@ -82,14 +83,17 @@ export function createProductionAppProbe({ platform = process.platform, env = pr
         execFile(cliPath, ['version'], options, (error, stdout, stderr) => resolve(observationOf({ platform, cliPath, processes: seen, answer: readVersionAnswer({ stdout, stderr, exited: !error }) })))
       })
     },
-    // Whether the app answers for exactly this vault and has finished reading it. Asked from inside the vault's
-    // folder, so the app answers in that vault's window whichever window has focus, and opens it when it is known
-    // and closed. Both sides are compared by real path.
-    vaultState({ vaultRoot }) {
+    // Whether the app answers for exactly this vault and has finished reading it. Asked where `route` (a
+    // `vaultRoute` of the app's list) says: from inside the vault's folder, or naming its id, so the app answers in
+    // that vault's window whichever window has focus, and opens it when it is known and closed. Without a route that
+    // reaches only this vault nothing is asked. Both sides are compared by real path.
+    vaultState({ vaultRoot, route }) {
       let target
       try { target = fs.realpathSync(vaultRoot) } catch { return Promise.resolve({ answered: false, indexReady: false }) }
+      if (route?.how !== 'folder' && route?.how !== 'id') return Promise.resolve({ answered: false, indexReady: false })
+      const where = routedCall(route, workingDirectory)
       return new Promise((resolve) => {
-        execFile(cliPath, ['eval', `code=${VAULT_STATE_CODE}`], { ...options, cwd: target }, (error, stdout, stderr) => {
+        execFile(cliPath, [...where.args, 'eval', `code=${VAULT_STATE_CODE}`], { ...options, cwd: where.cwd }, (error, stdout, stderr) => {
           const answer = readEvalAnswer({ stdout, stderr, failed: Boolean(error) })
           const value = answer.answered ? answer.value : null
           const answered = value !== null && typeof value === 'object' && value.basePath === target

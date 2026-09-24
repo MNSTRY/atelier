@@ -13,6 +13,15 @@ import { openRegularFileNoFollow } from '../../../project/private-state.mjs'
 //
 // Nothing here writes the file. The one write Atelier makes to it is in
 // src/runtime/obsidian/app-registration.mjs, and only while no Obsidian runs.
+//
+// The list also decides which window answers a command-line call (1.13.7): a
+// first argument `vault=<value>` names the first listed vault whose id is the
+// value, or whose folder's name is the value in any letter case; without one,
+// the first listed vault whose folder is the tool's working directory or
+// contains it takes the call, the folders compared as written; failing both,
+// the vault window that had focus last. The first in list order, not the
+// deepest: a vault listed at a folder above another one takes the calls run
+// inside it. The app opens a vault that takes a call when it is closed.
 
 export const OBSIDIAN_SETTINGS_FILE = 'obsidian.json'
 // Far more than a list of vaults and a few settings; a larger file is not read.
@@ -85,7 +94,7 @@ export function readObsidianSettings({ userDataDir, uid = currentUid() } = {}) {
   } catch {
     return refused('obsidian-settings-unreadable', 'the Obsidian settings file cannot be read')
   } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor)
+    if (descriptor !== undefined) try { fs.closeSync(descriptor) } catch { /* read already, or refused */ }
   }
   let document
   try { document = JSON.parse(bytes.toString('utf8')) } catch { return refused('obsidian-settings-unreadable', 'the Obsidian settings file is not JSON') }
@@ -94,9 +103,41 @@ export function readObsidianSettings({ userDataDir, uid = currentUid() } = {}) {
   return { ok: true, file, document, vaults: document.vaults ?? {}, bytes, mode: leaf.mode & 0o777 }
 }
 
-// Whether the app lists this vault as open in a window, from its settings
-// file. False whenever that cannot be read.
-export function vaultOpenInApp({ vaultRoot, userDataDir }) {
-  const settings = readObsidianSettings({ userDataDir })
-  return settings.ok && findVaultEntry(settings.vaults, vaultRoot)?.open === true
+const listedFolders = (vaults) => (isPlainObject(vaults) ? Object.entries(vaults).filter(([, entry]) => isPlainObject(entry) && typeof entry.path === 'string' && path.isAbsolute(entry.path)) : [])
+
+// Where a command-line call about this vault reaches the app, predicted from
+// the app's list as the app routes a call (see above):
+//
+//   { how: 'folder', cwd }  run in the vault's folder (its real path, which the tool reports): the first listed vault
+//                           that is or contains it is this one;
+//   { how: 'id', id }       run in a directory that is no vault, with `vault=<id>` first: the id names this vault first;
+//   { how: 'unlisted' }     the list has no entry for this folder (with `open`, none that the app lists open);
+//   { how: 'ambiguous' }    a vault listed above it takes a call run in its folder, and the id names another vault first.
+//
+// With `open`, only an entry the app lists open may take the call, so a
+// closed vault window is never reopened.
+export function vaultRoute({ vaults, vaultRoot, open = false } = {}) {
+  if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return { how: 'unlisted' }
+  const target = realOrResolved(vaultRoot)
+  const listed = listedFolders(vaults)
+  const takes = ([, entry]) => realOrResolved(entry.path) === target && (!open || entry.open === true)
+  const own = listed.filter(takes)
+  if (own.length === 0) return { how: 'unlisted' }
+  const byFolder = listed.find(([, entry]) => { const folder = path.resolve(entry.path); return target === folder || target.startsWith(folder + path.sep) })
+  if (byFolder !== undefined && takes(byFolder)) return { how: 'folder', cwd: target }
+  const byName = (value) => listed.find(([id, entry]) => id === value || path.basename(entry.path).toUpperCase() === value.toUpperCase())
+  const named = own.find(([id]) => byName(id)?.[0] === id)
+  return named === undefined ? { how: 'ambiguous' } : { how: 'id', id: named[0] }
+}
+
+// The listed vaults whose folder contains this vault root, by real path: the
+// app would show this vault's notes in their windows too, and a call run in
+// this vault's folder may reach them. No vault is added inside another one.
+export function enclosingVaults({ vaults, vaultRoot } = {}) {
+  if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return []
+  const target = realOrResolved(vaultRoot)
+  return listedFolders(vaults).filter(([, entry]) => {
+    const folder = realOrResolved(entry.path)
+    return folder !== target && target.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep)
+  }).map(([id, entry]) => ({ id, path: entry.path }))
 }

@@ -18,9 +18,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 //
 // A child that could reach a running Obsidian itself (the production service
 // entry with its command-line adapter, or anything that loads the production
-// app seams) must be given a private HOME: the command-line tool finds the
-// app through a socket under HOME, and the app keeps its settings under it.
-// With the developer's own HOME such a child would ask the developer's own
+// app seams) must be given an environment that leads to no app of the
+// developer's: the command-line tool finds the app through a socket under
+// HOME on macOS and under XDG_RUNTIME_DIR on Linux, and the app keeps its
+// settings under HOME (under XDG_CONFIG_HOME on Linux, when that is set). On
+// Windows the app listens on a named pipe of the user account, which no
+// environment changes, so no such child is started there at all. With the
+// developer's own environment such a child would ask the developer's own
 // Obsidian, which is out of bounds for a test.
 // ---------------------------------------------------------------------------
 
@@ -28,6 +32,20 @@ const BANNED_PROGRAMS = ['obsidian-cli', 'obsidian', 'open', 'xdg-open', 'launch
 const WRAPPERS = ['sh', 'bash', 'zsh', 'dash', 'env', 'cmd', 'powershell', 'pwsh', 'nohup', 'sudo']
 const REACHES_THE_APP = /--adapter=obsidian-cli|app-production-seams/
 const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
+const REAL_RUNTIME_DIRS = [process.env.XDG_RUNTIME_DIR, typeof process.getuid === 'function' ? `/run/user/${process.getuid()}` : ''].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
+const REAL_CONFIG_HOMES = [process.env.XDG_CONFIG_HOME, ...REAL_HOMES.map((home) => path.join(home, '.config'))].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
+const oneOf = (value, list) => typeof value === 'string' && value !== '' && list.includes(path.resolve(value))
+// Why a child with this env could reach the developer's own Obsidian on this platform; null when it cannot.
+function reachesOwnApp(env, platform = process.platform) {
+  if (platform !== 'darwin' && platform !== 'linux') return 'a child that can reach a running Obsidian is never started on this platform: the app listens on a pipe of the user account, which no environment isolates'
+  if (typeof env?.HOME !== 'string' || env.HOME === '' || oneOf(env.HOME, REAL_HOMES)) return 'a child that can reach a running Obsidian needs a private HOME, never the developer\'s own'
+  if (platform === 'linux') {
+    const runtime = env.XDG_RUNTIME_DIR
+    if (typeof runtime !== 'string' || runtime === '' || oneOf(runtime, REAL_RUNTIME_DIRS) || /^\/run\/user\//.test(runtime)) return 'a child that can reach a running Obsidian needs a private XDG_RUNTIME_DIR on Linux, never the session\'s own'
+    if (oneOf(env.XDG_CONFIG_HOME, REAL_CONFIG_HOMES)) return 'a child that can reach a running Obsidian needs no XDG_CONFIG_HOME on Linux, or a private one'
+  }
+  return null
+}
 const programName = (command) => path.basename(String(command).replaceAll('\\', '/')).toLowerCase().replace(/\.(exe|app|cmd|bat)$/, '')
 const guardErrors = []
 function guardSpawn(command, args, options) {
@@ -41,9 +59,9 @@ function guardSpawn(command, args, options) {
     throw error
   }
   // A child with no env of its own inherits this process's, and with it the developer's HOME.
-  const home = options?.env ? options.env.HOME : process.env.HOME
-  if (words.some((word) => REACHES_THE_APP.test(word)) && (typeof home !== 'string' || home === '' || REAL_HOMES.includes(path.resolve(home)))) {
-    const error = new Error('spawn guard: a child that can reach a running Obsidian needs a private HOME, never the developer\'s own')
+  const refusal = words.some((word) => REACHES_THE_APP.test(word)) ? reachesOwnApp(options?.env ?? process.env) : null
+  if (refusal !== null) {
+    const error = new Error(`spawn guard: ${refusal}`)
     guardErrors.push(error.message)
     throw error
   }
@@ -59,16 +77,21 @@ for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 
 }
 syncBuiltinESMExports()
 
-// The env of a child that may reach a running Obsidian: this process's, with a private HOME in `dir` and no XDG_CONFIG_HOME.
+// The env of a child that may reach a running Obsidian: this process's, with a private HOME and XDG_RUNTIME_DIR in `dir`
+// and no XDG_CONFIG_HOME. Only where the guard lets such a child start at all (`needsAppIsolation`).
 function privateHomeEnv(dir, base = process.env) {
   const home = path.join(dir, 'private-home')
+  const runtime = path.join(dir, 'private-runtime')
   fs.mkdirSync(home, { recursive: true })
+  fs.mkdirSync(runtime, { recursive: true, mode: 0o700 })
   const { XDG_CONFIG_HOME: _config, ...rest } = base
-  return { ...rest, HOME: home }
+  return { ...rest, HOME: home, XDG_RUNTIME_DIR: runtime }
 }
+const APP_ISOLATION_HERE = reachesOwnApp({ HOME: path.join(os.tmpdir(), 'private-home'), XDG_RUNTIME_DIR: path.join(os.tmpdir(), 'private-runtime') }) === null
+const needsAppIsolation = APP_ISOLATION_HERE ? {} : { skip: 'the app listens on a pipe of the user account on this platform, which no environment isolates: no child that could reach it is started' }
 
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
-const { NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, findVaultEntry, obsidianUserDataDir, openVaultDirectory, readObsidianSettings, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
+const { NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, createObsidianCliCall, enclosingVaults, findVaultEntry, obsidianUserDataDir, publicationRoute, readObsidianSettings, resolveExchange, vaultRoute } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
 const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readEvalAnswer, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { appStateSignature, registerVaultInObsidianSettings } = await import('../src/runtime/obsidian/app-registration.mjs')
@@ -179,24 +202,40 @@ function fakeApp(overrides = {}) {
   // `vaults`: the app's own list, id -> { path, open }. `settingsRefusal`: a typed refusal its settings file gives.
   // `registerResult`: what the app answers when asked to add a vault; `registerForgets`: it answers true and lists nothing;
   // `loadingAnswers`: how many list calls after an addition reach the new window while it is still loading.
+  // `listNoVault` / `registerNoVault`: the app answered its version, then its last vault window closed, so the list or
+  // the addition answers "Vault not found.".
   const state = {
     installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0,
-    noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, ...overrides,
+    noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, listNoVault: false, registerNoVault: false, ...overrides,
   }
   const launches = []
   const registrations = []
+  // Each listed vault a call about a vault reached, by id: the app opens a vault that takes a call and is closed.
+  const reached = []
   const listed = (vaultRoot) => Object.values(state.vaults).some((entry) => entry.path === vaultRoot)
   const noVaultNow = () => state.running && (state.noVaultAnswers > 0 || (state.noVaultUntilLaunch && launches.length === 0))
   const add = (vaultRoot, via) => { registrations.push({ via, vaultRoot }); if (!state.registerForgets) state.vaults[`fake${String(registrations.length).padStart(12, '0')}`] = { path: vaultRoot, ts: 1, open: true } }
+  // The listed vault that takes a call, as Obsidian 1.13.7 routes one: a first argument `vault=<value>` names the first
+  // listed vault whose id is the value, or whose folder's name is the value in any letter case; otherwise the first
+  // listed vault whose folder is the working directory or contains it takes the call, in list order.
+  const takerOf = (route) => {
+    const ids = Object.keys(state.vaults)
+    if (route.how === 'id') return ids.find((id) => id === route.id || path.basename(state.vaults[id].path).toUpperCase() === route.id.toUpperCase()) ?? null
+    if (route.how !== 'folder') return null
+    return ids.find((id) => { const folder = path.resolve(state.vaults[id].path); return route.cwd === folder || route.cwd.startsWith(folder + path.sep) }) ?? null
+  }
   return {
-    state, launches, registrations, noVaultNow,
+    state, launches, registrations, reached, noVaultNow,
     appProbe: {
       inspect: async () => {
         if (noVaultNow()) { if (state.noVaultAnswers > 0) state.noVaultAnswers -= 1; return { installed: state.installed, cli: state.cli, running: true, version: null, noVaultOpen: true } }
         return { installed: state.installed, cli: state.cli, running: state.running, version: state.running ? state.version : null }
       },
-      vaultState: async ({ vaultRoot }) => {
-        const holds = state.answered && launches.includes(vaultRoot) && listed(vaultRoot)
+      // A call with no route runs in the vault's folder, as every call about a vault did before routes.
+      vaultState: async ({ vaultRoot, route = { how: 'folder', cwd: vaultRoot } }) => {
+        const taker = takerOf(route)
+        if (taker !== null) reached.push(taker)
+        const holds = taker !== null && state.vaults[taker].path === vaultRoot && state.answered && launches.includes(vaultRoot)
         return { answered: holds, indexReady: holds && state.indexReady }
       },
     },
@@ -204,12 +243,13 @@ function fakeApp(overrides = {}) {
     registry: {
       listThroughApp: async () => {
         if (!state.running) throw new Error('the app does not run')
-        if (noVaultNow()) return { answered: false, reason: 'no-vault-open' }
+        if (noVaultNow() || state.listNoVault) return { answered: false, reason: 'no-vault-open' }
         if (registrations.length > 0 && state.loadingAnswers > 0) { state.loadingAnswers -= 1; return { answered: false, reason: 'no-value' } }
         return state.listAnswers ? { answered: true, vaults: structuredClone(state.vaults) } : { answered: false, reason: 'cli-failed' }
       },
       registerThroughApp: async ({ vaultRoot }) => {
         if (!state.running || noVaultNow()) throw new Error('the app cannot be asked')
+        if (state.registerNoVault) return { answered: false, reason: 'no-vault-open' }
         if (state.registerResult === true) add(vaultRoot, 'app')
         return { answered: true, result: state.registerResult }
       },
@@ -217,10 +257,12 @@ function fakeApp(overrides = {}) {
       registerInSettings: ({ vaultRoot }) => {
         if (state.running) return { ok: false, code: 'app-may-be-running', message: 'fake' }
         if (state.settingsRefusal) return state.settingsRefusal
-        if (listed(vaultRoot)) return { ok: true, registered: 'already', entry: { id: 'known', path: vaultRoot, open: true }, confirmed: true }
+        const known = Object.keys(state.vaults).find((id) => state.vaults[id].path === vaultRoot)
+        if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: true }, confirmed: true, vaults: structuredClone(state.vaults) }
+        if (Object.values(state.vaults).some((entry) => vaultRoot.startsWith(entry.path + path.sep))) return { ok: false, code: 'vault-inside-another-vault', message: 'fake' }
         add(vaultRoot, 'settings')
         // `settingsUnconfirmed`: an app started right after the write, and may have read the list before it.
-        return { ok: true, registered: 'written', entry: { id: 'fake', path: vaultRoot, open: true }, confirmed: !state.settingsUnconfirmed, ...(state.settingsUnconfirmed ? { reason: 'app-started-during-registration' } : {}) }
+        return { ok: true, registered: 'written', entry: { id: 'fake', path: vaultRoot, open: true }, confirmed: !state.settingsUnconfirmed, vaults: structuredClone(state.vaults), ...(state.settingsUnconfirmed ? { reason: 'app-started-during-registration' } : {}) }
       },
     },
   }
@@ -383,26 +425,63 @@ test('the spawn guard throws before any banned program is started, whichever way
   assert.doesNotThrow(() => guardSpawn('node', ['--version']))
 })
 
-test('the spawn guard refuses a child that can reach a running Obsidian unless it has a private HOME, whichever way it is started', (t) => {
+// The decision of the guard, for each platform: macOS needs a private HOME; Linux a private HOME and XDG_RUNTIME_DIR,
+// and no XDG_CONFIG_HOME of the developer's; on Windows, and anywhere else, no such child is started.
+function assertGuardDecisions(decide, isolated) {
+  const own = os.homedir()
+  const decisions = [
+    ['darwin', { HOME: own }, /private HOME/], ['darwin', { HOME: '' }, /private HOME/], ['darwin', {}, /private HOME/],
+    ['darwin', { HOME: isolated.HOME }, null], ['darwin', { HOME: isolated.HOME, XDG_RUNTIME_DIR: '/run/user/501' }, null],
+    ['linux', { HOME: isolated.HOME }, /private XDG_RUNTIME_DIR/], ['linux', { HOME: isolated.HOME, XDG_RUNTIME_DIR: '/run/user/1000' }, /private XDG_RUNTIME_DIR/],
+    ['linux', { HOME: isolated.HOME, XDG_RUNTIME_DIR: '' }, /private XDG_RUNTIME_DIR/], ['linux', { HOME: own, XDG_RUNTIME_DIR: isolated.XDG_RUNTIME_DIR }, /private HOME/],
+    ['linux', { HOME: isolated.HOME, XDG_RUNTIME_DIR: isolated.XDG_RUNTIME_DIR, XDG_CONFIG_HOME: path.join(own, '.config') }, /XDG_CONFIG_HOME/],
+    ['linux', { HOME: isolated.HOME, XDG_RUNTIME_DIR: isolated.XDG_RUNTIME_DIR }, null],
+    ['win32', isolated, /never started on this platform/], ['freebsd', isolated, /never started on this platform/],
+  ]
+  for (const [platform, env, expected] of decisions) {
+    const reason = decide(env, platform)
+    if (expected === null) assert.equal(reason, null, `${platform} ${JSON.stringify(env)}`)
+    else assert.match(String(reason), expected, `${platform} ${JSON.stringify(env)}`)
+  }
+}
+
+test('the spawn guard refuses a child that can reach a running Obsidian unless nothing in its environment leads to the developer\'s own app, whichever way it is started', (t) => {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-home-guard-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  // The decision, for each platform: macOS needs a private HOME; Linux a private HOME and XDG_RUNTIME_DIR, and no
+  // XDG_CONFIG_HOME of the developer's; on Windows, and anywhere else, no such child is started.
+  const isolated = privateHomeEnv(dir)
+  const own = os.homedir()
+  assertGuardDecisions(reachesOwnApp, isolated)
+  // Here, through every way a child is started.
   const before = guardErrors.length
   const production = ['-e', '0', '--', '--adapter=obsidian-cli']
   const seams = ['--input-type=module', '-e', `// ${path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')}`]
   for (const args of [production, seams]) {
     // No env of its own is this process's env, with the developer's HOME; so is an env that copies it.
-    assert.throws(() => childProcess.spawnSync(process.execPath, args), /needs a private HOME/)
-    assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: { ...process.env } }), /needs a private HOME/)
-    assert.throws(() => childProcess.execFileSync(process.execPath, args, { env: { ...process.env, HOME: '' } }), /needs a private HOME/)
-    assert.throws(() => childProcess.spawn(process.execPath, args, { env: { ...process.env, HOME: os.homedir() } }), /needs a private HOME/)
-    // A private HOME lets it run.
-    assert.equal(childProcess.spawnSync(process.execPath, args, { env: privateHomeEnv(dir) }).status, 0)
+    assert.throws(() => childProcess.spawnSync(process.execPath, args), /spawn guard/)
+    assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: { ...process.env } }), /spawn guard/)
+    assert.throws(() => childProcess.execFileSync(process.execPath, args, { env: { ...process.env, HOME: '' } }), /spawn guard/)
+    assert.throws(() => childProcess.spawn(process.execPath, args, { env: { ...process.env, HOME: own } }), /spawn guard/)
+    // A private HOME alone is enough on macOS only; the whole private environment wherever a child can be isolated.
+    const homeOnly = { ...isolated, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? '' }
+    if (process.platform === 'darwin') assert.equal(childProcess.spawnSync(process.execPath, args, { env: homeOnly }).status, 0)
+    else assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: homeOnly }), /spawn guard/)
+    if (APP_ISOLATION_HERE) assert.equal(childProcess.spawnSync(process.execPath, args, { env: isolated }).status, 0)
+    else assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: isolated }), /never started on this platform/)
   }
   assert.throws(() => childProcess.execSync(`${JSON.stringify(process.execPath)} -e 0 -- --adapter=obsidian-cli`), /spawn guard/)
-  assert.equal(guardErrors.length, before + 9)
+  assert.equal(guardErrors.length, before + 9 + (process.platform === 'darwin' ? 0 : 2) + (APP_ISOLATION_HERE ? 0 : 2))
   guardErrors.length = before
-  // Mutation control: a child that names neither passes whatever HOME it has.
+  // Mutation control: a child that names neither passes whatever environment it has.
   assert.doesNotThrow(() => childProcess.spawnSync(process.execPath, ['-e', '0']))
+})
+
+test('mutation control: the guard of #76, which looked at HOME alone, lets a Linux child reach the session\'s app and starts one on Windows', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-home-guard-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const homeAlone = (env) => (typeof env?.HOME !== 'string' || env.HOME === '' || oneOf(env.HOME, REAL_HOMES) ? 'a child that can reach a running Obsidian needs a private HOME, never the developer\'s own' : null)
+  assert.throws(() => assertGuardDecisions(homeAlone, privateHomeEnv(dir)), assert.AssertionError)
 })
 
 test('the command never falls through to a real app: without seams it refuses, and as the real entry it refuses without an explicit adapter', async (t) => {
@@ -438,14 +517,13 @@ test('the production seams are imported in exactly two places, dynamically, behi
   assert.match(entry, /createQualifiedAdapterFactory\(\{ appProbe: createProductionAppProbe\(\), createAdapter: \(\{ qualification \}\) => createObsidianCliAdapter\(\{ qualification \}\) \}\)/, 'the service constructs the CLI adapter only through the version-qualified factory, and hands it the qualification')
   assert.equal((entry.match(/createObsidianCliAdapter\(/g) ?? []).length, 1)
   assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
-  // Control: the trace exists. A child that only evaluates the module (it constructs and calls nothing) shows it.
+})
+
+test('control: the trace of the production seams exists; a child that only evaluates the module (it constructs and calls nothing) shows it', needsAppIsolation, (t) => {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-seams-trace-'))
-  try {
-    const seen = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href)}); process.stdout.write(String(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')]))`], { encoding: 'utf8', windowsHide: true, env: privateHomeEnv(dir) })
-    assert.equal(seen.stdout, 'true')
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const seen = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href)}); process.stdout.write(String(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')]))`], { encoding: 'utf8', windowsHide: true, env: privateHomeEnv(dir) })
+  assert.equal(seen.stdout, 'true')
 })
 
 // ---------------------------------------------------------------------------
@@ -548,7 +626,7 @@ test('mutation control: reading the answer of 0.2.0-alpha.9, which took any succ
   assert.throws(() => assertNoVaultIsNotAVersion(tookAnyOutput), assert.AssertionError)
 })
 
-test('the production app probe reads both output streams of the version call, with either exit status', (t) => {
+test('the production app probe reads both output streams of the version call, with either exit status', needsAppIsolation, (t) => {
   // The command-line tool is played by this Node binary running a script named `version` in the child's directory, so the
   // same arrangement runs on every platform. `win32` keeps the process table out of it: the version is always asked.
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-version-answer-'))
@@ -962,6 +1040,47 @@ test('open verifies what the app says: a vault it refuses, one its list does not
   }
 })
 
+test('an app whose last vault window closes between its version answer and the list or the addition is a typed answer, never an internal error; nothing is added or launched', async (t) => {
+  for (const race of [{ listNoVault: true }, { registerNoVault: true }]) {
+    const world = makeWorld(t)
+    await world.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
+    const app = fakeApp({ running: true, ...race })
+    const result = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+    assert.deepEqual([result.exit, result.json?.outcome, result.json?.reason, result.json?.next, result.json?.launched, app.registrations, app.launches], [EXIT.notSuccess, 'app-version-unsupported', 'no-vault-open', REASON_NEXT['no-vault-open'], false, [], []], `${JSON.stringify(race)}: ${result.stdout.slice(0, 300)}`)
+  }
+})
+
+test('a vault Obsidian lists at a folder above the view\'s vault never takes its calls: open reaches the view\'s vault by its id, never adds a vault inside another one, and refuses when the id names another vault first', needsExchange, async (t) => {
+  // Listed first, as a vault at the home folder would be: a call run in the view's vault folder reaches it instead.
+  const ABOVE = 'aaaaaaaaaaaaaaaa'
+  const OURS = 'bbbbbbbbbbbbbbbb'
+  const above = (world, extra = {}) => ({ [ABOVE]: { path: world.dir, ts: 1, ...extra } })
+
+  // Listed already, below it: reached by its id, and the vault above it is never reached, so never opened.
+  const listed = makeWorld(t)
+  const app = fakeApp({ running: true, vaults: { ...above(listed), [OURS]: { path: listed.vault(), ts: 2 } } })
+  await serviceBehindApp(listed, app)
+  const opened = await listed.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.registration?.how, app.launches], ['current', 'listed', [listed.vault()]], JSON.stringify(opened.json))
+  assert.deepEqual([...new Set(app.reached)], [OURS], 'only the view\'s vault was reached')
+
+  // Not listed yet: it is added neither through the running app nor to the settings of a quit one, and nothing is launched.
+  for (const running of [true, false]) {
+    const world = makeWorld(t)
+    const nested = fakeApp({ running, vaults: above(world, { open: true }) })
+    await serviceBehindApp(world, nested)
+    const refused = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...nested }, open: FAST_APP })
+    assert.deepEqual([refused.json.outcome, refused.json.reason, refused.json.next, nested.registrations, nested.launches, nested.reached], ['launch-failed', 'vault-inside-another-vault', REASON_NEXT['vault-inside-another-vault'], [], [], []], `running: ${running}`)
+  }
+
+  // The id names another vault first: one listed before it whose folder has the id as its name, in another case.
+  const clash = makeWorld(t)
+  const clashing = fakeApp({ running: true, vaults: { ...above(clash), cccccccccccccccc: { path: path.join(clash.dir, OURS.toUpperCase()), ts: 2 }, [OURS]: { path: clash.vault(), ts: 3 } } })
+  await serviceBehindApp(clash, clashing)
+  const ambiguous = await clash.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...clashing }, open: FAST_APP })
+  assert.deepEqual([ambiguous.json.outcome, ambiguous.json.reason, clashing.launches, clashing.reached], ['launch-failed', 'vault-inside-another-vault', [], []])
+})
+
 test('a view the app kept, with no app answering and none known to run (an unknown process table), keeps its own outcome and advice; nothing is added or launched', async (t) => {
   const world = makeWorld(t)
   await world.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
@@ -1232,6 +1351,91 @@ test('the settings file: an app that appears right after the rename leaves the e
   assert.deepEqual(Object.keys(JSON.parse(empty.bytes())), ['cli', 'vaults'])
 })
 
+test('the settings file never gains a vault inside another listed vault; one listed already is found, and a vault beside or inside it is no reason to refuse', (t) => {
+  const world = settingsWorld(t)
+  const register = () => registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: world.vaultRoot, processProbe: world.probeOf(['absent']), now: () => START })
+  const list = (vaults) => { fs.writeFileSync(world.file, JSON.stringify({ ...SETTINGS_BEFORE, vaults: { ...SETTINGS_BEFORE.vaults, ...vaults } })); return world.bytes() }
+  const before = list({ bbbbbbbbbbbbbbbb: { path: world.dir, ts: 1 } })
+  const refused = register()
+  assert.deepEqual([refused.ok, refused.code, world.bytes(), world.names()], [false, 'vault-inside-another-vault', before, [OBSIDIAN_SETTINGS_FILE]])
+  const listedBelow = list({ bbbbbbbbbbbbbbbb: { path: world.dir, ts: 1 }, cccccccccccccccc: { path: world.vaultRoot, ts: 2 } })
+  const found = register()
+  assert.deepEqual([found.ok, found.registered, found.entry.id, Object.keys(found.vaults), world.bytes()], [true, 'already', 'cccccccccccccccc', ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'], listedBelow])
+  list({ bbbbbbbbbbbbbbbb: { path: `${world.vaultRoot}-old`, ts: 1 }, dddddddddddddddd: { path: path.join(world.vaultRoot, 'inner'), ts: 1 } })
+  const added = register()
+  assert.deepEqual([added.ok, added.registered, added.confirmed], [true, 'written', true], JSON.stringify(added))
+  assert.deepEqual(Object.keys(added.vaults), ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'dddddddddddddddd', added.entry.id], 'the list as written is answered')
+})
+
+test('a write that fails at any step leaves the settings file as it was and nothing beside it: every file-system call it makes in the app\'s directory is failed in turn', (t) => {
+  // Only calls about the app's directory and the files in it are counted and failed. A failed close releases its
+  // descriptor all the same, as close(2) does.
+  const control = { directory: null, failAt: 0, calls: [] }
+  const descriptors = new Map()
+  const inside = (target) => control.directory !== null && typeof target === 'string' && (target === control.directory || target.startsWith(control.directory + path.sep))
+  const label = (target) => {
+    const name = path.basename(target)
+    return target === control.directory ? 'directory' : name === OBSIDIAN_SETTINGS_FILE ? 'settings' : name.endsWith('.tmp') ? 'temporary' : name.includes('.atelier-backup-') ? 'backup' : name
+  }
+  for (const name of ['lstatSync', 'statSync', 'openSync', 'fstatSync', 'readFileSync', 'readSync', 'writeFileSync', 'writeSync', 'fchmodSync', 'fsyncSync', 'closeSync', 'renameSync']) {
+    const original = fs[name]
+    t.mock.method(fs, name, function failing(...args) {
+      const [first, second] = args
+      const target = typeof first === 'number' ? descriptors.get(first) : typeof first === 'string' ? first : undefined
+      const counted = inside(target) || (name === 'renameSync' && inside(second))
+      if (counted) {
+        control.calls.push(`${name} ${label(target)}`)
+        if (control.calls.length === control.failAt) {
+          if (name === 'closeSync') { descriptors.delete(first); original.apply(this, args) }
+          throw Object.assign(new Error(`injected failure of ${name}`), { code: 'EIO' })
+        }
+      }
+      const result = original.apply(this, args)
+      if (name === 'openSync' && counted) descriptors.set(result, target)
+      if (name === 'closeSync') descriptors.delete(first)
+      return result
+    })
+  }
+  const BACKUP = `${OBSIDIAN_SETTINGS_FILE}.atelier-backup-20260105T100000000Z`
+  const attempt = (failAt) => {
+    const world = settingsWorld(t)
+    const before = world.bytes()
+    Object.assign(control, { directory: world.userDataDir, failAt, calls: [] })
+    try {
+      const result = registerVaultInObsidianSettings({ userDataDir: world.userDataDir, vaultRoot: world.vaultRoot, processProbe: world.probeOf(['absent']), now: () => START })
+      return { world, before, result, calls: control.calls }
+    } finally {
+      control.directory = null
+    }
+  }
+  const { result: written, calls: steps } = attempt(0)
+  assert.equal(written.ok, true, JSON.stringify(written))
+  // Among the reads around it, the write makes these calls, in this order. Windows opens no directory to fsync it.
+  let from = 0
+  for (const step of ['openSync temporary', 'writeSync temporary', 'fchmodSync temporary', 'fsyncSync temporary', 'closeSync temporary', 'openSync backup', 'writeSync backup', 'fchmodSync backup', 'fsyncSync backup', 'closeSync backup', 'readFileSync settings', 'renameSync temporary', 'openSync directory', ...(process.platform === 'win32' ? [] : ['fsyncSync directory'])]) {
+    const at = steps.indexOf(step, from)
+    assert.ok(at >= 0, `${step} is made after the calls before it: ${steps.join(', ')}`)
+    from = at + 1
+  }
+  const renamed = steps.indexOf('renameSync temporary') + 1
+  for (let failAt = 1; failAt <= steps.length; failAt += 1) {
+    const { world, before, result, calls } = attempt(failAt)
+    const step = `${calls[failAt - 1]} (call ${failAt})`
+    assert.equal(calls[failAt - 1], steps[failAt - 1], `${step}: the same calls up to the failure`)
+    assert.equal(typeof result?.ok, 'boolean', `${step}: an answer, not an exception`)
+    if (/^(openSync|writeFileSync|writeSync|fchmodSync|fsyncSync|closeSync) (temporary|backup)$|^renameSync/.test(calls[failAt - 1])) assert.equal(result.ok, false, `${step}: a failed write is refused`)
+    if (failAt > renamed) assert.equal(result.ok, true, `${step}: after the replacement, the vault is added`)
+    if (result.ok) {
+      assert.deepEqual(world.names(), [OBSIDIAN_SETTINGS_FILE, BACKUP], `${step}: the backup and no temporary file`)
+      assert.deepEqual(fs.readFileSync(path.join(world.userDataDir, BACKUP)), before, `${step}: the whole backup`)
+      assert.notEqual(findVaultEntry(JSON.parse(world.bytes().toString('utf8')).vaults, world.vaultRoot), null, step)
+    } else {
+      assert.match(result.code, /^obsidian-settings-/, step)
+      assert.deepEqual([world.bytes(), world.names()], [before, [OBSIDIAN_SETTINGS_FILE]], `${step}: the file as it was, and nothing beside it`)
+    }
+  }
+})
+
 test('where the app keeps its settings: under HOME on macOS, under XDG_CONFIG_HOME or ~/.config on Linux, unknown elsewhere or without an absolute HOME', () => {
   assert.equal(obsidianUserDataDir({ platform: 'darwin', env: { HOME: '/home/someone' } }), '/home/someone/Library/Application Support/obsidian')
   assert.equal(obsidianUserDataDir({ platform: 'linux', env: { HOME: '/home/someone' } }), '/home/someone/.config/obsidian')
@@ -1267,38 +1471,88 @@ test('what the app looks like changes when it quits or starts, when it qualifies
   ]) assert.notEqual(other, base)
 })
 
-test('a publication call runs inside the vault\'s folder while the app lists that vault open, and otherwise in a directory that is no vault', { skip: process.platform === 'win32' && 'no location of the app\'s settings is known on Windows: every call runs in a directory that is no vault' }, (t) => {
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-cli-cwd-')))
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
-  const vaultRoot = path.join(home, 'vault')
-  fs.mkdirSync(vaultRoot)
-  const userDataDir = obsidianUserDataDir({ platform: 'darwin', env: { HOME: home } })
-  fs.mkdirSync(userDataDir, { recursive: true })
-  const list = (open) => fs.writeFileSync(path.join(userDataDir, OBSIDIAN_SETTINGS_FILE), JSON.stringify({ vaults: { cccccccccccccccc: { path: vaultRoot, ts: 1, ...(open ? { open: true } : {}) } } }))
-  const directory = openVaultDirectory({ env: { HOME: home }, platform: 'darwin' })
-  const payload = { op: 'inspect', vaultRoot, path: 'notes/x.md' }
-  assert.equal(directory(payload), NEUTRAL_DIRECTORY, 'the app does not list it: no vault is chosen')
-  list(false)
-  assert.equal(directory(payload), NEUTRAL_DIRECTORY, 'listed but closed: maintenance never reopens it')
-  list(true)
-  assert.equal(directory(payload), vaultRoot, 'listed and open: its window, whichever has focus')
-  assert.equal(directory({ ...payload, vaultRoot: path.join(home, 'another') }), NEUTRAL_DIRECTORY)
+test('where a call about a vault reaches the app, predicted from the app\'s list as the app routes it: in the vault\'s folder, by its id, or not at all', () => {
+  // The paths need not exist: the list is compared as the app compares it.
+  const root = path.join(TMP, 'atelier-route-nowhere')
+  const home = path.join(root, 'home')
+  const vaultRoot = path.join(home, 'data', 'vault')
+  const OURS = 'cccccccccccccccc'
+  const ours = { path: vaultRoot, ts: 2, open: true }
+  const route = (vaults, options = {}) => vaultRoute({ vaults, vaultRoot, ...options })
+  const FOLDER = { how: 'folder', cwd: vaultRoot }
+  assert.deepEqual(route({ [OURS]: ours }), FOLDER)
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: ours }), { how: 'id', id: OURS }, 'a vault listed first at a folder above it would take a call run in its folder')
+  assert.deepEqual(route({ [OURS]: ours, aaaaaaaaaaaaaaaa: { path: home, ts: 1 } }), FOLDER, 'listed after it, that vault takes nothing: the first listed vault that is or contains the folder does')
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: `${vaultRoot}-old`, ts: 1 }, bbbbbbbbbbbbbbbb: { path: path.join(root, 'ho'), ts: 1 }, [OURS]: ours }), FOLDER, 'a folder whose name only begins the same contains nothing')
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: path.parse(vaultRoot).root, ts: 1 }, [OURS]: ours }), FOLDER, 'the app routes no call to a vault at the root of the file system')
+  // The id names another vault first: its folder has the id as its name, in another letter case, and it is listed before.
+  const namedLikeIt = { path: path.join(root, OURS.toUpperCase()), ts: 1 }
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, dddddddddddddddd: namedLikeIt, [OURS]: ours }), { how: 'ambiguous' })
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: ours, dddddddddddddddd: namedLikeIt }), { how: 'id', id: OURS })
+  assert.deepEqual(route({ dddddddddddddddd: namedLikeIt, [OURS]: ours }), FOLDER, 'a name that matches the id matters only when the folder is not enough')
+  // With `open`, only an entry the app lists open may take a call: a closed vault is never reopened.
+  assert.deepEqual(route({ [OURS]: { ...ours, open: false } }, { open: true }), { how: 'unlisted' })
+  assert.deepEqual(route({ [OURS]: { ...ours, open: false } }), FOLDER)
+  for (const vaults of [{}, null, [], { [OURS]: { path: 'relative/vault' } }, { aaaaaaaaaaaaaaaa: { path: home } }]) assert.deepEqual(route(vaults), { how: 'unlisted' }, JSON.stringify(vaults))
+  // The vaults that contain it, by real path: any listed above it, whatever their order, and none beside or inside it.
+  const vaults = { [OURS]: ours, aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, bbbbbbbbbbbbbbbb: { path: `${vaultRoot}-old` }, dddddddddddddddd: { path: path.join(vaultRoot, 'inner') }, eeeeeeeeeeeeeeee: { path: path.parse(vaultRoot).root } }
+  assert.deepEqual(enclosingVaults({ vaults, vaultRoot }).map((entry) => entry.id), ['aaaaaaaaaaaaaaaa', 'eeeeeeeeeeeeeeee'])
+  assert.deepEqual(enclosingVaults({ vaults: { [OURS]: ours }, vaultRoot }), [])
 })
 
-test('the production registry and vault check, against a stand-in for the command-line tool: a path travels only as base64 JSON, answers are verified, and failures are typed', (t) => {
-  // The command-line tool is played by this Node binary running a script named `eval` in the directory the call
-  // runs in: the registry's calls run in `workingDirectory`, the vault check in the vault's folder.
+test('a publication call reaches only this vault: in its folder while the app lists it open, by its id when a vault listed above it would take the call there, not at all when the id names another vault first; otherwise in a directory that is no vault', { skip: process.platform === 'win32' && 'no location of the app\'s settings is known on Windows: every call runs in a directory that is no vault' }, async (t) => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-cli-route-')))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const vaultRoot = path.join(home, 'data', 'vault')
+  fs.mkdirSync(vaultRoot, { recursive: true })
+  const userDataDir = obsidianUserDataDir({ platform: 'darwin', env: { HOME: home } })
+  fs.mkdirSync(userDataDir, { recursive: true })
+  const list = (vaults) => fs.writeFileSync(path.join(userDataDir, OBSIDIAN_SETTINGS_FILE), JSON.stringify({ vaults }))
+  const route = publicationRoute({ env: { HOME: home }, platform: 'darwin' })
+  const payload = { op: 'inspect', vaultRoot, path: 'notes/x.md' }
+  const NOWHERE = { cwd: NEUTRAL_DIRECTORY, args: [] }
+  const OURS = 'cccccccccccccccc'
+  assert.deepEqual(route(payload), NOWHERE, 'the app does not list it: no vault is chosen')
+  list({ [OURS]: { path: vaultRoot, ts: 2 } })
+  assert.deepEqual(route(payload), NOWHERE, 'listed but closed: maintenance never reopens it')
+  list({ [OURS]: { path: vaultRoot, ts: 2, open: true } })
+  assert.deepEqual(route(payload), { cwd: vaultRoot, args: [] }, 'listed and open: its window, whichever has focus')
+  // The home folder as a vault, listed first: a call run in the vault's folder would reach it, and open it when closed.
+  list({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: { path: vaultRoot, ts: 2, open: true } })
+  assert.deepEqual(route(payload), { cwd: NEUTRAL_DIRECTORY, args: [`vault=${OURS}`] })
+  list({ aaaaaaaaaaaaaaaa: { path: home, ts: 1, open: true }, [OURS]: { path: vaultRoot, ts: 2 } })
+  assert.deepEqual(route(payload), NOWHERE, 'closed, below an open vault above it: no vault is chosen either')
+  list({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, dddddddddddddddd: { path: path.join(home, OURS.toUpperCase()), ts: 1 }, [OURS]: { path: vaultRoot, ts: 2, open: true } })
+  assert.throws(() => route(payload), /vault-inside-another-vault/, 'no call can reach only this vault')
+  assert.deepEqual(route({ ...payload, vaultRoot: path.join(home, 'another') }), NOWHERE)
+
+  // A call takes its route's directory and leading arguments; a route that refuses makes no call. The command-line
+  // tool is played by this Node binary running the script that the first argument names, in the directory it runs in.
+  const log = path.join(home, 'calls.jsonl')
+  fs.writeFileSync(path.join(home, `vault=${OURS}`), `require('fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), script: require('path').basename(process.argv[1]), next: process.argv[2] }) + '\\n'); console.log('=> ' + JSON.stringify({ status: 'inspected' }))\n`)
+  const call = createObsidianCliCall({ cliPath: process.execPath, env: process.env, route: () => ({ cwd: home, args: [`vault=${OURS}`] }) })
+  assert.deepEqual(await call(payload), { status: 'inspected' })
+  const refusing = createObsidianCliCall({ cliPath: process.execPath, env: process.env, route: () => { throw new Error('vault-inside-another-vault: stub') } })
+  await assert.rejects(refusing(payload), /vault-inside-another-vault/)
+  assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)), [{ cwd: home, script: `vault=${OURS}`, next: 'eval' }], 'one call, naming the vault first; none for the route that refused')
+})
+
+test('the production registry and vault check, against a stand-in for the command-line tool: a path travels only as base64 JSON, a vault is reached by its route, answers are verified, and failures are typed', needsAppIsolation, (t) => {
+  // The command-line tool is played by this Node binary running the script its first argument names (`eval`, or
+  // `vault=<id>`) in the directory the call runs in: the registry's calls run in `workingDirectory`, and so does a vault
+  // check that names the vault; a vault check routed by folder runs in the vault's folder.
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-registry-cli-')))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const vaultRoot = path.join(dir, "it's a vault `${x}` $(y) é")
   fs.mkdirSync(vaultRoot)
-  const script = `const fs = require('fs'); fs.appendFileSync(process.env.EVAL_LOG, JSON.stringify({ cwd: process.cwd(), code: process.argv[2] }) + '\\n');
+  const script = `const fs = require('fs'); fs.appendFileSync(process.env.EVAL_LOG, JSON.stringify({ cwd: process.cwd(), first: require('path').basename(process.argv[1]), code: process.argv.at(-1) }) + '\\n');
 const mode = process.env.EVAL_MODE
 if (mode === 'no-vault') console.log('Vault not found.')
 else if (mode === 'fail') process.exitCode = 3
 else if (mode === 'hang') setTimeout(() => {}, 60000)
 else console.log('=> ' + process.env.EVAL_ANSWER)\n`
   for (const where of [dir, vaultRoot]) fs.writeFileSync(path.join(where, 'eval'), script)
+  fs.writeFileSync(path.join(dir, 'vault=dddddddddddddddd'), script)
   const log = path.join(dir, 'log.jsonl')
   const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
   const child = `const { createProductionAppProbe, createProductionAppRegistry } = await import(${JSON.stringify(seams)})
@@ -1317,10 +1571,14 @@ const started = Date.now()
 out.registerHung = await registry('hang', '', { timeoutMs: 1500 }).registerThroughApp({ vaultRoot })
 out.hungMs = Date.now() - started
 out.settings = registry('answer').registerInSettings({ vaultRoot })
-const probe = (answer) => createProductionAppProbe({ platform: 'win32', cliPath: process.execPath, env: env('answer', answer) })
-out.vaultState = await probe(JSON.stringify({ basePath: vaultRoot, ready: true })).vaultState({ vaultRoot })
-out.vaultStateOther = await probe(JSON.stringify({ basePath: '/another/folder', ready: true })).vaultState({ vaultRoot })
-out.vaultStateIndexing = await probe(JSON.stringify({ basePath: vaultRoot, ready: false })).vaultState({ vaultRoot })
+const probe = (answer) => createProductionAppProbe({ platform: 'win32', cliPath: process.execPath, workingDirectory: ${JSON.stringify(dir)}, env: env('answer', answer) })
+const folder = { how: 'folder', cwd: vaultRoot }
+out.vaultState = await probe(JSON.stringify({ basePath: vaultRoot, ready: true })).vaultState({ vaultRoot, route: folder })
+out.vaultStateById = await probe(JSON.stringify({ basePath: vaultRoot, ready: true })).vaultState({ vaultRoot, route: { how: 'id', id: 'dddddddddddddddd' } })
+out.vaultStateOther = await probe(JSON.stringify({ basePath: '/another/folder', ready: true })).vaultState({ vaultRoot, route: folder })
+out.vaultStateIndexing = await probe(JSON.stringify({ basePath: vaultRoot, ready: false })).vaultState({ vaultRoot, route: folder })
+out.vaultStateUnrouted = await probe(JSON.stringify({ basePath: vaultRoot, ready: true })).vaultState({ vaultRoot })
+out.vaultStateAmbiguous = await probe(JSON.stringify({ basePath: vaultRoot, ready: true })).vaultState({ vaultRoot, route: { how: 'ambiguous' } })
 process.stdout.write(JSON.stringify(out))`
   const run = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', child], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 120000, env: privateHomeEnv(dir) })
   assert.equal(run.status, 0, run.stderr)
@@ -1331,13 +1589,15 @@ process.stdout.write(JSON.stringify(out))`
   assert.deepEqual(out.registerHung, { answered: false, reason: 'cli-failed' })
   assert.ok(out.hungMs < 10000, 'a call that does not answer is killed at its timeout')
   assert.deepEqual([out.settings.ok, out.settings.code], [false, 'obsidian-settings-location-unknown'])
-  assert.deepEqual([out.vaultState, out.vaultStateOther, out.vaultStateIndexing], [{ answered: true, indexReady: true }, { answered: false, indexReady: false }, { answered: true, indexReady: false }])
+  assert.deepEqual([out.vaultState, out.vaultStateById, out.vaultStateOther, out.vaultStateIndexing], [{ answered: true, indexReady: true }, { answered: true, indexReady: true }, { answered: false, indexReady: false }, { answered: true, indexReady: false }])
+  assert.deepEqual([out.vaultStateUnrouted, out.vaultStateAmbiguous], [{ answered: false, indexReady: false }, { answered: false, indexReady: false }], 'without a route that reaches only this vault, nothing is asked')
   const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
   // Three answered; the one that hangs may be killed before it logs anything.
   const registerCalls = calls.filter((call) => call.code.includes("'vault-open'"))
   assert.ok(registerCalls.length >= 3, `${registerCalls.length} calls`)
-  for (const call of calls.filter((call) => !call.code.includes('app.vault.adapter.basePath'))) assert.equal(call.cwd, dir, 'calls about no vault run in the working directory they were given')
-  for (const call of calls.filter((call) => call.code.includes('app.vault.adapter.basePath'))) assert.equal(call.cwd, vaultRoot, 'the vault check runs inside the vault\'s folder')
+  for (const call of calls.filter((call) => !call.code.includes('app.vault.adapter.basePath'))) assert.deepEqual([call.cwd, call.first], [dir, 'eval'], 'calls about no vault run in the working directory they were given, naming none')
+  const checks = calls.filter((call) => call.code.includes('app.vault.adapter.basePath')).map((call) => [call.cwd, call.first])
+  assert.deepEqual(checks, [[vaultRoot, 'eval'], [dir, 'vault=dddddddddddddddd'], [vaultRoot, 'eval'], [vaultRoot, 'eval']], 'the vault check runs inside the vault\'s folder, or names the vault first; four checks, none without a route')
   // The path is never part of the code: it travels as base64 JSON, and only that literal differs between two paths.
   const [mine, other] = [registerCalls[0].code, registerCalls[1].code]
   assert.equal(mine.includes(vaultRoot) || mine.includes("it's") || mine.includes('${x}') || mine.includes('$(y)'), false)

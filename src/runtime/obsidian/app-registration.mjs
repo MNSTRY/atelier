@@ -1,7 +1,7 @@
 import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { OBSIDIAN_SETTINGS_FILE, findVaultEntry, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
+import { OBSIDIAN_SETTINGS_FILE, enclosingVaults, findVaultEntry, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
 import { openRegularFileNoFollow, syncPrivateDirectory } from '../../project/private-state.mjs'
 
 // Adding a view's vault to Obsidian's own vault list while Obsidian is not
@@ -19,6 +19,9 @@ import { openRegularFileNoFollow, syncPrivateDirectory } from '../../project/pri
 //   - only an existing file, in an existing user-data directory, both this
 //     user's own, a real directory and a regular file (no link), holding a
 //     JSON object: a file Obsidian has not written is never created;
+//   - never for a vault inside a folder the list has as a vault already: the
+//     app would show its notes in that vault too, and a call run in its folder
+//     would reach that vault (see vault-list.mjs);
 //   - every other key and every other vault entry is kept as the app wrote
 //     it, as values: the app itself rewrites the file with JSON.stringify;
 //   - the new entry is { path: the vault root's real path, ts: now, open:
@@ -29,33 +32,43 @@ import { openRegularFileNoFollow, syncPrivateDirectory } from '../../project/pri
 //     fsynced, renamed over it, and the directory is fsynced;
 //   - a file that changed since it was read is not replaced.
 //
-// Every refusal writes nothing, leaves nothing behind and is typed.
+// Every refusal writes nothing, leaves nothing behind and is typed: a file
+// created on the way is removed again whichever step after its creation fails.
 
 const refused = (code, message) => ({ ok: false, code, message })
 const currentUid = () => (typeof process.getuid === 'function' ? process.getuid() : null)
 const compactUtc = (ms) => new Date(ms).toISOString().replace(/[-:.]/g, '')
 
+// Creates `file`, which must not exist (an exclusive create fails on anything
+// there, a link included), with these bytes, fsynced. The file exists exactly
+// when the create returned; any failure after it removes the file again.
 function writeNewFile(file, bytes, mode) {
-  const descriptor = openRegularFileNoFollow(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, mode)
+  const descriptor = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), mode)
   try {
-    fs.writeFileSync(descriptor, bytes)
-    fs.fchmodSync(descriptor, mode)
-    fs.fsyncSync(descriptor)
-  } finally {
-    fs.closeSync(descriptor)
+    try {
+      fs.writeFileSync(descriptor, bytes)
+      fs.fchmodSync(descriptor, mode)
+      fs.fsyncSync(descriptor)
+    } finally {
+      fs.closeSync(descriptor)
+    }
+  } catch (error) {
+    try { fs.unlinkSync(file) } catch { /* already gone */ }
+    throw error
   }
 }
 
 function readBytesNoFollow(file) {
   const descriptor = openRegularFileNoFollow(file)
-  try { return fs.readFileSync(descriptor) } finally { fs.closeSync(descriptor) }
+  try { return fs.readFileSync(descriptor) } finally { try { fs.closeSync(descriptor) } catch { /* read already, or failed */ } }
 }
 
-// { ok: true, registered: 'already' | 'written', entry: { id, path, open }, confirmed, backupPath?, reason? }
+// { ok: true, registered: 'already' | 'written', entry: { id, path, open }, confirmed, vaults, backupPath?, reason? }
 // or a typed refusal { ok: false, code, message }. `confirmed` is false when an
 // app appeared right after the rename: it may have read the list before it,
-// so whoever asked verifies through the app. `processProbe()` answers
-// 'absent', 'running' or 'unknown'; only 'absent' allows a write.
+// so whoever asked verifies through the app. `vaults` is the list as it was
+// found or written. `processProbe()` answers 'absent', 'running' or
+// 'unknown'; only 'absent' allows a write.
 export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe, now = () => Date.now(), randomBytes = cryptoRandomBytes, uid = currentUid() } = {}) {
   if (typeof processProbe !== 'function') throw new TypeError('registering a vault needs a process probe')
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot) || vaultRoot.includes('\u0000')) throw new TypeError('vaultRoot must be an absolute path')
@@ -64,7 +77,8 @@ export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, proces
   const settings = readObsidianSettings({ userDataDir, uid })
   if (!settings.ok) return settings
   const known = findVaultEntry(settings.vaults, vaultRoot)
-  if (known) return { ok: true, registered: 'already', entry: known, confirmed: true }
+  if (known) return { ok: true, registered: 'already', entry: known, confirmed: true, vaults: settings.vaults }
+  if (enclosingVaults({ vaults: settings.vaults, vaultRoot }).length > 0) return refused('vault-inside-another-vault', 'Obsidian lists a vault at a folder that contains this vault\'s folder')
 
   let folder
   try { folder = fs.realpathSync(vaultRoot) } catch { return refused('vault-root-missing', 'the view\'s vault folder does not exist') }
@@ -105,7 +119,7 @@ export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, proces
   const written = readObsidianSettings({ userDataDir, uid })
   const entry = written.ok ? findVaultEntry(written.vaults, vaultRoot) : null
   return {
-    ok: true, registered: 'written', entry: entry ?? { id, path: folder, open: true }, backupPath, confirmed: stillAbsent && entry !== null,
+    ok: true, registered: 'written', entry: entry ?? { id, path: folder, open: true }, backupPath, confirmed: stillAbsent && entry !== null, vaults: written.ok ? written.vaults : document.vaults,
     ...(stillAbsent ? {} : { reason: 'app-started-during-registration' }),
   }
 }

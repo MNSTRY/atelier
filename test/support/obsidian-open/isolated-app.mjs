@@ -2,12 +2,16 @@
 //
 // Isolation has two independent parts, as in experiments/obsidian-publication:
 // a private HOME (the command-line tool reaches the app through a socket under
-// $HOME, so nothing here can reach another session's app) and a private
-// Electron profile, passed as --user-data-dir. The profile sits exactly where
-// the app keeps it for that HOME (on macOS `$HOME/Library/Application
+// $HOME on macOS, so nothing here can reach another session's app) and a
+// private Electron profile, passed as --user-data-dir. The profile sits exactly
+// where the app keeps it for that HOME (`$HOME/Library/Application
 // Support/obsidian`), so the production seams, which derive the settings
 // location from HOME, find this app's vault list and no other. The private
-// HOME has no login keychain, so Chromium's mock keychain is used.
+// HOME has no login keychain, so Chromium's mock keychain is used. On Linux
+// the tool and the app find each other under XDG_RUNTIME_DIR instead, and the
+// settings live under XDG_CONFIG_HOME when that is set: the environment gets a
+// private XDG_RUNTIME_DIR and no XDG_CONFIG_HOME, but the suite is qualified
+// on macOS only, and refuses to start anywhere else.
 //
 // Nothing here uses the operating system's URL opener: that would reach the
 // app the person runs. A URL is handed to this app on its command line when it
@@ -44,15 +48,18 @@ function pidsIn(table, marker) {
 }
 
 export function createIsolatedApp({ parent = process.env.ATELIER_OBSIDIAN_TMP || '/tmp', vaults = {}, platform = process.platform } = {}) {
+  if (platform !== 'darwin') throw new Error('the isolated app suite is qualified on macOS only')
   const root = fs.realpathSync(fs.mkdtempSync(path.join(parent, 'atelier-first-open-')))
   const home = path.join(root, 'home')
+  const runtime = path.join(root, 'runtime')
   const userDataDir = obsidianUserDataDir({ platform, env: { HOME: home } })
-  if (userDataDir === null) throw new Error('the isolated app suite knows the profile location on macOS and Linux only')
   fs.mkdirSync(userDataDir, { recursive: true })
+  fs.mkdirSync(runtime, { mode: 0o700 })
   // The app runs the newest app build in its profile; the pinned one, when given, is the one qualified.
   if (process.env.ATELIER_OBSIDIAN_ASAR) fs.copyFileSync(process.env.ATELIER_OBSIDIAN_ASAR, path.join(userDataDir, path.basename(process.env.ATELIER_OBSIDIAN_ASAR)))
   fs.writeFileSync(path.join(userDataDir, OBSIDIAN_SETTINGS_FILE), JSON.stringify({ vaults, cli: true, updateDisabled: true }))
-  const env = { ...process.env, HOME: home }
+  const { XDG_CONFIG_HOME: _config, ...inherited } = process.env
+  const env = { ...inherited, HOME: home, XDG_RUNTIME_DIR: runtime }
   const marker = `--user-data-dir=${userDataDir}`
   const processProbe = isolatedProcessProbe(userDataDir)
   const pids = () => { try { return pidsIn(execFileSync('/bin/ps', ['-ww', '-A', '-o', 'pid=,command='], { encoding: 'utf8' }), marker) } catch { return [] } }

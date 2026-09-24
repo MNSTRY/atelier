@@ -20,8 +20,9 @@
   runs (read again immediately before the rename), only a file Obsidian
   created, owned by this user and not a link, atomically (a temporary file in
   the same directory, fsynced, renamed), keeping every other key and entry,
-  and with a timestamped backup beside it; an Obsidian that never ran on the
-  account (no such file) is asked to be started once. With Obsidian running
+  and with a timestamped backup beside it; a write that fails at any step
+  leaves the file as it was and nothing beside it; an Obsidian that never ran
+  on the account (no such file) is asked to be started once. With Obsidian running
   and no vault open, a vault the app already lists is opened by path; one it
   does not list is answered as `app-version-unsupported` / `no-vault-open`
   (open any vault, or quit Obsidian, then open again) and nothing is
@@ -39,12 +40,18 @@
   list), and otherwise after a delay that starts at 30 seconds
   (`DEFAULT_PUBLICATION_RETRY_MS`) and doubles, up to the full reconciliation
   interval. Before, it waited for a change or the five-minute reconciliation.
-- Command-line calls to the app run in a chosen directory: publication calls
-  in the view's vault folder while the app's list shows that vault open, so
-  they reach its window whichever window has focus, and every other call in a
-  directory that is no vault. Maintenance never reopens a vault window that
-  was closed, and the directory a command or service was started in no longer
-  picks, or opens, a vault.
+- Command-line calls to the app reach only the vault they are about. A call
+  about a vault runs in its folder, so it reaches that vault's window
+  whichever window has focus, or names the vault first (`vault=<id>`) when a
+  vault the app lists before it at a folder above it (a home folder, say)
+  would take a call run there; when that id would name another vault first
+  too, no call is made. Publication calls do so only while the app's list
+  shows the view's vault open; every other call runs in a directory that is
+  no vault. Maintenance never reopens a vault window that was closed and never
+  reaches another vault, and the directory a command or service was started
+  in no longer picks, or opens, a vault. `open` never adds a view's vault
+  inside a folder Obsidian already lists as a vault, which would show the
+  view's notes too: it answers `launch-failed` / `vault-inside-another-vault`.
 - The `status` next step for `publisher-conflict` / `editor-uncoordinated`
   names `atelier obsidian open` (which adds the vault to Obsidian and
   publishes through it) or quitting Obsidian; after `open` itself tried, it
