@@ -39,8 +39,8 @@ test('a vault folder is named `<project> (<view>)`, made safe for every system a
     ['a/b\\c:d*e?f"g<h>i|j#k^l[m]n', 'a b c d e f g h i j k l m n', 'separators, reserved and link characters'],
     ['draft (old)', 'draft old', 'parentheses end the view part, so a project never carries one'],
     ['tab\there\nline', 'tab here line'],
-    ['éte', 'éte', 'NFC'],
-    ['bi‮di', 'bidi', 'bidirectional controls are removed'],
+    ['e\u0301te', '\u00e9te', 'NFC'],
+    ['bi\u202edi', 'bidi', 'bidirectional controls are removed'],
     ['CON', '_CON', 'a Windows device name'],
     ['con.txt', '_con.txt'],
     ['', ''],
@@ -49,7 +49,10 @@ test('a vault folder is named `<project> (<view>)`, made safe for every system a
   const long = safeFolderPart('é'.repeat(100))
   assert.equal(Buffer.byteLength(long, 'utf8') <= MAX_PROJECT_NAME_BYTES, true)
   assert.equal(long, 'é'.repeat(40), 'cut on a character boundary')
-  assert.equal(safeFolderPart(`${'a'.repeat(79)}é`), 'a'.repeat(79), 'a combining character left alone at the cut is removed')
+  assert.equal(safeFolderPart(`${'a'.repeat(79)}e\u0301`), 'a'.repeat(79), 'NFC makes one character of the accented letter, and a character that does not fit is left out')
+  assert.equal(safeFolderPart(`${'a'.repeat(78)}q\u0307\u0323`), 'a'.repeat(78), 'a letter and its accents stay together or go together')
+  assert.equal(safeFolderPart(`${'a'.repeat(75)}\u{1F469}\u200d\u{1F4BB}`), 'a'.repeat(75), 'so does an emoji sequence')
+  assert.equal(safeFolderPart(`${'a'.repeat(69)}\u{1F469}\u200d\u{1F4BB}`), `${'a'.repeat(69)}\u{1F469}\u200d\u{1F4BB}`, 'a sequence that fits stays whole')
   assert.equal(projectDisplayName({ config: { name: 'harbor-notes' }, configDir: '/x/other' }), 'harbor-notes')
   assert.equal(projectDisplayName({ config: {}, configDir: '/x/field-notes' }), 'field-notes', 'without a name, the project folder')
   assert.equal(projectDisplayName({ config: { name: '...' }, configDir: '/' }), 'project')
