@@ -133,10 +133,12 @@
   window whichever window has focus; only when that id would name another
   vault first does it run in the vault's folder, and not at all when a vault
   the app lists before it at a folder above it (a home folder, say) would take
-  a call run there. The vault root, the settings entry and the vault check use
-  the path as the file system stores it, so on macOS a data root given in
-  another letter case neither hides a vault listed above it nor routes a call
-  there. Publication calls do so only while the app's list
+  a call run there. The vault root, the settings entry, the vault check and
+  the publication bridge's check that the app holds this vault use the path as
+  the file system stores it, so on macOS a data root given in another letter
+  case neither hides a vault listed above it nor routes a call there, and a
+  store written before, or an app that holds the vault under another spelling
+  or through a link, keeps working. Publication calls do so only while the app's list
   shows the view's vault open; every other call runs in a directory that is
   no vault. Maintenance never reopens a vault window that was closed and never
   reaches another vault, and the directory a command or service was started

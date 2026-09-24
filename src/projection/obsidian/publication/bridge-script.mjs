@@ -76,7 +76,9 @@ export function criticalSection(P, host) {
   const trace = []
   const step = (event, detail) => trace.push({ ms: Number((host.performance.now() - t0).toFixed(3)), event, ...(detail || {}) })
   const crash = (point) => { if (host.crashSeam && host.crashSeam.at === point) host.crashSeam.halt(point) }
-  const real = (target) => { try { return fs.realpathSync(target) } catch (error) { return null } }
+  // As the file system stores the path, except on Windows (see realPathAsStored): an app that holds the vault under
+  // another spelling of its folder (a letter case, on a volume that folds it) holds this vault.
+  const real = (target) => { try { return host.process.platform !== 'win32' && fs.realpathSync.native ? fs.realpathSync.native(target) : fs.realpathSync(target) } catch (error) { return null } }
   const vaultBasePath = app ? real(app.vault.adapter.getBasePath()) : real(P.vaultRoot)
   const full = nodePath.join(P.vaultRoot, P.path)
   const views = () => {

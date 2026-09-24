@@ -1295,6 +1295,29 @@ test('open, with the app running and no vault open, leaves a view published whil
   assert.deepEqual([status.json.scopes[0].outcome, status.json.scopes[0].reason], ['current', 'verified-by-read-back'])
 })
 
+// Through a running service: a tick asked for one view over the listener reaches the engine, which drops what the
+// service's adapter factory remembered. `hand` is what the service is given for that factory.
+async function assertServiceAsksTheAppAgain(t, hand = (factory) => factory) {
+  const world = makeWorld(t)
+  let observation = { installed: true, cli: true, running: true, version: null, noVaultOpen: true }
+  const adapterFactory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => observation }, createAdapter: absentAdapter })
+  await world.service({ adapterFactory: hand(adapterFactory) })
+  assert.equal((await world.run(['status', '--json'])).json.scopes[0].reason, 'app-version-unsupported')
+  // The app now has a vault open. The refusal above is remembered for ten seconds; the tick asked for does not reuse it.
+  observation = { installed: true, cli: true, running: true, version: '1.13.7' }
+  const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE }
+  const asked = await requestServiceTick({ ...lifecycle, scopeId: FULL_SCOPE.scopeId })
+  assert.deepEqual([asked.tick?.scopes?.[0]?.state, adapterFactory.lastQualification().outcome], ['current', 'qualified'], JSON.stringify(asked.tick).slice(0, 300))
+}
+
+test('through the running service, a tick asked for a view makes the adapter factory ask the app again', needsExchange, async (t) => {
+  await assertServiceAsksTheAppAgain(t)
+})
+
+test('mutation control: a service that hands the engine a wrapper of its adapter factory without `forget` reuses the refusal', needsExchange, async (t) => {
+  await assert.rejects(assertServiceAsksTheAppAgain(t, (factory) => (input) => factory(input)), assert.AssertionError)
+})
+
 // ---------------------------------------------------------------------------
 // 4d. Obsidian's settings file: written only while no Obsidian runs, atomically, keeping everything else
 // ---------------------------------------------------------------------------

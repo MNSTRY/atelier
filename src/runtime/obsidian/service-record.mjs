@@ -67,10 +67,12 @@ const byName = (left, right) => (left.name < right.name ? -1 : left.name > right
 const releases = new Map()
 
 // The release that runs, beyond its entry module: the version of the package
-// and a digest of the runtime it ships, every file under `src/` and the
-// `contracts/` it reads, by relative path and content. A release that changes
-// any module, and not only the entry, differs. Computed once per process and
-// package root, so a service keeps the identity of the code it loaded.
+// and a digest of the runtime it ships, by relative path and content. That is
+// what the service loads: every module under `src/`, and the `contracts/` it
+// reads; outside `src/` it reads nothing else of the package but the version
+// in `package.json`. A release that changes any of it, and not only the
+// entry, differs. Computed once per process and package root, so a service
+// keeps the identity of the code it loaded.
 export function releaseIdentity({ root = PACKAGE_ROOT } = {}) {
   if (!releases.has(root)) {
     const hash = createHash('sha256')

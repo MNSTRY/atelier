@@ -1032,6 +1032,36 @@ test('interrupted conditional removal: killed after the move, the bytes are in r
   assert.ok(keptTexts(world).includes(BASE))
 })
 
+// Whether this file system folds letter case (macOS by default): a folder can then be spelled in another case than it
+// is stored in.
+const CASE_FOLDING = (() => {
+  try {
+    const probe = fs.mkdtempSync(path.join(TMP, 'atelier-Case-'))
+    try { return probe !== probe.toLowerCase() && fs.existsSync(probe.toLowerCase()) } finally { fs.rmSync(probe, { recursive: true, force: true }) }
+  } catch { return false }
+})()
+
+test('a store written under another spelling of its folder keeps working: its generation is read back, and an app that holds the vault under that spelling, or through a link, is coordinated with', { ...needsExchange, ...(CASE_FOLDING && process.platform !== 'win32' ? {} : { skip: 'this file system tells letter case apart, or it is Windows: a folder has one spelling here' }) }, async (t) => {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-Spelled-')))
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }))
+  const stored = path.join(parent, 'Workspace')
+  fs.mkdirSync(stored)
+  // Written through a spelling in another letter case, as a data root typed that way gives: the first generation.
+  const lower = stored.toLowerCase()
+  const world = await seeded(t, { [NOTE]: BASE }, { root: lower })
+  // Opened again, as the next process does: the same store, whichever spelling.
+  const again = createRecoveryStore({ workspaceRoot: lower, workspaceId: 'ws-synthetic-0003', scopeId: 'scope-synthetic', repositoryRoots: [] })
+  assert.deepEqual([again.vaultRoot, again.readCurrent().generationId], [world.vault, 'gen-0001'])
+  // An app that holds the vault under the other spelling, and one that holds it through a link to it, answer for this vault.
+  const link = path.join(parent, 'linked-vault')
+  fs.symlinkSync(world.vault, link)
+  for (const [label, basePath, generation] of [['another letter case', world.vault.toLowerCase(), 'gen-0002'], ['a link', link, 'gen-0003']]) {
+    const app = new ModelApp(basePath)
+    const result = await world.publish(viewOf(generation, { notes: { [NOTE]: generation === 'gen-0002' ? CANDIDATE : BASE } }), modelAdapter(app))
+    assert.deepEqual([result.state, result.mode], ['committed', 'in-app'], `${label}: ${JSON.stringify(result).slice(0, 300)}`)
+  }
+})
+
 test('I10 the app going away mid-publication leaves a coherent note and a retryable state', needsExchange, async (t) => {
   for (const when of ['dropBefore', 'dropAfter']) {
     const world = await seeded(t)

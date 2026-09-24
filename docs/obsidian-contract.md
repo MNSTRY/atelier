@@ -917,7 +917,9 @@ vault in. Publication calls are routed from the file, and only while it lists
 the vault open; otherwise they run in a directory that is no vault and name
 none, so maintenance never reopens a vault window that was closed and never
 reaches another vault. The bridge still checks that the app answered for
-exactly this vault.
+exactly this vault, both folders taken as the file system stores them: an app
+that holds the vault under another letter case or through a link holds this
+vault, and a store written under another spelling keeps its vault.
 
 **Retries.** The maintenance service is told what the app looks like from
 the process table and the file alone (whether an Obsidian process runs, and
