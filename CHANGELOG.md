@@ -39,11 +39,13 @@
   allocates the earlier layout's paths for a whole workspace, exactly as
   before, and Atelier no longer calls it.
 - A source that does not fit is laid out anyway and reported, never a reason
-  to refuse the workspace: a folder chain too long for the path budget keeps
-  a readable prefix and a short stable id, and a source folder that meets a
-  file of the same name is qualified with one. What is worth a look (these,
-  an author's own identity keys shadowing the generated ones, generated text
-  that names a note outside the view without refusing it) is recorded in the
+  to refuse the workspace: a folder chain too long for the path budget keeps a
+  readable prefix and a short stable id, or, when not even that fits, the note
+  sits directly in its repository's folder; a source folder that meets a file
+  of the same name is qualified with an id. Only a name that does not fit even
+  in its repository's folder refuses the view. What is worth a look (these, an
+  author's own identity keys shadowing the generated ones, generated text that
+  names a note outside the view without refusing it) is recorded in the
   manifest and the view's freshness entry, and shown by
   `atelier obsidian status`, naming the note.
 - Every note names its identity in three generated front-matter properties,
@@ -73,8 +75,9 @@
   view does not select it only reports. A view may newly refuse with
   `redaction-failure`; the refusal names the rule and the in-view note, never
   the value. Both rules run over every note, cached ones included. The deny
-  matcher is one automaton: building it is linear in the values it holds, and
-  it reads each text once, however many there are.
+  matcher is one automaton: building it takes time and memory linear in the
+  values it holds, on every preparation, and it reads each text once, however
+  many there are.
 - A focus query names each note by an anchored regular-expression path term
   (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
   exactly the selected notes; a focus persisted with the earlier version is

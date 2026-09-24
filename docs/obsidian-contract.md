@@ -77,9 +77,10 @@ A layout 2 vault shows, in its folder names, the repository identity and the
 source directory chain of the notes in the view, and every note names its
 repository and source path in its `atelier-repo` and `atelier-source`
 properties; layout 1 showed neither. A folder exists only because a note of
-the view is in it, though it may hold only some of that source directory's
-files. This surface is acceptable for every vault, scoped ones included (owner
-decision, 2026-09-24).
+the view, a file the view copies for an embed, or a file held for an open edit
+is in it, though it may hold only some of that source directory's files. This
+surface is acceptable for every vault, scoped ones included (owner decision,
+2026-09-24).
 
 Each note may carry the generated line `Relationships leading outside this
 view: N`. N counts that note's relationships to notes that are visible but not
@@ -137,8 +138,8 @@ in the vault layout the view is prepared in:
      unambiguous identifier refuses the view: an identity qualified by any
      repository of the census (`<repository>:…`, whichever repository holds
      the note), a repository-qualified source path (`<repository>/<path>`), a
-     repository-relative path that holds a folder (a `/`), or a vault path the
-     node has in another view or had in this one. An identity that is a bare
+     repository-relative path that holds a folder (a `/`), or a vault path
+     recorded for it (see below). An identity that is a bare
      word, and a file name at a repository's root (`README.md`, `index.md`),
      are ambiguous and only reported: in-view text names such words and files
      all the time.
@@ -180,11 +181,15 @@ something the audience may not see; the refusal never says which note or
 value. That existence oracle is open only to a person who can already edit
 in-view text, and is accepted with the rule.
 
-The vault paths that other views hold come from the persistent registry, and
-those of this view's prior generation from that generation. After the
-registry is lost, a vault path another view held is not denied until that view
-is prepared again and writes its section; the identities and source paths of
-the same notes still are.
+The vault paths the deny-list knows come from two places only: the sections of
+the persistent registry, which hold each view's last allocation, this view's
+included, and this view's prior generation. So after the registry is lost, a
+vault path another view holds is not denied until that view is prepared again
+and writes its section; within one tick, what a view denies of another view
+depends on the order the views are prepared in; and a view still held in
+layout 1 records its layout 2 allocation in its section, not the layout 1
+paths its vault holds, which other views therefore do not deny. The
+identities and source paths of the same notes are always denied.
 
 Identities are what the graph records. A sidecar's identity is checked for its
 form, but a Markdown note's `kg.id` may be any non-empty string, a bare word
@@ -193,9 +198,10 @@ included; Atelier's own documents use repository-qualified identities
 is unambiguous, whichever repository holds its note. A bare word could be any
 word of a title, and a root file name such as `README.md` any repository's, so
 both are reported, never refused. The matcher is one Aho–Corasick automaton
-over every value, with the token boundary tested at each hit: building it is
-linear in the total length of the values, and it then reads a text once,
-however many values there are.
+over every value, with the token boundary tested at each hit: building it
+takes time and memory linear in the total length of the values, on every
+preparation (some tenths of a second and about 100 MB at 120,000 values), and
+it then reads a text once, however many values there are.
 
 In layout 1 the guard additionally refuses any `--<hex>` identity suffix of a
 census identity outside the view, anywhere in generated text or emitted paths,
@@ -296,12 +302,18 @@ Obsidian links:
 
 A path longer than the file system allows (255 bytes a name, and
 `maxFullPathBytes`, 1024 by default, with the view's own vault root) is
-shortened by cutting the title part further, never below 16 bytes. A folder
-chain that leaves less room than that keeps as many leading folders as fit,
-and the last folder kept, cut, carries ` (<id>)`, the first 6 hexadecimal
-characters of the SHA-256 of the repository and the whole source directory:
-two deep directories under one readable prefix stay two folders. Only a vault
-root that leaves no room for any name refuses the view, with `path-too-long`.
+shortened by cutting the title part further, never below 16 bytes. A folder is
+kept only where a name of 16 bytes and its extensions still fits in it,
+whatever the title of the note at hand, so a folder's spelling depends on its
+source directory alone. A folder chain that leaves less room than that keeps
+as many leading folders as fit, and the last folder kept, cut, carries
+` (<id>)`, the first 6 hexadecimal characters of the SHA-256 of the
+repository and the whole source directory: two deep directories under one
+readable prefix stay two folders. When not even `<repository folder>/(<id>)`
+leaves that room, the note sits directly in its repository's folder. Only a
+note whose name does not fit even there, qualified if it collides, refuses
+the view, with `path-too-long`: its repository's folder under the view's vault
+root leaves no room for it.
 
 ### Collisions
 
@@ -342,9 +354,13 @@ into a new identity, since a source without an identity of its own is
 identified by its path) releases its path there, unless its file is held for
 an edit: then the file stays in the vault and its name stays taken. A renamed
 source therefore takes its name back instead of keeping a qualifier its old
-name forced, and a note that comes back gets its earlier path again when
-nothing took it meanwhile. One identity may have different paths in different
-views: each view allocates among its own notes, with its own vault root.
+name forced. A note that comes back is allocated again like a newcomer: it
+gets its earlier path only when its title is unchanged and the names around it
+are as they were, nothing having taken its name meanwhile and no note it
+collided with having left. A published path that no longer fits the view's
+vault root (a root that grew) is allocated again as well. One identity may
+have different paths in different views: each view allocates among its own
+notes, with its own vault root.
 
 The persistent path registry keeps each view's last allocation in a section of
 its own (`views.<scopeId>`); a selection resolved without the view's
@@ -358,7 +374,11 @@ no view its paths and is written again on the next preparation.
 What is worth a person's look, but no reason to refuse a view, is recorded as a
 diagnostic that names the note and never a value: in the generation manifest
 (`ext["mnstry.atelier.obsidian"].diagnostics`, layout 2), in the view's
-freshness entry (the first 100), and in `atelier obsidian status`. Each is
+freshness entry (the first 100), and in `atelier obsidian status`. The manifest
+holds those of the preparation that first committed its generation: a
+preparation that yields the same generation (the same files) does not commit
+it again. The freshness entry, and so `status`, holds those of the latest
+preparation. Each is
 `{ code, rule?, repoId, nodeId, notePath }` (an embedded asset has `assetPath`
 and `filePath` instead of `nodeId` and `notePath`):
 
