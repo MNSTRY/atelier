@@ -64,6 +64,10 @@ export function meetsMinimumAppVersion(version, floor = MINIMUM_APP_VERSION) {
 // command, `version` too, with this line (observed on 1.13.7, on either output
 // stream and with either exit status). It is not a version.
 const NO_VAULT_OPEN = /^vault not found\.?$/i
+// While a vault window is still loading, right after the app started or opened
+// a vault, the tool answers a command with this line instead (observed on
+// 1.13.7). The app is not up yet: this is not a version either.
+const COMMAND_NOT_READY = /^error: command "[^"]*" not found\b/i
 
 // Pure. What one `version` call of the command-line tool answered:
 // { version, noVaultOpen }. `exited` is false for a call that failed or exited
@@ -71,8 +75,31 @@ const NO_VAULT_OPEN = /^vault not found\.?$/i
 export function readVersionAnswer({ stdout = '', stderr = '', exited = true } = {}) {
   const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
   if (lines.some((line) => NO_VAULT_OPEN.test(line))) return { version: null, noVaultOpen: true }
+  if (lines.some((line) => COMMAND_NOT_READY.test(line))) return { version: null, noVaultOpen: false }
   const text = typeof stdout === 'string' ? stdout.trim() : ''
   return { version: exited && text !== '' ? text : null, noVaultOpen: false }
+}
+
+// Pure. What one `eval` call of the command-line tool answered:
+// { answered: true, value } with the value the script returned, parsed as
+// JSON, or { answered: false, reason }. The tool prints a returned string as
+// it is after `=> `; a string that is itself JSON text is parsed once more.
+// `reason` is `no-vault-open` for the answer the app gives with no vault open,
+// `cli-failed` for a call that failed, and `no-value` otherwise.
+export function readEvalAnswer({ stdout = '', stderr = '', failed = false } = {}) {
+  const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
+  if (lines.some((line) => NO_VAULT_OPEN.test(line))) return { answered: false, reason: 'no-vault-open' }
+  if (failed) return { answered: false, reason: 'cli-failed' }
+  const text = typeof stdout === 'string' ? stdout : ''
+  const start = text.indexOf('=> ')
+  if (start < 0) return { answered: false, reason: 'no-value' }
+  try {
+    let value = JSON.parse(text.slice(start + 3))
+    if (typeof value === 'string') { try { value = JSON.parse(value) } catch { /* a plain string */ } }
+    return { answered: true, value }
+  } catch {
+    return { answered: false, reason: 'no-value' }
+  }
 }
 
 // Pure. `requireVersion: false` lets an installed app that is positively not

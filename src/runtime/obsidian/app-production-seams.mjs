@@ -1,8 +1,10 @@
 import { execFile, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { defaultCliPath, defaultObsidianProcessProbe } from '../../projection/obsidian/publication/transport.mjs'
-import { readVersionAnswer } from './app-capability.mjs'
+import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe } from '../../projection/obsidian/publication/transport.mjs'
+import { obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
+import { readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
+import { registerVaultInObsidianSettings } from './app-registration.mjs'
 
 // The production seams of `obsidian open` and of the service's adapter
 // factory: the only code that asks the installed Obsidian anything or asks the
@@ -11,15 +13,21 @@ import { readVersionAnswer } from './app-capability.mjs'
 // This module is imported by exactly two places, both real command-line
 // entries and both behind an explicit `--adapter=obsidian-cli`: the service
 // entry (service-main.mjs) and the command entry (src/commands/obsidian.mjs,
-// `production: true`). No test imports it in-process, and importing it leaves
-// a trace below that the test suite asserts is absent. One test imports it in
-// a child process, with a stand-in for the command-line tool, to read the
-// version answers it parses.
+// `production: true`). No test of the default suite imports it in-process, and
+// importing it leaves a trace below that the test suite asserts is absent. One
+// test imports it in a child process, with a stand-in for the command-line
+// tool, to read the version answers it parses; the opt-in real-app suite
+// imports it to reach an isolated app through that app's private HOME.
 //
-// Status: written against the documented command-line interface and NOT yet
-// exercised against a running app. The acceptance work qualifies it on an
-// isolated host before any of it is relied on; until then every answer it
-// cannot establish is the failing one.
+// Status: exercised against an isolated Obsidian 1.13.7 (installer 1.12.7) on
+// macOS by the opt-in real-app suite in test/obsidian-first-open-real-app.test.mjs;
+// every answer it cannot establish is the failing one.
+//
+// Where each call runs matters: the app answers a command in the window of the
+// vault that contains the tool's working directory, opening that vault when it
+// is closed. A call about one vault runs in its folder; every other call runs
+// in a directory that is no vault, so the directory this process was started
+// in never picks, or opens, a vault.
 globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')] = true
 
 const CLI_TIMEOUT_MS = 5000
@@ -49,42 +57,94 @@ const observationOf = ({ platform, cliPath, processes, answer }) => {
   }
 }
 
-export function createProductionAppProbe({ platform = process.platform, env = process.env, cliPath = defaultCliPath(platform) } = {}) {
-  const options = { env, timeout: CLI_TIMEOUT_MS, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }
+// `processProbe` reads the process table ('running', 'absent' or 'unknown');
+// `workingDirectory` is where calls that are about no vault run.
+export function createProductionAppProbe({ platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), processProbe = () => defaultObsidianProcessProbe({ platform }), workingDirectory = NEUTRAL_DIRECTORY } = {}) {
+  const options = { env, cwd: workingDirectory, timeout: CLI_TIMEOUT_MS, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }
+  const processes = () => { try { return processProbe() } catch { return 'unknown' } }
   return {
     // For the service's adapter factory, which is synchronous. The version is asked for only while an app runs.
     // Both output streams are read, whatever the exit status: the answer with no vault open is not a version.
     inspectSync() {
-      const processes = defaultObsidianProcessProbe({ platform })
-      if (processes === 'absent') return observationOf({ platform, cliPath, processes, answer: NOT_ASKED })
+      const seen = processes()
+      if (seen === 'absent') return observationOf({ platform, cliPath, processes: seen, answer: NOT_ASKED })
       let answer = NOT_ASKED
       try {
         const reply = spawnSync(cliPath, ['version'], { ...options, stdio: ['ignore', 'pipe', 'pipe'] })
         answer = readVersionAnswer({ stdout: reply.stdout, stderr: reply.stderr, exited: reply.error === undefined && reply.status === 0 })
       } catch { answer = NOT_ASKED }
-      return observationOf({ platform, cliPath, processes, answer })
+      return observationOf({ platform, cliPath, processes: seen, answer })
     },
     inspect() {
-      const processes = defaultObsidianProcessProbe({ platform })
-      if (processes === 'absent') return Promise.resolve(observationOf({ platform, cliPath, processes, answer: NOT_ASKED }))
+      const seen = processes()
+      if (seen === 'absent') return Promise.resolve(observationOf({ platform, cliPath, processes: seen, answer: NOT_ASKED }))
       return new Promise((resolve) => {
-        execFile(cliPath, ['version'], options, (error, stdout, stderr) => resolve(observationOf({ platform, cliPath, processes, answer: readVersionAnswer({ stdout, stderr, exited: !error }) })))
+        execFile(cliPath, ['version'], options, (error, stdout, stderr) => resolve(observationOf({ platform, cliPath, processes: seen, answer: readVersionAnswer({ stdout, stderr, exited: !error }) })))
       })
     },
-    // Whether the app answers for exactly this vault and has finished reading it.
+    // Whether the app answers for exactly this vault and has finished reading it. Asked from inside the vault's
+    // folder, so the app answers in that vault's window whichever window has focus, and opens it when it is known
+    // and closed. Both sides are compared by real path.
     vaultState({ vaultRoot }) {
-      const code = '(()=>JSON.stringify({basePath:app.vault.adapter.basePath,ready:app.metadataCache.initialized===true}))()'
+      let target
+      try { target = fs.realpathSync(vaultRoot) } catch { return Promise.resolve({ answered: false, indexReady: false }) }
       return new Promise((resolve) => {
-        execFile(cliPath, ['eval', `code=${code}`], options, (error, stdout) => {
-          if (error) return resolve({ answered: false, indexReady: false })
-          try {
-            const text = String(stdout)
-            const value = JSON.parse(JSON.parse(text.slice(text.indexOf('=> ') + 3)))
-            return resolve({ answered: value.basePath === vaultRoot, indexReady: value.basePath === vaultRoot && value.ready === true })
-          } catch { return resolve({ answered: false, indexReady: false }) }
+        execFile(cliPath, ['eval', `code=${VAULT_STATE_CODE}`], { ...options, cwd: target }, (error, stdout, stderr) => {
+          const answer = readEvalAnswer({ stdout, stderr, failed: Boolean(error) })
+          const value = answer.answered ? answer.value : null
+          const answered = value !== null && typeof value === 'object' && value.basePath === target
+          resolve({ answered, indexReady: answered && value.ready === true })
         })
       })
     },
+  }
+}
+
+// The fixed scripts the app runs for `open`. The only variable input is a JSON
+// payload that travels base64-encoded, so a path never becomes code.
+const VAULT_STATE_CODE = "(()=>{let p=app.vault.adapter.basePath;try{p=require('fs').realpathSync(p)}catch(e){}return JSON.stringify({basePath:p,ready:app.metadataCache.initialized===true})})()"
+const VAULT_LIST_CODE = "(()=>JSON.stringify({vaults:require('electron').ipcRenderer.sendSync('vault-list')}))()"
+// `vault-open` with `false` adds an existing folder to the app's vault list (the app writes its own file) and opens
+// it in a window; it answers true, or a message. With `true` it would create a new folder, which is never wanted.
+const VAULT_REGISTER_SCRIPT = "return JSON.stringify({result:require('electron').ipcRenderer.sendSync('vault-open',P.path,false)})"
+function vaultRegisterCode(vaultRoot) {
+  if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot) || vaultRoot.includes('\u0000')) throw new TypeError('vaultRoot must be an absolute path')
+  const data = Buffer.from(JSON.stringify({ path: vaultRoot }), 'utf8').toString('base64')
+  return `(()=>{const P=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${data}'),c=>c.charCodeAt(0))));${VAULT_REGISTER_SCRIPT}})()`
+}
+
+// The vault list of the app, and adding this view's vault to it:
+//
+//   listThroughApp()                  -> { answered: true, vaults } | { answered: false, reason }
+//   registerThroughApp({ vaultRoot }) -> { answered: true, result } | { answered: false, reason }
+//   readSettings()                    -> readObsidianSettings answer (never writes)
+//   registerInSettings({ vaultRoot }) -> registerVaultInObsidianSettings answer
+//
+// Through the app only while it runs and answers; in its settings file only
+// while no Obsidian runs, which registerVaultInObsidianSettings checks itself.
+// Adding a vault opens a window, so a call may take longer than a version answer.
+export function createProductionAppRegistry({
+  platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), processProbe = () => defaultObsidianProcessProbe({ platform }), workingDirectory = NEUTRAL_DIRECTORY,
+  userDataDir = obsidianUserDataDir({ platform, env }), timeoutMs = CLI_TIMEOUT_MS * 3,
+} = {}) {
+  const evaluate = (code) => new Promise((resolve) => {
+    execFile(cliPath, ['eval', `code=${code}`], { env, cwd: workingDirectory, timeout: timeoutMs, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => resolve(readEvalAnswer({ stdout, stderr, failed: Boolean(error) })))
+  })
+  return {
+    async listThroughApp() {
+      const answer = await evaluate(VAULT_LIST_CODE)
+      if (!answer.answered) return answer
+      const vaults = answer.value?.vaults
+      return vaults !== null && typeof vaults === 'object' && !Array.isArray(vaults) ? { answered: true, vaults } : { answered: false, reason: 'no-value' }
+    },
+    async registerThroughApp({ vaultRoot }) {
+      const answer = await evaluate(vaultRegisterCode(vaultRoot))
+      return answer.answered ? { answered: true, result: answer.value?.result ?? null } : answer
+    },
+    readSettings: () => readObsidianSettings({ userDataDir }),
+    registerInSettings: ({ vaultRoot }) => (userDataDir === null
+      ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
+      : registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe })),
   }
 }
 
@@ -103,5 +163,5 @@ export function createProductionLauncher({ platform = process.platform, env = pr
 }
 
 export function createProductionAppSeams(options = {}) {
-  return { appProbe: createProductionAppProbe(options), launcher: createProductionLauncher(options) }
+  return { appProbe: createProductionAppProbe(options), launcher: createProductionLauncher(options), registry: createProductionAppRegistry(options) }
 }

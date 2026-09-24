@@ -70,7 +70,7 @@ function privateHomeEnv(dir, base = process.env) {
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
 const { NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, findVaultEntry, obsidianUserDataDir, openVaultDirectory, readObsidianSettings, resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
-const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
+const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readEvalAnswer, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { appStateSignature, registerVaultInObsidianSettings } = await import('../src/runtime/obsidian/app-registration.mjs')
 const { loadContributions } = await import('../src/runtime/obsidian/contributions.mjs')
 const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await import('../src/runtime/obsidian/engine.mjs')
@@ -149,7 +149,6 @@ const REFUSED_PUBLICATION = { state: 'refused', refusal: { code: 'exchange-unsup
 const CONFLICT_PUBLICATION = { state: 'refused', refusal: { code: 'publication-in-progress', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
 // Obsidian runs and does not answer for this vault: the publisher writes nothing. There is no other publisher.
 const UNCOORDINATED_PUBLICATION = { state: 'refused', refusal: { code: 'editor-uncoordinated', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
-const FIRST_PUBLICATION_NEXT = 'an Obsidian that may hold this vault could not be coordinated with, so publication stopped; quit Obsidian (on Linux, also any app that runs on a system Electron) so the view is published, then `atelier obsidian open` starts Obsidian on it'
 
 function listing(directory) {
   const found = {}
@@ -164,27 +163,66 @@ function listing(directory) {
 }
 
 // Seams that must never be reached: a read-only operation that touches one fails its test.
+const unreachable = (name) => () => { throw new Error(`the ${name} was reached`) }
 const UNREACHABLE_SEAMS = Object.freeze({
-  appProbe: { inspect() { throw new Error('the app probe was reached') }, inspectSync() { throw new Error('the app probe was reached') }, vaultState() { throw new Error('the app probe was reached') } },
-  launcher: { open() { throw new Error('the launcher was reached') } },
+  appProbe: { inspect: unreachable('app probe'), inspectSync: unreachable('app probe'), vaultState: unreachable('app probe') },
+  launcher: { open: unreachable('launcher') },
+  registry: { listThroughApp: unreachable('app registry'), registerThroughApp: unreachable('app registry'), readSettings: unreachable('app registry'), registerInSettings: unreachable('app registry') },
   service: { entryPath: TEST_SERVICE_ENTRY, spawn() { throw new Error('a service was started') } },
 })
 
-// An installed app, as the injected probe describes it, and a launcher that records what it was asked.
+// An installed app, as the injected probe describes it, its vault list, and a launcher that records what it was asked.
+// The app answers for a vault only once it was asked to open it AND its list knows it, as the real app does.
 function fakeApp(overrides = {}) {
-  // `noVaultAnswers`: how many inspections of the running app answer that no vault is open before it has one.
-  const state = { installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0, ...overrides }
+  // `noVaultAnswers`: how many inspections of the running app answer that no vault is open before it has one;
+  // `noVaultUntilLaunch`: the running app has no vault open until it is asked to open one.
+  // `vaults`: the app's own list, id -> { path, open }. `settingsRefusal`: a typed refusal its settings file gives.
+  // `registerResult`: what the app answers when asked to add a vault; `registerForgets`: it answers true and lists nothing;
+  // `loadingAnswers`: how many list calls after an addition reach the new window while it is still loading.
+  const state = {
+    installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0,
+    noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, ...overrides,
+  }
   const launches = []
+  const registrations = []
+  const listed = (vaultRoot) => Object.values(state.vaults).some((entry) => entry.path === vaultRoot)
+  const noVaultNow = () => state.running && (state.noVaultAnswers > 0 || (state.noVaultUntilLaunch && launches.length === 0))
+  const add = (vaultRoot, via) => { registrations.push({ via, vaultRoot }); if (!state.registerForgets) state.vaults[`fake${String(registrations.length).padStart(12, '0')}`] = { path: vaultRoot, ts: 1, open: true } }
   return {
-    state, launches,
+    state, launches, registrations, noVaultNow,
     appProbe: {
       inspect: async () => {
-        if (state.running && state.noVaultAnswers > 0) { state.noVaultAnswers -= 1; return { installed: state.installed, cli: state.cli, running: true, version: null, noVaultOpen: true } }
+        if (noVaultNow()) { if (state.noVaultAnswers > 0) state.noVaultAnswers -= 1; return { installed: state.installed, cli: state.cli, running: true, version: null, noVaultOpen: true } }
         return { installed: state.installed, cli: state.cli, running: state.running, version: state.running ? state.version : null }
       },
-      vaultState: async ({ vaultRoot }) => ({ answered: state.answered && launches.includes(vaultRoot), indexReady: state.answered && state.indexReady && launches.includes(vaultRoot) }),
+      vaultState: async ({ vaultRoot }) => {
+        const holds = state.answered && launches.includes(vaultRoot) && listed(vaultRoot)
+        return { answered: holds, indexReady: holds && state.indexReady }
+      },
     },
     launcher: { open: async ({ vaultRoot }) => { launches.push(vaultRoot); if (state.launchResult.launched && state.comesUp) state.running = true; return state.launchResult } },
+    registry: {
+      listThroughApp: async () => {
+        if (!state.running) throw new Error('the app does not run')
+        if (noVaultNow()) return { answered: false, reason: 'no-vault-open' }
+        if (registrations.length > 0 && state.loadingAnswers > 0) { state.loadingAnswers -= 1; return { answered: false, reason: 'no-value' } }
+        return state.listAnswers ? { answered: true, vaults: structuredClone(state.vaults) } : { answered: false, reason: 'cli-failed' }
+      },
+      registerThroughApp: async ({ vaultRoot }) => {
+        if (!state.running || noVaultNow()) throw new Error('the app cannot be asked')
+        if (state.registerResult === true) add(vaultRoot, 'app')
+        return { answered: true, result: state.registerResult }
+      },
+      readSettings: () => (state.settingsRefusal ?? { ok: true, vaults: structuredClone(state.vaults) }),
+      registerInSettings: ({ vaultRoot }) => {
+        if (state.running) return { ok: false, code: 'app-may-be-running', message: 'fake' }
+        if (state.settingsRefusal) return state.settingsRefusal
+        if (listed(vaultRoot)) return { ok: true, registered: 'already', entry: { id: 'known', path: vaultRoot, open: true }, confirmed: true }
+        add(vaultRoot, 'settings')
+        // `settingsUnconfirmed`: an app started right after the write, and may have read the list before it.
+        return { ok: true, registered: 'written', entry: { id: 'fake', path: vaultRoot, open: true }, confirmed: !state.settingsUnconfirmed, ...(state.settingsUnconfirmed ? { reason: 'app-started-during-registration' } : {}) }
+      },
+    },
   }
 }
 
@@ -477,6 +515,8 @@ const VERSION_ANSWERS = [
   [{ stdout: '1.13.7 (installer 1.12.7)\n', exited: false }, 'version-unknown'],
   [{ stdout: '', exited: true }, 'version-unknown'],
   [{ stdout: 'Error: the app did not answer\n', exited: true }, 'version-unreadable'],
+  // A vault window that is still loading, right after the app started: the app is not up yet, so there is no version to read.
+  [{ stdout: 'Error: Command "version" not found. It may require a plugin to be enabled.\n', exited: true }, 'version-unknown'],
 ]
 
 // `read` turns one CLI answer into { version, noVaultOpen }; the oracle qualifies a running app with it.
@@ -519,7 +559,7 @@ test('the production app probe reads both output streams of the version call, wi
   const script = `const { createProductionAppProbe } = await import(${JSON.stringify(seams)})
 const seen = []
 for (const [stream, text, status] of ${JSON.stringify(cases)}) {
-  const probe = createProductionAppProbe({ platform: 'win32', cliPath: process.execPath, env: { ...process.env, ANSWER_STREAM: stream, ANSWER_TEXT: text, ANSWER_STATUS: String(status) } })
+  const probe = createProductionAppProbe({ platform: 'win32', cliPath: process.execPath, workingDirectory: process.cwd(), env: { ...process.env, ANSWER_STREAM: stream, ANSWER_TEXT: text, ANSWER_STATUS: String(status) } })
   seen.push({ sync: probe.inspectSync(), async: await probe.inspect() })
 }
 process.stdout.write(JSON.stringify(seen))`
@@ -777,36 +817,171 @@ test('--allow-stale opens a readable vault as it is and still does not call it c
   assert.deepEqual([result.json.pendingEdits.open, result.json.pendingEdits.byState.queued], [1, 1])
 })
 
-test('a first publication stopped as editor-uncoordinated says, in status and in open, to quit the app so the view is published; nothing is launched', async (t) => {
+test('a first publication stopped as editor-uncoordinated: open adds the vault through the running app, opens it and asks again; a publisher that still refuses is reported with the step left', async (t) => {
   const world = makeWorld(t)
-  await world.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
+  const attempts = []
+  await world.service({ engineOptions: { seams: { publishView: async (input) => { attempts.push(input.recoveryStore.vaultRoot); return UNCOORDINATED_PUBLICATION } } } })
+  assert.equal(attempts.length, 1, 'the service tried once when it started')
+  const scopeBefore = (await world.run(['status', '--json'])).json.scopes[0]
+  assert.deepEqual([scopeBefore.outcome, scopeBefore.reason, scopeBefore.next], ['publisher-conflict', 'editor-uncoordinated', REASON_NEXT['editor-uncoordinated']])
+  assert.match(REASON_NEXT['editor-uncoordinated'], /`atelier obsidian open` adds this view's vault to Obsidian and publishes through it/)
   const app = fakeApp({ running: true })
-  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app } })
-  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.next, opened.json.readBack.readable], ['publisher-conflict', 'editor-uncoordinated', FIRST_PUBLICATION_NEXT, false])
-  const scope = (await world.run(['status', '--json'])).json.scopes[0]
-  assert.deepEqual([scope.outcome, scope.reason, scope.next, scope.readBack.readable], ['publisher-conflict', 'editor-uncoordinated', FIRST_PUBLICATION_NEXT, false])
-  // There is nothing to open as it is: --allow-stale launches nothing either, and says the same.
-  const stale = await world.run(openArgs(['--allow-stale']), { seams: { ...UNREACHABLE_SEAMS, ...app } })
-  assert.deepEqual([stale.json.outcome, stale.json.next, stale.json.launched, app.launches.length], ['publisher-conflict', FIRST_PUBLICATION_NEXT, false, 0])
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: { appWaitMs: 150, appPollMs: 25 } })
+  // Asked on the tick open requested, and again once the app held the vault: no change was needed for either.
+  assert.equal(attempts.length, 3, 'open re-attempts the refused view on its own tick, and again after the app holds the vault')
+  assert.deepEqual(app.registrations, [{ via: 'app', vaultRoot: world.vault() }], 'the vault was added through the running app, once')
+  assert.deepEqual(app.launches, [world.vault()])
+  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.launched, opened.json.registration?.how, opened.json.readBack.readable], ['publisher-conflict', 'editor-uncoordinated', true, 'added-through-app', false])
+  assert.equal(opened.json.next, nextStep('publisher-conflict', 'editor-uncoordinated', { afterOpen: true }))
+  assert.match(opened.json.next, /quit Obsidian .*then open again/)
+  // A second open finds the vault in the app's list and adds nothing.
+  const again = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: { appWaitMs: 150, appPollMs: 25 } })
+  assert.deepEqual([again.json.outcome, again.json.registration?.how, app.registrations.length], ['publisher-conflict', 'listed', 1])
 })
 
-test('the same refusal after a view was published says to quit the app or open the view in it as it is, and that open launches it', needsExchange, async (t) => {
+test('the same refusal after a view was published: open adds and opens the vault in the running app, and the view asked for again is current', needsExchange, async (t) => {
   const world = makeWorld(t)
   const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
-  let uncoordinated = false
-  await world.service({ engineOptions: { seams: { publishView: (input) => (uncoordinated ? Promise.resolve(UNCOORDINATED_PUBLICATION) : publishView(input)) } } })
-  uncoordinated = true
+  const app = fakeApp({ running: true })
+  // The publisher coordinates only with an app that holds the vault: until then it stops as uncoordinated.
+  let appRuns = false
+  const holds = () => appRuns && app.launches.length > 0 && app.registrations.length > 0
+  await world.service({ engineOptions: { seams: { publishView: (input) => (!appRuns || holds() ? publishView(input) : Promise.resolve(UNCOORDINATED_PUBLICATION)) } } })
+  appRuns = true
   fs.appendFileSync(world.source('west-wing/logs/tide.md'), '\nLow water at six.\n')
   world.advance(1000)
-  const app = fakeApp()
-  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app } })
-  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.next, opened.json.readBack.readable, app.launches.length], ['publisher-conflict', 'editor-uncoordinated', REASON_NEXT['editor-uncoordinated'], true, 0])
-  assert.match(REASON_NEXT['editor-uncoordinated'], /quit Obsidian .*`atelier obsidian open --allow-stale`/)
-  const scope = (await world.run(['status', '--json'])).json.scopes[0]
-  assert.deepEqual([scope.outcome, scope.reason, scope.next], ['publisher-conflict', 'editor-uncoordinated', REASON_NEXT['editor-uncoordinated']])
-  // The advice holds: --allow-stale opens the last published view in the app, and does not call it current.
-  const stale = await world.run(openArgs(['--allow-stale']), { seams: { ...UNREACHABLE_SEAMS, ...app } })
-  assert.deepEqual([stale.json.outcome, stale.json.ok, stale.json.launched, app.launches], ['publisher-conflict', false, true, [world.vault()]])
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: { appWaitMs: 150, appPollMs: 25 } })
+  assert.deepEqual([opened.json.outcome, opened.json.ok, opened.exit, opened.json.launched, opened.json.registration?.how], ['current', true, EXIT.ok, true, 'added-through-app'])
+  assert.ok(fs.readFileSync(world.noteFile('west-wing:tide'), 'utf8').includes('Low water at six.'), 'the change was published once the app held the vault')
+  assert.deepEqual(app.launches, [world.vault()])
+})
+
+// ---------------------------------------------------------------------------
+// 4b. The first open is automatic in every state of the app
+// ---------------------------------------------------------------------------
+
+// A service whose publisher coordinates only with an app that holds the vault, as the real one does: until the app
+// was asked to open this vault and its list knows it, a publication with the app running stops as uncoordinated.
+// A generation that is already the committed one is settled before any app is asked, as the real publisher does.
+async function serviceBehindApp(world, app, options = {}) {
+  const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+  const attempts = []
+  const holds = (vaultRoot) => !app.state.running || (app.launches.includes(vaultRoot) && Object.values(app.state.vaults).some((entry) => entry.path === vaultRoot))
+  const publish = (input) => {
+    const unchanged = input.recoveryStore.readCurrent()?.generationId === input.preparedView.manifest.generationId
+    const held = unchanged || holds(input.recoveryStore.vaultRoot)
+    attempts.push(held ? 'published' : 'refused')
+    return held ? publishView(input) : Promise.resolve(UNCOORDINATED_PUBLICATION)
+  }
+  const service = await world.service({ ...options, engineOptions: { ...options.engineOptions, seams: { publishView: publish } } })
+  return { service, attempts }
+}
+const FAST_APP = { appWaitMs: 400, appPollMs: 20 }
+
+test('app running with another vault: open adds the vault through the app, opens it, and the first publication runs once the app holds it; current, with no step by hand', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const app = fakeApp({ running: true, loadingAnswers: 3, vaults: { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })
+  const { attempts } = await serviceBehindApp(world, app)
+  assert.deepEqual(attempts, ['refused'], 'with the app running and not holding the vault, the first publication stops')
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.ok, opened.exit, opened.json.launched, opened.json.registration?.how], ['current', true, EXIT.ok, true, 'added-through-app'], JSON.stringify(opened.json))
+  assert.deepEqual(app.registrations, [{ via: 'app', vaultRoot: world.vault() }])
+  assert.equal(app.state.loadingAnswers, 0, 'the list was asked again while the new window was loading')
+  assert.deepEqual(attempts, ['refused', 'refused', 'published'], 'refused again on the tick open asked for, then published on the tick after the app held the vault')
+  assert.deepEqual([opened.json.readBack.intact, opened.json.readBack.generationId, opened.json.freshness.verified], [true, world.manifest().generationId, true])
+  assert.equal(Object.keys(app.state.vaults).length, 2, 'the other vault stays in the app\'s list')
+})
+
+test('app not running: the view is published on the path with no app, the vault is added to the app\'s settings, the app is started on it; current', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const app = fakeApp({ running: false })
+  const { attempts } = await serviceBehindApp(world, app)
+  assert.deepEqual(attempts, ['published'])
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.launched, opened.json.registration?.how], ['current', true, 'added-to-settings'], JSON.stringify(opened.json))
+  assert.deepEqual([app.registrations, app.launches], [[{ via: 'settings', vaultRoot: world.vault() }], [world.vault()]])
+  // Opened again, with the app now running and holding it: nothing is added a second time.
+  const again = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([again.json.outcome, again.json.registration?.how, app.registrations.length], ['current', 'listed', 1])
+})
+
+test('several views of one workspace each get their own vault in the app: one added while the app is quit, the next through the running app, each found again by its own path', needsExchange, async (t) => {
+  const world = makeWorld(t, { ext: settingsOf([FULL_SCOPE, EAST_SCOPE]) })
+  const app = fakeApp({ running: false })
+  await serviceBehindApp(world, app)
+  const [wholeVault, eastVault] = [world.vault(FULL_SCOPE.scopeId), world.vault(EAST_SCOPE.scopeId)]
+  assert.notEqual(wholeVault, eastVault)
+  const openScope = (scopeId) => world.run(openArgs(['--scope', scopeId]), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  const whole = await openScope(FULL_SCOPE.scopeId)
+  const east = await openScope(EAST_SCOPE.scopeId)
+  assert.deepEqual([whole.json.outcome, whole.json.registration?.how, east.json.outcome, east.json.registration?.how], ['current', 'added-to-settings', 'current', 'added-through-app'], JSON.stringify([whole.json.reason, east.json.reason]))
+  assert.deepEqual(app.registrations, [{ via: 'settings', vaultRoot: wholeVault }, { via: 'app', vaultRoot: eastVault }])
+  assert.deepEqual(app.launches, [wholeVault, eastVault])
+  assert.deepEqual(Object.values(app.state.vaults).map((entry) => entry.path).sort(), [wholeVault, eastVault].sort())
+  for (const scopeId of [FULL_SCOPE.scopeId, EAST_SCOPE.scopeId]) {
+    const again = await openScope(scopeId)
+    assert.deepEqual([again.json.outcome, again.json.registration?.how], ['current', 'listed'], scopeId)
+  }
+  assert.equal(app.registrations.length, 2, 'nothing was added twice')
+})
+
+test('app running with no vault open: a vault its list knows is opened by path and published through the app; one it does not know is a typed answer, and nothing is written or launched', needsExchange, async (t) => {
+  // Known: the app lists the vault from an earlier open. Its command line answers nothing until a vault is open.
+  const world = makeWorld(t)
+  const known = fakeApp({ running: true, noVaultUntilLaunch: true, vaults: { bbbbbbbbbbbbbbbb: { path: world.vault(), ts: 1 } } })
+  const refusing = (input) => { if (known.noVaultNow()) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'stub', { reason: 'no-vault-open' }); return absentAdapter(input) }
+  await world.service({ adapterFactory: refusing })
+  assert.deepEqual([(await world.run(['status', '--json'])).json.scopes[0].reason], ['app-version-unsupported'], 'nothing was published while the app answered nothing')
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...known }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.launched, opened.json.registration?.how, known.registrations, known.launches], ['current', true, 'listed', [], [world.vault()]], JSON.stringify(opened.json))
+
+  // Unknown: the app's settings belong to the running app and are not written; there is nothing to open by path.
+  const other = makeWorld(t)
+  const unknown = fakeApp({ running: true, noVaultAnswers: Number.POSITIVE_INFINITY })
+  await other.service()
+  const refused = await other.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...unknown }, open: FAST_APP })
+  assert.deepEqual([refused.json.outcome, refused.json.reason, refused.json.next, refused.json.launched, unknown.registrations, unknown.launches], ['app-version-unsupported', 'no-vault-open', REASON_NEXT['no-vault-open'], false, [], []])
+})
+
+test('open verifies what the app says: a vault it refuses, one its list does not show afterwards, a list it does not give, and settings it cannot take are typed, and nothing is launched', needsExchange, async (t) => {
+  const cases = [
+    [{ running: true, registerResult: 'folder not found' }, 'app-refused-registration'],
+    [{ running: true, registerForgets: true }, 'registration-not-verified'],
+    [{ running: true, listAnswers: false }, 'app-did-not-list-its-vaults'],
+    [{ running: false, settingsRefusal: { ok: false, code: 'obsidian-settings-missing', message: 'fake' } }, 'obsidian-settings-missing'],
+    [{ running: false, settingsRefusal: { ok: false, code: 'obsidian-settings-unsafe', message: 'fake' } }, 'obsidian-settings-unsafe'],
+    // Written, but an app started just then and may have read its list before: a URL it may not resolve is never sent.
+    [{ running: false, settingsUnconfirmed: true }, 'app-started-during-registration'],
+  ]
+  for (const [state, reason] of cases) {
+    const world = makeWorld(t)
+    await world.service()
+    const app = fakeApp(state)
+    const result = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+    assert.deepEqual([result.json.outcome, result.json.reason, result.json.next, result.json.launched, app.launches], ['launch-failed', reason, REASON_NEXT[reason], false, []], reason)
+  }
+})
+
+test('a view the app kept, with no app answering and none known to run (an unknown process table), keeps its own outcome and advice; nothing is added or launched', async (t) => {
+  const world = makeWorld(t)
+  await world.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
+  const app = fakeApp({ running: null })
+  const result = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([result.json.outcome, result.json.reason, result.json.next, result.json.app.reason, app.registrations, app.launches], ['publisher-conflict', 'editor-uncoordinated', nextStep('publisher-conflict', 'editor-uncoordinated', { afterOpen: true }), 'version-unknown', [], []])
+  // An app that runs and is below the floor is what the person has to fix, and says so.
+  const below = makeWorld(t)
+  await below.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
+  const old = fakeApp({ running: true, version: '1.13.6' })
+  const refused = await below.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...old }, open: FAST_APP })
+  assert.deepEqual([refused.json.outcome, refused.json.reason, old.registrations, old.launches], ['app-version-unsupported', 'below-minimum-version', [], []])
+})
+
+test('mutation control: an open that does not ask again for a view the app kept from publication reports the conflict it could have cleared', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const app = fakeApp({ running: true })
+  await serviceBehindApp(world, app)
+  const result = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP, rules: { opening: { ...OPENING_PRIMITIVES, keptByApp: () => false } } })
+  assert.deepEqual([result.json.outcome, result.json.reason, app.registrations.length], ['publisher-conflict', 'editor-uncoordinated', 0])
 })
 
 // ---------------------------------------------------------------------------
@@ -1069,6 +1244,16 @@ test('where the app keeps its settings: under HOME on macOS, under XDG_CONFIG_HO
 // 4e. The command line of the app: its answers, and the window a call reaches
 // ---------------------------------------------------------------------------
 
+test('an eval answer is read from the value after "=> ", once or twice parsed; "Vault not found." and a failed call are typed', () => {
+  assert.deepEqual(readEvalAnswer({ stdout: '=> {"vaults":{"a":{"path":"/v"}}}\n' }), { answered: true, value: { vaults: { a: { path: '/v' } } } })
+  assert.deepEqual(readEvalAnswer({ stdout: '=> "{\\"result\\":true}"\n' }), { answered: true, value: { result: true } }, 'a tool that quotes the string it prints')
+  assert.deepEqual(readEvalAnswer({ stdout: 'Vault not found.\n' }), { answered: false, reason: 'no-vault-open' })
+  assert.deepEqual(readEvalAnswer({ stderr: 'Vault not found.\n', failed: true }), { answered: false, reason: 'no-vault-open' })
+  assert.deepEqual(readEvalAnswer({ stdout: '=> {"result":true}', failed: true }), { answered: false, reason: 'cli-failed' }, 'the value of a failed call is not believed')
+  assert.deepEqual(readEvalAnswer({ stdout: 'Error: Command "eval" not found.\n' }), { answered: false, reason: 'no-value' })
+  assert.deepEqual(readEvalAnswer({ stdout: '=> /a/plain/string\n' }), { answered: false, reason: 'no-value' })
+})
+
 test('what the app looks like changes when it quits or starts, when it qualifies differently, and when a vault opens or closes', () => {
   const settings = (open) => ({ ok: true, vaults: { a: { path: '/one', open: open.includes('/one') }, b: { path: '/two', open: open.includes('/two') } } })
   const running = { running: true, outcome: 'qualified', reason: 'meets-minimum-version' }
@@ -1098,6 +1283,68 @@ test('a publication call runs inside the vault\'s folder while the app lists tha
   list(true)
   assert.equal(directory(payload), vaultRoot, 'listed and open: its window, whichever has focus')
   assert.equal(directory({ ...payload, vaultRoot: path.join(home, 'another') }), NEUTRAL_DIRECTORY)
+})
+
+test('the production registry and vault check, against a stand-in for the command-line tool: a path travels only as base64 JSON, answers are verified, and failures are typed', (t) => {
+  // The command-line tool is played by this Node binary running a script named `eval` in the directory the call
+  // runs in: the registry's calls run in `workingDirectory`, the vault check in the vault's folder.
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-registry-cli-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const vaultRoot = path.join(dir, "it's a vault `${x}` $(y) é")
+  fs.mkdirSync(vaultRoot)
+  const script = `const fs = require('fs'); fs.appendFileSync(process.env.EVAL_LOG, JSON.stringify({ cwd: process.cwd(), code: process.argv[2] }) + '\\n');
+const mode = process.env.EVAL_MODE
+if (mode === 'no-vault') console.log('Vault not found.')
+else if (mode === 'fail') process.exitCode = 3
+else if (mode === 'hang') setTimeout(() => {}, 60000)
+else console.log('=> ' + process.env.EVAL_ANSWER)\n`
+  for (const where of [dir, vaultRoot]) fs.writeFileSync(path.join(where, 'eval'), script)
+  const log = path.join(dir, 'log.jsonl')
+  const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
+  const child = `const { createProductionAppProbe, createProductionAppRegistry } = await import(${JSON.stringify(seams)})
+const env = (mode, answer = '') => ({ ...process.env, EVAL_LOG: ${JSON.stringify(log)}, EVAL_MODE: mode, EVAL_ANSWER: answer })
+const registry = (mode, answer, extra = {}) => createProductionAppRegistry({ platform: 'win32', cliPath: process.execPath, workingDirectory: ${JSON.stringify(dir)}, env: env(mode, answer), userDataDir: null, ...extra })
+const vaultRoot = ${JSON.stringify(vaultRoot)}
+const out = {}
+out.list = await registry('answer', JSON.stringify({ vaults: { dddddddddddddddd: { path: vaultRoot, ts: 1, open: true } } })).listThroughApp()
+out.listNoVault = await registry('no-vault').listThroughApp()
+out.listFailed = await registry('fail').listThroughApp()
+out.listNotAMap = await registry('answer', JSON.stringify({ vaults: [] })).listThroughApp()
+out.register = await registry('answer', JSON.stringify({ result: true })).registerThroughApp({ vaultRoot })
+out.registerOther = await registry('answer', JSON.stringify({ result: true })).registerThroughApp({ vaultRoot: '/another/folder' })
+out.registerRefused = await registry('answer', JSON.stringify({ result: 'folder not found' })).registerThroughApp({ vaultRoot })
+const started = Date.now()
+out.registerHung = await registry('hang', '', { timeoutMs: 1500 }).registerThroughApp({ vaultRoot })
+out.hungMs = Date.now() - started
+out.settings = registry('answer').registerInSettings({ vaultRoot })
+const probe = (answer) => createProductionAppProbe({ platform: 'win32', cliPath: process.execPath, env: env('answer', answer) })
+out.vaultState = await probe(JSON.stringify({ basePath: vaultRoot, ready: true })).vaultState({ vaultRoot })
+out.vaultStateOther = await probe(JSON.stringify({ basePath: '/another/folder', ready: true })).vaultState({ vaultRoot })
+out.vaultStateIndexing = await probe(JSON.stringify({ basePath: vaultRoot, ready: false })).vaultState({ vaultRoot })
+process.stdout.write(JSON.stringify(out))`
+  const run = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', child], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 120000, env: privateHomeEnv(dir) })
+  assert.equal(run.status, 0, run.stderr)
+  const out = JSON.parse(run.stdout)
+  assert.deepEqual(out.list, { answered: true, vaults: { dddddddddddddddd: { path: vaultRoot, ts: 1, open: true } } })
+  assert.deepEqual([out.listNoVault, out.listFailed, out.listNotAMap], [{ answered: false, reason: 'no-vault-open' }, { answered: false, reason: 'cli-failed' }, { answered: false, reason: 'no-value' }])
+  assert.deepEqual([out.register, out.registerRefused], [{ answered: true, result: true }, { answered: true, result: 'folder not found' }])
+  assert.deepEqual(out.registerHung, { answered: false, reason: 'cli-failed' })
+  assert.ok(out.hungMs < 10000, 'a call that does not answer is killed at its timeout')
+  assert.deepEqual([out.settings.ok, out.settings.code], [false, 'obsidian-settings-location-unknown'])
+  assert.deepEqual([out.vaultState, out.vaultStateOther, out.vaultStateIndexing], [{ answered: true, indexReady: true }, { answered: false, indexReady: false }, { answered: true, indexReady: false }])
+  const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  // Three answered; the one that hangs may be killed before it logs anything.
+  const registerCalls = calls.filter((call) => call.code.includes("'vault-open'"))
+  assert.ok(registerCalls.length >= 3, `${registerCalls.length} calls`)
+  for (const call of calls.filter((call) => !call.code.includes('app.vault.adapter.basePath'))) assert.equal(call.cwd, dir, 'calls about no vault run in the working directory they were given')
+  for (const call of calls.filter((call) => call.code.includes('app.vault.adapter.basePath'))) assert.equal(call.cwd, vaultRoot, 'the vault check runs inside the vault\'s folder')
+  // The path is never part of the code: it travels as base64 JSON, and only that literal differs between two paths.
+  const [mine, other] = [registerCalls[0].code, registerCalls[1].code]
+  assert.equal(mine.includes(vaultRoot) || mine.includes("it's") || mine.includes('${x}') || mine.includes('$(y)'), false)
+  const literal = /atob\('([A-Za-z0-9+/=]+)'\)/
+  assert.deepEqual(JSON.parse(Buffer.from(literal.exec(mine)[1], 'base64').toString('utf8')), { path: vaultRoot })
+  assert.equal(mine.replace(literal, "atob('')"), other.replace(literal, "atob('')"))
+  assert.match(mine, /sendSync\('vault-open',P\.path,false\)/, 'an existing folder is added, never created')
 })
 
 test('open starts the owned service the first time only with a consent, reconnects afterwards, and an unknown view refuses', async (t) => {
@@ -1709,25 +1956,28 @@ test('sync status is exactly what it was when the Obsidian member is absent or d
   assert.equal(obsidianMaintenanceNotice({ repoPath: path.join(TMP, 'not-enrolled-anywhere') }), null, 'a report never throws into sync')
 })
 
-test('a publisher refusal for an app without this vault open advises quitting the app, not waiting for another publisher', () => {
-  for (const published of [true, false]) {
-    const next = nextStep('publisher-conflict', 'editor-uncoordinated', { published })
+test('a publisher refusal for an app without this vault open advises open, which adds the vault, or quitting the app; after open it advises quitting', () => {
+  for (const afterOpen of [false, true]) {
+    const next = nextStep('publisher-conflict', 'editor-uncoordinated', { afterOpen })
     assert.match(next, /quit Obsidian/)
     assert.doesNotMatch(next, /other publisher/)
     for (const reason of ['publication-in-progress', 'generation-mismatch', 'state-mismatch']) {
-      assert.equal(nextStep('publisher-conflict', reason, { published }), OPENING_OUTCOMES['publisher-conflict'].next, `${reason} is another publisher or a changed state, and keeps its advice`)
+      assert.equal(nextStep('publisher-conflict', reason, { afterOpen }), OPENING_OUTCOMES['publisher-conflict'].next, `${reason} is another publisher or a changed state, and keeps its advice`)
     }
   }
-  assert.equal(nextStep('publisher-conflict', 'editor-uncoordinated', { published: false }), FIRST_PUBLICATION_NEXT, 'before a first publication there is nothing to open as it is')
   assert.equal(nextStep('publisher-conflict', 'editor-uncoordinated'), REASON_NEXT['editor-uncoordinated'])
+  assert.match(REASON_NEXT['editor-uncoordinated'], /`atelier obsidian open` adds this view's vault to Obsidian and publishes through it/)
+  assert.doesNotMatch(nextStep('publisher-conflict', 'editor-uncoordinated', { afterOpen: true }), /`atelier obsidian open` adds/, 'open does not advise itself')
   // The reason has several causes (another vault open, a command line that did not answer, an unknown process table,
   // an app started during a publication with the app closed): the text names none of them as the cause, stops short
   // of claiming nothing was written, and names what clears every one of them.
-  for (const next of [FIRST_PUBLICATION_NEXT, REASON_NEXT['editor-uncoordinated']]) {
+  for (const next of [REASON_NEXT['editor-uncoordinated'], nextStep('publisher-conflict', 'editor-uncoordinated', { afterOpen: true })]) {
     assert.doesNotMatch(next, /without (this|the|that) vault|nothing (is|was) written/)
     assert.match(next, /may hold this vault could not be coordinated with/)
     assert.match(next, /on Linux, also any app that runs on a system Electron/)
   }
+  // No step is a manual one: nothing asks a person to open a vault folder by hand.
+  for (const text of [...Object.values(REASON_NEXT), ...Object.values(OPENING_OUTCOMES).map((entry) => entry.next)]) assert.doesNotMatch(text, /by hand/)
 })
 
 // ---------------------------------------------------------------------------
