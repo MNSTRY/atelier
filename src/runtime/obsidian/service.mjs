@@ -239,7 +239,9 @@ export async function runMaintenanceService(options = {}) {
           ...(typeof appStatus === 'function' ? { app: appStatus() } : {}),
         }
       },
-      async tick() {
+      // A tick asked for one view (`open` asks for its own) prepares and publishes that view once more.
+      async tick({ scopeId } = {}) {
+        if (scopeId !== undefined) engine.requestPreparation?.(scopeId)
         const outcome = await loop.tickNow()
         if (outcome.stopped) return { ok: false, stopped: true }
         return outcome.ok ? { ok: true, ...summary(outcome.report) } : { ok: false, error: { code: errorCode(outcome.error), name: errorName(outcome.error) } }

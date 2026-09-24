@@ -75,6 +75,10 @@ export function meetsMinimumAppVersion(version, floor = MINIMUM_APP_VERSION) {
 // command, `version` too, with this line (observed on 1.13.7, on either output
 // stream and with either exit status). It is not a version.
 const NO_VAULT_OPEN = /^vault not found\.?$/i
+// While a vault window is still loading, right after the app started or opened
+// a vault, the tool answers a command with this line instead (observed on
+// 1.13.7). The app is not up yet: this is not a version either.
+const COMMAND_NOT_READY = /^error: command "[^"]*" not found\b/i
 
 // Pure. What one `version` call of the command-line tool answered:
 // { version, noVaultOpen }. `exited` is false for a call that failed or exited
@@ -82,8 +86,31 @@ const NO_VAULT_OPEN = /^vault not found\.?$/i
 export function readVersionAnswer({ stdout = '', stderr = '', exited = true } = {}) {
   const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
   if (lines.some((line) => NO_VAULT_OPEN.test(line))) return { version: null, noVaultOpen: true }
+  if (lines.some((line) => COMMAND_NOT_READY.test(line))) return { version: null, noVaultOpen: false }
   const text = typeof stdout === 'string' ? stdout.trim() : ''
   return { version: exited && text !== '' ? text : null, noVaultOpen: false }
+}
+
+// Pure. What one `eval` call of the command-line tool answered:
+// { answered: true, value } with the value the script returned, parsed as
+// JSON, or { answered: false, reason }. The tool prints a returned string as
+// it is after `=> `; a string that is itself JSON text is parsed once more.
+// `reason` is `no-vault-open` for the answer the app gives with no vault open,
+// `cli-failed` for a call that failed, and `no-value` otherwise.
+export function readEvalAnswer({ stdout = '', stderr = '', failed = false } = {}) {
+  const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
+  if (lines.some((line) => NO_VAULT_OPEN.test(line))) return { answered: false, reason: 'no-vault-open' }
+  if (failed) return { answered: false, reason: 'cli-failed' }
+  const text = typeof stdout === 'string' ? stdout : ''
+  const start = text.indexOf('=> ')
+  if (start < 0) return { answered: false, reason: 'no-value' }
+  try {
+    let value = JSON.parse(text.slice(start + 3))
+    if (typeof value === 'string') { try { value = JSON.parse(value) } catch { /* a plain string */ } }
+    return { answered: true, value }
+  } catch {
+    return { answered: false, reason: 'no-value' }
+  }
 }
 
 // Pure. `requireVersion: false` lets an installed app that is positively not
@@ -130,6 +157,11 @@ export async function inspectApp(appProbe) {
 // a version, and an adapter built on that answer must not coordinate with an
 // app started since (see createEditorAdapter).
 //
+// The app is asked only when an adapter is wanted, that is when a view is
+// about to be published. An appProbe with `inspect()` is asked without
+// blocking, and the factory and `qualification()` then answer promises; one
+// with only `inspectSync()` is asked synchronously.
+//
 // When the service passes `pluginReport` (one launch of the plugin holds a
 // live lease on the view), the probe is asked as without one, through the same
 // remembered answer, and that answer decides wherever the tool gave a version,
@@ -139,7 +171,8 @@ export async function inspectApp(appProbe) {
 // call. The adapter still coordinates through its own channel, which must
 // answer for the vault before anything is published.
 export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor = MINIMUM_APP_VERSION, maxAgeMs = 10_000, now = () => Date.now() } = {}) {
-  if (typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspectSync()')
+  const waits = typeof appProbe?.inspect === 'function'
+  if (!waits && typeof appProbe?.inspectSync !== 'function') throw new TypeError('the qualified adapter factory needs an appProbe with inspect() or inspectSync()')
   if (typeof createAdapter !== 'function') throw new TypeError('the qualified adapter factory needs createAdapter')
   let last = null
   // An answer that lets an adapter through without a checked version (no app
@@ -147,16 +180,13 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
   // asked for its version by the next call, not refused on the old answer. An
   // answer that checked a version, or that refuses, is reused for `maxAgeMs`.
   const reusable = (result) => result.versionChecked === true || (result.outcome !== 'qualified' && result.outcome !== 'app-missing')
-  const qualification = () => {
-    if (last === null || !reusable(last.result) || now() - last.at > maxAgeMs) {
-      let observation
-      try { observation = appProbe.inspectSync() } catch { observation = null }
-      last = { at: now(), result: qualifyApp(observation, { requireVersion: false, floor }) }
-    }
-    return last.result
-  }
-  const fromPlugin = (report) => {
-    const probed = qualification()
+  const current = () => last !== null && reusable(last.result) && now() - last.at <= maxAgeMs
+  const learn = (observation) => { last = { at: now(), result: qualifyApp(observation, { requireVersion: false, floor }) }; return last.result }
+  const qualification = waits
+    ? async () => { if (current()) return last.result; let observation; try { observation = await appProbe.inspect() } catch { observation = null } return learn(observation) }
+    : () => { if (current()) return last.result; let observation; try { observation = appProbe.inspectSync() } catch { observation = null } return learn(observation) }
+  const withPlugin = (probed, report) => {
+    if (report === null) return probed
     // No app in the process table: a live lease is the echo of an app that is gone (it lapses within the lease time) or
     // of a process holding the key, and vouches for no version. The probe's own answer stands, so an adapter built on it
     // never coordinates with an app started since, whose version nobody checked.
@@ -164,16 +194,19 @@ export function createQualifiedAdapterFactory({ appProbe, createAdapter, floor =
     return qualifyApp({ installed: true, cli: true, version: typeof report?.appVersion === 'string' ? report.appVersion : null, versionSource: 'plugin' }, { requireVersion: true, floor })
   }
   let shown = null
-  const factory = (input) => {
-    const report = input?.pluginReport ?? null
-    const result = report === null ? qualification() : fromPlugin(report)
+  const build = (input, probed) => {
+    const result = withPlugin(probed, input?.pluginReport ?? null)
     shown = result
     // No app at all is not an unqualified app: the publisher's own path needs none, and its adapter finds no process.
     if (result.outcome !== 'qualified' && result.outcome !== 'app-missing') refuse(result.outcome, 'the installed Obsidian does not qualify; nothing is published through it', { reason: result.reason, floor: result.floor, version: result.version })
     return createAdapter({ ...input, qualification: result })
   }
+  const factory = waits ? async (input) => build(input, await qualification()) : (input) => build(input, qualification())
   factory.qualification = qualification
   // What was last learned, from the probe or from a plugin, without asking again: for a status answer.
   factory.lastQualification = () => shown ?? last?.result ?? null
+  // Drops what was learned, so the next adapter asks the app again: a tick somebody asked for does not reuse an
+  // answer from before the app changed.
+  factory.forget = () => { last = null; shown = null }
   return factory
 }

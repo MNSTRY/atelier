@@ -145,7 +145,7 @@ explicit consent that names its actor.
 | --- | --- | --- | --- |
 | Health | `GET /health` | none | service name, workspace identity, runtime identifier, PID, loopback host and port, executable digest, start time, status |
 | Status | `GET /status` | bearer | the health fields, loop state, last tick, last error code, and per-view freshness with held notes counted, not named |
-| Tick now | `POST /tick` | bearer | the state of the tick that ran |
+| Tick now | `POST /tick` | bearer | the state of the tick that ran. The body may also name one view (`scopeId`, a contract identifier), which that tick prepares and publishes once more, asking the app again |
 | Stop | `POST /stop` | bearer | an acknowledgement naming the runtime and PID, then the service ends |
 | Plugin challenge, hello, lease, release, status | `POST /plugin/challenge`, `/plugin/hello`, `/plugin/lease`, `/plugin/release`, `/plugin/status` | a handshake over one vault's key, which never crosses the wire | Atelier's Obsidian plugin inside that vault: presence and read-only status of that one view ([obsidian-plugin.md](obsidian-plugin.md)) |
 
@@ -166,7 +166,11 @@ The listener refuses a request before looking its operation up when:
 Status, tick and stop additionally refuse without the bearer of the running
 runtime. A `POST` payload is a JSON object of at most 1 KiB that names the
 runtime identifier it is meant for, so a request aimed at an earlier runtime on
-the same port does nothing.
+the same port does nothing (409, `request-names-another-runtime`). A tick may
+also name one view by its `scopeId`, which must be a contract identifier as
+the scope contract defines it (400, `request-invalid`); any other member, and a
+`scopeId` on a stop, is refused (400, `request-member-unknown`). A refused
+request runs nothing.
 
 The plugin commands carry no credential in a header, and refuse one. The key
 of a vault the workspace maintains is random per view and kept owner-only in
@@ -191,8 +195,9 @@ exactly the fields of its command.
 | `stale-record` | the recorded address is closed and the recorded PID is gone | starts; the new service replaces the record once it listens | refuses; nothing is proven to stop |
 | `pid-not-ours` | the recorded address is closed and a process has the recorded PID (the number was reused, or a process outlived its listener) | starts; that PID is never signalled | refuses; that PID is never signalled |
 
-`start` is serialized per workspace, spawns the service without a shell, and
-detaches it only when asked for a service that survives the launching command.
+`start` is serialized per workspace, spawns the service without a shell, in
+the root directory rather than the one the command runs in, and detaches it
+only when asked for a service that survives the launching command.
 It waits for health to echo the runtime identifier it generated and the PID of
 the child it created. If that proof never arrives it stops only that child, by
 its process handle, and reports the private operational log,
@@ -210,6 +215,20 @@ established on Windows, where a silent service still reads as `occupied`.
 to end and removes only the generated record. It never looks a process up by
 port, name or pattern. Ending a proven runtime that ignores the request is
 opt-in and is proven again immediately before the signal.
+
+A runtime of an earlier release is replaced by a command that asks for a tick
+with the start options of the installed entry (`requestServiceTick({ service
+})`; `open` does). Such a runtime proves itself `healthy` but either records
+an entry module whose digest differs from the installed entry, or refuses a
+tick that names a view, as releases up to 0.2.0-alpha.11 do (their `POST`
+payload has exactly one member). It is stopped as `stop` stops it and the
+installed entry is started, detached, under the consent already recorded; the
+answer carries `restarted: "outdated"`, and `open` shows `service: restarted
+(outdated)`. A `busy` runtime is not stopped, and anything that is not a
+proven runtime of this workspace is never stopped. Without the start options
+the runtime is only reported (`service-outdated`). The digest covers the
+entry module only, so a release that changes other modules and keeps the
+entry is recognised by the tick alone.
 
 The service itself refuses to start beside a runtime of the same workspace
 that proves itself, and ends cleanly when its record no longer names it. Two
@@ -274,7 +293,7 @@ error, 3 the operation ran and its answer is not success.
 | `policy show`, `policy install FILE`, `policy revoke` | `install` validates against the apply-policy contract and stores the policy owner-only beside the machine settings, never in a project, a repository or a note. `revoke` marks the stored policy revoked, which the engine reads before its very next dispatch, and returns the mode to manual | private machine settings |
 | `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start needs `--consent-actor ID` | what the lifecycle writes |
 | `service unit --print` | the text `buildStartupAdapter` returns. Installing a unit is not offered | nothing |
-| `open [--scope ID]` | starts or reconnects the owned service, asks it for a tick, reads the view back, qualifies the installed app, has the vault opened | what the service writes |
+| `open [--scope ID]` | starts or reconnects the owned service, asks it for a tick, reads the view back, qualifies the installed app, makes the app know the vault (through the app while it runs; in its settings while none runs), has the vault opened, and asks again for a view the app kept from publication | what the service writes; the app's vault list (see [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list)) |
 
 Reaching the installed app or the operating system is never a default.
 `open`, `service start` and `service unit` refuse with
@@ -289,14 +308,14 @@ step. Only `current` is success:
 
 | Outcome | Meaning |
 | --- | --- |
-| `current` | the proven service ticked after the request; the view's persisted freshness is `current`; read back independently, the trusted generation is the prepared one and every note has the bytes it was published with; the app meets the minimum version, was asked to open this vault, answers for exactly this vault and has finished reading it |
+| `current` | the proven service ticked after the request; the view's persisted freshness is `current`; read back independently, the trusted generation is the prepared one and every note has the bytes it was published with; the app meets the minimum version, knows this vault as one of its vaults, was asked to open it, answers for exactly this vault and has finished reading it |
 | `updating` | a publication is under way, a tick outlasted the wait, or a note differs from the trusted generation and has not been looked at yet |
 | `held-for-your-edit` | an edited note is preserved and held |
 | `stale-readable` | a last good vault exists and reads back, but is not proven to be the present generation |
 | `not-prepared` | no generation of this view has been published |
 | `publisher-conflict` | another publisher or an uncoordinated editor holds the vault |
 | `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability; below the minimum version, or a version that cannot be read (reason `no-vault-open` when the app runs with no vault open and its command line answers nothing else) |
-| `launch-failed` | the operating system refused, or the app never answered for this vault |
+| `launch-failed` | the vault could not be added to the app's list (a typed reason names why), the operating system refused, or the app never answered for this vault |
 | `indexing` | the app answers for this vault and has not finished reading it |
 | `service-unavailable` | the service could not be started or is not provably ours (`occupied`, no consent yet, a start that never proved ownership) |
 | `busy` | the service is ours and in a long tick |

@@ -35,7 +35,7 @@ import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
 // that did not start, a stop that was refused).
 //
 // Reaching the installed app or the operating system goes through seams
-// (`appProbe`, `launcher`, `service`). A caller passes them. The production
+// (`appProbe`, `launcher`, `registry`, `service`). A caller passes them. The production
 // seams are constructed only when this module runs as the real command-line
 // entry (`production: true`) AND `--adapter=obsidian-cli` was given, the same
 // explicit rule the service entry has; there is no default.
@@ -60,7 +60,7 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   service unit --print --adapter=${PRODUCTION_ADAPTER}
                                        Print an operating-system startup unit. Writes and installs nothing.
   open [--scope ID] [--consent-actor ID] [--allow-stale] --adapter=${PRODUCTION_ADAPTER}
-                                       Start or reconnect maintenance, verify the view, open it in Obsidian.
+                                       Start or reconnect maintenance, verify the view, add it to Obsidian and open it.
   plugin show [--scope ID]             Whether Atelier's plugin is on in a view's vault, and whether it holds it open.
   plugin on [--scope ID]               Offer Atelier's plugin again in a vault where it was turned off.
 
@@ -151,7 +151,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       return { entryPath: SERVICE_ENTRY_PATH, entryArgs: [`--adapter=${PRODUCTION_ADAPTER}`] }
     }
     const appSeams = async () => {
-      if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher }
+      if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher, registry: seams.registry }
       if (flags.adapter !== PRODUCTION_ADAPTER) refuse('app-adapter-not-selected', 'no editor adapter was selected; reaching the installed app is never a default')
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
@@ -343,11 +343,12 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
 
       async open() {
         const seam = await serviceSeam()
-        const { appProbe, launcher } = await appSeams()
+        const app = await appSeams()
+        const { appProbe } = app
         // The view whose plugin may report the app version; an unknown one is refused by open itself.
         const requested = () => { try { return resolveScope(readObsidianEnablement(loadProject()), flags.scope) } catch { return null } }
         const result = await openScopeForOracleTests({
-          ...lifecycle, launcher,
+          ...lifecycle, ...app,
           appProbe: typeof appProbe?.inspect === 'function' && typeof appProbe?.vaultState === 'function' ? withPluginReportedVersion(appProbe, async () => { const scopeId = requested(); return scopeId === null ? null : pluginOf(scopeId) }) : appProbe,
           service: seam, scopeId: flags.scope, consent, allowStale: flags['allow-stale'] === true, extensions: registry.extensions,
           ...(flags['wait-ms'] === undefined ? {} : { tickTimeoutMs: Number(flags['wait-ms']) || undefined }), ...(options.open ?? {}),
@@ -355,7 +356,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const { ok: _ok, ...opened } = result
         const plugin = typeof result.scopeId === 'string' ? await pluginOf(result.scopeId) : null
         const document = plugin === null ? opened : { ...opened, plugin }
-        return { exit: result.ok ? EXIT.ok : EXIT.notSuccess, document, human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])] }
+        return {
+          exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
+          human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])],
+        }
       },
 
       // Atelier's plugin in the vault of a view: the person's choice (as recorded, or as the vault shows it before the next

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import http from 'node:http'
+import { isContractIdentifier } from '../../projection/obsidian/contracts.mjs'
 import { PLUGIN_MAX_REQUEST_BYTES, pluginCommandOf, validatePluginRequest } from '../../projection/obsidian/plugin-bridge/channel.mjs'
 import { requestHeader, sameOrigin } from '../../server/security.mjs'
 import { isPlainObject } from './documents.mjs'
@@ -32,7 +33,10 @@ import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs
 // Everything but health and the plugin's commands needs the per-runtime
 // random bearer that exists only in the owner-only record. A POST body is JSON
 // of at most 1 KiB naming the runtime it is meant for, so a request aimed at an
-// earlier runtime on the same port does nothing.
+// earlier runtime on the same port does nothing (409). A tick may also name one
+// view (`scopeId`, a contract identifier), which is then prepared and published
+// once more on that tick; any other member is refused (400,
+// `request-member-unknown`).
 //
 // A plugin command carries no bearer: the plugin never sends its vault's key.
 // Its body, JSON of at most 1 KiB with exactly the fields of its command, is
@@ -125,8 +129,12 @@ export function createServiceServerForOracleTests({ identity, bearer, operations
     if (request.url === '/status') return send(response, 200, await operations.status())
     const payload = await readBoundedJson(request, rules.maxRequestBytes)
     if (!payload.ok) return send(response, payload.statusCode, { error: payload.code })
-    if (Object.keys(payload.body).length !== 1 || payload.body.runtimeId !== identity.runtimeId) return send(response, 409, { error: 'request-names-another-runtime' })
-    if (request.url === '/tick') return send(response, 200, await operations.tick())
+    const { runtimeId, scopeId, ...unknown } = payload.body
+    if (runtimeId !== identity.runtimeId) return send(response, 409, { error: 'request-names-another-runtime' })
+    // A member the operation does not take: a view on a stop, or anything else.
+    if (Object.keys(unknown).length > 0 || (scopeId !== undefined && request.url !== '/tick')) return send(response, 400, { error: 'request-member-unknown' })
+    if (scopeId !== undefined && !isContractIdentifier(scopeId)) return send(response, 400, { error: 'request-invalid' })
+    if (request.url === '/tick') return send(response, 200, await operations.tick(scopeId === undefined ? {} : { scopeId }))
     // The answer leaves first; the service then finishes its tick and exits.
     response.once('finish', () => { void operations.stop() })
     return send(response, 202, { stopping: true, runtimeId: identity.runtimeId, pid: identity.pid })

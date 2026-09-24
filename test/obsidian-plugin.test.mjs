@@ -1783,6 +1783,13 @@ test('status and open report the plugin, and open takes the app version from it 
   const seams = {
     appProbe: { inspect: async () => ({ installed: true, cli: true, running: true, version: null }), vaultState: async () => ({ answered: true, indexReady: true }) },
     launcher: { open: async ({ vaultRoot }) => { launches.push(vaultRoot); return { launched: true, reason: 'fake' } } },
+    // The app lists the view's vault already, so `open` has nothing to add to its list.
+    registry: {
+      listThroughApp: async () => ({ answered: true, vaults: { 'atelier-plugin-view': { path: fs.realpathSync(world.vault), ts: 1, open: true } } }),
+      registerThroughApp: async () => { throw new Error('the app lists the vault already') },
+      readSettings: () => { throw new Error('the settings file is not read while the app answers') },
+      registerInSettings: () => { throw new Error('the settings file is not written while the app runs') },
+    },
     service: { entryPath: TEST_SERVICE_ENTRY, spawn() { throw new Error('a service was started') } },
   }
   const without = await world.run(['open', '--json', '--consent-actor', CONSENT.actor], { seams })

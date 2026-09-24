@@ -94,6 +94,18 @@ function loadSchema(contract) {
   return schemaCache.get(contract.shape)
 }
 
+// Whether a value is an identifier as the contracts define one: the
+// `identifier` of the scope contract, which names a view, read from the
+// shipped contract rather than restated.
+let identifierRule = null
+export function isContractIdentifier(value) {
+  if (identifierRule === null) {
+    const { minLength, maxLength, pattern } = loadSchema(contractFor('scope')).$defs.identifier
+    identifierRule = { minLength, maxLength, pattern: new RegExp(pattern, 'u') }
+  }
+  return typeof value === 'string' && value.length >= identifierRule.minLength && value.length <= identifierRule.maxLength && identifierRule.pattern.test(value)
+}
+
 const ABSOLUTE_PATH = /^(?:\/|~[\\/]|[A-Za-z]:[\\/]|\\\\|file:)/
 
 export function isAbsolutePathLike(value) {
