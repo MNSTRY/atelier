@@ -5,7 +5,7 @@ import { requestHeader, sameOrigin } from '../../server/security.mjs'
 import { isPlainObject } from './documents.mjs'
 import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs'
 
-// The listener of the maintenance service: four fixed operations, the four
+// The listener of the maintenance service: four fixed operations, the five
 // fixed commands of Atelier's plugin, and nothing else. There is no file
 // serving, no command, no evaluation and no route that takes a path, a name or
 // code from a request.
@@ -15,9 +15,10 @@ import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs
 //   POST /tick     run one tick now; bearer required
 //   POST /stop     finish the tick in flight and exit; bearer required
 //
-//   POST /plugin/hello | /plugin/lease | /plugin/release | /plugin/status
-//                  Atelier's plugin inside one vault; that vault's bearer
-//                  required (plugin-bridge/channel.mjs)
+//   POST /plugin/challenge | /plugin/hello | /plugin/lease | /plugin/release |
+//        /plugin/status
+//                  Atelier's plugin inside one vault, authenticated by a
+//                  handshake over that vault's key (plugin-bridge/channel.mjs)
 //
 // Every request, before its operation is even looked up:
 //
@@ -25,7 +26,7 @@ import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs
 //     to, so a name that resolves to loopback (DNS rebinding) is refused;
 //   - a `Sec-Fetch-Site` other than `none` or `same-origin`, or an `Origin`
 //     that is not this listener itself, is refused: no web page drives this;
-//   - the path is one of the eight, exactly, with no query; the method is the
+//   - the path is one of the nine, exactly, with no query; the method is the
 //     one that path has.
 //
 // Everything but health and the plugin's commands needs the per-runtime
@@ -33,13 +34,13 @@ import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs
 // of at most 1 KiB naming the runtime it is meant for, so a request aimed at an
 // earlier runtime on the same port does nothing.
 //
-// A plugin command needs the bearer of one vault instead, which Atelier writes
-// into that vault's plugin data file and keeps in private state: it is compared
-// with every vault's bearer, in constant time, before the body is read, and
-// grants nothing but these commands for that vault. The body is JSON of at most
-// 1 KiB with exactly the fields of its command, naming that vault's view. The
-// runtime bearer is not a plugin bearer, and a plugin bearer is not the runtime
-// bearer.
+// A plugin command carries no bearer: the plugin never sends its vault's key.
+// Its body, JSON of at most 1 KiB with exactly the fields of its command, is
+// judged by the plugin channel (plugin-channel.mjs): a challenge the service
+// answers only for a key it holds, a hello that proves the same key, and
+// session commands under the key the handshake derived. What it grants is
+// these commands for that one vault. The runtime bearer is not accepted there,
+// and nothing a plugin holds reaches status, tick or stop.
 
 export const MAX_REQUEST_BYTES = 1024
 export const SERVICE_OPERATIONS = Object.freeze({ '/health': 'GET', '/status': 'GET', '/tick': 'POST', '/stop': 'POST' })
@@ -49,13 +50,6 @@ const digestOf = (value) => createHash('sha256').update(String(value)).digest()
 // The decisions the request oracles are sensitive to; tests substitute broken ones to prove the oracles can fail.
 export const SERVER_PRIMITIVES = Object.freeze({
   bearerMatches: (presented, expected) => typeof presented === 'string' && presented !== '' && timingSafeEqual(digestOf(presented), digestOf(expected)),
-  // The view whose vault bearer was presented, or null. Every known bearer is compared, whichever matches.
-  pluginBearerScope(presented, bearers) {
-    if (typeof presented !== 'string' || presented === '') return null
-    let found = null
-    for (const [scopeId, expected] of bearers) if (timingSafeEqual(digestOf(presented), digestOf(expected)) && found === null) found = scopeId
-    return found
-  },
   maxPluginRequestBytes: PLUGIN_MAX_REQUEST_BYTES,
   hostMatches: (header, authority) => header === authority,
   originAllowed(headers, authority) {
@@ -96,8 +90,8 @@ function readBoundedJson(request, limit) {
 
 // identity: { serviceName, workspaceId, runtimeId, pid, host, port, executableDigest, startedAt }
 // operations: { healthStatus(), status(), tick(), stop() }, and, where the
-// service holds the plugin channel, { pluginBearers() -> Map<scopeId, bearer>,
-// plugin(command, { scopeId, body }) -> { statusCode, body } }
+// service holds the plugin channel, { plugin(command, { body, authority }) ->
+// { statusCode, body } }
 export function createServiceServerForOracleTests({ identity, bearer, operations }, primitives = SERVER_PRIMITIVES) {
   if (!LOOPBACK_HOSTS.includes(identity?.host)) throw new TypeError('the service listens on a literal loopback address only')
   if (typeof bearer !== 'string' || bearer.length < 32) throw new TypeError('the service needs its random bearer')
@@ -111,14 +105,13 @@ export function createServiceServerForOracleTests({ identity, bearer, operations
     const command = typeof operations.plugin === 'function' ? pluginCommandOf(request.url) : null
     if (command !== null) {
       if (request.method !== 'POST') return send(response, 405, { error: 'method-not-allowed' })
-      const scopeId = rules.pluginBearerScope(presented, operations.pluginBearers())
-      if (scopeId === null) return send(response, 401, { error: 'plugin-bearer-required' })
+      // No credential travels in a header here: a request that sends one was not made by the plugin.
+      if (requestHeader(request.headers, 'authorization') !== '') return send(response, 400, { error: 'plugin-command-takes-no-bearer' })
       const payload = await readBoundedJson(request, rules.maxPluginRequestBytes)
       if (!payload.ok) return send(response, payload.statusCode, { error: payload.code })
       const checked = validatePluginRequest(command, payload.body)
       if (!checked.ok) return send(response, checked.code === 'protocol-unsupported' ? 409 : 400, { error: checked.code })
-      if (checked.body.scopeId !== scopeId) return send(response, 403, { error: 'scope-not-this-vault' })
-      const answer = await operations.plugin(command, { scopeId, body: checked.body })
+      const answer = await operations.plugin(command, { body: checked.body, authority })
       return send(response, answer.statusCode, answer.body)
     }
     const method = Object.hasOwn(SERVICE_OPERATIONS, request.url) ? SERVICE_OPERATIONS[request.url] : null

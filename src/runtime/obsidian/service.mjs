@@ -235,7 +235,6 @@ export async function runMaintenanceService(options = {}) {
         return outcome.ok ? { ok: true, ...summary(outcome.report) } : { ok: false, error: { code: errorCode(outcome.error), name: errorName(outcome.error) } }
       },
       stop: () => shutdown('stop-requested'),
-      pluginBearers: () => pluginChannel.bearers(),
       plugin: (command, request) => pluginChannel.handle(command, request),
     },
   })

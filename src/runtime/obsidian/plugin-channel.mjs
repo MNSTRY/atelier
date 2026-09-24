@@ -1,9 +1,10 @@
-import { randomBytes as cryptoRandomBytes } from 'node:crypto'
+import { createHash, randomBytes as cryptoRandomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow } from '../../project/private-state.mjs'
 import {
-  PLUGIN_BEARER, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_SESSIONS_PER_SCOPE, PLUGIN_RENEW_INTERVAL_MS, PLUGIN_STATUS_SCHEMA,
+  PLUGIN_BEARER, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MAX_SESSIONS_PER_SCOPE,
+  PLUGIN_RENEW_INTERVAL_MS, PLUGIN_STATUS_SCHEMA, pluginClientProof, pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof,
 } from '../../projection/obsidian/plugin-bridge/channel.mjs'
 import { canonicalJson, compareText, isPlainObject, isoTime } from './documents.mjs'
 
@@ -11,16 +12,19 @@ import { canonicalJson, compareText, isPlainObject, isoTime } from './documents.
 //
 //   bearers    one random bearer per view, minted when the view's vault first
 //              receives the plugin, kept owner-only under state/plugin/ and
-//              written into that vault's plugin data file, nowhere else
-//   sessions   who holds a view open right now: a plugin that said hello and
-//              renews its lease; in memory, gone when the service stops
-//   commands   hello, lease, release and status, answered from state the
-//              service already keeps; nothing here writes a vault, a source,
-//              a manifest or an edit, and no command decides anything
+//              written into that vault's plugin data file, nowhere else; it
+//              is the key of the handshake and never crosses the wire
+//   sessions   who holds a view open right now: a plugin that proved it holds
+//              the vault's key and renews its lease; in memory, gone when the
+//              service stops
+//   commands   challenge, hello, lease, release and status, answered from
+//              state the service already keeps; nothing here writes a vault, a
+//              source, a manifest or an edit, and no command decides anything
 //
-// A live session also tells the app version the plugin runs in. That version
-// counts as checked for app qualification (app-capability.mjs): the plugin
-// runs inside exactly that app.
+// A live session also tells the app version the plugin runs in, and an id of
+// that launch of the plugin. That version counts as checked for app
+// qualification (app-capability.mjs) while one launch alone holds the view:
+// the plugin runs inside exactly that app.
 
 export const PLUGIN_BEARER_SCHEMA = 'atelier-obsidian-plugin-bearer/v1'
 export const PLUGIN_PRESENCE_SCHEMA = 'atelier-obsidian-plugin-presence/v1'
@@ -65,77 +69,169 @@ export function readPluginBearers({ workspaceRoot, workspaceId }) {
   return bearers
 }
 
-// Sessions of the plugin, per view. A session lives as long as its lease: a
-// hello grants one, each renewal extends it by `ttlMs`, and a release or a
-// lapse ends it. At most `maxPerScope` live sessions per view.
-export function createPluginSessions({ now = () => Date.now(), ttlMs = PLUGIN_LEASE_TTL_MS, maxPerScope = PLUGIN_MAX_SESSIONS_PER_SCOPE, randomBytes = cryptoRandomBytes } = {}) {
-  const sessions = new Map()
-  const prune = () => { const at = now(); for (const [sessionId, session] of sessions) if (session.expiresAt <= at) sessions.delete(sessionId) }
-  const liveFor = (scopeId) => { prune(); return [...sessions.values()].filter((session) => session.scopeId === scopeId) }
+// The bearers in memory. They are read again only when the directory changed
+// (a bearer minted, replaced, or deleted to rotate it), so a request costs one
+// stat of the directory, not a read of every file.
+export function createPluginBearerCache({ workspaceRoot, workspaceId, read = readPluginBearers }) {
+  const directory = pluginBearerDirectory(workspaceRoot)
+  const signature = () => {
+    try { const stat = fs.statSync(directory, { bigint: true }); return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}` } catch (error) { if (error.code === 'ENOENT') return 'absent'; throw error }
+  }
+  let seen = null
+  let bearers = new Map()
   return {
-    open({ scopeId, pluginVersion, appVersion }) {
+    current() {
+      // Taken before the read: a change during the read is seen by the next call.
+      const now = signature()
+      if (now !== seen) { bearers = read({ workspaceRoot, workspaceId }); seen = now }
+      return bearers
+    },
+  }
+}
+
+// The decisions the channel's oracles are sensitive to; tests substitute broken ones to prove the oracles can fail.
+export const PLUGIN_CHANNEL_PRIMITIVES = Object.freeze({
+  // Two HMACs in hex of validated shape, compared in constant time.
+  macMatches: (presented, expected) => typeof presented === 'string' && presented.length === expected.length && timingSafeEqual(Buffer.from(presented, 'hex'), Buffer.from(expected, 'hex')),
+  counterIsNew: (counter, last) => counter > last,
+  handshakeUsedOnce: true,
+})
+
+// Sessions of the plugin, per view. A session lives as long as its lease: a
+// hello grants one, each renewal extends it by `ttlMs`, and a release, a lapse
+// or `maxAgeMs` ends it. At most `maxPerScope` live sessions per view. A
+// session holds the key its handshake derived; nothing it hands out carries it.
+export function createPluginSessions({ now = () => Date.now(), ttlMs = PLUGIN_LEASE_TTL_MS, maxPerScope = PLUGIN_MAX_SESSIONS_PER_SCOPE, maxAgeMs = PLUGIN_MAX_SESSION_AGE_MS, randomBytes = cryptoRandomBytes } = {}) {
+  const sessions = new Map()
+  const prune = () => { const at = now(); for (const [sessionId, session] of sessions) if (session.expiresAt <= at || at - session.openedAt >= maxAgeMs) sessions.delete(sessionId) }
+  const liveFor = (scopeId) => { prune(); return [...sessions.values()].filter((session) => session.scopeId === scopeId) }
+  const shown = ({ sessionKey: _key, keyDigest: _digest, ...session }) => ({ ...session })
+  return {
+    open({ scopeId, pluginVersion, appVersion, instanceId, sessionKey, keyDigest }) {
       if (liveFor(scopeId).length >= maxPerScope) return null
       const at = now()
-      const session = { sessionId: `ps-${randomBytes(16).toString('hex')}`, scopeId, pluginVersion, appVersion, openedAt: at, renewedAt: at, expiresAt: at + ttlMs }
+      const session = { sessionId: `ps-${randomBytes(16).toString('hex')}`, scopeId, pluginVersion, appVersion, instanceId, sessionKey, keyDigest, counter: 0, openedAt: at, renewedAt: at, expiresAt: at + ttlMs }
       sessions.set(session.sessionId, session)
-      return { ...session }
+      return shown(session)
     },
-    renew({ scopeId, sessionId }) {
-      prune()
+    // The live session with this id, key included, for the channel only; null once it lapsed or was released.
+    held(sessionId) { prune(); return sessions.get(sessionId) ?? null },
+    renew(sessionId) {
       const session = sessions.get(sessionId)
-      if (!session || session.scopeId !== scopeId) return null
+      if (!session) return null
       session.renewedAt = now()
       session.expiresAt = session.renewedAt + ttlMs
-      return { ...session }
+      return shown(session)
     },
-    release({ scopeId, sessionId }) {
-      const session = sessions.get(sessionId)
-      if (!session || session.scopeId !== scopeId) return false
-      return sessions.delete(sessionId)
-    },
-    live: (scopeId) => liveFor(scopeId).map((session) => ({ ...session })),
-    // What the most recently renewed live session reports, or null when no plugin holds the view.
+    release: (sessionId) => sessions.delete(sessionId),
+    live: (scopeId) => liveFor(scopeId).map(shown),
+    // What the most recently renewed live session reports, or null when no plugin holds the view. `instances` counts
+    // the launches of the plugin behind the live sessions: more than one means more than one app holds the vault.
     report(scopeId) {
       const live = liveFor(scopeId).sort((left, right) => right.renewedAt - left.renewedAt)
       if (live.length === 0) return null
       const [newest] = live
-      return { scopeId, appVersion: newest.appVersion, pluginVersion: newest.pluginVersion, sessions: live.length, renewedAt: new Date(newest.renewedAt).toISOString() }
+      return { scopeId, appVersion: newest.appVersion, pluginVersion: newest.pluginVersion, sessions: live.length, instances: new Set(live.map((session) => session.instanceId)).size, renewedAt: new Date(newest.renewedAt).toISOString() }
     },
     scopeIds() { prune(); return [...new Set([...sessions.values()].map((session) => session.scopeId))] },
   }
 }
 
-// The commands of the plugin channel. `statusOf(scopeId)` returns the view's
-// freshness entry as the service reports it and its open pending edits; the
-// vault root a hello must name is the view's vault under the workspace state.
-export function createPluginChannel({ workspaceRoot, workspaceId, runtimeId, sessions, statusOf, serviceStatus }) {
+// The commands of the plugin channel (plugin-bridge/channel.mjs). `statusOf(scopeId)`
+// returns the view's freshness entry as the service reports it and its open
+// pending edits; the vault a hello must prove is the view's vault under the
+// workspace state. `authority` is the exact address the request reached.
+export function createPluginChannelForOracleTests({
+  workspaceRoot, workspaceId, runtimeId, sessions, statusOf, serviceStatus, now = () => Date.now(), randomBytes = cryptoRandomBytes,
+  bearers = createPluginBearerCache({ workspaceRoot, workspaceId }),
+}, primitives = PLUGIN_CHANNEL_PRIMITIVES) {
+  const rules = { ...PLUGIN_CHANNEL_PRIMITIVES, ...primitives }
   const vaultRootOf = (scopeId) => { try { return fs.realpathSync(path.join(workspaceRoot, 'vaults', segment(scopeId))) } catch { return null } }
+  const keyDigestOf = (bearer) => createHash('sha256').update(bearer, 'utf8').digest()
+  const handshakes = new Map()
+  const pruneHandshakes = () => { const at = now(); for (const [handshakeId, handshake] of handshakes) if (handshake.expiresAt <= at) handshakes.delete(handshakeId) }
   const answer = (statusCode, body) => ({ statusCode, body })
+  // An answer only the session's key can have made: the exact text of the document, and a MAC over it.
+  const sealed = ({ sessionKey, command, sessionId, counter }, document) => {
+    const payload = JSON.stringify(document)
+    return answer(200, { payload, mac: pluginResponseMac({ sessionKey, command, sessionId, counter, payload }) })
+  }
+  // A request of a session: its MAC verifies under the session's key and its counter was never seen. A session
+  // whose vault's bearer was rotated since its handshake ends: its key came from the old bearer.
+  const authenticated = (command, body) => {
+    const session = sessions.held(body.sessionId)
+    if (session === null) return { refusal: answer(409, { error: 'session-unknown' }) }
+    if (!rules.macMatches(body.mac, pluginRequestMac({ sessionKey: session.sessionKey, command, sessionId: session.sessionId, counter: body.counter }))) return { refusal: answer(401, { error: 'request-not-authenticated' }) }
+    if (!rules.counterIsNew(body.counter, session.counter)) return { refusal: answer(401, { error: 'request-replayed' }) }
+    session.counter = body.counter
+    const bearer = bearers.current().get(session.scopeId)
+    if (typeof bearer !== 'string' || !timingSafeEqual(keyDigestOf(bearer), session.keyDigest)) {
+      sessions.release(session.sessionId)
+      return { refusal: answer(409, { error: 'session-unknown' }) }
+    }
+    return { session, seal: (document) => sealed({ sessionKey: session.sessionKey, command, sessionId: session.sessionId, counter: body.counter }, document) }
+  }
   const commands = {
-    hello({ scopeId, body }) {
-      // Compared, never opened: the path the plugin names is the vault the app has open.
+    challenge({ body, authority }) {
+      // The key the hint was made with: every key is tried, all of them, whichever matches.
+      let found = null
+      for (const [scopeId, bearer] of bearers.current()) {
+        if (rules.macMatches(body.keyHint, pluginKeyHint({ bearer, clientNonce: body.clientNonce })) && found === null) found = { scopeId, bearer }
+      }
+      if (found === null) return answer(401, { error: 'plugin-key-unknown' })
+      pruneHandshakes()
+      if (handshakes.size >= PLUGIN_MAX_PENDING_HANDSHAKES) return answer(429, { error: 'too-many-handshakes' })
+      const handshake = { handshakeId: `ph-${randomBytes(16).toString('hex')}`, scopeId: found.scopeId, authority, clientNonce: body.clientNonce, serverNonce: randomBytes(32).toString('hex'), expiresAt: now() + PLUGIN_HANDSHAKE_TTL_MS }
+      handshakes.set(handshake.handshakeId, handshake)
+      return answer(200, { protocol: PLUGIN_CHANNEL_PROTOCOL, handshakeId: handshake.handshakeId, serverNonce: handshake.serverNonce, serverProof: pluginServerProof({ bearer: found.bearer, ...handshake }) })
+    },
+    hello({ body, authority }) {
+      pruneHandshakes()
+      const handshake = handshakes.get(body.handshakeId) ?? null
+      if (rules.handshakeUsedOnce) handshakes.delete(body.handshakeId)
+      const bearer = handshake === null ? undefined : bearers.current().get(handshake.scopeId)
+      if (handshake === null || handshake.authority !== authority || typeof bearer !== 'string') return answer(401, { error: 'handshake-unknown' })
+      const { scopeId } = handshake
+      const bound = { bearer, scopeId, authority, clientNonce: handshake.clientNonce, serverNonce: handshake.serverNonce, handshakeId: handshake.handshakeId }
+      const expected = pluginClientProof({ ...bound, pluginVersion: body.pluginVersion, appVersion: body.appVersion, instanceId: body.instanceId, vaultProof: body.vaultProof })
+      if (!rules.macMatches(body.clientProof, expected)) return answer(401, { error: 'plugin-not-authenticated' })
+      const sessionKey = pluginSessionKey(bound)
+      // Compared, never named: the vault the app has open, proven under this session's key.
       const vaultRoot = vaultRootOf(scopeId)
-      if (vaultRoot === null || body.vaultPath !== vaultRoot) return answer(409, { error: 'wrong-vault' })
-      const session = sessions.open({ scopeId, pluginVersion: body.pluginVersion, appVersion: body.appVersion })
+      if (vaultRoot === null || !rules.macMatches(body.vaultProof, pluginVaultProof({ sessionKey, vaultPath: vaultRoot }))) return answer(409, { error: 'wrong-vault' })
+      const session = sessions.open({ scopeId, pluginVersion: body.pluginVersion, appVersion: body.appVersion, instanceId: body.instanceId, sessionKey, keyDigest: keyDigestOf(bearer) })
       if (session === null) return answer(429, { error: 'too-many-sessions' })
-      return answer(200, { schema: PLUGIN_CHANNEL_PROTOCOL, scopeId, sessionId: session.sessionId, runtimeId, leaseTtlMs: session.expiresAt - session.openedAt, renewEveryMs: PLUGIN_RENEW_INTERVAL_MS })
+      return sealed({ sessionKey, command: 'hello', sessionId: session.sessionId, counter: 0 }, {
+        schema: PLUGIN_CHANNEL_PROTOCOL, scopeId, sessionId: session.sessionId, runtimeId, leaseTtlMs: session.expiresAt - session.openedAt, renewEveryMs: PLUGIN_RENEW_INTERVAL_MS,
+      })
     },
-    lease({ scopeId, body }) {
-      const session = sessions.renew({ scopeId, sessionId: body.sessionId })
-      return session === null ? answer(409, { error: 'session-unknown' }) : answer(200, { schema: PLUGIN_CHANNEL_PROTOCOL, scopeId, sessionId: session.sessionId, leaseTtlMs: session.expiresAt - session.renewedAt })
+    lease({ body }) {
+      const request = authenticated('lease', body)
+      if (request.refusal) return request.refusal
+      const session = sessions.renew(request.session.sessionId)
+      return request.seal({ schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: session.scopeId, sessionId: session.sessionId, leaseTtlMs: session.expiresAt - session.renewedAt })
     },
-    release({ scopeId, body }) {
-      return answer(200, { schema: PLUGIN_CHANNEL_PROTOCOL, scopeId, released: sessions.release({ scopeId, sessionId: body.sessionId }) })
+    release({ body }) {
+      const request = authenticated('release', body)
+      if (request.refusal) return request.refusal
+      return request.seal({ schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: request.session.scopeId, released: sessions.release(request.session.sessionId) })
     },
-    status({ scopeId }) {
+    status({ body }) {
+      const request = authenticated('status', body)
+      if (request.refusal) return request.refusal
+      const { scopeId } = request.session
       const { view, pendingEdits } = statusOf(scopeId)
-      return answer(200, { schema: PLUGIN_STATUS_SCHEMA, scopeId, service: { status: serviceStatus() }, view, pendingEdits })
+      return request.seal({ schema: PLUGIN_STATUS_SCHEMA, scopeId, service: { status: serviceStatus() }, view, pendingEdits })
     },
   }
   return {
-    bearers: () => readPluginBearers({ workspaceRoot, workspaceId }),
+    bearers: () => bearers.current(),
     handle: (command, request) => commands[command](request),
   }
+}
+
+export function createPluginChannel(options) {
+  return createPluginChannelForOracleTests(options, PLUGIN_CHANNEL_PRIMITIVES)
 }
 
 // Which views a plugin holds open, for the service's status document, and

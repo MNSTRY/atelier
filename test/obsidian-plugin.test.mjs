@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createHash, randomBytes } from 'node:crypto'
+import crypto, { createHash, randomBytes } from 'node:crypto'
 import childProcess, { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -39,8 +39,9 @@ import { forbiddenEgressFindingsForText } from '../src/egress/forbidden-egress.m
 import { OBSIDIAN_EXT_KEY, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import { COMMUNITY_PLUGINS_PATH, POLICY_SETTINGS_PATH, isUserOwnedSettingsPath, prepareSettings } from '../src/projection/obsidian/materialize/index.mjs'
 import {
-  PLUGIN_CHANNEL_PROTOCOL, PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_DATA_SCHEMA, PLUGIN_DIRECTORY, PLUGIN_ID, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_REQUEST_BYTES, PLUGIN_MINIMUM_APP_VERSION,
-  PLUGIN_RENEW_INTERVAL_MS, PLUGIN_ROUTES, PLUGIN_SOURCE_FILES, PLUGIN_STATUS_SCHEMA, preparePluginFiles, readPluginSource, validatePluginData, validatePluginRequest,
+  PLUGIN_CHANNEL_PROTOCOL, PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_DATA_SCHEMA, PLUGIN_DIRECTORY, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_ID, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES,
+  PLUGIN_MAX_REQUEST_BYTES, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MINIMUM_APP_VERSION, PLUGIN_RENEW_INTERVAL_MS, PLUGIN_ROUTES, PLUGIN_SOURCE_FILES, PLUGIN_STATUS_SCHEMA, pluginClientProof,
+  pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof, preparePluginFiles, readPluginSource, validatePluginData, validatePluginRequest,
 } from '../src/projection/obsidian/plugin-bridge/index.mjs'
 import { PROTOCOL_ID, createEditorAdapter, createInProcessHost, createObsidianCliAdapter, publishView, resolveExchange, runInProcess } from '../src/projection/obsidian/publication/index.mjs'
 import { createRecoveryStore } from '../src/projection/obsidian/recovery/index.mjs'
@@ -53,7 +54,9 @@ import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '.
 import { readServiceRecord, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
 import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { createMaintenanceStateStore } from '../src/runtime/obsidian/state-store.mjs'
-import { createPluginChannel, createPluginSessions, ensurePluginBearer, pluginBearerDirectory, readPluginBearers } from '../src/runtime/obsidian/plugin-channel.mjs'
+import {
+  PLUGIN_CHANNEL_PRIMITIVES, createPluginBearerCache, createPluginChannelForOracleTests, createPluginSessions, ensurePluginBearer, pluginBearerDirectory, readPluginBearers,
+} from '../src/runtime/obsidian/plugin-channel.mjs'
 import { authorityOf, requestLoopback } from '../src/runtime/obsidian/service-client.mjs'
 import { MAX_REQUEST_BYTES, SERVER_PRIMITIVES, createServiceServerForOracleTests } from '../src/runtime/obsidian/service-server.mjs'
 
@@ -177,9 +180,19 @@ function fakeObsidian({ apiVersion = '1.13.7' } = {}) {
 }
 
 // The plugin exactly as the app evaluates main.js. `requests` receives every
-// request the plugin makes through `http`, as it was asked for.
+// request the plugin makes through `http`, as it was asked for, with the exact
+// body it sent.
 function loadPluginClass(fake, { requires = [], requests = [], source = fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'), 'utf8') } = {}) {
-  const recordingHttp = { request(options, onResponse) { requests.push({ host: options.host, port: options.port, method: options.method, path: options.path, headers: { ...options.headers } }); return http.request(options, onResponse) } }
+  const recordingHttp = {
+    request(options, onResponse) {
+      const entry = { host: options.host, port: options.port, method: options.method, path: options.path, headers: { ...options.headers }, body: null }
+      requests.push(entry)
+      const request = http.request(options, onResponse)
+      const end = request.end.bind(request)
+      request.end = (chunk, ...rest) => { entry.body = chunk === undefined ? null : String(chunk); return end(chunk, ...rest) }
+      return request
+    },
+  }
   const factory = (0, eval)(`(function anonymous(require,module,exports){${source}\n})\n//# sourceURL=plugin:${PLUGIN_ID}\n`)
   const module = { exports: {} }
   factory((name) => {
@@ -187,6 +200,7 @@ function loadPluginClass(fake, { requires = [], requests = [], source = fs.readF
     if (name === 'obsidian') return fake.module
     if (name === 'http') return recordingHttp
     if (name === 'fs') return fs
+    if (name === 'crypto') return crypto
     throw new Error(`the plugin required ${name}`)
   }, module, module.exports)
   return module.exports.default || module.exports
@@ -231,6 +245,7 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
 // reloads the plugin, so a change to the code without a new version would leave two plugins under one version.
 const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
+  '1.1.0': 'sha256:1f3538fcd11d2e77dabc1f850bed4b3dda14ac59dde894dd0dcc2bcb7e5977bc',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
@@ -242,21 +257,23 @@ test('the plugin\'s version changes whenever its code does', () => {
   assert.equal(code, RELEASED_PLUGIN_CODE[version], `the code of plugin ${version} changed: raise the version in plugins/obsidian/manifest.json and record ${code} under it`)
 })
 
-test('parity: the constants the plugin carries are the channel contract\'s', () => {
-  const fake = fakeObsidian()
-  const Plugin = loadPluginClass(fake)
+function assertConstantsParity(Plugin) {
   assert.deepEqual(Plugin.channel, {
     pluginId: PLUGIN_ID, protocol: PLUGIN_CHANNEL_PROTOCOL, dataSchema: PLUGIN_DATA_SCHEMA, statusSchema: PLUGIN_STATUS_SCHEMA, routes: { ...PLUGIN_ROUTES },
     renewEveryMs: PLUGIN_RENEW_INTERVAL_MS, requestTimeoutMs: Plugin.channel.requestTimeoutMs, maxResponseBytes: 64 * 1024, minimumAppVersion: PLUGIN_MINIMUM_APP_VERSION,
   })
   assert.ok(Plugin.channel.requestTimeoutMs < PLUGIN_RENEW_INTERVAL_MS, 'one round trip gives up before the next renewal is due')
   assert.ok(PLUGIN_LEASE_TTL_MS >= 3 * PLUGIN_RENEW_INTERVAL_MS, 'three renewals can be missed before a vault stops counting as open')
+}
+
+test('parity: the constants the plugin carries are the channel contract\'s', () => {
+  assertConstantsParity(loadPluginClass(fakeObsidian()))
 })
 
 test('mutation control: a plugin that carries another route fails the parity oracle', () => {
   const source = fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'), 'utf8').replace("lease: '/plugin/lease'", "lease: '/plugin/renew'")
-  const Plugin = loadPluginClass(fakeObsidian(), { source })
-  assert.notDeepEqual(Plugin.channel.routes, { ...PLUGIN_ROUTES })
+  assert.notEqual(source, fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'), 'utf8'))
+  assert.throws(() => assertConstantsParity(loadPluginClass(fakeObsidian(), { source })), assert.AssertionError)
 })
 
 test('the plugin reaches a literal loopback address only: the egress scan passes it, and fails a variant that names a host', () => {
@@ -274,20 +291,32 @@ test('the plugin reaches a literal loopback address only: the egress scan passes
 })
 
 test('the channel contract refuses every request that is not exactly one of its commands', () => {
-  const hello = { protocol: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE, pluginVersion: '1.0.0', appVersion: '1.13.7', vaultPath: '/vaults/scope-plugin' }
+  const hex = (fill, length = 64) => fill.repeat(length)
+  const challenge = { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: hex('a'), clientNonce: hex('b') }
+  const hello = { handshakeId: `ph-${hex('1', 32)}`, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${hex('2', 32)}`, vaultProof: hex('c'), clientProof: hex('d') }
+  const sealed = { sessionId: `ps-${hex('3', 32)}`, counter: 1, mac: hex('e') }
+  assert.deepEqual(validatePluginRequest('challenge', challenge), { ok: true, body: challenge })
   assert.deepEqual(validatePluginRequest('hello', hello), { ok: true, body: hello })
-  assert.deepEqual(validatePluginRequest('status', { scopeId: SCOPE }), { ok: true, body: { scopeId: SCOPE } })
-  const session = `ps-${'1'.repeat(32)}`
+  for (const command of ['lease', 'release', 'status']) assert.deepEqual(validatePluginRequest(command, sealed), { ok: true, body: sealed })
   for (const [command, body, code] of [
-    ['eval', { scopeId: SCOPE }, 'unknown-command'],
+    ['eval', sealed, 'unknown-command'],
     ['status', [], 'request-malformed'],
-    ['status', { scopeId: SCOPE, path: 'notes/a.md' }, 'request-malformed'],
-    ['status', { scopeId: '../other' }, 'request-malformed'],
-    ['lease', { scopeId: SCOPE }, 'request-malformed'],
-    ['lease', { scopeId: SCOPE, sessionId: 'ps-guess' }, 'request-malformed'],
-    ['release', { scopeId: SCOPE, sessionId: session, force: true }, 'request-malformed'],
-    ['hello', { ...hello, protocol: 'atelier-obsidian-plugin-channel/v2' }, 'protocol-unsupported'],
-    ['hello', { ...hello, vaultPath: 'relative/vault' }, 'request-malformed'],
+    ['status', { ...sealed, path: 'notes/a.md' }, 'request-malformed'],
+    ['status', { scopeId: SCOPE }, 'request-malformed'],
+    ['lease', { ...sealed, sessionId: 'ps-guess' }, 'request-malformed'],
+    ['lease', { ...sealed, counter: 0 }, 'request-malformed'],
+    ['lease', { ...sealed, counter: '2' }, 'request-malformed'],
+    ['lease', { ...sealed, counter: 2 ** 53 }, 'request-malformed'],
+    ['release', { ...sealed, mac: hex('E') }, 'request-malformed'],
+    ['release', { ...sealed, force: true }, 'request-malformed'],
+    ['challenge', { ...challenge, protocol: 'atelier-obsidian-plugin-channel/v1' }, 'protocol-unsupported'],
+    // The first thing a plugin sends names no view, no vault and no key.
+    ['challenge', { ...challenge, scopeId: SCOPE }, 'request-malformed'],
+    ['challenge', { ...challenge, keyHint: 'b'.repeat(43) }, 'request-malformed'],
+    ['challenge', { ...challenge, clientNonce: hex('b', 32) }, 'request-malformed'],
+    ['hello', { ...hello, vaultPath: '/vaults/scope-plugin' }, 'request-malformed'],
+    ['hello', { ...hello, handshakeId: 'ph-guess' }, 'request-malformed'],
+    ['hello', { ...hello, instanceId: `ps-${hex('2', 32)}` }, 'request-malformed'],
     ['hello', { ...hello, appVersion: 'x'.repeat(41) }, 'request-malformed'],
     ['hello', { ...hello, code: 'app.vault.delete()' }, 'request-malformed'],
   ]) assert.deepEqual(validatePluginRequest(command, body), { ok: false, code }, `${command} ${JSON.stringify(body)}`)
@@ -298,13 +327,40 @@ test('the channel contract refuses every request that is not exactly one of its 
   }
 })
 
+test('the handshake computations: each binds everything it names, and no two of them agree', () => {
+  const base = { bearer: 'k'.repeat(43), scopeId: SCOPE, authority: '127.0.0.1:43123', clientNonce: 'a'.repeat(64), serverNonce: 'b'.repeat(64), handshakeId: `ph-${'1'.repeat(32)}` }
+  const proof = pluginServerProof(base)
+  assert.match(proof, /^[0-9a-f]{64}$/)
+  // Change any one input and the proof changes: the view, the listener's exact address, either nonce, the handshake, the key.
+  for (const [field, value] of [['scopeId', 'scope-other'], ['authority', '127.0.0.1:43124'], ['authority', '[::1]:43123'], ['clientNonce', 'c'.repeat(64)], ['serverNonce', 'c'.repeat(64)], ['handshakeId', `ph-${'2'.repeat(32)}`], ['bearer', 'j'.repeat(43)]]) {
+    assert.notEqual(pluginServerProof({ ...base, [field]: value }), proof, field)
+  }
+  const sessionKey = pluginSessionKey(base)
+  const vaultProof = pluginVaultProof({ sessionKey, vaultPath: '/vaults/scope-plugin' })
+  const client = pluginClientProof({ ...base, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${'3'.repeat(32)}`, vaultProof })
+  for (const [field, value] of [['pluginVersion', '1.1.1'], ['appVersion', '1.13.5'], ['instanceId', `pi-${'4'.repeat(32)}`], ['vaultProof', 'd'.repeat(64)]]) {
+    assert.notEqual(pluginClientProof({ ...base, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${'3'.repeat(32)}`, vaultProof, [field]: value }), client, field)
+  }
+  assert.notEqual(pluginVaultProof({ sessionKey, vaultPath: '/vaults/scope-plugin-copy' }), vaultProof)
+  const sessionId = `ps-${'5'.repeat(32)}`
+  const request = pluginRequestMac({ sessionKey, command: 'lease', sessionId, counter: 1 })
+  assert.notEqual(pluginRequestMac({ sessionKey, command: 'lease', sessionId, counter: 2 }), request, 'a counter is bound')
+  assert.notEqual(pluginRequestMac({ sessionKey, command: 'status', sessionId, counter: 1 }), request, 'the command is bound')
+  const answer = pluginResponseMac({ sessionKey, command: 'lease', sessionId, counter: 1, payload: '{}' })
+  assert.notEqual(pluginResponseMac({ sessionKey, command: 'lease', sessionId, counter: 1, payload: '{ }' }), answer, 'the exact bytes of an answer are bound')
+  // Separate labels: no proof can stand in for another, nor a request for an answer.
+  const hint = pluginKeyHint({ bearer: base.bearer, clientNonce: base.clientNonce })
+  assert.equal(new Set([proof, client, vaultProof, request, answer, hint, sessionKey.toString('hex')]).size, 7)
+  assert.notEqual(pluginKeyHint({ bearer: base.bearer, clientNonce: 'c'.repeat(64) }), hint, 'a hint is fresh with every nonce')
+})
+
 // ---------------------------------------------------------------------------
 // 2. The plugin in the stand-in app, against a real listener
 // ---------------------------------------------------------------------------
 
 // A workspace with one view whose vault holds the plugin as publication puts
 // it there, and a listener that holds the plugin channel of that workspace.
-async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginSessions(), primitives = SERVER_PRIMITIVES, port: fixedPort = null } = {}) {
+async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginSessions(), primitives = SERVER_PRIMITIVES, channelPrimitives = PLUGIN_CHANNEL_PRIMITIVES, now = () => Date.now(), port: fixedPort = null } = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const workspaceRoot = path.join(dir, 'workspace')
@@ -328,13 +384,13 @@ async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginS
   world.listen = async ({ port, withSessions = sessions } = {}) => {
     const identity = { serviceName: `atelier-obsidian-${WORKSPACE_ID}`, workspaceId: WORKSPACE_ID, runtimeId: `rt-${randomBytes(8).toString('hex')}`, pid: process.pid, host: '127.0.0.1', port, executableDigest: digest('entry'), startedAt: '2026-01-05T10:00:00.000Z' }
     const runtimeBearer = randomBytes(32).toString('base64url')
-    const channel = createPluginChannel({ workspaceRoot, workspaceId: WORKSPACE_ID, runtimeId: identity.runtimeId, sessions: withSessions, statusOf: world.statusOf, serviceStatus: () => world.health })
+    const channel = createPluginChannelForOracleTests({ workspaceRoot, workspaceId: WORKSPACE_ID, runtimeId: identity.runtimeId, sessions: withSessions, statusOf: world.statusOf, serviceStatus: () => world.health, now }, channelPrimitives)
     const calls = { status: 0, tick: 0, stop: 0, plugin: [] }
     const listener = createServiceServerForOracleTests({
       identity, bearer: runtimeBearer,
       operations: {
         healthStatus: () => world.health, status: () => { calls.status += 1; return { ok: true } }, tick: async () => { calls.tick += 1; return { ok: true } }, stop: async () => { calls.stop += 1 },
-        pluginBearers: () => channel.bearers(), plugin: (command, request) => { calls.plugin.push(command); return channel.handle(command, request) },
+        plugin: async (command, request) => { calls.plugin.push(command); await world.hold?.(command); return channel.handle(command, request) },
       },
     }, primitives)
     await listener.listen()
@@ -359,7 +415,7 @@ async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginS
 
 const statusBarOf = (world) => world.fake.record.statusBars.at(-1).text
 
-test('loaded in a vault Atelier published, the plugin says hello, holds a lease and shows the view current', async (t) => {
+test('loaded in a vault Atelier published, the plugin shakes hands, holds a lease and shows the view current, and its key never leaves the vault', async (t) => {
   const world = await channelWorld(t)
   const plugin = world.plugin()
   await plugin.load()
@@ -367,19 +423,25 @@ test('loaded in a vault Atelier published, the plugin says hello, holds a lease 
   assert.equal(statusBarOf(world), 'Atelier: current')
   const [session] = world.service.sessions.live(SCOPE)
   assert.deepEqual([session.appVersion, session.pluginVersion, world.service.sessions.live(SCOPE).length], ['1.13.7', shippedManifest().version, 1])
-  assert.deepEqual(world.service.calls.plugin, ['hello', 'status'])
-  // Every request went to the literal loopback address, carried this vault's bearer and named this view.
-  assert.ok(world.requests.length >= 2)
+  assert.match(session.instanceId, /^pi-[0-9a-f]{32}$/)
+  assert.equal(Object.hasOwn(session, 'sessionKey'), false, 'a session handed out carries no key')
+  assert.deepEqual(world.service.calls.plugin, ['challenge', 'hello', 'status'])
+  // Every request went to the literal loopback address with no credential in it: not the bearer, nor anything naming
+  // the vault. The first one names nothing at all.
+  assert.equal(world.requests.length, 3)
   for (const request of world.requests) {
-    assert.deepEqual([request.host, request.port, request.method, request.headers.Host, request.headers.Authorization], ['127.0.0.1', world.port, 'POST', authorityOf('127.0.0.1', world.port), `Bearer ${world.bearer}`])
+    assert.deepEqual([request.host, request.port, request.method, request.headers.Host, request.headers.Authorization], ['127.0.0.1', world.port, 'POST', authorityOf('127.0.0.1', world.port), undefined])
     assert.ok(Object.values(PLUGIN_ROUTES).includes(request.path))
+    for (const secret of [world.bearer, world.vaultRoot, fs.realpathSync(world.vaultRoot)]) assert.equal(request.body.includes(secret), false, `${request.path} carries ${secret}`)
   }
-  assert.deepEqual([...new Set(world.requires)].sort(), ['fs', 'http', 'obsidian'])
+  assert.deepEqual([world.requests[0].path, Object.keys(JSON.parse(world.requests[0].body)).sort()], [PLUGIN_ROUTES.challenge, ['clientNonce', 'keyHint', 'protocol']])
+  assert.equal(world.requests[0].body.includes(SCOPE), false, 'the challenge does not name the view')
+  assert.deepEqual([...new Set(world.requires)].sort(), ['crypto', 'fs', 'http', 'obsidian'])
   assert.deepEqual(world.fake.record.commands.map((command) => [command.id, command.name]), [[`${PLUGIN_ID}:show-status`, 'Atelier: Show status']])
   assert.deepEqual(world.fake.record.intervals.length, 1)
 
   await plugin.cycle()
-  assert.deepEqual(world.service.calls.plugin, ['hello', 'status', 'lease', 'status'], 'later rounds renew the lease and read the status')
+  assert.deepEqual(world.service.calls.plugin, ['challenge', 'hello', 'status', 'lease', 'status'], 'later rounds renew the lease and read the status')
   assert.equal(world.service.sessions.live(SCOPE).length, 1, 'one session per loaded plugin')
   assert.deepEqual([world.fake.record.forbidden, world.fake.record.saved, world.fake.record.notices], [[], 0, []], 'no write, no data file saved, and no notice for a view that is simply current')
 })
@@ -467,7 +529,7 @@ test('the lease: renewed while the vault is open, released when the plugin unloa
   assert.equal(sessions.report(SCOPE), null, 'no renewal within the lease: the vault no longer counts as open')
 })
 
-test('a service that started again forgets the session: the plugin says hello again and carries on', async (t) => {
+test('a service that started again forgets the session: the plugin shakes hands again and carries on', async (t) => {
   const world = await channelWorld(t)
   const plugin = world.plugin()
   await plugin.load()
@@ -476,11 +538,11 @@ test('a service that started again forgets the session: the plugin says hello ag
   world.service = await world.listen({ port: world.port, withSessions: createPluginSessions() })
   await plugin.cycle()
   assert.equal(statusBarOf(world), 'Atelier: current')
-  assert.deepEqual(world.service.calls.plugin, ['lease', 'hello', 'status'])
+  assert.deepEqual(world.service.calls.plugin, ['lease', 'challenge', 'hello', 'status'])
   assert.equal(world.service.sessions.report(SCOPE).sessions, 1)
 })
 
-test('a republished data file moves the plugin to the new address and bearer without a restart', async (t) => {
+test('a republished data file moves the plugin to the new address and key without a restart', async (t) => {
   const world = await channelWorld(t)
   const plugin = world.plugin()
   await plugin.load()
@@ -492,8 +554,9 @@ test('a republished data file moves the plugin to the new address and bearer wit
   const moved = await world.listen({ port })
   await plugin.onExternalSettingsChange()
   assert.equal(statusBarOf(world), 'Atelier: current')
-  assert.deepEqual(moved.calls.plugin, ['hello', 'status'])
-  assert.deepEqual([world.requests.at(-1).port, world.requests.at(-1).headers.Authorization], [port, `Bearer ${bearer}`])
+  assert.deepEqual(moved.calls.plugin, ['challenge', 'hello', 'status'])
+  assert.equal(world.requests.at(-1).port, port)
+  assert.ok(world.requests.every((request) => !request.body.includes(bearer) && !request.body.includes(world.bearer)), 'neither key went out')
 })
 
 test('without usable channel data the plugin says so and makes no request', async (t) => {
@@ -529,7 +592,7 @@ test('below the app floor the plugin shows it, says it once, and opens no channe
   assert.equal(statusBarOf(world), 'Atelier: current', 'a newer app is admitted')
 })
 
-test('the plugin sends the real path of the vault the app has open; another vault is refused', async (t) => {
+test('the plugin proves the real path of the vault the app has open without sending it; another folder is refused', async (t) => {
   const world = await channelWorld(t)
   // The app opened the vault through a symbolic link: the plugin resolves it.
   const link = path.join(world.dir, 'linked-vault')
@@ -543,7 +606,7 @@ test('the plugin sends the real path of the vault the app has open; another vaul
   assert.equal(statusBarOf(world), 'Atelier: current')
   plugin.unload()
 
-  // The same data file copied into another folder: the service refuses the hello.
+  // The same data file copied into another folder: the vault the plugin proves is not the view's, and the service refuses the hello.
   const elsewhere = path.join(world.dir, 'copied-vault')
   fs.cpSync(world.vaultRoot, elsewhere, { recursive: true })
   const copied = new Plugin(fakeApp(elsewhere, world.fake.record), shippedManifest())
@@ -554,99 +617,367 @@ test('the plugin sends the real path of the vault the app has open; another vaul
   assert.equal(copied.view.reason, 'not-the-vault-atelier-maintains')
 })
 
+// Parity of the computations: the plugin completes a handshake and a round with the channel's own code, and a
+// plugin that computes any one of them otherwise does not.
+test('parity: the plugin computes every proof and MAC the channel does, and a plugin that computes one otherwise gets nowhere', async (t) => {
+  const source = fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'), 'utf8')
+  const control = await channelWorld(t)
+  const plugin = control.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBarOf(control), 'Atelier: current', 'the shipped plugin and the channel agree')
+  for (const label of ['key-hint', 'server-proof', 'session-key', 'vault', 'client-proof', 'request', 'response']) {
+    const mutated = source.replaceAll(`'${label}'`, `'${label}-otherwise'`)
+    assert.notEqual(mutated, source, label)
+    const world = await channelWorld(t)
+    const Plugin = loadPluginClass(world.fake, { source: mutated })
+    const variant = new Plugin(fakeApp(world.vaultRoot, world.fake.record), shippedManifest())
+    t.after(() => variant.unload())
+    await variant.load()
+    await variant.cycle()
+    await variant.cycle()
+    assert.notEqual(statusBarOf(world), 'Atelier: current', label)
+    assert.equal(world.service.sessions.live(SCOPE).some((session) => session.counter > 0), false, `${label}: no request of a session was ever accepted`)
+  }
+})
+
+// A program at the service's address while the service is down: it records
+// every request it receives, headers and exact body, and answers as it likes.
+async function squatter(t, port, answerOf = () => ({ statusCode: 503, body: { error: 'service-unavailable' } })) {
+  const captured = []
+  const server = http.createServer((request, response) => {
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(chunk))
+    request.on('end', async () => {
+      const entry = { path: request.url, headers: { ...request.headers }, body: Buffer.concat(chunks).toString('utf8') }
+      captured.push(entry)
+      const { statusCode, body } = await answerOf(entry)
+      const text = JSON.stringify(body)
+      response.writeHead(statusCode, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text), Connection: 'close' })
+      response.end(text)
+    })
+  })
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: '127.0.0.1', port }, resolve) })
+  let closed = null
+  const close = () => { closed ??= new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections() }); return closed }
+  t.after(close)
+  return { captured, close }
+}
+
+test('a program squatting the service\'s address while it is down learns nothing it can use: no key, no vault, no view, no session, no app version', async (t) => {
+  const world = await channelWorld(t)
+  const plugin = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBarOf(world), 'Atelier: current')
+
+  // The service stops. Another program binds its address and answers as a restarted service would ("session
+  // unknown"), and every challenge with a proof it made up.
+  await world.service.listener.close()
+  const squat = await squatter(t, world.port, (entry) => (entry.path === PLUGIN_ROUTES.challenge
+    ? { statusCode: 200, body: { protocol: PLUGIN_CHANNEL_PROTOCOL, handshakeId: `ph-${randomBytes(16).toString('hex')}`, serverNonce: randomBytes(32).toString('hex'), serverProof: randomBytes(32).toString('hex') } }
+    : { statusCode: 409, body: { error: 'session-unknown' } }))
+  for (let round = 0; round < 3; round += 1) await plugin.cycle()
+  assert.deepEqual([statusBarOf(world), plugin.view.reason], ['Atelier: service unreachable', 'listener-not-proven'])
+  const paths = squat.captured.map((entry) => entry.path)
+  assert.deepEqual(paths, [PLUGIN_ROUTES.lease, PLUGIN_ROUTES.challenge, PLUGIN_ROUTES.challenge, PLUGIN_ROUTES.challenge], 'one renewal of the old session, then only challenges')
+  const everything = JSON.stringify(squat.captured)
+  for (const secret of [world.bearer, world.vaultRoot, fs.realpathSync(world.vaultRoot), SCOPE]) assert.equal(everything.includes(secret), false, `the squatter received ${secret}`)
+  assert.ok(squat.captured.every((entry) => entry.headers.authorization === undefined))
+  const hints = squat.captured.filter((entry) => entry.path === PLUGIN_ROUTES.challenge).map((entry) => JSON.parse(entry.body).keyHint)
+  assert.equal(new Set(hints).size, hints.length, 'no two challenges of this vault look alike')
+  await squat.close()
+
+  // The service starts again at the same address, with the same key. Everything the squatter received, replayed,
+  // opens no session: a replayed challenge is answered, but a hello needs the key.
+  const sessions = createPluginSessions()
+  world.service = await world.listen({ port: world.port, withSessions: sessions })
+  const Host = authorityOf('127.0.0.1', world.port)
+  let answered = 0
+  for (const entry of squat.captured) {
+    const replayed = await raw({ port: world.port, route: entry.path, headers: { Host }, body: entry.body })
+    if (entry.path !== PLUGIN_ROUTES.challenge) { assert.equal(replayed.statusCode, 409, `${entry.path} replayed`); continue }
+    assert.equal(replayed.statusCode, 200)
+    answered += 1
+    const forged = await raw({ port: world.port, route: PLUGIN_ROUTES.hello, headers: { Host }, body: JSON.stringify({ handshakeId: replayed.body.handshakeId, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${randomBytes(16).toString('hex')}`, vaultProof: randomBytes(32).toString('hex'), clientProof: randomBytes(32).toString('hex') }) })
+    assert.equal(forged.statusCode, 401, 'a hello that does not prove the key')
+  }
+  assert.equal(answered, 3)
+  assert.equal(sessions.report(SCOPE), null, 'no session for the squatter')
+  // So no app version it would claim reaches qualification: an app below the floor stays refused.
+  const factory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => ({ installed: true, cli: true, running: true, version: '1.13.5' }) }, createAdapter: ({ qualification }) => ({ qualification }) })
+  assert.throws(() => factory({ scope: { scopeId: SCOPE }, pluginReport: sessions.report(SCOPE) }), (error) => error.detail?.reason === 'below-minimum-version')
+
+  // The plugin shakes hands with the service that proves itself, and carries on.
+  await plugin.cycle()
+  assert.equal(statusBarOf(world), 'Atelier: current')
+  assert.equal(sessions.report(SCOPE).sessions, 1)
+})
+
+test('an answer relayed from the service at another address does not verify, and the relay is told nothing more', async (t) => {
+  const world = await channelWorld(t)
+  // The service listens elsewhere, with the vault's key; a program at the address the vault names relays to it.
+  await world.service.listener.close()
+  const elsewhere = await freePort()
+  world.service = await world.listen({ port: elsewhere })
+  const relay = await squatter(t, world.port, async (entry) => {
+    const answer = await raw({ port: elsewhere, route: entry.path, headers: { Host: authorityOf('127.0.0.1', elsewhere) }, body: entry.body })
+    return { statusCode: answer.statusCode, body: answer.body }
+  })
+  const plugin = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.deepEqual([statusBarOf(world), plugin.view.reason], ['Atelier: service unreachable', 'listener-not-proven'])
+  assert.deepEqual(relay.captured.map((entry) => entry.path), [PLUGIN_ROUTES.challenge])
+  assert.equal(world.service.sessions.report(SCOPE), null)
+})
+
+test('an answer that is not sealed with the session\'s key is not believed', async (t) => {
+  const world = await channelWorld(t)
+  const plugin = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBarOf(world), 'Atelier: current')
+  // Between two rounds the service goes away, and a program answers the lease and the status as if all were well.
+  await world.service.listener.close()
+  const forged = (document) => ({ statusCode: 200, body: { payload: JSON.stringify(document), mac: randomBytes(32).toString('hex') } })
+  const squat = await squatter(t, world.port, (entry) => (entry.path === PLUGIN_ROUTES.lease ? forged({ schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE }) : forged({ schema: PLUGIN_STATUS_SCHEMA, scopeId: SCOPE, view: { ...world.view } })))
+  await plugin.cycle()
+  assert.deepEqual([statusBarOf(world), plugin.view.reason], ['Atelier: service unreachable', 'answer-not-authenticated'])
+  assert.deepEqual(squat.captured.map((entry) => entry.path), [PLUGIN_ROUTES.lease], 'nothing more once an answer did not verify')
+})
+
+test('a plugin unloaded while its hello is under way lets that session go at once, and shows nothing afterwards', async (t) => {
+  const world = await channelWorld(t)
+  let answerHello = null
+  world.hold = (command) => (command === 'hello' ? new Promise((resolve) => { answerHello = resolve }) : null)
+  const plugin = world.plugin()
+  // onload starts the first round without waiting for it.
+  await plugin.load()
+  await waitFor(() => answerHello, { label: 'the hello under way' })
+  const notices = world.fake.record.notices.length
+  const shown = statusBarOf(world)
+  plugin.unload()
+  world.hold = null
+  answerHello()
+  await waitFor(() => world.service.calls.plugin.includes('release'), { label: 'the session let go' })
+  assert.equal(world.service.sessions.report(SCOPE), null)
+  assert.deepEqual(world.service.calls.plugin, ['challenge', 'hello', 'release'], 'no lease and no status after the unload')
+  assert.deepEqual([world.fake.record.notices.length, statusBarOf(world)], [notices, shown], 'nothing shown after the unload')
+})
+
+test('a session whose vault key was rotated ends; the plugin waits for the new key and carries on with it', async (t) => {
+  const world = await channelWorld(t)
+  const plugin = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  // The key is rotated in private state; the vault still holds the old one until its next publication.
+  fs.rmSync(path.join(pluginBearerDirectory(world.workspaceRoot), `${SCOPE}.json`))
+  const rotated = ensurePluginBearer({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE })
+  assert.notEqual(rotated, world.bearer)
+  await plugin.cycle()
+  assert.deepEqual([statusBarOf(world), plugin.view.reason], ['Atelier: not set up', 'key-not-known-to-the-service'])
+  assert.equal(world.service.sessions.report(SCOPE), null, 'the session made with the old key is gone')
+  world.install({ port: world.port, bearer: rotated })
+  await plugin.onExternalSettingsChange()
+  assert.equal(statusBarOf(world), 'Atelier: current')
+})
+
 // ---------------------------------------------------------------------------
-// 3. The listener's plugin commands: one vault's bearer, bounded, exact
+// 3. The listener's plugin commands: a handshake over one vault's key, then
+//    sealed requests; bounded and exact
 // ---------------------------------------------------------------------------
 
-async function assertOnlyTheVaultBearerActs(t, primitives) {
-  const world = await channelWorld(t, { primitives })
+// A client that holds a vault's key and speaks the channel the way the plugin does, one step at a time.
+function keyHolder({ port, bearer, scopeId = SCOPE, vaultPath, pluginVersion = '1.1.0', appVersion = '1.13.7', instanceId = `pi-${randomBytes(16).toString('hex')}` }) {
+  const authority = authorityOf('127.0.0.1', port)
+  const send = (route, body) => raw({ port, route, headers: { Host: authority }, body: JSON.stringify(body) })
+  const holder = {
+    async challenge() {
+      const clientNonce = randomBytes(32).toString('hex')
+      return { answer: await send(PLUGIN_ROUTES.challenge, { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer, clientNonce }), clientNonce }), clientNonce }
+    },
+    // The hello that answers a challenge; `overrides` replace what is sent.
+    helloFor({ answer, clientNonce }, overrides = {}) {
+      const bound = { bearer, scopeId, authority, clientNonce, serverNonce: answer.body.serverNonce, handshakeId: answer.body.handshakeId }
+      const sessionKey = pluginSessionKey(bound)
+      const vaultProof = pluginVaultProof({ sessionKey, vaultPath })
+      return { bound, sessionKey, body: { handshakeId: bound.handshakeId, pluginVersion, appVersion, instanceId, vaultProof, clientProof: pluginClientProof({ ...bound, pluginVersion, appVersion, instanceId, vaultProof }), ...overrides } }
+    },
+    async hello(challenged, overrides) {
+      const { bound, sessionKey, body } = holder.helloFor(challenged, overrides)
+      return { answer: await send(PLUGIN_ROUTES.hello, body), bound, sessionKey }
+    },
+    // A session command as the plugin sends it; `counter` and `mac` can be forced.
+    async command(session, command, { counter = session.counter + 1, mac } = {}) {
+      session.counter = Math.max(session.counter, counter)
+      const answer = await send(PLUGIN_ROUTES[command], { sessionId: session.id, counter, mac: mac ?? pluginRequestMac({ sessionKey: session.key, command, sessionId: session.id, counter }) })
+      return { answer, counter }
+    },
+  }
+  return holder
+}
+
+// The document of a sealed answer, after its MAC verified.
+function unsealed({ answer, counter }, { key, id }, command) {
+  assert.equal(answer.statusCode, 200, JSON.stringify(answer.body))
+  const document = JSON.parse(answer.body.payload)
+  assert.equal(answer.body.mac, pluginResponseMac({ sessionKey: key, command, sessionId: id ?? document.sessionId, counter, payload: answer.body.payload }), `the ${command} answer is sealed with the session's key`)
+  return document
+}
+
+async function assertOnlyTheVaultKeyActs(t, { primitives = SERVER_PRIMITIVES, channelPrimitives = PLUGIN_CHANNEL_PRIMITIVES } = {}) {
+  let now = Date.parse('2026-01-05T10:00:00.000Z')
+  const sessions = createPluginSessions({ now: () => now })
+  const world = await channelWorld(t, { primitives, channelPrimitives, sessions, now: () => now })
   const { port } = world
   const Host = authorityOf('127.0.0.1', port)
-  const authorised = { Host, Authorization: `Bearer ${world.bearer}` }
-  // A second view of the same workspace, with its own vault and bearer.
+  const send = (route, body, headers = {}, method = 'POST') => raw({ port, method, route, headers: { Host, ...headers }, body: body === null ? null : typeof body === 'string' ? body : JSON.stringify(body) })
+  const vaultPath = fs.realpathSync(world.vaultRoot)
+  const client = keyHolder({ port, bearer: world.bearer, vaultPath })
   const otherBearer = ensurePluginBearer({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'scope-other' })
-  const status = JSON.stringify({ scopeId: SCOPE })
-  const hello = (extra = {}) => JSON.stringify({ protocol: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE, pluginVersion: '1.0.0', appVersion: '1.13.7', vaultPath: fs.realpathSync(world.vaultRoot), ...extra })
-  const refused = [
-    ['no bearer', { route: PLUGIN_ROUTES.status, headers: { Host }, body: status }, 401],
-    ['a wrong bearer', { route: PLUGIN_ROUTES.status, headers: { Host, Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }, body: status }, 401],
-    ['the runtime bearer of the service', { route: PLUGIN_ROUTES.hello, headers: { Host, Authorization: `Bearer ${world.service.runtimeBearer}` }, body: hello() }, 401],
-    ['the bearer under another scheme', { route: PLUGIN_ROUTES.status, headers: { Host, Authorization: `Basic ${world.bearer}` }, body: status }, 401],
-    ['another vault\'s bearer naming this view', { route: PLUGIN_ROUTES.hello, headers: { Host, Authorization: `Bearer ${otherBearer}` }, body: hello() }, 403],
-    ['GET on a plugin command', { method: 'GET', route: PLUGIN_ROUTES.status, headers: authorised }, 405],
-    ['an oversized payload', { route: PLUGIN_ROUTES.status, headers: authorised, body: JSON.stringify({ scopeId: SCOPE, padding: 'x'.repeat(PLUGIN_MAX_REQUEST_BYTES) }) }, 413],
-    ['a payload that is not JSON', { route: PLUGIN_ROUTES.status, headers: authorised, body: 'status please' }, 400],
-    ['a payload with anything else in it', { route: PLUGIN_ROUTES.status, headers: authorised, body: JSON.stringify({ scopeId: SCOPE, path: 'notes/Lantern room--0123456789ab.md' }) }, 400],
-    ['a hello in another protocol', { route: PLUGIN_ROUTES.hello, headers: authorised, body: hello({ protocol: 'atelier-obsidian-plugin-channel/v2' }) }, 409],
-    ['a hello naming another vault', { route: PLUGIN_ROUTES.hello, headers: authorised, body: hello({ vaultPath: world.dir }) }, 409],
-    ['a lease nobody was granted', { route: PLUGIN_ROUTES.lease, headers: authorised, body: JSON.stringify({ scopeId: SCOPE, sessionId: `ps-${'0'.repeat(32)}` }) }, 409],
-    ['a query on a plugin command', { route: `${PLUGIN_ROUTES.status}?scope=${SCOPE}`, headers: authorised, body: status }, 404],
-    ['a command that does not exist', { route: '/plugin/eval', headers: authorised, body: status }, 404],
-    ['a command under another prefix', { route: '/plugins/status', headers: authorised, body: status }, 404],
-    ['a hostname in Host', { route: PLUGIN_ROUTES.status, headers: { ...authorised, Host: `localhost:${port}` }, body: status }, 403],
-    ['a cross-site Origin', { route: PLUGIN_ROUTES.status, headers: { ...authorised, Origin: 'app://obsidian.md' }, body: status }, 403],
-    ['Sec-Fetch-Site: cross-site', { route: PLUGIN_ROUTES.status, headers: { ...authorised, 'Sec-Fetch-Site': 'cross-site' }, body: status }, 403],
-    // The plugin's bearer is not the service's: none of the service's own operations answers it.
-    ['the vault bearer on the service status', { method: 'GET', route: '/status', headers: authorised }, 401],
-    ['the vault bearer asking for a tick', { route: '/tick', headers: authorised, body: JSON.stringify({ runtimeId: world.service.identity.runtimeId }) }, 401],
-    ['the vault bearer asking the service to stop', { route: '/stop', headers: authorised, body: JSON.stringify({ runtimeId: world.service.identity.runtimeId }) }, 401],
-  ]
-  for (const [label, request, statusCode] of refused) assert.equal((await raw({ port, ...request })).statusCode, statusCode, label)
-  assert.deepEqual([world.service.calls.status, world.service.calls.tick, world.service.calls.stop], [0, 0, 0], 'no refused request reached a service operation')
-  assert.equal(world.service.sessions.report(SCOPE), null, 'no refused request opened a session')
-  assert.ok(world.service.calls.plugin.every((command) => ['hello', 'lease'].includes(command)), 'only a well-formed, authorised command reached the channel')
+  const challenge = () => { const clientNonce = randomBytes(32).toString('hex'); return { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer: world.bearer, clientNonce }), clientNonce } }
+  const expect = async (label, pending, statusCode) => { const answer = await pending; assert.equal(answer.statusCode, statusCode, label); return answer }
+  const stranger = keyHolder({ port, bearer: randomBytes(32).toString('base64url'), vaultPath })
 
-  // The four commands, as the plugin sends them.
-  const opened = await raw({ port, route: PLUGIN_ROUTES.hello, headers: authorised, body: hello() })
-  assert.deepEqual([opened.statusCode, opened.body.schema, opened.body.scopeId, opened.body.leaseTtlMs, opened.body.renewEveryMs], [200, PLUGIN_CHANNEL_PROTOCOL, SCOPE, PLUGIN_LEASE_TTL_MS, PLUGIN_RENEW_INTERVAL_MS])
-  const session = JSON.stringify({ scopeId: SCOPE, sessionId: opened.body.sessionId })
-  assert.equal((await raw({ port, route: PLUGIN_ROUTES.lease, headers: authorised, body: session })).statusCode, 200)
-  const answered = await raw({ port, route: PLUGIN_ROUTES.status, headers: authorised, body: status })
-  assert.deepEqual(answered.body, { schema: PLUGIN_STATUS_SCHEMA, scopeId: SCOPE, service: { status: 'healthy' }, view: world.view, pendingEdits: { open: 0 } })
-  assert.deepEqual((await raw({ port, route: PLUGIN_ROUTES.release, headers: authorised, body: session })).body, { schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE, released: true })
-  assert.equal((await raw({ port, route: PLUGIN_ROUTES.lease, headers: authorised, body: session })).statusCode, 409, 'a released session renews nothing')
-  // Another vault's bearer speaks for that vault only.
-  assert.equal((await raw({ port, route: PLUGIN_ROUTES.status, headers: { Host, Authorization: `Bearer ${otherBearer}` }, body: JSON.stringify({ scopeId: 'scope-other' }) })).statusCode, 200)
-  for (const text of [opened.text, answered.text]) {
+  // Who may start a handshake, and the shape of every request.
+  await expect('a challenge made with a key the service does not hold', stranger.challenge().then(({ answer }) => answer), 401)
+  await expect('a challenge in another protocol', send(PLUGIN_ROUTES.challenge, { ...challenge(), protocol: 'atelier-obsidian-plugin-channel/v1' }), 409)
+  await expect('a challenge that names the view', send(PLUGIN_ROUTES.challenge, { ...challenge(), scopeId: SCOPE }), 400)
+  await expect('a bearer in the header of a plugin command', send(PLUGIN_ROUTES.challenge, challenge(), { Authorization: `Bearer ${world.bearer}` }), 400)
+  await expect('the runtime bearer on a plugin command', send(PLUGIN_ROUTES.challenge, challenge(), { Authorization: `Bearer ${world.service.runtimeBearer}` }), 400)
+  await expect('GET on a plugin command', send(PLUGIN_ROUTES.challenge, null, {}, 'GET'), 405)
+  await expect('an oversized payload', send(PLUGIN_ROUTES.challenge, { ...challenge(), padding: 'x'.repeat(PLUGIN_MAX_REQUEST_BYTES) }), 413)
+  await expect('a payload that is not JSON', send(PLUGIN_ROUTES.challenge, 'challenge please'), 400)
+  await expect('a query on a plugin command', send(`${PLUGIN_ROUTES.challenge}?scope=${SCOPE}`, challenge()), 404)
+  await expect('a command that does not exist', send('/plugin/eval', challenge()), 404)
+  await expect('a command under another prefix', send('/plugins/challenge', challenge()), 404)
+  await expect('a hostname in Host', send(PLUGIN_ROUTES.challenge, challenge(), { Host: `localhost:${port}` }), 403)
+  await expect('a cross-site Origin', send(PLUGIN_ROUTES.challenge, challenge(), { Origin: 'app://obsidian.md' }), 403)
+  await expect('Sec-Fetch-Site: cross-site', send(PLUGIN_ROUTES.challenge, challenge(), { 'Sec-Fetch-Site': 'cross-site' }), 403)
+  // A vault's key is not the service's bearer: none of the service's own operations answers it.
+  await expect('the vault key on the service status', send('/status', null, { Authorization: `Bearer ${world.bearer}` }, 'GET'), 401)
+  await expect('the vault key asking for a tick', send('/tick', { runtimeId: world.service.identity.runtimeId }, { Authorization: `Bearer ${world.bearer}` }), 401)
+  await expect('the vault key asking the service to stop', send('/stop', { runtimeId: world.service.identity.runtimeId }, { Authorization: `Bearer ${world.bearer}` }), 401)
+  assert.deepEqual([world.service.calls.status, world.service.calls.tick, world.service.calls.stop], [0, 0, 0], 'no refused request reached a service operation')
+
+  // The service proves the key first, bound to its own exact address.
+  const challenged = await client.challenge()
+  assert.equal(challenged.answer.statusCode, 200)
+  const proven = client.helloFor(challenged)
+  assert.equal(challenged.answer.body.serverProof, pluginServerProof(proven.bound))
+  // A hello that does not prove the key opens nothing and uses the handshake up; so does a hello that proves it late.
+  await expect('a hello with a handshake nobody offered', send(PLUGIN_ROUTES.hello, { ...proven.body, handshakeId: `ph-${randomBytes(16).toString('hex')}` }), 401)
+  const otherProof = pluginClientProof({ ...proven.bound, bearer: otherBearer, pluginVersion: proven.body.pluginVersion, appVersion: proven.body.appVersion, instanceId: proven.body.instanceId, vaultProof: proven.body.vaultProof })
+  await expect('a hello proven with another vault\'s key', client.hello(challenged, { clientProof: otherProof }).then(({ answer }) => answer), 401)
+  await expect('a handshake used a second time', client.hello(challenged).then(({ answer }) => answer), 401)
+  const late = await client.challenge()
+  now += PLUGIN_HANDSHAKE_TTL_MS
+  await expect('a hello after its handshake lapsed', client.hello(late).then(({ answer }) => answer), 401)
+  const copy = keyHolder({ port, bearer: world.bearer, vaultPath: fs.realpathSync(world.dir) })
+  await expect('a hello that proves another folder', copy.hello(await copy.challenge()).then(({ answer }) => answer), 409)
+  assert.equal(sessions.report(SCOPE), null, 'no refused request opened a session')
+
+  // A session, as the plugin opens and uses it; every answer is sealed with the session's key.
+  const opened = await client.hello(await client.challenge())
+  const hello = unsealed({ answer: opened.answer, counter: 0 }, { key: opened.sessionKey, id: null }, 'hello')
+  assert.deepEqual([hello.schema, hello.scopeId, hello.leaseTtlMs, hello.renewEveryMs], [PLUGIN_CHANNEL_PROTOCOL, SCOPE, PLUGIN_LEASE_TTL_MS, PLUGIN_RENEW_INTERVAL_MS])
+  const session = { id: hello.sessionId, key: opened.sessionKey, counter: 0 }
+  assert.equal(unsealed(await client.command(session, 'lease'), session, 'lease').sessionId, session.id)
+  await expect('a request replayed', client.command(session, 'lease', { counter: session.counter }).then(({ answer }) => answer), 401)
+  await expect('a request whose MAC was made up', client.command(session, 'status', { mac: randomBytes(32).toString('hex') }).then(({ answer }) => answer), 401)
+  await expect('a MAC made for another command', client.command(session, 'status', { mac: pluginRequestMac({ sessionKey: session.key, command: 'lease', sessionId: session.id, counter: session.counter + 1 }) }).then(({ answer }) => answer), 401)
+  await expect('a session nobody was granted', keyHolder({ port, bearer: world.bearer, vaultPath }).command({ id: `ps-${'0'.repeat(32)}`, key: session.key, counter: 0 }, 'lease').then(({ answer }) => answer), 409)
+  const statusAnswer = await client.command(session, 'status')
+  assert.deepEqual(unsealed(statusAnswer, session, 'status'), { schema: PLUGIN_STATUS_SCHEMA, scopeId: SCOPE, service: { status: 'healthy' }, view: world.view, pendingEdits: { open: 0 } })
+  assert.deepEqual(unsealed(await client.command(session, 'release'), session, 'release'), { schema: PLUGIN_CHANNEL_PROTOCOL, scopeId: SCOPE, released: true })
+  await expect('a released session', client.command(session, 'lease').then(({ answer }) => answer), 409)
+  assert.equal(sessions.report(SCOPE), null)
+
+  // Another vault's key opens a session for that vault only.
+  const otherVault = path.join(world.workspaceRoot, 'vaults', 'scope-other')
+  fs.mkdirSync(otherVault, { mode: 0o700 })
+  const other = keyHolder({ port, bearer: otherBearer, scopeId: 'scope-other', vaultPath: fs.realpathSync(otherVault) })
+  const otherOpened = await other.hello(await other.challenge())
+  assert.equal(unsealed({ answer: otherOpened.answer, counter: 0 }, { key: otherOpened.sessionKey, id: null }, 'hello').scopeId, 'scope-other')
+  assert.deepEqual([sessions.report('scope-other')?.sessions, sessions.report(SCOPE)], [1, null])
+  for (const text of [opened.answer.text, statusAnswer.answer.text, challenged.answer.text]) {
     for (const word of [world.dir, world.workspaceRoot, world.bearer, otherBearer, 'notes/', '.md']) assert.equal(text.includes(word), false, `an answer carries ${word}`)
   }
 }
 
-test('the plugin commands answer this vault\'s bearer only, bounded and exact, and grant nothing of the service', async (t) => {
-  await assertOnlyTheVaultBearerActs(t, SERVER_PRIMITIVES)
+test('the plugin commands answer only a handshake over this vault\'s key, bounded and exact, and grant nothing of the service', async (t) => {
+  await assertOnlyTheVaultKeyActs(t)
 })
 
 for (const [label, broken] of [
-  ['takes any bearer for the first view it knows', { pluginBearerScope: (_presented, bearers) => [...bearers.keys()][0] ?? null }],
-  ['takes the runtime bearer for a view', { pluginBearerScope: (presented, bearers) => SERVER_PRIMITIVES.pluginBearerScope(presented, bearers) ?? (presented ? SCOPE : null) }],
-  ['reads plugin payloads of any size', { maxPluginRequestBytes: 1024 * 1024 }],
+  ['takes any MAC or proof for a match', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, macMatches: () => true } }],
+  ['takes a counter it has already seen', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, counterIsNew: () => true } }],
+  ['lets one handshake open more than one hello', { channelPrimitives: { ...PLUGIN_CHANNEL_PRIMITIVES, handshakeUsedOnce: false } }],
+  ['reads plugin payloads of any size', { primitives: { ...SERVER_PRIMITIVES, maxPluginRequestBytes: 1024 * 1024 } }],
 ]) {
-  test(`mutation control: a listener that ${label} fails the plugin request oracle`, async (t) => {
-    await assert.rejects(assertOnlyTheVaultBearerActs(t, { ...SERVER_PRIMITIVES, ...broken }), assert.AssertionError)
+  test(`mutation control: a channel that ${label} fails the plugin request oracle`, async (t) => {
+    await assert.rejects(assertOnlyTheVaultKeyActs(t, broken), assert.AssertionError)
   })
 }
+
+test('a hello must reach the address its handshake was made at, and handshakes waiting for a hello are bounded', (t) => {
+  let now = 0
+  const workspaceRoot = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-handshakes-'))
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(workspaceRoot, 'vaults', SCOPE), { recursive: true })
+  const bearer = ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE })
+  const sessions = createPluginSessions({ now: () => now })
+  const channel = createPluginChannelForOracleTests({ workspaceRoot, workspaceId: WORKSPACE_ID, runtimeId: 'rt-1', sessions, statusOf: () => ({ view: null, pendingEdits: null }), serviceStatus: () => 'healthy', now: () => now })
+  const authority = '127.0.0.1:43123'
+  const challenge = () => { const clientNonce = randomBytes(32).toString('hex'); return { clientNonce, answer: channel.handle('challenge', { body: { protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: pluginKeyHint({ bearer, clientNonce }), clientNonce }, authority }) } }
+  const helloAt = ({ clientNonce, answer }, at) => {
+    const bound = { bearer, scopeId: SCOPE, authority, clientNonce, serverNonce: answer.body.serverNonce, handshakeId: answer.body.handshakeId }
+    const vaultProof = pluginVaultProof({ sessionKey: pluginSessionKey(bound), vaultPath: fs.realpathSync(path.join(workspaceRoot, 'vaults', SCOPE)) })
+    return channel.handle('hello', { body: { handshakeId: bound.handshakeId, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${'1'.repeat(32)}`, vaultProof, clientProof: pluginClientProof({ ...bound, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${'1'.repeat(32)}`, vaultProof }) }, authority: at })
+  }
+  assert.equal(helloAt(challenge(), '127.0.0.1:43124').statusCode, 401, 'a hello at another address')
+  assert.equal(helloAt(challenge(), authority).statusCode, 200)
+  const waiting = []
+  for (let index = 0; index < PLUGIN_MAX_PENDING_HANDSHAKES; index += 1) waiting.push(challenge().answer.statusCode)
+  assert.deepEqual(new Set(waiting), new Set([200]))
+  assert.equal(challenge().answer.statusCode, 429, 'no more handshakes wait than the bound')
+  now += PLUGIN_HANDSHAKE_TTL_MS
+  assert.equal(challenge().answer.statusCode, 200, 'lapsed handshakes free their places')
+})
 
 test('the plugin request bound is the service request bound', () => {
   assert.equal(PLUGIN_MAX_REQUEST_BYTES, MAX_REQUEST_BYTES)
 })
 
-test('sessions: bounded per view, renewed by their holder only, lapsing without renewal', () => {
+test('sessions: bounded per view, keyed for the channel only, lapsing without renewal and ending at their maximum age', () => {
   let now = 0
   const sessions = createPluginSessions({ now: () => now, maxPerScope: 2 })
-  const first = sessions.open({ scopeId: SCOPE, pluginVersion: '1.0.0', appVersion: '1.13.7' })
-  const second = sessions.open({ scopeId: SCOPE, pluginVersion: '1.0.0', appVersion: '1.13.8' })
-  assert.equal(sessions.open({ scopeId: SCOPE, pluginVersion: '1.0.0', appVersion: '1.13.7' }), null, 'a third live session for one view is refused')
-  assert.ok(sessions.open({ scopeId: 'scope-other', pluginVersion: '1.0.0', appVersion: '1.13.7' }), 'the bound is per view')
+  const key = Buffer.alloc(32, 1)
+  const open = (extra = {}) => sessions.open({ scopeId: SCOPE, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${'1'.repeat(32)}`, sessionKey: key, keyDigest: Buffer.alloc(32, 2), ...extra })
+  const first = open()
+  const second = open({ appVersion: '1.13.8', instanceId: `pi-${'2'.repeat(32)}` })
+  assert.equal(open(), null, 'a third live session for one view is refused')
+  assert.ok(open({ scopeId: 'scope-other' }), 'the bound is per view')
   assert.match(first.sessionId, /^ps-[0-9a-f]{32}$/)
-  assert.equal(sessions.renew({ scopeId: 'scope-other', sessionId: first.sessionId }), null, 'a session is renewed for its own view only')
+  assert.deepEqual([Object.hasOwn(first, 'sessionKey'), Object.hasOwn(first, 'keyDigest')], [false, false], 'what a session hands out carries no key')
+  assert.equal(sessions.held(first.sessionId).sessionKey, key)
+  assert.ok(sessions.live(SCOPE).every((session) => !Object.hasOwn(session, 'sessionKey')))
   now += 1000
-  assert.equal(sessions.renew({ scopeId: SCOPE, sessionId: second.sessionId }).expiresAt, 1000 + PLUGIN_LEASE_TTL_MS)
-  assert.deepEqual(sessions.report(SCOPE), { scopeId: SCOPE, appVersion: '1.13.8', pluginVersion: '1.0.0', sessions: 2, renewedAt: new Date(1000).toISOString() }, 'the most recently renewed session speaks for the view')
+  assert.equal(sessions.renew(second.sessionId).expiresAt, 1000 + PLUGIN_LEASE_TTL_MS)
+  assert.deepEqual(sessions.report(SCOPE), { scopeId: SCOPE, appVersion: '1.13.8', pluginVersion: '1.1.0', sessions: 2, instances: 2, renewedAt: new Date(1000).toISOString() }, 'the most recently renewed session speaks for the view; two launches hold it')
   now = PLUGIN_LEASE_TTL_MS
-  assert.equal(sessions.report(SCOPE).sessions, 1, 'the session nobody renewed lapsed')
-  assert.ok(sessions.open({ scopeId: SCOPE, pluginVersion: '1.0.0', appVersion: '1.13.7' }), 'and freed its place')
-  assert.equal(sessions.release({ scopeId: 'scope-other', sessionId: second.sessionId }), false, 'a session is released for its own view only')
-  assert.equal(sessions.release({ scopeId: SCOPE, sessionId: second.sessionId }), true)
+  assert.deepEqual([sessions.report(SCOPE).sessions, sessions.report(SCOPE).instances], [1, 1], 'the session nobody renewed lapsed')
+  assert.ok(open(), 'and freed its place')
+  assert.equal(sessions.release(second.sessionId), true)
+  assert.equal(sessions.held(second.sessionId), null)
+  // However often it is renewed, a session ends at its maximum age, and its key with it.
+  const aged = createPluginSessions({ now: () => now, maxAgeMs: PLUGIN_MAX_SESSION_AGE_MS })
+  const lasting = aged.open({ scopeId: SCOPE, pluginVersion: '1.1.0', appVersion: '1.13.7', instanceId: `pi-${'1'.repeat(32)}`, sessionKey: key, keyDigest: key })
+  const openedAt = now
+  while (now + PLUGIN_RENEW_INTERVAL_MS < openedAt + PLUGIN_MAX_SESSION_AGE_MS) { now += PLUGIN_RENEW_INTERVAL_MS; assert.ok(aged.renew(lasting.sessionId)) }
+  now = openedAt + PLUGIN_MAX_SESSION_AGE_MS
+  assert.equal(aged.held(lasting.sessionId), null)
 })
 
 test('vault bearers: minted once, owner-only in private state, listed per view, and a broken one is replaced', (t) => {
@@ -674,6 +1005,41 @@ test('vault bearers: minted once, owner-only in private state, listed per view, 
   const replaced = ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE, randomBytes: bytes(4) })
   assert.notEqual(replaced, first)
   assert.equal(readPluginBearers({ workspaceRoot, workspaceId: WORKSPACE_ID }).get(SCOPE), replaced)
+})
+
+test('the bearers are read into memory once, and again only when their directory changed, however many requests arrive', async (t) => {
+  let reads = 0
+  const counting = (input) => { reads += 1; return readPluginBearers(input) }
+  const workspaceRoot = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-cache-'))
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  const cache = createPluginBearerCache({ workspaceRoot, workspaceId: WORKSPACE_ID, read: counting })
+  assert.deepEqual([cache.current().size, reads], [0, 1], 'no directory yet')
+  const first = ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE })
+  for (let index = 0; index < 50; index += 1) assert.equal(cache.current().get(SCOPE), first)
+  assert.equal(reads, 2, 'fifty lookups, one read after the bearer was minted')
+  // Another view's bearer minted, and one deleted to rotate it: each is seen at the next lookup.
+  ensurePluginBearer({ workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'scope-other' })
+  assert.equal(cache.current().size, 2)
+  fs.rmSync(path.join(pluginBearerDirectory(workspaceRoot), `${SCOPE}.json`))
+  assert.equal(cache.current().has(SCOPE), false)
+  assert.equal(reads, 4)
+
+  // Through the listener: fifty requests from a program without a key cost one read in all.
+  const world = await channelWorld(t)
+  const listenerReads = { count: 0 }
+  const counted = createPluginBearerCache({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, read: (input) => { listenerReads.count += 1; return readPluginBearers(input) } })
+  const channel = createPluginChannelForOracleTests({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, runtimeId: 'rt-1', sessions: createPluginSessions(), statusOf: world.statusOf, serviceStatus: () => 'healthy', bearers: counted })
+  const port = await freePort()
+  const identity = { serviceName: 'svc', workspaceId: WORKSPACE_ID, runtimeId: 'rt-1', pid: process.pid, host: '127.0.0.1', port, executableDigest: digest('entry'), startedAt: '2026-01-05T10:00:00.000Z' }
+  const listener = createServiceServerForOracleTests({ identity, bearer: randomBytes(32).toString('base64url'), operations: { healthStatus: () => 'healthy', status: () => ({}), tick: async () => ({}), stop: async () => {}, plugin: (command, request) => channel.handle(command, request) } }, SERVER_PRIMITIVES)
+  await listener.listen()
+  t.after(() => listener.close())
+  for (let index = 0; index < 50; index += 1) {
+    const clientNonce = randomBytes(32).toString('hex')
+    const answer = await raw({ port, route: PLUGIN_ROUTES.challenge, headers: { Host: authorityOf('127.0.0.1', port) }, body: JSON.stringify({ protocol: PLUGIN_CHANNEL_PROTOCOL, keyHint: randomBytes(32).toString('hex'), clientNonce }) })
+    assert.equal(answer.statusCode, 401)
+  }
+  assert.equal(listenerReads.count, 1, 'the store was read once')
 })
 
 // ---------------------------------------------------------------------------
@@ -1079,7 +1445,7 @@ test('the service publishes the plugin into the vault it maintains, and the plug
   world.advance(1000)
   const second = await service.tickNow()
   assert.ok(second.ok)
-  assert.deepEqual(reports.at(-1), { scopeId: SCOPE, appVersion: '1.13.7', pluginVersion: shippedManifest().version, sessions: 1, renewedAt: reports.at(-1).renewedAt })
+  assert.deepEqual(reports.at(-1), { scopeId: SCOPE, appVersion: '1.13.7', pluginVersion: shippedManifest().version, sessions: 1, instances: 1, renewedAt: reports.at(-1).renewedAt })
   await plugin.cycle()
   assert.equal(statusBar(), 'Atelier: current')
 
