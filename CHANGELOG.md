@@ -20,6 +20,26 @@
 - `atelier adopt --enroll-documents [--audience AUDIENCE]` adopts and enrolls
   in one step, checking the audience against the policy before adoption
   writes anything.
+- Views can be declared without editing JSON:
+  `atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default]`
+  adds a view to `atelier.project.json` (and `.atelier-local/` to
+  `.gitignore` when that folder is not ignored), and never commits. It shows
+  the change as a diff and how many notes the view would show on this machine,
+  with how many of the notes it selects are withheld for carrying no
+  classification or an audience that is not admitted. A view that would show
+  no note is refused with `view-would-be-empty` unless `--allow-empty`. A
+  person at a terminal is asked before anything is written (`--yes` answers
+  beforehand; no answer within 10 minutes writes nothing); for anyone else the
+  command is the consent. The file is rewritten only when it is in the form
+  Atelier writes JSON in, so the change is the view and nothing else
+  (`project-config-format-unknown` names the member to add by hand
+  otherwise), atomically, keeping its mode, and only over the bytes it read
+  (`project-config-changed`). A file that is not UTF-8 is never rewritten
+  (`gitignore-not-utf8`, or `project-config-format-unknown`). Every new text
+  is written and synced to disk before any file is replaced; a failure after
+  that says which files changed (`project-files-partly-written`), and no
+  temporary file is left beside them. The first view is the default. `view list` and
+  `view show ID` are `scope list` and `scope show ID`.
 
 ### Changed
 

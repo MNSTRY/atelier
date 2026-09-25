@@ -282,13 +282,19 @@ below is the shipped `atelier obsidian` usage text; `atelier obsidian --help`
 prints it. There are three steps, and none of them is done by hand in
 Obsidian.
 
-1. Enable the projection in the project configuration. The member
-   `ext["mnstry.atelier.obsidian"]` is an `atelier-obsidian-ext-settings/v1`
+1. Declare a view in the project configuration:
+   `atelier obsidian view add everything --all`. It adds a view of every note
+   the machine may show to `atelier.project.json`, shows the change as a diff
+   and how many notes the view would show, and makes it the default view. You
+   commit the file; Atelier commits nothing. See
+   [Adding a view](#adding-a-view). The member it writes,
+   `ext["mnstry.atelier.obsidian"]`, is an `atelier-obsidian-ext-settings/v1`
    document: `enabled: true`, `scopes` (each with a `scopeId`, a `mode` of
    `full`, `scoped` or `focus`, a `selector`, and for an expansion an explicit
-   `depth` and `maxNodes`), and optionally `defaultScopeId`. A project without
-   this member is `disabled (not-configured)` and nothing is published.
-   `atelier obsidian scope list` shows what was declared.
+   `depth` and `maxNodes`), and optionally `defaultScopeId`. It can also be
+   written by hand. A project without this member is
+   `disabled (not-configured)` and nothing is published.
+   `atelier obsidian view list` (or `scope list`) shows what was declared.
 2. Set the private machine settings. They live outside every repository and
    are never committed:
    - `atelier obsidian audience set me` lets "only you" into a view: every
@@ -328,6 +334,47 @@ The maintenance service can also be managed on its own:
 `service status` and `service stop`; `service unit --print` prints a startup
 unit and installs nothing. The flags are needed only until the workspace
 remembers them, as for `open`.
+
+### Adding a view
+
+```sh
+atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default] [--allow-empty] [--yes]
+```
+
+- `--all` is a view of every note (`full`). `--folder` takes the notes under a
+  folder of a repository, written from the repository's root (`docs/notes`),
+  and can be given as often as needed; `--repo R` names the repository when
+  the project has more than one. `--tag T` takes the notes with a tag. Each of
+  these is a `scoped` view, and `--expand DEPTH:MAX` adds the notes they link
+  to, following links up to DEPTH steps and adding at most MAX notes.
+- The first view declared is the default; `--default` makes a later one the
+  default.
+- Before writing, the command counts the notes the view would show on this
+  machine, for the audiences the machine admits (for "only you" while nobody
+  decided who may see), and names how many of the notes it selects are
+  withheld: those without a classification (a `kg` block), and those whose
+  audience is not admitted. A view that would show no note is refused with
+  `view-would-be-empty` and the counts; `--allow-empty` declares it anyway.
+- A person at a terminal sees the change and the counts and is asked
+  `Write this change? [Y/n]`; `--yes` answers beforehand, and no answer within
+  10 minutes writes nothing (`unanswered`). For anyone else the command is the
+  consent: the change is made, and printed (`diff` under `--json`).
+- The file is rewritten only when it is in the form Atelier writes JSON in
+  (two-space indentation, LF or CRLF line ends, with or without a final one),
+  so the change is the new view and nothing else. A file in another form is
+  refused with `project-config-format-unknown`, and the member to add by hand
+  is in the refusal's `detail`. The file is replaced atomically, keeps its
+  mode, and only while it holds the bytes the change was made from
+  (`project-config-changed` otherwise). A link is not followed
+  (`project-file-not-regular`).
+- The workspace pointer is only ever written into an ignored `.atelier-local/`.
+  When that folder is not ignored, the same change adds `.atelier-local/` to
+  the project's `.gitignore`, and shows it.
+- A name that is taken is refused with `view-exists`. Removing a view is done
+  by hand for now.
+- The contract's `type` selector matches a note's file type (`markdown`,
+  `html`), not its `kg.type`, so `view add` does not offer it; a view by
+  `kg.type` needs a contract change.
 
 ### What this machine remembers
 
