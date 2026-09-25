@@ -4,8 +4,9 @@ import path from 'node:path'
 import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
 import { realPathAsStored } from '../../project/private-state.mjs'
-import { readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
+import { appAnswered, readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
 import { registerVaultInObsidianSettings } from './app-registration.mjs'
+import { launchPlan, runLaunchPlan, urlProcessed } from './launch-plan.mjs'
 
 // The production seams of `obsidian open` and of the service's adapter
 // factory: the only code that asks the installed Obsidian anything or asks the
@@ -44,18 +45,19 @@ function cliExists(cliPath) {
   try { return fs.statSync(cliPath).isFile() } catch { return false }
 }
 
-const NOT_ASKED = Object.freeze({ version: null, noVaultOpen: false })
+const NOT_ASKED = Object.freeze({ version: null, noVaultOpen: false, cliOff: false })
 
 const observationOf = ({ platform, cliPath, processes, answer }) => {
   const appPath = installedAppPath(platform)
   const present = cliExists(cliPath)
-  const answered = answer.version !== null || answer.noVaultOpen
+  const answered = answer.version !== null || answer.noVaultOpen || answer.cliOff === true
   return {
     installed: appPath === null ? (present !== false && (answered || present === true)) : fs.existsSync(appPath),
     cli: present === true || answered,
     running: processes === 'running' ? true : processes === 'absent' ? false : null,
     version: answer.version,
     ...(answer.noVaultOpen ? { noVaultOpen: true } : {}),
+    ...(answer.cliOff === true ? { cliOff: true } : {}),
   }
 }
 
@@ -159,15 +161,29 @@ export function createProductionAppRegistry({
   }
 }
 
-// Asks the operating system to open the vault in Obsidian. No shell.
-export function createProductionLauncher({ platform = process.platform, env = process.env } = {}) {
-  const command = platform === 'darwin' ? '/usr/bin/open' : platform === 'linux' ? 'xdg-open' : null
+// Shows the vault in Obsidian by the steps of launchPlan, carried out by
+// runLaunchPlan: a quit app is started plainly (so it reopens every vault its
+// list flags open) and handed the vault's URL through its command-line tool once
+// the app itself answers the tool; a running app is handed the URL through its
+// tool, which takes a URL even with its command line turned off, and through the
+// operating system when the tool did not take it. A URL is never handed to the
+// operating system for an app this launch started. No shell.
+export function createProductionLauncher({
+  platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), workingDirectory = NEUTRAL_DIRECTORY, waitMs, pollMs, sleep,
+} = {}) {
+  const osCommand = platform === 'darwin' ? '/usr/bin/open' : platform === 'linux' ? 'xdg-open' : null
+  const run = (file, args, timeout = 15_000) => new Promise((resolve) => {
+    execFile(file, args, { env, cwd: workingDirectory, timeout, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => resolve({ failed: Boolean(error), stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }))
+  })
   return {
-    open({ vaultRoot }) {
-      if (command === null) return Promise.resolve({ launched: false, reason: 'launcher-platform-unqualified' })
-      const uri = `obsidian://open?path=${encodeURIComponent(vaultRoot)}`
-      return new Promise((resolve) => {
-        execFile(command, [uri], { env, timeout: 15_000 }, (error) => resolve(error ? { launched: false, reason: 'os-open-failed' } : { launched: true, reason: 'os-open-accepted' }))
+    open({ vaultId = null, vaultPath = null, appRunning }) {
+      const plan = launchPlan({ platform, appRunning, vaultId, vaultPath })
+      return runLaunchPlan(plan, {
+        start: async () => !(await run(osCommand, ['-b', 'md.obsidian'])).failed,
+        answered: async () => { const reply = await run(cliPath, ['version'], CLI_TIMEOUT_MS); return appAnswered({ stdout: reply.stdout, stderr: reply.stderr, exited: !reply.failed }) },
+        handLink: async (uri) => urlProcessed((await run(cliPath, [uri], CLI_TIMEOUT_MS)).stdout),
+        osOpen: async (uri) => !(await run(osCommand, [uri])).failed,
+        ...(waitMs === undefined ? {} : { waitMs }), ...(pollMs === undefined ? {} : { pollMs }), ...(sleep === undefined ? {} : { sleep }),
       })
     },
   }

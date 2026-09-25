@@ -24,6 +24,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { OBSIDIAN_SETTINGS_FILE, obsidianUserDataDir } from '../../../src/projection/obsidian/publication/vault-list.mjs'
+import { launchPlan, runLaunchPlan, urlProcessed } from '../../../src/runtime/obsidian/launch-plan.mjs'
+import { appAnswered } from '../../../src/runtime/obsidian/app-capability.mjs'
 
 export const APP_DIR = process.env.ATELIER_OBSIDIAN_APP_DIR || '/Applications/Obsidian.app/Contents/MacOS'
 export const CLI_PATH = path.join(APP_DIR, 'obsidian-cli')
@@ -95,13 +97,17 @@ export function createIsolatedApp({ parent = process.env.ATELIER_OBSIDIAN_TMP ||
       }
       throw new Error('the isolated Obsidian did not answer its command line in time')
     },
-    // `open`'s launcher for this app: a URL on its command line when it starts, through its own tool while it runs.
+    // `open`'s launcher for this app, carried out like the production launcher (launch-plan.mjs), with this app's
+    // private start and its own tool: never the operating system's URL opener.
     launcher: {
-      async open({ vaultRoot }) {
-        const url = `obsidian://open?path=${encodeURIComponent(vaultRoot)}`
-        if (processProbe() !== 'running') { start(url); return { launched: true, reason: 'isolated-app-started' } }
-        const reply = await cli([url])
-        return reply.failed || !reply.stdout.includes('Processed URI') ? { launched: false, reason: 'isolated-app-refused-url' } : { launched: true, reason: 'isolated-app-accepted-url' }
+      open({ vaultId = null, vaultPath = null, appRunning }) {
+        return runLaunchPlan(launchPlan({ platform: 'darwin', appRunning, vaultId, vaultPath }), {
+          start: async () => { start(null); return true },
+          answered: async () => { if (!fs.existsSync(socket)) return false; const reply = await cli(['version'], { timeoutMs: 5000 }); return appAnswered({ stdout: reply.stdout, stderr: reply.stderr, exited: !reply.failed }) },
+          handLink: async (uri) => urlProcessed((await cli([uri])).stdout),
+          osOpen: async () => false,
+          waitMs: 60000, pollMs: 300,
+        })
       },
     },
     // Ends exactly this app's processes, by its profile; answers the PIDs still alive afterwards.

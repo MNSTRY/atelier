@@ -96,6 +96,8 @@ const { resolveProjectConfig, writeJson } = await import('../src/project/config.
 const { isContractIdentifier, validateObsidianContract } = await import('../src/projection/obsidian/contracts.mjs')
 const { MAX_OBSIDIAN_SETTINGS_BYTES, NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, createObsidianCliCall, enclosingVaults, findVaultEntry, obsidianSandboxedBuild, obsidianUserDataDir, publicationRoute, readObsidianSettings, resolveExchange, vaultRoute } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
+const { launchPlan, runLaunchPlan, urlProcessed } = await import('../src/runtime/obsidian/launch-plan.mjs')
+const { appAnswered } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readEvalAnswer, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { appStateSignature, registerVaultInObsidianSettings } = await import('../src/runtime/obsidian/app-registration.mjs')
 const { loadContributions } = await import('../src/runtime/obsidian/contributions.mjs')
@@ -212,9 +214,11 @@ function fakeApp(overrides = {}) {
   const state = {
     installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0,
     noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, listNoVault: false, registerNoVault: false,
-    registerUnanswered: null, ...overrides,
+    registerUnanswered: null, cliOff: false, ...overrides,
   }
   const launches = []
+  // What each launch was asked: { vaultRoot, vaultId, appRunning }.
+  const launchArgs = []
   const registrations = []
   // Each listed vault a call about a vault reached, by id: the app opens a vault that takes a call and is closed.
   const reached = []
@@ -231,9 +235,11 @@ function fakeApp(overrides = {}) {
     return ids.find((id) => { const folder = path.resolve(state.vaults[id].path); return route.cwd === folder || route.cwd.startsWith(folder + path.sep) }) ?? null
   }
   return {
-    state, launches, registrations, reached, noVaultNow,
+    state, launches, launchArgs, registrations, reached, noVaultNow,
     appProbe: {
       inspect: async () => {
+        // With its command line turned off the running app answers every command with the same line, never a version.
+        if (state.cliOff && state.running) return { installed: state.installed, cli: true, running: true, version: null, cliOff: true }
         if (noVaultNow()) { if (state.noVaultAnswers > 0) state.noVaultAnswers -= 1; return { installed: state.installed, cli: state.cli, running: true, version: null, noVaultOpen: true } }
         return { installed: state.installed, cli: state.cli, running: state.running, version: state.running ? state.version : null }
       },
@@ -245,10 +251,11 @@ function fakeApp(overrides = {}) {
         return { answered: holds, indexReady: holds && state.indexReady }
       },
     },
-    launcher: { open: async ({ vaultRoot }) => { launches.push(vaultRoot); if (state.launchResult.launched && state.comesUp) state.running = true; return state.launchResult } },
+    launcher: { open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push(Object.fromEntries(Object.entries({ vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning }).filter(([, value]) => value !== undefined))); if (state.launchResult.launched && state.comesUp) state.running = true; return state.launchResult } },
     registry: {
       listThroughApp: async () => {
         if (!state.running) throw new Error('the app does not run')
+        if (state.cliOff) return { answered: false, reason: 'cli-turned-off' }
         if (noVaultNow() || state.listNoVault) return { answered: false, reason: 'no-vault-open' }
         if (registrations.length > 0 && state.loadingAnswers > 0) { state.loadingAnswers -= 1; return { answered: false, reason: 'no-value' } }
         return state.listAnswers ? { answered: true, vaults: structuredClone(state.vaults) } : { answered: false, reason: 'cli-failed' }
@@ -996,6 +1003,105 @@ test('app not running: the view is published on the path with no app, the vault 
   // Opened again, with the app now running and holding it: nothing is added a second time.
   const again = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
   assert.deepEqual([again.json.outcome, again.json.registration?.how, app.registrations.length], ['current', 'listed', 1])
+})
+
+test('the launch names the vault by its id and says whether the app runs: a quit app is started plainly, so it reopens the vaults its list marks open, and handed the vault by id once it answers', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const app = fakeApp({ running: false, vaults: { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })
+  await serviceBehindApp(world, app)
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.equal(opened.json.outcome, 'current', JSON.stringify(opened.json))
+  const ours = Object.keys(app.state.vaults).find((id) => app.state.vaults[id].path === world.vault())
+  assert.deepEqual(app.launchArgs, [{ vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault(), appRunning: false }])
+  // Running now: handed the URL, never started again.
+  const listedClosed = fakeApp({ running: true, vaults: { [ours]: { path: world.vault(), ts: 1 } } })
+  await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...listedClosed }, open: FAST_APP })
+  assert.deepEqual(listedClosed.launchArgs, [{ vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault(), appRunning: true }])
+})
+
+test('the launch plan: a vault is named by id; a quit app on macOS is started plainly, waited for, then handed the URL; a running app is handed the URL; Linux starts a quit app with the URL; elsewhere nothing', () => {
+  const uri = 'obsidian://open?vault=0123456789abcdef'
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: false, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'plain-start' }, { step: 'wait-for-app' }, { step: 'url', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: true, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'url', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'linux', appRunning: false, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'url-start', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'linux', appRunning: true, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'url', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'win32', appRunning: false, vaultId: '0123456789abcdef' }), { ok: false, reason: 'launcher-platform-unqualified' })
+  for (const vaultId of [undefined, '', 'a b', '../x', 'x'.repeat(65), 'a&b=c']) assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: false, vaultId }), { ok: false, reason: 'vault-id-unknown' }, String(vaultId))
+  // A running app with no vault open also takes a URL through its tool; unknown ("null") is treated as not running,
+  // since a plain start of a running app only brings it forward.
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: null, vaultId: 'a1' }).steps[0], { step: 'plain-start' })
+  assert.equal(urlProcessed('Processed URI obsidian://open?vault=a1\n'), true)
+  assert.equal(urlProcessed('Command line interface is not enabled. Please turn it on in Settings > General > Advanced.'), false)
+})
+
+test('a vault is named by the id its route found, and by its own path when another vault\'s folder is named like its id', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const ours = 'abc123'
+  // Listed first, a vault whose folder name is our id in another case: `vault=abc123` would reach it.
+  const app = fakeApp({ running: true, vaults: { zzzzzzzzzzzzzzzz: { path: path.join(world.dir, 'ABC123'), ts: 1 }, [ours]: { path: world.vault(), ts: 2 } } })
+  await serviceBehindApp(world, app)
+  await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual(app.launchArgs, [{ vaultRoot: world.vault(), vaultPath: world.vault(), appRunning: true }])
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: true, vaultPath: '/v/strategy lab' }), { ok: true, steps: [{ step: 'url', uri: 'obsidian://open?path=%2Fv%2Fstrategy%20lab' }] })
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: true, vaultPath: 'relative' }), { ok: false, reason: 'vault-id-unknown' })
+  // An id the plan does not accept falls back to the vault's own path rather than refusing.
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: true, vaultId: 'odd id', vaultPath: '/v/a' }).steps, [{ step: 'url', uri: 'obsidian://open?path=%2Fv%2Fa' }])
+})
+
+test('the launch is carried out without ever handing a URL to the operating system for an app it started: the tool\'s "unable to find Obsidian" is not the app answering, a link the started app did not take is left to it, and a running app gets the system opener only as a fallback', async () => {
+  const UNABLE = 'The CLI is unable to find Obsidian. Please make sure Obsidian is running and try again.'
+  assert.equal(appAnswered({ stdout: UNABLE }), false)
+  assert.equal(appAnswered({ stdout: '', stderr: '' }), false)
+  assert.equal(appAnswered({ stdout: '1.13.7 (installer 1.12.7)\n' }), true)
+  assert.equal(appAnswered({ stdout: '1.13.7', exited: false }), false)
+  for (const line of ['Vault not found.', 'Error: Command "version" not found. It may require a plugin to be enabled.', 'Command line interface is not enabled. Please turn it on in Settings > General > Advanced.']) assert.equal(appAnswered({ stdout: line }), true, line)
+  const world = (script) => {
+    const calls = []
+    let polls = 0
+    let clock = 0
+    return {
+      calls,
+      io: {
+        start: async () => { calls.push('start'); return true },
+        answered: async () => { polls += 1; calls.push('poll'); return appAnswered({ stdout: polls <= (script.unableFor ?? 0) ? UNABLE : script.answer ?? '1.13.7' }) },
+        handLink: async (uri) => { calls.push(`link ${uri}`); return script.taken ?? true },
+        osOpen: async (uri) => { calls.push(`os ${uri}`); return true },
+        sleep: async (ms) => { clock += ms }, now: () => clock, waitMs: 2000, pollMs: 500,
+      },
+    }
+  }
+  const quit = launchPlan({ platform: 'darwin', appRunning: false, vaultId: 'a1' })
+  const running = launchPlan({ platform: 'darwin', appRunning: true, vaultId: 'a1' })
+  const link = 'obsidian://open?vault=a1'
+  let w = world({ unableFor: 2 })
+  assert.deepEqual(await runLaunchPlan(quit, w.io), { launched: true, reason: 'plain-start-then-url' })
+  assert.deepEqual(w.calls, ['start', 'poll', 'poll', 'poll', `link ${link}`], 'the link waits for the app itself, not for the tool')
+  w = world({ taken: false })
+  assert.deepEqual(await runLaunchPlan(quit, w.io), { launched: true, reason: 'app-started-link-not-taken' })
+  assert.ok(!w.calls.some((call) => call.startsWith('os ')), 'no URL to the operating system for an app this launch started')
+  w = world({ unableFor: Number.POSITIVE_INFINITY })
+  assert.deepEqual(await runLaunchPlan(quit, w.io), { launched: true, reason: 'app-started-not-answering' })
+  assert.ok(!w.calls.some((call) => call.startsWith('link ') || call.startsWith('os ')), 'nothing is handed to an app that never answered')
+  w = world({ taken: false })
+  assert.deepEqual(await runLaunchPlan(running, w.io), { launched: true, reason: 'os-open-accepted' })
+  assert.deepEqual(w.calls, [`link ${link}`, `os ${link}`])
+  assert.deepEqual(await runLaunchPlan({ ok: false, reason: 'vault-id-unknown' }, world({}).io), { launched: false, reason: 'vault-id-unknown' })
+})
+
+test('Obsidian with its command line turned off answers every command with one line: it is no version, it is app-cli-unavailable / cli-turned-off with the setting to turn on, and open adds and launches nothing', async (t) => {
+  const OFF = 'Command line interface is not enabled. Please turn it on in Settings > General > Advanced.'
+  assert.deepEqual(readVersionAnswer({ stdout: `${OFF}\n` }), { version: null, noVaultOpen: false, cliOff: true })
+  assert.deepEqual(readVersionAnswer({ stderr: OFF, exited: false }), { version: null, noVaultOpen: false, cliOff: true })
+  assert.deepEqual(readEvalAnswer({ stdout: OFF }), { answered: false, reason: 'cli-turned-off' })
+  const off = qualifyApp({ installed: true, cli: true, running: true, version: null, cliOff: true })
+  assert.deepEqual([off.outcome, off.reason], ['app-cli-unavailable', 'cli-turned-off'])
+  assert.match(REASON_NEXT['cli-turned-off'], /Settings > General > Advanced/)
+  const world = makeWorld(t)
+  const app = fakeApp({ running: true, cliOff: true })
+  await serviceBehindApp(world, app)
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.next], ['app-cli-unavailable', 'cli-turned-off', REASON_NEXT['cli-turned-off']], JSON.stringify(opened.json))
+  assert.deepEqual([app.launches, app.registrations], [[], []])
 })
 
 test('several views of one workspace each get their own vault in the app: one added while the app is quit, the next through the running app, each found again by its own path', needsExchange, async (t) => {

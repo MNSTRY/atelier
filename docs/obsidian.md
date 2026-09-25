@@ -387,10 +387,15 @@ Publication is proven on macOS arm64 only and is refused on Windows; see
 
 ### What `open` does in each state of Obsidian
 
-Obsidian opens a vault by path (`obsidian://open?path=`) only when the folder
-is in its own vault list, the `vaults` of `obsidian.json` in its user-data
-directory. `open` puts the view's vault there first, and never asks a person
-to open a folder by hand:
+Obsidian opens a vault from a link only when the folder is in its own vault
+list, the `vaults` of `obsidian.json` in its user-data directory. `open` puts
+the view's vault there first, and never asks a person to open a folder by
+hand. It then names the vault by its id (`obsidian://open?vault=<id>`), never
+by path where the id reaches it first: a path is matched against the list by
+string prefix, so a link for a note under `/A/strategy-lab` can open the
+listed vault `/A/strategy`. When another vault's folder is named like the id,
+or the id is unusual, the vault's own path is used, which the app matches
+exactly because the folder is listed.
 
 - **Obsidian runs and answers its command line (any vault is open).** `open`
   reads the app's vault list through its command line. A vault the app does
@@ -403,7 +408,16 @@ to open a folder by hand:
 - **Obsidian is not running.** The view is published on the path with no app,
   as before. `open` then adds the vault to the app's settings file (see
   [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list) for
-  exactly when and how that one file is written) and starts Obsidian on it.
+  exactly when and how that one file is written, marked to reopen) and starts
+  Obsidian plainly, with no link: an Obsidian started with a link opens only
+  that vault and drops the reopen flag of every other one, so your other
+  vaults would not come back the next time you start it. Started plainly, it
+  reopens every vault it had open, this one included, and once its command
+  line answers (the app itself, not the tool's "unable to find Obsidian")
+  `open` hands it the vault's link through that tool, never through the
+  operating system. On Linux a plain start is not
+  qualified yet, and Obsidian is started with the link (the other vaults'
+  reopen marks are lost there; a known limit).
   An Obsidian that never ran on this account has no settings file yet, and
   `open` does not create one: start Obsidian once, then open again.
 - **Obsidian runs with no vault open.** Its command line then answers every
@@ -414,6 +428,15 @@ to open a folder by hand:
   `app-version-unsupported` with reason `no-vault-open`: open any vault in
   Obsidian, or quit it, and open again. This is the one state of a running
   Obsidian that `open` cannot get through alone.
+- **Obsidian's command line is turned off** (the default of a new
+  installation). It then answers every command with "Command line interface
+  is not enabled", and only a link reaches it. With Obsidian running, `open`
+  adds and launches nothing. With Obsidian quit, `open` adds the vault to its
+  settings and starts it, and Obsidian opens the vault. Either way `open` then
+  answers `app-cli-unavailable` with reason `cli-turned-off` and says where to
+  turn it on: Settings > General > Advanced > Command line interface.
+  Publishing into a vault Obsidian holds needs it until Atelier's plugin takes
+  over that part.
 
 Only `open` adds a vault to Obsidian: the maintenance service never does, so
 it never opens a window nobody asked for. A declared view that was never
