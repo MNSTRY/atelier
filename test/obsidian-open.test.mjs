@@ -32,9 +32,10 @@ import { promisify } from 'node:util'
 const BANNED_PROGRAMS = ['obsidian-cli', 'obsidian', 'open', 'xdg-open', 'launchctl', 'systemctl']
 const WRAPPERS = ['sh', 'bash', 'zsh', 'dash', 'env', 'cmd', 'powershell', 'pwsh', 'nohup', 'sudo']
 const REACHES_THE_APP = /--adapter=obsidian-cli|app-production-seams/
-// The obsidian command of the real entry also reaches the app through an adapter its workspace remembers, which it uses
-// only outside the test runner: such a child counts as one that can reach the app unless it runs under the runner.
-const mayUseRememberedAdapter = (words, env) => words.includes('obsidian') && words.some((word) => word === 'open' || word === 'service') && (env ?? process.env).NODE_TEST_CONTEXT === undefined
+// The obsidian command of the real entry also reaches the app through an adapter its workspace remembers. The command
+// refuses a remembered adapter under the test runner, but that refusal is the code under test: such a child counts as one
+// that can reach the app, inside the runner or not, and needs the private environment.
+const mayUseRememberedAdapter = (words) => words.includes('obsidian') && words.some((word) => word === 'open' || word === 'service')
 const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
 const REAL_RUNTIME_DIRS = [process.env.XDG_RUNTIME_DIR, typeof process.getuid === 'function' ? `/run/user/${process.getuid()}` : ''].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
 const REAL_CONFIG_HOMES = [process.env.XDG_CONFIG_HOME, ...REAL_HOMES.map((home) => path.join(home, '.config'))].filter((dir) => typeof dir === 'string' && dir !== '').map((dir) => path.resolve(dir))
@@ -63,7 +64,7 @@ function guardSpawn(command, args, options) {
     throw error
   }
   // A child with no env of its own inherits this process's, and with it the developer's HOME.
-  const refusal = words.some((word) => REACHES_THE_APP.test(word)) || mayUseRememberedAdapter(words, options?.env) ? reachesOwnApp(options?.env ?? process.env) : null
+  const refusal = words.some((word) => REACHES_THE_APP.test(word)) || mayUseRememberedAdapter(words) ? reachesOwnApp(options?.env ?? process.env) : null
   if (refusal !== null) {
     const error = new Error(`spawn guard: ${refusal}`)
     guardErrors.push(error.message)
@@ -498,19 +499,22 @@ test('the spawn guard refuses a child that can reach a running Obsidian unless n
     const answered = await promisify(childProcess.execFile)(process.execPath, ['-e', 'process.stdout.write("ok")', '--', '--adapter=obsidian-cli'], { env: isolated })
     assert.deepEqual(answered, { stdout: 'ok', stderr: '' })
   }
-  // The obsidian command of the real entry may use an adapter its workspace remembers, which it never does under the
-  // test runner: outside the runner's context, such a child needs the private environment too; inside it, it does not.
+  // The obsidian command of the real entry may use an adapter its workspace remembers. It refuses one under the test
+  // runner, but the guard does not rely on the code under test: inside the runner's context or outside it, such a child
+  // needs the private environment.
   const { NODE_TEST_CONTEXT: _runner, ...outsideTheRunner } = process.env
   for (const words of [['obsidian', 'open', '--json'], ['obsidian', 'service', 'start']]) {
     const args = ['-e', '0', '--', ...words]
     assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: outsideTheRunner }), /spawn guard: a child that can reach a running Obsidian/)
-    assert.equal(childProcess.spawnSync(process.execPath, args, { env: process.env }).status, 0)
+    assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: process.env }), /spawn guard: a child that can reach a running Obsidian/)
+    assert.throws(() => childProcess.spawnSync(process.execPath, args), /spawn guard: a child that can reach a running Obsidian/)
     if (APP_ISOLATION_HERE) {
       const { NODE_TEST_CONTEXT: _isolatedRunner, ...isolatedOutside } = isolated
       assert.equal(childProcess.spawnSync(process.execPath, args, { env: isolatedOutside }).status, 0)
+      assert.equal(childProcess.spawnSync(process.execPath, args, { env: isolated }).status, 0)
     }
   }
-  assert.equal(guardErrors.length, before + 2)
+  assert.equal(guardErrors.length, before + 6)
   guardErrors.length = before
   // Mutation control: a child that names neither passes whatever environment it has.
   assert.doesNotThrow(() => childProcess.spawnSync(process.execPath, ['-e', '0']))
@@ -529,13 +533,19 @@ test('the command never falls through to a real app: without seams it refuses, a
   const out = []
   const bare = await runObsidianCommand({ argv: ['status', '--json', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`], env: world.env, cwd: world.projectDir, stdout: (text) => out.push(text), stderr: () => {} })
   assert.deepEqual([bare, JSON.parse(out[0]).error.code], [EXIT.refused, 'seams-required'], 'a caller that passes no seams and is not the real entry reaches nothing, for any operation')
+  // As the real entry, with a private HOME: the refusal proved does not depend on it, and a regression of the refusal
+  // would reach no app of the developer's.
+  const env = privateHomeEnv(world.dir, world.env)
   for (const argv of [openArgs(), ['service', 'start', '--json', '--consent-actor', 'somebody'], ['service', 'unit', '--print', '--json']]) {
-    const result = await world.run(argv, { seams: null, production: true })
+    const result = await world.run(argv, { seams: null, production: true, env })
     assert.deepEqual([result.exit, result.json.error.code], [EXIT.refused, 'app-adapter-not-selected'], argv.join(' '))
   }
-  // The same through the real entry, as a child: it refuses before it loads anything that could reach an app.
-  const child = childProcess.spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'bin', 'atelier.mjs'), 'obsidian', 'open', '--json', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`], { env: world.env, cwd: world.projectDir, encoding: 'utf8', windowsHide: true })
-  assert.deepEqual([child.status, JSON.parse(child.stdout).error.code], [EXIT.refused, 'app-adapter-not-selected'])
+  // The same through the real entry, as a child: it refuses before it loads anything that could reach an app. Such a
+  // child starts only where the private environment isolates it.
+  if (APP_ISOLATION_HERE) {
+    const child = childProcess.spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'bin', 'atelier.mjs'), 'obsidian', 'open', '--json', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`], { env, cwd: world.projectDir, encoding: 'utf8', windowsHide: true })
+    assert.deepEqual([child.status, JSON.parse(child.stdout).error.code], [EXIT.refused, 'app-adapter-not-selected'])
+  }
   assert.equal(fs.existsSync(world.dataRoot) ? Object.keys(listing(path.join(world.dataRoot, 'obsidian', WORKSPACE_ID, 'state', 'service'))).length : 0, 0, 'and started nothing')
 })
 
@@ -2251,14 +2261,20 @@ test('--adapter given once is remembered for the workspace before anything start
   assert.deepEqual([again.json.service.alreadyRunning, again.json.rememberedNow.adapter], [true, false])
   assert.deepEqual(readMachineSettings(world.workspace()).decisions.adapter, adapter)
 
-  // The real entry, in this process under the runner: the remembered adapter refuses before anything is loaded or started.
+  // The real entry, in this process under the runner, with a private HOME (the refusal does not depend on it, and a
+  // regression of it would reach no app of the developer's): the remembered adapter refuses before anything is loaded or
+  // started.
+  const env = privateHomeEnv(world.dir, world.env)
   for (const argv of [['open', '--json'], ['service', 'start', '--json'], ['service', 'unit', '--print', '--json']]) {
-    const result = await world.run(argv, { seams: null, production: true })
+    const result = await world.run(argv, { seams: null, production: true, env })
     assert.deepEqual([result.exit, result.json.error.code], [EXIT.refused, 'remembered-adapter-under-test'], argv.join(' '))
   }
-  // And as a child of the real entry, which inherits the runner's context: the same refusal, before it loads anything.
-  const child = childProcess.spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'bin', 'atelier.mjs'), 'obsidian', 'open', '--json', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`], { env: world.env, cwd: world.projectDir, encoding: 'utf8', windowsHide: true })
-  assert.deepEqual([child.status, JSON.parse(child.stdout).error.code], [EXIT.refused, 'remembered-adapter-under-test'])
+  // And as a child of the real entry, which inherits the runner's context and gets the private environment: the same
+  // refusal, before it loads anything. Such a child starts only where that environment isolates it.
+  if (APP_ISOLATION_HERE) {
+    const child = childProcess.spawnSync(process.execPath, [path.join(REPOSITORY_ROOT, 'bin', 'atelier.mjs'), 'obsidian', 'open', '--json', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`], { env, cwd: world.projectDir, encoding: 'utf8', windowsHide: true })
+    assert.deepEqual([child.status, JSON.parse(child.stdout).error.code], [EXIT.refused, 'remembered-adapter-under-test'])
+  }
   assert.equal(globalThis[Symbol.for('mnstry.atelier.obsidian.production-seams-loaded')], undefined)
   assert.equal(SPAWNED.filter((entry) => entry.test === t.name).length, 1, 'only the service the first start made')
 
