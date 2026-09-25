@@ -310,7 +310,7 @@ export function explainSavedUpgrade({ project, planFile, now = new Date() }) {
     consent: { mode: plan.mode, requiredEffects: plan.policy.allowedEffects, humanApprovalAuthenticated: false, applicationAuthorized: false },
     outcome: 'local candidate commit', dependencyInstallation: plan.dependencyInstallation,
     activation: 'excluded', recovery: 'local backups and inspection only; no automatic rollback',
-    caveats: ['Generated readiness bytes can contain absolute host paths; inspect the saved writes before sharing.', 'Local receipts prove consistency, not publisher identity or an authenticated human decision.', 'Application rechecks current state; this report neither reserves the workspace nor grants permission.'],
+    caveats: ['Saved writes are generated from repository content; inspect them before sharing.','Local receipts prove consistency, not publisher identity or an authenticated human decision.', 'Application rechecks current state; this report neither reserves the workspace nor grants permission.'],
   }
 }
 

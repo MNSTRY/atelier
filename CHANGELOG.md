@@ -14,8 +14,10 @@
   candidate's readiness bytes now match what `atelier readiness` regenerates
   there; before, when the path to the candidate passed through a symlink (as
   macOS temporary directories do), the check reported the new candidate
-  stale. An artifact written by an earlier version is reported stale once;
-  run `atelier readiness` to rewrite it and review the difference.
+  stale. `atelier upgrade explain` no longer warns that readiness bytes can
+  contain absolute host paths. An artifact written by an earlier version is
+  reported stale once; run `atelier readiness` to rewrite it and review the
+  difference.
 
 ## 0.2.0-alpha.12
 

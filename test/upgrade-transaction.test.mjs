@@ -382,14 +382,16 @@ transactionTest('ignored but tracked authored input remains present in prepared 
   assert.ok(graph.nodes.some((node) => node.id === 'workspace:seed'))
 })
 
-transactionTest('prepared readiness names no candidate path and stays fresh after application', (t) => {
+transactionTest('prepared writes name no candidate path and readiness stays fresh after application', (t) => {
   const f = fixture(t)
   const p = prepareUpgrade(f)
-  const written = Buffer.from(p.plan.writes.find((w) => w.path === 'atelier-output/atelier-readiness.json').content, 'base64').toString('utf8')
-  const readiness = JSON.parse(written)
+  const bytes = (w) => Buffer.from(w.content, 'base64').toString('utf8')
+  const readiness = JSON.parse(bytes(p.plan.writes.find((w) => w.path === 'atelier-output/atelier-readiness.json')))
   assert.equal(readiness.graph.path, 'atelier-output/knowledge.graph.json')
   assert.deepEqual(readiness.projection, { outputRoot: 'atelier-output', entry: 'atelier-output/index.html' })
-  for (const root of new Set([f.root, fs.realpathSync(f.root)])) assert.ok(!written.includes(root), `readiness names ${root}`)
+  for (const w of p.plan.writes) {
+    for (const root of new Set([f.root, fs.realpathSync(f.root)])) assert.ok(!bytes(w).includes(root), `${w.path} names ${root}`)
+  }
   assert.equal(apply(f.project, p).ok, true)
   const check = spawnSync(process.execPath, [new URL('../bin/atelier.mjs', import.meta.url).pathname, 'readiness', '--check', '--project', path.join(f.root, 'atelier.project.json')], { cwd: f.root, encoding: 'utf8', timeout: 60000 })
   assert.equal(check.status, 0, check.stderr)
