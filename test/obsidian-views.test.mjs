@@ -288,6 +288,31 @@ test('a file that is not UTF-8 is never rewritten: a byte the diff would not sho
   assert.ok(fs.readFileSync(other.configPath).equals(bytes), 'unchanged, byte for byte')
 })
 
+test('a change is written whole or says what changed: every new text is on the disk before any file is replaced, and no temporary file is left', (t) => {
+  const leftovers = (world) => fs.readdirSync(world.projectDir).filter((name) => name.endsWith('.atelier.tmp'))
+  const failing = (name) => (from, to) => { if (path.basename(to) === name) throw Object.assign(new Error('refused'), { code: 'EACCES' }); fs.renameSync(from, to) }
+  // The project file cannot be replaced after .gitignore was: typed, naming both.
+  const partly = makeWorld(t, { git: true })
+  const before = partly.text()
+  assert.throws(() => writeViewPlan(planViewAdd(partly.loadProject(), { scope: DEFAULT_VIEW }), { rename: failing('atelier.project.json') }),
+    (error) => error.code === 'project-files-partly-written' && JSON.stringify([error.detail.written, error.detail.notWritten, error.detail.cause]) === JSON.stringify([['.gitignore'], ['atelier.project.json'], 'EACCES']))
+  assert.equal(partly.text(), before)
+  assert.equal(partly.gitignore(), '.atelier-local/\n')
+  assert.deepEqual(leftovers(partly), [])
+  // The first file cannot be replaced: nothing changed, and it says so.
+  const none = makeWorld(t, { git: true })
+  assert.throws(() => writeViewPlan(planViewAdd(none.loadProject(), { scope: DEFAULT_VIEW }), { rename: failing('.gitignore') }), (error) => error.code === 'project-files-not-written' && error.detail.cause === 'EACCES')
+  assert.equal(fs.existsSync(path.join(none.projectDir, '.gitignore')), false)
+  assert.equal(none.text(), before)
+  assert.deepEqual(leftovers(none), [])
+  // A temporary file a crashed run left beside a planned file is removed by the next write.
+  const crashed = makeWorld(t)
+  const stale = path.join(crashed.projectDir, '.atelier.project.json.99999999.1.atelier.tmp')
+  fs.writeFileSync(stale, 'half')
+  writeViewPlan(planViewAdd(crashed.loadProject(), { scope: DEFAULT_VIEW }))
+  assert.deepEqual(leftovers(crashed), [])
+})
+
 test('a diff is one hunk with three lines of context', () => {
   const before = ['a', 'b', 'c', 'd', 'e', 'f', 'g', ''].join('\n')
   const after = ['a', 'b', 'c', 'd', 'X', 'Y', 'f', 'g', ''].join('\n')

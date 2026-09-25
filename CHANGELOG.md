@@ -216,7 +216,10 @@
   (`project-config-format-unknown` names the member to add by hand
   otherwise), atomically, keeping its mode, and only over the bytes it read
   (`project-config-changed`). A file that is not UTF-8 is never rewritten
-  (`gitignore-not-utf8`, or `project-config-format-unknown`). The first view is the default. `view list` and
+  (`gitignore-not-utf8`, or `project-config-format-unknown`). Every new text
+  is written and synced to disk before any file is replaced; a failure after
+  that says which files changed (`project-files-partly-written`), and no
+  temporary file is left beside them. The first view is the default. `view list` and
   `view show ID` are `scope list` and `scope show ID`.
 
 ### Changed

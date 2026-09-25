@@ -209,24 +209,74 @@ function assertUnchanged({ file, what, bytes: planned }) {
   }
 }
 
-// Replaces a planned file with its new text, atomically, keeping its mode.
-function replaceWith({ file, after, mode }) {
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.atelier.tmp`)
-  fs.writeFileSync(temporary, after, { flag: 'wx', ...(mode === null ? {} : { mode }) })
-  try {
-    if (mode !== null) fs.chmodSync(temporary, mode)
-    fs.renameSync(temporary, file)
-  } catch (error) {
-    fs.rmSync(temporary, { force: true })
-    throw error
+// The temporary file a planned file's new text is written to, beside it: `.<name>.<pid>.<ms>.atelier.tmp`.
+const temporaryOf = (file) => path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.atelier.tmp`)
+const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' } }
+// Temporary files an earlier run left beside a planned file when it stopped between writing and renaming (a crash):
+// removed, unless the run that made them still runs, so none is left to be committed.
+function removeLeftovers(file) {
+  const pattern = new RegExp(`^\\.${path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.([0-9]+)\\.[0-9]+\\.atelier\\.tmp$`)
+  let names = []
+  try { names = fs.readdirSync(path.dirname(file)) } catch { return }
+  for (const name of names) {
+    const match = pattern.exec(name)
+    if (match !== null && (Number(match[1]) === process.pid || !isAlive(Number(match[1])))) fs.rmSync(path.join(path.dirname(file), name), { force: true })
   }
 }
 
-// Writes a plan of planViewAdd when every file it changes still holds the bytes it was made from: the ignore line
-// first, so a project file that names a view never waits on it. Commits nothing. Answers the files written.
-export function writeViewPlan(plan) {
+// A planned file's new text in its temporary file, keeping its mode, and on the disk before any file is replaced.
+function writeTemporary({ file, after, mode }) {
+  const temporary = temporaryOf(file)
+  const descriptor = fs.openSync(temporary, 'wx', mode ?? 0o666)
+  try {
+    fs.writeFileSync(descriptor, after)
+    if (mode !== null) fs.fchmodSync(descriptor, mode)
+    fs.fsyncSync(descriptor)
+  } catch (error) {
+    fs.closeSync(descriptor)
+    fs.rmSync(temporary, { force: true })
+    throw error
+  } finally {
+    try { fs.closeSync(descriptor) } catch { /* closed above */ }
+  }
+  return temporary
+}
+
+// The folder of a replaced file, on the disk, so the renames survive a crash. A system that cannot sync a folder
+// (Windows) keeps the renames all the same.
+function syncFolder(folder) {
+  let descriptor
+  try { descriptor = fs.openSync(folder, 'r'); fs.fsyncSync(descriptor) } catch { /* not supported here */ } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
+}
+
+// Writes a plan of planViewAdd when every file it changes still holds the bytes it was made from: every new text is
+// written and synced to its temporary file first, then the files are replaced, the ignore line first, so a project
+// file that names a view never waits on it. A failure before the first replacement changes nothing
+// (`project-files-not-written`); one after it says which files changed (`project-files-partly-written`). No temporary
+// file is left. Commits nothing. Answers the files written. `rename` is injectable for tests.
+export function writeViewPlan(plan, { rename = fs.renameSync } = {}) {
   const targets = [...(plan.ignore.needed ? [plan.ignore] : []), plan.member]
+  for (const target of targets) removeLeftovers(target.file)
   for (const target of targets) assertUnchanged(target)
-  for (const target of targets) replaceWith(target)
-  return { written: targets.map((target) => target.file) }
+  const prepared = []
+  const discard = () => { for (const { temporary } of prepared) fs.rmSync(temporary, { force: true }) }
+  try {
+    for (const target of targets) prepared.push({ target, temporary: writeTemporary(target) })
+  } catch (error) {
+    discard()
+    refuse('project-files-not-written', 'the change could not be written; nothing was changed', { cause: error.code ?? String(error.message) })
+  }
+  const written = []
+  for (const { target, temporary } of prepared) {
+    try { rename(temporary, target.file) } catch (error) {
+      discard()
+      const names = (list) => list.map((file) => path.basename(file))
+      const rest = targets.map((item) => item.file).filter((file) => !written.includes(file))
+      if (written.length === 0) refuse('project-files-not-written', 'the change could not be written; nothing was changed', { cause: error.code ?? String(error.message) })
+      refuse('project-files-partly-written', `${names(written).join(', ')} changed, and ${names(rest).join(', ')} could not be; finish the change by hand, or undo it`, { written: names(written), notWritten: names(rest), cause: error.code ?? String(error.message) })
+    }
+    written.push(target.file)
+  }
+  for (const folder of new Set(written.map((file) => path.dirname(file)))) syncFolder(folder)
+  return { written }
 }
