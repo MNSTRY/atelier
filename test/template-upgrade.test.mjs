@@ -76,9 +76,11 @@ const read = (f, name) => fs.readFileSync(path.join(f.root, name))
 const state = f => hashObject(inventory(f.root, { exclude: ['.git', '.atelier-local'] }))
 const update = f => { const profile = structuredClone(profileSample); profile.version = '1.1.0'; profile.purpose = 'An updated invented reading shelf.'; put(f.root, 'next-profile.json', profile); commit(f) }
 
-transactionTest('prior-release lock upgrades through the template v3 transaction without a separate repin', (t) => {
+const priorReleaseLocks = ['alpha10-lock.json', 'alpha12-lock.json']
+const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url))).version
+for (const lockFile of priorReleaseLocks) transactionTest(`prior-release lock ${lockFile} upgrades through the template v3 transaction without a separate repin`, (t) => {
   const f = fixture(t)
-  const bytes = fs.readFileSync(new URL('./fixtures/upgrade/alpha10-lock.json', import.meta.url))
+  const bytes = fs.readFileSync(new URL('./fixtures/upgrade/' + lockFile, import.meta.url))
   const previous = JSON.parse(bytes)
   fs.writeFileSync(path.join(f.root, 'atelier.lock.json'), bytes)
   commit(f)
@@ -90,7 +92,7 @@ transactionTest('prior-release lock upgrades through the template v3 transaction
   assert.equal(applied.ok, true, JSON.stringify(applied))
   const next = JSON.parse(read(f, 'atelier.lock.json'))
   assert.deepEqual(next.extensionPacks, previous.extensionPacks)
-  assert.notEqual(next.package.version, previous.package.version)
+  assert.equal(next.package.version, packageVersion)
   assert.deepEqual(next.template, previous.template)
   assert.deepEqual(next.appliedMigrations, previous.appliedMigrations)
   assert.deepEqual(read(f, 'seed.md'), source)
@@ -129,9 +131,9 @@ transactionTest('workspace template lineage replacement in a rehashed plan refus
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), head)
 })
 
-transactionTest('prior-release lock with a changed pack digest still refuses template preparation', (t) => {
+for (const lockFile of priorReleaseLocks) transactionTest(`prior-release lock ${lockFile} with a changed pack digest still refuses template preparation`, (t) => {
   const f = fixture(t)
-  const previous = JSON.parse(fs.readFileSync(new URL('./fixtures/upgrade/alpha10-lock.json', import.meta.url)))
+  const previous = JSON.parse(fs.readFileSync(new URL('./fixtures/upgrade/' + lockFile, import.meta.url)))
   previous.extensionPacks[0].digest = 'sha256:' + '0'.repeat(64)
   put(f.root, 'atelier.lock.json', previous)
   commit(f)

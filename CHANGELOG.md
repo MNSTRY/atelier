@@ -5,6 +5,8 @@
 - Preserve workspace template lineage during profile adoption and updates.
   Keep profile identity in its typed adoption manifest, and refuse saved plans
   that replace the workspace lineage before installing any managed content.
+- Verify exact upgrades from a real 0.2.0-alpha.12 lock as well as the
+  alpha.10 lock, and check that the upgraded lock records the installed version.
 
 - Preserve the bundled readiness pack's immutable v1 content and digest so
   previous release locks can use both exact upgrade participants without a
