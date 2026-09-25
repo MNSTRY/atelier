@@ -170,11 +170,16 @@ async function startThroughLoginItem({ workspace, loginItem, entryPath, deadline
 // service (login-item.mjs). The service is then started through it, never as a child beside it, so two starts never
 // compete; `entryPath` is the entry the item runs. When the manager does not start it, the service is started as a
 // child, and the answer says why (`loginItem: { via: 'child', reason }`).
+//
+// `replaceOutdated`: a proven runtime of this workspace that runs an earlier release than the entry this start would run
+// (runtimeRelease) is stopped as `stopService` stops it and started again in its place, under the consent already
+// recorded (`replaced: 'outdated'`); one of a later release is never replaced (`release: 'later'`). Without it, any
+// proven runtime is answered as already running.
 export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   const {
     loadProject, dataRoot, host, port, consent, detached = false, entryPath = SERVICE_ENTRY_PATH, entryArgs = [], intervalMs,
     startTimeoutMs = DEFAULT_START_TIMEOUT_MS, probeTimeoutMs, clock = () => new Date(), env = process.env, platform = process.platform,
-    spawn = childProcess.spawn, execPath = process.execPath, alive = isProcessAlive, randomBytes = cryptoRandomBytes, loginItem = null,
+    spawn = childProcess.spawn, execPath = process.execPath, alive = isProcessAlive, randomBytes = cryptoRandomBytes, loginItem = null, replaceOutdated = false,
   } = options
   const { project, workspace } = context({ loadProject, dataRoot, env, platform, create: true })
   const { workspaceRoot, workspaceId } = workspace
@@ -195,8 +200,19 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
 
   let child = null
   try {
-    const before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
-    if (rules.isOurs(before)) return { ...shown(before), started: false, alreadyRunning: true }
+    let before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
+    // A runtime of an earlier release, still running after an upgrade, is replaced when asked to; it is stopped through its
+    // own listener, as its owner stops it, and nothing else is ever stopped here.
+    let replaced = null
+    if (rules.isOurs(before)) {
+      const standing = replaceOutdated ? runtimeRelease(before, entryPath) : null
+      if (standing === 'later') return { ...shown(before), started: false, alreadyRunning: true, release: 'later' }
+      if (standing !== 'outdated') return { ...shown(before), started: false, alreadyRunning: true }
+      const stopped = await stopService({ loadProject, dataRoot, env, platform, probeTimeoutMs, alive }, rules)
+      if (!stopped.stopped) return { ...shown(before), started: false, alreadyRunning: true, release: 'outdated', reason: stopped.reason ?? 'the-runtime-was-not-stopped' }
+      replaced = 'outdated'
+      before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
+    }
     // Running, and in a long tick: nothing is started beside it and nothing replaces it.
     if (before.state === 'busy') return { ...shown(before), started: false, alreadyRunning: true, busy: true }
     // With a login item, a listener that has not written its record yet may be the service its manager is starting
@@ -216,10 +232,10 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
     let fallback = null
     if (loginItem !== null) {
       const managed = await startThroughLoginItem({ workspace, loginItem, entryPath, deadline, probeTimeoutMs, alive, rules })
-      if (managed.result) return managed.result
+      if (managed.result) return replaced === null ? managed.result : { ...managed.result, replaced }
       fallback = { via: 'child', reason: managed.fallback, ...(managed.refreshed ? { refreshed: true } : {}) }
     }
-    const withFallback = (result) => (fallback === null ? result : { ...result, loginItem: fallback })
+    const withFallback = (result) => ({ ...result, ...(fallback === null ? {} : { loginItem: fallback }), ...(replaced === null ? {} : { replaced }) })
 
     const runtimeId = `rt-${randomBytes(16).toString('hex')}`
     const executable = executableIdentity(entryPath)

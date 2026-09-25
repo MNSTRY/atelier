@@ -1054,25 +1054,42 @@ test('once installed, a stopped service is started through the login item, and a
   assert.ok(world.launchd.calls.includes(`bootout gui/501/${label}`) && world.launchd.calls.includes(`kickstart -p gui/501/${label}`))
 })
 
-test('an outdated service is replaced through the login item: stopped as its owner stops it, then started by the manager on the installed entry', await commandTest(), async (t) => {
-  const world = await makeWorld(t)
-  // An earlier release: the same service entry with other bytes, running as a child `start` made before the item existed.
+// An earlier release: the same service entry with other bytes, as a child `start` made before an upgrade runs it.
+function earlierReleaseEntry(world) {
   const earlier = path.join(world.dir, 'earlier-release', 'service-entry.mjs')
   fs.mkdirSync(path.dirname(earlier))
   fs.writeFileSync(earlier, `${fs.readFileSync(TEST_SERVICE_ENTRY, 'utf8').replaceAll("'../../../src/", `'${new URL('../src/', import.meta.url).href}`)}\n// an earlier release\n`)
-  const outdated = await startService(world.lifecycle({ entryPath: earlier, consent: { actor: CONSENT_ACTOR, coverage: 'service' }, detached: true, spawn: followingSpawn(t), intervalMs: IDLE_INTERVAL }))
-  assert.equal(outdated.state, 'healthy')
-  // Installed now: its own start at load finds the earlier service running, and ends cleanly.
-  assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
+  return earlier
+}
+
+test('an outdated service is replaced through the login item: at --install before the unit is loaded, and by open once it is, never beside it', await commandTest(), async (t) => {
+  const world = await makeWorld(t)
+  const earlier = earlierReleaseEntry(world)
+  // The first start records a consent for the service alone; a later one runs under the consent recorded then.
+  const runEarlier = async (consent = undefined) => {
+    const outdated = await startService(world.lifecycle({ entryPath: earlier, ...(consent === undefined ? {} : { consent }), detached: true, spawn: followingSpawn(t), intervalMs: IDLE_INTERVAL }))
+    assert.equal(outdated.state, 'healthy')
+    return outdated
+  }
+  // Installed while an earlier release runs: it is stopped once the consent is recorded, before the unit is loaded, so
+  // the unit's own start at load runs the installed entry.
+  const first = await runEarlier({ actor: CONSENT_ACTOR, coverage: 'service' })
+  const installed = await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])
+  assert.deepEqual([installed.exit, installed.json.service.replaced], [EXIT.ok, 'outdated'], installed.stdout)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
-  await waitFor(() => job.child === null && job.exits.length === 1, { label: 'the start at load to end' })
-  assert.deepEqual([job.exits[0], world.lastStartup().code, world.record().runtimeId], [0, 'service-already-running', outdated.record.runtimeId])
+  const atLoad = await world.healthy()
+  assert.deepEqual([isAlive(first.record.pid), atLoad.record.executable.digest, atLoad.record.pid, job.runs, world.lastStartup().outcome], [false, sha256(fs.readFileSync(TEST_SERVICE_ENTRY)), job.child.pid, 1, 'started'])
+  // Once it is loaded: an earlier release started beside it (by another installation, say) is replaced by open,
+  // stopped as its owner stops it and started again by the manager.
+  assert.equal((await world.run(['service', 'stop', '--json'])).json.service.stopped, true)
+  await waitFor(() => job.child === null, { label: 'the unit\'s process to end' })
+  const second = await runEarlier()
   const opened = await world.run(['open', '--json'])
   assert.equal(opened.json.service.restarted, 'outdated', opened.stdout)
   const current = world.record()
   assert.deepEqual([current.executable.digest, current.pid, job.runs], [sha256(fs.readFileSync(TEST_SERVICE_ENTRY)), job.child.pid, 2], 'the manager started the installed entry; startService started no child')
-  assert.equal(isAlive(outdated.record.pid), false, 'the earlier service was stopped')
+  assert.equal(isAlive(second.record.pid), false, 'the earlier service was stopped')
 })
 
 test('a login item whose package is gone says so in status, and the next start writes it again for the entry of now', await commandTest(), async (t) => {
@@ -1145,20 +1162,100 @@ test('a login item its manager does not have loaded is not forced: the service i
   assert.match((await world.run(['status'])).stdout, /login item: installed, switched off in System Settings/)
 })
 
-test('service unit --remove lowers the consent first, unloads and deletes the unit, and the service it ran stops', await commandTest(), async (t) => {
+test('service unit --remove lowers the consent first, unloads and deletes the unit, and starts the service again for this session as a process of its own', await commandTest(), async (t) => {
   const world = await makeWorld(t)
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
-  const removed = await world.run(['service', 'unit', '--remove', '--json'])
+  const first = (await world.healthy()).record
+  const seams = world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, entryArgs: [`--interval-ms=${IDLE_INTERVAL}`], spawn: followingSpawn(t) } })
+  const removed = await world.run(['service', 'unit', '--remove', '--json'], { seams })
   assert.deepEqual([removed.exit, removed.json.loginItem.removed, removed.json.loginItem.file], [EXIT.ok, true, path.join(world.launchd.directory, `${label}.plist`)])
   assert.deepEqual([world.settings().consent.coverage, world.settings().consent.actor, world.loginItem(), fs.existsSync(path.join(world.launchd.directory, `${label}.plist`))], ['service', CONSENT_ACTOR, null, false])
-  assert.deepEqual([job.loaded, job.child, job.runs], [false, null, 1], 'unloaded and not started again')
-  assert.equal(removed.json.service.state === 'healthy', false)
+  assert.deepEqual([job.loaded, job.child, job.runs], [false, null, 1], 'unloaded, and its manager does not start it again')
+  assert.deepEqual([removed.json.service.state, removed.json.service.started], ['healthy', true], 'the service runs again at once')
+  const record = world.record()
+  assert.notEqual(record.runtimeId, first.runtimeId)
+  assert.equal(isAlive(first.pid), false, 'the one the unit ran was stopped as it was unloaded')
+  assert.deepEqual(record.consent.coverage, 'service', 'under the consent now recorded')
   const status = await world.run(['status'])
   assert.match(status.stdout, /login item: off/)
-  const again = await world.run(['service', 'unit', '--remove', '--json'])
-  assert.deepEqual([again.exit, again.json.loginItem.removed], [EXIT.ok, false], 'removing it twice changes nothing')
+  const words = await world.run(['service', 'unit', '--remove'], { seams })
+  assert.match(words.stdout, /no login item was installed/)
+  const again = await world.run(['service', 'unit', '--remove', '--json'], { seams })
+  assert.deepEqual([again.exit, again.json.loginItem.removed, again.json.service.started, world.record().runtimeId], [EXIT.ok, false, false, record.runtimeId], 'removing it twice changes nothing and starts nothing')
+})
+
+test('when no entry may be started, --remove removes the item and leaves the service to the next open', await commandTest(), async (t) => {
+  const world = await makeWorld(t)
+  assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
+  await world.healthy()
+  // No entry this command may start (for the real entry: no --adapter given or remembered): the start is refused, typed.
+  const removed = await world.run(['service', 'unit', '--remove', '--json'], { seams: world.seams({ service: {} }) })
+  assert.deepEqual([removed.exit, removed.json.loginItem.removed, removed.json.service.started, removed.json.service.reason], [EXIT.ok, true, false, 'seams-required'])
+  assert.match((await world.run(['service', 'unit', '--remove'], { seams: world.seams({ service: {} }) })).stdout, /no login item was installed/)
+  assert.notEqual((await serviceStatus(world.lifecycle())).state, 'healthy')
+})
+
+test('installing, removing and uninstalling remember the answer as the loginItem decision, with who gave it', await commandTest(), async (t) => {
+  const world = await makeWorld(t)
+  const decision = async () => (await world.run(['settings', '--json'])).json.decisions.loginItem
+  assert.equal(await decision(), null)
+  const installed = await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])
+  assert.deepEqual([installed.json.rememberedNow.loginItem, await decision()], ['on', { choice: 'on', decidedAt: (await decision()).decidedAt, decidedBy: CONSENT_ACTOR, via: 'command' }])
+  const seams = world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, entryArgs: [`--interval-ms=${IDLE_INTERVAL}`], spawn: followingSpawn(t) } })
+  // A program that names nobody: the answer is recorded, by nobody known.
+  const removed = await world.run(['service', 'unit', '--remove', '--json'], { seams })
+  assert.deepEqual([removed.json.rememberedNow.loginItem, (await decision()).choice, (await decision()).decidedBy], ['off', 'off', null])
+  assert.match((await world.run(['settings'])).stdout, /^Change: `atelier obsidian service unit --install` starts maintenance at login/m)
+  // A person at a terminal gives it by their account's name.
+  const terminal = { terminal: { stdin: true, stdout: true }, account: () => 'harbor-person' }
+  assert.equal((await world.run(['service', 'unit', '--install'], terminal)).exit, EXIT.ok)
+  assert.deepEqual([(await decision()).choice, (await decision()).decidedBy], ['on', 'harbor-person'])
+  assert.equal((await world.run(['uninstall'], terminal)).exit, EXIT.ok)
+  assert.deepEqual([(await decision()).choice, (await decision()).decidedBy], ['off', 'harbor-person'])
+})
+
+test('at a terminal, --install needs no --consent-actor: the account\'s name allows maintenance at login, or the actor already recorded keeps it', await commandTest(), async (t) => {
+  const world = await makeWorld(t)
+  const terminal = { terminal: { stdin: true, stdout: true }, account: () => 'harbor-person' }
+  const installed = await world.run(['service', 'unit', '--install'], terminal)
+  assert.equal(installed.exit, EXIT.ok, installed.stderr)
+  assert.match(installed.stdout, /Maintenance at login is allowed by harbor-person; recorded for this workspace\./)
+  assert.deepEqual([world.settings().consent.actor, world.settings().consent.coverage], ['harbor-person', 'service-and-startup'])
+  // Another workspace state: the consent recorded by somebody else for the service alone is raised, not replaced.
+  const seams = world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, entryArgs: [`--interval-ms=${IDLE_INTERVAL}`], spawn: followingSpawn(t) } })
+  assert.equal((await world.run(['service', 'unit', '--remove', '--json'], { seams })).exit, EXIT.ok)
+  const current = world.settings()
+  writeServiceSettings({ ...world.workspace(), settings: { ...current, consent: { ...current.consent, actor: CONSENT_ACTOR } } })
+  assert.equal((await world.run(['service', 'unit', '--install'], terminal)).exit, EXIT.ok)
+  assert.deepEqual([world.settings().consent.actor, world.settings().consent.coverage], [CONSENT_ACTOR, 'service-and-startup'])
+  // A program still names its actor.
+  assert.equal((await world.run(['service', 'unit', '--remove', '--json'], { seams })).exit, EXIT.ok)
+  const refused = await world.run(['service', 'unit', '--install', '--json'], terminal)
+  assert.deepEqual([refused.exit, refused.json.error.code], [EXIT.refused, 'startup-consent-required'], '--json means nobody is at a terminal')
+})
+
+test('--install with --adapter remembers the adapter, as service start does', await commandTest(), async (t) => {
+  const world = await makeWorld(t)
+  const installed = await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR, '--adapter=obsidian-cli'])
+  assert.deepEqual([installed.exit, installed.json.rememberedNow.adapter], [EXIT.ok, true])
+  assert.equal((await world.run(['settings', '--json'])).json.decisions.adapter.choice, 'obsidian-cli')
+})
+
+test('service start replaces a proven service of an earlier release, as open does, and leaves a current one running', needsPosix, async (t) => {
+  const world = await makeWorld(t, { withLaunchd: false })
+  const outdated = await startService(world.lifecycle({ entryPath: earlierReleaseEntry(world), consent: { actor: CONSENT_ACTOR, coverage: 'service' }, detached: true, spawn: followingSpawn(t), intervalMs: IDLE_INTERVAL }))
+  assert.equal(outdated.state, 'healthy')
+  const seams = world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, entryArgs: [`--interval-ms=${IDLE_INTERVAL}`], spawn: followingSpawn(t) } })
+  const started = await world.run(['service', 'start', '--json'], { seams })
+  assert.deepEqual([started.exit, started.json.service.state, started.json.service.started, started.json.service.replaced], [EXIT.ok, 'healthy', true, 'outdated'], started.stdout)
+  const current = world.record()
+  assert.deepEqual([current.executable.digest, isAlive(outdated.record.pid), current.consent.actor], [sha256(fs.readFileSync(TEST_SERVICE_ENTRY)), false, CONSENT_ACTOR], 'the installed entry runs in its place, under the consent already recorded')
+  // Control: a service of this release is not replaced.
+  const again = await world.run(['service', 'start'], { seams })
+  assert.match(again.stdout, /healthy \(already running\)/)
+  assert.equal(world.record().runtimeId, current.runtimeId)
 })
 
 test('uninstall removes the login item and stops the proven service, keeps vaults, private state, the project file and Obsidian\'s list, and names each', await commandTest(), async (t) => {

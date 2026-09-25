@@ -174,10 +174,13 @@ function checkManager(manager, platform) {
 // Installs, or installs again, this workspace's login item. `consent` ({ actor }) is the person's consent to the
 // service running at login; without it, a recorded consent must already cover startup (`startup-consent-required`).
 // `ownEntry` and `entryArgs` are the entry this command would start and its arguments (`--adapter=...`).
+// `beforeInstall({ entryPath })`, when given, runs once the consent is recorded and before the manager loads the unit,
+// which starts the service at once: the command stops a service of an earlier release there, so that start runs the
+// entry the unit names instead of finding the earlier one running.
 // { installed: true, label, file, kind, entry: { path, source }, node, searchPath } or, when the manager did not take
 // the unit, { installed: false, reason, label } with the consent as it was.
 export async function installLoginItem(options = {}) {
-  const { loadProject, dataRoot, env = process.env, platform = process.platform, manager, consent, ownEntry, entryArgs = [], nodePath = realNodePath(), pathValue = env.PATH, clock = () => new Date(), temporary = temporaryRoots() } = options
+  const { loadProject, dataRoot, env = process.env, platform = process.platform, manager, consent, ownEntry, entryArgs = [], nodePath = realNodePath(), pathValue = env.PATH, clock = () => new Date(), temporary = temporaryRoots(), beforeInstall = null } = options
   checkManager(manager, platform)
   const project = loadProject()
   ensureWorkspaceIdentity({ project, ...(dataRoot === undefined ? {} : { dataRoot }) })
@@ -193,6 +196,7 @@ export async function installLoginItem(options = {}) {
   if (consent === undefined && before?.consent.coverage !== 'service-and-startup') refuse('startup-consent-required', 'a login item needs a consent that covers the service starting at login; name who gives it')
   if (consent !== undefined && (typeof consent?.actor !== 'string' || consent.actor === '')) refuse('startup-consent-required', 'a consent names its actor')
   await ensureServiceSettings(workspace, { consent: consent === undefined ? undefined : { actor: consent.actor, coverage: 'service-and-startup' }, now })
+  if (typeof beforeInstall === 'function') await beforeInstall({ entryPath })
 
   const installed = await manager.install({ label, fileName: plan.fileName, text: plan.text })
   if (!installed.ok) {
