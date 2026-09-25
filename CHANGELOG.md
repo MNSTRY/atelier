@@ -206,6 +206,13 @@
 
 ### Fixed
 
+- A publication no longer stops with an untyped `state leaf changed while
+  opening` when another program replaces a note by rename at the instant the
+  publisher opens it (an editor or sync tool saving the note). The note is
+  read again, since every rename leaves a complete file; a note that keeps
+  being replaced is reported as `disk-changed` for that note only, and the
+  other notes are published. No bytes were ever lost: the publication threw
+  before writing.
 - A view whose prepared generation was already the committed one (on the
   first tick of a service, or prepared again on request) was marked `stale`
   when the app could not be qualified, for example while it ran with no vault
