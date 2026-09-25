@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { VAULT_ALLOCATION_SCHEMA, allocationFile, createRecoveryStore, hasCommittedGeneration, readVaultAllocation, vaultRootFor, writeVaultAllocation } from '../src/projection/obsidian/recovery/index.mjs'
 import {
-  MAX_PROJECT_NAME_BYTES, checkVaultParent, ensureVaultAllocation, projectDisplayName, protectedFolderOf, safeFolderPart, syncedFolderOf, vaultFolderName,
+  MAX_PROJECT_NAME_BYTES, checkVaultParent, ensureVaultAllocation, projectDisplayName, protectedFolderOf, readAppVaultListForAllocation, safeFolderPart, syncedFolderOf, vaultFolderName,
 } from '../src/runtime/obsidian/vault-location.mjs'
 
 // Where a workspace's vaults live once a person decided it, and the folder
@@ -237,4 +237,22 @@ test('the checks see through links and letter case: a folder reached through a l
   // A listed name in another letter case or normalization is taken.
   const taken = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'tides', location: { parent: path.join(w.dir, 'real-parent') }, projectName: 'Café', repositoryRoots: w.repositoryRoots, vaults: { dddddddddddddddd: { path: path.join(TMP, 'x', 'CAFÉ (TIDES)') } }, now: NOW })
   assert.equal(taken.name, 'Café (tides 2)')
+})
+
+test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {
+  const slept = []
+  const sleep = async (ms) => { slept.push(ms) }
+  const answers = (...list) => { let index = 0; return () => list[Math.min(index++, list.length - 1)] }
+  const unreadable = { ok: false, code: 'obsidian-settings-unreadable' }
+  const vaults = { aaaaaaaaaaaaaaaa: { path: '/x' } }
+  assert.deepEqual(await readAppVaultListForAllocation({ read: answers({ ok: true, vaults }), sleep }), { ok: true, vaults })
+  assert.deepEqual(await readAppVaultListForAllocation({ read: answers(unreadable, unreadable, { ok: true, vaults }), sleep }), { ok: true, vaults }, 'a file the app was writing')
+  assert.deepEqual(slept, [50, 50])
+  assert.deepEqual(await readAppVaultListForAllocation({ read: answers(unreadable), sleep }), { ok: false, code: 'obsidian-settings-unreadable' }, 'three reads at most')
+  assert.deepEqual(await readAppVaultListForAllocation({ read: answers({ ok: false, code: 'obsidian-settings-missing' }), sleep }), { ok: true, vaults: {} }, 'the app never ran here')
+  assert.deepEqual(await readAppVaultListForAllocation({ read: answers({ ok: false, code: 'obsidian-settings-missing' }), sandboxed: true, sleep }), { ok: false, code: 'obsidian-sandboxed' }, 'a Flatpak or snap build keeps its list elsewhere')
+  for (const code of ['obsidian-settings-unsafe', 'obsidian-settings-not-owned', 'obsidian-settings-location-unknown']) {
+    assert.deepEqual(await readAppVaultListForAllocation({ read: answers({ ok: false, code }), sleep }), { ok: false, code })
+  }
+  assert.deepEqual(await readAppVaultListForAllocation({ read: () => { throw new Error('boom') }, sleep }), { ok: false, code: 'obsidian-settings-unreadable' })
 })
