@@ -9,7 +9,7 @@ import { createEditorAdapter } from '../../../src/projection/obsidian/publicatio
 import { createRecoveryStore } from '../../../src/projection/obsidian/recovery/index.mjs'
 import { createMaintenanceEngine } from '../../../src/runtime/obsidian/engine.mjs'
 import { createMaintenanceExtensions } from '../../../src/runtime/obsidian/extension-points.mjs'
-import { ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } from '../../../src/runtime/obsidian/machine-settings.mjs'
+import { defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } from '../../../src/runtime/obsidian/machine-settings.mjs'
 import { observeVaultEdits, trustedNoteBases } from '../../../src/runtime/obsidian/pending-edits.mjs'
 import { createProductionSeams } from '../../../src/runtime/obsidian/pipeline.mjs'
 import { createAbandonmentProof, isProcessAlive } from '../../../src/runtime/obsidian/private-lock.mjs'
@@ -112,7 +112,7 @@ export function makeApplyWorld(t, { files, repositories, scopes = [{ scopeId: 's
       const pointer = ensureWorkspaceIdentity({ project, randomBytes: fixedRandom })
       const root = workspaceStateRoot(dataRoot, pointer.workspaceId)
       const current = fs.existsSync(root) ? readMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId }) : null
-      return writeMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(project), settings: { schema: 'atelier-obsidian-machine-settings/v1', workspaceId: pointer.workspaceId, applyPolicy: null, ...(current ?? {}), ...machine, updatedAt: clock().toISOString() } })
+      return writeMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(project), settings: { ...(current ?? defaultMachineSettings({ workspaceId: pointer.workspaceId, updatedAt: clock().toISOString() })), ...machine, updatedAt: clock().toISOString() } })
     },
     // Installs a policy whose digest is the digest of its content, unless `digest` is given.
     installPolicy(overrides = {}) {

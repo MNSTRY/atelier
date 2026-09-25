@@ -18,11 +18,14 @@ import { promisify } from 'node:util'
 // disposable instance its own; an attempt with the developer's HOME throws
 // here instead of running.
 const REACHES_THE_APP = [/obsidian-cli/, /\/Obsidian$/, /--adapter=obsidian-cli/, /app-production-seams/, /obsidian:\/\//i]
+// The obsidian command of the real entry also reaches the app through an adapter its workspace remembers; its refusal of
+// one under the test runner is the code under test, so such a child needs a private HOME too.
+const mayUseRememberedAdapter = (words) => words.includes('obsidian') && words.some((word) => word === 'open' || word === 'service')
 const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
 function guardSpawn(command, args, options) {
   const words = [command, ...(Array.isArray(args) ? args : [])].map(String)
   const home = options?.env ? options.env.HOME : process.env.HOME
-  if (words.some((word) => REACHES_THE_APP.some((pattern) => pattern.test(word))) && (typeof home !== 'string' || home === '' || REAL_HOMES.includes(path.resolve(home)))) {
+  if ((words.some((word) => REACHES_THE_APP.some((pattern) => pattern.test(word))) || mayUseRememberedAdapter(words)) && (typeof home !== 'string' || home === '' || REAL_HOMES.includes(path.resolve(home)))) {
     throw new Error('spawn guard: a child that can reach a running Obsidian needs a private HOME, never the developer\'s own')
   }
 }
