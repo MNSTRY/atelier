@@ -152,6 +152,8 @@ test('branded command help substitutes the wrapper command name', () => {
   assert.match(fallback, /^Usage: loomworks promote \[args\]/)
   assert.match(fallback, /Run loomworks --help for the command list\./)
   assert.match(buildCommandHelpText('init', DEFAULT_BRAND), /^Usage: atelier init/)
+  assert.match(buildCommandHelpText('dev', LOOMWORKS), /^Usage: loomworks dev /)
+  assert.match(buildCommandHelpText('dev', LOOMWORKS), /run loomworks graph, then loomworks build/)
 })
 
 test('invalid brands are rejected before any dispatch', async () => {
@@ -226,6 +228,74 @@ const PACK_FIXTURES = path.join(ROOT, 'fixtures', 'atelier-extension-pack')
 function runBin(args, { cwd = ROOT, env = process.env } = {}) {
   return spawnSync(process.execPath, [BIN, ...args], { cwd, env, encoding: 'utf8' })
 }
+
+// Regression: dev straight after init printed Node's raw
+// "[ENOENT] ENOENT: no such file or directory, lstat '<absolute path>'" with
+// no next step, and after graph alone a redacted internal error.
+test('dev before build names graph and build as the next step, with no path or stack', (t) => {
+  const sample = makeSampleProject(t)
+  const { ATELIER_DEBUG, ...env } = process.env
+  const tmp = [os.tmpdir(), fs.realpathSync(os.tmpdir())]
+  const expectRefusal = (label, message) => {
+    const result = runBin(['dev', '--project', sample.config], { cwd: sample.dir, env })
+    assert.equal(result.status, 2, `${label}: ${result.stderr}`)
+    assert.equal(result.stderr, [
+      `[projection-output-missing] ${message}; this project has not been built yet`,
+      'Next: Run atelier graph, then atelier build, with the same --project path, then retry.',
+      '',
+    ].join('\n'), label)
+    assert.doesNotMatch(result.stderr, /ENOENT|internal-error|\n\s+at /, label)
+    for (const dir of tmp) assert.equal(result.stderr.includes(dir), false, `${label}: absolute path printed`)
+    assert.doesNotMatch(result.stdout, /listening on/, label)
+  }
+
+  expectRefusal('fresh', 'projection output folder atelier-output does not exist')
+  assert.equal(runBin(['graph', '--project', sample.config], { cwd: sample.dir, env }).status, 0)
+  expectRefusal('graph only', 'projection output folder atelier-output has no atelier.manifest.json')
+  assert.equal(runBin(['build', '--project', sample.config], { cwd: sample.dir, env }).status, 0)
+  const built = runBin(['dev', '--project', sample.config, '--smoke'], { cwd: sample.dir, env })
+  assert.equal(built.status, 0, built.stderr)
+
+  // An output folder outside the project config's directory is not named.
+  const config = JSON.parse(fs.readFileSync(sample.config, 'utf8'))
+  config.projection.outputRoot = `../${path.basename(sample.dir)}-elsewhere`
+  fs.writeFileSync(sample.config, `${JSON.stringify(config, null, 2)}\n`)
+  expectRefusal('outside', 'the projection output folder does not exist')
+})
+
+// Regression: any error with a string code was printed verbatim, so Node's
+// own errors reached the terminal with the absolute path in their message.
+test('only typed codes print verbatim; Node errors are redacted to code and system call', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-codes-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const executor = path.join(ROOT, 'src', 'cli', 'execute-command.mjs')
+  const { ATELIER_DEBUG, ...env } = process.env
+  const redacted = (detail) => [
+    `[internal-error] command failed without a safe diagnostic${detail}`,
+    'Next: rerun with ATELIER_DEBUG=1 to inspect the stack locally.',
+    '',
+  ].join('\n')
+  for (const [name, body, status, stderr] of [
+    ['system.mjs', "import fs from 'node:fs'\nfs.lstatSync(new URL('./missing-leaf', import.meta.url))\n", 1, redacted(' (ENOENT from lstat)')],
+    ['internal.mjs', 'Buffer.alloc(-1)\n', 1, redacted(' (ERR_OUT_OF_RANGE)')],
+    ['dotted.mjs', "throw Object.assign(new Error('detail'), { code: 'signature.invalid' })\n", 1, redacted('')],
+    ['typed.mjs', "throw Object.assign(new Error('the widget is missing'), { code: 'widget-missing', hint: 'Add a widget.' })\n", 2,
+      '[widget-missing] the widget is missing\nNext: Add a widget.\n'],
+  ]) {
+    const script = path.join(dir, name)
+    fs.writeFileSync(script, body)
+    const result = spawnSync(process.execPath, [executor, script], { env, encoding: 'utf8' })
+    assert.equal(result.status, status, `${name}: ${result.stderr}`)
+    assert.equal(result.stderr, stderr, name)
+  }
+
+  const debug = spawnSync(process.execPath, [executor, path.join(dir, 'system.mjs')], {
+    env: { ...env, ATELIER_DEBUG: '1' },
+    encoding: 'utf8',
+  })
+  assert.equal(debug.status, 1)
+  assert.match(debug.stderr, /ENOENT.*missing-leaf/)
+})
 
 test('expected project failures are typed, actionable, and stack-free by default', (t) => {
   const sample = makeSampleProject(t)
@@ -331,6 +401,17 @@ test('init command help lists the distribution template and the rejection rule',
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /--template private-domain\|shared-project\|sample-workspace\|distribution/)
   assert.match(result.stdout, /An unrecognized --template exits 1 and writes nothing/)
+})
+
+test('dev and server help name the port flag, the PORT variable, and --review', () => {
+  for (const command of ['dev', 'server']) {
+    const result = runBin([command, '--help'])
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, new RegExp(`^Usage: atelier ${command} \\[--project \\./atelier\\.project\\.json\\] \\[--port=PORT\\] \\[--review\\]$`, 'm'))
+    assert.match(result.stdout, /--port=PORT, else the PORT environment variable, else 8137/)
+    assert.match(result.stdout, /--review also serves the local review workspace/)
+    assert.match(result.stdout, /run atelier graph, then atelier build/)
+  }
 })
 
 test('runCli default-brand help and version match the pinned defaults', async () => {

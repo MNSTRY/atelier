@@ -170,7 +170,12 @@ Machine-local repo paths belong in
 
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
+  const serverHelp = (name) => `Usage: ${c} ${name} [--project ./atelier.project.json] [--port=PORT] [--review]
+
+Serves the project's built projection on 127.0.0.1 in the foreground until stopped. It builds nothing: run ${c} graph, then ${c} build, with the same --project path first. The port is --port=PORT, else the PORT environment variable, else 8137; 0 picks a free port, and the address printed on start names it. --review also serves the local review workspace at /review (docs/local-review.md).`
   const help = {
+    dev: serverHelp('dev'),
+    server: serverHelp('server'),
     skills: `Usage: ${c} skills audit|observe|candidates|sync
 Audit bundled skills or --root DIR [--peer DIR].
 Sync previews by default; applying requires --apply --confirm PLAN_DIGEST.
