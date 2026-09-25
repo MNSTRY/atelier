@@ -266,6 +266,20 @@ test('enroll refuses unknown subcommands, flags and audiences as usage', (t) => 
   assert.equal(run(dir, ['adopt', '--profile', 'single-repo', '--actor', 'ada', '--audience', 'team', '--yes']).status, 1)
 })
 
+test('enroll refuses, writing nothing and naming no path, when the census cannot run', (t) => {
+  const dir = repository(t, 'broken-access', { 'one.pdf': PDF })
+  adopt(dir, 'broken-access')
+  const access = readJson(dir, 'repo-access.v1.json')
+  access.defaultReadBoundary = 'everyone'
+  fs.writeFileSync(path.join(dir, 'repo-access.v1.json'), `${JSON.stringify(access, null, 2)}\n`)
+  const refused = run(dir, ['enroll', 'documents'])
+  assert.equal(refused.status, 2)
+  assert.ok(refused.stderr.startsWith('[enroll-census-unavailable] the knowledge graph census could not run, so no document was enrolled\n'), refused.stderr)
+  assert.match(refused.stderr, /^Next: Run atelier graph with the same --project path to see why, fix that, then retry\.$/m)
+  assert.equal(refused.stderr.includes(dir), false)
+  assert.equal(fs.existsSync(path.join(dir, 'one.pdf.kg.json')), false)
+})
+
 test('setup.exclude keeps a committed build folder out of the census', (t) => {
   const dir = repository(t, 'lantern-docs', {
     'guide/start.md': '# Start here\n',
