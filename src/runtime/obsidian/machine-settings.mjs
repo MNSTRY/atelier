@@ -192,7 +192,12 @@ function sameMembers(left, right) {
   return sortedLeft.length === sortedRight.length && sortedLeft.every((item, index) => item === sortedRight[index])
 }
 
-function validateDecisions(document) {
+// `deciding` is true when the audience decision is being recorded (withDecision). Only then must "only you" be exactly
+// the set this release stands for. Read, or written back by any other change, an "only you" list is the one recorded
+// when it was decided: any part of this release's set, never `sensitive` and never an audience this release does not
+// know. So a later release that adds an audience to "only you" still reads what an earlier one recorded, and
+// `audience set me` records the current set again.
+function validateDecisions(document, { deciding = false } = {}) {
   const code = 'invalid-machine-settings'
   closedObject(document.decisions, { required: DECISIONS }, code, 'the remembered decisions')
   for (const name of DECISIONS) {
@@ -206,9 +211,10 @@ function validateDecisions(document) {
     if (decision.decidedBy !== null && (typeof decision.decidedBy !== 'string' || !IDENTIFIER.test(decision.decidedBy))) refuse(code, `the ${name} decision names who decided as an identifier or null`)
     if (!DECISION_SOURCES.includes(decision.via)) refuse(code, `the ${name} decision says how it was made`)
   }
-  // "Only you" is a set of audiences, and the list the engine reads must be exactly that set.
-  if (document.decisions.audience?.choice === 'only-you' && !sameMembers(document.audienceAllow, ONLY_YOU_AUDIENCES)) {
-    refuse(code, 'the audiences allowed are not the ones "only you" stands for')
+  // "Only you" is a set of audiences, and the list the engine reads is exactly that set when it is decided.
+  if (document.decisions.audience?.choice === 'only-you') {
+    const recorded = document.audienceAllow.length > 0 && document.audienceAllow.every((audience) => ONLY_YOU_AUDIENCES.includes(audience))
+    if (deciding ? !sameMembers(document.audienceAllow, ONLY_YOU_AUDIENCES) : !recorded) refuse(code, 'the audiences allowed are not the ones "only you" stands for')
   }
   if (document.decisions.audience?.unclassified === 'shown' && document.decisions.audience.choice !== 'only-you') {
     refuse(code, 'notes without a classification are shown only in a vault that is only yours')
@@ -221,11 +227,11 @@ function validateV1(document, workspaceId) {
   return document
 }
 
-function validateV2(document, workspaceId) {
+function validateV2(document, workspaceId, { deciding = false } = {}) {
   closedObject(document, { required: [...MACHINE_FIELDS, 'decisions'] }, 'invalid-machine-settings', 'machine settings')
   if (document.schema !== MACHINE_SETTINGS_SCHEMA) refuse('invalid-machine-settings', 'machine settings name an unknown schema')
   validateCommonFields(document, workspaceId)
-  validateDecisions(document)
+  validateDecisions(document, { deciding })
   return document
 }
 
@@ -260,7 +266,7 @@ export function defaultMachineSettings({ workspaceId, updatedAt }) {
 export function withDecision(settings, name, decision, { decidedAt, decidedBy = null, via }) {
   if (!DECISIONS.includes(name)) throw new TypeError(`unknown decision: ${String(name)}`)
   const next = { ...settings, decisions: { ...settings.decisions, [name]: { ...decision, decidedAt, decidedBy, via } } }
-  return validateV2(next, settings.workspaceId)
+  return validateV2(next, settings.workspaceId, { deciding: name === 'audience' })
 }
 
 const settingsDirectory = (workspaceRoot) => ensureContainedPrivateDirectory({ workspaceRoot, directory: path.join(workspaceRoot, 'state', 'settings'), label: 'Obsidian machine settings' })

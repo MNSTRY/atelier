@@ -380,7 +380,8 @@ test('remembered decisions are closed documents: each says what was decided, whe
     ['a location that is not written plainly', decision('location', (item) => ({ ...item, parent: `${path.join(TMP, 'Atelier')}${path.sep}..${path.sep}Atelier` }))],
     ['a location with a control character', decision('location', (item) => ({ ...item, parent: path.join(TMP, 'At\u0007elier') }))],
     ['an unknown audience answer', decision('audience', (item) => ({ ...item, choice: 'everyone' }))],
-    ['"only you" beside another list of audiences', { ...decided, audienceAllow: ['team'] }],
+    ['"only you" beside an audience it does not stand for', { ...decided, audienceAllow: ['private', 'partner'] }],
+    ['"only you" admitting nobody', { ...decided, audienceAllow: [] }],
     ['"only you" with sensitive added', { ...decided, audienceAllow: [...ONLY_YOU_AUDIENCES, 'sensitive'] }],
     ['an audience decision that does not say whether unclassified notes are shown', decision('audience', ({ unclassified: _unclassified, ...rest }) => rest)],
     ['an unknown answer about unclassified notes', decision('audience', (item) => ({ ...item, unclassified: 'sometimes' }))],
@@ -395,6 +396,7 @@ test('remembered decisions are closed documents: each says what was decided, whe
   }
   assert.throws(() => withDecision(base, 'colour', { choice: 'red' }, STAMP), TypeError)
   assert.throws(() => withDecision(base, 'audience', { choice: 'only-you', unclassified: 'shown' }, STAMP), (error) => error.code === 'invalid-machine-settings', 'only you needs its audiences')
+  assert.throws(() => withDecision({ ...base, audienceAllow: ['team'] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, STAMP), (error) => error.code === 'invalid-machine-settings', 'only you is decided as its whole set')
   // Unclassified notes are shown only to "only you", which may also withhold them; any other list always withholds them.
   assert.equal(withDecision({ ...base, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, STAMP).decisions.audience.unclassified, 'withheld')
   assert.equal(withDecision({ ...base, audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, STAMP).decisions.audience.choice, 'custom')
@@ -427,6 +429,26 @@ for (const [label, ext, reason] of [['absent settings', null, 'not-configured'],
     await assertDisabledDoesNothing(world, () => engine.tick())
   })
 }
+
+test('"only you" recorded under another release\'s set of audiences stays readable and writable; deciding it again records this release\'s set', (t) => {
+  const world = makeWorld(t, { machine: null })
+  const root = workspaceStateRoot(world.dataRoot, WORKSPACE_ID)
+  const file = path.join(root, 'state', 'settings', 'machine.json')
+  // What a release whose "only you" had one audience fewer recorded (a later release adds one to it).
+  const earlierSet = ONLY_YOU_AUDIENCES.filter((audience) => audience !== 'staff')
+  const recorded = { ...defaultMachineSettings({ workspaceId: WORKSPACE_ID, updatedAt: '2026-01-05T10:00:00.000Z' }), audienceAllow: earlierSet, decisions: { audience: { choice: 'only-you', unclassified: 'withheld', ...STAMP }, location: null, loginItem: null, adapter: null } }
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(recorded))
+  const read = readMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID })
+  assert.deepEqual(read.audienceAllow, earlierSet, 'the list recorded is the one the engine reads')
+  // Another change (the mode, say) writes it back as it is.
+  const written = writeMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID, repositoryRoots: [], settings: { ...read, maintenanceMode: 'automatic' } })
+  assert.deepEqual([written.audienceAllow, written.decisions.audience.choice], [earlierSet, 'only-you'])
+  assert.equal(authorizeAutomaticApply({ workspaceRoot: root, workspaceId: WORKSPACE_ID }).reason, 'no-apply-policy-installed', 'and automatic apply reads the settings, not an invalid file')
+  // Deciding "only you" again records this release's whole set.
+  const again = withDecision({ ...written, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, STAMP)
+  assert.deepEqual(again.audienceAllow, [...ONLY_YOU_AUDIENCES])
+})
 
 test('mutation control: a tick that leaves a file behind fails the disabled oracle', async (t) => {
   const world = makeWorld(t, { ext: null, machine: null })
