@@ -79,27 +79,58 @@ const releases = new Map()
 // maintains; outside those it reads nothing else of the package but the
 // version in `package.json`. A release that changes any of it, and not only
 // the entry, differs. A package without `plugins/` reads as one with an empty
-// one. Computed once per process and package root, so a service keeps the
-// identity of the code it loaded.
-export function releaseIdentity({ root = PACKAGE_ROOT } = {}) {
-  if (!releases.has(root)) {
-    const hash = createHash('sha256')
-    const walk = (relative, { optional = false } = {}) => {
-      let entries
-      try { entries = fs.readdirSync(path.join(root, relative), { withFileTypes: true }) } catch (error) { if (optional && error.code === 'ENOENT') return; throw error }
-      for (const entry of entries.sort(byName)) {
-        const child = `${relative}/${entry.name}`
-        if (entry.isDirectory()) walk(child)
-        else if (entry.isFile()) hash.update(`${child}\0${createHash('sha256').update(fs.readFileSync(path.join(root, child))).digest('hex')}\n`)
-      }
+// one.
+
+// Every regular file a release identity covers, in a fixed order: `visit(relative, absolute)`. A missing `src/` or
+// `contracts/` throws (the package cannot be read); a missing `plugins/` is empty.
+export function walkRelease(root, visit) {
+  const walk = (relative, { optional = false } = {}) => {
+    let entries
+    try { entries = fs.readdirSync(path.join(root, relative), { withFileTypes: true }) } catch (error) { if (optional && error.code === 'ENOENT') return; throw error }
+    for (const entry of entries.sort(byName)) {
+      const child = `${relative}/${entry.name}`
+      if (entry.isDirectory()) walk(child)
+      else if (entry.isFile()) visit(child, path.join(root, child))
     }
-    for (const part of ['src', 'contracts']) walk(part)
-    walk('plugins', { optional: true })
-    let version = null
-    try { const read = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; version = typeof read === 'string' ? read : null } catch { version = null }
-    releases.set(root, Object.freeze({ version, digest: `sha256:${hash.digest('hex')}` }))
   }
+  for (const part of ['src', 'contracts']) walk(part)
+  walk('plugins', { optional: true })
+}
+
+// The release identity of the package at `root`, read now and never cached: { version, digest }.
+export function readReleaseIdentity({ root }) {
+  if (typeof root !== 'string' || !path.isAbsolute(root)) throw new TypeError('a release identity is read from the absolute root of a package')
+  const hash = createHash('sha256')
+  walkRelease(root, (relative, absolute) => { hash.update(`${relative}\0${createHash('sha256').update(fs.readFileSync(absolute)).digest('hex')}\n`) })
+  let version = null
+  try { const read = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; version = typeof read === 'string' ? read : null } catch { version = null }
+  return Object.freeze({ version, digest: `sha256:${hash.digest('hex')}` })
+}
+
+// readReleaseIdentity, computed once per process and package root, so a service keeps the identity of the code it
+// loaded.
+export function releaseIdentity({ root = PACKAGE_ROOT } = {}) {
+  if (!releases.has(root)) releases.set(root, readReleaseIdentity({ root }))
   return releases.get(root)
+}
+
+const ENTRY_IN_PACKAGE = Object.freeze(['src', 'runtime', 'obsidian', 'service-main.mjs'])
+
+// The root of the package whose service entry is `entryPath` (`<root>/src/runtime/obsidian/service-main.mjs`), as that
+// path names it, without resolving links; null for any other entry.
+export function packageRootOfEntry(entryPath) {
+  if (typeof entryPath !== 'string' || !path.isAbsolute(entryPath)) return null
+  const parts = path.resolve(entryPath).split(path.sep)
+  if (parts.length <= ENTRY_IN_PACKAGE.length || ENTRY_IN_PACKAGE.some((part, index) => parts[parts.length - ENTRY_IN_PACKAGE.length + index] !== part)) return null
+  return parts.slice(0, parts.length - ENTRY_IN_PACKAGE.length).join(path.sep) || path.sep
+}
+
+// The release that starting `entryPath` would run, read now from the package that path names (so a link pointed
+// elsewhere, or a `file:` install, is the package it leads to now); for an entry that is not a package's service entry,
+// this package's own, as it was loaded.
+export function releaseOfEntry(entryPath) {
+  const root = packageRootOfEntry(entryPath)
+  return root === null ? releaseIdentity() : readReleaseIdentity({ root })
 }
 
 // ---------------------------------------------------------------------------

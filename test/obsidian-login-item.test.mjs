@@ -825,6 +825,55 @@ test('the release watch compares the files\' status first, digests only when tha
   assert.equal(removed.changed(), false, 'a package that cannot be read right now is not a change yet')
 })
 
+test('the release identity is read uncached from a root, the cached one is kept per process, and the plugin is part of what the watch compares', async (t) => {
+  const { createReleaseWatch } = await releases()
+  const { readReleaseIdentity, releaseIdentity } = await records()
+  const root = await syntheticPackage(t)
+  const cached = releaseIdentity({ root })
+  const before = readReleaseIdentity({ root })
+  assert.deepEqual(before, cached)
+  fs.mkdirSync(path.join(root, 'plugins'))
+  assert.deepEqual(readReleaseIdentity({ root }), before, 'a package without plugins/ reads as one with an empty one')
+  const watch = createReleaseWatch({ root })
+  fs.mkdirSync(path.join(root, 'plugins', 'obsidian'))
+  fs.writeFileSync(path.join(root, 'plugins', 'obsidian', 'main.js'), 'module.exports = 1\n')
+  const after = readReleaseIdentity({ root })
+  assert.notEqual(after.digest, before.digest, 'read now, the plugin is part of the release')
+  assert.deepEqual(releaseIdentity({ root }), cached, 'the cached identity stays the one this process first read')
+  assert.equal(watch.changed(), true, 'a service whose package\'s plugin changed runs another release')
+})
+
+test('the installed release a running service is measured against is read from the entry that would be started, through the path it is named by', needsPosix, async (t) => {
+  const { readReleaseIdentity } = await releases()
+  const { runtimeRelease } = await import('../src/runtime/obsidian/lifecycle.mjs')
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-installed-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const makePackage = (name, module) => {
+    const root = path.join(dir, name)
+    fs.mkdirSync(path.join(root, 'src', 'runtime', 'obsidian'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'contracts'))
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: '@mnstry/atelier', version: '9.9.9' }))
+    fs.writeFileSync(path.join(root, 'src', 'runtime', 'obsidian', 'service-main.mjs'), 'export const entry = 1\n')
+    fs.writeFileSync(path.join(root, 'src', 'runtime', 'obsidian', 'other.mjs'), module)
+    fs.writeFileSync(path.join(root, 'contracts', 'c.json'), '{}\n')
+    return root
+  }
+  const first = makePackage('first', 'export const other = 1\n')
+  const second = makePackage('second', 'export const other = 2\n')
+  // The project's package is a link, as a `file:` install makes it; the login item names the entry through it.
+  const linked = path.join(dir, 'project', 'node_modules', '@mnstry', 'atelier')
+  fs.mkdirSync(path.dirname(linked), { recursive: true })
+  fs.symlinkSync(first, linked)
+  const entry = path.join(linked, 'src', 'runtime', 'obsidian', 'service-main.mjs')
+  const running = { state: 'healthy', record: { executable: { path: path.join(first, 'src', 'runtime', 'obsidian', 'service-main.mjs'), digest: sha256('export const entry = 1\n'), ext: { release: readReleaseIdentity({ root: first }) } } } }
+  assert.equal(runtimeRelease(running, entry), 'current', 'the service runs the release the item\'s package holds, whatever package this command runs from')
+  fs.unlinkSync(linked)
+  fs.symlinkSync(second, linked)
+  assert.equal(runtimeRelease(running, entry), 'outdated', 'the link pointed at another package of the same version with other modules is another release')
+  fs.writeFileSync(path.join(second, 'package.json'), JSON.stringify({ name: '@mnstry/atelier', version: '9.9.8' }))
+  assert.equal(runtimeRelease(running, entry), 'later', 'an earlier installed version never replaces the running one')
+})
+
 test('the package root of a service entry is read from its path, without resolving links', async () => {
   const { packageRootOfEntry } = await releases()
   const entry = (root) => path.join(root, 'src', 'runtime', 'obsidian', 'service-main.mjs')
@@ -892,6 +941,20 @@ async function silentListener(t, port) {
   t.after(close)
   return { close }
 }
+
+test('a service a login item started that is busy in its first tick is waited for until it is healthy, as a child started here is', needsPosix, async (t) => {
+  const world = await makeWorld(t, { withLaunchd: false })
+  serviceSettings(world, await freePort(), 'service-and-startup')
+  const loginItem = {
+    async start() {
+      follow(t, childProcess.spawn(process.execPath, entryWords(world, ['--startup', `--interval-ms=${IDLE_INTERVAL}`, '--first-tick-block-ms=2500']), { env: world.env, stdio: 'ignore', windowsHide: true }), 'the service a manager started')
+      return { ok: true, entryPath: TEST_SERVICE_ENTRY }
+    },
+  }
+  const started = await startService(world.lifecycle({ entryPath: TEST_SERVICE_ENTRY, loginItem, spawn: forbiddenSpawn, probeTimeoutMs: 200, startTimeoutMs: 20000 }))
+  assert.deepEqual([started.state, started.started, started.busy ?? false, started.loginItem], ['healthy', true, false, { via: 'login-item' }])
+  assert.equal((await stopService(world.lifecycle({ stopTimeoutMs: 10000 }))).stopped, true)
+})
 
 test('with a login item, a listener that has not recorded itself yet is waited for as the service its manager is starting, and only a runtime that proves itself is taken', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })

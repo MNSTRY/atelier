@@ -12,7 +12,7 @@ import { processRunsRecordedExecutable } from './process-identity.mjs'
 import { DEFAULT_PROBE_TIMEOUT_MS, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'
 import { SERVICE_ENTRY_PATH } from './service-entry-path.mjs'
 import {
-  CONSENT_COVERAGES, SERVICE_SETTINGS_SCHEMA, executableIdentity, openServiceLog, publicRecord, readLastStartup, readServiceRecord, readServiceSettings, releaseIdentity, removeServiceRecord,
+  CONSENT_COVERAGES, SERVICE_SETTINGS_SCHEMA, executableIdentity, openServiceLog, publicRecord, readLastStartup, readServiceRecord, readServiceSettings, releaseOfEntry, removeServiceRecord,
   serviceNameFor, servicePaths, writeServiceSettings,
 } from './service-record.mjs'
 import { resolveServiceWorkspace } from './service.mjs'
@@ -149,11 +149,10 @@ async function startThroughLoginItem({ workspace, loginItem, entryPath, deadline
   let expected
   try { expected = executableIdentity(typeof asked.entryPath === 'string' ? asked.entryPath : entryPath).digest } catch { return { result: { state: 'start-failed', started: false, alreadyRunning: false, workspaceId, reason: 'login-item-entry-missing', observed: null, logPath: servicePaths(workspaceRoot).loginItemLog, loginItem: item } } }
   let last = null
+  const proves = (status) => status?.record?.executable?.digest === expected
   while (Date.now() < deadline) {
     last = await evaluate(workspace, { probeTimeoutMs, alive, rules }).catch((error) => ({ state: 'refused', reason: error.code ?? 'untyped-error' }))
-    if ((last.state === 'healthy' || last.state === 'busy') && last.record?.executable?.digest === expected) {
-      return { result: { ...shown(last), started: true, alreadyRunning: false, ...(last.state === 'busy' ? { busy: true } : {}), loginItem: item } }
-    }
+    if (last.state === 'healthy' && proves(last)) return { result: { ...shown(last), started: true, alreadyRunning: false, loginItem: item } }
     const now = lastStartup()
     if (now !== before && now !== null) {
       const startup = JSON.parse(now)
@@ -161,6 +160,9 @@ async function startThroughLoginItem({ workspace, loginItem, entryPath, deadline
     }
     await sleep(50)
   }
+  // As for a child started here: a service that proved itself and went straight into a long first tick runs, and is
+  // answered as busy only once the wait for it to be healthy is over.
+  if (last?.state === 'busy' && proves(last)) return { result: { ...shown(last), started: true, alreadyRunning: false, busy: true, loginItem: item } }
   return { result: { state: 'start-failed', started: false, alreadyRunning: false, workspaceId, reason: 'health-never-proved-ownership', observed: last?.state ?? null, logPath: servicePaths(workspaceRoot).loginItemLog, loginItem: item } }
 }
 
@@ -302,7 +304,7 @@ async function askProvenRuntime(options, rules, { method, operation, timeoutMs, 
 
 // Pure. How the release a runtime recorded at its start (`executable.ext.release`, see releaseIdentity: the package
 // version and a digest of every runtime module) stands to the installed one, `installed` being { entry, release }, the
-// digest of the entry this command would start and releaseIdentity():
+// digest of the entry this command would start and the release that entry's package holds now (releaseOfEntry):
 //   current   the same version, entry module and modules;
 //   outdated  an earlier version; the same version with another entry module or other modules; or no release named,
 //             as releases before the one that began recording it record none;
@@ -321,11 +323,13 @@ export function releaseStanding(executable, installed) {
 }
 
 // How the release the proven runtime runs stands to the installed one (releaseStanding), `entryPath` being the entry
-// this command would start. Null when the runtime is not proven, or the installed side cannot be read.
+// this command would start: its digest and the release are both read from that entry, so with a login item the
+// installed release is the project's own package, read through the path the item names, whichever package this command
+// runs from. Null when the runtime is not proven, or the installed side cannot be read.
 export function runtimeRelease(status, entryPath) {
   if (status?.state !== 'healthy' || typeof status.record?.executable?.digest !== 'string' || typeof entryPath !== 'string') return null
   let installed
-  try { installed = { entry: executableIdentity(entryPath).digest, release: releaseIdentity() } } catch { return null }
+  try { installed = { entry: executableIdentity(entryPath).digest, release: releaseOfEntry(entryPath) } } catch { return null }
   return releaseStanding(status.record.executable, installed)
 }
 

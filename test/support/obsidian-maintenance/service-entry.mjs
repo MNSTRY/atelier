@@ -10,6 +10,8 @@
 //   --crash-at=<point>            where in that publication (a point of the publisher's crash seam; default after-staging)
 //   --release-root=<directory>    under --startup, the package whose release it watches (a synthetic one), as a login
 //                                 item's service watches its own
+//   --first-tick-block-ms=<N>     the first canonical graph build holds the process for N milliseconds without yielding,
+//                                 so health does not answer in time and the service is busy
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from '../../../src/project/config.mjs'
 import { createEditorAdapter, publishView } from '../../../src/projection/obsidian/publication/index.mjs'
@@ -26,9 +28,11 @@ const { adapter: _never, ...options } = serviceOptionsFromArgv(argv)
 let failuresLeft = typeof args['fail-tick-once'] === 'string' ? 1 : 0
 const crashOn = Number(args['crash-on-publication'] ?? 0)
 let publications = 0
+let blockFirstTick = Number(args['first-tick-block-ms'] ?? 0)
 
 const seams = {
   buildGraph(input) {
+    if (blockFirstTick > 0) { const until = Date.now() + blockFirstTick; blockFirstTick = 0; while (Date.now() < until) { /* held */ } }
     if (failuresLeft > 0) { failuresLeft -= 1; throw Object.assign(new Error('injected: no space left on device'), { code: args['fail-tick-once'] }) }
     return buildGraph(input)
   },
