@@ -115,7 +115,7 @@ const { createAbandonmentProof, machineDigest } = await import('../src/runtime/o
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
 const { readServiceRecord, readServiceSettings, releaseIdentity, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
-const { createRecoveryStore } = await import('../src/projection/obsidian/recovery/store.mjs')
+const { createRecoveryStore, readVaultAllocation } = await import('../src/projection/obsidian/recovery/store.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { maintenanceNoticeFor } = await import('../src/runtime/obsidian/sync-notice.mjs')
@@ -2419,7 +2419,7 @@ test('a vault folder is never allocated under a name a vault the app lists alrea
   const parent = path.join(world.dir, 'Atelier')
   await world.run(['location', 'set', parent, '--json'])
   const listed = { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'elsewhere', 'Opening-Fixture (Scope-Whole)'), ts: 1 } }
-  const engine = world.engine({ readAppVaultList: () => listed })
+  const engine = world.engine({ readAppVaultList: () => ({ ok: true, vaults: listed }) })
   assert.equal((await engine.tick()).scopes[0].state, 'current')
   assert.deepEqual((await world.run(['location', 'show', '--json'])).json.views, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(parent, 'opening-fixture (scope-whole 2)'), origin: 'allocated' }])
 
@@ -2434,8 +2434,64 @@ test('a vault folder is never allocated under a name a vault the app lists alrea
   // An app that lists a vault above the folder: the same.
   const third = makeWorld(t)
   await third.run(['location', 'set', path.join(third.dir, 'Atelier'), '--json'])
-  const enclosing = await third.engine({ readAppVaultList: () => ({ bbbbbbbbbbbbbbbb: { path: third.dir, ts: 1 } }) }).tick()
+  const enclosing = await third.engine({ readAppVaultList: () => ({ ok: true, vaults: { bbbbbbbbbbbbbbbb: { path: third.dir, ts: 1 } } }) }).tick()
   assert.deepEqual([enclosing.scopes[0].state, enclosing.scopes[0].reason], ['stale', 'vault-location-inside-vault'])
+})
+
+test('no vault folder is allocated while the app\'s list cannot be read: the view says why and is allocated at a later tick, once the list reads', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'])
+  let answer = { ok: false, code: 'obsidian-settings-unreadable' }
+  let reads = 0
+  const engine = world.engine({ readAppVaultList: async () => { reads += 1; if (answer instanceof Error) throw answer; return answer } })
+  for (const unreadable of [{ ok: false, code: 'obsidian-settings-unreadable' }, { ok: false, code: 'obsidian-sandboxed' }, new Error('a reader that failed'), null]) {
+    answer = unreadable
+    const report = await engine.tick()
+    assert.deepEqual([report.state, report.scopes[0].state, report.scopes[0].reason], ['ticked', 'stale', 'app-vault-list-unreadable'], String(unreadable?.code ?? unreadable))
+    assert.equal(fs.existsSync(parent), false, 'nothing is made')
+    assert.equal(readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }), null, 'nothing is recorded')
+    assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)), false, 'nor published under the data root')
+    world.advance(10 * 60 * 1000)
+  }
+  answer = { ok: true, vaults: {} }
+  const report = await engine.tick()
+  assert.equal(report.scopes[0].state, 'current')
+  assert.equal(readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }).path, path.join(parent, 'opening-fixture (scope-whole)'))
+  // Once allocated, the list is not read again.
+  const before = reads
+  world.advance(10 * 60 * 1000)
+  answer = { ok: false, code: 'obsidian-settings-unreadable' }
+  assert.equal((await engine.tick()).scopes[0].state, 'current')
+  assert.equal(reads, before)
+})
+
+test('location set checks the folder against the app\'s vault list: through the app when it answers, else its settings file; a list it cannot read is said', async (t) => {
+  const world = makeWorld(t)
+  const listedAbove = { aaaaaaaaaaaaaaaa: { path: world.dir, ts: 1, open: true } }
+  const parent = path.join(world.dir, 'Atelier')
+  // The app runs and answers: its own list decides.
+  const running = fakeApp({ running: true, vaults: listedAbove })
+  const refused = await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...running } })
+  assert.deepEqual([refused.exit, refused.json.error.code], [EXIT.refused, 'vault-location-inside-vault'])
+  assert.equal(world.machine().decisions.location, null, 'nothing is remembered')
+  // Quit: its settings file decides.
+  const quit = fakeApp({ vaults: listedAbove })
+  const fromFile = await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...quit } })
+  assert.deepEqual([fromFile.exit, fromFile.json.error.code], [EXIT.refused, 'vault-location-inside-vault'])
+  // A vault elsewhere: accepted, and the document says which list was read.
+  const elsewhere = { bbbbbbbbbbbbbbbb: { path: path.join(TMP, 'elsewhere-vault'), ts: 1, open: true } }
+  const accepted = await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ running: true, vaults: elsewhere }) } })
+  assert.deepEqual([accepted.exit, accepted.json.appVaultList], [EXIT.ok, { source: 'app' }])
+  assert.deepEqual((await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ vaults: elsewhere }) } })).json.appVaultList, { source: 'file' })
+  assert.deepEqual((await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ settingsRefusal: { ok: false, code: 'obsidian-settings-missing', message: 'fake' } }) } })).json.appVaultList, { source: 'none' })
+  // A list that cannot be read: accepted, said, and checked again before any allocation.
+  const unread = await world.run(['location', 'set', parent], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ settingsRefusal: { ok: false, code: 'obsidian-settings-unsafe', message: 'fake' } }) } })
+  assert.equal(unread.exit, EXIT.ok, unread.stderr)
+  assert.match(unread.stdout, /vault list could not be read \(obsidian-settings-unsafe\); no vault is allocated there until it can be/)
+  // The real entry under the test runner never reads the developer's own settings file.
+  const real = await world.run(['location', 'set', parent, '--json'], { seams: null, production: true, env: privateHomeEnv(world.dir, world.env) })
+  assert.deepEqual([real.exit, real.json.appVaultList], [EXIT.ok, { source: 'unread', reason: 'app-vault-list-under-test' }])
 })
 
 test('open adds the view\'s allocated vault to the app and opens it there', needsExchange, async (t) => {

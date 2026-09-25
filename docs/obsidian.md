@@ -451,7 +451,14 @@ given: another machine's Obsidian could hold a vault there unseen. A folder
 macOS protects (Desktop, Documents, Downloads) is accepted with a warning,
 because macOS asks before Obsidian or the maintenance service may read it.
 `~/` is read against the account's home folder, which a shell does not do
-after `--x=`.
+after `--x=`. Each check compares the folder as written and as its real path,
+in any letter case, so a link into a listed or synced vault is refused as
+that vault is. Obsidian's vault list is read through the app when it runs and
+answers, and otherwise from its settings file, never written. When the list
+cannot be read, `location set` says so and accepts the folder, and the
+maintenance service allocates no vault there until it can read the list
+(the view is `stale`, `app-vault-list-unreadable`, and is tried again at
+the next tick).
 
 ### What `open` does in each state of Obsidian
 

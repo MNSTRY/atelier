@@ -207,3 +207,22 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
   }
   return refuse('vault-location-full', 'no free vault name is left for this view in that folder', { parent })
 }
+
+// The app's vault list for an allocation, from its settings file and never from the app: { ok: true, vaults } when it
+// was read, or when the app never ran here (no file, and no Flatpak or snap build whose list lives elsewhere), and
+// { ok: false, code } otherwise, so a folder is never allocated while a listed vault could enclose it or have its
+// name. `read` answers readObsidianSettings; a file the app is writing can read as unreadable for a moment, so an
+// unreadable file is read again, up to `attempts` times `delayMs` apart. `sandboxed` is true for such a build.
+export async function readAppVaultListForAllocation({ read, sandboxed = false, attempts = 3, delayMs = 50, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
+  if (sandboxed) return { ok: false, code: 'obsidian-sandboxed' }
+  let answer = null
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try { answer = read() } catch { answer = { ok: false, code: 'obsidian-settings-unreadable' } }
+    if (answer?.ok === true) return { ok: true, vaults: answer.vaults ?? {} }
+    if (answer?.code === 'obsidian-settings-missing') return { ok: true, vaults: {} }
+    if (answer?.code !== 'obsidian-settings-unreadable') break
+    if (attempt < attempts) await sleep(delayMs)
+  }
+  return { ok: false, code: typeof answer?.code === 'string' ? answer.code : 'obsidian-settings-unreadable' }
+}
+

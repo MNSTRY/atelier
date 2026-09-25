@@ -37,8 +37,11 @@
   under the data root, and a workspace that decides nothing publishes there as
   before. A folder inside a repository or the project, inside a vault Atelier
   publishes or one the app lists, or on another volume than the data root is
-  refused; a synced one needs `--allow-synced-location`; a macOS-protected one
-  is warned about. A view whose folder cannot be allocated is not published
+  refused, through links and in any letter case; a synced one needs
+  `--allow-synced-location`; a macOS-protected one is warned about. The app's
+  list is read through the app when it answers, else from its settings file;
+  while it cannot be read, no folder is allocated (`app-vault-list-unreadable`,
+  tried again at the next tick). A view whose folder cannot be allocated is not published
   and its freshness says why, while the other views go on. `location show`
   and `status` (`scopes[].vault`) say where each view's vault is.
 - The Obsidian machine settings of a workspace remember what a person decided

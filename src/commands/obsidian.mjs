@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { AtelierDiagnosticError, resolveProjectConfig } from '../project/config.mjs'
 import { ObsidianContractRefusal } from '../projection/obsidian/contracts.mjs'
 import { applyPolicyDigest } from '../projection/obsidian/edits/policy.mjs'
-import { MINIMUM_APP_VERSION } from '../runtime/obsidian/app-capability.mjs'
+import { MINIMUM_APP_VERSION, inspectApp } from '../runtime/obsidian/app-capability.mjs'
 import { loadContributions } from '../runtime/obsidian/contributions.mjs'
 import { isoTime } from '../runtime/obsidian/documents.mjs'
 import { readObsidianEnablement } from '../runtime/obsidian/enablement.mjs'
@@ -26,6 +26,7 @@ import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
 import { checkVaultParent, projectDisplayName, vaultFolderName } from '../runtime/obsidian/vault-location.mjs'
 import { hasCommittedGeneration, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
+import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../projection/obsidian/publication/vault-list.mjs'
 
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
@@ -252,6 +253,29 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
     }
+    // The app's vault list, read only, for a check of where vaults may live: through the app when it runs and answers,
+    // else from its settings file. { source: 'app' | 'file' | 'none', vaults } ('none': the app never ran here), or
+    // { source: 'unread', vaults: null, reason }. The app is reached only with the adapter (given or remembered, or the
+    // caller's seams); without it, only the file is read, and never under the test runner.
+    const appVaultList = async () => {
+      const quietly = async (read) => { try { return await read() } catch { return null } }
+      const reach = seams !== null ? seams : adapterSelected() ? await appSeams() : null
+      const registry = reach?.registry ?? null
+      if (registry !== null && reach.appProbe !== undefined) {
+        const seen = await inspectApp(reach.appProbe)
+        if (seen.running === true && typeof seen.version === 'string') {
+          const listed = await quietly(() => registry.listThroughApp())
+          if (listed?.answered === true) return { source: 'app', vaults: listed.vaults }
+        }
+      }
+      const settings = registry !== null ? await quietly(() => registry.readSettings())
+        : env.NODE_TEST_CONTEXT !== undefined ? { ok: false, code: 'app-vault-list-under-test' }
+          : obsidianSandboxedBuild({ platform, env }) !== null ? { ok: false, code: 'obsidian-sandboxed' }
+            : readObsidianSettings({ userDataDir: obsidianUserDataDir({ platform, env }) })
+      if (settings?.ok === true) return { source: 'file', vaults: settings.vaults ?? {} }
+      if (settings?.code === 'obsidian-settings-missing') return { source: 'none', vaults: {} }
+      return { source: 'unread', vaults: null, reason: typeof settings?.code === 'string' ? settings.code : 'obsidian-settings-unreadable' }
+    }
     // Whether this run may reach the installed app: --adapter given, or remembered by the workspace for the real entry.
     const adapterSelected = () => { try { chooseAdapter(); return true } catch (error) { if (isTyped(error)) return false; throw error } }
     // Atelier's plugin as the running service sees it, for one view. A vault that turned it off says so from its own list
@@ -426,17 +450,22 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const parent = tilde ? path.join(homedir, value.slice(1)) : path.resolve(cwd, value)
         const { project, enablement, workspace, repositoryRoots, now } = writable()
         const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultRootFor({ ...workspace, scopeId })).filter((found) => found.origin === 'allocated').map((found) => found.path)
-        const warnings = checkVaultParent({ parent, workspaceRoot: workspace.workspaceRoot, repositoryRoots, allocatedPaths, allowSynced: flags['allow-synced-location'] === true, homedir: homedir ?? undefined, platform })
+        // A folder inside, or holding, a vault the app lists is refused now; when the list cannot be read, it is checked
+        // again, and has to be read, before any vault is allocated there.
+        const list = await appVaultList()
+        const warnings = checkVaultParent({ parent, workspaceRoot: workspace.workspaceRoot, repositoryRoots, vaults: list.vaults, allocatedPaths, allowSynced: flags['allow-synced-location'] === true, homedir: homedir ?? undefined, platform })
+        const appVaultListShown = { source: list.source, ...(list.reason === undefined ? {} : { reason: list.reason }) }
         const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
         const decided = withDecision(current, 'location', { parent }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
         writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
         const placed = views(project, enablement, workspace, decided.decisions.location)
         return {
-          exit: EXIT.ok, document: { location: decided.decisions.location, warnings, views: placed, takesEffect: 'next-tick' },
+          exit: EXIT.ok, document: { location: decided.decisions.location, warnings, appVaultList: appVaultListShown, views: placed, takesEffect: 'next-tick' },
           human: [
             `where vaults live: ${parent}; a view's vault is allocated there at its first publication, as "${projectDisplayName(project)} (<view>)"`,
             ...(warnings.synced === null ? [] : [`Warning: ${warnings.synced} keeps this folder in step with other machines.`]),
             ...(warnings.protected === null ? [] : [`Warning: macOS asks before Obsidian or the maintenance service may read your ${warnings.protected} folder.`]),
+            ...(list.source === 'unread' ? [`Obsidian's vault list could not be read (${list.reason}); no vault is allocated there until it can be, and it is checked again then.`] : []),
             ...lines(placed),
           ],
         }

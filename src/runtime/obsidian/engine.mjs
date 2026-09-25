@@ -3,10 +3,10 @@ import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
-import { PublicationRefusal, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
+import { PublicationRefusal, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
-import { ObsidianMaintenanceRefusal } from './errors.mjs'
+import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { createMaintenanceExtensions } from './extension-points.mjs'
 import {
   assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
@@ -170,8 +170,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility = DEFAULT_ELIGIBILITY,
     fullReconciliationIntervalMs = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS, lateWriterWindowMs = DEFAULT_LATE_WRITER_WINDOW_MS,
     publicationRetryMs = DEFAULT_PUBLICATION_RETRY_MS, observeApp = null,
-    // The app's own vault list (id -> { path }) when it can be read without asking the app, or null: a folder for a
-    // new vault is never allocated inside a vault it lists, nor under a name a vault it lists already has.
+    // Reads the app's own vault list without asking the app (readAppVaultListForAllocation): { ok: true, vaults } with
+    // the map id -> { path }, or { ok: false, code }. A folder for a new vault is never allocated inside a vault it
+    // lists, nor under a name a vault it lists already has, nor while the list cannot be read.
     readAppVaultList = null,
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
     // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
@@ -363,11 +364,28 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // this tick, and its freshness says why; the other views go on.
     const allocationRefusals = new Map()
     if (machine.decisions.location !== null) {
-      let vaults = null
-      try { vaults = typeof readAppVaultList === 'function' ? readAppVaultList() ?? null : null } catch { vaults = null }
+      // The app's list, read once per tick and only when a view is about to be allocated. An engine given no reader
+      // coordinates with no app, and knows no list. A list that cannot be read allocates nothing: the view says why,
+      // and its folder is allocated at a later tick, once the list reads.
+      let list = null
+      const appList = async () => {
+        if (typeof readAppVaultList !== 'function') return { ok: true, vaults: null }
+        if (list === null) {
+          let answer
+          try { answer = await readAppVaultList() } catch { answer = null }
+          list = answer?.ok === true ? { ok: true, vaults: answer.vaults ?? {} } : { ok: false, code: typeof answer?.code === 'string' ? answer.code : 'obsidian-settings-unreadable' }
+        }
+        return list
+      }
       const allocatedPaths = enablement.scopes.map((scope) => readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path).filter((item) => typeof item === 'string')
       for (const scope of enablement.scopes) {
         try {
+          let vaults = null
+          if (readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId }) === null && !hasCommittedGeneration({ workspaceRoot, scopeId: scope.scopeId })) {
+            const known = await appList()
+            if (!known.ok) refuse('app-vault-list-unreadable', 'Obsidian\'s vault list could not be read, so no folder is allocated for this view yet; it is tried again at the next tick', { cause: known.code })
+            vaults = known.vaults
+          }
           ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId, location: machine.decisions.location, projectName: projectDisplayName(project), repositoryRoots, vaults, allocatedPaths, now })
         } catch (error) {
           if (!isTypedRefusal(error)) throw error
