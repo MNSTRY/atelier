@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { checkManagedRoots } from '../../project/file-class.mjs'
+import { checkManagedRoots, realLocation } from '../../project/file-class.mjs'
+import { realPathAsStored } from '../../project/private-state.mjs'
 import { VAULT_ALLOCATION_SCHEMA, VAULT_LOCK_DIRECTORY, hasCommittedGeneration, readVaultAllocation, writeVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { refuse } from './errors.mjs'
 
@@ -79,7 +80,19 @@ function nearestExisting(target) {
   }
 }
 
-const realOf = (target) => { try { return fs.realpathSync(target) } catch { return path.resolve(target) } }
+// A path compared with another as a volume that folds letter case would: NFC, lower case. Used where a false match
+// only refuses (an enclosing vault, a synced or protected folder, a listed name), so a case-sensitive volume is at worst
+// refused a folder whose name differs from a listed vault's in letter case only.
+const folded = (target) => target.normalize('NFC').toLowerCase()
+const foldedInside = (parent, child) => isSameOrInside(folded(parent), folded(child))
+// The real path of a folder that may not exist yet, as the file system stores it (realPathAsStored): the nearest
+// existing folder on the way up resolved, links and letter case included, and the missing tail appended.
+export const realPathOfLocation = (target) => realLocation(target, realPathAsStored)
+// The same, for a folder read from somewhere else (the app's list, the home folder): its lexical path when it cannot be
+// resolved, since it may be on a volume that is gone.
+const realOrLexical = (target) => { try { return realPathOfLocation(target) } catch { return path.resolve(target) } }
+// A path as written and as its real path, both.
+const spellings = (target) => [...new Set([path.resolve(target), realOrLexical(target)])]
 
 // A folder a sync client of this account keeps in step with other machines, by name; null for any other folder.
 // `exists` answers whether a path exists. iCloud also syncs Desktop and Documents when "Desktop & Documents Folders"
@@ -87,7 +100,7 @@ const realOf = (target) => { try { return fs.realpathSync(target) } catch { retu
 export function syncedFolderOf(target, { homedir, exists = fs.existsSync } = {}) {
   if (typeof homedir !== 'string' || !path.isAbsolute(homedir)) return null
   const resolved = path.resolve(target)
-  const within = (...parts) => isSameOrInside(path.join(homedir, ...parts), resolved)
+  const within = (...parts) => foldedInside(path.join(homedir, ...parts), resolved)
   if (within('Library', 'Mobile Documents')) return 'iCloud Drive'
   if (within('Library', 'CloudStorage')) return 'a cloud storage provider'
   for (const [folder, name] of [['Dropbox', 'Dropbox'], ['OneDrive', 'OneDrive'], ['Google Drive', 'Google Drive'], ['Box', 'Box']]) if (within(folder)) return name
@@ -102,33 +115,43 @@ export function syncedFolderOf(target, { homedir, exists = fs.existsSync } = {})
 export function protectedFolderOf(target, { homedir, platform = process.platform } = {}) {
   if (platform !== 'darwin' || typeof homedir !== 'string' || !path.isAbsolute(homedir)) return null
   const resolved = path.resolve(target)
-  return ['Desktop', 'Documents', 'Downloads'].find((folder) => isSameOrInside(path.join(homedir, folder), resolved)) ?? null
+  return ['Desktop', 'Documents', 'Downloads'].find((folder) => foldedInside(path.join(homedir, folder), resolved)) ?? null
 }
 
 // The folder of a vault Atelier publishes into that contains `target`, or null: the vault lock of a published vault,
 // or a folder another view of this workspace was allocated.
 function enclosingAtelierVault(target, allocatedPaths = []) {
-  const resolved = path.resolve(target)
-  for (const allocated of allocatedPaths) if (isSameOrInside(allocated, resolved)) return allocated
-  let current = resolved
-  for (;;) {
-    try { if (fs.statSync(path.join(current, VAULT_LOCK_DIRECTORY)).isDirectory()) return current } catch { /* not a published vault */ }
-    const parent = path.dirname(current)
-    if (parent === current) return null
-    current = parent
+  const candidates = spellings(target)
+  for (const allocated of allocatedPaths) if (spellings(allocated).some((folder) => candidates.some((candidate) => foldedInside(folder, candidate)))) return allocated
+  for (const resolved of candidates) {
+    let current = resolved
+    for (;;) {
+      try { if (fs.statSync(path.join(current, VAULT_LOCK_DIRECTORY)).isDirectory()) return current } catch { /* not a published vault */ }
+      const parent = path.dirname(current)
+      if (parent === current) break
+      current = parent
+    }
   }
+  return null
 }
 
 // The folder of a vault the app lists that contains `target` or is it; null when there is none or no list is known.
-// `vaults` is the app's own map, id -> { path }.
+// `vaults` is the app's own map, id -> { path }. Both sides are compared as written and as their real paths, in any
+// letter case, so neither a link nor another spelling of a listed folder hides it.
 function enclosingListedVault(target, vaults) {
   if (vaults === null || typeof vaults !== 'object') return null
-  const resolved = [path.resolve(target), realOf(target)]
+  const candidates = spellings(target)
   for (const entry of Object.values(vaults)) {
     if (entry === null || typeof entry !== 'object' || typeof entry.path !== 'string' || !path.isAbsolute(entry.path)) continue
-    const folder = path.resolve(entry.path)
-    if (resolved.some((candidate) => isSameOrInside(folder, candidate))) return entry.path
+    if (spellings(entry.path).some((folder) => candidates.some((candidate) => foldedInside(folder, candidate)))) return entry.path
   }
+  return null
+}
+
+// A folder a sync client keeps in step, or one macOS protects, for any spelling of the target and the home folder.
+const anySpelling = (check, target, homedir) => {
+  if (typeof homedir !== 'string' || !path.isAbsolute(homedir)) return null
+  for (const home of spellings(homedir)) for (const candidate of spellings(target)) { const found = check(candidate, home); if (found !== null) return found }
   return null
 }
 
@@ -151,11 +174,11 @@ export function checkVaultParent({ parent, workspaceRoot, repositoryRoots, vault
   if (typeof workspaceRoot === 'string' && deviceOf(nearestExisting(parent)) !== deviceOf(nearestExisting(workspaceRoot))) {
     refuse('vault-location-other-volume', 'vaults live on the volume of Atelier\'s private data, because a note is published by an exchange that cannot cross volumes; name another data root (--data-root) on that volume to use it')
   }
-  const synced = syncedFolderOf(parent, { homedir })
+  const synced = anySpelling((candidate, home) => syncedFolderOf(candidate, { homedir: home }), parent, homedir)
   if (synced !== null && !allowSynced) {
     refuse('vault-location-synced', `this folder is kept in step by ${synced}: another machine's Obsidian could hold a vault there unseen, and a sync conflict is not a publication; pass --allow-synced-location to use it anyway`, { synced })
   }
-  return { synced, protected: protectedFolderOf(parent, { homedir, platform }) }
+  return { synced, protected: anySpelling((candidate, home) => protectedFolderOf(candidate, { homedir: home, platform }), parent, homedir) }
 }
 
 // The view's allocation, allocated now when this workspace decided where its vaults live and the view has none yet
@@ -170,14 +193,17 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
   // A synced location was allowed when it was decided; it is checked again for everything else.
   checkVaultParent({ parent, workspaceRoot, repositoryRoots, vaults, allocatedPaths, allowSynced: true, homedir })
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 })
-  const listedNames = new Set(Object.values(vaults ?? {}).filter((entry) => typeof entry?.path === 'string').map((entry) => path.basename(entry.path).toLowerCase()))
+  // The folder is recorded by its real path, as the file system stores it: a link on the way to the location decided
+  // then leads nowhere else later, and the path is the one the app and every check see.
+  const realParent = realPathAsStored(parent)
+  const listedNames = new Set(Object.values(vaults ?? {}).filter((entry) => typeof entry?.path === 'string').map((entry) => folded(path.basename(entry.path))))
   for (let number = 1; number <= 99; number += 1) {
     const name = vaultFolderName({ projectName, scopeId, number })
-    const folder = path.join(parent, name)
-    if (listedNames.has(name.toLowerCase()) || fs.lstatSync(folder, { throwIfNoEntry: false }) !== undefined) continue
+    const folder = path.join(realParent, name)
+    if (listedNames.has(folded(name)) || fs.lstatSync(folder, { throwIfNoEntry: false }) !== undefined) continue
     try { fs.mkdirSync(folder, { mode: 0o700 }) } catch (error) { if (error.code === 'EEXIST') continue; throw error }
     try { fs.chmodSync(folder, 0o700) } catch { /* a file system without modes */ }
-    return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: folder, name, parent, allocatedAt: now } })
+    return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: folder, name, parent: realParent, allocatedAt: now } })
   }
   return refuse('vault-location-full', 'no free vault name is left for this view in that folder', { parent })
 }
