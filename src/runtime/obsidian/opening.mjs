@@ -407,6 +407,9 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     if (rules.appQualifies(after)) {
       try { vault = await appProbe.vaultState({ vaultRoot, route }) } catch { vault = { answered: false, indexReady: false } }
       if (vault?.answered === true && vault.indexReady === true) break
+      // Only the command line answers for a vault. An app whose version still only Atelier's plugin reports gives no
+      // answer there, and waiting changes nothing: its command line is what is missing, not a launch.
+      if (vault?.answered !== true && after.versionSource === 'plugin') return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
     }
     if (monotonic() >= deadline) break
     await sleep(appPollMs)

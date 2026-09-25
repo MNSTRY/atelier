@@ -452,7 +452,9 @@ running, a plugin's report counts for nothing. `open` then asks the command
 line nothing: a vault the app's settings file lists is opened by path, and one
 it does not show is answered as `app-cli-unavailable` with reason
 `vault-open-cli-silent` (the app has the vault open; make sure its
-command-line interface is turned on).
+command-line interface is turned on). So is a listed vault the command line
+does not answer for once it is opened, while only the plugin reports the
+version: `open` says so at once instead of waiting for the app.
 
 ## Known limits
 

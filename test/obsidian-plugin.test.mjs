@@ -1843,6 +1843,18 @@ test('status and open report the plugin, and open takes the app version from it 
   assert.match(silent.json.next, /has this view's vault open, as Atelier's plugin in it shows, but its command line did not answer/)
   assert.deepEqual(opened.json.plugin, { present: true, reason: 'live-lease', appVersion: '1.13.7', pluginVersion: shippedManifest().version, sessions: 1 })
   assert.deepEqual(launches, [fs.realpathSync(world.vault)])
+  // A settings file that lists the vault while the command line is silent (turned off in Obsidian, say): the vault is
+  // opened by path, and an app whose version still only the plugin reports is not waited for, since only its command
+  // line could answer for the vault. The answer names the command line, not a launch that failed.
+  listed = true
+  asked.length = 0
+  seams.appProbe = { ...seams.appProbe, vaultState: async () => ({ answered: false, indexReady: false }) }
+  const started = Date.now()
+  const cliOff = await world.run(['open', '--json', '--consent-actor', CONSENT.actor], { seams })
+  assert.deepEqual([cliOff.json.outcome, cliOff.json.reason, asked, launches.length], ['app-cli-unavailable', 'vault-open-cli-silent', ['readSettings'], 2])
+  assert.equal(cliOff.json.launched, true)
+  assert.match(cliOff.json.next, /its command line did not answer/)
+  assert.ok(Date.now() - started < 15_000, 'answered without waiting out the app')
 
   // A service that is not running reports no plugin, whatever was open before.
   plugin.unload()
