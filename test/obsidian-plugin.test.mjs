@@ -54,6 +54,7 @@ import { ensureWorkspaceIdentity, protectedRoots, workspaceStateRoot, writeMachi
 import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
 import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
 import { readServiceRecord, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
+import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
 import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { createMaintenanceStateStore } from '../src/runtime/obsidian/state-store.mjs'
 import {
@@ -1993,6 +1994,40 @@ test('a plugin file that drifted is written again at the service\'s next tick, w
   fs.rmSync(path.join(folder, 'main.js'))
   assert.equal(await tick(), off)
   assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
+})
+
+test('a drifted plugin file never makes a committed view need the app: while the app does not qualify the view stays current, and the file is written once it does', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  let qualifies = true
+  let built = 0
+  // #74's rule: a generation that is already committed needs no app, so an app that cannot be qualified never makes a current view stale.
+  const adapterFactory = () => {
+    built += 1
+    if (!qualifies) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'the installed Obsidian does not qualify', { reason: 'below-minimum-version' })
+    return absentAdapter()
+  }
+  const service = await world.service({ adapterFactory })
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return world.freshness() }
+  assert.equal((await tick()).state, 'current')
+  const generation = world.freshness().generationId
+  const data = path.join(world.vault, PLUGIN_DATA_PATH)
+
+  qualifies = false
+  fs.rmSync(data)
+  const before = built
+  const kept = await tick()
+  assert.equal(built, before + 1, 'the drift asked for the app once')
+  assert.deepEqual([kept.state, kept.generationId, kept.verified], ['current', generation, true], 'the committed view stays current')
+  assert.equal(fs.existsSync(data), false, 'nothing was published without a qualified app')
+  const again = await tick()
+  assert.deepEqual([again.state, built], ['current', before + 1], 'not asked again before the retry is due')
+
+  // Once the app qualifies, the retry writes the file, as the same generation.
+  qualifies = true
+  world.advance(31_000)
+  const repaired = await tick()
+  assert.deepEqual([repaired.state, repaired.generationId], ['current', generation])
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE)
 })
 
 // What the release before vault layout 2 prepared: layout 1 paths, recorded in a layout 1 registry.

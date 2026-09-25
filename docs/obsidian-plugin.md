@@ -101,8 +101,13 @@ with the disk, has a view whose files differ prepared again, and a generation
 that is already committed is published again, as it is, with its notes kept.
 A drift left for the person is asked about once, and again once it changes;
 where the plugin is turned off in the vault, a pinned file that is gone is no
-drift. (The settings files are held to the same rule for a file nobody may
-read.) A plugin file that another program changes while a publication runs
+drift. Publishing a committed generation again needs the app when one runs;
+if that app does not qualify, nothing is written, the view stays `current`
+(a committed generation needs no app, so an app that cannot be qualified
+never makes a current view stale), and the file is written at a later
+attempt, on the retry schedule of an unsettled view, once the app
+qualifies. (The settings files are held to the same rule for a file nobody
+may read.) A plugin file that another program changes while a publication runs
 is a race and is handled like one on a note: that publication does not
 commit, the view is tried again, and the file is planned from the disk anew
 (`plugin-file-changed`); nothing reads a plugin file as an edit of a note.

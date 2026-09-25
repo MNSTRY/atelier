@@ -129,11 +129,13 @@ const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal ||
 const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
 
 // An editor adapter that `build` makes, synchronously or not, the first time the publisher calls it; a refusal of
-// `build` is thrown from that call.
+// `build` is thrown from that call, and `refusal()` answers it afterwards.
 function builtOnFirstUse(build) {
   let adapter = null
-  const built = () => (adapter ??= Promise.resolve().then(build))
+  let refused = null
+  const built = () => (adapter ??= Promise.resolve().then(build).catch((error) => { refused = error; throw error }))
   return {
+    refusal: () => refused,
     probe: async (input) => (await built()).probe(input),
     inspect: async (payload) => (await built()).inspect(payload),
     collect: async (payload) => (await built()).collect(payload),
@@ -208,6 +210,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   // Views whose last attempt did not settle, by scope: { attempts in a row, lastAttemptMs, appState then }. Kept in
   // memory only: a new engine attempts every view on its first tick.
   const unsettled = new Map()
+  // Views kept current although publishing their committed generation again (a drifted plugin file) needed an app
+  // that did not qualify: tried again on the same schedule as an unsettled view, and forgotten once one settles.
+  const waitingForApp = new Map()
   const proveAbandoned = createAbandonmentProof({ probe: lockProbe })
 
   async function takeLock(workspaceRoot, workspaceId) {
@@ -466,8 +471,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     for (const { scope } of scopes) {
       const entry = entries.get(scope.scopeId)
       // A view that did not settle is tried again, not on every tick: see the head of this file.
-      const retried = RETRIED_STATES.has(entry.state)
-        && (full || rules.isRetryDue({ nowMs, unsettled: unsettled.get(scope.scopeId), appState: appNow, retryMs: publicationRetryMs, maxMs: fullReconciliationIntervalMs }))
+      const retried = (RETRIED_STATES.has(entry.state)
+        && (full || rules.isRetryDue({ nowMs, unsettled: unsettled.get(scope.scopeId), appState: appNow, retryMs: publicationRetryMs, maxMs: fullReconciliationIntervalMs })))
+        || (waitingForApp.has(scope.scopeId) && rules.isRetryDue({ nowMs, unsettled: waitingForApp.get(scope.scopeId), appState: appNow, retryMs: publicationRetryMs, maxMs: fullReconciliationIntervalMs }))
       if (firstTick || unseen.has(scope.scopeId) || requested.has(scope.scopeId) || retried) invalidate(scope.scopeId, null)
       // A settled view still in the earlier vault layout is laid out again at the first tick where no note holds it.
       if (earlierLayout.has(scope.scopeId) && entry.state === 'current' && layoutHeldOf(scope.scopeId).length === 0) invalidate(scope.scopeId, null)
@@ -536,11 +542,23 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           // recovery, before it would probe. Its adapter is then built only if the publisher asks for one, so an app
           // that cannot be qualified never makes a current view stale. Any other publication builds the adapter first,
           // and an app that does not qualify keeps the publisher from being reached at all.
-          const adapter = trusted()?.generationId === preparedGenerationId ? builtOnFirstUse(() => adapterFactory({ store, scope })) : await adapterFactory({ store, scope })
-          const result = await seams.publishView({
-            preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
-            ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
-          })
+          const lazy = trusted()?.generationId === preparedGenerationId ? builtOnFirstUse(() => adapterFactory({ store, scope })) : null
+          const adapter = lazy ?? await adapterFactory({ store, scope })
+          let result
+          try {
+            result = await seams.publishView({
+              preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
+              ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
+            })
+          } catch (error) {
+            // The publisher asked for the app only to publish the committed generation again (a plugin file drifted),
+            // and the app did not qualify: nothing was written, and the committed generation is read back as it is.
+            // The file is written at a later attempt, once the app qualifies.
+            if (lazy === null || lazy.refusal() !== error || !isTypedRefusal(error) || trusted()?.generationId !== preparedGenerationId) throw error
+            result = { state: 'committed', alreadyCommitted: true, notes: [], waitsForApp: true }
+          }
+          if (result.waitsForApp === true) waitingForApp.set(scopeId, { attempts: (waitingForApp.get(scopeId)?.attempts ?? 0) + 1, lastAttemptMs: nowMs, appState: appNow() })
+          else waitingForApp.delete(scopeId)
           const pointerNow = trusted()
           const common = { generationId: pointerNow?.generationId ?? null, preparedGenerationId, retainedEdits: pointerNow?.retained?.length ?? 0 }
           if (result.state === 'refused') {
@@ -580,6 +598,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       else unsettled.set(scopeId, { attempts: (unsettled.get(scopeId)?.attempts ?? 0) + 1, lastAttemptMs: nowMs, appState: appNow() })
     }
     for (const scopeId of [...unsettled.keys()]) if (!entries.has(scopeId) || entries.get(scopeId).state === 'disabled') unsettled.delete(scopeId)
+    for (const scopeId of [...waitingForApp.keys()]) if (entries.get(scopeId)?.state !== 'current') waitingForApp.delete(scopeId)
     semantic = nextSemantic
     firstTick = false
     return {
