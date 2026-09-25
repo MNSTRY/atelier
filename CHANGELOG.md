@@ -294,10 +294,12 @@
   quit Obsidian started with an `obsidian://` link opens only that vault and
   drops the reopen flag of every other one; `open` now starts it plainly on
   macOS (it reopens every vault it had open, and the view's vault, which `open`
-  added marked to reopen) and hands it the vault once its command line answers.
+  added flagged to reopen) and hands it the vault's link through its command
+  line once the app itself answers there, never through the operating system.
   On Linux a quit Obsidian is still started with the link (a known limit).
-- `open` names the vault by its id (`obsidian://open?vault=<id>`) instead of
-  its path, which Obsidian matches against its vault list by string prefix.
+- `open` names the vault by its id (`obsidian://open?vault=<id>`) where the id
+  reaches it first, instead of its path, which Obsidian matches against its
+  vault list by string prefix.
 - Obsidian with its command line turned off (the default of a new
   installation) answers every command with "Command line interface is not
   enabled"; that answer was read as an unreadable version. It is now

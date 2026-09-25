@@ -402,10 +402,12 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
 
   // 5. Launch, then wait, bounded, for the app to answer for exactly this vault.
   let launch
-  // Named by its id (a path is matched by string prefix); a quit app is started plainly and handed the vault once it
-  // answers, so the vaults its list marks open come back (launch-plan.mjs).
-  const entry = findVaultEntry(known.vaults, known.path) ?? findVaultEntry(known.vaults, vaultRoot)
-  try { launch = await launcher.open({ vaultRoot: known.path, vaultId: entry?.id ?? null, appRunning: before.running === true }) } catch { launch = { launched: false, reason: 'launcher-threw' } }
+  // A quit app is started plainly and handed the vault once it answers, so the vaults its list flags open come back
+  // (launch-plan.mjs).
+  // The id only where the route found it reaches this vault first (another vault's folder name may equal an id);
+  // otherwise the vault's own path, which the app matches exactly since the folder is listed.
+  const target = route.how === 'id' ? { vaultId: route.id, vaultPath: known.path } : { vaultPath: known.path }
+  try { launch = await launcher.open({ vaultRoot: known.path, ...target, appRunning: before.running === true }) } catch { launch = { launched: false, reason: 'launcher-threw' } }
   if (launch?.launched !== true) return finish('launch-failed', { ...common, reason: typeof launch?.reason === 'string' ? launch.reason : 'launcher-refused', app: app(before), registration })
   const deadline = monotonic() + appWaitMs
   let after = before

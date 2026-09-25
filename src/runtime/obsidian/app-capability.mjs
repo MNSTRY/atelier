@@ -95,6 +95,18 @@ export function readVersionAnswer({ stdout = '', stderr = '', exited = true } = 
   return { version: exited && text !== '' ? text : null, noVaultOpen: false }
 }
 
+// Pure. Whether a reply of the command-line tool came from the app itself: a
+// version, or one of the lines the app answers with (no vault open, a command
+// not ready yet, the command line turned off). The tool's own message while it
+// cannot reach the app ("The CLI is unable to find Obsidian …") is not one, and
+// nor is silence: the app is not up.
+export function appAnswered({ stdout = '', stderr = '', exited = true } = {}) {
+  const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
+  if (lines.some((line) => NO_VAULT_OPEN.test(line) || CLI_TURNED_OFF.test(line) || COMMAND_NOT_READY.test(line))) return true
+  const text = typeof stdout === 'string' ? stdout.trim() : ''
+  return exited && parseAppVersion(text) !== null
+}
+
 // Pure. What one `eval` call of the command-line tool answered:
 // { answered: true, value } with the value the script returned, parsed as
 // JSON, or { answered: false, reason }. The tool prints a returned string as

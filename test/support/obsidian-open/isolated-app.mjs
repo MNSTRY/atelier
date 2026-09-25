@@ -24,7 +24,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { OBSIDIAN_SETTINGS_FILE, obsidianUserDataDir } from '../../../src/projection/obsidian/publication/vault-list.mjs'
-import { launchPlan, urlProcessed } from '../../../src/runtime/obsidian/launch-plan.mjs'
+import { launchPlan, runLaunchPlan, urlProcessed } from '../../../src/runtime/obsidian/launch-plan.mjs'
+import { appAnswered } from '../../../src/runtime/obsidian/app-capability.mjs'
 
 export const APP_DIR = process.env.ATELIER_OBSIDIAN_APP_DIR || '/Applications/Obsidian.app/Contents/MacOS'
 export const CLI_PATH = path.join(APP_DIR, 'obsidian-cli')
@@ -96,28 +97,17 @@ export function createIsolatedApp({ parent = process.env.ATELIER_OBSIDIAN_TMP ||
       }
       throw new Error('the isolated Obsidian did not answer its command line in time')
     },
-    // `open`'s launcher for this app, by the same plan as the production launcher (launch-plan.mjs): a quit app is
-    // started with no URL and handed the vault's URL through its own tool once the tool answers anything; a running
-    // app is handed the URL through its tool.
+    // `open`'s launcher for this app, carried out like the production launcher (launch-plan.mjs), with this app's
+    // private start and its own tool: never the operating system's URL opener.
     launcher: {
-      async open({ vaultId, appRunning }) {
-        const plan = launchPlan({ platform: 'darwin', appRunning, vaultId })
-        if (!plan.ok) return { launched: false, reason: plan.reason }
-        for (const { step, uri } of plan.steps) {
-          if (step === 'plain-start') start(null)
-          else if (step === 'wait-for-app') {
-            let up = false
-            for (const until = Date.now() + 60000; !up && Date.now() < until;) {
-              if (fs.existsSync(socket)) { const reply = await cli(['version'], { timeoutMs: 5000 }); up = (reply.stdout + reply.stderr).trim() !== '' }
-              if (!up) await sleep(300)
-            }
-            if (!up) return { launched: true, reason: 'isolated-app-started-not-answering' }
-          } else if (step === 'url' || step === 'url-start') {
-            const reply = await cli([uri])
-            if (reply.failed || !urlProcessed(reply.stdout)) return { launched: false, reason: 'isolated-app-refused-url' }
-          }
-        }
-        return { launched: true, reason: 'isolated-app-accepted-url' }
+      open({ vaultId = null, vaultPath = null, appRunning }) {
+        return runLaunchPlan(launchPlan({ platform: 'darwin', appRunning, vaultId, vaultPath }), {
+          start: async () => { start(null); return true },
+          answered: async () => { if (!fs.existsSync(socket)) return false; const reply = await cli(['version'], { timeoutMs: 5000 }); return appAnswered({ stdout: reply.stdout, stderr: reply.stderr, exited: !reply.failed }) },
+          handLink: async (uri) => urlProcessed((await cli([uri])).stdout),
+          osOpen: async () => false,
+          waitMs: 60000, pollMs: 300,
+        })
       },
     },
     // Ends exactly this app's processes, by its profile; answers the PIDs still alive afterwards.

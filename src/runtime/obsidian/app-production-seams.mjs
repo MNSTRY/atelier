@@ -4,9 +4,9 @@ import path from 'node:path'
 import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
 import { realPathAsStored } from '../../project/private-state.mjs'
-import { readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
+import { appAnswered, readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
 import { registerVaultInObsidianSettings } from './app-registration.mjs'
-import { launchPlan, urlProcessed } from './launch-plan.mjs'
+import { launchPlan, runLaunchPlan, urlProcessed } from './launch-plan.mjs'
 
 // The production seams of `obsidian open` and of the service's adapter
 // factory: the only code that asks the installed Obsidian anything or asks the
@@ -161,62 +161,30 @@ export function createProductionAppRegistry({
   }
 }
 
-// Shows the vault in Obsidian by the steps of launchPlan: a quit app is started
-// plainly (so it reopens every vault its list marks open) and handed the vault's
-// URL by id once its command-line tool answers anything; a running app is
-// handed the URL through its tool, which takes a URL even with its command line
-// turned off, or through the operating system when the tool did not take it. A
-// URL reaching a running app opens a window and changes no reopen flag. No shell.
-const APP_WAIT_MS = 30_000
-const APP_POLL_MS = 500
+// Shows the vault in Obsidian by the steps of launchPlan, carried out by
+// runLaunchPlan: a quit app is started plainly (so it reopens every vault its
+// list flags open) and handed the vault's URL through its command-line tool once
+// the app itself answers the tool; a running app is handed the URL through its
+// tool, which takes a URL even with its command line turned off, and through the
+// operating system when the tool did not take it. A URL is never handed to the
+// operating system for an app this launch started. No shell.
 export function createProductionLauncher({
-  platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), processProbe = () => defaultObsidianProcessProbe({ platform }), workingDirectory = NEUTRAL_DIRECTORY,
-  appWaitMs = APP_WAIT_MS, appPollMs = APP_POLL_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), workingDirectory = NEUTRAL_DIRECTORY, waitMs, pollMs, sleep,
 } = {}) {
-  const osOpen = platform === 'darwin' ? '/usr/bin/open' : platform === 'linux' ? 'xdg-open' : null
+  const osCommand = platform === 'darwin' ? '/usr/bin/open' : platform === 'linux' ? 'xdg-open' : null
   const run = (file, args, timeout = 15_000) => new Promise((resolve) => {
     execFile(file, args, { env, cwd: workingDirectory, timeout, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => resolve({ failed: Boolean(error), stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }))
   })
-  const processes = () => { try { return processProbe() } catch { return 'unknown' } }
-  // Up once its tool answers anything (a version, "Vault not found.", a command not found yet, the command line
-  // turned off): the app then handles what reaches it after its start, not as the URL it was started with. Without a
-  // tool that answers, once the process table has shown it for a few polls.
-  async function appAnswers() {
-    const deadline = Date.now() + appWaitMs
-    let seen = 0
-    while (Date.now() < deadline) {
-      const reply = await run(cliPath, ['version'], CLI_TIMEOUT_MS)
-      if ((reply.stdout + reply.stderr).trim() !== '') return true
-      if (processes() === 'running') { seen += 1; if (seen >= 6) return true }
-      await sleep(appPollMs)
-    }
-    return false
-  }
   return {
-    async open({ vaultId, appRunning }) {
-      const plan = launchPlan({ platform, appRunning, vaultId })
-      if (!plan.ok) return { launched: false, reason: plan.reason }
-      let reason = 'url-accepted'
-      for (const { step, uri } of plan.steps) {
-        if (step === 'plain-start') {
-          const started = await run(osOpen, ['-b', 'md.obsidian'])
-          if (started.failed) return { launched: false, reason: 'os-open-failed' }
-        } else if (step === 'wait-for-app') {
-          if (!(await appAnswers())) return { launched: true, reason: 'app-started-not-answering' }
-        } else if (step === 'url') {
-          const handed = await run(cliPath, [uri], CLI_TIMEOUT_MS)
-          if (!urlProcessed(handed.stdout)) {
-            const opened = await run(osOpen, [uri])
-            if (opened.failed) return { launched: false, reason: 'os-open-failed' }
-            reason = 'os-open-accepted'
-          }
-        } else if (step === 'url-start') {
-          const opened = await run(osOpen, [uri])
-          if (opened.failed) return { launched: false, reason: 'os-open-failed' }
-          reason = 'os-open-accepted'
-        }
-      }
-      return { launched: true, reason }
+    open({ vaultId = null, vaultPath = null, appRunning }) {
+      const plan = launchPlan({ platform, appRunning, vaultId, vaultPath })
+      return runLaunchPlan(plan, {
+        start: async () => !(await run(osCommand, ['-b', 'md.obsidian'])).failed,
+        answered: async () => { const reply = await run(cliPath, ['version'], CLI_TIMEOUT_MS); return appAnswered({ stdout: reply.stdout, stderr: reply.stderr, exited: !reply.failed }) },
+        handLink: async (uri) => urlProcessed((await run(cliPath, [uri], CLI_TIMEOUT_MS)).stdout),
+        osOpen: async (uri) => !(await run(osCommand, [uri])).failed,
+        ...(waitMs === undefined ? {} : { waitMs }), ...(pollMs === undefined ? {} : { pollMs }), ...(sleep === undefined ? {} : { sleep }),
+      })
     },
   }
 }
