@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve workspace template lineage during profile adoption and updates.
+  Keep profile identity in its typed adoption manifest, and refuse saved plans
+  that replace the workspace lineage before installing any managed content.
+
 ## 0.2.0-alpha.12
 
 - Preserve the bundled readiness pack's immutable v1 content and digest so

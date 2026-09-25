@@ -160,17 +160,16 @@ function boundaryCheck(project, staged = false) {
   const report = checkBoundaryPolicy({ project, policy: loaded.policy, staged, gitExecutable: resolveGitExecutable(), allowNetworkActorResolution: false, forceActorErrors: true })
   if (!report.ok) throw new Error(`boundary postcheck refused: ${report.errors.map((e) => e.code).join(', ')}`)
 }
-function preservedLock(project, generatedAt, template = null) {
+function preservedLock(project, generatedAt, preserveUnrelated = false) {
   const file = path.join(project.configDir, 'atelier.lock.json')
   const previous = fs.existsSync(file) ? validateUpgradeDocument('lock', readJson(file)) : null
-  // Pack adoption and template changes are separate participants.
+  // Pack adoption and workspace lineage are separate from profile adoption.
   const built = buildAtelierLock({ project })
-  const next = template && previous ? { ...previous, package: built.package } : built
+  const next = preserveUnrelated && previous ? { ...previous, package: built.package } : built
   if (previous && !same(previous.boundaryPolicy, built.boundaryPolicy)) throw new Error('boundary policy adoption requires a separate participant')
   if (previous && !same(previous.extensionPacks, built.extensionPacks)) throw new Error('pack adoption requires a separate participant')
   next.generatedAt = generatedAt
   if (previous) { next.appliedMigrations = previous.appliedMigrations; next.template = previous.template; next.lastSuccessfulUpgrade = previous.lastSuccessfulUpgrade }
-  if (template) next.template = { ...(previous?.template ?? {}), ...template }
   return validateUpgradeDocument('lock', next)
 }
 function render(project, readSet, createdAt, templateInput = null) {
@@ -207,7 +206,7 @@ function render(project, readSet, createdAt, templateInput = null) {
     }
     const template = templateInput ? prepareTemplateParticipant(clone, templateInput) : null
     if (template) for (const [name, bytes] of template.outputs) write(name, bytes)
-    const lock = preservedLock(project, createdAt, template?.template)
+    const lock = preservedLock(project, createdAt, Boolean(template))
     write('atelier.lock.json', jsonText(lock))
     const graph = buildGraph(clone)
     graph.project = path.basename(root)
@@ -419,7 +418,14 @@ export function applySavedUpgrade({ project, planFile, confirm }) {
     clean(root)
     liveBindings(root, plan, 0)
     if (!same(allowedPaths(project, plan.participant), plan.migration.allowedWrites) || path.basename(project.configPath) !== plan.configPath) throw new Error('project binding changed')
-    if (plan.participant) verifyTemplatePreparation(project, plan)
+    let workspaceTemplate = null
+    if (plan.participant) {
+      verifyTemplatePreparation(project, plan)
+      workspaceTemplate = preservedLock(project, plan.createdAt, true).template
+      const lockWrite = plan.writes.find(entry => entry.path === 'atelier.lock.json')
+      const plannedLock = lockWrite ? JSON.parse(Buffer.from(lockWrite.content, 'base64')) : readJson(path.join(root, 'atelier.lock.json'))
+      if (!same(plannedLock.template, workspaceTemplate)) throw new Error('workspace template lineage mismatch')
+    }
     const id = plan.digest.slice(7)
     privateDirectory(root, `${PRIVATE}/operations`)
     const operation = operationDirectory(root, id)
@@ -443,7 +449,7 @@ export function applySavedUpgrade({ project, planFile, confirm }) {
       if (plan.participant) {
         verifyTemplateInstallation(project, plan.participant)
         const installedLock = readJson(path.join(root, 'atelier.lock.json'))
-        if (installedLock.template.id !== plan.participant.templateRef.id || installedLock.template.version !== plan.participant.templateRef.version) throw new Error('lock template identity mismatch')
+        if (!same(installedLock.template, workspaceTemplate)) throw new Error('workspace template lineage mismatch')
       }
       boundaryCheck(project)
       const expectedIndex = plannedIndex(root, plan)

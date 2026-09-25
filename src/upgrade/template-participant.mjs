@@ -118,7 +118,7 @@ export function prepareTemplateParticipant(project, { profileFile, selectionFile
     templateRef: view.templateRef, bindingRef: view.bindingRef,
     previousAdoptionDigest: prior.digest, adoptionDigest: hashBytes(adoptionBytes),
   }
-  return { participant, outputs, template: { id: profile.value.id, version: profile.value.version } }
+  return { participant, outputs }
 }
 
 /** Saved plan shape validation only. It does not run a renderer or mutate. */

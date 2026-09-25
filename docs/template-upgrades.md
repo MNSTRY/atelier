@@ -69,9 +69,11 @@ The engine owns only these template paths:
 
 The existing lock and normal four graph/projection/readiness files are refreshed
 through their original builders. The v1 lock keeps unrelated fields, provenance,
-migration history and historical success metadata; only the template id/version
-and legitimately refreshed package/generated information change. The separate
-adoption document owns typed digest identity. It does not hash itself recursively.
+migration history, historical success metadata, and the complete workspace
+template lineage in `lock.template`. Only package and generated information
+are refreshed. The separate adoption document owns the profile's typed identity,
+version, and digest. A profile adoption never replaces the workspace template
+identity or version. The adoption document does not hash itself recursively.
 
 First adoption refuses orphan reserved state. Later adoption verifies every
 managed preimage and the complete prior-manifest chain. Committed local changes

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import test, { beforeEach } from 'node:test'
 import { resolveProjectConfig } from '../src/project/config.mjs'
 import { validateJsonSchema } from '../src/export/atelier-export-contract.mjs'
-import { writeAtelierLock } from '../src/upgrade/upgrade.mjs'
+import { buildAtelierLock, writeAtelierLock } from '../src/upgrade/upgrade.mjs'
 import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, validateUpgradeDocument, explainSavedUpgrade, prepareTemplateUpgrade } from '../src/upgrade/transaction.mjs'
 import { hashObject, hashBytes, inventory } from '../src/upgrade/transaction-files.mjs'
 import { renderUpgradeExplanation } from '../src/upgrade/explanation.mjs'
@@ -91,10 +91,42 @@ transactionTest('prior-release lock upgrades through the template v3 transaction
   const next = JSON.parse(read(f, 'atelier.lock.json'))
   assert.deepEqual(next.extensionPacks, previous.extensionPacks)
   assert.notEqual(next.package.version, previous.package.version)
-  assert.equal(next.template.id, profileSample.id)
+  assert.deepEqual(next.template, previous.template)
   assert.deepEqual(next.appliedMigrations, previous.appliedMigrations)
   assert.deepEqual(read(f, 'seed.md'), source)
   assert.equal(upgradeOperationStatus({ project: f.project, operationId: applied.operationId }).status, 'completed')
+})
+
+transactionTest('workspace template lineage survives profile adoption and explicit lock rewrite', t => {
+  const f = fixture(t)
+  const original = writeAtelierLock({ project: f.project, templateId: 'sample-workspace' })
+  commit(f)
+  const applied = apply(f.project, prepare(f))
+  assert.equal(applied.ok, true, JSON.stringify(applied))
+  const rewritten = writeAtelierLock({ project: f.project, templateId: original.template.id })
+  assert.deepEqual(rewritten.template, original.template)
+  assert.equal(JSON.parse(read(f, 'atelier-template/adoption.json')).templateRef.id, profileSample.id)
+})
+
+transactionTest('workspace template lineage replacement in a rehashed plan refuses before writes', t => {
+  const f = fixture(t)
+  writeAtelierLock({ project: f.project, templateId: 'sample-workspace' })
+  commit(f)
+  const prepared = prepare(f), forged = structuredClone(prepared.plan)
+  const entry = forged.writes.find(write => write.path === 'atelier.lock.json')
+  const lock = JSON.parse(Buffer.from(entry.content, 'base64'))
+  lock.template = { id: profileSample.id, version: profileSample.version }
+  const bytes = Buffer.from(JSON.stringify(lock, null, 2) + '\n')
+  entry.content = bytes.toString('base64')
+  entry.after.digest = hashBytes(bytes)
+  const { digest, ...authority } = forged
+  forged.digest = hashObject(authority)
+  const file = path.join(path.dirname(prepared.savedPlan), forged.digest.slice(7) + '.json')
+  fs.writeFileSync(file, JSON.stringify(forged, null, 2) + '\n')
+  const before = state(f), head = git(f.root, ['rev-parse', 'HEAD'])
+  assert.throws(() => applySavedUpgrade({ project: f.project, planFile: file, confirm: forged.digest }), /workspace template lineage mismatch/)
+  assert.equal(state(f), before)
+  assert.equal(git(f.root, ['rev-parse', 'HEAD']), head)
 })
 
 transactionTest('prior-release lock with a changed pack digest still refuses template preparation', (t) => {
@@ -157,7 +189,7 @@ transactionTest('first adoption and update use one journal, preserve source/hist
   assert.match(read(f, 'atelier-output/template.html').toString(), /Seed/)
   const firstAdoption = read(f, 'atelier-template/adoption.json')
   const lock = JSON.parse(read(f, 'atelier.lock.json'))
-  assert.equal(lock.template.id, profileSample.id)
+  assert.deepEqual(lock.template, buildAtelierLock({ project: f.project }).template)
   assert.equal(lock.lastSuccessfulUpgrade, null)
   assert.equal(upgradeOperationStatus({ project: f.project, operationId: result.operationId }).status, 'completed')
   assert.throws(() => apply(f.project, prepared))
@@ -173,7 +205,8 @@ transactionTest('first adoption and update use one journal, preserve source/hist
   assert.deepEqual(read(f, 'seed.md'), source)
   assert.match(read(f, 'atelier-output/template.html').toString(), /updated invented reading shelf/)
   const updatedLock = JSON.parse(read(f, 'atelier.lock.json'))
-  assert.equal(updatedLock.template.version, '1.1.0')
+  assert.deepEqual(updatedLock.template, lock.template)
+  assert.equal(JSON.parse(read(f, 'atelier-template/adoption.json')).templateRef.version, '1.1.0')
   assert.deepEqual(updatedLock.ext, lock.ext)
   assert.deepEqual(updatedLock.template.ext, lock.template.ext)
   assert.equal(updatedLock.lastSuccessfulUpgrade, lock.lastSuccessfulUpgrade)
