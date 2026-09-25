@@ -323,6 +323,15 @@
 - An app whose vault window is still loading answers a command with `Error:
   Command "version" not found`; that was read as an unreadable version and
   ended `open` as `app-version-unsupported`. It is now read as not up yet.
+- `atelier dev` on a port that was already taken (8137 by default) printed
+  only `[internal-error] command failed without a safe diagnostic`, and the
+  message that says what to do appeared only with `ATELIER_DEBUG=1`. It is now
+  `port-in-use`, naming the port, with `--port=<free port>` as the next step.
+  A port the operating system refuses (EACCES, usually one below 1024) is
+  `port-permission-denied` with the same remedy, and a `--port` or `PORT`
+  value that is not a port from 0 to 65535 is `port-invalid`, naming which
+  one, instead of Node's `ERR_SOCKET_BAD_PORT`. Other failures without a
+  typed code are still redacted.
 
 ## 0.2.0-alpha.11
 

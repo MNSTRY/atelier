@@ -325,9 +325,54 @@ test('local sidecar reports a busy port as a rejection, not a crash', async (t) 
   await assert.rejects(
     () => second.listen(address.port),
     (error) => {
-      assert.match(error.message, /already in use/)
-      assert.match(error.message, /--port=/)
+      // A string code is what lets the CLI print the message instead of
+      // redacting it as an internal error.
+      assert.equal(error.code, 'port-in-use')
+      assert.equal(error.message, `port ${address.port} is already in use`)
+      assert.match(error.hint, /--port=/)
+      assert.equal(error.cause?.code, 'EADDRINUSE')
       return true
     }
   )
+})
+
+// The operating system decides which ports need privileges, so the refusal
+// is injected rather than provoked by binding a low port for real.
+function failingListen(sidecar, failure) {
+  sidecar.server.listen = function listen() {
+    process.nextTick(() => this.emit('error', failure))
+    return this
+  }
+}
+
+test('local sidecar reports a refused port with the --port remedy', async (t) => {
+  const workspaceRoot = makeWorkspace()
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  const sidecar = createAtelierSidecarServer({ workspaceRoot })
+  const refused = Object.assign(new Error('listen EACCES: permission denied 127.0.0.1:80'), { code: 'EACCES' })
+  failingListen(sidecar, refused)
+
+  await assert.rejects(
+    () => sidecar.listen(80),
+    (error) => {
+      assert.equal(error.code, 'port-permission-denied')
+      assert.equal(error.message, 'permission to listen on port 80 was denied')
+      assert.match(error.hint, /--port=<free port from 1024 to 65535>/)
+      assert.equal(error.cause, refused)
+      return true
+    }
+  )
+})
+
+test('local sidecar passes any other listen failure through unchanged', async (t) => {
+  const workspaceRoot = makeWorkspace()
+  t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+  for (const failure of [
+    new Error('listen failed for a reason nobody anticipated'),
+    Object.assign(new Error('listen EADDRNOTAVAIL: address not available 127.0.0.1:8137'), { code: 'EADDRNOTAVAIL' }),
+  ]) {
+    const sidecar = createAtelierSidecarServer({ workspaceRoot })
+    failingListen(sidecar, failure)
+    await assert.rejects(() => sidecar.listen(8137), (error) => error === failure)
+  }
 })
