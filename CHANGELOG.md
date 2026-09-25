@@ -283,6 +283,14 @@
 
 ### Fixed
 
+- `atelier dev` run before `atelier build` (straight after `atelier init`,
+  for example) printed Node's raw `[ENOENT] ... lstat '<absolute path>'`
+  with no next step, and after `atelier graph` alone a redacted
+  `[internal-error]`. Both are now `projection-output-missing`, naming the
+  output folder relative to the project config (never as an absolute path)
+  and the next step: run `atelier graph`, then `atelier build`, with the same
+  `--project` path. `atelier dev --help` (and `server --help`) now documents
+  `--port=PORT`, the `PORT` variable, the 8137 default, and `--review`.
 - A publication no longer stops with an untyped `state leaf changed while
   opening` when another program replaces a note by rename at the instant the
   publisher opens it (an editor or sync tool saving the note). The note is

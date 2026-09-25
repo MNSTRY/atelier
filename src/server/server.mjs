@@ -1,5 +1,26 @@
-import { resolveProjectConfig } from '../project/config.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
+import { AtelierDiagnosticError, resolveProjectConfig } from '../project/config.mjs'
 import { createAtelierSidecarServer } from './local-sidecar.mjs'
+
+// dev serves what build wrote and builds nothing itself. Before build, the
+// output folder (or, after graph alone, its manifest) is absent, and the
+// sidecar failed with a raw ENOENT carrying an absolute path or a redacted
+// internal error. Name the missing steps instead, and name the folder only
+// relative to the project config. A non-directory is left to the sidecar.
+function assertProjectionBuilt(project) {
+  const stat = fs.statSync(project.outputRoot, { throwIfNoEntry: false })
+  if (stat && !stat.isDirectory()) return
+  const manifestMissing = stat && !fs.existsSync(path.join(project.outputRoot, 'atelier.manifest.json'))
+  if (stat && !manifestMissing) return
+  const rel = path.relative(project.configDir, project.outputRoot)
+  const contained = rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
+  const folder = contained ? `projection output folder ${rel}` : 'the projection output folder'
+  const state = manifestMissing ? 'has no atelier.manifest.json' : 'does not exist'
+  throw new AtelierDiagnosticError('projection-output-missing', `${folder} ${state}; this project has not been built yet`, {
+    hint: 'Run atelier graph, then atelier build, with the same --project path, then retry.',
+  })
+}
 
 function parseServerArgs(argv = []) {
   const args = { projectArgs: [] }
@@ -14,6 +35,7 @@ function parseServerArgs(argv = []) {
 export async function runServerCommand(argv = process.argv.slice(2)) {
   const args = parseServerArgs(argv)
   const project = resolveProjectConfig({ argv: args.projectArgs })
+  assertProjectionBuilt(project)
   const sidecar = createAtelierSidecarServer({
     workspaceRoot: project.outputRoot,
     stateDir: project.outputRoot,
