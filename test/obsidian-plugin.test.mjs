@@ -1423,6 +1423,38 @@ test('a plugin file another writer changes under a publication is a race: the vi
   assert.ok(world.recovered().some((bytes) => bytes.toString() === '/* written meanwhile */\n'), 'the replaced bytes are kept')
 })
 
+test('a plugin or settings file another program keeps replacing while the publisher opens it is a race of that file, never a person\'s edit, and the notes go on', needsExchange, async (t) => {
+  const world = publicationWorld(t)
+  assert.equal((await world.publish(pluginViewOf('gen-0001'))).state, 'committed')
+  // Every open of these files first replaces them by rename, as a sync tool saving them does (see I06c in the recovery suite).
+  const churned = [`${PLUGIN_DIRECTORY}/styles.css`, COMMUNITY_PLUGINS_PATH]
+  const original = fs.openSync
+  let renames = 0
+  fs.openSync = function openSync(target, ...rest) {
+    const relative = typeof target === 'string' ? path.relative(world.store.vaultRoot, target).split(path.sep).join('/') : null
+    if (churned.includes(relative)) {
+      renames += 1
+      fs.writeFileSync(`${target}.ext~`, relative === COMMUNITY_PLUGINS_PATH ? JSON.stringify(['dataview', PLUGIN_ID, `churn-${renames}`]) : `/* churn ${renames} */\n`)
+      fs.renameSync(`${target}.ext~`, target)
+    }
+    return original.call(this, target, ...rest)
+  }
+  t.after(() => { fs.openSync = original })
+  const result = await world.publish(pluginViewOf('gen-0002', { notes: { [NOTE]: `${NOTE_TEXT}\nLow water at six.\n` } }))
+  fs.openSync = original
+  assert.ok(renames > 0)
+  assert.equal(result.state, 'updating', JSON.stringify(result.notes))
+  assert.deepEqual([outcomeOf(result, churned[0]).outcome, outcomeOf(result, churned[0]).blocking], ['plugin-file-changed', true])
+  assert.deepEqual([outcomeOf(result, churned[1]).outcome, outcomeOf(result, churned[1]).blocking], ['settings-changed', true])
+  assert.equal(result.notes.some((entry) => entry.kind !== 'note' && ['edit-kept', 'disk-changed', 'editor-edit'].includes(entry.outcome)), false, 'nothing reads a plugin or settings file as an edit of a note')
+  assert.equal(outcomeOf(result, NOTE).outcome, 'published', 'the note goes on')
+  // Tried again once the other program stops, the view converges; the bytes it wrote are kept in recovery.
+  const again = await world.publish(pluginViewOf('gen-0002', { notes: { [NOTE]: `${NOTE_TEXT}\nLow water at six.\n` } }))
+  assert.equal(again.state, 'committed', JSON.stringify(again.notes))
+  assert.ok(world.read(churned[0]).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'styles.css'))))
+  assert.ok(world.recovered().some((bytes) => bytes.toString().startsWith('/* churn ')), 'the replaced bytes are kept')
+})
+
 test('the community list is written only over the bytes the decision was made on; withheld, it is never touched', needsExchange, async (t) => {
   const world = publicationWorld(t)
   fs.mkdirSync(world.full('.obsidian'), { recursive: true })

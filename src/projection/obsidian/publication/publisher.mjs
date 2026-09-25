@@ -452,7 +452,14 @@ const UNREADABLE_PATH = new Set(['EACCES', 'EPERM', 'ELOOP'])
 const PLUGIN_FILE_CHANGED = new Set(['edit-kept', 'disk-changed', 'editor-edit'])
 
 async function publishUnit(unit, context) {
-  const result = await publishOneUnit(unit, context)
+  let result
+  try { result = await publishOneUnit(unit, context) } catch (error) {
+    // A plugin or settings file another program kept replacing while it was opened (see readNote) is a race of that
+    // file, like one that changed under the run: blocking, tried again, and never taken for a person's edit of a note.
+    if (error?.code !== 'ELEAFCHANGED' || (unit.kind !== 'plugin' && unit.kind !== 'settings')) throw error
+    // Its candidate is left as #83 leaves a note's: the unit's journal stays open for recovery like an interrupted one.
+    result = { path: unit.path, kind: unit.kind, op: unit.op, outcome: unit.kind === 'settings' ? 'settings-changed' : 'disk-changed', blocking: true }
+  }
   if (unit.kind !== 'plugin') return result
   const { changedAfterPublication, retained: _retained, ...rest } = result
   if (rest.outcome === 'path-unsafe' && unit.stagedPath) retire(unit, context)
