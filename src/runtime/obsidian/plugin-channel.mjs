@@ -1,7 +1,7 @@
 import { createHash, randomBytes as cryptoRandomBytes, timingSafeEqual } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow } from '../../project/private-state.mjs'
+import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow, realPathAsStored } from '../../project/private-state.mjs'
 import {
   PLUGIN_BEARER, PLUGIN_CHALLENGE_WINDOW_MS, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MAX_SESSIONS_PER_SCOPE,
   PLUGIN_RENEW_INTERVAL_MS, PLUGIN_STATUS_SCHEMA, pluginClientProof, pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof,
@@ -158,7 +158,9 @@ export function createPluginChannelForOracleTests({
   onSessionOpened = () => {},
 }, primitives = PLUGIN_CHANNEL_PRIMITIVES) {
   const rules = { ...PLUGIN_CHANNEL_PRIMITIVES, ...primitives }
-  const vaultRootOf = (scopeId) => { try { return fs.realpathSync(path.join(workspaceRoot, 'vaults', segment(scopeId))) } catch { return null } }
+  // As the file system stores the path, as the store registers the vault in the app (realPathAsStored): a data root given
+  // in another letter case names the same vault.
+  const vaultRootOf = (scopeId) => { try { return realPathAsStored(path.join(workspaceRoot, 'vaults', segment(scopeId))) } catch { return null } }
   const keyDigestOf = (bearer) => createHash('sha256').update(bearer, 'utf8').digest()
   const handshakes = new Map()
   const pruneHandshakes = () => { const at = now(); for (const [handshakeId, handshake] of handshakes) if (handshake.expiresAt <= at) handshakes.delete(handshakeId) }

@@ -42,7 +42,12 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
   plugin is turned off). A lease that is not renewed lapses after six seconds.
   The hello carries the plugin version, the app version (`apiVersion`, the
   version of the app the plugin runs in), an id of this launch of the plugin,
-  and a proof of the real path of the vault the app has open.
+  and a proof of the real path of the vault the app has open. Both sides
+  take that path as the file system stores it (on a volume that folds
+  letter case, in the case it is stored in; on Windows, Node's own
+  resolution), so a data root given in another letter case, or an app that
+  has the vault in another, still proves the view's vault. Plugin 1.1.1
+  does so; 1.1.0 kept the app's spelling.
 
 ## What it never does
 

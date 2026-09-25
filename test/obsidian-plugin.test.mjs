@@ -279,6 +279,7 @@ test('the spawn guard: a child that can reach a running Obsidian runs only with 
 const RELEASED_PLUGIN_CODE = Object.freeze({
   '1.0.0': 'sha256:57f6cf1613c45f677438e86cc470094b73fda37bd9f3a62fb4aba42decc98294',
   '1.1.0': 'sha256:7a4ed9bd7a9092e55e874b6ac722bcb6c8fabefdf85470ba5ded6e3e083cb347',
+  '1.1.1': 'sha256:ae67330e2b4b662efbcfe9288b97114053b99e31430409a4cdbffcb3cea4178f',
 })
 
 test('the plugin\'s version changes whenever its code does', () => {
@@ -396,7 +397,7 @@ test('the handshake computations: each binds everything it names, and no two of 
 
 // A workspace with one view whose vault holds the plugin as publication puts
 // it there, and a listener that holds the plugin channel of that workspace.
-async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginSessions(), primitives = SERVER_PRIMITIVES, channelPrimitives = PLUGIN_CHANNEL_PRIMITIVES, now = () => Date.now(), port: fixedPort = null, keepIntervals = false } = {}) {
+async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginSessions(), primitives = SERVER_PRIMITIVES, channelPrimitives = PLUGIN_CHANNEL_PRIMITIVES, now = () => Date.now(), port: fixedPort = null, keepIntervals = false, channelRoot = (root) => root } = {}) {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const workspaceRoot = path.join(dir, 'workspace')
@@ -420,7 +421,7 @@ async function channelWorld(t, { apiVersion = '1.13.7', sessions = createPluginS
   world.listen = async ({ port, withSessions = sessions } = {}) => {
     const identity = { serviceName: `atelier-obsidian-${WORKSPACE_ID}`, workspaceId: WORKSPACE_ID, runtimeId: `rt-${randomBytes(8).toString('hex')}`, pid: process.pid, host: '127.0.0.1', port, executableDigest: digest('entry'), startedAt: '2026-01-05T10:00:00.000Z' }
     const runtimeBearer = randomBytes(32).toString('base64url')
-    const channel = createPluginChannelForOracleTests({ workspaceRoot, workspaceId: WORKSPACE_ID, runtimeId: identity.runtimeId, sessions: withSessions, statusOf: world.statusOf, serviceStatus: () => world.health, now }, channelPrimitives)
+    const channel = createPluginChannelForOracleTests({ workspaceRoot: channelRoot(workspaceRoot), workspaceId: WORKSPACE_ID, runtimeId: identity.runtimeId, sessions: withSessions, statusOf: world.statusOf, serviceStatus: () => world.health, now }, channelPrimitives)
     const calls = { status: 0, tick: 0, stop: 0, plugin: [] }
     const listener = createServiceServerForOracleTests({
       identity, bearer: runtimeBearer,
@@ -651,6 +652,22 @@ test('the plugin proves the real path of the vault the app has open without send
   await copied.cycle()
   assert.equal(statusBarOf(world), 'Atelier: not set up', 'a copy of the vault is not the vault Atelier maintains')
   assert.equal(copied.view.reason, 'not-the-vault-atelier-maintains')
+})
+
+// On a volume that folds letter case, a data root given in another case than the one stored names the same vault. The
+// service proves the vault as the file system stores its path, and so does the plugin, whatever spelling the app has.
+const FOLDS_CASE = (() => { const probe = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-Case-')); try { return fs.existsSync(probe.toUpperCase()) && fs.existsSync(probe.toLowerCase()) } finally { fs.rmSync(probe, { recursive: true, force: true }) } })()
+
+test('the vault proof compares the spelling the file system stores: a data root given in another letter case, and an app that has the vault in a third, still hold the view', { skip: !FOLDS_CASE && 'a file system that tells letter cases apart' }, async (t) => {
+  // The service's workspace root as a data root given in capitals resolves it: Node's own resolution keeps that case.
+  const world = await channelWorld(t, { channelRoot: (root) => fs.realpathSync(path.join(path.dirname(root), 'WORKSPACE')) })
+  const appSpelling = path.join(world.dir, 'Workspace', 'vaults', SCOPE)
+  const Plugin = loadPluginClass(world.fake, { requests: world.requests })
+  const plugin = new Plugin(fakeApp(appSpelling, world.fake.record), shippedManifest())
+  t.after(() => plugin.unload())
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBarOf(world), 'Atelier: current', 'the vault the view is published into, however its path is spelled')
 })
 
 // Parity of the computations: the plugin completes a handshake and a round with the channel's own code, and a

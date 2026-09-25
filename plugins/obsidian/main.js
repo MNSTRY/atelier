@@ -302,7 +302,10 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
   // The handshake. Nothing that names this vault is sent before the listener proved it holds the vault's key.
   async handshake(channel) {
     let vaultPath = null
-    try { vaultPath = this.fs.realpathSync(this.app.vault.adapter.getBasePath()) } catch { vaultPath = null }
+    // As the file system stores the path, as the service proves it: the app may have the vault in another letter case.
+    // On Windows Node's own resolution, as the service's (the native one also expands short names).
+    const native = globalThis.process?.platform !== 'win32' && typeof this.fs.realpathSync.native === 'function'
+    try { vaultPath = native ? this.fs.realpathSync.native(this.app.vault.adapter.getBasePath()) : this.fs.realpathSync(this.app.vault.adapter.getBasePath()) } catch { vaultPath = null }
     if (typeof vaultPath !== 'string') {
       this.showRound({ state: 'not-set-up', reason: 'vault-path-unknown', report: null })
       return false
