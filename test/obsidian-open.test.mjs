@@ -2380,6 +2380,9 @@ test('`location set` decides where vaults live: an absolute folder, `~/` only ag
   const words = await world.run(['settings'])
   assert.match(words.stdout, new RegExp(`^where vaults live: ${escaped(path.join(home, 'Documents', 'Atelier'))} \\(given on the command line, `, 'm'))
   assert.match(words.stdout, /^Change: `atelier obsidian location set DIR`/m)
+  // `status` says where a view not published yet will be, as `location show` does, not the data root.
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual(status.json.scopes[0].vault, { path: path.join(home, 'Documents', 'Atelier', 'opening-fixture (scope-whole)'), origin: 'to-be-allocated' })
 })
 
 test('each view not published yet gets `<project> (<view>)` where the vaults live, at its first publication; a view published before stays under the data root', needsExchange, async (t) => {

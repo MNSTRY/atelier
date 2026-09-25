@@ -365,6 +365,17 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const applyShown = { available: applyAvailable, state: applyAvailable ? 'available' : APPLY_UNAVAILABLE, operationId: registry.extensions.applyOperation().id }
     const [, sub, value] = positionals
 
+    // Where a view's vault is, or will be: { path, origin }. A view the next tick will place is shown where it would go,
+    // if that name is still free then (`to-be-allocated`).
+    const vaultWhere = (workspace, scopeId, decided, projectName) => {
+      if (workspace === null) return { path: null, origin: 'workspace-not-prepared' }
+      const found = vaultRootFor({ ...workspace, scopeId })
+      if (found.origin === 'legacy-data-root' && decided !== null && !hasCommittedGeneration({ ...workspace, scopeId })) {
+        return { path: path.join(decided.parent, vaultFolderName({ projectName, scopeId })), origin: 'to-be-allocated' }
+      }
+      return { path: found.path, origin: found.origin }
+    }
+
     const operations = {
       async status() {
         const { project, enablement, workspace, workspaceId } = readable()
@@ -375,7 +386,9 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const scopes = workspace === null
           ? enablement.scopes.map(({ scopeId }) => ({ scopeId, outcome: enablement.state === 'disabled' ? 'disabled' : 'not-prepared', reason: enablement.state === 'disabled' ? enablement.reason : 'workspace-not-prepared' }))
           : enablement.scopes.map(({ scopeId }) => {
-            const { vaultRoot: _vault, summary: _summary, ...report } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
+            const { vaultRoot: _vault, summary: _summary, ...found } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
+            // A view whose vault the next tick allocates elsewhere says where, not the data root it will not use.
+            const report = found.vault?.origin === 'legacy-data-root' ? { ...found, vault: vaultWhere(workspace, scopeId, machineOf(workspace)?.decisions.location ?? null, projectDisplayName(project)) } : found
             const plugin = pluginView(running, workspace, scopeId)
             return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next, plugin } : { ...report, plugin }
           })
@@ -425,15 +438,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       // Where this workspace's vaults live. Deciding it places the vaults of views not published yet; a vault published
       // already, under the data root or where an earlier decision placed it, stays where it is.
       async location() {
-        const where = (workspace, scopeId, decided, projectName) => {
-          if (workspace === null) return { path: null, origin: 'workspace-not-prepared' }
-          const found = vaultRootFor({ ...workspace, scopeId })
-          // A view that the next tick will place: where it would go, if that name is still free then.
-          if (found.origin === 'legacy-data-root' && decided !== null && !hasCommittedGeneration({ ...workspace, scopeId })) {
-            return { path: path.join(decided.parent, vaultFolderName({ projectName, scopeId })), origin: 'to-be-allocated' }
-          }
-          return { path: found.path, origin: found.origin }
-        }
+        const where = vaultWhere
         const views = (project, enablement, workspace, decided) => enablement.scopes.map(({ scopeId }) => ({ scopeId, ...where(workspace, scopeId, decided, projectDisplayName(project)) }))
         const lines = (list) => list.map((view) => `view ${view.scopeId}: ${view.path ?? 'no vault yet'} (${view.origin})`)
         if (sub === 'show' || sub === undefined) {
