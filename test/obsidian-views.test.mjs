@@ -404,13 +404,17 @@ test('an agent adds a view with one command, which is its consent: the change is
   assert.match(human.stdout, /^ {2}\+ {10}"scopeId": "beacons",$/m, 'the diff is shown')
   assert.match(human.stdout, /^view beacons would show 1 note\(s\) \(who may see: only you, until you decide\)$/m)
   assert.match(human.stdout, /^Added the view beacons\. Commit atelier\.project\.json when you are ready; Atelier commits nothing\.$/m)
-  assert.match(human.stdout, /^Next: `atelier obsidian open --scope beacons` shows it in Obsidian$/m)
+  // Nobody decided who may see: the service publishes nothing until someone does, so that comes first.
+  assert.match(human.stdout, /^Next: `atelier obsidian audience set me` lets only you see its notes; until someone decides, the view publishes none$/m)
+  assert.match(human.stdout, /^Then: `atelier obsidian open --scope beacons` shows it in Obsidian$/m)
+  assert.equal(result.json.next[0].startsWith('`atelier obsidian audience set me`'), true)
   assert.deepEqual((await world.run(['view', 'list', '--json'])).json.scopes.map((scope) => scope.scopeId), ['north', 'beacons'], '`view list` is `scope list`')
 
   // Counted for the audiences this machine admits, once someone decided them.
   world.decideAudience(['team'], 'custom')
   const decided = await world.run(['view', 'add', 'logs', '--folder', 'logs', '--allow-empty', '--json'])
   assert.deepEqual([decided.json.counts.shown, decided.json.counts.withheld, decided.json.audience], [0, { unclassified: 0, audience: 2 }, { allow: ['team'], decided: true }])
+  assert.deepEqual(decided.json.next, ['`atelier obsidian open --scope logs` shows it in Obsidian'], 'once decided, opening is next')
 })
 
 test('a person at a terminal sees the change and what the view would show, and is asked before anything is written', async (t) => {
@@ -436,7 +440,8 @@ test('a person at a terminal sees the change and what the view would show, and i
   assert.equal(world.gitignore(), '.atelier-local/\n')
   assert.equal(world.loadProject().config.ext[EXT].defaultScopeId, 'everything')
   assert.match(accepted.stdout, /^Added the view everything, the default\. Commit \.gitignore and atelier\.project\.json when you are ready; Atelier commits nothing\.$/m)
-  assert.match(accepted.stdout, /^Next: `atelier obsidian open` shows it in Obsidian$/m)
+  assert.match(accepted.stdout, /^Next: `atelier obsidian audience set me` lets only you see its notes/m)
+  assert.match(accepted.stdout, /^Then: `atelier obsidian open` shows it in Obsidian$/m)
   assert.equal(accepted.stdout.match(/^Atelier will add/gm).length, 1, 'the change is shown once, before the question')
 
   const answeredBefore = await world.run(['view', 'add', 'north', '--folder', 'notes', '--yes'], { person: true, answers: [] })
@@ -467,6 +472,12 @@ test('`view add` refuses, and writes nothing, for a view that would be empty, a 
   }
   const empty = await world.run(['view', 'add', 'drafts', '--folder', 'drafts'])
   assert.match(empty.stderr, /^\[view-would-be-empty\] view drafts would show no note \(who may see: team\); of the 2 note\(s\) it names, 2 carry no classification; nothing was written$/m)
+  // No audience admitted at all: the refusal names deciding who may see, not classification.
+  world.decideAudience([], 'custom')
+  const nobody = await world.run(['view', 'add', 'harbour', '--all'])
+  assert.match(nobody.stderr, /^\[view-would-be-empty\] view harbour would show no note \(who may see: no audience\); of the 7 note\(s\) it names, 2 carry no classification and 5 an audience not admitted; no audience is admitted on this machine: `atelier obsidian audience set me` admits yours; nothing was written$/m)
+  assert.match(nobody.stderr, /audience set me/)
+  world.decideAudience(['team'], 'custom')
   const declared = await world.run(['view', 'add', 'drafts', '--folder', 'drafts', '--allow-empty', '--json'])
   assert.equal(declared.exit, EXIT.ok, '--allow-empty declares it anyway')
   assert.equal(world.loadProject().config.ext[EXT].defaultScopeId, undefined, 'a later view is not the default unless asked')
