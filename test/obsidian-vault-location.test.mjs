@@ -245,6 +245,10 @@ test('the checks see through links and letter case: a folder reached through a l
   const byCase = { cccccccccccccccc: { path: notes } }
   assert.equal(check(path.join(w.dir, 'notes', 'Atelier'), { vaults: byCase }), 'vault-location-inside-vault')
   assert.equal(check(path.join(w.dir, 'NOTES'), { vaults: byCase }), 'vault-location-inside-vault')
+  // A location that is itself a link says so, and asks for the folder it leads to.
+  fs.mkdirSync(path.join(w.dir, 'vault-target'))
+  fs.symlinkSync(path.join(w.dir, 'vault-target'), path.join(w.dir, 'vault-link'))
+  assert.equal(check(path.join(w.dir, 'vault-link')), 'vault-location-is-link')
   // A home folder reached through a link.
   fs.symlinkSync(home, path.join(w.dir, 'home-link'))
   assert.equal(check(path.join(w.dir, 'home-link', 'Library', 'mobile documents', 'x'), { homedir: home }), 'vault-location-synced')

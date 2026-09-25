@@ -452,7 +452,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         // folder is only ever one the test named.
         const tilde = value === '~' || value.startsWith('~/')
         if (tilde && typeof homedir !== 'string') refuse('real-vault-location-under-test', 'a location under the home folder is never used under the test runner; name an absolute folder')
-        const parent = tilde ? path.join(homedir, value.slice(1)) : path.resolve(cwd, value)
+        // Resolved, so a trailing separator (as tab completion leaves it) is no refusal.
+        const parent = tilde ? path.resolve(path.join(homedir, value.slice(1))) : path.resolve(cwd, value)
         const { project, enablement, workspace, repositoryRoots, now } = writable()
         const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultRootFor({ ...workspace, scopeId })).filter((found) => found.origin === 'allocated').map((found) => found.path)
         // A folder inside, or holding, a vault the app lists is refused now; when the list cannot be read, it is checked

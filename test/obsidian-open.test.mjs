@@ -2364,6 +2364,9 @@ test('`location set` decides where vaults live: an absolute folder, `~/` only ag
   assert.deepEqual(named.json.location, { parent: path.join(home, 'Atelier'), decidedAt: iso(START), decidedBy: 'someone', via: 'command' })
   assert.deepEqual(named.json.views, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(home, 'Atelier', 'opening-fixture (scope-whole)'), origin: 'to-be-allocated' }])
   assert.equal(fs.existsSync(path.join(home, 'Atelier')), false, 'deciding creates nothing: the next tick allocates')
+  // A trailing separator, as tab completion leaves it, is the same folder.
+  const trailing = await world.run(['location', 'set', `~/Atelier${path.sep}`, '--json'], { homedir: home, account: () => 'someone' })
+  assert.deepEqual([trailing.exit, trailing.json.location?.parent], [EXIT.ok, path.join(home, 'Atelier')])
   const relative = await world.run(['location', 'set', 'vaults-here', '--json'], { cwd: world.dir })
   assert.equal(relative.json.location.parent, path.join(world.dir, 'vaults-here'))
   const inside = await world.run(['location', 'set', path.join(world.projectDir, 'east-wing', 'vaults'), '--json'])

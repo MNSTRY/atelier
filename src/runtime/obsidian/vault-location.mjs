@@ -166,6 +166,8 @@ export function checkVaultParent({ parent, workspaceRoot, repositoryRoots, vault
   // A repository beside the vaults, below the same folder (a home folder, say), is no overlap: each vault folder is
   // checked again against every repository when its store is made.
   const overlaps = checkManagedRoots({ managedRoots: [parent], repositoryRoots }).refusals.filter(({ code }) => code !== 'repository-inside-managed-root')
+  // A folder that is itself a link: the folder it leads to is named instead, so the decision says where vaults are.
+  if (overlaps.some(({ code }) => code === 'managed-root-symlink-alias')) refuse('vault-location-is-link', 'this folder is a link; name the folder it leads to', { refusals: overlaps.map(({ code }) => code) })
   if (overlaps.length > 0) refuse('vault-location-inside-repository', 'vaults never live inside an enrolled repository or the project', { refusals: overlaps.map(({ code }) => code) })
   // Atelier's own private state: publication state, recovery and staging live there, and a vault inside it would be
   // published over them.
