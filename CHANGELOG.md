@@ -38,6 +38,23 @@
 - `atelier graph` ends its error list with a `Next:` line naming
   `atelier enroll documents` when a document has no sidecar.
 
+### Fixed
+
+- The project readiness artifact (`atelier-output/atelier-readiness.json` by
+  default) records `graph.path`, `projection.outputRoot` and
+  `projection.entry` relative to the project configuration directory, in POSIX
+  form, instead of as absolute paths. `atelier readiness --check` and
+  `atelier generated check` now accept an artifact written in another checkout
+  of the same project, and the artifact no longer names the machine's
+  directories (which could include the account name). An exact upgrade
+  candidate's readiness bytes now match what `atelier readiness` regenerates
+  there; before, when the path to the candidate passed through a symlink (as
+  macOS temporary directories do), the check reported the new candidate
+  stale. `atelier upgrade explain` no longer warns that readiness bytes can
+  contain absolute host paths. An artifact written by an earlier version is
+  reported stale once; run `atelier readiness` to rewrite it and review the
+  difference.
+
 ## 0.2.0-alpha.12
 
 ### Added
