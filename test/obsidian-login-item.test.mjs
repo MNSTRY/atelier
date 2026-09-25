@@ -1035,7 +1035,7 @@ test('once installed, a stopped service is started through the login item, and a
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
-  assert.equal((await world.run(['service', 'stop', '--json'])).json.service.stopped, true)
+  assert.equal((await stopAskingAgain(world)).stopped, true)
   await waitFor(() => job.child === null, { label: 'the unit\'s process to end' })
   assert.deepEqual([job.exits.at(-1), job.runs], [0, 1], 'a clean stop exits 0, and the manager does not start it again')
 
@@ -1043,7 +1043,7 @@ test('once installed, a stopped service is started through the login item, and a
   assert.deepEqual([started.exit, started.json.service.started, started.json.service.loginItem, job.runs], [EXIT.ok, true, { via: 'login-item' }, 2])
 
   // The node the unit names is gone (a version manager removed it): `open` writes the unit again and says so.
-  assert.equal((await world.run(['service', 'stop', '--json'])).json.service.stopped, true)
+  assert.equal((await stopAskingAgain(world)).stopped, true)
   await waitFor(() => job.child === null, { label: 'the unit\'s process to end' })
   const file = path.join(world.launchd.directory, `${label}.plist`)
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(fs.realpathSync(process.execPath), '/opt/removed/node'))
@@ -1053,6 +1053,14 @@ test('once installed, a stopped service is started through the login item, and a
   assert.deepEqual([world.loginItem().digest, (await serviceStatus(world.lifecycle())).state], [sha256(fs.readFileSync(file)), 'healthy'])
   assert.ok(world.launchd.calls.includes(`bootout gui/501/${label}`) && world.launchd.calls.includes(`kickstart -p gui/501/${label}`))
 })
+
+// `service stop`, asked again while the service answers that it is busy in a long tick (`retry: true`), as its answer
+// says to: a first tick under load can hold health past the probe's timeout. Any other refusal is answered at once.
+async function stopAskingAgain(world) {
+  let last = null
+  await waitFor(async () => { last = (await world.run(['service', 'stop', '--json'])).json.service; return last.stopped === true || last.retry !== true }, { label: 'the service to stop' })
+  return last
+}
 
 // An earlier release: the same service entry with other bytes, as a child `start` made before an upgrade runs it.
 function earlierReleaseEntry(world) {
@@ -1082,7 +1090,7 @@ test('an outdated service is replaced through the login item: at --install befor
   assert.deepEqual([isAlive(first.record.pid), atLoad.record.executable.digest, atLoad.record.pid, job.runs, world.lastStartup().outcome], [false, sha256(fs.readFileSync(TEST_SERVICE_ENTRY)), job.child.pid, 1, 'started'])
   // Once it is loaded: an earlier release started beside it (by another installation, say) is replaced by open,
   // stopped as its owner stops it and started again by the manager.
-  assert.equal((await world.run(['service', 'stop', '--json'])).json.service.stopped, true)
+  assert.equal((await stopAskingAgain(world)).stopped, true)
   await waitFor(() => job.child === null, { label: 'the unit\'s process to end' })
   const second = await runEarlier()
   const opened = await world.run(['open', '--json'])
@@ -1097,7 +1105,7 @@ test('a login item whose package is gone says so in status, and the next start w
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
-  assert.equal((await world.run(['service', 'stop', '--json'])).json.service.stopped, true)
+  assert.equal((await stopAskingAgain(world)).stopped, true)
   await waitFor(() => job.child === null, { label: 'the unit\'s process to end' })
   // The package the unit and the record name was removed (the project's node_modules deleted, say).
   const gone = path.join(world.dir, 'removed', 'node_modules', '@mnstry', 'atelier', 'src', 'runtime', 'obsidian', 'service-main.mjs')
@@ -1118,7 +1126,7 @@ test('a refusal under the login item is answered at once with its code, is not r
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
-  assert.equal((await world.run(['service', 'stop', '--json'])).json.service.stopped, true)
+  assert.equal((await stopAskingAgain(world)).stopped, true)
   await waitFor(() => job.child === null, { label: 'the unit\'s process to end' })
   // The consent is lowered behind the item's back: its start is refused.
   const current = world.settings()
