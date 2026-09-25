@@ -28,6 +28,13 @@ Stewardship owns knowledge inclusion and applicability. Neither owns another
 repository's adoption decision. Fabric can implement Coordination; the local
 contracts do not require a Fabric service or account.
 
+Creation and Delivery also owns the kit's user-facing failure contract: one
+diagnostic shape, a registry of stable codes, and one exit-code convention for
+every command. Other responsibilities raise typed diagnostics through that
+contract rather than defining their own formats. The contract is proposed in
+issue #90 and is not yet implemented. Until it lands, existing typed codes and
+refusal classes remain authoritative.
+
 `atelier architecture catalog` returns the validated catalog. `architecture
 entry "Skill Steward"` resolves a name. Historical names remain aliases: Discovery
 Engine resolves to Discovery Harness; Skills Harness resolves to Capability
