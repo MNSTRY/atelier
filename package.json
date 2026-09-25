@@ -1,6 +1,6 @@
 {
   "name": "@mnstry/atelier",
-  "version": "0.2.0-alpha.11",
+  "version": "0.2.0-alpha.12",
   "private": false,
   "description": "Local toolkit that turns a Git repository into an ontology-governed knowledge graph, enforcement layer, and runtime for people, agents, and tools. No telemetry or required hosted account; optional host-bound vault adapters.",
   "keywords": [
@@ -147,7 +147,7 @@
     "url": "https://github.com/MNSTRY/atelier/issues"
   },
   "engines": {
-    "node": ">=22.18.0 <23"
+    "node": ">=22.18.0 <23 || >=24.13.1 <25"
   },
   "files": [
     "README.md",

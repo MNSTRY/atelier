@@ -319,6 +319,27 @@ test('expected project failures are typed, actionable, and stack-free by default
   assert.match(debug.stderr, /\n\s+at /)
 })
 
+test('a failure without a typed code stays redacted unless ATELIER_DEBUG is set', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-untyped-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const script = path.join(dir, 'throws.mjs')
+  fs.writeFileSync(script, "throw new Error('untyped detail that must not reach the terminal')\n")
+  const executor = path.join(ROOT, 'src', 'cli', 'execute-command.mjs')
+  const { ATELIER_DEBUG, ...env } = process.env
+
+  const redacted = spawnSync(process.execPath, [executor, script], { env, encoding: 'utf8' })
+  assert.equal(redacted.status, 1)
+  assert.equal(redacted.stderr, [
+    '[internal-error] command failed without a safe diagnostic',
+    'Next: rerun with ATELIER_DEBUG=1 to inspect the stack locally.',
+    '',
+  ].join('\n'))
+
+  const debug = spawnSync(process.execPath, [executor, script], { env: { ...env, ATELIER_DEBUG: '1' }, encoding: 'utf8' })
+  assert.equal(debug.status, 1)
+  assert.match(debug.stderr, /untyped detail that must not reach the terminal/)
+})
+
 test('extension-pack validate dispatches to the extension-pack module', (t) => {
   const sample = makeSampleProject(t)
   fs.mkdirSync(path.join(sample.dir, 'packs', 'protocols'), { recursive: true })

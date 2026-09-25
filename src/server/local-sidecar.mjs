@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { AtelierDiagnosticError } from '../project/config.mjs'
 import {
   atomicReplacePrivateText,
   ensureContainedPrivateDirectory,
@@ -194,6 +195,25 @@ function capabilityContract() {
     grantEndpoint: '/api/session-auth',
     proposalEndpoint: '/api/proposals',
   }
+}
+
+// A listen failure a person can fix by choosing another port becomes a typed
+// diagnostic the CLI prints with that remedy. Any other failure is returned
+// unchanged, so the CLI's own rule for unknown errors still decides what shows.
+function listenFailure(error, port) {
+  if (error?.code === 'EADDRINUSE') {
+    return new AtelierDiagnosticError('port-in-use', `port ${port} is already in use`, {
+      hint: 'Pass --port=<free port> to choose another.',
+      cause: error,
+    })
+  }
+  if (error?.code === 'EACCES') {
+    return new AtelierDiagnosticError('port-permission-denied', `permission to listen on port ${port} was denied`, {
+      hint: 'Pass --port=<free port from 1024 to 65535> to choose another; lower ports need elevated privileges.',
+      cause: error,
+    })
+  }
+  return error
 }
 
 function doctorEnvelope() {
@@ -662,14 +682,13 @@ export function createAtelierSidecarServer({
       if (!isLoopbackHost(host)) {
         return Promise.reject(new Error(`non-loopback listen host refused: ${host}`))
       }
-      // A busy port is an ordinary condition, not a crash: surface it as a
-      // rejection the CLI can print, instead of an unhandled 'error' event.
+      // A busy or refused port is an ordinary condition, not a crash: surface
+      // it as a typed rejection the CLI prints with its remedy, instead of an
+      // unhandled 'error' event or a redacted internal error.
       return new Promise((resolve, reject) => {
         const onError = (error) => {
           server.removeListener('listening', onListening)
-          reject(error.code === 'EADDRINUSE'
-            ? new Error(`port ${listenPort} is already in use — pass --port=<free port> to choose another`)
-            : error)
+          reject(listenFailure(error, listenPort))
         }
         const onListening = () => {
           server.removeListener('error', onError)

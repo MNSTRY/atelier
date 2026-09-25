@@ -54,7 +54,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.11
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -374,11 +374,11 @@ to MNSTRY, and a document MNSTRY declines can still be fully conformant.
 
 ## Install and go deeper
 
-Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
-remains in alpha:
+Node.js 22 (22.18.0 or later) or Node.js 24 (24.13.1 or later) is required.
+Pin the prerelease while the package remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.11
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
 ```
 
 Then choose the path that matches what you are building:
@@ -397,7 +397,7 @@ Then choose the path that matches what you are building:
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.11`.
+Current package: `@mnstry/atelier@0.2.0-alpha.12`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.

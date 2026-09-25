@@ -58,7 +58,7 @@ body:
     id: node
     attributes:
       label: Node version
-      description: Output of `node --version`. Supported range is >=22.18.0 <23.
+      description: Output of `node --version`. Supported versions are Node 22 (22.18.0 or later) and Node 24 (24.13.1 or later).
       placeholder: v22.18.0
     validations:
       required: true

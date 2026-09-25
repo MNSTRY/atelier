@@ -32,18 +32,34 @@ function parseServerArgs(argv = []) {
   return args
 }
 
+// argv > PORT env > default. Supervisors that assign a free port (preview
+// panes, dev harnesses) pass it via PORT, and an Atelier that ignores that
+// fights whatever already holds the canonical port instead of coexisting.
+// A value listen would refuse is refused here, naming where it came from;
+// Node's own range error names neither the flag nor the variable.
+function resolvePort(args, env = process.env) {
+  const [source, raw] = args.port ? ['--port', args.port] : env.PORT ? ['PORT', env.PORT] : [null, '8137']
+  const port = Number(raw)
+  if (Number.isInteger(port) && port >= 0 && port <= 65535) return port
+  throw new AtelierDiagnosticError('port-invalid', `${source} must be a whole number from 0 to 65535, got ${JSON.stringify(raw)}`, {
+    hint: source === 'PORT'
+      ? 'Set PORT to a free port or unset it, or pass --port=<free port> to override it.'
+      : 'Pass a free port, for example --port=8138.',
+  })
+}
+
 export async function runServerCommand(argv = process.argv.slice(2)) {
   const args = parseServerArgs(argv)
   const project = resolveProjectConfig({ argv: args.projectArgs })
+  // An unusable --port or PORT is refused before the project's build state,
+  // so a mistyped argument is named even in a project not built yet.
+  const port = args.smoke ? 0 : resolvePort(args)
   assertProjectionBuilt(project)
   const sidecar = createAtelierSidecarServer({
     workspaceRoot: project.outputRoot,
     stateDir: project.outputRoot,
     reviewProject: argv.includes('--review') ? project : null,
-    // argv > PORT env > default. Supervisors that assign a free port (preview
-    // panes, dev harnesses) pass it via PORT, and an Atelier that ignores that
-    // fights whatever already holds the canonical port instead of coexisting.
-    port: args.smoke ? 0 : Number(args.port || process.env.PORT || 8137),
+    port,
   })
 
   if (args.smoke) {
