@@ -16,7 +16,7 @@ import {
   authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots, readInstalledApplyPolicy, readMachineSettings,
   revokeApplyPolicy, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
-import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
+import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
 import { currentPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
 import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
 import { serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
@@ -393,8 +393,12 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             : takesEffect === 'publishing'
               ? `view ${scopeId}: Atelier's plugin is requested; the maintenance service is publishing the view again, which brings its entry and its files back`
               : `view ${scopeId}: Atelier's plugin is requested; its entry and its files come back with the view's next publication (the next change at its sources, or when the maintenance service next starts)${service.asked ? ` (the service's tick: ${view ? `${view.state}, ${view.reason}` : service.reason})` : ''}`
-          const outdated = service.reason === 'service-outdated' ? [`  Next: the running maintenance service is of an earlier release; run \`atelier obsidian plugin on --scope ${scopeId} --adapter=${PRODUCTION_ADAPTER}\` to replace it`] : []
-          return { exit: EXIT.ok, document: { scopeId, choice, takesEffect, service }, human: [human, ...(service.restarted ? [`service: restarted (${service.restarted})`] : []), ...outdated] }
+          // A service this command could not ask: one of an earlier release it may replace (with `--adapter`), and one of a
+          // later release it never replaces, which gets open's next step.
+          const next = service.reason === 'service-outdated'
+            ? `the running maintenance service is of an earlier release; run \`atelier obsidian plugin on --scope ${scopeId} --adapter=${PRODUCTION_ADAPTER}\` to replace it`
+            : service.reason === 'service-other-release' ? REASON_NEXT['service-other-release'] : null
+          return { exit: EXIT.ok, document: { scopeId, choice, takesEffect, service, ...(next === null ? {} : { next }) }, human: [human, ...(service.restarted ? [`service: restarted (${service.restarted})`] : []), ...(next === null ? [] : [`  Next: ${next}`])] }
         }
         const { enablement, workspace } = readable()
         const scopeIds = flags.scope === undefined ? enablement.scopes.map((scope) => scope.scopeId) : [resolveScope(enablement, flags.scope)]

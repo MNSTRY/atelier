@@ -2251,6 +2251,19 @@ test('a service of a later release than the installed one is neither replaced no
   await stopWhateverRuns(world, seams)
 })
 
+test('`plugin on` with a service of a later release running records the request, leaves that service alone and gives the same next step as open', async (t) => {
+  const world = makeWorld(t)
+  const later = await standInRuntime(t, world, { mode: 'current', release: { version: '999.0.0', digest: `sha256:${'0'.repeat(64)}` } })
+  const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const json = await world.run(['plugin', 'on', '--json', '--scope', FULL_SCOPE.scopeId], { seams })
+  assert.deepEqual([json.exit, json.json.choice.state, json.json.takesEffect, json.json.service.reason], [0, 'requested', 'next-publication', 'service-other-release'], JSON.stringify(json.json).slice(0, 500))
+  assert.equal(json.json.next, REASON_NEXT['service-other-release'])
+  const human = await world.run(['plugin', 'on', '--scope', FULL_SCOPE.scopeId], { seams })
+  assert.match(human.stdout, /\n {2}Next: the maintenance service runs a later release of Atelier than this command/)
+  assert.deepEqual([isAlive(later.child.pid), readServiceRecord(world.workspace()).runtimeId], [true, later.runtimeId], 'the later runtime still runs, under its own record')
+  await stopWhateverRuns(world, seams)
+})
+
 test('a service whose record names the installed entry module and no release, as 0.2.0-alpha.11 records it, is replaced by the next open', async (t) => {
   const world = makeWorld(t)
   const earlier = await standInRuntime(t, world, { mode: 'current', ext: { runner: process.execPath } })

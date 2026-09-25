@@ -165,7 +165,10 @@ follows. The decision is the one Obsidian itself records: the
   `--adapter=obsidian-cli`, a service of an earlier release still running
   after an upgrade is replaced by the installed one first, under the consent
   already recorded, as `open` does; without it, such a service is only
-  reported (`service-outdated`) with that next step. With no service
+  reported (`service-outdated`) with that next step. A service of a later
+  release is never replaced; it is reported (`service-other-release`) with
+  `open`'s next step for it. Either next step is also the document's
+  `next`. With no service
   running, the view's next publication does it: the one the next change at
   its sources causes, or the one when the service next starts.
   Obsidian reads `community-plugins.json` when it opens a vault, so a plugin
