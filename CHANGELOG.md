@@ -215,7 +215,8 @@
   Atelier writes JSON in, so the change is the view and nothing else
   (`project-config-format-unknown` names the member to add by hand
   otherwise), atomically, keeping its mode, and only over the bytes it read
-  (`project-config-changed`). The first view is the default. `view list` and
+  (`project-config-changed`). A file that is not UTF-8 is never rewritten
+  (`gitignore-not-utf8`, or `project-config-format-unknown`). The first view is the default. `view list` and
   `view show ID` are `scope list` and `scope show ID`.
 
 ### Changed
