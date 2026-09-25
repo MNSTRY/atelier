@@ -39,7 +39,7 @@ for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 
 syncBuiltinESMExports()
 import { forbiddenEgressFindingsForText } from '../src/egress/forbidden-egress.mjs'
 import { OBSIDIAN_EXT_KEY, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
-import { COMMUNITY_PLUGINS_PATH, POLICY_SETTINGS_PATH, isUserOwnedSettingsPath, prepareSettings } from '../src/projection/obsidian/materialize/index.mjs'
+import { COMMUNITY_PLUGINS_PATH, PATH_REGISTRY_SCHEMA, POLICY_SETTINGS_PATH, isUserOwnedSettingsPath, prepareSettings, prepareView } from '../src/projection/obsidian/materialize/index.mjs'
 import {
   PLUGIN_CHALLENGE_WINDOW_MS, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_DATA_SCHEMA, PLUGIN_DIRECTORY, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_ID, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE,
   PLUGIN_MAX_REQUEST_BYTES, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MINIMUM_APP_VERSION, PLUGIN_RENEW_INTERVAL_MS, PLUGIN_ROUTES, PLUGIN_SOURCE_FILES, PLUGIN_STATUS_SCHEMA, pluginClientProof,
@@ -1993,6 +1993,49 @@ test('a plugin file that drifted is written again at the service\'s next tick, w
   fs.rmSync(path.join(folder, 'main.js'))
   assert.equal(await tick(), off)
   assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
+})
+
+// What the release before vault layout 2 prepared: layout 1 paths, recorded in a layout 1 registry.
+const LAYOUT_1_RELEASE = (input) => {
+  const prepared = prepareView({ ...input, layout: 1 })
+  const entries = prepared.manifest.notes.map(({ repoId, nodeId, path: notePath }) => ({ repoId, nodeId, path: notePath }))
+  return { ...prepared, persistentPathRegistry: { schema: PATH_REGISTRY_SCHEMA, workspaceId: prepared.persistentPathRegistry.workspaceId, entries } }
+}
+
+test('vault layout 2 never treats the plugin as notes, and laying a layout 1 vault out again keeps the plugin files where they are', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const manifestOf = () => createRecoveryStore({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: SCOPE, repositoryRoots: [] }).readCurrentManifest()
+  const pluginPaths = [...PLUGIN_SOURCE_FILES.map((name) => `${PLUGIN_DIRECTORY}/${name}`), PLUGIN_DATA_PATH]
+  const onDisk = () => Object.fromEntries(PLUGIN_SOURCE_FILES.map((name) => `${PLUGIN_DIRECTORY}/${name}`).map((relative) => {
+    const stat = fs.statSync(path.join(world.vault, relative))
+    return [relative, { ino: stat.ino, digest: digest(fs.readFileSync(path.join(world.vault, relative))) }]
+  }))
+  const earlier = await world.service({ seams: { prepareView: LAYOUT_1_RELEASE } })
+  assert.ok((await earlier.tickNow()).ok)
+  assert.equal(manifestOf().schema, 'atelier-obsidian-generation-manifest/v1')
+  const before = onDisk()
+  await earlier.shutdown('test-restart')
+
+  const service = await world.service()
+  world.advance(1000)
+  const outcome = await service.tickNow()
+  assert.ok(outcome.ok, JSON.stringify(outcome))
+  assert.equal(world.freshness().state, 'current')
+  const after = manifestOf()
+  assert.deepEqual([after.schema, after.layoutVersion], ['atelier-obsidian-generation-manifest/v2', 2])
+  assert.deepEqual(after.notes.map((item) => item.path).sort(), ['harbor/notes/Harbor plan.md', 'harbor/notes/Tide table.md'])
+  // The plugin is Atelier's settings, pinned beside the notes and never one of them: no note, attachment or diagnostic names a settings path.
+  for (const item of [...after.notes, ...after.attachments]) assert.equal(item.path.startsWith('.obsidian'), false, item.path)
+  assert.deepEqual(after.ext[OBSIDIAN_EXT_KEY].diagnostics ?? [], [])
+  assert.deepEqual(after.ext[OBSIDIAN_EXT_KEY].settings.pluginOwned.files.map((file) => file.path).sort(), [...pluginPaths].sort())
+  // Laid out again, the plugin files were kept as they were (same file, same bytes), not retired with the layout 1 notes;
+  // the data file names the listener of the service now running, with the view's bearer.
+  assert.deepEqual(onDisk(), before)
+  const data = JSON.parse(fs.readFileSync(path.join(world.vault, PLUGIN_DATA_PATH), 'utf8'))
+  assert.deepEqual(data, { schema: PLUGIN_DATA_SCHEMA, channel: { host: '127.0.0.1', port: world.port }, scopeId: SCOPE, bearer: readPluginBearers({ workspaceRoot: world.workspaceRoot, workspaceId: WORKSPACE_ID }).get(SCOPE) })
+  for (const name of PLUGIN_SOURCE_FILES) assert.ok(fs.readFileSync(path.join(world.vault, PLUGIN_DIRECTORY, name)).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, name))), name)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(world.vault, COMMUNITY_PLUGINS_PATH), 'utf8')), [PLUGIN_ID])
+  assert.equal(fs.existsSync(path.join(world.vault, 'notes', 'harbor-plan.md')), false)
 })
 
 test('an entry written while an app held the vault is only offered: that app writing back its list without it is no decision of the person\'s, until the plugin ran there', needsExchange, async (t) => {
