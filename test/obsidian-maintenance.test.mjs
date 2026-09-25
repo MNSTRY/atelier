@@ -314,7 +314,7 @@ test('machine settings live outside every repository, owner-only, strictly valid
   assert.throws(() => readLocalPointer(project), (error) => error.code === 'invalid-local-pointer')
 })
 
-// What releases up to 0.2.0-alpha.11 wrote, byte for byte in shape: no remembered decision.
+// What releases up to 0.2.0-alpha.12 wrote, byte for byte in shape: no remembered decision.
 const v1Settings = (fields = {}) => ({ schema: 'atelier-obsidian-machine-settings/v1', workspaceId: WORKSPACE_ID, maintenanceMode: 'manual', audienceAllow: [], applyPolicy: null, updatedAt: '2026-01-05T10:00:00.000Z', ...fields })
 const STAMP = Object.freeze({ decidedAt: '2026-01-05T11:00:00.000Z', decidedBy: 'someone', via: 'command' })
 

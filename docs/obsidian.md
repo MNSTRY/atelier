@@ -350,7 +350,7 @@ Who allowed the maintenance service is not a second copy here: it stays the
 consent the service reads from its own settings. `atelier obsidian settings`
 shows all of it, and how each answer is changed.
 
-Releases up to 0.2.0-alpha.11 wrote `atelier-obsidian-machine-settings/v1`.
+Releases up to 0.2.0-alpha.12 wrote `atelier-obsidian-machine-settings/v1`.
 Such a file is read as the v2 document it stands for, an audience list set
 with it becoming that person's decision, and stays v1 on disk until the next
 write, which writes v2. A release that knows only v1 refuses a v2 file as

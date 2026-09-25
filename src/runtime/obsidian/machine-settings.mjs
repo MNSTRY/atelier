@@ -24,7 +24,7 @@ import { canonicalJson, closedObject, isPlainObject } from './documents.mjs'
 // data directory.
 
 export const MACHINE_SETTINGS_SCHEMA = 'atelier-obsidian-machine-settings/v2'
-// What releases up to 0.2.0-alpha.11 wrote. It is still read, as the v2 document it stands for, and never written:
+// What releases up to 0.2.0-alpha.12 wrote. It is still read, as the v2 document it stands for, and never written:
 // the next write writes v2. A release that knows only v1 refuses a v2 document, so a downgrade stops, loudly, rather
 // than working from settings it cannot read.
 export const MACHINE_SETTINGS_SCHEMA_V1 = 'atelier-obsidian-machine-settings/v1'

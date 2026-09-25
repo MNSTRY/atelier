@@ -17,7 +17,7 @@
   made today withholds them. A v1 document is read as the v2 document it
   stands for and stays v1 on disk until the next write, which writes v2; an
   audience list set before is carried over as that person's decision, with
-  unclassified notes withheld as they were. A release up to 0.2.0-alpha.11 refuses a v2 document
+  unclassified notes withheld as they were. A release up to 0.2.0-alpha.12 refuses a v2 document
   (`invalid-machine-settings`), so after an upgrade a maintenance service
   still running the earlier release fails its ticks until it is replaced:
   `atelier obsidian open` replaces it, as does `service stop` and a new
