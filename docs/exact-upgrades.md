@@ -69,8 +69,9 @@ builders. Only five registered output paths can be written, and a complete
 before/after inventory checks that boundary. The executor then saves those
 bytes; application does not recalculate or silently replace the selected plan.
 This is a bounded trusted executor, not a sandbox for arbitrary migration code.
-The generated readiness JSON retains absolute local graph and projection paths,
-which may include the account name. Inspect those committed bytes before sharing
+The generated readiness JSON records graph and projection paths relative to the
+project configuration directory, so its bytes match what `atelier readiness`
+would regenerate in the candidate. Inspect the committed bytes before sharing
 the candidate branch; generating a candidate does not authorize publication.
 
 ## Apply the reviewed bytes

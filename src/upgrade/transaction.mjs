@@ -205,10 +205,9 @@ function render(project, readSet, createdAt) {
     const projection = buildProjectProjection(clone)
     write(path.relative(scratch, projection.output), projection.html)
     write(path.relative(scratch, path.join(clone.outputRoot, 'atelier.manifest.json')), jsonText(buildProjectManifest(clone, projection)))
+    // Readiness paths are configuration-relative, so the scratch clone yields
+    // the bytes the candidate itself would regenerate.
     const readiness = buildReadiness({ project: clone, graph })
-    readiness.graph.path = project.graphPath
-    readiness.projection.outputRoot = project.outputRoot
-    readiness.projection.entry = path.join(project.outputRoot, 'index.html')
     if (!readiness.ready) throw new Error('readiness postcheck failed')
     write(path.relative(scratch, clone.readinessPath), jsonText(readiness))
     const after = snapshot(scratch)
