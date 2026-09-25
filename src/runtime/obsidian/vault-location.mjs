@@ -167,6 +167,20 @@ export function checkVaultParent({ parent, workspaceRoot, repositoryRoots, vault
   // checked again against every repository when its store is made.
   const overlaps = checkManagedRoots({ managedRoots: [parent], repositoryRoots }).refusals.filter(({ code }) => code !== 'repository-inside-managed-root')
   if (overlaps.length > 0) refuse('vault-location-inside-repository', 'vaults never live inside an enrolled repository or the project', { refusals: overlaps.map(({ code }) => code) })
+  // Atelier's own private state: publication state, recovery and staging live there, and a vault inside it would be
+  // published over them.
+  if (typeof workspaceRoot === 'string' && spellings(workspaceRoot).some((root) => spellings(parent).some((candidate) => foldedInside(root, candidate)))) {
+    refuse('vault-location-inside-private-state', 'vaults never live inside Atelier\'s private state for this workspace')
+  }
+  // A folder a vault can be made in: the nearest folder that exists on the way is a folder this user can write in.
+  const nearest = nearestExisting(parent)
+  try {
+    if (!fs.statSync(nearest).isDirectory()) refuse('vault-location-unusable', 'no folder can be made there: a file is in the way', { path: nearest })
+    fs.accessSync(nearest, fs.constants.W_OK | fs.constants.X_OK)
+  } catch (error) {
+    if (typeof error?.code === 'string' && !/^E[A-Z]+$/.test(error.code)) throw error
+    refuse('vault-location-unusable', 'no folder can be made there: this user cannot write in the nearest folder that exists', { path: nearest, cause: error.code ?? null })
+  }
   const inAtelierVault = enclosingAtelierVault(parent, allocatedPaths)
   if (inAtelierVault !== null) refuse('vault-location-inside-vault', 'vaults never live inside a vault Atelier publishes', { vault: inAtelierVault })
   const inListedVault = enclosingListedVault(parent, vaults)
@@ -192,7 +206,8 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
   const parent = location.parent
   // A synced location was allowed when it was decided; it is checked again for everything else.
   checkVaultParent({ parent, workspaceRoot, repositoryRoots, vaults, allocatedPaths, allowSynced: true, homedir })
-  fs.mkdirSync(parent, { recursive: true, mode: 0o700 })
+  const unusable = (error) => refuse('vault-location-unusable', 'the folder for this view\'s vault cannot be made there', { parent, cause: error?.code ?? String(error?.message ?? error) })
+  try { fs.mkdirSync(parent, { recursive: true, mode: 0o700 }) } catch (error) { unusable(error) }
   // The folder is recorded by its real path, as the file system stores it: a link on the way to the location decided
   // then leads nowhere else later, and the path is the one the app and every check see.
   const realParent = realPathAsStored(parent)
@@ -201,7 +216,7 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
     const name = vaultFolderName({ projectName, scopeId, number })
     const folder = path.join(realParent, name)
     if (listedNames.has(folded(name)) || fs.lstatSync(folder, { throwIfNoEntry: false }) !== undefined) continue
-    try { fs.mkdirSync(folder, { mode: 0o700 }) } catch (error) { if (error.code === 'EEXIST') continue; throw error }
+    try { fs.mkdirSync(folder, { mode: 0o700 }) } catch (error) { if (error.code === 'EEXIST') continue; unusable(error) }
     try { fs.chmodSync(folder, 0o700) } catch { /* a file system without modes */ }
     return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: folder, name, parent: realParent, allocatedAt: now } })
   }

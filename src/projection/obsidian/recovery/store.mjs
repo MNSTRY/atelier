@@ -218,7 +218,7 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
   const vault = realPathAsStored(requestedVault)
   const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
   for (const area of ['state', 'recovery', 'staging']) {
-    if (inside(path.join(root, area), vault) || inside(vault, path.join(root, area))) throw new TypeError('the vault may not overlap private publication state')
+    if (inside(path.join(root, area), vault) || inside(vault, path.join(root, area))) refuse('vault-overlaps-private-state', 'the vault may not overlap private publication state')
   }
   const manifests = privateDir('state', 'manifests', segment(scopeId))
   const journals = privateDir('state', 'journals', segment(scopeId))

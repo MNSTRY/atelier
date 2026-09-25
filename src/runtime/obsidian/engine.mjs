@@ -127,6 +127,10 @@ export const ENGINE_PRIMITIVES = Object.freeze({
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
+// The code a view is refused with when its own vault cannot be placed: a typed refusal's, or `vault-location-unusable`
+// for a file-system error there (a file in the way, no permission, a read-only volume). Null for anything else, which
+// is a fault of the engine and stops the tick.
+const viewRefusalCode = (error) => (isTypedRefusal(error) ? error.code : typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code) ? 'vault-location-unusable' : null)
 const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
 
 // An editor adapter that `build` makes, synchronously or not, the first time the publisher calls it; a refusal of
@@ -377,7 +381,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         }
         return list
       }
-      const allocatedPaths = enablement.scopes.map((scope) => readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path).filter((item) => typeof item === 'string')
+      // The folders allocated to the views; a record that cannot be read refuses only its own view, below.
+      const allocatedPaths = enablement.scopes.map((scope) => { try { return readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path } catch { return undefined } }).filter((item) => typeof item === 'string')
       for (const scope of enablement.scopes) {
         try {
           let vaults = null
@@ -388,12 +393,23 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
           ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId, location: machine.decisions.location, projectName: projectDisplayName(project), repositoryRoots, vaults, allocatedPaths, now })
         } catch (error) {
-          if (!isTypedRefusal(error)) throw error
-          allocationRefusals.set(scope.scopeId, error.code)
+          const code = viewRefusalCode(error)
+          if (code === null) throw error
+          allocationRefusals.set(scope.scopeId, code)
         }
       }
     }
-    const scopes = enablement.scopes.filter((scope) => !allocationRefusals.has(scope.scopeId)).map((scope) => ({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }))
+    // Each view's store, on its own: one whose vault cannot be placed (a record naming a folder inside a repository,
+    // say) is refused alone, and the other views go on.
+    const scopes = []
+    for (const scope of enablement.scopes) {
+      if (allocationRefusals.has(scope.scopeId)) continue
+      try { scopes.push({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }) } catch (error) {
+        const code = viewRefusalCode(error)
+        if (code === null) throw error
+        allocationRefusals.set(scope.scopeId, code)
+      }
+    }
 
     watch([
       ...(project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => ({ id: `repo:${repo.name}`, path: repo.path, recursive: true, keyPrefix: sourceKey(repo.name, ''), keyOf: (relative) => sourceKey(repo.name, relative) })),

@@ -42,7 +42,12 @@
   list is read through the app when it answers, else from its settings file;
   while it cannot be read, no folder is allocated (`app-vault-list-unreadable`,
   tried again at the next tick). A view whose folder cannot be allocated is not published
-  and its freshness says why, while the other views go on. `location show`
+  and its freshness says why, while the other views go on: a folder that
+  cannot be made (`vault-location-unusable`: a file in the way, no
+  permission), one inside Atelier's private state
+  (`vault-location-inside-private-state`, refused by `location set` too), an
+  allocation record that cannot be read or names a folder inside a
+  repository, each stops its own view only. `location show`
   and `status` (`scopes[].vault`) say where each view's vault is.
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the

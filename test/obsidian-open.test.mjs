@@ -115,7 +115,7 @@ const { createAbandonmentProof, machineDigest } = await import('../src/runtime/o
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
 const { readServiceRecord, readServiceSettings, releaseIdentity, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
-const { createRecoveryStore, readVaultAllocation } = await import('../src/projection/obsidian/recovery/store.mjs')
+const { allocationFile, createRecoveryStore, readVaultAllocation } = await import('../src/projection/obsidian/recovery/store.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { maintenanceNoticeFor } = await import('../src/runtime/obsidian/sync-notice.mjs')
@@ -2436,6 +2436,49 @@ test('a vault folder is never allocated under a name a vault the app lists alrea
   await third.run(['location', 'set', path.join(third.dir, 'Atelier'), '--json'])
   const enclosing = await third.engine({ readAppVaultList: () => ({ ok: true, vaults: { bbbbbbbbbbbbbbbb: { path: third.dir, ts: 1 } } }) }).tick()
   assert.deepEqual([enclosing.scopes[0].state, enclosing.scopes[0].reason], ['stale', 'vault-location-inside-vault'])
+})
+
+test('a bad location or allocation stops only its own view: the others go on, each refusal is typed, and a better location recovers the view', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const engine = world.engine()
+  const stateOf = (report, scopeId) => { const entry = report.scopes.find((item) => item.scopeId === scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick(), FULL_SCOPE.scopeId)[0], 'current')
+  world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+  // A location the command refuses, left by hand (an earlier release, a copied file).
+  const decide = (parent) => writeMachineSettings({ ...world.workspace(), repositoryRoots: [], settings: withDecision(world.machine(), 'location', { parent }, { decidedAt: iso(START), decidedBy: null, via: 'command' }) })
+  const tick = async () => { world.advance(10 * 60 * 1000); return engine.tick() }
+  const file = path.join(world.dir, 'a-file')
+  fs.writeFileSync(file, 'not a folder')
+  const cases = [
+    [file, 'vault-location-unusable', 'a file where the folder would be'],
+    [path.join(file, 'below'), 'vault-location-unusable', 'a file on the way'],
+    [path.join(world.workspaceRoot(), 'state', 'vaults'), 'vault-location-inside-private-state', 'inside the private state'],
+    [path.join(world.workspaceRoot(), 'staging'), 'vault-location-inside-private-state', 'inside staging'],
+  ]
+  for (const [parent, code, label] of cases) {
+    decide(parent)
+    const report = await tick()
+    assert.equal(report.state, 'ticked', label)
+    assert.deepEqual([stateOf(report, FULL_SCOPE.scopeId)[0], stateOf(report, EAST_SCOPE.scopeId)], ['current', ['stale', code]], label)
+    assert.equal(readVaultAllocation({ ...world.workspace(), scopeId: EAST_SCOPE.scopeId }), null, label)
+  }
+  // The command refuses the same folders.
+  for (const [parent, code] of cases) assert.equal((await world.run(['location', 'set', parent, '--json'])).json.error.code, code, parent)
+  // A better location recovers the view: nothing was recorded for the bad ones.
+  const good = path.join(world.dir, 'Atelier')
+  assert.equal((await world.run(['location', 'set', good, '--json'])).exit, EXIT.ok)
+  assert.deepEqual(stateOf(await tick(), EAST_SCOPE.scopeId)[0], 'current')
+  // A record of one view that names a folder inside a repository, or cannot be read, stops that view only.
+  const record = allocationFile(world.workspaceRoot(), EAST_SCOPE.scopeId)
+  const allocation = JSON.parse(fs.readFileSync(record, 'utf8'))
+  const inside = path.join(world.projectDir, 'east-wing', 'vault')
+  fs.writeFileSync(record, JSON.stringify({ ...allocation, path: inside, parent: path.dirname(inside), name: 'vault' }))
+  const intoRepository = await tick()
+  assert.deepEqual([intoRepository.state, stateOf(intoRepository, FULL_SCOPE.scopeId)[0], stateOf(intoRepository, EAST_SCOPE.scopeId)], ['ticked', 'current', ['stale', 'managed-root-inside-repository']])
+  assert.equal(fs.existsSync(inside), false)
+  fs.writeFileSync(record, 'not json')
+  const unreadable = await tick()
+  assert.deepEqual([unreadable.state, stateOf(unreadable, FULL_SCOPE.scopeId)[0], stateOf(unreadable, EAST_SCOPE.scopeId)], ['ticked', 'current', ['stale', 'invalid-vault-allocation']])
 })
 
 test('no vault folder is allocated while the app\'s list cannot be read: the view says why and is allocated at a later tick, once the list reads', needsExchange, async (t) => {
