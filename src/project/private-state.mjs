@@ -80,6 +80,15 @@ export function readRegularTextNoFollow(file) {
   }
 }
 
+// The real path of a target as the file system stores it: on a volume that
+// folds letter case (macOS by default) each component in the case it is stored
+// in, which is also how the operating system reports a working directory, while
+// Node's own resolution keeps the case it was given. On Windows Node's own
+// resolution is kept: the native one also expands short 8.3 names.
+export function realPathAsStored(target) {
+  return process.platform === 'win32' ? fs.realpathSync(target) : fs.realpathSync.native(target)
+}
+
 export function syncPrivateDirectory(directory) {
   let fd;
   try { fd = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(fd); }

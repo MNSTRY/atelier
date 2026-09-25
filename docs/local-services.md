@@ -205,17 +205,34 @@ opt-in and is proven again immediately before the signal.
 
 A runtime of an earlier release is replaced by a command that asks for a tick
 with the start options of the installed entry (`requestServiceTick({ service
-})`; `open` does). Such a runtime proves itself `healthy` but either records
-an entry module whose digest differs from the installed entry, or refuses a
-tick that names a view, as releases up to 0.2.0-alpha.11 do (their `POST`
-payload has exactly one member). It is stopped as `stop` stops it and the
-installed entry is started, detached, under the consent already recorded; the
-answer carries `restarted: "outdated"`, and `open` shows `service: restarted
-(outdated)`. A `busy` runtime is not stopped, and anything that is not a
-proven runtime of this workspace is never stopped. Without the start options
-the runtime is only reported (`service-outdated`). The digest covers the
-entry module only, so a release that changes other modules and keeps the
-entry is recognised by the tick alone.
+})`; `open` does). Every runtime records at its start the release it runs
+(`executable.ext.release` in its record): the package version and a digest of
+every runtime module it ships (`src/` and `contracts/`, by path and content).
+A runtime of an earlier release proves itself `healthy` but records an earlier
+version than this package's, this version with an entry module or modules of
+other content, or no release at all (releases up to the one that began
+recording it); or it refuses a tick that names a view, as releases up to
+0.2.0-alpha.11 do (their `POST` payload has exactly one member). Versions are
+ordered as semantic versions, a prerelease below its release
+(`0.2.0-alpha.11` < `0.2.0-alpha.12` < `0.2.0`; `releaseStanding` in
+`lifecycle.mjs`). It is stopped as `stop` stops it and the installed entry is
+started, detached, under the consent already recorded; the answer carries
+`restarted: "outdated"`, and `open` shows `service: restarted (outdated)`. A
+runtime that records a later version, or another version that cannot be
+ordered against the installed one, is never
+replaced by this release, nor asked for the tick: the answer is
+`service-other-release` (`open`: `service-unavailable`, with the next step
+`atelier obsidian service stop`, then open again). So two installations used
+on one workspace, a global and a project-local one for example, do not replace
+each other's runtime on every open; within one version, other content is
+replaced. The same version string is compared by content even when it cannot
+be ordered (a fork's `dev`, say), so the runtime `open` just started is always
+this release and "service stop, then open" cannot loop. A listener of now refuses a tick only when it names another runtime,
+which happens when a concurrent command replaced the runtime between the check
+and the request: the record is read again, the runtime that took its place is
+asked, and nothing is restarted. A `busy` runtime is not stopped, and anything
+that is not a proven runtime of this workspace is never stopped. Without the
+start options the runtime is only reported (`service-outdated`).
 
 The service itself refuses to start beside a runtime of the same workspace
 that proves itself, and ends cleanly when its record no longer names it. Two
@@ -304,7 +321,7 @@ step. Only `current` is success:
 | `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability; below the minimum version, or a version that cannot be read (reason `no-vault-open` when the app runs with no vault open and its command line answers nothing else) |
 | `launch-failed` | the vault could not be added to the app's list (a typed reason names why), the operating system refused, or the app never answered for this vault |
 | `indexing` | the app answers for this vault and has not finished reading it |
-| `service-unavailable` | the service could not be started or is not provably ours (`occupied`, no consent yet, a start that never proved ownership) |
+| `service-unavailable` | the service could not be started or is not provably ours (`occupied`, no consent yet, a start that never proved ownership), or it runs a later release than this command (`service-other-release`) |
 | `busy` | the service is ours and in a long tick |
 | `disabled` | the integration is off or not declared |
 

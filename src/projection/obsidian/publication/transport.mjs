@@ -6,7 +6,7 @@ import { obsidianUserDataDir, readObsidianSettings, vaultRoute } from './vault-l
 
 // Editor coordination adapter.
 //
-//   adapter.probe({ vaultRoot })  -> { state: 'coordinated' | 'absent' | 'uncoordinated', reason }
+//   adapter.probe({ vaultRoot })  -> { state: 'coordinated' | 'absent' | 'uncoordinated', reason, code? }
 //   adapter.inspect(payload)      -> reply          read-only, may retry
 //   adapter.collect(payload)      -> reply          read-only, may retry
 //   adapter.publish(payload)      -> reply          sent at most once
@@ -24,6 +24,16 @@ export class TransportTimeout extends Error {
     super(message)
     this.name = 'TransportTimeout'
     this.code = 'transport-timeout'
+  }
+}
+
+// A call that no route can take: the app's list says no call reaches only
+// this vault. `code` says why; the call is never made.
+export class RouteRefusal extends Error {
+  constructor(code, message) {
+    super(`${code}: ${message}`)
+    this.name = 'RouteRefusal'
+    this.code = code
   }
 }
 
@@ -73,7 +83,8 @@ export function createEditorAdapter({ call, processProbe, kind = 'custom', quali
     // Path selection. `absent` is returned only when the process probe says,
     // positively, that no Obsidian is running. A running or unknowable app
     // that does not answer for this exact vault is `uncoordinated`, and so is
-    // any app while this adapter's qualification checked no version.
+    // any app while this adapter's qualification checked no version. When no
+    // call could be routed to only this vault, `code` names the route's refusal.
     probe: ({ vaultRoot }) => serialized(async () => {
       let processes
       try { processes = await processProbe() } catch { processes = 'unknown' }
@@ -85,7 +96,7 @@ export function createEditorAdapter({ call, processProbe, kind = 'custom', quali
         if (['inspected', 'path-unsafe'].includes(reply.status) && reply.vaultBasePath === vaultRoot) return { state: 'coordinated', reason: 'the app answered for this vault' }
         return { state: 'uncoordinated', reason: reply.status === 'vault-mismatch' ? 'the app answered for another vault' : `the app answered ${reply.status}` }
       } catch (error) {
-        return { state: 'uncoordinated', reason: `an Obsidian process may be running and the bridge did not answer: ${String(error.message || error).slice(0, 200)}` }
+        return { state: 'uncoordinated', ...(error instanceof RouteRefusal ? { code: error.code } : {}), reason: `an Obsidian process may be running and the bridge did not answer: ${String(error.message || error).slice(0, 200)}` }
       }
     }),
   }
@@ -133,7 +144,10 @@ export function routedCall(route, neutral = NEUTRAL_DIRECTORY) {
 // the app lists this vault as open, a call therefore runs in its folder, or,
 // when a vault listed at a folder above it would take a call run there, names
 // its id; when neither reaches only this vault, no call is made (the error
-// says `vault-inside-another-vault`). Otherwise a call runs in a directory
+// says `vault-inside-another-vault`), nor when the app has the vault open in
+// more than one window, one per entry of its list that names this folder
+// (`vault-open-in-several-windows`): a call would coordinate with one of them
+// only. Otherwise a call runs in a directory
 // that is no vault and names none: a closed vault is never reopened by
 // maintenance, no other vault is reached through this one's folder, and the
 // working directory of whoever started the service never picks a vault. The
@@ -143,7 +157,8 @@ export function publicationRoute({ env = process.env, platform = process.platfor
   return (payload) => {
     const settings = readObsidianSettings({ userDataDir })
     const route = settings.ok ? vaultRoute({ vaults: settings.vaults, vaultRoot: payload.vaultRoot, open: true }) : { how: 'unlisted' }
-    if (route.how === 'ambiguous') throw new Error('vault-inside-another-vault: Obsidian lists a vault at a folder above this one, and no call reaches only this vault; no call was made')
+    if (route.how === 'ambiguous') throw new RouteRefusal('vault-inside-another-vault', 'Obsidian lists a vault at a folder above this one, and no call reaches only this vault; no call was made')
+    if (route.how === 'duplicated') throw new RouteRefusal('vault-open-in-several-windows', `Obsidian has this vault open in ${route.entries.length} windows (${route.entries.map((entry) => entry.id).join(', ')}), and a call reaches one of them only; no call was made`)
     return routedCall(route)
   }
 }

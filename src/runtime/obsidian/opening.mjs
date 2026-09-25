@@ -50,7 +50,7 @@ export const OPENING_OUTCOMES = Object.freeze({
   indexing: { summary: 'the app answered for this vault but has not finished reading it', next: 'wait for Obsidian to finish indexing, then open again' },
   'publisher-conflict': { summary: 'another publisher or an uncoordinated editor holds this vault', next: 'close the other publisher or let it finish; it is retried automatically' },
   'launch-failed': { summary: 'the operating system or the app did not open this vault', next: 'run `obsidian open` again; if it fails the same way, start Obsidian with any vault open and open again' },
-  'service-unavailable': { summary: 'the maintenance service of this workspace could not be started or reached as ours', next: 'see `obsidian service status`' },
+  'service-unavailable': { summary: 'the maintenance service of this workspace could not be started or reached as ours, or runs a later release than this command', next: 'see `obsidian service status`' },
   busy: { summary: 'the maintenance service runs but is in a long tick and did not answer in time', next: 'run `obsidian open` again in a moment; nothing was stopped or restarted' },
   disabled: { summary: 'the Obsidian integration is not enabled for this project, or this view is not configured', next: 'enable it in the project configuration' },
 })
@@ -101,6 +101,8 @@ export const REASON_NEXT = Object.freeze({
   'registration-not-verified': 'Obsidian answered, but its vault list does not show this view\'s vault; quit Obsidian and open again',
   'restarted-service-in-its-first-tick': 'the maintenance service ran an earlier release and was restarted on the installed one, which is still in its first tick; run `obsidian open` again in a moment',
   'service-outdated': 'the maintenance service runs an earlier release of Atelier that could not be replaced; run `atelier obsidian service stop`, then open again',
+  'service-other-release': 'the maintenance service runs a later release of Atelier than this command, which never replaces a later release by itself; run `atelier obsidian service stop`, then open again, or open with the later release',
+  'vault-open-in-several-windows': 'Obsidian\'s vault list marks this view\'s folder open under more than one entry (in another letter case, or through a link), so it may hold the vault in more than one window, and a publication coordinates with one window only; remove the extra entries from Obsidian\'s vault list (Obsidian keeps the last window it closed marked open, so closing windows does not clear this), then open again',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 
@@ -130,8 +132,9 @@ export const OPENING_PRIMITIVES = Object.freeze({
   // Whether the app may be shown this vault at all.
   appQualifies: (qualification) => qualification.outcome === 'qualified',
   // Whether a view that is not current was kept from publication by the app: then making the app hold the vault
-  // and asking for the view again can make it current.
-  keptByApp: (view) => ['publisher-conflict', 'stale-readable', 'not-prepared'].includes(view.outcome) && ['editor-uncoordinated', 'app-version-unsupported'].includes(view.reason),
+  // and asking for the view again can make it current. A vault open in several windows is asked for again once one
+  // window is left; while more are open, open names them instead.
+  keptByApp: (view) => ['publisher-conflict', 'stale-readable', 'not-prepared'].includes(view.outcome) && ['editor-uncoordinated', 'vault-open-in-several-windows', 'app-version-unsupported'].includes(view.reason),
 })
 
 const segment = (identifier) => identifier.replaceAll(':', '_')
@@ -384,6 +387,9 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   if (!known.ok) return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
   const registration = { how: known.how }
   const route = vaultRoute({ vaults: known.vaults, vaultRoot })
+  // Open in several windows, one per entry of the list that names its folder: each holds the vault, and a publication
+  // coordinates with one only. Nothing is launched; the entries are named.
+  if (route.how === 'duplicated') return finish('publisher-conflict', { ...common, reason: 'vault-open-in-several-windows', duplicates: route.entries, app: app(before), registration })
   if (route.how !== 'folder' && route.how !== 'id') return finish('launch-failed', { ...common, reason: route.how === 'ambiguous' ? 'vault-inside-another-vault' : 'registration-not-verified', app: app(before), registration })
 
   // 5. Launch, then wait, bounded, for the app to answer for exactly this vault.
