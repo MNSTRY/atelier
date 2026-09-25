@@ -71,6 +71,17 @@ async function projectBeside(app) {
 
 const { vaultRoute } = await import('../src/projection/obsidian/publication/vault-list.mjs')
 
+// The app's own list, asked again while it does not answer, for at most `withinMs`: right after a new vault window
+// opens, a command-line call can wait out its timeout once.
+async function listedWithin(registry, { withinMs = 60000 } = {}) {
+  const until = Date.now() + withinMs
+  for (;;) {
+    const listed = await registry.listThroughApp()
+    if (listed.answered || Date.now() >= until) return listed
+    await new Promise((resolve) => { setTimeout(resolve, 1000) })
+  }
+}
+
 async function journalModes(dataRoot) {
   const { createRecoveryStore, journalDetail, listJournals } = await import('../src/projection/obsidian/recovery/index.mjs')
   const [workspaceId] = fs.readdirSync(path.join(dataRoot, 'obsidian'))
@@ -100,14 +111,14 @@ test('real isolated Obsidian: open adds the view\'s vault and publishes, with th
         const { store, modes } = await journalModes(world.dataRoot)
         t.diagnostic(`publications: ${JSON.stringify(modes)}`)
         assert.ok(modes.length >= 1 && modes.every((mode) => mode === 'in-app'), 'every publication ran through the app; nothing was written beside a running app')
-        const listed = await world.registry.listThroughApp()
+        const listed = await listedWithin(world.registry)
         assert.equal(listed.answered, true)
         const ours = Object.values(listed.vaults).filter((entry) => fs.realpathSync(entry.path) === store.vaultRoot)
         assert.equal(ours.length, 1, 'the app lists the vault once')
         assert.ok(Object.hasOwn(listed.vaults, unrelated), 'the unrelated vault stays in the app\'s list')
         assert.equal(listed.vaults[unrelated].open, true, 'the unrelated vault\'s window stayed open: the view\'s vault opened in a new window')
         const route = vaultRoute({ vaults: listed.vaults, vaultRoot: store.vaultRoot })
-        assert.deepEqual(route, { how: 'folder', cwd: store.vaultRoot })
+        assert.equal(route.how, 'id', JSON.stringify(route))
         assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route }), { answered: true, indexReady: true })
         assert.equal(fs.readdirSync(app.userDataDir).some((name) => name.includes('atelier-backup')), false, 'the running app\'s settings file was not written by Atelier')
         assert.equal(opened.readBack.intact, true)
@@ -167,7 +178,7 @@ test('real isolated Obsidian: open adds the view\'s vault and publishes, with th
         const opened = await world.run(['open', '--consent-actor', 'real-app-suite'])
         t.diagnostic(`open answered ${opened.outcome} (${opened.reason}) in ${Date.now() - started} ms; registration ${JSON.stringify(opened.registration ?? null)}`)
         assert.deepEqual([opened.outcome, opened.ok, opened.launched, opened.registration?.how], ['current', true, true, 'listed'], JSON.stringify(opened, null, 2))
-        const listed = await world.registry.listThroughApp()
+        const listed = await listedWithin(world.registry)
         assert.equal(listed.answered, true)
         const route = vaultRoute({ vaults: listed.vaults, vaultRoot })
         assert.deepEqual(route, { how: 'id', id: ours })

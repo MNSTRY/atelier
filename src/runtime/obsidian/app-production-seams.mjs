@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
+import { realPathAsStored } from '../../project/private-state.mjs'
 import { readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
 import { registerVaultInObsidianSettings } from './app-registration.mjs'
 
@@ -86,10 +87,10 @@ export function createProductionAppProbe({ platform = process.platform, env = pr
     // Whether the app answers for exactly this vault and has finished reading it. Asked where `route` (a
     // `vaultRoute` of the app's list) says: from inside the vault's folder, or naming its id, so the app answers in
     // that vault's window whichever window has focus, and opens it when it is known and closed. Without a route that
-    // reaches only this vault nothing is asked. Both sides are compared by real path.
+    // reaches only this vault nothing is asked. Both sides are compared by real path, in the stored spelling.
     vaultState({ vaultRoot, route }) {
       let target
-      try { target = fs.realpathSync(vaultRoot) } catch { return Promise.resolve({ answered: false, indexReady: false }) }
+      try { target = realPathAsStored(vaultRoot) } catch { return Promise.resolve({ answered: false, indexReady: false }) }
       if (route?.how !== 'folder' && route?.how !== 'id') return Promise.resolve({ answered: false, indexReady: false })
       const where = routedCall(route, workingDirectory)
       return new Promise((resolve) => {
@@ -105,8 +106,10 @@ export function createProductionAppProbe({ platform = process.platform, env = pr
 }
 
 // The fixed scripts the app runs for `open`. The only variable input is a JSON
-// payload that travels base64-encoded, so a path never becomes code.
-const VAULT_STATE_CODE = "(()=>{let p=app.vault.adapter.basePath;try{p=require('fs').realpathSync(p)}catch(e){}return JSON.stringify({basePath:p,ready:app.metadataCache.initialized===true})})()"
+// payload that travels base64-encoded, so a path never becomes code. The app's
+// folder is taken as the file system stores it, as the target is and as the
+// bridge takes it, so a vault the app lists under another letter case answers.
+const VAULT_STATE_CODE = "(()=>{let p=app.vault.adapter.basePath;try{const f=require('fs');p=process.platform!=='win32'&&f.realpathSync.native?f.realpathSync.native(p):f.realpathSync(p)}catch(e){}return JSON.stringify({basePath:p,ready:app.metadataCache.initialized===true})})()"
 const VAULT_LIST_CODE = "(()=>JSON.stringify({vaults:require('electron').ipcRenderer.sendSync('vault-list')}))()"
 // `vault-open` with `false` adds an existing folder to the app's vault list (the app writes its own file) and opens
 // it in a window; it answers true, or a message. With `true` it would create a new folder, which is never wanted.

@@ -321,12 +321,20 @@ The maintenance service can also be managed on its own:
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
 the earlier release. `open` replaces it: when the service of this workspace
-proves itself Atelier's own but runs another entry module than the installed
-one, or refuses a tick that names a view as releases up to 0.2.0-alpha.11 do,
+proves itself Atelier's own but runs an earlier release than the installed one
+(its record names the release it runs: the package version and a digest of
+its modules; an earlier version, the same version with other modules, or no
+release named), or refuses a tick that names a view as releases up to
+0.2.0-alpha.11 do,
 `open` stops it as `service stop` would and starts the installed release under
 the consent already recorded, and says `service: restarted (outdated)`. A
-service in a long tick is not stopped (`open` answers `busy`), and a listener
-that does not prove itself this workspace's service is never touched.
+service of a later release is never replaced by an earlier one, so two
+installations used on one workspace (a global and a project-local one, say)
+do not replace each other's service on every open: `open` answers
+`service-unavailable` / `service-other-release`; run `atelier obsidian service
+stop`, then open again, or open with the later release. A service in a long
+tick is not stopped (`open` answers `busy`), and a listener that does not
+prove itself this workspace's service is never touched.
 
 The first time Obsidian opens a view's vault it asks "Do you trust the author
 of this vault?", because every vault Atelier publishes carries Atelier's own
@@ -419,6 +427,19 @@ remove that vault from Obsidian's vault list, or keep Atelier's data root
 outside that folder. A view's vault that Obsidian lists already, below such a
 vault, is reached by its id instead (see "Which window answers" in
 [Known limits](#known-limits)).
+
+Obsidian can list one folder more than once, under another letter case or
+through a link, and then open it in one window per entry. Each of those
+windows holds the view's vault, and a publication coordinates with one window
+only, so none is made: the view reports `publisher-conflict` with reason
+`vault-open-in-several-windows`, and `open` answers the same, names the
+entries (`open in Obsidian as: …`; `duplicates` in JSON) and launches nothing.
+Remove the extra entries from Obsidian's vault list and open again. Closing
+the extra windows is not enough: Obsidian keeps the last window it closed
+marked open, so two entries can stay marked open with one window showing, and
+the view stays refused until the list names the folder once.
+While one entry of the folder has a window, `open` reaches only that one and
+never opens another entry of the same folder beside it.
 
 The publisher still writes into a vault only when it can coordinate with every
 Obsidian that may hold it, or when the process table shows, positively, that
@@ -518,8 +539,10 @@ test reported as a pass.
   before, and with a backup beside it; see
   [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list). A
   Flatpak or snap build keeps its list inside its sandbox and never reads that
-  file. Such a build is recognised by its sandbox in HOME or by its
-  installation, and the file is then neither read nor written: `open` answers
+  file. Which build is in use is read from which vault list was written last
+  (every build rewrites its own when a vault window opens or closes), and only
+  when no build wrote one from its installation; for a Flatpak or snap build
+  the file is then neither read nor written: `open` answers
   `obsidian-sandboxed` and says to start Obsidian with any vault open, then
   open again, and adds the vault through the app. On Windows no location is
   known, and `open` adds the vault through the app in the same way.
@@ -531,10 +554,12 @@ test reported as a pass.
   window of the first vault in its list whose folder is the tool's working
   directory or contains it, and otherwise in the vault window that had focus
   last. A vault that takes a call is opened when it is closed. Calls about a
-  vault therefore run inside its folder while no vault listed before it at a
-  folder above it (your home folder, say) would take them there, and name its
-  id otherwise; when that id would name another vault first too (one whose
-  folder has the id as its name), no call is made. Publication calls do this
+  vault therefore name its id; only when that id would name another vault
+  first (one whose folder has the id as its name) do they run inside its
+  folder instead, and not at all when a vault listed before it at a folder
+  above it (your home folder, say) would take them there. The vault root is
+  taken in the spelling the file system stores, so a data root given in
+  another letter case on macOS changes nothing. Publication calls do this
   only while the app's list shows the view's vault open, and run in a
   directory that is no vault otherwise. So maintenance never reopens a vault
   window you closed while Obsidian keeps running, and never reaches another

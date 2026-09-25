@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { acquirePrivateLock, publishPrivateFile } from '../../../project/durable-state.mjs'
 import { checkManagedRoots } from '../../../project/file-class.mjs'
-import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularFileNoFollow, readRegularTextNoFollow } from '../../../project/private-state.mjs'
+import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularFileNoFollow, readRegularTextNoFollow, realPathAsStored } from '../../../project/private-state.mjs'
 
 // Private per-workspace state for one Obsidian view:
 //
@@ -128,12 +128,14 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
   const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(vaultRoot === undefined ? [] : [vaultRoot])], repositoryRoots })
   if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
-  const root = fs.realpathSync(workspaceRoot)
+  // Both as the file system stores them: the vault root is what the app is told, and what it compares its own
+  // working-directory spelling with.
+  const root = realPathAsStored(workspaceRoot)
   const privateDir = (...parts) => ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, ...parts), label: 'Obsidian publication state' })
   const requestedVault = vaultRoot ?? path.join(root, 'vaults', segment(scopeId))
   // A vault this store places itself is private to this user from the start: it will hold the plugin's bearer.
   fs.mkdirSync(requestedVault, { recursive: true, ...(vaultRoot === undefined ? { mode: 0o700 } : {}) })
-  const vault = fs.realpathSync(requestedVault)
+  const vault = realPathAsStored(requestedVault)
   const inside = (parent, child) => { const relative = path.relative(parent, child); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
   for (const area of ['state', 'recovery', 'staging']) {
     if (inside(path.join(root, area), vault) || inside(vault, path.join(root, area))) throw new TypeError('the vault may not overlap private publication state')

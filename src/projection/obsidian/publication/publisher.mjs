@@ -291,9 +291,10 @@ export async function publishView(options = {}) {
     }
     if ((pointer?.generationId ?? null) !== expectedGeneration) refuse('generation-mismatch', 'the committed generation is not the one this publication expects', { committed: pointer?.generationId ?? null })
 
-    // Path selection.
+    // Path selection. An app with this vault open in several windows is refused as such: publishing through one of
+    // them would leave the others uncoordinated.
     const probe = await adapter.probe({ vaultRoot: store.vaultRoot })
-    if (probe.state !== 'coordinated' && probe.state !== 'absent') refuse('editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
+    if (probe.state !== 'coordinated' && probe.state !== 'absent') refuse(probe.code === 'vault-open-in-several-windows' ? probe.code : 'editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
     const mode = probe.state === 'coordinated' ? 'in-app' : 'direct'
     const channel = mode === 'in-app' ? adapter : createDirectAdapter({ crashSeam: seam })
 

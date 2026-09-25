@@ -102,13 +102,14 @@ const { loadContributions } = await import('../src/runtime/obsidian/contribution
 const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await import('../src/runtime/obsidian/engine.mjs')
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
-const { LIFECYCLE_PRIMITIVES, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
+const { LIFECYCLE_PRIMITIVES, releaseStanding, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
 const { ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
-const { readServiceRecord, readServiceSettings, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
+const { readServiceRecord, readServiceSettings, releaseIdentity, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
+const { createRecoveryStore } = await import('../src/projection/obsidian/recovery/store.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { maintenanceNoticeFor } = await import('../src/runtime/obsidian/sync-notice.mjs')
@@ -1111,6 +1112,45 @@ test('a vault Obsidian lists at a folder above the view\'s vault never takes its
   assert.deepEqual([ambiguous.json.outcome, ambiguous.json.reason, clashing.launches, clashing.reached], ['launch-failed', 'vault-inside-another-vault', [], []])
 })
 
+const DUPLICATED_PUBLICATION = { state: 'refused', refusal: { code: 'vault-open-in-several-windows', message: 'stub' }, notes: [], retainedEdits: [], lateWriters: [] }
+
+test('a vault the app has open in several windows, one per entry of its list that names its folder, is not opened through one of them: open answers publisher-conflict, names the entries and launches nothing; with one window left, that window is the one reached', needsExchange, async (t) => {
+  const OURS = 'cccccccccccccccc'
+  const OTHER = 'dddddddddddddddd'
+  // Another spelling of the view's folder: with a trailing separator.
+  const twice = (world, otherOpen = true) => ({ [OURS]: { path: world.vault(), ts: 1, open: true }, [OTHER]: { path: `${world.vault()}${path.sep}`, ts: 2, open: otherOpen } })
+  const named = (world) => [{ id: OURS, path: world.vault() }, { id: OTHER, path: `${world.vault()}${path.sep}` }]
+
+  // The publication was refused as such (the publisher's own case is in obsidian-recovery): a publisher conflict.
+  const refused = makeWorld(t)
+  await refused.service({ engineOptions: { seams: { publishView: async () => DUPLICATED_PUBLICATION } } })
+  const app = fakeApp({ running: true, vaults: twice(refused) })
+  const answer = await refused.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([answer.json.outcome, answer.json.reason, answer.json.next, answer.json.duplicates], ['publisher-conflict', 'vault-open-in-several-windows', REASON_NEXT['vault-open-in-several-windows'], named(refused)], JSON.stringify(answer.json))
+  assert.deepEqual([app.launches, app.registrations, app.reached], [[], [], []], 'nothing is launched, added or asked')
+  // The app keeps the last window it closed marked open, so two entries can be marked open with one window showing:
+  // the step that always clears it is removing the extra entries; closing windows is not offered as the remedy.
+  assert.match(answer.json.next, /remove the extra entries from Obsidian's vault list/)
+  assert.doesNotMatch(answer.json.next, /close the extra windows/)
+  const shown = await refused.run(['open', '--consent-actor', CONSENT.actor], { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.ok(`${shown.stdout}\n${shown.stderr}`.split('\n').includes(`open in Obsidian as: ${named(refused).map((entry) => entry.path).join(', ')}`), shown.stderr)
+
+  // A current view whose vault the app holds in two windows: the same answer, before anything is launched.
+  const current = makeWorld(t)
+  const later = fakeApp({ running: false })
+  await serviceBehindApp(current, later)
+  Object.assign(later.state, { running: true, vaults: twice(current) })
+  const held = await current.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...later }, open: FAST_APP })
+  assert.deepEqual([held.json.outcome, held.json.reason, held.json.duplicates, later.launches, later.reached], ['publisher-conflict', 'vault-open-in-several-windows', named(current), [], []], JSON.stringify(held.json))
+
+  // One window left, below a closed entry of the same folder: that window is launched and reached, never the closed entry.
+  const one = makeWorld(t)
+  const single = fakeApp({ running: true, vaults: { [OTHER]: { path: `${one.vault()}${path.sep}`, ts: 2 }, [OURS]: { path: one.vault(), ts: 1, open: true } } })
+  await serviceBehindApp(one, single)
+  const opened = await one.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...single }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, single.launches, [...new Set(single.reached)]], ['current', [one.vault()], [OURS]], JSON.stringify(opened.json))
+})
+
 test('a view the app kept, with no app answering and none known to run (an unknown process table), keeps its own outcome and advice; nothing is added or launched', async (t) => {
   const world = makeWorld(t)
   await world.service({ engineOptions: { seams: { publishView: async () => UNCOORDINATED_PUBLICATION } } })
@@ -1300,6 +1340,29 @@ test('open, with the app running and no vault open, leaves a view published whil
   assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.launched, opened.json.freshness?.state], ['app-version-unsupported', 'no-vault-open', false, 'current'], JSON.stringify(opened.json).slice(0, 400))
   const status = await world.run(['status', '--json'])
   assert.deepEqual([status.json.scopes[0].outcome, status.json.scopes[0].reason], ['current', 'verified-by-read-back'])
+})
+
+// Through a running service: a tick asked for one view over the listener reaches the engine, which drops what the
+// service's adapter factory remembered. `hand` is what the service is given for that factory.
+async function assertServiceAsksTheAppAgain(t, hand = (factory) => factory) {
+  const world = makeWorld(t)
+  let observation = { installed: true, cli: true, running: true, version: null, noVaultOpen: true }
+  const adapterFactory = createQualifiedAdapterFactory({ appProbe: { inspectSync: () => observation }, createAdapter: absentAdapter })
+  await world.service({ adapterFactory: hand(adapterFactory) })
+  assert.equal((await world.run(['status', '--json'])).json.scopes[0].reason, 'app-version-unsupported')
+  // The app now has a vault open. The refusal above is remembered for ten seconds; the tick asked for does not reuse it.
+  observation = { installed: true, cli: true, running: true, version: '1.13.7' }
+  const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE }
+  const asked = await requestServiceTick({ ...lifecycle, scopeId: FULL_SCOPE.scopeId })
+  assert.deepEqual([asked.tick?.scopes?.[0]?.state, adapterFactory.lastQualification().outcome], ['current', 'qualified'], JSON.stringify(asked.tick).slice(0, 300))
+}
+
+test('through the running service, a tick asked for a view makes the adapter factory ask the app again', needsExchange, async (t) => {
+  await assertServiceAsksTheAppAgain(t)
+})
+
+test('mutation control: a service that hands the engine a wrapper of its adapter factory without `forget` reuses the refusal', needsExchange, async (t) => {
+  await assert.rejects(assertServiceAsksTheAppAgain(t, (factory) => (input) => factory(input)), assert.AssertionError)
 })
 
 // ---------------------------------------------------------------------------
@@ -1590,20 +1653,113 @@ test('a Flatpak or snap build is recognised by its sandbox for this account or i
   assert.equal(build('linux', { HOME: 'relative' }), null)
 })
 
+// Whether this file system folds letter case, as macOS does by default: a folder can then be spelled in another case
+// than the one it is stored in, and the operating system reports a working directory in the stored one.
+const CASE_FOLDING = (() => {
+  try {
+    const probe = fs.mkdtempSync(path.join(TMP, 'atelier-Case-'))
+    try { return probe !== probe.toLowerCase() && fs.existsSync(probe.toLowerCase()) } finally { fs.rmSync(probe, { recursive: true, force: true }) }
+  } catch { return false }
+})()
+const needsCaseFolding = CASE_FOLDING && process.platform !== 'win32' ? {} : { skip: 'this file system tells letter case apart, or it is Windows: a folder has one spelling here' }
+
+test('a vault root spelled in another letter case than it is stored in is taken as stored: the store, the enclosing check, routing and the settings file see what the app sees', needsCaseFolding, (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-Spelling-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const home = path.join(dir, 'Home')
+  const workspaceRoot = path.join(home, 'Data', 'Workspace')
+  fs.mkdirSync(workspaceRoot, { recursive: true })
+  // The store derives the vault root in the stored spelling, whichever spelling it was given.
+  const store = createRecoveryStore({ workspaceRoot: workspaceRoot.toLowerCase(), workspaceId: WORKSPACE_ID, scopeId: FULL_SCOPE.scopeId, repositoryRoots: [] })
+  assert.equal(store.vaultRoot, path.join(workspaceRoot, 'vaults', FULL_SCOPE.scopeId))
+  const spelled = store.vaultRoot.toLowerCase()
+  // A vault listed above it in the stored spelling contains it, and the vault is reached by its id, not by a working
+  // directory that the operating system would report in the stored spelling.
+  const above = { aaaaaaaaaaaaaaaa: { path: home, ts: 1 } }
+  assert.deepEqual(enclosingVaults({ vaults: above, vaultRoot: spelled }).map((entry) => entry.id), ['aaaaaaaaaaaaaaaa'])
+  assert.deepEqual(vaultRoute({ vaults: { ...above, cccccccccccccccc: { path: spelled, ts: 2 } }, vaultRoot: spelled }), { how: 'id', id: 'cccccccccccccccc' })
+  // The settings file names the stored spelling.
+  const userDataDir = path.join(dir, 'user-data')
+  fs.mkdirSync(userDataDir)
+  fs.writeFileSync(path.join(userDataDir, OBSIDIAN_SETTINGS_FILE), JSON.stringify({ vaults: {} }))
+  const written = registerVaultInObsidianSettings({ userDataDir, vaultRoot: spelled, processProbe: () => 'absent', now: () => START })
+  assert.deepEqual([written.ok, written.entry.path], [true, store.vaultRoot], JSON.stringify(written))
+})
+
+test('open\'s check that the app answers for the vault takes the app\'s folder as the file system stores it, as the bridge does: a vault the app holds under another letter case or through a link answers, another folder does not', needsCaseFolding.skip === undefined ? needsAppIsolation : needsCaseFolding, (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-Held-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const vaultRoot = path.join(dir, 'Stand', 'Vaults', 'scope-whole')
+  fs.mkdirSync(vaultRoot, { recursive: true })
+  fs.mkdirSync(path.join(dir, 'other'))
+  fs.symlinkSync(path.join(dir, 'Stand', 'Vaults'), path.join(dir, 'linked'))
+  // A stand-in for the command-line tool that runs the code it is given as the app runs it, in a vault the app holds
+  // at HELD, the folder its list names (one added, say, from a data root typed in another letter case).
+  const script = `const vm = require('vm')
+const app = { vault: { adapter: { basePath: process.env.HELD } }, metadataCache: { initialized: true } }
+console.log('=> ' + vm.runInNewContext(process.argv.at(-1).slice('code='.length), { app, require, process }))\n`
+  fs.writeFileSync(path.join(vaultRoot, 'eval'), script)
+  fs.writeFileSync(path.join(dir, 'vault=cccccccccccccccc'), script)
+  const held = { stored: vaultRoot, otherCase: path.join(dir, 'stand', 'vaults', 'scope-whole'), throughLink: path.join(dir, 'linked', 'scope-whole'), another: path.join(dir, 'other') }
+  const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
+  const child = `const { createProductionAppProbe } = await import(${JSON.stringify(seams)})
+const vaultRoot = ${JSON.stringify(vaultRoot)}
+const out = {}
+for (const [name, where] of Object.entries(${JSON.stringify(held)})) {
+  const probe = createProductionAppProbe({ cliPath: process.execPath, workingDirectory: ${JSON.stringify(dir)}, env: { ...process.env, HELD: where } })
+  out[name] = [await probe.vaultState({ vaultRoot, route: { how: 'folder', cwd: vaultRoot } }), await probe.vaultState({ vaultRoot, route: { how: 'id', id: 'cccccccccccccccc' } })]
+}
+process.stdout.write(JSON.stringify(out))`
+  const run = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', child], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 120000, env: privateHomeEnv(dir) })
+  assert.equal(run.status, 0, run.stderr)
+  const [yes, no] = [{ answered: true, indexReady: true }, { answered: false, indexReady: false }]
+  assert.deepEqual(JSON.parse(run.stdout), { stored: [yes, yes], otherCase: [yes, yes], throughLink: [yes, yes], another: [no, no] })
+})
+
+test('a Flatpak or snap build is told from a native one by whose vault list was written last; installation traces decide only when no build wrote one', () => {
+  // Linux paths under a POSIX HOME, whatever platform runs this: what exists, and when a list was written, from a table.
+  const lists = new Map()
+  const traces = new Set()
+  const build = (env = { HOME: '/home/someone' }) => obsidianSandboxedBuild({ platform: 'linux', env, exists: (candidate) => traces.has(candidate) || lists.has(candidate), modified: (candidate) => lists.get(candidate) ?? null })
+  const NATIVE = '/home/someone/.config/obsidian/obsidian.json'
+  const FLATPAK = '/home/someone/.var/app/md.obsidian.Obsidian/config/obsidian/obsidian.json'
+  const SNAP = '/home/someone/snap/obsidian/current/.config/obsidian/obsidian.json'
+  // The data of an uninstalled Flatpak stays behind; the native build wrote its list since.
+  traces.add('/home/someone/.var/app/md.obsidian.Obsidian')
+  lists.set(FLATPAK, 1000)
+  lists.set(NATIVE, 2000)
+  assert.equal(build(), null)
+  lists.set(FLATPAK, 3000)
+  assert.equal(build(), 'flatpak')
+  lists.set(SNAP, 4000)
+  assert.equal(build(), 'snap')
+  // XDG_CONFIG_HOME moves the native list.
+  lists.set('/cfg/obsidian/obsidian.json', 5000)
+  assert.equal(build({ HOME: '/home/someone', XDG_CONFIG_HOME: '/cfg' }), null)
+  // No list anywhere: the installation decides, a snap mounted under /var/lib/snapd included.
+  lists.clear()
+  traces.clear()
+  traces.add('/var/lib/snapd/snap/obsidian')
+  assert.equal(build(), 'snap')
+})
+
 test('a listed folder is compared as written first, and its real path is read only when its last component is the vault root\'s: no other vault is waited on', (t) => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-lexical-')))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const vaultRoot = path.join(dir, 'vaults', 'scope-whole')
   fs.mkdirSync(vaultRoot, { recursive: true })
   const others = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`${String(index).padStart(16, 'a')}`, { path: path.join(dir, 'elsewhere', `vault-${index}`), ts: 1 }]))
+  // Both Node's own resolution and the one that reads the spelling from the disk (`.native`) are counted.
   const asked = []
   const realpath = fs.realpathSync
-  t.mock.method(fs, 'realpathSync', (target, ...rest) => { asked.push(String(target)); return realpath(target, ...rest) })
+  t.after(() => { fs.realpathSync = realpath })
+  const native = (target, ...rest) => { asked.push(String(target)); return realpath.native(target, ...rest) }
+  fs.realpathSync = Object.assign((target, ...rest) => { asked.push(String(target)); return realpath(target, ...rest) }, { native })
   const count = (operation) => { asked.length = 0; const answer = operation(); return { answer, others: asked.filter((target) => target !== vaultRoot).length } }
   const listed = { ...others, cccccccccccccccc: { path: vaultRoot, ts: 2, open: true } }
   assert.deepEqual(count(() => findVaultEntry(listed, vaultRoot)), { answer: { id: 'cccccccccccccccc', path: vaultRoot, open: true }, others: 0 })
   assert.deepEqual(count(() => findVaultEntry(others, vaultRoot)), { answer: null, others: 0 })
-  assert.deepEqual(count(() => vaultRoute({ vaults: listed, vaultRoot, open: true })), { answer: { how: 'folder', cwd: vaultRoot }, others: 0 })
+  assert.deepEqual(count(() => vaultRoute({ vaults: listed, vaultRoot, open: true })), { answer: { how: 'id', id: 'cccccccccccccccc' }, others: 0 })
   assert.deepEqual(count(() => enclosingVaults({ vaults: { ...others, dddddddddddddddd: { path: dir } }, vaultRoot }).map((entry) => entry.id)), { answer: ['dddddddddddddddd'], others: 0 })
   // The vault root reached through a linked parent keeps its last component, and is still found.
   if (process.platform !== 'win32') {
@@ -1676,7 +1832,7 @@ test('the service\'s adapter factory asks the app without blocking, and only whe
   assert.deepEqual([afterFirst, asked], [1, 1], 'nothing to publish, nothing asked')
 })
 
-test('where a call about a vault reaches the app, predicted from the app\'s list as the app routes it: in the vault\'s folder, by its id, or not at all', () => {
+test('where a call about a vault reaches the app, predicted from the app\'s list as the app routes it: by its id, in its folder when the id is not enough, or not at all', () => {
   // The paths need not exist: the list is compared as the app compares it.
   const root = path.join(TMP, 'atelier-route-nowhere')
   const home = path.join(root, 'home')
@@ -1685,27 +1841,59 @@ test('where a call about a vault reaches the app, predicted from the app\'s list
   const ours = { path: vaultRoot, ts: 2, open: true }
   const route = (vaults, options = {}) => vaultRoute({ vaults, vaultRoot, ...options })
   const FOLDER = { how: 'folder', cwd: vaultRoot }
-  assert.deepEqual(route({ [OURS]: ours }), FOLDER)
-  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: ours }), { how: 'id', id: OURS }, 'a vault listed first at a folder above it would take a call run in its folder')
-  assert.deepEqual(route({ [OURS]: ours, aaaaaaaaaaaaaaaa: { path: home, ts: 1 } }), FOLDER, 'listed after it, that vault takes nothing: the first listed vault that is or contains the folder does')
-  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: `${vaultRoot}-old`, ts: 1 }, bbbbbbbbbbbbbbbb: { path: path.join(root, 'ho'), ts: 1 }, [OURS]: ours }), FOLDER, 'a folder whose name only begins the same contains nothing')
-  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: path.parse(vaultRoot).root, ts: 1 }, [OURS]: ours }), FOLDER, 'the app routes no call to a vault at the root of the file system')
+  const ID = { how: 'id', id: OURS }
+  // By its id whenever the id names it first: that does not depend on how a working directory is spelled.
+  assert.deepEqual(route({ [OURS]: ours }), ID)
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: ours }), ID, 'a vault listed first at a folder above it would take a call run in its folder')
+  assert.deepEqual(route({ [OURS]: ours, aaaaaaaaaaaaaaaa: { path: home, ts: 1 } }), ID)
   // The id names another vault first: its folder has the id as its name, in another letter case, and it is listed before.
+  // Then the folder, when the first listed vault that is or contains it is this one.
   const namedLikeIt = { path: path.join(root, OURS.toUpperCase()), ts: 1 }
-  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, dddddddddddddddd: namedLikeIt, [OURS]: ours }), { how: 'ambiguous' })
-  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: ours, dddddddddddddddd: namedLikeIt }), { how: 'id', id: OURS })
-  assert.deepEqual(route({ dddddddddddddddd: namedLikeIt, [OURS]: ours }), FOLDER, 'a name that matches the id matters only when the folder is not enough')
+  assert.deepEqual(route({ dddddddddddddddd: namedLikeIt, [OURS]: ours }), FOLDER)
+  assert.deepEqual(route({ dddddddddddddddd: namedLikeIt, [OURS]: ours, aaaaaaaaaaaaaaaa: { path: home, ts: 1 } }), FOLDER, 'listed after it, the vault above takes nothing')
+  assert.deepEqual(route({ dddddddddddddddd: namedLikeIt, aaaaaaaaaaaaaaaa: { path: `${vaultRoot}-old`, ts: 1 }, bbbbbbbbbbbbbbbb: { path: path.join(root, 'ho'), ts: 1 }, [OURS]: ours }), FOLDER, 'a folder whose name only begins the same contains nothing')
+  assert.deepEqual(route({ dddddddddddddddd: namedLikeIt, aaaaaaaaaaaaaaaa: { path: path.parse(vaultRoot).root, ts: 1 }, [OURS]: ours }), FOLDER, 'the app routes no call to a vault at the root of the file system')
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, dddddddddddddddd: namedLikeIt, [OURS]: ours }), { how: 'ambiguous' }, 'neither the id nor the folder reaches only this vault')
+  assert.deepEqual(route({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: ours, dddddddddddddddd: namedLikeIt }), ID)
   // With `open`, only an entry the app lists open may take a call: a closed vault is never reopened.
   assert.deepEqual(route({ [OURS]: { ...ours, open: false } }, { open: true }), { how: 'unlisted' })
-  assert.deepEqual(route({ [OURS]: { ...ours, open: false } }), FOLDER)
+  assert.deepEqual(route({ [OURS]: { ...ours, open: false } }), ID)
   for (const vaults of [{}, null, [], { [OURS]: { path: 'relative/vault' } }, { aaaaaaaaaaaaaaaa: { path: home } }]) assert.deepEqual(route(vaults), { how: 'unlisted' }, JSON.stringify(vaults))
-  // The vaults that contain it, by real path: any listed above it, whatever their order, and none beside or inside it.
+  // The vaults that contain it: any listed above it, whatever their order, and none beside or inside it.
   const vaults = { [OURS]: ours, aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, bbbbbbbbbbbbbbbb: { path: `${vaultRoot}-old` }, dddddddddddddddd: { path: path.join(vaultRoot, 'inner') }, eeeeeeeeeeeeeeee: { path: path.parse(vaultRoot).root } }
   assert.deepEqual(enclosingVaults({ vaults, vaultRoot }).map((entry) => entry.id), ['aaaaaaaaaaaaaaaa', 'eeeeeeeeeeeeeeee'])
   assert.deepEqual(enclosingVaults({ vaults: { [OURS]: ours }, vaultRoot }), [])
 })
 
-test('a publication call reaches only this vault: in its folder while the app lists it open, by its id when a vault listed above it would take the call there, not at all when the id names another vault first; otherwise in a directory that is no vault', { skip: process.platform === 'win32' && 'no location of the app\'s settings is known on Windows: every call runs in a directory that is no vault' }, async (t) => {
+test('a folder the app lists open more than once, one window per entry, is duplicated: no call reaches every window that holds it, with `open` or without; while one entry has a window, a closed entry of the same folder is never reached, nor found first', (t) => {
+  const OURS = 'cccccccccccccccc'
+  const OTHER = 'dddddddddddddddd'
+  // Another spelling of the same folder on every platform: with a trailing separator. The paths need not exist.
+  const vaultRoot = path.join(TMP, 'atelier-route-twice', 'data', 'vault')
+  const spelled = `${vaultRoot}${path.sep}`
+  const both = { [OURS]: { path: vaultRoot, ts: 1, open: true }, [OTHER]: { path: spelled, ts: 2, open: true } }
+  const duplicated = { how: 'duplicated', entries: [{ id: OURS, path: vaultRoot }, { id: OTHER, path: spelled }] }
+  assert.deepEqual(vaultRoute({ vaults: both, vaultRoot, open: true }), duplicated)
+  assert.deepEqual(vaultRoute({ vaults: both, vaultRoot }), duplicated)
+  // One window: that entry, even below a closed entry of the same folder. None: the first entry, as before.
+  const oneOpen = { [OTHER]: { path: spelled, ts: 2 }, [OURS]: { path: vaultRoot, ts: 1, open: true } }
+  for (const open of [true, false]) assert.deepEqual(vaultRoute({ vaults: oneOpen, vaultRoot, open }), { how: 'id', id: OURS }, `open: ${open}`)
+  assert.deepEqual(findVaultEntry(oneOpen, vaultRoot), { id: OURS, path: vaultRoot, open: true })
+  const closed = { [OTHER]: { path: spelled, ts: 2 }, [OURS]: { path: vaultRoot, ts: 1 } }
+  assert.deepEqual([vaultRoute({ vaults: closed, vaultRoot }), vaultRoute({ vaults: closed, vaultRoot, open: true }), findVaultEntry(closed, vaultRoot)?.id], [{ how: 'id', id: OTHER }, { how: 'unlisted' }, OTHER])
+  // The folder opened by another path, through a link.
+  if (process.platform !== 'win32') {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-twice-')))
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+    const real = path.join(dir, 'vaults', 'scope-whole')
+    fs.mkdirSync(real, { recursive: true })
+    fs.symlinkSync(path.join(dir, 'vaults'), path.join(dir, 'linked'))
+    const linked = path.join(dir, 'linked', 'scope-whole')
+    assert.deepEqual(vaultRoute({ vaults: { [OURS]: { path: real, ts: 1, open: true }, [OTHER]: { path: linked, ts: 2, open: true } }, vaultRoot: real, open: true }), { how: 'duplicated', entries: [{ id: OURS, path: real }, { id: OTHER, path: linked }] })
+  }
+})
+
+test('a publication call reaches only this vault: by its id while the app lists it open, whatever vault is listed above it, and not at all when neither its id nor its folder reaches only it; otherwise in a directory that is no vault', { skip: process.platform === 'win32' && 'no location of the app\'s settings is known on Windows: every call runs in a directory that is no vault' }, async (t) => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-cli-route-')))
   t.after(() => fs.rmSync(home, { recursive: true, force: true }))
   const vaultRoot = path.join(home, 'data', 'vault')
@@ -1721,7 +1909,7 @@ test('a publication call reaches only this vault: in its folder while the app li
   list({ [OURS]: { path: vaultRoot, ts: 2 } })
   assert.deepEqual(route(payload), NOWHERE, 'listed but closed: maintenance never reopens it')
   list({ [OURS]: { path: vaultRoot, ts: 2, open: true } })
-  assert.deepEqual(route(payload), { cwd: vaultRoot, args: [] }, 'listed and open: its window, whichever has focus')
+  assert.deepEqual(route(payload), { cwd: NEUTRAL_DIRECTORY, args: [`vault=${OURS}`] }, 'listed and open: its window by its id, whichever has focus')
   // The home folder as a vault, listed first: a call run in the vault's folder would reach it, and open it when closed.
   list({ aaaaaaaaaaaaaaaa: { path: home, ts: 1 }, [OURS]: { path: vaultRoot, ts: 2, open: true } })
   assert.deepEqual(route(payload), { cwd: NEUTRAL_DIRECTORY, args: [`vault=${OURS}`] })
@@ -1883,22 +2071,35 @@ test('open restarts the owned service when it runs another entry than the instal
   await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
 })
 
-// A runtime of an earlier release, as far as a tick is concerned: the listener of 0.2.0-alpha.11 takes a POST body
-// with exactly one member, the runtime it is meant for, and so refuses a tick that names a view. It claims the
-// installed entry, so its digest tells nothing. Health and stop answer as a service's.
-const EARLIER_RUNTIME = `import http from 'node:http'
-const [port, runtimeId, bearer, identity] = process.argv.slice(2)
-const health = { ...JSON.parse(identity), pid: process.pid }
+// A stand-in for a runtime of this workspace, in a process of its own. Health and stop answer as a service's; a tick
+// answers `{ ok, state: 'ticked', scopes: [] }` when the listener takes it. `mode`:
+//   refuses-views     the listener of 0.2.0-alpha.11: a POST body has exactly one member, the runtime it is meant for,
+//                     so a tick that names a view is refused (409);
+//   current           the listener of now: a tick may name a view;
+//   replaced-on-view  as current, but the first tick that names a view finds that another runtime took this one's
+//                     place just before (this process stands for it): its record now names that runtime, and the
+//                     request, aimed at the one before, is refused (409).
+const STAND_IN_RUNTIME = `import http from 'node:http'
+const [mode, port, first, bearer, identity, next, recordModule, workspaceRoot, workspaceId, nextRecord] = process.argv.slice(2)
+let runtimeId = first
 const send = (response, status, body) => { response.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' }); response.end(JSON.stringify(body)) }
+const takes = (body) => body.runtimeId === runtimeId && Object.keys(body).every((key) => key === 'runtimeId' || (mode !== 'refuses-views' && key === 'scopeId'))
 const server = http.createServer((request, response) => {
   let text = ''
   request.on('data', (chunk) => { text += chunk })
-  request.on('end', () => {
-    if (request.method === 'GET' && request.url === '/health') return send(response, 200, health)
+  request.on('end', async () => {
+    if (request.method === 'GET' && request.url === '/health') return send(response, 200, { ...JSON.parse(identity), runtimeId, pid: process.pid })
     if (request.headers.authorization !== 'Bearer ' + bearer) return send(response, 401, { error: 'bearer-required' })
     let body = null
     try { body = JSON.parse(text) } catch { body = null }
-    if (body === null || Object.keys(body).length !== 1 || body.runtimeId !== runtimeId) return send(response, 409, { error: 'request-names-another-runtime' })
+    if (body === null || typeof body !== 'object') return send(response, 400, { error: 'request-invalid' })
+    if (mode === 'replaced-on-view' && request.url === '/tick' && body.scopeId !== undefined && runtimeId === first) {
+      runtimeId = next
+      const { writeServiceRecord } = await import(recordModule)
+      writeServiceRecord({ workspaceRoot, workspaceId, record: { ...JSON.parse(nextRecord), runtimeId: next, pid: process.pid } })
+      return send(response, 409, { error: 'request-names-another-runtime' })
+    }
+    if (!takes(body)) return send(response, 409, { error: 'request-names-another-runtime' })
     if (request.url === '/tick') return send(response, 200, { ok: true, state: 'ticked', scopes: [] })
     if (request.url === '/stop') { send(response, 202, { runtimeId, pid: process.pid }); server.close(); setTimeout(() => process.exit(0), 20); return }
     send(response, 404, { error: 'unknown-operation' })
@@ -1928,42 +2129,148 @@ test('`plugin on` with the installed entry to start replaces a service of an ear
   await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
 })
 
-test('open restarts an owned service of an earlier release that refuses a tick naming a view, and says so; without the installed entry to start, such a service is only reported', async (t) => {
-  const world = makeWorld(t)
+// The release a record names: this package's by default (`releaseIdentity`, where it exists), or the one given.
+const currentRelease = () => (typeof releaseIdentity === 'function' ? releaseIdentity() : undefined)
+
+// Starts a stand-in runtime of `world`'s workspace that proves itself ours: service settings, the record, the process,
+// and health. Its record names the installed test entry and `release` (none when undefined), or `ext` as given.
+async function standInRuntime(t, world, { mode, release = currentRelease(), ext = release === undefined ? undefined : { release }, next = 'rt-replacing-runtime' }) {
   const port = await freePort()
   const consent = { grantedAt: iso(START), actor: 'first-actor', coverage: 'service' }
   writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent, updatedAt: iso(START) } })
-  const runtimeId = 'rt-earlier-release'
+  const runtimeId = 'rt-stand-in'
   const bearer = randomBytes(32).toString('base64url')
   const installed = { path: fs.realpathSync(TEST_SERVICE_ENTRY), digest: digest(fs.readFileSync(TEST_SERVICE_ENTRY)) }
-  const script = path.join(world.dir, 'earlier-runtime.mjs')
-  fs.writeFileSync(script, EARLIER_RUNTIME)
-  const identity = { schema: HEALTH_SCHEMA, serviceName: serviceNameFor(WORKSPACE_ID), workspaceId: WORKSPACE_ID, runtimeId, host: '127.0.0.1', port, executableDigest: installed.digest, startedAt: iso(START), status: 'running' }
-  const earlier = trackingSpawn(t)(process.execPath, [script, String(port), runtimeId, bearer, JSON.stringify(identity)], { stdio: 'ignore', windowsHide: true })
-  writeServiceRecord({
-    ...world.workspace(),
-    record: {
-      schema: 'atelier-obsidian-service-state/v1', contractVersion: '1.0.0', workspaceId: WORKSPACE_ID, serviceName: serviceNameFor(WORKSPACE_ID), host: '127.0.0.1', port, runtimeId, pid: earlier.pid,
-      executable: installed, stateLocation: path.join(world.workspaceRoot(), 'state'), health: { status: 'healthy', checkedAt: iso(START) }, consent, ext: { bearer },
-    },
-  })
-  await waitFor(async () => (await probeHealth({ host: '127.0.0.1', port, timeoutMs: 1000 })).kind === 'health', { label: 'the earlier runtime to listen' })
+  const record = {
+    schema: 'atelier-obsidian-service-state/v1', contractVersion: '1.0.0', workspaceId: WORKSPACE_ID, serviceName: serviceNameFor(WORKSPACE_ID), host: '127.0.0.1', port, runtimeId,
+    executable: { ...installed, ...(ext === undefined ? {} : { ext }) }, stateLocation: path.join(world.workspaceRoot(), 'state'), health: { status: 'healthy', checkedAt: iso(START) }, consent, ext: { bearer },
+  }
+  const script = path.join(world.dir, `stand-in-${mode}.mjs`)
+  fs.writeFileSync(script, STAND_IN_RUNTIME)
+  const identity = { schema: HEALTH_SCHEMA, serviceName: serviceNameFor(WORKSPACE_ID), workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, executableDigest: installed.digest, startedAt: iso(START), status: 'running' }
+  const recordModule = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/service-record.mjs')).href
+  const child = trackingSpawn(t)(process.execPath, [script, mode, String(port), runtimeId, bearer, JSON.stringify(identity), next, recordModule, world.workspaceRoot(), WORKSPACE_ID, JSON.stringify(record)], { stdio: 'ignore', windowsHide: true })
+  writeServiceRecord({ ...world.workspace(), record: { ...record, pid: child.pid } })
+  await waitFor(async () => (await probeHealth({ host: '127.0.0.1', port, timeoutMs: 1000 })).kind === 'health', { label: 'the stand-in runtime to listen' })
+  return { child, runtimeId, consent, port }
+}
+
+const stopWhateverRuns = async (world, seams) => {
+  const record = readServiceRecord(world.workspace())
+  const stopped = await world.run(['service', 'stop', '--json'], { seams })
+  assert.equal(stopped.json.service.stopped, true, JSON.stringify(stopped.json).slice(0, 300))
+  if (record) await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+}
+
+test('open restarts an owned service of an earlier release that refuses a tick naming a view, and says so; without the installed entry to start, such a service is only reported', async (t) => {
+  const world = makeWorld(t)
+  // Its record names this release: only the refused tick tells it apart.
+  const earlier = await standInRuntime(t, world, { mode: 'refuses-views' })
   const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE }
   assert.equal((await serviceStatus(lifecycle)).state, 'healthy', 'it proves itself ours')
   const reported = await requestServiceTick({ ...lifecycle, scopeId: FULL_SCOPE.scopeId })
-  assert.deepEqual([reported.requested, reported.tick, reported.reason, isAlive(earlier.pid)], [true, null, 'service-outdated', true])
+  assert.deepEqual([reported.requested, reported.tick, reported.reason, isAlive(earlier.child.pid)], [true, null, 'service-outdated', true])
   const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
   const opened = await world.run(['open', '--consent-actor', CONSENT.actor], { seams, open: FAST_APP })
   // The lines of an answer that is not success go to stderr: `not-prepared` where no atomic exchange exists.
   const shown = `${opened.stdout}\n${opened.stderr}`
   assert.ok(shown.split('\n').includes('service: restarted (outdated)'), shown)
-  await waitFor(() => !isAlive(earlier.pid), { label: 'the earlier runtime to end' })
+  await waitFor(() => !isAlive(earlier.child.pid), { label: 'the earlier runtime to end' })
+  assert.notEqual(readServiceRecord(world.workspace()).runtimeId, earlier.runtimeId)
+  assert.deepEqual(readServiceSettings(world.workspace()).consent, earlier.consent, 'under the consent already recorded')
+  await stopWhateverRuns(world, seams)
+})
+
+test('a service whose entry module is the installed one but whose release is another (other modules changed) is replaced by the next open', async (t) => {
+  const world = makeWorld(t)
+  // The listener of now takes the view; only the recorded release differs from this package's.
+  const older = await standInRuntime(t, world, { mode: 'current', release: { version: currentRelease()?.version ?? '0.0.0', digest: `sha256:${'0'.repeat(64)}` } })
+  const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const opened = await world.run(openArgs(), { seams, open: FAST_APP })
+  assert.equal(opened.json.service?.restarted, 'outdated', JSON.stringify(opened.json).slice(0, 500))
+  await waitFor(() => !isAlive(older.child.pid), { label: 'the older runtime to end' })
   const record = readServiceRecord(world.workspace())
-  assert.notEqual(record.runtimeId, runtimeId)
-  assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded')
-  const stopped = await world.run(['service', 'stop', '--json'], { seams })
-  assert.equal(stopped.json.service.stopped, true)
-  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+  assert.deepEqual(record.executable.ext?.release, releaseIdentity(), 'the runtime started in its place records this release')
+  // Opened again, it is this release: nothing is replaced.
+  const again = await world.run(openArgs(), { seams, open: FAST_APP })
+  assert.deepEqual([again.json.service?.restarted, again.json.service?.runtimeId], [undefined, record.runtimeId])
+  await stopWhateverRuns(world, seams)
+})
+
+test('which runtime the installed release replaces: an earlier version, this version with another entry module or other modules, or one that records no release; never a later version, nor one that cannot be ordered', () => {
+  const release = (version, digest = `sha256:${'a'.repeat(64)}`) => ({ version, digest })
+  const other = `sha256:${'0'.repeat(64)}`
+  const installed = { entry: `sha256:${'e'.repeat(64)}`, release: release('0.2.0-alpha.12') }
+  const recording = (ext, digest = installed.entry) => ({ path: '/installed/service-main.mjs', digest, ...(ext === undefined ? {} : { ext }) })
+  const standing = (executable) => releaseStanding(executable, installed)
+  assert.equal(standing(recording({ runner: '/node', release: installed.release })), 'current')
+  // What 0.2.0-alpha.11 and earlier record (no release; no ext at all), earlier versions (a prerelease number is a
+  // number: alpha.9 is before alpha.12), and this version with other content.
+  const outdated = [
+    recording({ runner: '/node' }), recording(undefined), recording({ release: release('0.2.0-alpha.11', installed.release.digest) }), recording({ release: release('0.2.0-alpha.9') }),
+    recording({ release: release('0.1.9') }), recording({ release: release('0.2.0-alpha.12', other) }), recording({ release: installed.release }, other),
+  ]
+  assert.deepEqual(outdated.map(standing), outdated.map(() => 'outdated'))
+  // A later version, whatever its content, or one that cannot be ordered: never replaced by this release.
+  const later = [
+    recording({ release: release('0.2.0-alpha.13', installed.release.digest) }), recording({ release: release('0.2.0') }), recording({ release: release('0.3.0-alpha.1') }, other),
+    recording({ release: release('not a version') }), recording({ release: {} }), recording({ release: 'x' }),
+  ]
+  assert.deepEqual(later.map(standing), later.map(() => 'later'))
+})
+
+test('a version that cannot be ordered, the same on both sides (a fork\'s "dev", say), is compared by content: the runtime open just started is current, and other content is outdated, so "service stop, then open" never loops', () => {
+  const content = `sha256:${'a'.repeat(64)}`
+  const other = `sha256:${'0'.repeat(64)}`
+  const entry = `sha256:${'e'.repeat(64)}`
+  for (const version of ['dev', 'not a version']) {
+    const installed = { entry, release: { version, digest: content } }
+    const recording = (release, digest = entry) => ({ path: '/installed/service-main.mjs', digest, ext: { runner: '/node', release } })
+    assert.equal(releaseStanding(recording({ version, digest: content }), installed), 'current', version)
+    assert.equal(releaseStanding(recording({ version, digest: other }), installed), 'outdated', version)
+    assert.equal(releaseStanding(recording({ version, digest: content }, other), installed), 'outdated', version)
+    // Another version string that cannot be ordered against this one stays a release of its own.
+    assert.equal(releaseStanding(recording({ version: '0.2.0-alpha.12', digest: content }), installed), 'later', version)
+  }
+})
+
+test('a service of a later release than the installed one is neither replaced nor asked by open, which answers service-other-release with its next step; stopped, the next open starts the installed release', async (t) => {
+  const world = makeWorld(t)
+  const later = await standInRuntime(t, world, { mode: 'current', release: { version: '999.0.0', digest: `sha256:${'0'.repeat(64)}` } })
+  const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const opened = await world.run(openArgs(), { seams, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.service?.restarted, opened.json.service?.runtimeId], ['service-unavailable', 'service-other-release', undefined, later.runtimeId], JSON.stringify(opened.json).slice(0, 500))
+  assert.equal(opened.json.next, REASON_NEXT['service-other-release'])
+  assert.match(opened.json.next, /atelier obsidian service stop`, then open again/)
+  assert.deepEqual([isAlive(later.child.pid), readServiceRecord(world.workspace()).runtimeId], [true, later.runtimeId], 'the later runtime still runs, under its own record')
+  // The next step: stopped, the next open starts this release.
+  await stopWhateverRuns(world, seams)
+  const again = await world.run(openArgs(), { seams, open: FAST_APP })
+  assert.notEqual(again.json.reason, 'service-other-release', JSON.stringify(again.json).slice(0, 500))
+  assert.deepEqual(readServiceRecord(world.workspace()).executable.ext?.release, releaseIdentity())
+  await stopWhateverRuns(world, seams)
+})
+
+test('a service whose record names the installed entry module and no release, as 0.2.0-alpha.11 records it, is replaced by the next open', async (t) => {
+  const world = makeWorld(t)
+  const earlier = await standInRuntime(t, world, { mode: 'current', ext: { runner: process.execPath } })
+  const seams = { ...UNREACHABLE_SEAMS, ...fakeApp(), service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const opened = await world.run(openArgs(), { seams, open: FAST_APP })
+  assert.equal(opened.json.service?.restarted, 'outdated', JSON.stringify(opened.json).slice(0, 500))
+  await waitFor(() => !isAlive(earlier.child.pid), { label: 'the earlier runtime to end' })
+  assert.deepEqual(readServiceRecord(world.workspace()).executable.ext?.release, releaseIdentity())
+  await stopWhateverRuns(world, seams)
+})
+
+test('a tick refused because another runtime took the service\'s place just before is asked of that runtime; nothing is stopped or restarted', async (t) => {
+  const world = makeWorld(t)
+  const replaced = await standInRuntime(t, world, { mode: 'replaced-on-view' })
+  const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE }
+  const service = { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) }
+  const asked = await requestServiceTick({ ...lifecycle, scopeId: FULL_SCOPE.scopeId, service })
+  assert.deepEqual([asked.requested, asked.reason, asked.runtimeId, asked.restarted, asked.tick?.state], [true, 'tick-ran', 'rt-replacing-runtime', undefined, 'ticked'], JSON.stringify(asked))
+  assert.equal(isAlive(replaced.child.pid), true, 'the runtime that took its place still runs')
+  await stopWhateverRuns(world, { ...UNREACHABLE_SEAMS, service })
 })
 
 // ---------------------------------------------------------------------------

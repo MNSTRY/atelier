@@ -362,7 +362,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const document = plugin === null ? opened : { ...opened, plugin }
         return {
           exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
-          human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])],
+          human: [`${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []), ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : [])],
         }
       },
 
