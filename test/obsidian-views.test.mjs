@@ -271,6 +271,23 @@ test('a project where `.atelier-local/` is not ignored gets the ignore line in t
   }
 })
 
+test('a file that is not UTF-8 is never rewritten: a byte the diff would not show is never replaced', (t) => {
+  // A .gitignore with a Latin-1 comment (0xE9 is "é" there, and no UTF-8).
+  const world = makeWorld(t, { git: true })
+  const latin1 = Buffer.concat([Buffer.from('# caf'), Buffer.from([0xe9]), Buffer.from('\nnode_modules/\n')])
+  fs.writeFileSync(path.join(world.projectDir, '.gitignore'), latin1)
+  assert.throws(() => planViewAdd(world.loadProject(), { scope: DEFAULT_VIEW }), (error) => error.code === 'gitignore-not-utf8' && error.detail.line === '.atelier-local/')
+  assert.ok(fs.readFileSync(path.join(world.projectDir, '.gitignore')).equals(latin1), 'unchanged, byte for byte')
+  // A project file with a byte that is not UTF-8 inside a string: in no form Atelier writes, and the member is named.
+  const other = makeWorld(t)
+  const bytes = Buffer.from(other.text().replace('"harbor-notes"', '"harbor-notes-X"'), 'utf8')
+  const at = bytes.indexOf(Buffer.from('-X"')) + 1
+  bytes[at] = 0xff
+  fs.writeFileSync(other.configPath, bytes)
+  assert.throws(() => planViewAdd(other.loadProject(), { scope: DEFAULT_VIEW }), (error) => error.code === 'project-config-format-unknown' && error.detail.member[EXT].scopes[0].scopeId === 'everything')
+  assert.ok(fs.readFileSync(other.configPath).equals(bytes), 'unchanged, byte for byte')
+})
+
 test('a diff is one hunk with three lines of context', () => {
   const before = ['a', 'b', 'c', 'd', 'e', 'f', 'g', ''].join('\n')
   const after = ['a', 'b', 'c', 'd', 'X', 'Y', 'f', 'g', ''].join('\n')

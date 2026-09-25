@@ -73,6 +73,14 @@ function readRegularFile(file, { code, what }) {
   try { return { bytes: fs.readFileSync(file), mode: stat.mode & 0o777 } } catch (error) { return refuse(code, `${what} cannot be read`, { cause: error.code ?? 'unreadable' }) }
 }
 
+// The text of a file's bytes, only when they are UTF-8 that decodes and encodes back to exactly them: a file in another
+// encoding is never rewritten, since a byte that is not UTF-8 would be replaced without the diff showing it.
+function textOf(bytes, refusal) {
+  const text = bytes.toString('utf8')
+  if (!Buffer.from(text, 'utf8').equals(bytes)) refusal()
+  return text
+}
+
 // The settings as enablement will read them, or a typed refusal naming what is wrong.
 function checkedSettings(document, settings) {
   try {
@@ -105,7 +113,7 @@ function planIgnore(project) {
   if (project?.localState?.ignored === true) return { needed: false }
   const file = path.join(project.configDir, '.gitignore')
   const { bytes, mode } = readRegularFile(file, { code: 'gitignore-unreadable', what: 'the project\'s .gitignore' })
-  const before = bytes === null ? '' : bytes.toString('utf8')
+  const before = bytes === null ? '' : textOf(bytes, () => refuse('gitignore-not-utf8', `the project's .gitignore is not UTF-8, so Atelier does not rewrite it; add the line ${LOCAL_STATE_LINE} to it by hand; nothing was written`, { line: LOCAL_STATE_LINE }))
   const eol = before.includes('\r\n') ? '\r\n' : '\n'
   const after = `${before}${before === '' || before.endsWith('\n') ? '' : eol}${LOCAL_STATE_LINE}${eol}`
   return { needed: true, file, what: 'the project\'s .gitignore', bytes, after, mode, diff: unifiedDiff(before, after, { label: '.gitignore' }) }
@@ -117,7 +125,11 @@ function readProjectFile(project) {
   if (typeof file !== 'string') refuse('project-config-unreadable', 'this project has no configuration file to write the view into')
   const { bytes, mode } = readRegularFile(file, { code: 'project-config-unreadable', what: path.basename(file) })
   if (bytes === null) refuse('project-config-unreadable', `${path.basename(file)} is not there`)
-  const before = bytes.toString('utf8')
+  // Not UTF-8: in no form Atelier writes. The member is named for the person when the rest of the file can be read.
+  let before
+  try { before = textOf(bytes, () => { throw new SyntaxError('not UTF-8') }) } catch {
+    return { file, bytes, before: null, mode, document: null }
+  }
   let document = null
   try { document = JSON.parse(before) } catch { document = null }
   return { file, bytes, before, mode, document }
