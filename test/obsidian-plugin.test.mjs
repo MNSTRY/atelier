@@ -53,7 +53,7 @@ import { MINIMUM_APP_VERSION, createQualifiedAdapterFactory, inspectApp, parseAp
 import { ensureWorkspaceIdentity, protectedRoots, workspaceStateRoot, writeMachineSettings } from '../src/runtime/obsidian/machine-settings.mjs'
 import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
 import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
-import { readServiceRecord, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
+import { readServiceRecord, releaseIdentity, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
 import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
 import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { createMaintenanceStateStore } from '../src/runtime/obsidian/state-store.mjs'
@@ -228,6 +228,32 @@ test('the shipped plugin: three files, a desktop-only manifest at the protocol f
   for (const file of source.files) assert.ok(file.bytes.equals(fs.readFileSync(path.join(PLUGIN_SOURCE, file.name))), `${file.name} is shipped byte for byte`)
   const pkg = JSON.parse(fs.readFileSync(path.join(REPOSITORY_ROOT, 'package.json'), 'utf8'))
   for (const name of PLUGIN_SOURCE_FILES) assert.ok(pkg.files.includes(`plugins/obsidian/${name}`), `package.json files ships ${name}`)
+})
+
+test('the release a service records covers the plugin it ships: a change under plugins/ is another release, and a package without plugins/ reads as none', (t) => {
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-release-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  // A stand-in package root per state: the identity is computed once per root.
+  const packageRoot = (name, { plugin = null } = {}) => {
+    const root = path.join(dir, name)
+    for (const [relative, text] of Object.entries({ 'package.json': '{"version":"0.0.0-test"}\n', 'src/entry.mjs': 'export {}\n', 'contracts/a.json': '{}\n' })) {
+      fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true })
+      fs.writeFileSync(path.join(root, relative), text)
+    }
+    if (plugin !== null) {
+      fs.mkdirSync(path.join(root, 'plugins', 'obsidian'), { recursive: true })
+      fs.writeFileSync(path.join(root, 'plugins', 'obsidian', 'main.js'), plugin)
+    }
+    return root
+  }
+  const without = releaseIdentity({ root: packageRoot('without') })
+  const one = releaseIdentity({ root: packageRoot('one', { plugin: 'module.exports = 1\n' }) })
+  const other = releaseIdentity({ root: packageRoot('other', { plugin: 'module.exports = 2\n' }) })
+  const same = releaseIdentity({ root: packageRoot('same', { plugin: 'module.exports = 1\n' }) })
+  assert.match(without.digest, /^sha256:[0-9a-f]{64}$/, 'a package without plugins/ has a release')
+  assert.notEqual(one.digest, other.digest, 'another plugin is another release')
+  assert.equal(one.digest, same.digest)
+  assert.notEqual(without.digest, one.digest)
 })
 
 test('the spawn guard: a child that can reach a running Obsidian runs only with a private HOME', async (t) => {

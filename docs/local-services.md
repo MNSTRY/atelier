@@ -220,7 +220,9 @@ A runtime of an earlier release is replaced by a command that asks for a tick
 with the start options of the installed entry (`requestServiceTick({ service
 })`; `open` does). Every runtime records at its start the release it runs
 (`executable.ext.release` in its record): the package version and a digest of
-every runtime module it ships (`src/` and `contracts/`, by path and content).
+every runtime module it ships (`src/` and `contracts/`, by path and content),
+and of the plugin it publishes into every vault (`plugins/`; none where a
+package has no such folder).
 A runtime of an earlier release proves itself `healthy` but records an earlier
 version than this package's, this version with an entry module or modules of
 other content, or no release at all (releases up to the one that began

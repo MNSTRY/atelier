@@ -68,22 +68,27 @@ const releases = new Map()
 
 // The release that runs, beyond its entry module: the version of the package
 // and a digest of the runtime it ships, by relative path and content. That is
-// what the service loads: every module under `src/`, and the `contracts/` it
-// reads; outside `src/` it reads nothing else of the package but the version
-// in `package.json`. A release that changes any of it, and not only the
-// entry, differs. Computed once per process and package root, so a service
-// keeps the identity of the code it loaded.
+// what the service loads: every module under `src/`, the `contracts/` it
+// reads, and the plugin under `plugins/` it publishes into every vault it
+// maintains; outside those it reads nothing else of the package but the
+// version in `package.json`. A release that changes any of it, and not only
+// the entry, differs. A package without `plugins/` reads as one with an empty
+// one. Computed once per process and package root, so a service keeps the
+// identity of the code it loaded.
 export function releaseIdentity({ root = PACKAGE_ROOT } = {}) {
   if (!releases.has(root)) {
     const hash = createHash('sha256')
-    const walk = (relative) => {
-      for (const entry of fs.readdirSync(path.join(root, relative), { withFileTypes: true }).sort(byName)) {
+    const walk = (relative, { optional = false } = {}) => {
+      let entries
+      try { entries = fs.readdirSync(path.join(root, relative), { withFileTypes: true }) } catch (error) { if (optional && error.code === 'ENOENT') return; throw error }
+      for (const entry of entries.sort(byName)) {
         const child = `${relative}/${entry.name}`
         if (entry.isDirectory()) walk(child)
         else if (entry.isFile()) hash.update(`${child}\0${createHash('sha256').update(fs.readFileSync(path.join(root, child))).digest('hex')}\n`)
       }
     }
     for (const part of ['src', 'contracts']) walk(part)
+    walk('plugins', { optional: true })
     let version = null
     try { const read = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; version = typeof read === 'string' ? read : null } catch { version = null }
     releases.set(root, Object.freeze({ version, digest: `sha256:${hash.digest('hex')}` }))
