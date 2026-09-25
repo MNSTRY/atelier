@@ -134,8 +134,8 @@ test('real isolated Obsidian: open adds the view\'s vault and publishes, with th
       const app = createIsolatedApp({ vaults: {} })
       const unrelatedVault = path.join(app.root, 'unrelated-vault')
       fs.mkdirSync(unrelatedVault)
-      // Obsidian has run on this account before: it left its settings, with one vault it knows.
-      const before = JSON.stringify({ vaults: { f0e1d2c3b4a59687: { path: unrelatedVault, ts: 1700000000000 } }, cli: true, updateDisabled: true, suiteMarker: 'kept' })
+      // Obsidian has run on this account before: it left its settings, with one vault it knows, marked to reopen.
+      const before = JSON.stringify({ vaults: { f0e1d2c3b4a59687: { path: unrelatedVault, ts: 1700000000000, open: true } }, cli: true, updateDisabled: true, suiteMarker: 'kept' })
       fs.writeFileSync(app.settingsFile, before)
       let world = null
       try {
@@ -153,6 +153,8 @@ test('real isolated Obsidian: open adds the view\'s vault and publishes, with th
         assert.equal(fs.readFileSync(path.join(app.userDataDir, backups[0]), 'utf8'), before, 'the backup holds the settings as they were')
         const after = JSON.parse(fs.readFileSync(app.settingsFile, 'utf8'))
         assert.deepEqual([after.suiteMarker, after.cli, after.vaults.f0e1d2c3b4a59687.path], ['kept', true, unrelatedVault], 'the app kept every other setting and vault')
+        // Started plainly, not with a URL: the person's other vault is still marked to reopen (a URL start drops it).
+        assert.equal(after.vaults.f0e1d2c3b4a59687.open, true, 'the other vault is still marked to reopen')
         assert.equal(Object.values(after.vaults).filter((entry) => entry.path === store.vaultRoot).length, 1)
         assert.equal(app.running(), true, 'open started the app')
         assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route: vaultRoute({ vaults: after.vaults, vaultRoot: store.vaultRoot }) }), { answered: true, indexReady: true })

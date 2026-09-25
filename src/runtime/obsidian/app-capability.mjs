@@ -79,6 +79,9 @@ const NO_VAULT_OPEN = /^vault not found\.?$/i
 // a vault, the tool answers a command with this line instead (observed on
 // 1.13.7). The app is not up yet: this is not a version either.
 const COMMAND_NOT_READY = /^error: command "[^"]*" not found\b/i
+// With its command line turned off (the default of a new installation: Settings > General > Advanced), the app
+// answers every command but a URL with this line (1.13.7). It runs and is reachable only by URL: not a version.
+const CLI_TURNED_OFF = /^command line interface is not enabled\b/i
 
 // Pure. What one `version` call of the command-line tool answered:
 // { version, noVaultOpen }. `exited` is false for a call that failed or exited
@@ -86,6 +89,7 @@ const COMMAND_NOT_READY = /^error: command "[^"]*" not found\b/i
 export function readVersionAnswer({ stdout = '', stderr = '', exited = true } = {}) {
   const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
   if (lines.some((line) => NO_VAULT_OPEN.test(line))) return { version: null, noVaultOpen: true }
+  if (lines.some((line) => CLI_TURNED_OFF.test(line))) return { version: null, noVaultOpen: false, cliOff: true }
   if (lines.some((line) => COMMAND_NOT_READY.test(line))) return { version: null, noVaultOpen: false }
   const text = typeof stdout === 'string' ? stdout.trim() : ''
   return { version: exited && text !== '' ? text : null, noVaultOpen: false }
@@ -100,6 +104,7 @@ export function readVersionAnswer({ stdout = '', stderr = '', exited = true } = 
 export function readEvalAnswer({ stdout = '', stderr = '', failed = false } = {}) {
   const lines = [stdout, stderr].flatMap((text) => (typeof text === 'string' ? text.split('\n') : [])).map((line) => line.trim())
   if (lines.some((line) => NO_VAULT_OPEN.test(line))) return { answered: false, reason: 'no-vault-open' }
+  if (lines.some((line) => CLI_TURNED_OFF.test(line))) return { answered: false, reason: 'cli-turned-off' }
   if (failed) return { answered: false, reason: 'cli-failed' }
   const text = typeof stdout === 'string' ? stdout : ''
   const start = text.indexOf('=> ')
@@ -132,6 +137,7 @@ export function qualifyApp(observation, { requireVersion = true, floor = MINIMUM
     return { ...reported, outcome: 'qualified', reason: 'plugin-reported', versionChecked: true }
   }
   if (seen.installed !== true) return { ...base, outcome: 'app-missing', reason: 'no-app-found' }
+  if (seen.cliOff === true) return { ...base, running: true, outcome: 'app-cli-unavailable', reason: 'cli-turned-off' }
   if (seen.cli !== true) return { ...base, outcome: 'app-cli-unavailable', reason: 'cli-capability-absent' }
   if (seen.noVaultOpen === true) return { ...base, outcome: 'app-version-unsupported', reason: 'no-vault-open' }
   if (base.version === null) {

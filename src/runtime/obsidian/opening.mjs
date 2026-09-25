@@ -80,6 +80,7 @@ const QUIT = 'quit Obsidian (on Linux, also any app that runs on a system Electr
 // Obsidian's settings file could not be used to add the vault while the app was quit: adding it through the app works instead.
 const THROUGH_THE_APP = 'start Obsidian with any vault open, then open again: the vault is then added through the app'
 export const REASON_NEXT = Object.freeze({
+  'cli-turned-off': 'Obsidian\'s command line is turned off (the default of a new installation): turn it on in Obsidian under Settings > General > Advanced > Command line interface, then open again',
   'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again; open then adds this view\'s vault to Obsidian itself',
   'vault-open-cli-silent': 'Obsidian has this view\'s vault open, as Atelier\'s plugin in it shows, but its command line did not answer, so the vault can be neither found nor opened through it; make sure the command-line interface is turned on in Obsidian\'s settings, then open again',
   'editor-uncoordinated': `${UNCOORDINATED}; \`atelier obsidian open\` adds this view's vault to Obsidian and publishes through it, or ${QUIT}; it is retried automatically`,
@@ -401,7 +402,10 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
 
   // 5. Launch, then wait, bounded, for the app to answer for exactly this vault.
   let launch
-  try { launch = await launcher.open({ vaultRoot: known.path }) } catch { launch = { launched: false, reason: 'launcher-threw' } }
+  // Named by its id (a path is matched by string prefix); a quit app is started plainly and handed the vault once it
+  // answers, so the vaults its list marks open come back (launch-plan.mjs).
+  const entry = findVaultEntry(known.vaults, known.path) ?? findVaultEntry(known.vaults, vaultRoot)
+  try { launch = await launcher.open({ vaultRoot: known.path, vaultId: entry?.id ?? null, appRunning: before.running === true }) } catch { launch = { launched: false, reason: 'launcher-threw' } }
   if (launch?.launched !== true) return finish('launch-failed', { ...common, reason: typeof launch?.reason === 'string' ? launch.reason : 'launcher-refused', app: app(before), registration })
   const deadline = monotonic() + appWaitMs
   let after = before

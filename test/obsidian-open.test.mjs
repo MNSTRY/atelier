@@ -96,6 +96,7 @@ const { resolveProjectConfig, writeJson } = await import('../src/project/config.
 const { isContractIdentifier, validateObsidianContract } = await import('../src/projection/obsidian/contracts.mjs')
 const { MAX_OBSIDIAN_SETTINGS_BYTES, NEUTRAL_DIRECTORY, OBSIDIAN_SETTINGS_FILE, createEditorAdapter, createObsidianCliCall, enclosingVaults, findVaultEntry, obsidianSandboxedBuild, obsidianUserDataDir, publicationRoute, readObsidianSettings, resolveExchange, vaultRoute } = await import('../src/projection/obsidian/publication/index.mjs')
 const { BUILT_IN_OPERATIONS, COMMAND_SCHEMA, EXIT, default: defaultCommand, runObsidianCommand, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
+const { launchPlan, urlProcessed } = await import('../src/runtime/obsidian/launch-plan.mjs')
 const { MINIMUM_APP_VERSION, compareAppVersions, createQualifiedAdapterFactory, meetsMinimumAppVersion, parseAppVersion, qualifyApp, readEvalAnswer, readVersionAnswer } = await import('../src/runtime/obsidian/app-capability.mjs')
 const { appStateSignature, registerVaultInObsidianSettings } = await import('../src/runtime/obsidian/app-registration.mjs')
 const { loadContributions } = await import('../src/runtime/obsidian/contributions.mjs')
@@ -212,9 +213,11 @@ function fakeApp(overrides = {}) {
   const state = {
     installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0,
     noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, listNoVault: false, registerNoVault: false,
-    registerUnanswered: null, ...overrides,
+    registerUnanswered: null, cliOff: false, ...overrides,
   }
   const launches = []
+  // What each launch was asked: { vaultRoot, vaultId, appRunning }.
+  const launchArgs = []
   const registrations = []
   // Each listed vault a call about a vault reached, by id: the app opens a vault that takes a call and is closed.
   const reached = []
@@ -231,9 +234,11 @@ function fakeApp(overrides = {}) {
     return ids.find((id) => { const folder = path.resolve(state.vaults[id].path); return route.cwd === folder || route.cwd.startsWith(folder + path.sep) }) ?? null
   }
   return {
-    state, launches, registrations, reached, noVaultNow,
+    state, launches, launchArgs, registrations, reached, noVaultNow,
     appProbe: {
       inspect: async () => {
+        // With its command line turned off the running app answers every command with the same line, never a version.
+        if (state.cliOff && state.running) return { installed: state.installed, cli: true, running: true, version: null, cliOff: true }
         if (noVaultNow()) { if (state.noVaultAnswers > 0) state.noVaultAnswers -= 1; return { installed: state.installed, cli: state.cli, running: true, version: null, noVaultOpen: true } }
         return { installed: state.installed, cli: state.cli, running: state.running, version: state.running ? state.version : null }
       },
@@ -245,10 +250,11 @@ function fakeApp(overrides = {}) {
         return { answered: holds, indexReady: holds && state.indexReady }
       },
     },
-    launcher: { open: async ({ vaultRoot }) => { launches.push(vaultRoot); if (state.launchResult.launched && state.comesUp) state.running = true; return state.launchResult } },
+    launcher: { open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push({ vaultRoot, vaultId: args.vaultId, appRunning: args.appRunning }); if (state.launchResult.launched && state.comesUp) state.running = true; return state.launchResult } },
     registry: {
       listThroughApp: async () => {
         if (!state.running) throw new Error('the app does not run')
+        if (state.cliOff) return { answered: false, reason: 'cli-turned-off' }
         if (noVaultNow() || state.listNoVault) return { answered: false, reason: 'no-vault-open' }
         if (registrations.length > 0 && state.loadingAnswers > 0) { state.loadingAnswers -= 1; return { answered: false, reason: 'no-value' } }
         return state.listAnswers ? { answered: true, vaults: structuredClone(state.vaults) } : { answered: false, reason: 'cli-failed' }
@@ -996,6 +1002,51 @@ test('app not running: the view is published on the path with no app, the vault 
   // Opened again, with the app now running and holding it: nothing is added a second time.
   const again = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
   assert.deepEqual([again.json.outcome, again.json.registration?.how, app.registrations.length], ['current', 'listed', 1])
+})
+
+test('the launch names the vault by its id and says whether the app runs: a quit app is started plainly, so it reopens the vaults its list marks open, and handed the vault by id once it answers', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const app = fakeApp({ running: false, vaults: { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })
+  await serviceBehindApp(world, app)
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.equal(opened.json.outcome, 'current', JSON.stringify(opened.json))
+  const ours = Object.keys(app.state.vaults).find((id) => app.state.vaults[id].path === world.vault())
+  assert.deepEqual(app.launchArgs, [{ vaultRoot: world.vault(), vaultId: ours, appRunning: false }])
+  // Running now: handed the URL, never started again.
+  const listedClosed = fakeApp({ running: true, vaults: { [ours]: { path: world.vault(), ts: 1 } } })
+  await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...listedClosed }, open: FAST_APP })
+  assert.deepEqual(listedClosed.launchArgs, [{ vaultRoot: world.vault(), vaultId: ours, appRunning: true }])
+})
+
+test('the launch plan: a vault is named by id; a quit app on macOS is started plainly, waited for, then handed the URL; a running app is handed the URL; Linux starts a quit app with the URL; elsewhere nothing', () => {
+  const uri = 'obsidian://open?vault=0123456789abcdef'
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: false, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'plain-start' }, { step: 'wait-for-app' }, { step: 'url', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: true, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'url', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'linux', appRunning: false, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'url-start', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'linux', appRunning: true, vaultId: '0123456789abcdef' }), { ok: true, steps: [{ step: 'url', uri }] })
+  assert.deepEqual(launchPlan({ platform: 'win32', appRunning: false, vaultId: '0123456789abcdef' }), { ok: false, reason: 'launcher-platform-unqualified' })
+  for (const vaultId of [undefined, '', 'a b', '../x', 'x'.repeat(65), 'a&b=c']) assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: false, vaultId }), { ok: false, reason: 'vault-id-unknown' }, String(vaultId))
+  // A running app with no vault open also takes a URL through its tool; unknown ("null") is treated as not running,
+  // since a plain start of a running app only brings it forward.
+  assert.deepEqual(launchPlan({ platform: 'darwin', appRunning: null, vaultId: 'a1' }).steps[0], { step: 'plain-start' })
+  assert.equal(urlProcessed('Processed URI obsidian://open?vault=a1\n'), true)
+  assert.equal(urlProcessed('Command line interface is not enabled. Please turn it on in Settings > General > Advanced.'), false)
+})
+
+test('Obsidian with its command line turned off answers every command with one line: it is no version, it is app-cli-unavailable / cli-turned-off with the setting to turn on, and open adds and launches nothing', async (t) => {
+  const OFF = 'Command line interface is not enabled. Please turn it on in Settings > General > Advanced.'
+  assert.deepEqual(readVersionAnswer({ stdout: `${OFF}\n` }), { version: null, noVaultOpen: false, cliOff: true })
+  assert.deepEqual(readVersionAnswer({ stderr: OFF, exited: false }), { version: null, noVaultOpen: false, cliOff: true })
+  assert.deepEqual(readEvalAnswer({ stdout: OFF }), { answered: false, reason: 'cli-turned-off' })
+  const off = qualifyApp({ installed: true, cli: true, running: true, version: null, cliOff: true })
+  assert.deepEqual([off.outcome, off.reason], ['app-cli-unavailable', 'cli-turned-off'])
+  assert.match(REASON_NEXT['cli-turned-off'], /Settings > General > Advanced/)
+  const world = makeWorld(t)
+  const app = fakeApp({ running: true, cliOff: true })
+  await serviceBehindApp(world, app)
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.reason, opened.json.next], ['app-cli-unavailable', 'cli-turned-off', REASON_NEXT['cli-turned-off']], JSON.stringify(opened.json))
+  assert.deepEqual([app.launches, app.registrations], [[], []])
 })
 
 test('several views of one workspace each get their own vault in the app: one added while the app is quit, the next through the running app, each found again by its own path', needsExchange, async (t) => {

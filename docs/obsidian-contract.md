@@ -790,8 +790,8 @@ each open item is discharged with its own evidence.
 
 ## Obsidian's vault list
 
-Obsidian opens a vault by path (`obsidian://open?path=`) only when the folder
-is in its own vault list. `atelier obsidian open` puts the view's vault there.
+Obsidian opens a vault from a link only when the folder is in its own vault
+list. `atelier obsidian open` puts the view's vault there.
 Outside its own storage (the data root, which holds the vaults and their
 policy-owned `.obsidian/core-plugins.json`), the list is the only file of
 another application that Atelier writes; to write it, Atelier writes nothing
@@ -912,8 +912,20 @@ then:
 
 Every refusal writes nothing and leaves nothing behind: a temporary file or
 backup created on the way is removed again whichever later step fails.
-`open` then asks the operating system to open
-`obsidian://open?path=<the vault root>`, as before.
+`open` then shows the vault by the steps of `launchPlan`
+(`src/runtime/obsidian/launch-plan.mjs`), always naming it
+`obsidian://open?vault=<id>` (a path is matched against the list by string
+prefix, with no separator check): a running app is handed the link through its
+command-line tool, which takes a link even with its command line turned off,
+or through the operating system when the tool did not take it; on macOS a quit
+app is started plainly (`open -b md.obsidian`), which reopens every vault the
+list marks open (the entry written above is marked open), and handed the link
+once its tool answers anything. An app started with a link would delete the
+reopen flag of every other vault without a window (1.13.7, checked on an
+isolated instance). On Linux a quit app is started with the link, a known
+limit. With its command line turned off the app answers every other command
+with "Command line interface is not enabled"; that is read as
+`app-cli-unavailable` / `cli-turned-off`, never as a version.
 
 **Which window answers.** The command line (1.13.7) answers a call whose first
 argument is `vault=<value>` in the window of the first listed vault whose id is

@@ -24,6 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { OBSIDIAN_SETTINGS_FILE, obsidianUserDataDir } from '../../../src/projection/obsidian/publication/vault-list.mjs'
+import { launchPlan, urlProcessed } from '../../../src/runtime/obsidian/launch-plan.mjs'
 
 export const APP_DIR = process.env.ATELIER_OBSIDIAN_APP_DIR || '/Applications/Obsidian.app/Contents/MacOS'
 export const CLI_PATH = path.join(APP_DIR, 'obsidian-cli')
@@ -95,13 +96,28 @@ export function createIsolatedApp({ parent = process.env.ATELIER_OBSIDIAN_TMP ||
       }
       throw new Error('the isolated Obsidian did not answer its command line in time')
     },
-    // `open`'s launcher for this app: a URL on its command line when it starts, through its own tool while it runs.
+    // `open`'s launcher for this app, by the same plan as the production launcher (launch-plan.mjs): a quit app is
+    // started with no URL and handed the vault's URL through its own tool once the tool answers anything; a running
+    // app is handed the URL through its tool.
     launcher: {
-      async open({ vaultRoot }) {
-        const url = `obsidian://open?path=${encodeURIComponent(vaultRoot)}`
-        if (processProbe() !== 'running') { start(url); return { launched: true, reason: 'isolated-app-started' } }
-        const reply = await cli([url])
-        return reply.failed || !reply.stdout.includes('Processed URI') ? { launched: false, reason: 'isolated-app-refused-url' } : { launched: true, reason: 'isolated-app-accepted-url' }
+      async open({ vaultId, appRunning }) {
+        const plan = launchPlan({ platform: 'darwin', appRunning, vaultId })
+        if (!plan.ok) return { launched: false, reason: plan.reason }
+        for (const { step, uri } of plan.steps) {
+          if (step === 'plain-start') start(null)
+          else if (step === 'wait-for-app') {
+            let up = false
+            for (const until = Date.now() + 60000; !up && Date.now() < until;) {
+              if (fs.existsSync(socket)) { const reply = await cli(['version'], { timeoutMs: 5000 }); up = (reply.stdout + reply.stderr).trim() !== '' }
+              if (!up) await sleep(300)
+            }
+            if (!up) return { launched: true, reason: 'isolated-app-started-not-answering' }
+          } else if (step === 'url' || step === 'url-start') {
+            const reply = await cli([uri])
+            if (reply.failed || !urlProcessed(reply.stdout)) return { launched: false, reason: 'isolated-app-refused-url' }
+          }
+        }
+        return { launched: true, reason: 'isolated-app-accepted-url' }
       },
     },
     // Ends exactly this app's processes, by its profile; answers the PIDs still alive afterwards.
