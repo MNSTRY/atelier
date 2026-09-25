@@ -128,7 +128,8 @@ test('a view\'s vault is allocated once, private to this user, under the first f
   assert.equal(fs.existsSync(w.parent), false)
 
   const first = allocate('everything')
-  assert.deepEqual(first, { schema: VAULT_ALLOCATION_SCHEMA, workspaceId: WORKSPACE_ID, scopeId: 'everything', path: path.join(w.parent, 'harbor-notes (everything)'), name: 'harbor-notes (everything)', parent: w.parent, allocatedAt: NOW })
+  const made = fs.statSync(path.join(w.parent, 'harbor-notes (everything)'), { bigint: true })
+  assert.deepEqual(first, { schema: VAULT_ALLOCATION_SCHEMA, workspaceId: WORKSPACE_ID, scopeId: 'everything', path: path.join(w.parent, 'harbor-notes (everything)'), name: 'harbor-notes (everything)', parent: w.parent, device: String(made.dev), inode: String(made.ino), allocatedAt: NOW })
   assert.equal(fs.statSync(first.path).isDirectory(), true)
   if (POSIX) {
     assert.equal(fs.statSync(first.path).mode & 0o777, 0o700)
@@ -171,10 +172,35 @@ test('the store publishes a view into its allocated vault, makes it again when i
   const placed = storeOf('everything')
   assert.deepEqual([placed.vaultRoot, placed.vaultOrigin, placed.allocation], [allocation.path, 'allocated', allocation])
   assert.equal(fs.existsSync(path.join(w.workspaceRoot, 'vaults', 'everything')), false, 'nothing is made under the data root for it')
-  // A folder somebody removed is made again, private, where the record says.
+  // A folder somebody removed: the store refuses until the engine's allocation makes it again, private, where the
+  // record says, and records the folder it now is.
   fs.rmSync(allocation.path, { recursive: true })
+  assert.throws(() => storeOf('everything'), (error) => error.code === 'vault-allocation-missing')
+  assert.equal(fs.existsSync(allocation.path), false, 'the store makes nothing there')
+  const again = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  const remade = fs.statSync(allocation.path, { bigint: true })
+  assert.deepEqual(again, { ...allocation, device: String(remade.dev), inode: String(remade.ino) })
   assert.equal(storeOf('everything').vaultRoot, allocation.path)
   if (POSIX) assert.equal(fs.statSync(allocation.path).mode & 0o777, 0o700)
+  // A folder that is not the one made, at the recorded path (restored, or moved in), is never published into; the
+  // allocation leaves it alone.
+  fs.rmSync(allocation.path, { recursive: true })
+  fs.mkdirSync(path.join(w.dir, 'moved-in'))
+  fs.writeFileSync(path.join(w.dir, 'moved-in', 'theirs.md'), 'theirs')
+  fs.renameSync(path.join(w.dir, 'moved-in'), allocation.path)
+  assert.throws(() => storeOf('everything'), (error) => error.code === 'vault-allocation-replaced')
+  assert.deepEqual(ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW }), again)
+  assert.throws(() => storeOf('everything'), (error) => error.code === 'vault-allocation-replaced')
+  assert.equal(fs.readFileSync(path.join(allocation.path, 'theirs.md'), 'utf8'), 'theirs')
+  fs.rmSync(allocation.path, { recursive: true })
+  if (POSIX) {
+    fs.mkdirSync(path.join(w.dir, 'elsewhere'))
+    fs.symlinkSync(path.join(w.dir, 'elsewhere'), allocation.path)
+    assert.throws(() => storeOf('everything'), (error) => ['vault-allocation-replaced', 'managed-root-symlink-alias'].includes(error.code), 'a link where the folder was')
+    fs.rmSync(allocation.path)
+  }
+  ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  const current = readVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything' })
   // An explicit vault root still wins.
   const explicit = path.join(w.dir, 'explicit vault')
   const named = createRecoveryStore({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', vaultRoot: explicit, repositoryRoots: w.repositoryRoots })
@@ -183,16 +209,17 @@ test('the store publishes a view into its allocated vault, makes it again when i
   // A record that names a folder inside a repository is refused before anything is created; so is one that is not a record.
   const file = allocationFile(w.workspaceRoot, 'everything')
   const inside = path.join(w.repository, 'vault')
-  fs.writeFileSync(file, JSON.stringify({ ...allocation, path: inside, parent: w.repository, name: 'vault' }))
+  fs.writeFileSync(file, JSON.stringify({ ...current, path: inside, parent: w.repository, name: 'vault' }))
   assert.throws(() => storeOf('everything'), (error) => error.code === 'managed-root-inside-repository')
   assert.equal(fs.existsSync(inside), false)
-  for (const broken of [{ ...allocation, surprise: 1 }, { ...allocation, scopeId: 'another' }, { ...allocation, path: 'relative' }, { ...allocation, name: 'other' }, { ...allocation, allocatedAt: 'now' }]) {
+  const { device: _device, ...noDevice } = current
+  for (const broken of [{ ...current, surprise: 1 }, { ...current, scopeId: 'another' }, { ...current, path: 'relative' }, { ...current, name: 'other' }, { ...current, allocatedAt: 'now' }, noDevice, { ...current, inode: 12 }, { ...current, device: '-1' }]) {
     fs.writeFileSync(file, JSON.stringify(broken))
     assert.throws(() => storeOf('everything'), (error) => error.code === 'invalid-vault-allocation', JSON.stringify(broken))
   }
   fs.writeFileSync(file, 'not json')
   assert.throws(() => vaultRootFor({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything' }), (error) => error.code === 'invalid-vault-allocation')
-  assert.throws(() => writeVaultAllocation({ workspaceRoot: w.workspaceRoot, allocation: { ...allocation, parent: w.dir } }), (error) => error.code === 'invalid-vault-allocation')
+  assert.throws(() => writeVaultAllocation({ workspaceRoot: w.workspaceRoot, allocation: { ...current, parent: w.dir } }), (error) => error.code === 'invalid-vault-allocation')
 })
 
 test('the checks see through links and letter case: a folder reached through a link into a listed or synced vault is refused, whichever side is spelled which way', { skip: POSIX ? false : 'links need privileges on Windows' }, (t) => {

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { checkManagedRoots, realLocation } from '../../project/file-class.mjs'
 import { realPathAsStored } from '../../project/private-state.mjs'
-import { VAULT_ALLOCATION_SCHEMA, VAULT_LOCK_DIRECTORY, hasCommittedGeneration, readVaultAllocation, writeVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
+import { VAULT_ALLOCATION_SCHEMA, VAULT_LOCK_DIRECTORY, allocatedFolderState, folderIdentity, hasCommittedGeneration, readVaultAllocation, writeVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { refuse } from './errors.mjs'
 
 // Where the vaults of a workspace live when a person decided it (the
@@ -201,6 +201,16 @@ export function checkVaultParent({ parent, workspaceRoot, repositoryRoots, vault
 // and, when the app's list is known, by no vault it lists with that name in any letter case.
 export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, location, projectName, repositoryRoots, vaults = null, allocatedPaths = [], homedir, now }) {
   const existing = readVaultAllocation({ workspaceRoot, workspaceId, scopeId })
+  // An allocated folder that has gone is made again where it was, private, and recorded as the folder it now is; one
+  // another folder replaced is left alone, and the store refuses to publish into it.
+  if (existing !== null && allocatedFolderState(existing) === 'missing') {
+    try { fs.mkdirSync(existing.parent, { recursive: true, mode: 0o700 }); fs.mkdirSync(existing.path, { mode: 0o700 }) } catch (error) {
+      if (error?.code === 'EEXIST') return existing
+      refuse('vault-location-unusable', 'the folder for this view\'s vault cannot be made again there', { parent: existing.parent, cause: error?.code ?? null })
+    }
+    const made = folderIdentity(existing.path)
+    return writeVaultAllocation({ workspaceRoot, allocation: { ...existing, device: made.device, inode: made.inode } })
+  }
   if (existing !== null) return existing
   if (location === null || location === undefined || hasCommittedGeneration({ workspaceRoot, scopeId })) return null
   const parent = location.parent
@@ -218,7 +228,8 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
     if (listedNames.has(folded(name)) || fs.lstatSync(folder, { throwIfNoEntry: false }) !== undefined) continue
     try { fs.mkdirSync(folder, { mode: 0o700 }) } catch (error) { if (error.code === 'EEXIST') continue; unusable(error) }
     try { fs.chmodSync(folder, 0o700) } catch { /* a file system without modes */ }
-    return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: folder, name, parent: realParent, allocatedAt: now } })
+    const made = folderIdentity(folder)
+    return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: folder, name, parent: realParent, device: made.device, inode: made.inode, allocatedAt: now } })
   }
   return refuse('vault-location-full', 'no free vault name is left for this view in that folder', { parent })
 }
