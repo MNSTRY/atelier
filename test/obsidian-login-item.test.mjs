@@ -1062,6 +1062,13 @@ async function stopAskingAgain(world) {
   return last
 }
 
+// A person at a terminal: both streams are terminals, the account is `harbor-person`, and the environment carries none
+// of what says nobody is at one, whatever the runner itself has (CI sets CI).
+function atTerminal(world) {
+  const { CI: _ci, ATELIER_NONINTERACTIVE: _nonInteractive, ...personEnv } = world.env
+  return { terminal: { stdin: true, stdout: true }, account: () => 'harbor-person', env: personEnv }
+}
+
 // An earlier release: the same service entry with other bytes, as a child `start` made before an upgrade runs it.
 function earlierReleaseEntry(world) {
   const earlier = path.join(world.dir, 'earlier-release', 'service-entry.mjs')
@@ -1217,7 +1224,7 @@ test('installing, removing and uninstalling remember the answer as the loginItem
   assert.deepEqual([removed.json.rememberedNow.loginItem, (await decision()).choice, (await decision()).decidedBy], ['off', 'off', null])
   assert.match((await world.run(['settings'])).stdout, /^Change: `atelier obsidian service unit --install` starts maintenance at login/m)
   // A person at a terminal gives it by their account's name.
-  const terminal = { terminal: { stdin: true, stdout: true }, account: () => 'harbor-person' }
+  const terminal = atTerminal(world)
   assert.equal((await world.run(['service', 'unit', '--install'], terminal)).exit, EXIT.ok)
   assert.deepEqual([(await decision()).choice, (await decision()).decidedBy], ['on', 'harbor-person'])
   assert.equal((await world.run(['uninstall'], terminal)).exit, EXIT.ok)
@@ -1226,7 +1233,7 @@ test('installing, removing and uninstalling remember the answer as the loginItem
 
 test('at a terminal, --install needs no --consent-actor: the account\'s name allows maintenance at login, or the actor already recorded keeps it', await commandTest(), async (t) => {
   const world = await makeWorld(t)
-  const terminal = { terminal: { stdin: true, stdout: true }, account: () => 'harbor-person' }
+  const terminal = atTerminal(world)
   const installed = await world.run(['service', 'unit', '--install'], terminal)
   assert.equal(installed.exit, EXIT.ok, installed.stderr)
   assert.match(installed.stdout, /Maintenance at login is allowed by harbor-person; recorded for this workspace\./)
