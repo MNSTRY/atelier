@@ -134,7 +134,11 @@ export const VAULT_ORIGINS = Object.freeze(['allocated', 'legacy-data-root'])
 
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
 const CONTROL = /[\u0000-\u001f\u007f]/
-const ALLOCATION_KEYS = Object.freeze(['schema', 'workspaceId', 'scopeId', 'path', 'name', 'parent', 'allocatedAt'])
+// `device` and `inode` name the folder that was made, as decimal strings (a 64-bit number does not fit a JSON number):
+// a folder at the recorded path that is another one (restored, moved in, made again by someone else) is never
+// published into.
+const ALLOCATION_KEYS = Object.freeze(['schema', 'workspaceId', 'scopeId', 'path', 'name', 'parent', 'device', 'inode', 'allocatedAt'])
+const DECIMAL = /^(0|[1-9][0-9]{0,19})$/
 const isPlainPath = (value) => typeof value === 'string' && value.length <= 4096 && !CONTROL.test(value) && path.isAbsolute(value) && path.resolve(value) === value
 
 export const allocationFile = (workspaceRoot, scopeId) => path.join(workspaceRoot, 'state', 'allocations', `${segment(scopeId)}.json`)
@@ -149,6 +153,7 @@ export function validateVaultAllocation(document, { workspaceId, scopeId }) {
   if (document.workspaceId !== workspaceId || document.scopeId !== scopeId || !IDENTIFIER.test(String(scopeId))) refuse(code, 'the vault allocation belongs to another workspace or view')
   if (!isPlainPath(document.path) || !isPlainPath(document.parent)) refuse(code, 'the vault allocation names a folder that is not an absolute, plainly written path')
   if (path.dirname(document.path) !== document.parent || path.basename(document.path) !== document.name) refuse(code, 'the vault allocation names its folder inconsistently')
+  if (typeof document.device !== 'string' || !DECIMAL.test(document.device) || typeof document.inode !== 'string' || !DECIMAL.test(document.inode)) refuse(code, 'the vault allocation names its folder\'s device and inode as decimal strings')
   if (typeof document.allocatedAt !== 'string' || !TIMESTAMP.test(document.allocatedAt)) refuse(code, 'the vault allocation needs a UTC time')
   return document
 }
@@ -163,6 +168,19 @@ export function readVaultAllocation({ workspaceRoot, workspaceId, scopeId }) {
   let document
   try { document = JSON.parse(text) } catch { return refuse('invalid-vault-allocation', 'the vault allocation is not JSON') }
   return validateVaultAllocation(document, { workspaceId, scopeId })
+}
+
+// The device and inode of a folder, as an allocation records them; null when nothing is there.
+export function folderIdentity(folder) {
+  const stat = fs.lstatSync(folder, { bigint: true, throwIfNoEntry: false })
+  return stat === undefined ? null : { device: String(stat.dev), inode: String(stat.ino), directory: stat.isDirectory(), link: stat.isSymbolicLink() }
+}
+
+// Whether the folder at an allocation's path is the one it recorded: 'same', 'missing', or 'replaced'.
+export function allocatedFolderState(allocation) {
+  const found = folderIdentity(allocation.path)
+  if (found === null) return 'missing'
+  return found.directory && !found.link && found.device === allocation.device && found.inode === allocation.inode ? 'same' : 'replaced'
 }
 
 // Written only by the maintenance engine, under its lock, and by what moves a vault under the same lock.
@@ -191,8 +209,10 @@ export const hasCommittedGeneration = ({ workspaceRoot, scopeId }) => fs.existsS
 // temporary directory) says so with an explicit empty list.
 //
 // Without `vaultRoot` the vault is where the view's allocation says, else in
-// the workspace's `vaults/` (vaultRootFor). An allocated folder that has gone
-// is made again, private to this user, as a vault under the data root is.
+// the workspace's `vaults/` (vaultRootFor). An allocated folder must be the
+// very folder the record names (device and inode): one that has gone is made
+// again by the maintenance engine under its lock (ensureVaultAllocation), and
+// until then, like one that another folder replaced, the store refuses.
 export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vaultRoot, repositoryRoots } = {}) {
   if (typeof workspaceRoot !== 'string' || !path.isAbsolute(workspaceRoot)) throw new TypeError('workspaceRoot must be an absolute path')
   for (const [label, value] of [['workspaceId', workspaceId], ['scopeId', scopeId]]) {
@@ -206,6 +226,11 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
   const namedVault = vaultRoot ?? allocation?.path
   const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(namedVault === undefined ? [] : [namedVault])], repositoryRoots })
   if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
+  if (allocation !== null) {
+    const found = allocatedFolderState(allocation)
+    if (found === 'missing') refuse('vault-allocation-missing', 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick', { path: allocation.path })
+    if (found === 'replaced') refuse('vault-allocation-replaced', 'another folder is where this view\'s vault was allocated; Atelier publishes only into the folder it made', { path: allocation.path })
+  }
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
   // Both as the file system stores them: the vault root is what the app is told, and what it compares its own
   // working-directory spelling with.
