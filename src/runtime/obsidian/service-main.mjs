@@ -33,15 +33,21 @@ import { runMaintenanceService } from './service.mjs'
 // only read here.
 const ADAPTERS = Object.freeze({
   'obsidian-cli': async () => {
-    const [{ createObsidianCliAdapter, defaultObsidianProcessProbe }, { createProductionAppProbe }, { createQualifiedAdapterFactory }, { obsidianUserDataDir, readObsidianSettings }, { appStateSignature }] = await Promise.all([
+    const [{ createObsidianCliAdapter, defaultObsidianProcessProbe }, { createProductionAppProbe }, { createQualifiedAdapterFactory }, { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings }, { appStateSignature }, { readAppVaultListForAllocation }] = await Promise.all([
       import('../../projection/obsidian/publication/transport.mjs'), import('./app-production-seams.mjs'), import('./app-capability.mjs'),
-      import('../../projection/obsidian/publication/vault-list.mjs'), import('./app-registration.mjs'),
+      import('../../projection/obsidian/publication/vault-list.mjs'), import('./app-registration.mjs'), import('./vault-location.mjs'),
     ])
     const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe(), createAdapter: ({ qualification }) => createObsidianCliAdapter({ qualification }) })
     const userDataDir = obsidianUserDataDir()
     const observeApp = () => appStateSignature({ processes: defaultObsidianProcessProbe(), settings: userDataDir === null ? null : readObsidianSettings({ userDataDir }) })
+    // The app's own vault list, read from its file and never written, so a new vault's folder is never allocated inside
+    // a vault it lists nor under a name one of its vaults has; a list that cannot be read allocates nothing.
+    const readAppVaultList = () => readAppVaultListForAllocation({
+      read: () => (userDataDir === null ? { ok: false, code: 'obsidian-settings-location-unknown' } : readObsidianSettings({ userDataDir })),
+      sandboxed: obsidianSandboxedBuild() !== null,
+    })
     return {
-      adapterFactory, engineOptions: { observeApp },
+      adapterFactory, engineOptions: { observeApp, readAppVaultList },
       appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } },
     }
   },

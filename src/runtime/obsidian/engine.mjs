@@ -3,10 +3,10 @@ import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
-import { PublicationRefusal } from '../../projection/obsidian/recovery/store.mjs'
+import { PublicationRefusal, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
-import { ObsidianMaintenanceRefusal } from './errors.mjs'
+import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { createMaintenanceExtensions } from './extension-points.mjs'
 import {
   assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
@@ -18,6 +18,7 @@ import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import { FRESHNESS_SCHEMA, LATE_WRITERS_SCHEMA, createMaintenanceStateStore } from './state-store.mjs'
+import { ensureVaultAllocation, projectDisplayName } from './vault-location.mjs'
 import { createNullWatcherFactory } from './watchers.mjs'
 
 // The maintenance engine. One explicit `tick()`; no timer, no process, no
@@ -126,6 +127,10 @@ export const ENGINE_PRIMITIVES = Object.freeze({
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
+// The code a view is refused with when its own vault cannot be placed: a typed refusal's, or `vault-location-unusable`
+// for a file-system error there (a file in the way, no permission, a read-only volume). Null for anything else, which
+// is a fault of the engine and stops the tick.
+const viewRefusalCode = (error) => (isTypedRefusal(error) ? error.code : typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code) ? 'vault-location-unusable' : null)
 const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
 
 // An editor adapter that `build` makes, synchronously or not, the first time the publisher calls it; a refusal of
@@ -169,6 +174,10 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility = DEFAULT_ELIGIBILITY,
     fullReconciliationIntervalMs = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS, lateWriterWindowMs = DEFAULT_LATE_WRITER_WINDOW_MS,
     publicationRetryMs = DEFAULT_PUBLICATION_RETRY_MS, observeApp = null,
+    // Reads the app's own vault list without asking the app (readAppVaultListForAllocation): { ok: true, vaults } with
+    // the map id -> { path }, or { ok: false, code }. A folder for a new vault is never allocated inside a vault it
+    // lists, nor under a name a vault it lists already has, nor while the list cannot be read.
+    readAppVaultList = null,
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
     // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
     lockOwner = null, lockProbe = probeHealth,
@@ -249,7 +258,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   }
 
   function storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) {
-    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots])
+    // A view's vault can be allocated, or moved, while the engine runs: the store follows its record.
+    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots, readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path ?? null])
     const cached = stores.get(scope.scopeId)
     if (cached?.signature === signature) return cached.store
     const store = seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId: scope.scopeId, repositoryRoots })
@@ -353,7 +363,53 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       ?? writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: defaultMachineSettings({ workspaceId, updatedAt: now }) })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }
-    const scopes = enablement.scopes.map((scope) => ({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }))
+    // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never
+    // published under the data root (vault-location.mjs). A view whose folder cannot be allocated is not prepared on
+    // this tick, and its freshness says why; the other views go on.
+    const allocationRefusals = new Map()
+    if (machine.decisions.location !== null) {
+      // The app's list, read once per tick and only when a view is about to be allocated. An engine given no reader
+      // coordinates with no app, and knows no list. A list that cannot be read allocates nothing: the view says why,
+      // and its folder is allocated at a later tick, once the list reads.
+      let list = null
+      const appList = async () => {
+        if (typeof readAppVaultList !== 'function') return { ok: true, vaults: null }
+        if (list === null) {
+          let answer
+          try { answer = await readAppVaultList() } catch { answer = null }
+          list = answer?.ok === true ? { ok: true, vaults: answer.vaults ?? {} } : { ok: false, code: typeof answer?.code === 'string' ? answer.code : 'obsidian-settings-unreadable' }
+        }
+        return list
+      }
+      // The folders allocated to the views; a record that cannot be read refuses only its own view, below.
+      const allocatedPaths = enablement.scopes.map((scope) => { try { return readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path } catch { return undefined } }).filter((item) => typeof item === 'string')
+      for (const scope of enablement.scopes) {
+        try {
+          let vaults = null
+          if (readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId }) === null && !hasCommittedGeneration({ workspaceRoot, scopeId: scope.scopeId })) {
+            const known = await appList()
+            if (!known.ok) refuse('app-vault-list-unreadable', 'Obsidian\'s vault list could not be read, so no folder is allocated for this view yet; it is tried again at the next tick', { cause: known.code })
+            vaults = known.vaults
+          }
+          ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId, location: machine.decisions.location, projectName: projectDisplayName(project), repositoryRoots, vaults, allocatedPaths, now })
+        } catch (error) {
+          const code = viewRefusalCode(error)
+          if (code === null) throw error
+          allocationRefusals.set(scope.scopeId, code)
+        }
+      }
+    }
+    // Each view's store, on its own: one whose vault cannot be placed (a record naming a folder inside a repository,
+    // say) is refused alone, and the other views go on.
+    const scopes = []
+    for (const scope of enablement.scopes) {
+      if (allocationRefusals.has(scope.scopeId)) continue
+      try { scopes.push({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }) } catch (error) {
+        const code = viewRefusalCode(error)
+        if (code === null) throw error
+        allocationRefusals.set(scope.scopeId, code)
+      }
+    }
 
     watch([
       ...(project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => ({ id: `repo:${repo.name}`, path: repo.path, recursive: true, keyPrefix: sourceKey(repo.name, ''), keyOf: (relative) => sourceKey(repo.name, relative) })),
@@ -455,7 +511,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (full) { lastFullMs = nowMs; forceFull = false }
 
     // 7. Which views are invalid.
-    declaredScopes = new Set(scopes.map(({ scope }) => scope.scopeId))
+    declaredScopes = new Set(enablement.scopes.map((scope) => scope.scopeId))
     const previous = readPreviousFreshness(stateStore)
     const entries = new Map()
     const unseen = new Set()
@@ -482,6 +538,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // Invalidation is durable before any work: a view is not reported current while it is being rebuilt.
     for (const [scopeId, classes] of attempt) entries.set(scopeId, { ...demote(entries.get(scopeId), 'stale', 'invalidated', now), changeClasses: [...classes].sort() })
+    for (const [scopeId, code] of allocationRefusals) {
+      entries.set(scopeId, demote(previous?.scopes.find((entry) => entry.scopeId === scopeId && entry.state !== 'disabled') ?? blankEntry(scopeId, now), 'stale', code, now))
+    }
     for (const entry of previous?.scopes ?? []) if (!entries.has(entry.scopeId)) entries.set(entry.scopeId, demote(entry, 'disabled', 'scope-not-configured', now))
     const persist = () => stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries }))
     persist()

@@ -342,7 +342,7 @@ defaults (`defaults`), or carried over from an earlier release (`v1`).
 | Decision | Holds | Made today by |
 | --- | --- | --- |
 | `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you) or `audience set A,B` / `audience clear`; each withholds unclassified notes for now |
-| `location` | the absolute folder that holds this workspace's vaults | not yet: the first-run flow |
+| `location` | the absolute folder that holds this workspace's vaults | `location set DIR` |
 | `loginItem` | `on` or `off` | not yet: the first-run flow |
 | `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open` or `service start` |
 
@@ -416,13 +416,49 @@ proposals list` and `proposals show OPERATION` read them, and nothing applies
 one. A body edit to a note whose source uses CRLF line endings is also a
 proposal, never an apply, because the app normalizes line endings on save.
 
-The vault itself lives under the private data root, outside every repository:
-`~/Library/Application Support/Atelier` on macOS, `$XDG_DATA_HOME/atelier`
-(else `~/.local/share/atelier`) on Linux and `%LOCALAPPDATA%\Atelier` on
-Windows, under `obsidian/<workspace-id>/`. `--data-root DIR` names another
-absolute directory. Private state inside an enrolled repository is refused.
-Publication is proven on macOS arm64 only and is refused on Windows; see
-[Known limits](#known-limits).
+Atelier's private state lives under the private data root, outside every
+repository: `~/Library/Application Support/Atelier` on macOS,
+`$XDG_DATA_HOME/atelier` (else `~/.local/share/atelier`) on Linux and
+`%LOCALAPPDATA%\Atelier` on Windows, under `obsidian/<workspace-id>/`.
+`--data-root DIR` names another absolute directory. Private state inside an
+enrolled repository is refused. Publication is proven on macOS arm64 only and
+is refused on Windows; see [Known limits](#known-limits).
+
+Where the vaults are is decided per workspace. Until a person decides it, a
+view's vault is under the data root too, in `vaults/<view>`, as in every
+earlier release. `atelier obsidian location set DIR` decides a visible folder
+instead (`~/Atelier`, say). Each view that has not been published yet is then
+given its own folder there at its first publication, named
+`<project> (<view>)`: `~/Atelier/harbor-notes (everything)`. That name is also
+the vault's name in Obsidian's vault switcher, so it is readable and unique
+across projects and views. The first name that is free is taken, with a number
+inside the parentheses when needed (`harbor-notes (everything 2)`): free means
+nothing on the disk has it, and no vault Obsidian lists has it in any letter
+case. The folder is created private to this user (mode 0700), and so is `DIR`
+when Atelier creates it. The allocation is recorded in the workspace's private
+state (`state/allocations/<view>.json`) and is never recomputed: renaming the
+project or deciding another folder later moves no vault, and a vault published
+before under the data root stays there. `location show` says where each
+view's vault is, or will be.
+
+`DIR` is refused inside an enrolled repository or the project, inside a vault
+Atelier publishes, inside a folder Obsidian lists as a vault, and on another
+volume than the data root (a note is published by an atomic exchange, which
+cannot cross volumes). A folder a sync client keeps in step (iCloud Drive, a
+cloud storage provider, Dropbox, OneDrive, Google Drive, or a Desktop or
+Documents folder iCloud syncs) is refused unless `--allow-synced-location` is
+given: another machine's Obsidian could hold a vault there unseen. A folder
+macOS protects (Desktop, Documents, Downloads) is accepted with a warning,
+because macOS asks before Obsidian or the maintenance service may read it.
+`~/` is read against the account's home folder, which a shell does not do
+after `--x=`. Each check compares the folder as written and as its real path,
+in any letter case, so a link into a listed or synced vault is refused as
+that vault is. Obsidian's vault list is read through the app when it runs and
+answers, and otherwise from its settings file, never written. When the list
+cannot be read, `location set` says so and accepts the folder, and the
+maintenance service allocates no vault there until it can read the list
+(the view is `stale`, `app-vault-list-unreadable`, and is tried again at
+the next tick).
 
 ### What `open` does in each state of Obsidian
 

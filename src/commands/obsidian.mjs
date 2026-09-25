@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { AtelierDiagnosticError, resolveProjectConfig } from '../project/config.mjs'
 import { ObsidianContractRefusal } from '../projection/obsidian/contracts.mjs'
 import { applyPolicyDigest } from '../projection/obsidian/edits/policy.mjs'
-import { MINIMUM_APP_VERSION } from '../runtime/obsidian/app-capability.mjs'
+import { MINIMUM_APP_VERSION, inspectApp } from '../runtime/obsidian/app-capability.mjs'
 import { loadContributions } from '../runtime/obsidian/contributions.mjs'
 import { isoTime } from '../runtime/obsidian/documents.mjs'
 import { readObsidianEnablement } from '../runtime/obsidian/enablement.mjs'
@@ -24,6 +24,9 @@ import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '.
 import { readServiceSettings, serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
+import { checkVaultParent, projectDisplayName, vaultFolderName } from '../runtime/obsidian/vault-location.mjs'
+import { hasCommittedGeneration, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
+import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../projection/obsidian/publication/vault-list.mjs'
 
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
@@ -63,6 +66,9 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   scope list | scope show ID           The views this project declares. Read-only.
   audience show | set me|A,B | clear   The audiences this machine lets into a view (private; none by default).
                                        \`me\` is only you: every audience but sensitive, which is added by name.
+  location show | set DIR [--allow-synced-location]
+                                       Where this workspace's vaults live, as "<project> (<view>)"; each is allocated
+                                       there at its first publication. A vault published already stays where it is.
   mode show | set manual|automatic     Whether queued edits wait for a person or are applied under the policy.
   policy show | install FILE | revoke  The private apply policy. Automatic mode needs an installed, active one.
   policy digest FILE                   The digest FILE has to carry to be installed. Reads FILE; writes nothing.
@@ -98,7 +104,7 @@ Pending edits additionally report ${APPLY_UNAVAILABLE} while no apply operation 
 Minimum Obsidian version: ${MINIMUM_APP_VERSION}.
 Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer is not success.`
 
-const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
+const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', 'allow-synced-location': 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
@@ -133,7 +139,7 @@ export const accountActor = (username) => (typeof username === 'string' && IDENT
 // How each remembered answer is changed; null where no command changes it.
 const DECISION_CHANGES = Object.freeze({
   audience: '`atelier obsidian audience set me|A,B` decides who may see the vaults again',
-  location: null,
+  location: '`atelier obsidian location set DIR` decides where the vaults of views not published yet live',
   loginItem: null,
   adapter: null,
   consent: '`atelier obsidian service stop`, then `service start --consent-actor ID`, records another actor',
@@ -207,6 +213,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // under the test runner the process's own terminal is never looked at.
     terminal = env.NODE_TEST_CONTEXT === undefined ? { stdin: tty.isatty(0), stdout: tty.isatty(1) } : { stdin: false, stdout: false },
     account = accountName,
+    // The home folder a location is read against (`~/`) and checked for sync clients; a test names its own.
+    homedir = env.NODE_TEST_CONTEXT === undefined ? os.homedir() : null,
   } = options
   let json = argv.includes('--json')
   let operationName = null
@@ -244,6 +252,29 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       chooseAdapter()
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
+    }
+    // The app's vault list, read only, for a check of where vaults may live: through the app when it runs and answers,
+    // else from its settings file. { source: 'app' | 'file' | 'none', vaults } ('none': the app never ran here), or
+    // { source: 'unread', vaults: null, reason }. The app is reached only with the adapter (given or remembered, or the
+    // caller's seams); without it, only the file is read, and never under the test runner.
+    const appVaultList = async () => {
+      const quietly = async (read) => { try { return await read() } catch { return null } }
+      const reach = seams !== null ? seams : adapterSelected() ? await appSeams() : null
+      const registry = reach?.registry ?? null
+      if (registry !== null && reach.appProbe !== undefined) {
+        const seen = await inspectApp(reach.appProbe)
+        if (seen.running === true && typeof seen.version === 'string') {
+          const listed = await quietly(() => registry.listThroughApp())
+          if (listed?.answered === true) return { source: 'app', vaults: listed.vaults }
+        }
+      }
+      const settings = registry !== null ? await quietly(() => registry.readSettings())
+        : env.NODE_TEST_CONTEXT !== undefined ? { ok: false, code: 'app-vault-list-under-test' }
+          : obsidianSandboxedBuild({ platform, env }) !== null ? { ok: false, code: 'obsidian-sandboxed' }
+            : readObsidianSettings({ userDataDir: obsidianUserDataDir({ platform, env }) })
+      if (settings?.ok === true) return { source: 'file', vaults: settings.vaults ?? {} }
+      if (settings?.code === 'obsidian-settings-missing') return { source: 'none', vaults: {} }
+      return { source: 'unread', vaults: null, reason: typeof settings?.code === 'string' ? settings.code : 'obsidian-settings-unreadable' }
     }
     // Whether this run may reach the installed app: --adapter given, or remembered by the workspace for the real entry.
     const adapterSelected = () => { try { chooseAdapter(); return true } catch (error) { if (isTyped(error)) return false; throw error } }
@@ -334,6 +365,17 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const applyShown = { available: applyAvailable, state: applyAvailable ? 'available' : APPLY_UNAVAILABLE, operationId: registry.extensions.applyOperation().id }
     const [, sub, value] = positionals
 
+    // Where a view's vault is, or will be: { path, origin }. A view the next tick will place is shown where it would go,
+    // if that name is still free then (`to-be-allocated`).
+    const vaultWhere = (workspace, scopeId, decided, projectName) => {
+      if (workspace === null) return { path: null, origin: 'workspace-not-prepared' }
+      const found = vaultRootFor({ ...workspace, scopeId })
+      if (found.origin === 'legacy-data-root' && decided !== null && !hasCommittedGeneration({ ...workspace, scopeId })) {
+        return { path: path.join(decided.parent, vaultFolderName({ projectName, scopeId })), origin: 'to-be-allocated' }
+      }
+      return { path: found.path, origin: found.origin }
+    }
+
     const operations = {
       async status() {
         const { project, enablement, workspace, workspaceId } = readable()
@@ -344,7 +386,9 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const scopes = workspace === null
           ? enablement.scopes.map(({ scopeId }) => ({ scopeId, outcome: enablement.state === 'disabled' ? 'disabled' : 'not-prepared', reason: enablement.state === 'disabled' ? enablement.reason : 'workspace-not-prepared' }))
           : enablement.scopes.map(({ scopeId }) => {
-            const { vaultRoot: _vault, summary: _summary, ...report } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
+            const { vaultRoot: _vault, summary: _summary, ...found } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
+            // A view whose vault the next tick allocates elsewhere says where, not the data root it will not use.
+            const report = found.vault?.origin === 'legacy-data-root' ? { ...found, vault: vaultWhere(workspace, scopeId, machineOf(workspace)?.decisions.location ?? null, projectDisplayName(project)) } : found
             const plugin = pluginView(running, workspace, scopeId)
             return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next, plugin } : { ...report, plugin }
           })
@@ -387,6 +431,48 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             `reaching the app: ${decisionWords('adapter', decisions.adapter)}`,
             `maintenance allowed by: ${consent === null ? 'nobody yet' : `${consent.actor} (${consent.coverage}, since ${consent.grantedAt})`}`,
             ...Object.values(DECISION_CHANGES).filter((change) => change !== null).map((change) => `Change: ${change}`),
+          ],
+        }
+      },
+
+      // Where this workspace's vaults live. Deciding it places the vaults of views not published yet; a vault published
+      // already, under the data root or where an earlier decision placed it, stays where it is.
+      async location() {
+        const where = vaultWhere
+        const views = (project, enablement, workspace, decided) => enablement.scopes.map(({ scopeId }) => ({ scopeId, ...where(workspace, scopeId, decided, projectDisplayName(project)) }))
+        const lines = (list) => list.map((view) => `view ${view.scopeId}: ${view.path ?? 'no vault yet'} (${view.origin})`)
+        if (sub === 'show' || sub === undefined) {
+          const { project, enablement, workspace } = readable()
+          const { decisions } = shownMachine(machineOf(workspace), workspace)
+          const shown = views(project, enablement, workspace, decisions.location)
+          return { exit: EXIT.ok, document: { location: decisions.location, views: shown }, human: [`where vaults live: ${decisionWords('location', decisions.location)}`, ...lines(shown)] }
+        }
+        if (sub !== 'set' || value === undefined) refuse('usage', 'location show | location set DIR [--allow-synced-location]')
+        // `~/` is read against the home folder, which a shell does not do after `--x=`; under the test runner a home
+        // folder is only ever one the test named.
+        const tilde = value === '~' || value.startsWith('~/')
+        if (tilde && typeof homedir !== 'string') refuse('real-vault-location-under-test', 'a location under the home folder is never used under the test runner; name an absolute folder')
+        // Resolved, so a trailing separator (as tab completion leaves it) is no refusal.
+        const parent = tilde ? path.resolve(path.join(homedir, value.slice(1))) : path.resolve(cwd, value)
+        const { project, enablement, workspace, repositoryRoots, now } = writable()
+        const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultRootFor({ ...workspace, scopeId })).filter((found) => found.origin === 'allocated').map((found) => found.path)
+        // A folder inside, or holding, a vault the app lists is refused now; when the list cannot be read, it is checked
+        // again, and has to be read, before any vault is allocated there.
+        const list = await appVaultList()
+        const warnings = checkVaultParent({ parent, workspaceRoot: workspace.workspaceRoot, repositoryRoots, vaults: list.vaults, allocatedPaths, allowSynced: flags['allow-synced-location'] === true, homedir: homedir ?? undefined, platform })
+        const appVaultListShown = { source: list.source, ...(list.reason === undefined ? {} : { reason: list.reason }) }
+        const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
+        const decided = withDecision(current, 'location', { parent }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
+        writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
+        const placed = views(project, enablement, workspace, decided.decisions.location)
+        return {
+          exit: EXIT.ok, document: { location: decided.decisions.location, warnings, appVaultList: appVaultListShown, views: placed, takesEffect: 'next-tick' },
+          human: [
+            `where vaults live: ${parent}; a view's vault is allocated there at its first publication, as "${projectDisplayName(project)} (<view>)"`,
+            ...(warnings.synced === null ? [] : [`Warning: ${warnings.synced} keeps this folder in step with other machines.`]),
+            ...(warnings.protected === null ? [] : [`Warning: macOS asks before Obsidian or the maintenance service may read your ${warnings.protected} folder.`]),
+            ...(list.source === 'unread' ? [`Obsidian's vault list could not be read (${list.reason}); no vault is allocated there until it can be, and it is checked again then.`] : []),
+            ...lines(placed),
           ],
         }
       },

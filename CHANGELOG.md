@@ -23,6 +23,36 @@
 
 ### Changed
 
+- Where a workspace's vaults live can be decided, and a visible folder can
+  hold them: `atelier obsidian location set DIR` (`~/Atelier`, say) records
+  the `location` decision. Each view not published yet is then given its own
+  folder there at its first publication, `<project> (<view>)`, which is also
+  the vault's name in Obsidian (`harbor-notes (everything)`; a number inside the
+  parentheses when that name is taken on the disk or by a vault the app lists).
+  The folder is created exclusively and private to this user, and its
+  allocation is recorded once in the workspace's private state
+  (`atelier-obsidian-vault-allocation/v1`, `state/allocations/<view>.json`,
+  with the folder's device and inode: a folder that is not the one made,
+  restored or moved in, is never published into, `vault-allocation-replaced`,
+  and one that has gone is made again by the next tick, never inside a
+  repository, the project or the private state),
+  which the recovery store reads: the engine, source apply, the proposal
+  adapter and `open` all find the same vault. A vault published before stays
+  under the data root, and a workspace that decides nothing publishes there as
+  before. A folder inside a repository or the project, inside a vault Atelier
+  publishes or one the app lists, or on another volume than the data root is
+  refused, through links and in any letter case; a synced one needs
+  `--allow-synced-location`; a macOS-protected one is warned about. The app's
+  list is read through the app when it answers, else from its settings file;
+  while it cannot be read, no folder is allocated (`app-vault-list-unreadable`,
+  tried again at the next tick). A view whose folder cannot be allocated is not published
+  and its freshness says why, while the other views go on: a folder that
+  cannot be made (`vault-location-unusable`: a file in the way, no
+  permission), one inside Atelier's private state
+  (`vault-location-inside-private-state`, refused by `location set` too), an
+  allocation record that cannot be read or names a folder inside a
+  repository, each stops its own view only. `location show`
+  and `status` (`scopes[].vault`) say where each view's vault is.
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the
