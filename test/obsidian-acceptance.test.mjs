@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 
 // ---------------------------------------------------------------------------
 // 0. The spawn guard, installed before anything else is imported: nothing in
@@ -63,11 +64,13 @@ function guardSpawn(command, args, options) {
 }
 for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
   const original = childProcess[method]
-  childProcess[method] = function guarded(command, args, ...rest) {
-    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/), args)
-    else guardSpawn(command, args, Array.isArray(args) ? rest[0] : args)
-    return original.call(this, command, args, ...rest)
-  }
+  // exec and execSync take one shell line, and their options come second.
+  const check = (command, args, rest) => (method === 'exec' || method === 'execSync' ? guardSpawn('sh', String(command).split(/\s+/), args) : guardSpawn(command, args, Array.isArray(args) ? rest[0] : args))
+  const guarded = function guarded(command, args, ...rest) { check(command, args, rest); return original.call(this, command, args, ...rest) }
+  // exec and execFile have a promisified form of their own ({ stdout, stderr }); it is kept, and guarded the same way.
+  const custom = original[promisify.custom]
+  if (typeof custom === 'function') guarded[promisify.custom] = function guardedPromise(command, args, ...rest) { check(command, args, rest); return custom.call(this, command, args, ...rest) }
+  childProcess[method] = guarded
 }
 syncBuiltinESMExports()
 
@@ -172,7 +175,7 @@ const select = (scope, extra = {}) => resolveSelection({ canonicalSnapshot: SNAP
 // 1. Selection: literal expected scopes
 // ---------------------------------------------------------------------------
 
-test('the spawn guard refuses a child that can reach a running Obsidian unless nothing in its environment leads to the developer\'s own app', (t) => {
+test('the spawn guard refuses a child that can reach a running Obsidian unless nothing in its environment leads to the developer\'s own app', async (t) => {
   const dir = tempDir(t, 'home-guard')
   const [home, runtime] = [path.join(dir, 'private-home'), path.join(dir, 'private-runtime')]
   fs.mkdirSync(home)
@@ -191,10 +194,14 @@ test('the spawn guard refuses a child that can reach a running Obsidian unless n
   const args = ['-e', '0', '--', '--adapter=obsidian-cli']
   assert.throws(() => childProcess.spawnSync(process.execPath, args), /spawn guard/)
   assert.throws(() => childProcess.spawnSync(process.execPath, ['-e', '0', '--', '--entry-args=--adapter=obsidian-cli'], { env: { ...process.env } }), /spawn guard/)
-  assert.equal(guardErrors.length, before + 2)
+  // The promisified execFile keeps its own form ({ stdout, stderr }), and is guarded too.
+  assert.throws(() => promisify(childProcess.execFile)(process.execPath, args), /spawn guard/)
+  assert.equal(guardErrors.length, before + 3)
   guardErrors.length = before
-  if (reachesOwnApp(isolated) === null) assert.equal(childProcess.spawnSync(process.execPath, args, { env: isolated }).status, 0)
-  else assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: isolated }), /never started on this platform/)
+  if (reachesOwnApp(isolated) === null) {
+    assert.equal(childProcess.spawnSync(process.execPath, args, { env: isolated }).status, 0)
+    assert.deepEqual(await promisify(childProcess.execFile)(process.execPath, ['-e', 'process.stdout.write("ok")', '--', '--adapter=obsidian-cli'], { env: isolated }), { stdout: 'ok', stderr: '' })
+  } else assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: isolated }), /never started on this platform/)
   guardErrors.length = before
 })
 

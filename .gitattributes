@@ -3,3 +3,7 @@ templates/external-project-workspace/packs/** text eol=lf
 
 # Generated schema bytes must match the canonical LF generator on every host.
 src/ui/presentation/schema.generated.mjs text eol=lf
+
+# Atelier's Obsidian plugin is copied byte for byte into every managed vault and
+# its version is pinned to its code digest: the same bytes on every host.
+plugins/obsidian/** text eol=lf

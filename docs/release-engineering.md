@@ -63,7 +63,13 @@ Shipped, and required by the audit:
 - Every `contracts/atelier-obsidian-<name>.v<n>.schema.json` present in the
   source tree (lowercase name, versioned). Each must be packed and exported
   under its own path, and the audit fails if it finds none.
-- `docs/obsidian.md` and `docs/obsidian-contract.md`.
+- `docs/obsidian.md`, `docs/obsidian-contract.md` and `docs/obsidian-plugin.md`.
+- Atelier's own Obsidian plugin, which every managed vault receives:
+  `plugins/obsidian/manifest.json`, `main.js` and `styles.css`, the only files
+  admitted under `plugins/`, with its channel
+  (`src/projection/obsidian/plugin-bridge/index.mjs`) and the service's half
+  (`src/runtime/obsidian/plugin-channel.mjs`). `main.js` is scanned for egress
+  like every packed script.
 - `fixtures/obsidian/**`: small synthetic text only. Every packed fixture, in
   any subtree and spelling under `fixtures/`, is at most 262,144 bytes. The
   acceptance receipts under `fixtures/obsidian/acceptance/receipts/` are

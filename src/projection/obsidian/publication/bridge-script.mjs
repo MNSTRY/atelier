@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import { PLUGIN_OWNED_PATHS, POLICY_SETTINGS_PATHS } from '../materialize/settings.mjs'
 import { EXCHANGE_CONSTANTS } from './exchange.mjs'
 
 // The fixed script that performs one conditional publication. It runs in two
@@ -26,11 +27,14 @@ const KEYS = {
 const isAbsolute = (value) => typeof value === 'string' && value.startsWith('/') && !value.includes('\u0000')
 
 // A vault-relative path the publisher may address: visible files only, plus
-// the one policy-owned settings file. Every other settings path is the
-// person's and cannot be named in a payload at all.
+// the settings Atelier owns (the two policy settings files and its own
+// plugin's files). Every other settings path is the person's and cannot be
+// named in a payload at all.
+const ATELIER_OWNED_SETTINGS = new Set([...POLICY_SETTINGS_PATHS, ...PLUGIN_OWNED_PATHS])
+
 export function isAddressableVaultPath(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 1024 || value.startsWith('/') || value.includes('\\') || value.includes('\u0000')) return false
-  if (value === POLICY_SETTINGS_PATH) return true
+  if (ATELIER_OWNED_SETTINGS.has(value)) return true
   return value.split('/').every((part) => part !== '' && part !== '.' && part !== '..' && !part.startsWith('.'))
 }
 
@@ -43,7 +47,7 @@ export function validatePayload(payload) {
   for (const key of Object.keys(payload)) if (!allowed.includes(key)) fail(`unknown key ${key}`)
   for (const key of allowed) if (payload[key] === undefined) fail(`missing key ${key}`)
   if (!isAbsolute(payload.vaultRoot)) fail('vaultRoot must be absolute')
-  if (!isAddressableVaultPath(payload.path)) fail('path must be a relative visible path or the policy settings file')
+  if (!isAddressableVaultPath(payload.path)) fail('path must be a relative visible path or a settings file Atelier owns')
   if (payload.op === 'publish') {
     if (!OPERATION_ID.test(payload.operationId)) fail('operationId required')
     if (!SHA.test(payload.baseSha256)) fail('baseSha256 required')

@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 
 // ---------------------------------------------------------------------------
 // 0. The spawn guard. Installed before anything else is imported, for every
@@ -68,12 +69,13 @@ function guardSpawn(command, args, options) {
 }
 for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
   const original = childProcess[method]
-  childProcess[method] = function guarded(command, args, ...rest) {
-    // exec and execSync take one shell line, and their options come second.
-    if (method === 'exec' || method === 'execSync') guardSpawn('sh', String(command).split(/\s+/), args)
-    else guardSpawn(command, args, Array.isArray(args) ? rest[0] : args)
-    return original.call(this, command, args, ...rest)
-  }
+  // exec and execSync take one shell line, and their options come second.
+  const check = (command, args, rest) => (method === 'exec' || method === 'execSync' ? guardSpawn('sh', String(command).split(/\s+/), args) : guardSpawn(command, args, Array.isArray(args) ? rest[0] : args))
+  const guarded = function guarded(command, args, ...rest) { check(command, args, rest); return original.call(this, command, args, ...rest) }
+  // exec and execFile have a promisified form of their own ({ stdout, stderr }); it is kept, and guarded the same way.
+  const custom = original[promisify.custom]
+  if (typeof custom === 'function') guarded[promisify.custom] = function guardedPromise(command, args, ...rest) { check(command, args, rest); return custom.call(this, command, args, ...rest) }
+  childProcess[method] = guarded
 }
 syncBuiltinESMExports()
 
@@ -452,7 +454,7 @@ function assertGuardDecisions(decide, isolated) {
   }
 }
 
-test('the spawn guard refuses a child that can reach a running Obsidian unless nothing in its environment leads to the developer\'s own app, whichever way it is started', (t) => {
+test('the spawn guard refuses a child that can reach a running Obsidian unless nothing in its environment leads to the developer\'s own app, whichever way it is started', async (t) => {
   const dir = fs.mkdtempSync(path.join(TMP, 'atelier-home-guard-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   // The decision, for each platform: macOS needs a private HOME; Linux a private HOME and XDG_RUNTIME_DIR, and no
@@ -478,8 +480,14 @@ test('the spawn guard refuses a child that can reach a running Obsidian unless n
     else assert.throws(() => childProcess.spawnSync(process.execPath, args, { env: isolated }), /never started on this platform/)
   }
   assert.throws(() => childProcess.execSync(`${JSON.stringify(process.execPath)} -e 0 -- --adapter=obsidian-cli`), /spawn guard/)
-  assert.equal(guardErrors.length, before + 9 + (process.platform === 'darwin' ? 0 : 2) + (APP_ISOLATION_HERE ? 0 : 2))
+  // The promisified execFile keeps its own form ({ stdout, stderr }), and is guarded too.
+  assert.throws(() => promisify(childProcess.execFile)(process.execPath, production), /spawn guard/)
+  assert.equal(guardErrors.length, before + 10 + (process.platform === 'darwin' ? 0 : 2) + (APP_ISOLATION_HERE ? 0 : 2))
   guardErrors.length = before
+  if (APP_ISOLATION_HERE) {
+    const answered = await promisify(childProcess.execFile)(process.execPath, ['-e', 'process.stdout.write("ok")', '--', '--adapter=obsidian-cli'], { env: isolated })
+    assert.deepEqual(answered, { stdout: 'ok', stderr: '' })
+  }
   // Mutation control: a child that names neither passes whatever environment it has.
   assert.doesNotThrow(() => childProcess.spawnSync(process.execPath, ['-e', '0']))
 })
@@ -2100,6 +2108,27 @@ const server = http.createServer((request, response) => {
 server.listen(Number(port), '127.0.0.1')
 `
 
+test('`plugin on` with the installed entry to start replaces a service of an earlier release before its tick, under the consent already recorded, and the view is published with the plugin', async (t) => {
+  const world = makeWorld(t)
+  const spawn = trackingSpawn(t)
+  const seams = (entryPath) => ({ ...UNREACHABLE_SEAMS, service: { entryPath, intervalMs: IDLE_INTERVAL, spawn } })
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', 'first-actor'], { seams: seams(earlierEntry(world.dir)) })
+  assert.equal(started.json.service.state, 'healthy', JSON.stringify(started.json).slice(0, 400))
+  const before = readServiceRecord(world.workspace())
+  const consent = readServiceSettings(world.workspace()).consent
+  const on = await world.run(['plugin', 'on', '--json', '--scope', FULL_SCOPE.scopeId], { seams: seams(TEST_SERVICE_ENTRY) })
+  const after = readServiceRecord(world.workspace())
+  assert.deepEqual([on.exit, on.json.choice.state, on.json.service.restarted, on.json.takesEffect], [0, 'requested', 'outdated', EXCHANGE_HERE ? 'published' : 'next-publication'], JSON.stringify(on.json).slice(0, 600))
+  assert.notEqual(after.runtimeId, before.runtimeId)
+  assert.equal(after.executable.digest, digest(fs.readFileSync(TEST_SERVICE_ENTRY)), 'the installed entry runs now')
+  assert.deepEqual(readServiceSettings(world.workspace()).consent, consent, 'under the consent already recorded')
+  await waitFor(() => !isAlive(before.pid), { label: 'the earlier runtime to end' })
+  if (EXCHANGE_HERE) assert.ok(fs.existsSync(path.join(world.vault(), '.obsidian', 'plugins', 'atelier-projection', 'main.js')), 'the plugin is in the vault')
+  const stopped = await world.run(['service', 'stop', '--json'], { seams: seams(TEST_SERVICE_ENTRY) })
+  assert.equal(stopped.json.service.stopped, true)
+  await waitFor(() => !isAlive(after.pid), { label: 'the stopped service to exit' })
+})
+
 // The release a record names: this package's by default (`releaseIdentity`, where it exists), or the one given.
 const currentRelease = () => (typeof releaseIdentity === 'function' ? releaseIdentity() : undefined)
 
@@ -2219,6 +2248,19 @@ test('a service of a later release than the installed one is neither replaced no
   const again = await world.run(openArgs(), { seams, open: FAST_APP })
   assert.notEqual(again.json.reason, 'service-other-release', JSON.stringify(again.json).slice(0, 500))
   assert.deepEqual(readServiceRecord(world.workspace()).executable.ext?.release, releaseIdentity())
+  await stopWhateverRuns(world, seams)
+})
+
+test('`plugin on` with a service of a later release running records the request, leaves that service alone and gives the same next step as open', async (t) => {
+  const world = makeWorld(t)
+  const later = await standInRuntime(t, world, { mode: 'current', release: { version: '999.0.0', digest: `sha256:${'0'.repeat(64)}` } })
+  const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const json = await world.run(['plugin', 'on', '--json', '--scope', FULL_SCOPE.scopeId], { seams })
+  assert.deepEqual([json.exit, json.json.choice.state, json.json.takesEffect, json.json.service.reason], [0, 'requested', 'next-publication', 'service-other-release'], JSON.stringify(json.json).slice(0, 500))
+  assert.equal(json.json.next, REASON_NEXT['service-other-release'])
+  const human = await world.run(['plugin', 'on', '--scope', FULL_SCOPE.scopeId], { seams })
+  assert.match(human.stdout, /\n {2}Next: the maintenance service runs a later release of Atelier than this command/)
+  assert.deepEqual([isAlive(later.child.pid), readServiceRecord(world.workspace()).runtimeId], [true, later.runtimeId], 'the later runtime still runs, under its own record')
   await stopWhateverRuns(world, seams)
 })
 

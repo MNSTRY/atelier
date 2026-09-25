@@ -653,7 +653,7 @@ export function createViewPreparationForOracleTests(rules = REDACTION_RULES) {
 // notes that hold a layout 1 view in layout 1 (open edits and edits closed on
 // this tick); without it, `heldNotePaths` do. `viewScopeIds`, when given, are
 // the views still maintained: the registry drops the sections of any other.
-function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, viewScopeIds = null, layout: requestedLayout } = {}) {
+function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, plugin = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, viewScopeIds = null, layout: requestedLayout } = {}) {
   if (cache !== null && !isPreparationCache(cache)) refuse('invalid-preparation-cache', 'the preparation cache must come from createPreparationCache')
   assertObsidianContract('corpus-profile', profile)
   assertObsidianContract('scope', scope)
@@ -835,7 +835,7 @@ function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegis
     })
     .sort((left, right) => compare(left.edgeId, right.edgeId))
 
-  const settings = prepareSettings({ existing: existingSettings })
+  const settings = prepareSettings({ existing: existingSettings, plugin })
   files.push(...settings.files)
   const occupied = new Set()
   for (const file of files) {

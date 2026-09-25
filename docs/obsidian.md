@@ -261,7 +261,7 @@ nothing under `scripts/obsidian/` ships.
 | --- | --- |
 | `@mnstry/atelier/obsidian` | `src/runtime/obsidian/index.mjs`: enablement, machine settings, engine, service lifecycle, production seams, app qualification |
 | `@mnstry/atelier/obsidian/contracts` | `src/projection/obsidian/contracts.mjs`: contract validation, `selectScope`, note paths |
-| `@mnstry/atelier/obsidian/materialize` | `prepareView`, settings, path registry |
+| `@mnstry/atelier/obsidian/materialize` | `prepareView`, settings (including the plugin's files and entry), path registry |
 | `@mnstry/atelier/obsidian/publication` | `publishView`, editor adapters, the exchange |
 | `@mnstry/atelier/obsidian/recovery` | recovery store, journals, late-writer recheck |
 | `@mnstry/atelier/obsidian/edits` | edit observation, arbitration, apply policy, source apply |
@@ -336,6 +336,20 @@ stop`, then open again, or open with the later release. A service in a long
 tick is not stopped (`open` answers `busy`), and a listener that does not
 prove itself this workspace's service is never touched.
 
+The first time Obsidian opens a view's vault it asks "Do you trust the author
+of this vault?", because every vault Atelier publishes carries Atelier's own
+plugin. "Trust author and enable plugins" turns it on: a status bar item then
+says whether the view is current, updating, held for an edit you made, stale,
+or whether the maintenance service does not answer, and "Atelier: show status"
+says why. "Browse vault in Restricted Mode" keeps every community plugin off
+in that vault, and nothing else changes: maintenance, `open` and `status` work
+without the plugin, as they always did. Obsidian keeps the answer per vault in
+its own storage and asks again the next time until the vault is trusted or
+restricted mode is switched on for good in its settings. Turning the plugin
+off in a vault, or uninstalling it there, is respected from then on;
+`atelier obsidian plugin on --scope ID` brings it back. What the plugin does
+and never does is in [obsidian-plugin.md](obsidian-plugin.md).
+
 `open` and `status` answer with a freshness state, not a promise. `current`
 means the vault is the present generation, verified by read-back, and the app
 has it open. `updating` means maintenance is publishing or has not finished.
@@ -346,7 +360,9 @@ and the view is not republished over it. The remaining outcomes (`indexing`,
 `publisher-conflict`, `app-missing`, `app-version-unsupported`,
 `app-cli-unavailable`, `launch-failed`, `service-unavailable`, `busy`,
 `disabled`) each name what to do next, and exit code 3 says the answer is not
-success.
+success. Both also report Atelier's plugin for each view, under `plugin`:
+present while it holds the vault open in the app, with the app and plugin
+versions, or not present with the reason.
 
 Edits made in the vault are preserved before anything is republished. A body
 replacement is held as a pending edit; under manual mode it reaches its source
@@ -448,6 +464,18 @@ doubles per attempt, up to the full reconciliation every five minutes. What
 the app looks like is read from the process table and the app's vault list
 alone: maintenance runs nothing in Obsidian to find out, and asks it for its
 version only when a view is about to be published, without blocking.
+
+While Atelier's plugin holds the view's vault open in the app and the command
+line gives no version (as it answers while a vault is still loading), the
+version the plugin reports stands in (reason `plugin-reported`); a version the
+command line gives always decides, and while the process table shows no app
+running, a plugin's report counts for nothing. `open` then asks the command
+line nothing: a vault the app's settings file lists is opened by path, and one
+it does not show is answered as `app-cli-unavailable` with reason
+`vault-open-cli-silent` (the app has the vault open; make sure its
+command-line interface is turned on). So is a listed vault the command line
+does not answer for once it is opened, while only the plugin reports the
+version: `open` says so at once instead of waiting for the app.
 
 ## Known limits
 
@@ -586,6 +614,15 @@ test reported as a pass.
 - An edit the byte lens cannot turn into source bytes (a new or changed link
   to another note of the vault, an edited front matter) becomes a copy-only
   proposal. No operation applies one.
+- Atelier's plugin (phase 1) reports presence and status and decides
+  nothing: publication still coordinates with the app through its
+  command-line tool, which must be enabled, and the plugin only supplies the
+  app version where that tool gives none. A person who turns the plugin off
+  in a vault, or uninstalls it there, is followed: its entry is not added
+  back and a deleted folder is not made again until the person turns it on
+  in Obsidian's settings or runs
+  `atelier obsidian plugin on --scope ID`. Plugin files are never removed from
+  a vault. See [obsidian-plugin.md](obsidian-plugin.md).
 - Acceptance: a schema-valid receipt closes no gate, the package proof closes
   no gate, and no adopter acceptance is recorded in this repository.
 

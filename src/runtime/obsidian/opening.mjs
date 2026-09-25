@@ -81,6 +81,7 @@ const QUIT = 'quit Obsidian (on Linux, also any app that runs on a system Electr
 const THROUGH_THE_APP = 'start Obsidian with any vault open, then open again: the vault is then added through the app'
 export const REASON_NEXT = Object.freeze({
   'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again; open then adds this view\'s vault to Obsidian itself',
+  'vault-open-cli-silent': 'Obsidian has this view\'s vault open, as Atelier\'s plugin in it shows, but its command line did not answer, so the vault can be neither found nor opened through it; make sure the command-line interface is turned on in Obsidian\'s settings, then open again',
   'editor-uncoordinated': `${UNCOORDINATED}; \`atelier obsidian open\` adds this view's vault to Obsidian and publishes through it, or ${QUIT}; it is retried automatically`,
   'obsidian-settings-missing': 'Obsidian has not run on this account yet: start it once (it creates its settings), then open again with it running or quit',
   'obsidian-settings-location-unknown': THROUGH_THE_APP,
@@ -235,7 +236,10 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 //     back from its list (findVaultEntry);
 //   - running with no vault open: its command line answers nothing, and its
 //     settings file is the running app's, so it is only read: a vault it lists
-//     is opened by path, and one it does not list is `no-vault-open`;
+//     is opened by path, and one it does not list is `no-vault-open`. So is an
+//     app whose version only Atelier's plugin reported: its command line gave
+//     none, so nothing is asked through it, and a vault its settings do not
+//     show is `vault-open-cli-silent` (the plugin shows the vault open);
 //   - not running: the vault is added to its settings file, which is written
 //     only while no Obsidian runs (registerVaultInObsidianSettings). An app
 //     that started just after that write may have read its list before it, and
@@ -260,7 +264,7 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
     const vaults = settings?.ok === true ? settings.vaults : null
     const entry = findVaultEntry(vaults, vaultRoot)
     if (entry) return { ok: true, path: entry.path, how: 'listed', vaults }
-    return { ok: false, reason: inside(vaults) ? 'vault-inside-another-vault' : 'no-vault-open' }
+    return { ok: false, reason: inside(vaults) ? 'vault-inside-another-vault' : observation.fromPlugin === true ? 'vault-open-cli-silent' : 'no-vault-open' }
   }
   if (observation.answering === true) {
     const listed = await attempt(() => registry.listThroughApp())
@@ -382,9 +386,12 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   //    above it would take a call run there.
   const { vaultRoot } = view
   if (typeof vaultRoot !== 'string') return finish('not-prepared', { ...common, reason: 'no-vault-folder', app: app(before) })
-  const known = await ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string', noVaultOpen }, vaultRoot, sleep, pollMs: appPollMs })
-  // An app that answered its version and then closed its last vault window is one with no vault open.
-  if (!known.ok) return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
+  // A version Atelier's plugin reported is not the command line answering (withPluginReportedVersion).
+  const fromPlugin = before.versionSource === 'plugin'
+  const known = await ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string' && !fromPlugin, noVaultOpen: noVaultOpen || fromPlugin, fromPlugin }, vaultRoot, sleep, pollMs: appPollMs })
+  // An app that answered its version and then closed its last vault window is one with no vault open; one that holds
+  // this vault open but whose command line does not answer has no usable command line.
+  if (!known.ok) return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : known.reason === 'vault-open-cli-silent' ? 'app-cli-unavailable' : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
   const registration = { how: known.how }
   const route = vaultRoute({ vaults: known.vaults, vaultRoot })
   // Open in several windows, one per entry of the list that names its folder: each holds the vault, and a publication
@@ -406,6 +413,9 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     if (rules.appQualifies(after)) {
       try { vault = await appProbe.vaultState({ vaultRoot, route }) } catch { vault = { answered: false, indexReady: false } }
       if (vault?.answered === true && vault.indexReady === true) break
+      // Only the command line answers for a vault. An app whose version still only Atelier's plugin reports gives no
+      // answer there, and waiting changes nothing: its command line is what is missing, not a launch.
+      if (vault?.answered !== true && after.versionSource === 'plugin') return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
     }
     if (monotonic() >= deadline) break
     await sleep(appPollMs)

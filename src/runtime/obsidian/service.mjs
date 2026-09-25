@@ -2,10 +2,16 @@ import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
+import { prepareView as productionPrepareView } from '../../projection/obsidian/materialize/index.mjs'
+import { preparePluginFiles } from '../../projection/obsidian/plugin-bridge/bundle.mjs'
+import { publishView as productionPublishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { isoTime } from './documents.mjs'
 import { createMaintenanceEngine } from './engine.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { assertOutsideRepositories, protectedRoots, readLocalPointer, resolveDataRoot, workspaceStateRoot } from './machine-settings.mjs'
+import { createPluginChannel, createPluginSessions, ensurePluginBearer, pluginPresence } from './plugin-channel.mjs'
+import { confirmPluginEntry, confirmPluginSeen, currentPluginChoice, decidePluginChoice, vaultFilePresent, viewVaultRoot } from './plugin-choice.mjs'
+import { createPluginDriftObserver } from './plugin-drift.mjs'
 import { isProcessAlive } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import {
@@ -13,7 +19,7 @@ import {
   writeLastServiceError, writeServiceRecord,
 } from './service-record.mjs'
 import { createServiceServer } from './service-server.mjs'
-import { createMaintenanceStateStore } from './state-store.mjs'
+import { OPEN_EDIT_STATES, createMaintenanceStateStore } from './state-store.mjs'
 import { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
 import { createFsWatcherFactory } from './watchers.mjs'
 
@@ -32,6 +38,13 @@ import { createFsWatcherFactory } from './watchers.mjs'
 // shutdown the tick in flight is allowed to finish; nothing is swept, and a
 // publication that was cut short is settled by the publisher's own restart
 // recovery on a later tick, never by deleting what it left behind.
+//
+// It also holds the plugin channel (plugin-channel.mjs). Every view it
+// prepares carries Atelier's plugin, whose data file names this listener and
+// the view's bearer, unless the person turned the plugin off in that vault
+// (plugin-choice.mjs): then the entry is left alone and only the plugin files
+// that are still there are kept current. A plugin that holds a view open is
+// reported by status and tells the adapter factory the app version it runs in.
 //
 // `adapterFactory` has no default here either: whoever starts the service
 // decides whether it may reach a running app.
@@ -98,6 +111,8 @@ export async function runMaintenanceService(options = {}) {
   const identity = { serviceName: serviceNameFor(workspaceId), workspaceId, runtimeId, pid, host, port, executableDigest: executable.digest, startedAt }
   const bearer = randomBytes(32).toString('base64url')
   const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
+  // Session identities live in memory only and are always random, whatever `randomBytes` the service was given.
+  const pluginSessions = createPluginSessions()
 
   let stopping = false
   let consecutiveFailures = 0
@@ -105,7 +120,49 @@ export async function runMaintenanceService(options = {}) {
   let settleDone
   const done = new Promise((resolve) => { settleDone = resolve })
 
-  const engine = createEngine({ watcherFactory: createFsWatcherFactory(), ...engineOptions, loadProject, dataRoot, adapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId } })
+  // Every prepared view carries the plugin with this listener's address and the view's bearer, as the person's choice
+  // for that vault allows: the choice is read, and recorded when the vault shows it changed, from the community plugin
+  // list as it is now, and those very bytes travel with the view. A bearer or a choice that cannot be kept leaves that
+  // view without the plugin for this tick; the view itself is prepared as ever.
+  const pluginFor = (scopeId) => {
+    try {
+      const vaultRoot = viewVaultRoot(workspaceRoot, scopeId)
+      const { choice, community } = decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultRoot, clock })
+      const off = choice.state === 'off'
+      const bearer = ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock })
+      if (pluginChannel.bearers().get(scopeId) !== bearer) pluginChannel.bearersChanged()
+      const plugin = preparePluginFiles({ channel: { host, port }, scopeId, bearer, onlyIfPresent: off })
+      // Turned off: the files still there are kept current; a folder the person removed is not made again.
+      const files = off ? plugin.files.filter((file) => vaultFilePresent(vaultRoot, file.path)) : plugin.files
+      const kept = new Set(files.map((file) => file.path))
+      const unreadable = community.file.state === 'unreadable'
+      return {
+        files, ownership: { ...plugin.ownership, files: plugin.ownership.files.filter((entry) => kept.has(entry.path)) },
+        community: off || unreadable ? { entry: 'withheld', reason: off ? 'turned-off-in-this-vault' : 'list-unreadable' } : { entry: 'owned', existing: community.file.bytes },
+      }
+    } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-not-prepared', code: errorCode(error), name: errorName(error) })
+      return null
+    }
+  }
+  const prepareWithPlugin = (input) => (engineOptions.seams?.prepareView ?? productionPrepareView)({ ...input, plugin: pluginFor(input.scope.scopeId) })
+  // An entry offered to a vault and now in place is confirmed: from then on, a list without it is the person's decision.
+  const publishAndConfirm = async (input) => {
+    const result = await (engineOptions.seams?.publishView ?? productionPublishView)(input)
+    try { confirmPluginEntry({ workspaceRoot, workspaceId, scopeId: input.recoveryStore.scopeId, result, clock }) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-entry-not-confirmed', code: errorCode(error), name: errorName(error) })
+    }
+    return result
+  }
+  // The app version a live plugin reports counts as checked for the view it holds open, while one launch of the plugin
+  // alone holds it: with two apps holding the vault, which one the command-line tool reaches is unknown.
+  const pluginReportOf = (scopeId) => { const report = pluginSessions.report(scopeId); return report?.instances === 1 ? report : null }
+  // The engine also asks the factory itself (`forget`, on a tick somebody asked for): the wrapper keeps its methods.
+  const pluginAwareAdapterFactory = Object.assign((input) => adapterFactory({ ...input, pluginReport: typeof input?.scope?.scopeId === 'string' ? pluginReportOf(input.scope.scopeId) : null }), adapterFactory)
+  const engine = createEngine({
+    watcherFactory: createFsWatcherFactory(), ...engineOptions, seams: { ...(engineOptions.seams ?? {}), prepareView: prepareWithPlugin, publishView: publishAndConfirm },
+    loadProject, dataRoot, adapterFactory: pluginAwareAdapterFactory, clock, env, platform, lockOwner: { host, port, runtimeId },
+  })
 
   const recordIsOurs = () => {
     try { const record = readServiceRecord({ workspaceRoot, workspaceId }); return record !== null && record.runtimeId === runtimeId && record.pid === pid } catch { return false }
@@ -128,11 +185,21 @@ export async function runMaintenanceService(options = {}) {
     writeLastServiceError({ workspaceRoot, workspaceId, document: { schema: SERVICE_ERROR_SCHEMA, workspaceId, runtimeId, code: errorCode(outcome.error), name: errorName(outcome.error), at, consecutiveFailures, totalFailures: (previous?.totalFailures ?? 0) + 1, resolvedAt: null } })
   }
 
+  // A plugin file a view's committed generation pins that is not on disk as pinned has the view prepared again, so the
+  // publisher writes it again; a drift is asked about once, not at every tick.
+  const pluginDrift = createPluginDriftObserver({ workspaceRoot, workspaceId })
+  const askForDriftedViews = () => {
+    try { for (const scopeId of pluginDrift.observe([...pluginChannel.bearers().keys()])) engine.requestPreparation(scopeId) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-drift-not-read', code: errorCode(error), name: errorName(error) })
+    }
+  }
+
   const loop = createTickLoop({
     intervalMs, maxBackoffMs, onOutcome: recordOutcome,
     async tick() {
       // The service runs only while its record names it: a replaced or removed record ends it, cleanly.
       if (!recordIsOurs()) { void shutdown('record-no-longer-names-this-runtime'); return { state: 'stopping', reason: 'record-no-longer-names-this-runtime' } }
+      askForDriftedViews()
       return engine.tick()
     },
   })
@@ -150,6 +217,26 @@ export async function runMaintenanceService(options = {}) {
   }
 
   const healthStatus = () => (stopping ? 'stopped' : consecutiveFailures > 0 ? 'degraded' : 'healthy')
+
+  // One view as the plugin is told about it: its freshness entry with held notes counted, and its open pending edits.
+  function pluginStatusOf(scopeId) {
+    let entry = null
+    try { entry = stateStore.readFreshness()?.scopes.find((item) => item.scopeId === scopeId) ?? null } catch (error) { if (!isTyped(error)) throw error; return { view: null, pendingEdits: null } }
+    let open = null
+    try { open = stateStore.readPendingEdits().edits.filter((edit) => edit.scopeId === scopeId && OPEN_EDIT_STATES.includes(edit.state)).length } catch (error) { if (!isTyped(error)) throw error }
+    const view = entry === null ? null : {
+      state: entry.state, reason: entry.reason, verified: entry.verified, generationId: entry.generationId, preparedGenerationId: entry.preparedGenerationId,
+      heldNoteCount: entry.heldNotes.length, retainedEdits: entry.retainedEdits, checkedAt: entry.checkedAt,
+    }
+    return { view, pendingEdits: open === null ? null : { open } }
+  }
+  // A plugin that holds a view open shows that its app has the view's entry: an entry only offered so far is confirmed.
+  const pluginSeen = (scopeId) => {
+    try { confirmPluginSeen({ workspaceRoot, workspaceId, scopeId, clock }) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-entry-not-confirmed', code: errorCode(error), name: errorName(error) })
+    }
+  }
+  const pluginChannel = createPluginChannel({ workspaceRoot, workspaceId, runtimeId, sessions: pluginSessions, statusOf: pluginStatusOf, serviceStatus: healthStatus, onSessionOpened: pluginSeen })
   const server = createServiceServer({
     identity, bearer,
     operations: {
@@ -158,7 +245,11 @@ export async function runMaintenanceService(options = {}) {
         let lastError = null
         try { lastError = readLastServiceError({ workspaceRoot, workspaceId }) } catch (error) { if (!isTyped(error)) throw error; lastError = { unreadable: error.code } }
         if (lastError?.schema) { const { schema: _schema, workspaceId: _workspace, ...shown } = lastError; lastError = shown }
-        return { schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(), ...(typeof appStatus === 'function' ? { app: appStatus() } : {}) }
+        return {
+          schema: SERVICE_STATUS_SCHEMA, service: { ...identity, status: healthStatus() }, loop: loop.state(), lastTick, lastError, freshness: freshnessSummary(),
+          plugins: pluginPresence({ sessions: pluginSessions, scopeIds: [...pluginChannel.bearers().keys()], entryOf: (scopeId) => currentPluginChoice({ workspaceRoot, workspaceId, scopeId }).state }),
+          ...(typeof appStatus === 'function' ? { app: appStatus() } : {}),
+        }
       },
       // A tick asked for one view (`open` asks for its own) prepares and publishes that view once more.
       async tick({ scopeId } = {}) {
@@ -168,6 +259,7 @@ export async function runMaintenanceService(options = {}) {
         return outcome.ok ? { ok: true, ...summary(outcome.report) } : { ok: false, error: { code: errorCode(outcome.error), name: errorName(outcome.error) } }
       },
       stop: () => shutdown('stop-requested'),
+      plugin: (command, request) => pluginChannel.handle(command, request),
     },
   })
 

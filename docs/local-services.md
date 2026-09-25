@@ -147,6 +147,7 @@ explicit consent that names its actor.
 | Status | `GET /status` | bearer | the health fields, loop state, last tick, last error code, and per-view freshness with held notes counted, not named |
 | Tick now | `POST /tick` | bearer | the state of the tick that ran. The body may also name one view (`scopeId`, a contract identifier), which that tick prepares and publishes once more, asking the app again |
 | Stop | `POST /stop` | bearer | an acknowledgement naming the runtime and PID, then the service ends |
+| Plugin challenge, hello, lease, release, status | `POST /plugin/challenge`, `/plugin/hello`, `/plugin/lease`, `/plugin/release`, `/plugin/status` | a handshake over one vault's key, which never crosses the wire | Atelier's Obsidian plugin inside that vault: presence and read-only status of that one view ([obsidian-plugin.md](obsidian-plugin.md)) |
 
 Health carries no path, no note title, no source name and no withheld
 identity. There is no other operation: no file serving, no command, no
@@ -159,7 +160,7 @@ The listener refuses a request before looking its operation up when:
   also refuses a name that resolves to loopback;
 - `Sec-Fetch-Site` is present and is neither `none` nor `same-origin`, or
   `Origin` is present and is not the listener itself;
-- the path is not one of the four, exactly and without a query, or the method
+- the path is not one of the nine, exactly and without a query, or the method
   is not that path's method.
 
 Status, tick and stop additionally refuse without the bearer of the running
@@ -170,6 +171,18 @@ also name one view by its `scopeId`, which must be a contract identifier as
 the scope contract defines it (400, `request-invalid`); any other member, and a
 `scopeId` on a stop, is refused (400, `request-member-unknown`). A refused
 request runs nothing.
+
+The plugin commands carry no credential in a header, and refuse one. The key
+of a vault the workspace maintains is random per view and kept owner-only in
+private state and in that vault's plugin data file; it never crosses the
+wire. The service answers a challenge only for a key it holds, with a proof
+over its own exact address, before the plugin sends anything that names the
+vault; the plugin then proves the same key, and every later command and answer
+is sealed with a key for that session, with a counter that only goes up. What
+a session grants is the plugin commands for that one view and nothing else:
+the runtime bearer is not accepted there, and a vault's key is not accepted by
+status, tick or stop. A plugin payload is a JSON object of at most 1 KiB with
+exactly the fields of its command.
 
 ### Status values and refusal cases
 
@@ -207,7 +220,9 @@ A runtime of an earlier release is replaced by a command that asks for a tick
 with the start options of the installed entry (`requestServiceTick({ service
 })`; `open` does). Every runtime records at its start the release it runs
 (`executable.ext.release` in its record): the package version and a digest of
-every runtime module it ships (`src/` and `contracts/`, by path and content).
+every runtime module it ships (`src/` and `contracts/`, by path and content),
+and of the plugin it publishes into every vault (`plugins/`; none where a
+package has no such folder).
 A runtime of an earlier release proves itself `healthy` but records an earlier
 version than this package's, this version with an entry module or modules of
 other content, or no release at all (releases up to the one that began

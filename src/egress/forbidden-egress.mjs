@@ -17,6 +17,8 @@ export const DEFAULT_EGRESS_SCAN_PATHS = [
   'templates',
   'examples',
   'skills',
+  // Atelier's own Obsidian plugin: shipped, and run inside the app of every vault Atelier manages.
+  'plugins',
 ]
 
 const SCRIPT_EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.sh'])
