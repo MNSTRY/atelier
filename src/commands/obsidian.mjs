@@ -288,7 +288,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const { workspace } = readable()
       if (workspace !== null && readServiceSettings(workspace) !== null) return { consent: undefined, source: null }
       const actor = accountActor(account())
-      return actor === null ? { consent: undefined, source: null } : { consent: { actor, coverage: 'service' }, source: 'account' }
+      // `derived`: the start records it only while no consent is recorded, checked again under the start lock.
+      return actor === null ? { consent: undefined, source: null } : { consent: { actor, coverage: 'service', derived: true }, source: 'account' }
     }
     // --adapter, given to an operation that starts or reaches the service of an enabled project, is remembered the first
     // time: the workspace is prepared and the decision written before anything starts, so no later run needs the flag.

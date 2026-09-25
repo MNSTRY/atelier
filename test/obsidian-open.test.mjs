@@ -2241,6 +2241,32 @@ test('a person at a terminal allows the first start by their account\'s name; a 
   await waitFor(() => !isAlive(second.pid), { label: 'the second service to exit' })
 })
 
+test('a consent derived at a terminal never replaces one recorded meanwhile: the start decides under its lock, and still records one for a workspace that has none', async (t) => {
+  const world = makeWorld(t)
+  const service = { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) }
+  const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: FAST_PROBE, clock: world.clock }
+  const derived = { actor: 'someone', coverage: 'service', derived: true }
+  const stop = async () => { const { pid } = readServiceRecord(world.workspace()); await stopService(lifecycle); await waitFor(() => !isAlive(pid), { label: 'the service to exit' }) }
+  // A command at a terminal found no consent and derived one; before its start, an agent's run recorded its own.
+  await world.run(['service', 'start', '--json', '--consent-actor', 'agent-synthetic'], { seams: { ...UNREACHABLE_SEAMS, service } })
+  const recorded = readServiceSettings(world.workspace()).consent
+  await stop()
+  const started = await startService({ ...lifecycle, ...service, consent: derived })
+  assert.equal(started.state, 'healthy')
+  assert.deepEqual(readServiceSettings(world.workspace()).consent, recorded, 'the recorded consent stays, actor and coverage')
+  await stop()
+  // A workspace with no consent recorded takes the derived one, and records it without the member that marks it derived.
+  const fresh = makeWorld(t)
+  const freshLifecycle = { ...lifecycle, loadProject: fresh.loadProject, dataRoot: fresh.dataRoot, env: fresh.env }
+  const first = await startService({ ...freshLifecycle, ...service, consent: derived })
+  assert.equal(first.state, 'healthy')
+  const { grantedAt: _at, ...consent } = readServiceSettings(fresh.workspace()).consent
+  assert.deepEqual(consent, { actor: 'someone', coverage: 'service' })
+  const { pid } = readServiceRecord(fresh.workspace())
+  await stopService(freshLifecycle)
+  await waitFor(() => !isAlive(pid), { label: 'the fresh service to exit' })
+})
+
 test('--adapter given once is remembered for the workspace before anything starts; the real entry then needs none, and under the test runner a remembered adapter always refuses', async (t) => {
   const world = makeWorld(t)
   const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
