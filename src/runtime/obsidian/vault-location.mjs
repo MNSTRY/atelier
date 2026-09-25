@@ -14,7 +14,9 @@ import { refuse } from './errors.mjs'
 // The folder's name is the vault's name in Obsidian (its vault switcher, its
 // window title, a `vault=` call), so it carries the project and the view:
 // readable, the same in the file manager and in the app, and unique across
-// projects and views. The view is the text in the last parentheses, and no
+// projects and views. The view is the text in the last parentheses, up to
+// its first space (a number follows it when the name was taken; view ids
+// never contain a space), and no
 // name of this form is the beginning of another one's path, which matters
 // because the app matches an `obsidian://open?path=` by the longest string
 // prefix among the folders it lists.
@@ -29,7 +31,8 @@ import { refuse } from './errors.mjs'
 export const MAX_PROJECT_NAME_BYTES = 80
 
 const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029/\\:*?"<>|#^[\]()]/g
-const INVISIBLE = /[\u202a-\u202e\u2066-\u2069\ufeff\u200b]/g
+// Bidirectional controls and marks, and characters that show nothing: a name reads as it is.
+const INVISIBLE = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g
 const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)$/i
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 

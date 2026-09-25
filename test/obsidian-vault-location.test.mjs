@@ -41,6 +41,7 @@ test('a vault folder is named `<project> (<view>)`, made safe for every system a
     ['tab\there\nline', 'tab here line'],
     ['e\u0301te', '\u00e9te', 'NFC'],
     ['bi\u202edi', 'bidi', 'bidirectional controls are removed'],
+    ['a\u200eb\u200fc\u061cd\u2060e', 'abcde', 'directional marks and a word joiner too'],
     ['CON', '_CON', 'a Windows device name'],
     ['con.txt', '_con.txt'],
     ['', ''],
