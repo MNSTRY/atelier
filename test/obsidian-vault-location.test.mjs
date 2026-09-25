@@ -194,3 +194,47 @@ test('the store publishes a view into its allocated vault, makes it again when i
   assert.throws(() => vaultRootFor({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything' }), (error) => error.code === 'invalid-vault-allocation')
   assert.throws(() => writeVaultAllocation({ workspaceRoot: w.workspaceRoot, allocation: { ...allocation, parent: w.dir } }), (error) => error.code === 'invalid-vault-allocation')
 })
+
+test('the checks see through links and letter case: a folder reached through a link into a listed or synced vault is refused, whichever side is spelled which way', { skip: POSIX ? false : 'links need privileges on Windows' }, (t) => {
+  const w = world(t)
+  const check = (parent, extra = {}) => { try { return checkVaultParent({ parent, workspaceRoot: w.workspaceRoot, repositoryRoots: w.repositoryRoots, ...extra }) } catch (error) { return error.code } }
+  // An Obsidian vault kept in iCloud, listed by the app, and a link to it in the home folder.
+  const home = path.join(w.dir, 'home')
+  const icloudVault = path.join(home, 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents', 'Field Notes')
+  fs.mkdirSync(icloudVault, { recursive: true })
+  fs.symlinkSync(icloudVault, path.join(home, 'vault'))
+  const listed = { aaaaaaaaaaaaaaaa: { path: icloudVault, ts: 1 } }
+  // The location does not exist yet, below the link.
+  assert.equal(check(path.join(home, 'vault', 'atelier'), { vaults: listed, homedir: home }), 'vault-location-inside-vault')
+  // Without a list, the sync client is still seen through the link, and asks for consent.
+  assert.equal(check(path.join(home, 'vault', 'atelier'), { homedir: home }), 'vault-location-synced')
+  assert.deepEqual(check(path.join(home, 'vault', 'atelier'), { homedir: home, allowSynced: true }), { synced: 'iCloud Drive', protected: null })
+  // The listed entry spelled through a link, the location through the real path.
+  fs.symlinkSync(path.dirname(icloudVault), path.join(w.dir, 'docs-link'))
+  assert.equal(check(path.join(icloudVault, 'atelier'), { vaults: { bbbbbbbbbbbbbbbb: { path: path.join(w.dir, 'docs-link', 'Field Notes') } }, homedir: home, allowSynced: true }), 'vault-location-inside-vault')
+  // Another letter case of a listed folder, existing or not.
+  const notes = path.join(w.dir, 'Notes')
+  fs.mkdirSync(notes)
+  const byCase = { cccccccccccccccc: { path: notes } }
+  assert.equal(check(path.join(w.dir, 'notes', 'Atelier'), { vaults: byCase }), 'vault-location-inside-vault')
+  assert.equal(check(path.join(w.dir, 'NOTES'), { vaults: byCase }), 'vault-location-inside-vault')
+  // A home folder reached through a link.
+  fs.symlinkSync(home, path.join(w.dir, 'home-link'))
+  assert.equal(check(path.join(w.dir, 'home-link', 'Library', 'mobile documents', 'x'), { homedir: home }), 'vault-location-synced')
+  // A published Atelier vault reached through a link.
+  const published = path.join(w.dir, 'published vault')
+  fs.mkdirSync(path.join(published, '.atelier-publication'), { recursive: true })
+  fs.symlinkSync(published, path.join(w.dir, 'published-link'))
+  assert.equal(check(path.join(w.dir, 'published-link', 'inner', 'deeper')), 'vault-location-inside-vault')
+
+  // An allocation below a link records the real folder, so the link leads nowhere else later.
+  fs.mkdirSync(path.join(w.dir, 'real-parent'))
+  fs.symlinkSync(path.join(w.dir, 'real-parent'), path.join(w.dir, 'parent-link'))
+  const allocation = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: path.join(w.dir, 'parent-link', 'vaults') }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  assert.deepEqual([allocation.parent, allocation.path], [path.join(w.dir, 'real-parent', 'vaults'), path.join(w.dir, 'real-parent', 'vaults', 'harbor-notes (everything)')])
+  const store = createRecoveryStore({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', repositoryRoots: w.repositoryRoots })
+  assert.deepEqual([store.vaultRoot, store.managedVaultRoot], [allocation.path, true])
+  // A listed name in another letter case or normalization is taken.
+  const taken = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'tides', location: { parent: path.join(w.dir, 'real-parent') }, projectName: 'Café', repositoryRoots: w.repositoryRoots, vaults: { dddddddddddddddd: { path: path.join(TMP, 'x', 'CAFÉ (TIDES)') } }, now: NOW })
+  assert.equal(taken.name, 'Café (tides 2)')
+})
