@@ -12,3 +12,13 @@ test('`atelier obsidian --help` names every built-in obsidian operation, in its 
     assert.match(help, new RegExp(`\\n  \\S+ obsidian ${operation}\\b`), `${operation} has a line of its own`)
   }
 })
+
+test('both helps name the login item\'s flags, service unit --install and --remove, and uninstall', async () => {
+  const help = buildCommandHelpText('obsidian')
+  const { USAGE } = await import('../src/commands/obsidian.mjs')
+  for (const text of [help, USAGE]) {
+    assert.match(text, /service unit --install \[--consent-actor ID\]/)
+    assert.match(text, /unit --remove/)
+    assert.match(text, /\n {2}(\S+ obsidian )?uninstall\b/)
+  }
+})

@@ -315,9 +315,16 @@ side effect (`src/runtime/obsidian/login-item.mjs`):
    version manager's per-shell link is never named. The search path keeps
    absolute entries once, and none in a temporary folder.
 2. The consent is recorded before the unit is loaded, because the manager
-   starts the service as soon as it loads it: `--consent-actor ID`, or a
-   recorded consent that already covers startup; otherwise
+   starts the service as soon as it loads it: `--consent-actor ID`; for a
+   person at a terminal, the actor already recorded for the workspace or else
+   the account's name (asking for the login item there is that person's
+   consent); or a recorded consent that already covers startup. Otherwise
    `startup-consent-required`. Its coverage becomes `service-and-startup`.
+   A proven service of an earlier release than the entry the unit will run
+   is stopped then, as `service stop` stops it, so the unit's own start at
+   load runs that entry instead of refusing beside the earlier one; if the
+   manager then refuses the unit, the entry is started as a child for this
+   session.
 3. The injected service manager (`service-managers.mjs`) writes the unit
    atomically with mode 0644 and loads it. launchd: bootout of a loaded job
    (it keeps the definition it was loaded with), a bounded wait until launchd
@@ -325,7 +332,10 @@ side effect (`src/runtime/obsidian/login-item.mjs`):
    A manager that refuses the unit leaves the consent as it was.
 4. `state/service/login-item.json` (`atelier-obsidian-login-item/v1`) records
    the label, allocated once and kept, the unit file, the digest of its text,
-   the program and the search path.
+   the program and the search path. The answer is remembered as the
+   `loginItem` decision of the machine settings (`on`), by the actor named or
+   the person at the terminal; `--adapter=obsidian-cli`, when given, is
+   remembered as for `service start`.
 
 The production manager (`service-manager-production.mjs`) is the only code
 that runs `launchctl` or `systemctl` or writes into `~/Library/LaunchAgents`
@@ -339,14 +349,33 @@ Once installed, `startService` starts the service through the manager
 (`launchctl kickstart -p`, `systemctl --user start`) instead of spawning a
 child, so two starts never compete, and accepts the runtime that proves itself
 with a record naming the digest of the entry the unit runs; the runtime
-identifier is the service's own there. A listener that has not written its
+identifier is the service's own there. As for a child, it waits for that
+runtime to be healthy and answers `busy` only when the wait is over and the
+runtime is still in its first tick. A listener that has not written its
 record yet is waited for as that service, never adopted. On the way, a unit
 whose text differs from what would be written now, keeping the recorded
 search path, is written and loaded again (`loginItem: { refreshed: true }`).
 A unit whose file is gone, or that the manager does not have loaded (switched
 off in System Settings, no user systemd), is not forced: a child is started
 for that command only, and the answer says why (`loginItem: { via: 'child',
-reason }`). `requestServiceTick` replaces an outdated service the same way.
+reason }`). `requestServiceTick` replaces an outdated service the same way,
+and so does `startService` with `replaceOutdated` (`service start`): a proven
+runtime of an earlier release is stopped through its own listener, under the
+start lock, and the installed entry started in its place
+(`replaced: 'outdated'`); one of a later release is left running and
+answered as `release: 'later'`.
+
+Which release is installed is read from the entry that would be started
+(`runtimeRelease`): the digest of that entry, and `readReleaseIdentity({
+root })` of the package that entry's path names (its root is the folder above
+`src/runtime/obsidian/service-main.mjs`, read without resolving links), read
+now and never cached. With a login item that is the project's own package,
+whatever package the command runs from, and a re-pointed link or a `file:`
+install is read where it leads now. An entry that is not a package's service
+entry (a test entry) is measured against this package's own release,
+`releaseIdentity()`, the cached form a service records when it starts. Both
+cover the package version and every file under `src/`, `contracts/` and
+`plugins/`; a package without `plugins/` reads as one with an empty one.
 
 Under `--startup` the service:
 
@@ -363,8 +392,9 @@ Under `--startup` the service:
   (`executable.ext.invokedAs`), so the busy proof reads a process table that
   names the entry through a link;
 - after every tick, compares the release on disk, read through the path it
-  was started by, with the one it started with: the package version and a
-  digest of every file under `src/` and `contracts/`. The files' status is
+  was started by, with the one it started with (`readReleaseIdentity`: the
+  package version and a digest of every file under `src/`, `contracts/` and
+  `plugins/`). The files' status is
   compared first and the digest computed only when that differs; a package
   that cannot be read is not a change yet. When they differ, the service
   finishes the tick, removes its record and exits 75, which its manager
@@ -373,9 +403,13 @@ Under `--startup` the service:
 `service unit --remove` lowers the consent to the service alone first, so a
 unit a failed removal left behind could only refuse, then unloads it (launchd
 `bootout`, systemd `disable --now`, which stop a service it runs) and deletes
-the file and the record. `uninstall` removes the login item and stops the
-proven service, and keeps the vaults, the private state, the project file and
-Obsidian's vault list.
+the file and the record, and remembers `off`. It then starts the service again
+at once as a detached child for this session, under the consent now recorded,
+when the adapter is given or remembered; otherwise the next `open` starts it.
+`uninstall` removes the login item and stops the proven service, remembers
+`off`, starts nothing, and keeps the vaults, the private state, the project
+file and Obsidian's vault list. Removing Obsidian's vault entries is not part
+of it.
 
 The service entry refuses to run without an explicitly selected editor
 adapter. Public Atelier tests start only a test entry whose adapter reports

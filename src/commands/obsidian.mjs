@@ -72,7 +72,8 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   policy show | install FILE | revoke  The private apply policy. Automatic mode needs an installed, active one.
   policy digest FILE                   The digest FILE has to carry to be installed. Reads FILE; writes nothing.
   service start [--consent-actor ID] [--adapter=${PRODUCTION_ADAPTER}]
-  service status | stop                The owned maintenance service of this workspace.
+  service status | stop                The owned maintenance service of this workspace. start replaces one of an
+                                       earlier release still running after an upgrade.
   service unit --print [--adapter=${PRODUCTION_ADAPTER}]
                                        Print the login item (launchd agent, systemd user unit). Writes nothing.
   service unit --install [--consent-actor ID] [--adapter=${PRODUCTION_ADAPTER}]
@@ -91,7 +92,8 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
 
 Reaching the installed app needs --adapter=${PRODUCTION_ADAPTER} once for a workspace; it is remembered after that.
 The first start of the maintenance service records who allows it: --consent-actor ID, or, for a person at a terminal,
-their account's name. --no-input, --json, a CI environment or ATELIER_NONINTERACTIVE=1 mean no person is at a terminal.
+their account's name; service unit --install records who allows it to start at login the same way (at a terminal, the
+actor already recorded is kept). --no-input, --json, a CI environment or ATELIER_NONINTERACTIVE=1 mean no person is at a terminal.
 
 Contributed operations, registered by the modules shipped under src/runtime/obsidian/contributions/:
   apply list | show EDIT | run EDIT [--actor ID] | recover

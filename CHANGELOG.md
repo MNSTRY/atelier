@@ -21,14 +21,20 @@
   in one step, checking the audience against the policy before adoption
   writes anything.
 - A login item keeps a workspace's vaults fresh after you log in:
-  `atelier obsidian service unit --install --consent-actor ID
-  --adapter=obsidian-cli` installs a launchd agent on macOS
+  `atelier obsidian service unit --install [--consent-actor ID]
+  [--adapter=obsidian-cli]` installs a launchd agent on macOS
   (`~/Library/LaunchAgents/ai.mnstry.atelier.<project>.<workspace-id>.plist`)
   or a systemd user unit on Linux
   (`~/.config/systemd/user/atelier-obsidian-<workspace-id>.service`), after
-  recording a consent that covers startup; `service unit --remove` removes it
-  and lowers the consent to the service alone; `service unit --print` shows
-  what `--install` writes. The unit runs the package installed in the project,
+  recording a consent that covers startup (`--consent-actor ID`; at a
+  terminal, the actor already recorded or else the account's name). A
+  service of an earlier release still running is stopped just before the
+  unit is loaded, so the unit's first start runs the installed release.
+  `service unit --remove` lowers the consent to the service alone, removes
+  the item and starts the service again at once for this session only;
+  `service unit --print` shows what `--install` writes. The answer is
+  remembered as the machine settings' `loginItem` decision (`on`, `off`), and
+  `atelier obsidian settings` names these commands as the way to change it. The unit runs the package installed in the project,
   by its path, with the Node that installed it (its real path), the search
   path you had (absolute, non-temporary entries), in `/`. launchd: `Standard`
   process type, `RunAtLoad`, `KeepAlive` `SuccessfulExit` false,
@@ -51,12 +57,14 @@
   (`atelier-obsidian-last-startup/v1`); `status` shows the login item and
   `the login item did not start the service: <code>` with the next step. After
   each tick it compares its package on disk with the release it started with
-  (file status first, then a digest of `src/` and `contracts/` and the
-  version) and exits 75 after the tick when it changed, which its manager
-  restarts on the new release.
+  (file status first, then a digest of `src/`, `contracts/` and `plugins/`
+  and the version) and exits 75 after the tick when it changed, which its
+  manager restarts on the new release.
 - `atelier obsidian uninstall` removes the login item and stops the proven
-  service. Vaults, private state, the project file and Obsidian's vault list
-  are kept, and it prints where each is.
+  service, and starts nothing. Vaults, private state, the project file and
+  Obsidian's vault list are kept, and it prints where each is.
+- `readReleaseIdentity({ root })` reads a package's release identity now,
+  uncached; `releaseIdentity()` stays its cached form.
 - The production service manager refuses under the Node test runner
   (`real-login-item-under-test`) and when HOME is not the account's own home
   directory (`login-item-home-mismatch`), since launchd and systemd register a
@@ -80,8 +88,7 @@
   unclassified notes withheld as they were. A release up to 0.2.0-alpha.12 refuses a v2 document
   (`invalid-machine-settings`), so after an upgrade a maintenance service
   still running the earlier release fails its ticks until it is replaced:
-  `atelier obsidian open` replaces it, as does `service stop` and a new
-  `service start`. `atelier obsidian settings` shows what is remembered and
+  `atelier obsidian open` and `service start` replace it. `atelier obsidian settings` shows what is remembered and
   how each answer is changed; `status` carries the decisions and a one-line
   summary.
 - `--adapter=obsidian-cli` is needed once per workspace. Given to `open` or
@@ -120,8 +127,31 @@
   `docs/install.md`.
 - `atelier graph` ends its error list with a `Next:` line naming
   `atelier enroll documents` when a document has no sidecar.
+- `service unit --print` prints the unit `--install` writes: on macOS under
+  the label `ai.mnstry.atelier.<project>.<workspace-id>`, with process type
+  `Standard` instead of `Background`, the search path, `WorkingDirectory` `/`
+  and output to `login-item.log` instead of `service.log`; on Linux with
+  `Environment="PATH=…"`, `WorkingDirectory=/` and `TimeoutStopSec=60`.
+  `buildStartupAdapter` takes `searchPath`, and its working directory is `/`
+  unless one is given. A service records the path it was started by beside its
+  real path (`executable.ext.invokedAs`), and the busy proof accepts a process
+  table that names the entry through it.
+- Whether a running maintenance service is of an earlier, the same or a
+  later release is measured against the entry that would be started: its
+  digest and the release of the package that entry's path names, read now.
+  With a login item that is the project's own package, whatever package the
+  command runs from, and a re-pointed link or `file:` install is read where
+  it leads.
 
 ### Fixed
+
+- `atelier obsidian service start` replaces a maintenance service of an
+  earlier release still running after an upgrade, as `open` does (stopped
+  through its own listener, the installed release started under the consent
+  already recorded, `replaced: 'outdated'`), instead of answering that it is
+  already running while that service fails every tick on the new machine
+  settings. A service of a later release is left running (`release:
+  'later'`).
 
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
@@ -304,15 +334,6 @@
   (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
   exactly the selected notes; a focus persisted with the earlier version is
   still read.
-- `service unit --print` prints the unit `--install` writes: on macOS under
-  the label `ai.mnstry.atelier.<project>.<workspace-id>`, with process type
-  `Standard` instead of `Background`, the search path, `WorkingDirectory` `/`
-  and output to `login-item.log` instead of `service.log`; on Linux with
-  `Environment="PATH=…"`, `WorkingDirectory=/` and `TimeoutStopSec=60`.
-  `buildStartupAdapter` takes `searchPath`, and its working directory is `/`
-  unless one is given. A service records the path it was started by beside its
-  real path (`executable.ext.invokedAs`), and the busy proof accepts a process
-  table that names the entry through it.
 - `atelier obsidian open` makes the first open of a view automatic: Obsidian
   no longer has to be quit, and no vault folder has to be opened by hand. It
   makes the app know the view's vault as one of its vaults before it opens
