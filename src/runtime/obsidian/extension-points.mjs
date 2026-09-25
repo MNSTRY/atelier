@@ -65,7 +65,7 @@ export function normalizeApplyResult(value) {
 // an apply operation replaces it.
 const OPERATION_NAME = /^[a-z][a-z0-9-]{0,31}$/
 // The operations the command ships. The service composes the same registry, so both refuse the same contributions.
-export const BUILT_IN_OPERATIONS = Object.freeze(['status', 'scope', 'audience', 'mode', 'policy', 'service', 'open', 'plugin', 'apply', 'help'])
+export const BUILT_IN_OPERATIONS = Object.freeze(['status', 'settings', 'scope', 'audience', 'mode', 'policy', 'service', 'open', 'plugin', 'apply', 'help'])
 export const REPLACEABLE_OPERATIONS = Object.freeze(['apply'])
 
 export function createCommandOperations({ reserved = [] } = {}) {

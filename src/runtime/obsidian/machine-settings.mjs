@@ -6,12 +6,13 @@ import { LOCAL_STATE_DIR, localStateRoot } from '../../project/config.mjs'
 import { checkManagedRoots } from '../../project/file-class.mjs'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow } from '../../project/private-state.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract } from '../../projection/obsidian/contracts.mjs'
+import { LOCAL_AUDIENCES } from '../../projection/policy.mjs'
 import { refuse } from './errors.mjs'
 import { canonicalJson, closedObject, isPlainObject } from './documents.mjs'
 
 // Machine-private settings of the Obsidian maintenance runtime.
 //
-//   <data>/obsidian/<workspace-id>/state/settings/machine.json       mode, audiences, policy reference
+//   <data>/obsidian/<workspace-id>/state/settings/machine.json       mode, audiences, policy reference, remembered decisions
 //   <data>/obsidian/<workspace-id>/state/settings/apply-policy.json  the installed apply policy
 //   <project>/.atelier-local/obsidian.json                           pointer: workspace id, optional data root
 //
@@ -22,14 +23,33 @@ import { canonicalJson, closedObject, isPlainObject } from './documents.mjs'
 // checkout keeps its vaults) and, optionally, where this machine keeps the
 // data directory.
 
-export const MACHINE_SETTINGS_SCHEMA = 'atelier-obsidian-machine-settings/v1'
+export const MACHINE_SETTINGS_SCHEMA = 'atelier-obsidian-machine-settings/v2'
+// What releases up to 0.2.0-alpha.12 wrote. It is still read, as the v2 document it stands for, and never written:
+// the next write writes v2. A release that knows only v1 refuses a v2 document, so a downgrade stops, loudly, rather
+// than working from settings it cannot read.
+export const MACHINE_SETTINGS_SCHEMA_V1 = 'atelier-obsidian-machine-settings/v1'
 export const LOCAL_POINTER_SCHEMA = 'atelier-obsidian-local-pointer/v1'
 export const LOCAL_POINTER_FILE = 'obsidian.json'
 export const MAINTENANCE_MODES = Object.freeze(['manual', 'automatic'])
 
+// What a person decided once for this workspace on this machine, so that no later run has to ask again: who may see
+// its vaults, where they live, whether maintenance starts at login, and that the installed app may be reached. Each is
+// null until it is decided.
+export const DECISIONS = Object.freeze(['audience', 'location', 'loginItem', 'adapter'])
+// How a decision was made: answered to a question at a terminal, given on the command line (an operation or a flag),
+// taken as the defaults, or carried over from a v1 document.
+export const DECISION_SOURCES = Object.freeze(['question', 'command', 'defaults', 'v1'])
+// "Only you": every audience of a note, except `sensitive`, which a vault takes only when it is named. A vault is a
+// folder in which the app's community plugins run with full access to its files.
+export const ONLY_YOU_AUDIENCES = Object.freeze(LOCAL_AUDIENCES.filter((audience) => audience !== 'sensitive').sort())
+// Whether the notes that carry no classification enter this workspace's vaults. They may only for "only you": a vault
+// of any other audience never shows them. Withheld unless a person decided otherwise.
+export const UNCLASSIFIED_CHOICES = Object.freeze(['shown', 'withheld'])
+
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const DIGEST = /^sha256:[0-9a-f]{64}$/
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
+const CONTROL = /[\u0000-\u001f\u007f]/
 
 const segment = (identifier) => identifier.replaceAll(':', '_')
 
@@ -138,9 +158,9 @@ export function ensureWorkspaceIdentity({ project, dataRoot, randomBytes = crypt
 // Machine settings
 // ---------------------------------------------------------------------------
 
-function validateMachineSettings(document, workspaceId) {
-  closedObject(document, { required: ['schema', 'workspaceId', 'maintenanceMode', 'audienceAllow', 'applyPolicy', 'updatedAt'] }, 'invalid-machine-settings', 'machine settings')
-  if (document.schema !== MACHINE_SETTINGS_SCHEMA) refuse('invalid-machine-settings', 'machine settings name an unknown schema')
+const MACHINE_FIELDS = Object.freeze(['schema', 'workspaceId', 'maintenanceMode', 'audienceAllow', 'applyPolicy', 'updatedAt'])
+
+function validateCommonFields(document, workspaceId) {
   if (document.workspaceId !== workspaceId) refuse('invalid-machine-settings', 'machine settings belong to another workspace')
   if (!MAINTENANCE_MODES.includes(document.maintenanceMode)) refuse('invalid-machine-settings', 'maintenanceMode must be manual or automatic')
   if (!Array.isArray(document.audienceAllow) || document.audienceAllow.length > 64 || document.audienceAllow.some((item) => typeof item !== 'string' || !IDENTIFIER.test(item))
@@ -155,29 +175,116 @@ function validateMachineSettings(document, workspaceId) {
     }
   }
   if (typeof document.updatedAt !== 'string' || !TIMESTAMP.test(document.updatedAt)) refuse('invalid-machine-settings', 'updatedAt must be a UTC timestamp')
+}
+
+const isOneOf = (values) => (value) => values.includes(value)
+const isAbsoluteDirectory = (value) => typeof value === 'string' && value.length <= 4096 && !CONTROL.test(value) && path.isAbsolute(value) && path.resolve(value) === value
+// The members of each decision besides its stamp, and what each may hold. A decision gains a member here, and a
+// document that carries it is refused by a release that does not know it, loudly.
+const DECISION_MEMBERS = Object.freeze({
+  audience: Object.freeze({ choice: isOneOf(['only-you', 'custom']), unclassified: isOneOf(UNCLASSIFIED_CHOICES) }),
+  location: Object.freeze({ parent: isAbsoluteDirectory }),
+  loginItem: Object.freeze({ choice: isOneOf(['on', 'off']) }),
+  adapter: Object.freeze({ choice: isOneOf(['obsidian-cli']) }),
+})
+function sameMembers(left, right) {
+  const [sortedLeft, sortedRight] = [[...left].sort(), [...right].sort()]
+  return sortedLeft.length === sortedRight.length && sortedLeft.every((item, index) => item === sortedRight[index])
+}
+
+// `deciding` is true when the audience decision is being recorded (withDecision). Only then must "only you" be exactly
+// the set this release stands for. Read, or written back by any other change, an "only you" list is the one recorded
+// when it was decided: any part of this release's set, never `sensitive` and never an audience this release does not
+// know. So a later release that adds an audience to "only you" still reads what an earlier one recorded, and
+// `audience set me` records the current set again.
+function validateDecisions(document, { deciding = false } = {}) {
+  const code = 'invalid-machine-settings'
+  closedObject(document.decisions, { required: DECISIONS }, code, 'the remembered decisions')
+  for (const name of DECISIONS) {
+    const decision = document.decisions[name]
+    if (decision === null) continue
+    const members = DECISION_MEMBERS[name]
+    closedObject(decision, { required: [...Object.keys(members), 'decidedAt', 'decidedBy', 'via'] }, code, `the ${name} decision`)
+    for (const [member, holds] of Object.entries(members)) if (!holds(decision[member])) refuse(code, `the ${name} decision carries an unknown ${member}`)
+    if (typeof decision.decidedAt !== 'string' || !TIMESTAMP.test(decision.decidedAt)) refuse(code, `the ${name} decision needs a UTC time`)
+    // Who decided, when it is known: an identifier, or null.
+    if (decision.decidedBy !== null && (typeof decision.decidedBy !== 'string' || !IDENTIFIER.test(decision.decidedBy))) refuse(code, `the ${name} decision names who decided as an identifier or null`)
+    if (!DECISION_SOURCES.includes(decision.via)) refuse(code, `the ${name} decision says how it was made`)
+  }
+  // "Only you" is a set of audiences, and the list the engine reads is exactly that set when it is decided.
+  if (document.decisions.audience?.choice === 'only-you') {
+    const recorded = document.audienceAllow.length > 0 && document.audienceAllow.every((audience) => ONLY_YOU_AUDIENCES.includes(audience))
+    if (deciding ? !sameMembers(document.audienceAllow, ONLY_YOU_AUDIENCES) : !recorded) refuse(code, 'the audiences allowed are not the ones "only you" stands for')
+  }
+  if (document.decisions.audience?.unclassified === 'shown' && document.decisions.audience.choice !== 'only-you') {
+    refuse(code, 'notes without a classification are shown only in a vault that is only yours')
+  }
+}
+
+function validateV1(document, workspaceId) {
+  closedObject(document, { required: MACHINE_FIELDS }, 'invalid-machine-settings', 'machine settings')
+  validateCommonFields(document, workspaceId)
   return document
 }
 
-// The defaults fail closed: edits are only queued, no audience is visible and
-// no apply policy is installed until the person says otherwise.
+function validateV2(document, workspaceId, { deciding = false } = {}) {
+  closedObject(document, { required: [...MACHINE_FIELDS, 'decisions'] }, 'invalid-machine-settings', 'machine settings')
+  if (document.schema !== MACHINE_SETTINGS_SCHEMA) refuse('invalid-machine-settings', 'machine settings name an unknown schema')
+  validateCommonFields(document, workspaceId)
+  validateDecisions(document, { deciding })
+  return document
+}
+
+// A v1 document as the v2 document it stands for. Nothing was remembered then, except that a list of audiences a
+// person set (`audience set`) is their decision, and is carried over as one, with the notes that carry no
+// classification withheld as they were; who made it is not known.
+function fromV1(document) {
+  const { schema: _v1, ...fields } = document
+  const audience = fields.audienceAllow.length === 0 ? null : { choice: 'custom', unclassified: 'withheld', decidedAt: fields.updatedAt, decidedBy: null, via: 'v1' }
+  return { ...fields, schema: MACHINE_SETTINGS_SCHEMA, decisions: { audience, location: null, loginItem: null, adapter: null } }
+}
+
+// Every document this module reads or is handed, as a validated v2 document.
+function normalizeMachineSettings(document, workspaceId) {
+  if (isPlainObject(document) && document.schema === MACHINE_SETTINGS_SCHEMA_V1) return validateV2(fromV1(validateV1(document, workspaceId)), workspaceId)
+  return validateV2(document, workspaceId)
+}
+
+// The defaults fail closed: edits are only queued, no audience is visible,
+// no apply policy is installed and nothing is decided until the person says
+// otherwise.
 export function defaultMachineSettings({ workspaceId, updatedAt }) {
-  return { schema: MACHINE_SETTINGS_SCHEMA, workspaceId, maintenanceMode: 'manual', audienceAllow: [], applyPolicy: null, updatedAt }
+  return {
+    schema: MACHINE_SETTINGS_SCHEMA, workspaceId, maintenanceMode: 'manual', audienceAllow: [], applyPolicy: null,
+    decisions: Object.fromEntries(DECISIONS.map((name) => [name, null])), updatedAt,
+  }
+}
+
+// The settings with one decision recorded, validated; nothing is written. `decision` holds the decision's own members
+// (`{ choice, unclassified }`, `{ parent }`, `{ choice }`); the stamp says when, by whom (an identifier, or null when not
+// known) and how.
+export function withDecision(settings, name, decision, { decidedAt, decidedBy = null, via }) {
+  if (!DECISIONS.includes(name)) throw new TypeError(`unknown decision: ${String(name)}`)
+  const next = { ...settings, decisions: { ...settings.decisions, [name]: { ...decision, decidedAt, decidedBy, via } } }
+  return validateV2(next, settings.workspaceId, { deciding: name === 'audience' })
 }
 
 const settingsDirectory = (workspaceRoot) => ensureContainedPrivateDirectory({ workspaceRoot, directory: path.join(workspaceRoot, 'state', 'settings'), label: 'Obsidian machine settings' })
 const settingsFile = (workspaceRoot, name) => path.join(workspaceRoot, 'state', 'settings', name)
 
+// A v1 document is returned as v2 (see fromV1); the file keeps its v1 bytes until the next write.
 export function readMachineSettings({ workspaceRoot, workspaceId }) {
   const document = readJsonFile(settingsFile(workspaceRoot, 'machine.json'), 'invalid-machine-settings', 'machine settings')
-  return document === null ? null : validateMachineSettings(document, workspaceId)
+  return document === null ? null : normalizeMachineSettings(document, workspaceId)
 }
 
+// Writes v2, whatever version it is handed, and returns what it wrote.
 export function writeMachineSettings({ workspaceRoot, workspaceId, settings, repositoryRoots }) {
-  validateMachineSettings(settings, workspaceId)
+  const document = normalizeMachineSettings(settings, workspaceId)
   assertOutsideRepositories({ managedRoot: workspaceRoot, repositoryRoots })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
-  atomicReplacePrivateText(path.join(settingsDirectory(workspaceRoot), 'machine.json'), canonicalJson(settings))
-  return settings
+  atomicReplacePrivateText(path.join(settingsDirectory(workspaceRoot), 'machine.json'), canonicalJson(document))
+  return document
 }
 
 // ---------------------------------------------------------------------------

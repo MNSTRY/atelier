@@ -105,8 +105,11 @@ function freeLoopbackPort(host) {
   })
 }
 
-async function resolveSettings({ workspaceRoot, workspaceId }, { host, port, consent, now }) {
+async function resolveSettings({ workspaceRoot, workspaceId }, { host, port, consent: given, now }) {
   const current = readServiceSettings({ workspaceRoot, workspaceId })
+  // A consent derived from the account of a person at a terminal (`derived: true`) stands only for a workspace that has
+  // none. Read here, under the start lock, so one recorded meanwhile by another run is never replaced or narrowed.
+  const consent = given?.derived === true && current !== null ? undefined : given
   if (host !== undefined && !LOOPBACK_HOSTS.includes(host)) refuse('service-address-not-loopback', 'the service host must be the literal 127.0.0.1 or ::1')
   if (port !== undefined && (!Number.isInteger(port) || port < 1024 || port > 65535)) refuse('service-address-not-loopback', 'the service port must be between 1024 and 65535')
   if (consent !== undefined && (typeof consent?.actor !== 'string' || !CONSENT_COVERAGES.includes(consent.coverage ?? 'service'))) refuse('startup-consent-required', 'a consent names its actor and what it covers')
