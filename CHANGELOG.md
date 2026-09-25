@@ -34,7 +34,8 @@
   (`atelier-obsidian-vault-allocation/v1`, `state/allocations/<view>.json`,
   with the folder's device and inode: a folder that is not the one made,
   restored or moved in, is never published into, `vault-allocation-replaced`,
-  and one that has gone is made again by the next tick),
+  and one that has gone is made again by the next tick, never inside a
+  repository, the project or the private state),
   which the recovery store reads: the engine, source apply, the proposal
   adapter and `open` all find the same vault. A vault published before stays
   under the data root, and a workspace that decides nothing publishes there as

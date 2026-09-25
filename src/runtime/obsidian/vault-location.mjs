@@ -209,6 +209,13 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
   // An allocated folder that has gone is made again where it was, private, and recorded as the folder it now is; one
   // another folder replaced is left alone, and the store refuses to publish into it.
   if (existing !== null && allocatedFolderState(existing) === 'missing') {
+    // Only where the store would publish: a record that names a folder inside a repository, the project or the
+    // private state (edited, or copied from elsewhere) makes nothing there.
+    const guard = checkManagedRoots({ managedRoots: [workspaceRoot, existing.path], repositoryRoots })
+    if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals.map(({ code }) => code) })
+    if (spellings(workspaceRoot).some((root) => spellings(existing.path).some((candidate) => foldedInside(root, candidate)))) {
+      refuse('vault-location-inside-private-state', 'vaults never live inside Atelier\'s private state for this workspace')
+    }
     try { fs.mkdirSync(existing.parent, { recursive: true, mode: 0o700 }); fs.mkdirSync(existing.path, { mode: 0o700 }) } catch (error) {
       if (error?.code === 'EEXIST') return existing
       refuse('vault-location-unusable', 'the folder for this view\'s vault cannot be made again there', { parent: existing.parent, cause: error?.code ?? null })
