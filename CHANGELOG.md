@@ -48,6 +48,10 @@
 
 ### Fixed
 
+- `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
+  0.2.0-alpha.12 ships but left out of that help (the operations themselves
+  worked, and `atelier obsidian help` showed them). A test now fails when a
+  built-in obsidian operation is missing from it.
 - The project readiness artifact (`atelier-output/atelier-readiness.json` by
   default) records `graph.path`, `projection.outputRoot` and
   `projection.entry` relative to the project configuration directory, in POSIX
