@@ -84,7 +84,12 @@
   it changes the eligibility revision, so every view is rebuilt at the next
   tick. A decision recorded as "only you" with them withheld keeps them
   withheld until `audience set me` is run again. `view add` counts what a
-  view would show the same way, as "only you" while nobody decided.
+  view would show the same way, as "only you" while nobody decided. Since
+  the maintenance service publishes no note until someone decides who may
+  see, `view add` then names `atelier obsidian audience set me` as the next
+  step, before `open`; and a view refused as empty because no audience is
+  admitted (`audience clear`) is told to decide who may see, not to classify
+  notes.
 
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the

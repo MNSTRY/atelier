@@ -216,7 +216,7 @@ const NEXT = Object.freeze({
   [APPLY_UNAVAILABLE]: 'no apply operation is registered on this command; edits stay preserved and queued',
   'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
   disabled: 'declare the Obsidian settings in the project configuration: `atelier obsidian view add everything --all` does it',
-  'view-would-be-empty': 'check the folders or the tag; a note is shown once it carries a classification (a kg block) with an admitted audience; --allow-empty declares the view anyway',
+  'view-would-be-empty': 'check the folders or the tag, and who may see them (`atelier obsidian audience show`; `audience set me` admits every note that is only yours, those without a classification included); --allow-empty declares the view anyway',
   'view-exists': 'choose another name; `atelier obsidian view list` shows the views declared',
   'view-repository-ambiguous': 'name the repository the folders are in with --repo',
   'project-config-format-unknown': 'add the member shown under "detail" to the project configuration by hand, under "ext"',
@@ -539,7 +539,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const eligibility = decided === null ? onlyYouEligibility({ project }) : eligibilityFor({ machine, project })
         const counts = viewCounts({ project, audienceAllow: audience.allow, scope, eligibility, ...(workspaceId === null ? {} : { workspaceId }) })
         const countLine = viewCountWords(scope.scopeId, counts, audience)
-        if (counts.shown === 0 && flags['allow-empty'] !== true) refuse('view-would-be-empty', `${countLine}; nothing was written`, { scopeId: scope.scopeId, counts, audience })
+        // No audience admitted on this machine (`audience clear`): the view is empty whatever it selects, and the way out is
+        // deciding who may see, not classifying notes.
+        const nobody = audience.decided && audience.allow.length === 0 ? '; no audience is admitted on this machine: `atelier obsidian audience set me` admits yours' : ''
+        if (counts.shown === 0 && flags['allow-empty'] !== true) refuse('view-would-be-empty', `${countLine}${nobody}; nothing was written`, { scopeId: scope.scopeId, counts, audience })
         const file = path.basename(project.configPath)
         const shownPlan = [
           `Atelier will add the view "${scope.scopeId}" to ${file}${plan.ignore.needed ? ', and .atelier-local/ to .gitignore' : ''} (you commit it):`,
@@ -555,14 +558,18 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         }
         const { written } = writeViewPlan(plan)
         const committed = written.map((item) => path.relative(project.configDir, item).split(path.sep).join('/'))
+        // The counts are for "only you" while nobody decided, but the maintenance service publishes nothing until someone
+        // does: deciding comes first.
+        const openStep = `\`atelier obsidian open${plan.settings.defaultScopeId === scope.scopeId ? '' : ` --scope ${scope.scopeId}`}\` shows it in Obsidian`
+        const next = audience.decided ? [openStep] : ['`atelier obsidian audience set me` lets only you see its notes; until someone decides, the view publishes none', openStep]
         return {
           exit: EXIT.ok,
-          document: { scope, defaultScopeId: plan.settings.defaultScopeId ?? null, declined: false, written: committed, diff: plan.diff, counts, audience },
+          document: { scope, defaultScopeId: plan.settings.defaultScopeId ?? null, declined: false, written: committed, diff: plan.diff, counts, audience, next },
           human: [
             ...(asked ? [] : shownPlan),
             `Added the view ${scope.scopeId}${plan.settings.defaultScopeId === scope.scopeId ? ', the default' : ''}. Commit ${committed.join(' and ')} when you are ready; Atelier commits nothing.`,
             ...(plan.settings.enabled === true ? [] : ['The projection is turned off in this project ("enabled": false), so nothing is published until it is turned on.']),
-            `Next: \`atelier obsidian open${plan.settings.defaultScopeId === scope.scopeId ? '' : ` --scope ${scope.scopeId}`}\` shows it in Obsidian`,
+            `Next: ${next[0]}`, ...next.slice(1).map((step) => `Then: ${step}`),
           ],
         }
       },

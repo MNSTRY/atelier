@@ -356,6 +356,12 @@ atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo 
   (a `kg` block) that the decision does not show, and those whose audience is
   not admitted. A view that would show no note is refused with
   `view-would-be-empty` and the counts; `--allow-empty` declares it anyway.
+  When the machine admits no audience at all (`audience clear`), the refusal
+  says so and names `atelier obsidian audience set me`.
+- While nobody decided who may see, the maintenance service publishes no
+  note, whatever the counts say: the next step `view add` names is then
+  `atelier obsidian audience set me`, before `atelier obsidian open` (`next`
+  under `--json`, in order).
 - A person at a terminal sees the change and the counts and is asked
   `Write this change? [Y/n]`; `--yes` answers beforehand, and no answer within
   10 minutes writes nothing (`unanswered`). For anyone else the command is the
