@@ -1,6 +1,6 @@
 {
   "schema": "atelier-compat-baseline@v1",
-  "baselineTag": "v0.2.0-alpha.0",
+  "baselineTag": "v0.2.0-alpha.11",
   "preEpochTags": [
     "v0.1.0-alpha.0",
     "v0.1.0-alpha.1",
