@@ -4,6 +4,7 @@ import path from 'node:path'
 import { VALID_AUDIENCES } from '../projection/policy.mjs'
 import { generatedProjectionBasenames, generatedProjectionDirectoryBasenames } from '../project/file-class.mjs'
 import { gitIgnoreFilter } from '../project/git-ignore.mjs'
+import { matchesPathPattern, normalizeRelPath } from '../project/path-match.mjs'
 
 export const KNOWLEDGE_GRAPH_SCHEMA = 'mnstry.knowledge-graph@v1'
 export const REPO_ACCESS_SCHEMA = 'mnstry.repo-access@v1'
@@ -339,14 +340,58 @@ export function listRepos(workspaceRoot) {
     .sort()
 }
 
+// The project's census scope: `include` and `exclude` are path patterns in the
+// kit's one dialect (src/project/path-match.mjs), relative to the project
+// config's folder, read from the tracked config so every machine walks the
+// same paths. `base` is the repository root relative to that folder. The
+// returned predicate takes a repository-relative path and says whether it is
+// outside the census; `directory` lets a folder that may still hold included
+// files be walked. A path is excluded when it or a folder above it matches
+// `exclude`; with `include`, a file is in the census only when it or a folder
+// above it matches. Exclude wins. A `<file>.kg.json` sidecar belongs to its
+// source and shares the source's scope. Null when the scope restricts nothing.
+export function censusScopeFilter({ base = '', include = null, exclude = null } = {}) {
+  // A trailing slash names a folder, which a pattern without one matches too.
+  const pattern = (value) => (typeof value === 'string' && value.trim() ? normalizeRelPath(value.trim()).replace(/\/+$/, '') || null : null)
+  const includePattern = pattern(include)
+  const excludePattern = pattern(exclude)
+  if (!includePattern && !excludePattern) return null
+  const prefix = normalizeRelPath(base).replace(/\/+$/, '')
+  const lineage = (rel) => {
+    const parts = path.posix.normalize(prefix ? `${prefix}/${rel}` : rel).split('/')
+    return parts.map((_, index) => parts.slice(0, index + 1).join('/'))
+  }
+  // A folder may lead to an included file when it lies on the pattern's
+  // literal leading path, or below it. A slashless pattern matches at any
+  // depth, so every folder may.
+  const segments = includePattern?.includes('/') ? includePattern.split('/') : null
+  const globAt = segments ? segments.findIndex((part) => part.includes('*')) : -1
+  const literalLead = segments ? (globAt === -1 ? segments : segments.slice(0, globAt)) : null
+  const mayLeadToInclude = (paths) => {
+    if (!literalLead) return true
+    const parts = paths.at(-1).split('/')
+    const shared = Math.min(parts.length, literalLead.length)
+    return parts.slice(0, shared).every((part, index) => part.toLowerCase() === literalLead[index].toLowerCase())
+  }
+  return (rel, { directory = false } = {}) => {
+    const paths = lineage(!directory && rel.endsWith('.kg.json') ? rel.slice(0, -'.kg.json'.length) : rel)
+    if (excludePattern && paths.some((candidate) => matchesPathPattern(excludePattern, candidate))) return true
+    if (!includePattern || paths.some((candidate) => matchesPathPattern(includePattern, candidate))) return false
+    return !(directory && mayLeadToInclude(paths))
+  }
+}
+
 // Git-ignored paths are machine-local. Counting them makes committed graph
 // artifacts differ per machine, which turns every sync tick into a conflict.
+// `isIgnored(rel, { directory })` also carries the project's census scope when
+// the builder composes one in (censusScopeFilter); a plain Git filter ignores
+// the second argument.
 export function walkDocuments(dir, root, acc = [], isIgnored = gitIgnoreFilter(root)) {
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue
     const abs = path.join(dir, ent.name)
     const rel = relPath(root, abs)
-    if (isIgnored(rel)) continue
+    if (isIgnored(rel, { directory: ent.isDirectory() })) continue
     if (ent.isDirectory()) {
       walkDocuments(abs, root, acc, isIgnored)
     } else if (ent.isFile()) {
@@ -384,7 +429,7 @@ export function ignoredSourceSidecars(repoName, repoRoot, isIgnored = gitIgnoreF
       const abs = path.join(dir, ent.name)
       const rel = relPath(repoRoot, abs)
       if (ent.isDirectory()) {
-        if (!isIgnored(rel)) visit(abs)
+        if (!isIgnored(rel, { directory: true })) visit(abs)
         continue
       }
       if (!ent.isFile() || !ent.name.endsWith('.kg.json') || !isIgnored(rel)) continue
@@ -402,7 +447,7 @@ export function walkSidecars(dir, root, acc = [], isIgnored = gitIgnoreFilter(ro
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue
     const abs = path.join(dir, ent.name)
-    if (isIgnored(relPath(root, abs))) continue
+    if (isIgnored(relPath(root, abs), { directory: ent.isDirectory() })) continue
     if (ent.isDirectory()) {
       walkSidecars(abs, root, acc, isIgnored)
     } else if (ent.isFile() && ent.name.endsWith('.kg.json')) {
@@ -898,7 +943,7 @@ const isMarkdownPath = (rel) => rel.toLowerCase().endsWith('.md')
 // a path is tested, not the path alone.
 function ignoredAtAnyDepth(isIgnored, rel) {
   const parts = rel.split('/')
-  return parts.some((_, index) => isIgnored(parts.slice(0, index + 1).join('/')))
+  return parts.some((_, index) => isIgnored(parts.slice(0, index + 1).join('/'), { directory: index < parts.length - 1 }))
 }
 
 // True only for a regular file whose real location is exactly `rel` under the
@@ -979,7 +1024,7 @@ export function resolveWorkspaceLinks({ repos = [], isLinkTargetEligible = () =>
             if (ent.name === '.git') continue
             const abs = path.join(dir, ent.name)
             const rel = relPath(owner.root, abs)
-            if (isIgnored(rel)) continue
+            if (isIgnored(rel, { directory: ent.isDirectory() })) continue
             // A nested enrolled repository owns its own files.
             if (ent.isDirectory()) {
               if (!roots.has(abs)) visit(abs)
@@ -1362,7 +1407,9 @@ export function buildKnowledgeGraph({
   const resolvedWorkspaceRoot = path.resolve(workspaceRoot)
   const external = new Set(externalRepos)
   const discoveredEntries = repoEntries
-    ? repoEntries.map((entry) => ({ name: entry.name, path: path.resolve(entry.path) })).sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    ? repoEntries
+        .map((entry) => ({ name: entry.name, path: path.resolve(entry.path), ...(entry.censusScope ? { censusScope: entry.censusScope } : {}) }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     : (repoRoots ? repoRoots.map((repoRoot) => path.resolve(repoRoot)) : listRepos(resolvedWorkspaceRoot))
         .sort()
         .map((repoRoot) => ({ name: path.basename(repoRoot), path: repoRoot }))
@@ -1398,8 +1445,11 @@ export function buildKnowledgeGraph({
   for (const entry of roots) {
     const repoRoot = entry.path
     const repoName = entry.name
-    // One batched ignore lookup per repo, shared by every walk below.
-    const isIgnored = gitIgnoreFilter(repoRoot)
+    // One batched ignore lookup per repo, shared by every walk below. A path
+    // outside the project's census scope is treated exactly as an ignored one.
+    const gitIgnored = gitIgnoreFilter(repoRoot)
+    const outOfScope = censusScopeFilter(entry.censusScope ?? {})
+    const isIgnored = outOfScope ? (rel, info) => gitIgnored(rel) || outOfScope(rel, info) : gitIgnored
     const files = walkDocuments(repoRoot, repoRoot, [], isIgnored)
     workspaceOrphanSidecars.push(...activeOrphanSidecars(repoName, repoRoot, files, isIgnored))
     workspaceIgnoredSidecars.push(...ignoredSourceSidecars(repoName, repoRoot, isIgnored))

@@ -77,6 +77,21 @@ The check is one batched `git ls-files --others --ignored --exclude-standard
 --directory` per repository root, not a per-file `git check-ignore`, which is
 too slow to survive contact with a real workspace.
 
+The project can also scope the census from its tracked config:
+`setup.include` and `setup.exclude` in `atelier.project.json` are path
+patterns relative to the config's folder, and a path outside that scope is
+treated exactly like a Git-ignored one (no node, no sidecar demand, no orphan
+error, no link or embed target). A sidecar follows its source. The scope is
+tracked for the same reason ignored paths are skipped: every machine must walk
+the same files. The rules and the decision behind them are in
+[install](install.md#scoping-what-the-graph-reads).
+
+`atelier enroll documents` writes the sidecar the census demands of every
+non-Markdown document that has none, as the smallest classification that
+lets the graph pass (audience `private` unless `--audience` says otherwise and
+the boundary policy allows it). It reads the same census as `atelier graph`,
+never changes an existing sidecar, and never changes a source.
+
 Repository *discovery* is deliberately not filtered this way: a git folder that
 appears in the workspace is an explicit decision for the operator to make (see
 the `external` repo kind), not something to drop silently.
