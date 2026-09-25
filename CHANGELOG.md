@@ -58,6 +58,13 @@
 
 ### Changed
 
+- Node.js 24 is supported alongside Node.js 22. The engines range is now
+  `>=22.18.0 <23 || >=24.11.0 <25`, so an install on Node 24 no longer warns.
+  Graph and projection files come out byte-identical on either major: CI runs
+  the complete suite on 24.11.0 and on the newest 24, and a new
+  `cross-node-bytes` job builds one workspace on 22 and on 24 and compares
+  every file written. The byte-determinism test names the supported majors
+  and checks them against `package.json`.
 - **Breaking:** Obsidian generation manifests of the new vault layout are
   `atelier-obsidian-generation-manifest/v2`, a new contract major that records
   `layoutVersion: 2` and each note's identity region, and a vault an earlier

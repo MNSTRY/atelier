@@ -68,6 +68,72 @@ jobs:
           ATELIER_ALLOW_MISSING_DENYLIST: '1'
       - run: npm run consumer:smoke
       - run: npm run distribution:smoke
+  test-node-24:
+    # Node 24 is a supported runtime (package.json engines). The complete
+    # suite runs at the declared floor and at the newest 24. Kept apart from
+    # `test` so the required check's name does not change.
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['24.11.0', '24']
+    runs-on: ubuntu-latest
+    env:
+      ATELIER_ALLOW_MISSING_DENYLIST: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run syntax:check
+      - run: npm test
+      - run: npm run consumer:smoke
+  cross-node-bytes:
+    # Committed graph files are shared by everyone who works in a repository,
+    # so they must come out byte-identical whichever supported Node major
+    # built them. Build one workspace at one path on 22, then on 24, and
+    # compare every file the builds wrote.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.18.0'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: seed one workspace
+        run: |
+          WS="$RUNNER_TEMP/ws"
+          node bin/mnstry-atelier.mjs init --fixture=sample-workspace --target "$WS"
+          git -C "$WS" init --quiet
+          git -C "$WS" add -A
+          git -C "$WS" -c user.email=ci@example.invalid -c user.name=ci commit --quiet -m seed
+          # init also leaves git-ignored machine-local state; start both builds
+          # from the committed files alone.
+          git -C "$WS" clean -fdxq
+      - name: build on Node 22
+        run: |
+          WS="$RUNNER_TEMP/ws"
+          node --version
+          node bin/mnstry-atelier.mjs graph --project "$WS/atelier.project.json"
+          node bin/mnstry-atelier.mjs project --project "$WS/atelier.project.json"
+          cp -R "$WS" "$RUNNER_TEMP/built-22"
+          git -C "$WS" clean -fdxq
+          git -C "$WS" checkout --quiet -- .
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - name: build on Node 24 and compare
+        run: |
+          WS="$RUNNER_TEMP/ws"
+          node --version
+          node bin/mnstry-atelier.mjs graph --project "$WS/atelier.project.json"
+          node bin/mnstry-atelier.mjs project --project "$WS/atelier.project.json"
+          diff -r --exclude=.git "$RUNNER_TEMP/built-22" "$WS"
+          echo "Node 22 and Node 24 wrote identical bytes"
   structural-sweep:
     runs-on: ubuntu-latest
     steps:

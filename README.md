@@ -374,8 +374,8 @@ to MNSTRY, and a document MNSTRY declines can still be fully conformant.
 
 ## Install and go deeper
 
-Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
-remains in alpha:
+Node.js 22 (22.18.0 or later) or Node.js 24 (24.11.0 or later) is required.
+Pin the prerelease while the package remains in alpha:
 
 ```bash
 npm install --save-dev @mnstry/atelier@0.2.0-alpha.11

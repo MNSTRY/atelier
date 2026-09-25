@@ -17,7 +17,11 @@ import { commandProject, writeJson } from '../src/project/config.mjs'
 //   2. git-ignored files on disk change nothing (machine-invariant).
 // If this fails, fix the walker — do not relax the test.
 
-const ENGINE_RANGE = { min: 22, maxExclusive: 23 }
+// The Node majors package.json declares. Committed artifacts must be
+// byte-identical across every one of them, not only within one: a team with
+// one person on 22 and another on 24 shares the same graph files. The
+// cross-node-bytes CI job builds the same workspace on each and compares.
+const SUPPORTED_MAJORS = [22, 24]
 
 // Each entry must be git-ignored (asserted below) so a dropped .gitignore
 // pattern fails loudly instead of silently reintroducing the churn. The
@@ -115,11 +119,17 @@ function hashArtifacts(paths) {
   return hash.digest('hex')
 }
 
+test('supported majors match the engines range in package.json', () => {
+  const engines = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).engines.node
+  const declared = [...engines.matchAll(/>=(\d+)\./g)].map((match) => Number(match[1]))
+  assert.deepEqual(declared, SUPPORTED_MAJORS, `package.json engines (${engines}) and SUPPORTED_MAJORS must name the same Node majors`)
+})
+
 test('supported engine range covers the running node major', () => {
   const major = Number(process.versions.node.split('.')[0])
   assert.ok(
-    major >= ENGINE_RANGE.min && major < ENGINE_RANGE.maxExclusive,
-    `byte-determinism is only asserted on the kit engine range (>=${ENGINE_RANGE.min} <${ENGINE_RANGE.maxExclusive}); running ${process.versions.node}`,
+    SUPPORTED_MAJORS.includes(major),
+    `byte-determinism is only asserted on the kit's supported Node majors (${SUPPORTED_MAJORS.join(', ')}); running ${process.versions.node}`,
   )
 })
 
