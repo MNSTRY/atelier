@@ -17,6 +17,7 @@ module calls and branded `runCli` wrappers; wrapper authors must forward argv.
 | --- | --- |
 | graph; project/build; readiness/generated; context/resolve/capabilities/proposal | Shared project resolver. Graph/projection/readiness and proposal operations can create local outputs/history. |
 | dev/server | Shared project resolver; foreground loopback service. `--review` opts into local review ledgers. |
+| enroll documents | Shared project resolver and the graph's census. Writes a new tracked `<file>.kg.json` next to each non-Markdown document that has none, never over an existing path; `--dry-run` writes nothing. Rejects unknown options. |
 | config/manifest; extension-pack/list/validate | Shared resolver; project resolution may ensure ignored local state. Pack loading is declarative, with no extension execution. |
 | support/bundle; analysis/analyze | Project-aware implementation; local previews/explicit output or disabled-by-default analysis contracts retain their existing controls. |
 | boundary/check/doctor/push-check/audit/install-hooks; promote | Project-aware implementation; checks and explicit hook/promotion operations retain their own mutation guards. |

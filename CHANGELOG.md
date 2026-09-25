@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `atelier enroll documents [--audience private] [--dry-run] [--json]` writes
+  a minimal `<file>.kg.json` sidecar next to every `.html`, `.pdf` and
+  `.docx` document the knowledge graph reads that has none, so an adopted
+  vault with attachments, a static website or a folder of documents can pass
+  `atelier graph` without hand-written sidecars. Each sidecar carries the
+  document's title, the domain, lifecycle and status the graph infers, the id
+  `<repo>:asset:<path>` (with a short digest when two paths fold to one id)
+  and the audience `private`. `--audience` picks another, which the
+  repository's boundary policy must allow; a refusal is typed
+  (`enroll-audience-not-allowed`) and names the allowed audiences before
+  anything is written. An existing sidecar, including one Git ignores or a
+  link with the sidecar's name, is never changed, and sources are never
+  changed. See `docs/install.md`.
+- `atelier adopt --enroll-documents [--audience AUDIENCE]` adopts and enrolls
+  in one step, checking the audience against the policy before adoption
+  writes anything.
+
+### Changed
+
+- `setup.include` and `setup.exclude` in `atelier.project.json` now scope
+  what the knowledge graph reads. `adopt --include` and `--exclude` recorded
+  them, and the `monorepo` profile required `--include`, but nothing read
+  them, so a tracked build folder could not be left out and every tracked
+  page needed a sidecar. Each is a path pattern relative to the project
+  config's folder, in the boundary policy's `forbiddenPaths` dialect; a path
+  outside the scope is treated exactly like a Git-ignored one, and a sidecar
+  follows its source. A project that already sets either field gets a graph
+  over that scope from this release: run `atelier graph` and commit the
+  result. Both values must now be relative (the contract's `pathString`), and
+  `adopt` no longer writes them as `null`. The decision is recorded in
+  `docs/install.md`.
+- `atelier graph` ends its error list with a `Next:` line naming
+  `atelier enroll documents` when a document has no sidecar.
+
 ## 0.2.0-alpha.12
 
 ### Added

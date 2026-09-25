@@ -556,6 +556,14 @@ export function validateProjectConfigDoc(doc, { neutralTemplate = false } = {}) 
   if (setup.profile != null && !['single-repo', 'private-domain', 'shared-project', 'multi-repo', 'monorepo', 'control-workspace'].includes(setup.profile)) {
     errors.push('setup.profile is invalid')
   }
+  // The census reads these as path patterns relative to the project config's
+  // folder (docs/knowledge-graph.md), under the contract's pathString rules.
+  for (const key of ['include', 'exclude']) {
+    errors.push(...stringPathErrors(setup[key], `setup.${key}`))
+    if (typeof setup[key] === 'string' && (setup[key].includes('\u0000') || /^[a-z][a-z0-9+.-]*:/.test(setup[key]) || path.isAbsolute(setup[key]))) {
+      errors.push(`setup.${key} must be a path pattern relative to the project config folder`)
+    }
+  }
   if (alignment.appRepo != null && !firstString(alignment.appRepo)) errors.push('alignment.appRepo must be a non-empty string')
 
   const repoNames = new Set()

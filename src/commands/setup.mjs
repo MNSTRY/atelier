@@ -15,6 +15,14 @@ import {
 import { writeAtelierLock, loadAtelierLock, checkAtelierLock } from '../upgrade/upgrade.mjs'
 import { loadBoundaryPolicy, validateBoundaryPolicy } from '../boundary/policy.mjs'
 import { auditRepoIdentities } from '../project/repo-identity.mjs'
+import {
+  DEFAULT_ENROLLMENT_AUDIENCE,
+  assertAudienceAllowed,
+  assertEnrollmentAudience,
+  enrollmentReport,
+  planDocumentEnrollment,
+  writeDocumentEnrollment,
+} from '../graph/enroll.mjs'
 
 const PROFILE_SET = new Set(['single-repo', 'private-domain', 'shared-project', 'multi-repo', 'monorepo', 'control-workspace'])
 const IGNORE_LINES = [
@@ -190,6 +198,13 @@ function runAdopt(argv) {
   }
   const repoName = slug(firstString(args.name) || path.basename(target))
   const actor = slug(firstString(args.actor) || process.env.USER || 'owner')
+  if (typeof args['enroll-documents'] === 'string') throw new Error('--enroll-documents takes no value')
+  const enrollDocuments = args['enroll-documents'] === true
+  const audience = args.audience === undefined ? DEFAULT_ENROLLMENT_AUDIENCE : args.audience
+  if (args.audience !== undefined && !enrollDocuments) throw new Error('--audience applies only with --enroll-documents')
+  if (enrollDocuments) assertEnrollmentAudience(audience)
+  const include = firstString(args.include, args.includes)
+  const exclude = firstString(args.exclude, args.excludes)
   const projectPath = path.join(target, 'atelier.project.json')
   const existingProject = fs.existsSync(projectPath)
     ? resolveProjectConfig({ cwd: target, argv: ['--project', projectPath], writeLocalState: false }) : null
@@ -200,7 +215,7 @@ function runAdopt(argv) {
     graph: { repoAccessPath: 'repo-access.v1.json', outputPath: 'atelier-output/knowledge.graph.json' },
     projection: { outputRoot: 'atelier-output', readinessPath: 'atelier-output/atelier-readiness.json' },
     boundaries: { policyPath: 'boundary-policy.v1.json', governanceLedgerPath: 'governance/repo-boundary-ledger.md', strictNewRepos: true },
-    setup: { profile, include: firstString(args.include, args.includes) || null, exclude: firstString(args.exclude, args.excludes) || null },
+    setup: { profile, ...(include ? { include } : {}), ...(exclude ? { exclude } : {}) },
     repos: [{ name: repoName, path: '.', readBoundary: profile === 'shared-project' ? 'team' : 'private', role: profile }],
   }
   const configErrors = validateProjectConfigDoc(proposedConfig)
@@ -217,6 +232,10 @@ function runAdopt(argv) {
   const proposedPolicy = priorPolicy.ok ? priorPolicy.policy : cleanUndefined(baseBoundaryPolicy({ repoName, profile, actor }))
   const proposedPolicyErrors = validateBoundaryPolicy(proposedPolicy, proposedProject)
   if (proposedPolicyErrors.length) throw new Error(`adopt requires a valid boundary policy: ${proposedPolicyErrors.join('; ')}`)
+  // An audience the policy would refuse is refused before any scaffold write.
+  if (enrollDocuments) {
+    assertAudienceAllowed({ policy: proposedPolicy, repoNames: (proposedProject.repos ?? []).map((repo) => repo.name), audience })
+  }
   if (prior.lock) {
     const report = checkAtelierLock(existingProject)
     if (!report.ok) throw new Error(`adopt cannot accept existing lock drift: ${report.errors.join('; ')}`)
@@ -245,7 +264,8 @@ function runAdopt(argv) {
   if (!fs.existsSync(lockPath)) writeAtelierLock({ project, templateId: `adopt:${profile}` })
   const lockReport = checkAtelierLock(project)
   if (!lockReport.ok) throw new Error(`adopt lock check failed: ${lockReport.errors.join('; ')}`)
-  console.log(JSON.stringify({ ok: true, command: 'adopt', profile, target, projectPath }, null, 2))
+  const enrollment = enrollDocuments ? enrollmentReport(writeDocumentEnrollment(planDocumentEnrollment(project, { audience }))) : null
+  console.log(JSON.stringify({ ok: true, command: 'adopt', profile, target, projectPath, ...(enrollment ? { enrollment } : {}) }, null, 2))
 }
 
 function runDoctor(argv) {

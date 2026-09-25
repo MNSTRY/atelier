@@ -14,6 +14,7 @@ export const commandMap = new Map([
   ['export:dry-run', ['src/validate-atelier-export-dry-run.mjs']],
   ['dry-run', ['src/validate-atelier-export-dry-run.mjs']],
   ['graph', ['src/commands/graph.mjs']],
+  ['enroll', ['src/commands/enroll.mjs']],
   ['project', ['src/commands/project.mjs']],
   ['build', ['src/commands/project.mjs']],
   ['dev', ['src/commands/server.mjs']],
@@ -105,6 +106,7 @@ Core commands:
   adopt                           Add Atelier to an existing repo/workspace.
   setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
+  enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
   dev                             Run the local Atelier sidecar.
@@ -179,9 +181,9 @@ Read one JSON request from stdin (maximum 1 MiB). Start takes {"config":{"id":"S
     init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project] [--target DIR] [--actor ID]
 
 Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,
-    adopt: `Usage: ${c} adopt [--profile single-repo|private-domain|shared-project|multi-repo|monorepo|control-workspace] [--target DIR] [--yes]
+    adopt: `Usage: ${c} adopt [--profile single-repo|private-domain|shared-project|multi-repo|monorepo|control-workspace] [--target DIR] [--include PATTERN] [--exclude PATTERN] [--enroll-documents [--audience private]] [--yes]
 
-Creates or checks a tracked atelier.project.json for an existing workspace and writes machine-local path bindings only to ignored local overlay files.`,
+Creates or checks a tracked atelier.project.json for an existing workspace and writes machine-local path bindings only to ignored local overlay files. --include and --exclude record setup.include and setup.exclude, path patterns relative to the project config that scope which files the knowledge graph reads. --enroll-documents then runs ${c} enroll documents.`,
     setup: `Usage: ${c} setup --yes [--project ./atelier.project.json]
 
 Ensures ignored local Atelier state exists, verifies ignore coverage, and records unambiguous local repo path bindings.`,
@@ -194,6 +196,9 @@ check --staged judges the staged diff. push-check reads pre-push ref updates on 
     graph: `Usage: ${c} graph [--check] [--project ./atelier.project.json]
 
 Builds or checks the project knowledge graph from tracked sources plus ignored local path bindings.`,
+    enroll: `Usage: ${c} enroll documents [--audience private] [--dry-run] [--json] [--project ./atelier.project.json]
+
+Writes a minimal <file>.kg.json sidecar next to every .html, .pdf and .docx document the knowledge graph reads that has none, so ${c} graph can pass. Each sidecar classifies its document for --audience (default private), which the repository's boundary policy must allow, and keeps the domain, lifecycle and status the graph infers. An existing sidecar, even one Git ignores, is never changed, and sources are never changed. --dry-run lists what would be written.`,
     readiness: `Usage:
   ${c} readiness [--check] [--project ./atelier.project.json]
   ${c} readiness protocols [--json]

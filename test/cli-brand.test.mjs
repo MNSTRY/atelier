@@ -31,6 +31,7 @@ Core commands:
   adopt                           Add Atelier to an existing repo/workspace.
   setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
+  enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
   dev                             Run the local Atelier sidecar.
@@ -106,7 +107,8 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
   assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
-  assert.equal(commandMap.size, 57)
+  assert.deepEqual(commandMap.get('enroll'), ['src/commands/enroll.mjs'])
+  assert.equal(commandMap.size, 58)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {
