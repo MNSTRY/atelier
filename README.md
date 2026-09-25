@@ -439,8 +439,8 @@ to MNSTRY, and a document MNSTRY declines can still be fully conformant.
 
 ## Install and go deeper
 
-Node.js `>=22.18.0 <23` is required. Pin the prerelease while the package
-remains in alpha:
+Node.js 22 (22.18.0 or later) or Node.js 24 (24.13.1 or later) is required.
+Pin the prerelease while the package remains in alpha:
 
 ```bash
 npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
@@ -517,7 +517,11 @@ edit made in the editor before anything is republished. A body edit is applied
 to its source manually or under a scoped policy the user installs; anything
 structural stays a copy-only proposal. Atelier never commits to Git for it.
 It is disabled unless a project enables it, and it is proven on one platform
-and one app version. Read [what it does and its known limits](docs/obsidian.md),
+and one app version. Every vault it publishes carries
+[Atelier's own Obsidian plugin](docs/obsidian-plugin.md), which Obsidian asks
+you to trust once per vault; it shows whether the view is current, writes
+nothing, and talks only to the local maintenance service, and the projection
+works the same without it. Read [what it does and its known limits](docs/obsidian.md),
 the [contract](docs/obsidian-contract.md) and the
 [maintenance service](docs/local-services.md) before relying on it. The
 package subpaths are `@mnstry/atelier/obsidian` and

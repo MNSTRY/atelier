@@ -1,18 +1,25 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import http from 'node:http'
 import { isContractIdentifier } from '../../projection/obsidian/contracts.mjs'
+import { PLUGIN_MAX_REQUEST_BYTES, pluginCommandOf, validatePluginRequest } from '../../projection/obsidian/plugin-bridge/channel.mjs'
 import { requestHeader, sameOrigin } from '../../server/security.mjs'
 import { isPlainObject } from './documents.mjs'
 import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs'
 
-// The listener of the maintenance service: four fixed operations and nothing
-// else. There is no file serving, no command, no evaluation and no route that
-// takes a path, a name or code from a request.
+// The listener of the maintenance service: four fixed operations, the five
+// fixed commands of Atelier's plugin, and nothing else. There is no file
+// serving, no command, no evaluation and no route that takes a path, a name or
+// code from a request.
 //
 //   GET  /health   who answers here; open, and says nothing else
 //   GET  /status   service and per-view freshness summary; bearer required
 //   POST /tick     run one tick now; bearer required
 //   POST /stop     finish the tick in flight and exit; bearer required
+//
+//   POST /plugin/challenge | /plugin/hello | /plugin/lease | /plugin/release |
+//        /plugin/status
+//                  Atelier's plugin inside one vault, authenticated by a
+//                  handshake over that vault's key (plugin-bridge/channel.mjs)
 //
 // Every request, before its operation is even looked up:
 //
@@ -20,15 +27,24 @@ import { HEALTH_SCHEMA, LOOPBACK_HOSTS, authorityOf } from './service-client.mjs
 //     to, so a name that resolves to loopback (DNS rebinding) is refused;
 //   - a `Sec-Fetch-Site` other than `none` or `same-origin`, or an `Origin`
 //     that is not this listener itself, is refused: no web page drives this;
-//   - the path is one of the four, exactly, with no query; the method is the
+//   - the path is one of the nine, exactly, with no query; the method is the
 //     one that path has.
 //
-// Everything but health needs the per-runtime random bearer that exists only
-// in the owner-only record. A POST body is JSON of at most 1 KiB naming the
-// runtime it is meant for, so a request aimed at an earlier runtime on the
-// same port does nothing (409). A tick may also name one view (`scopeId`, a
-// contract identifier), which is then prepared and published once more on
-// that tick; any other member is refused (400, `request-member-unknown`).
+// Everything but health and the plugin's commands needs the per-runtime
+// random bearer that exists only in the owner-only record. A POST body is JSON
+// of at most 1 KiB naming the runtime it is meant for, so a request aimed at an
+// earlier runtime on the same port does nothing (409). A tick may also name one
+// view (`scopeId`, a contract identifier), which is then prepared and published
+// once more on that tick; any other member is refused (400,
+// `request-member-unknown`).
+//
+// A plugin command carries no bearer: the plugin never sends its vault's key.
+// Its body, JSON of at most 1 KiB with exactly the fields of its command, is
+// judged by the plugin channel (plugin-channel.mjs): a challenge the service
+// answers only for a key it holds, a hello that proves the same key, and
+// session commands under the key the handshake derived. What it grants is
+// these commands for that one vault. The runtime bearer is not accepted there,
+// and nothing a plugin holds reaches status, tick or stop.
 
 export const MAX_REQUEST_BYTES = 1024
 export const SERVICE_OPERATIONS = Object.freeze({ '/health': 'GET', '/status': 'GET', '/tick': 'POST', '/stop': 'POST' })
@@ -38,6 +54,7 @@ const digestOf = (value) => createHash('sha256').update(String(value)).digest()
 // The decisions the request oracles are sensitive to; tests substitute broken ones to prove the oracles can fail.
 export const SERVER_PRIMITIVES = Object.freeze({
   bearerMatches: (presented, expected) => typeof presented === 'string' && presented !== '' && timingSafeEqual(digestOf(presented), digestOf(expected)),
+  maxPluginRequestBytes: PLUGIN_MAX_REQUEST_BYTES,
   hostMatches: (header, authority) => header === authority,
   originAllowed(headers, authority) {
     const site = requestHeader(headers, 'sec-fetch-site').toLowerCase()
@@ -76,7 +93,9 @@ function readBoundedJson(request, limit) {
 }
 
 // identity: { serviceName, workspaceId, runtimeId, pid, host, port, executableDigest, startedAt }
-// operations: { healthStatus(), status(), tick(), stop() }
+// operations: { healthStatus(), status(), tick(), stop() }, and, where the
+// service holds the plugin channel, { plugin(command, { body, authority }) ->
+// { statusCode, body } }
 export function createServiceServerForOracleTests({ identity, bearer, operations }, primitives = SERVER_PRIMITIVES) {
   if (!LOOPBACK_HOSTS.includes(identity?.host)) throw new TypeError('the service listens on a literal loopback address only')
   if (typeof bearer !== 'string' || bearer.length < 32) throw new TypeError('the service needs its random bearer')
@@ -86,6 +105,19 @@ export function createServiceServerForOracleTests({ identity, bearer, operations
     const authority = authorityOf(identity.host, identity.port)
     if (!rules.hostMatches(requestHeader(request.headers, 'host'), authority)) return send(response, 403, { error: 'host-not-this-loopback-listener' })
     if (!rules.originAllowed(request.headers, authority)) return send(response, 403, { error: 'cross-site-request' })
+    const presented = /^Bearer ([A-Za-z0-9_-]+)$/.exec(requestHeader(request.headers, 'authorization'))?.[1] ?? null
+    const command = typeof operations.plugin === 'function' ? pluginCommandOf(request.url) : null
+    if (command !== null) {
+      if (request.method !== 'POST') return send(response, 405, { error: 'method-not-allowed' })
+      // No credential travels in a header here: a request that sends one was not made by the plugin.
+      if (requestHeader(request.headers, 'authorization') !== '') return send(response, 400, { error: 'plugin-command-takes-no-bearer' })
+      const payload = await readBoundedJson(request, rules.maxPluginRequestBytes)
+      if (!payload.ok) return send(response, payload.statusCode, { error: payload.code })
+      const checked = validatePluginRequest(command, payload.body)
+      if (!checked.ok) return send(response, checked.code === 'protocol-unsupported' ? 409 : 400, { error: checked.code })
+      const answer = await operations.plugin(command, { body: checked.body, authority })
+      return send(response, answer.statusCode, answer.body)
+    }
     const method = Object.hasOwn(SERVICE_OPERATIONS, request.url) ? SERVICE_OPERATIONS[request.url] : null
     if (method === null) return send(response, 404, { error: 'unknown-operation' })
     if (request.method !== method) return send(response, 405, { error: 'method-not-allowed' })
@@ -93,7 +125,6 @@ export function createServiceServerForOracleTests({ identity, bearer, operations
       const { serviceName, workspaceId, runtimeId, pid, host, port, executableDigest, startedAt } = identity
       return send(response, 200, { schema: HEALTH_SCHEMA, serviceName, workspaceId, runtimeId, pid, host, port, executableDigest, startedAt, status: operations.healthStatus() })
     }
-    const presented = /^Bearer ([A-Za-z0-9_-]+)$/.exec(requestHeader(request.headers, 'authorization'))?.[1] ?? null
     if (!rules.bearerMatches(presented, bearer)) return send(response, 401, { error: 'bearer-required' })
     if (request.url === '/status') return send(response, 200, await operations.status())
     const payload = await readBoundedJson(request, rules.maxRequestBytes)

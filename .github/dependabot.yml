@@ -18,8 +18,8 @@ updates:
       prefix: deps
       include: scope
     ignore:
-      # package.json pins engines to Node >=22.18.0 <23, so the type
-      # definitions track the supported runtime rather than the newest
+      # package.json supports Node 22 and Node 24, so the type definitions
+      # track the oldest supported runtime (22) rather than the newest
       # release. Dependabot proposed 22 -> 26 immediately, which would have
       # described APIs this package does not run on. Minor and patch updates
       # within the supported major still come through.

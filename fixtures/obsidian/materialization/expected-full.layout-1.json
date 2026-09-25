@@ -1,0 +1,99 @@
+{
+  "nodes": [
+    "north-desk:depth-chart",
+    "north-desk:harbor-plan",
+    "north-desk:journal-signal-log",
+    "north-desk:shared-a",
+    "north-desk:shared-b",
+    "south-desk:tide-table"
+  ],
+  "edges": [
+    [
+      "north-desk:depth-chart",
+      "evidences",
+      "north-desk:harbor-plan"
+    ],
+    [
+      "north-desk:harbor-plan",
+      "depends_on",
+      "north-desk:shared-a"
+    ],
+    [
+      "north-desk:harbor-plan",
+      "links_to",
+      "north-desk:depth-chart"
+    ],
+    [
+      "north-desk:harbor-plan",
+      "links_to",
+      "north-desk:shared-a"
+    ],
+    [
+      "north-desk:harbor-plan",
+      "links_to",
+      "south-desk:tide-table"
+    ],
+    [
+      "north-desk:harbor-plan",
+      "supports",
+      "south-desk:tide-table"
+    ],
+    [
+      "north-desk:shared-a",
+      "links_to",
+      "north-desk:harbor-plan"
+    ],
+    [
+      "north-desk:shared-b",
+      "contradicts",
+      "north-desk:shared-a"
+    ],
+    [
+      "south-desk:tide-table",
+      "links_to",
+      "north-desk:harbor-plan"
+    ]
+  ],
+  "attachments": [
+    {
+      "path": "attachments/Depth chart--74e876c145b7.pdf",
+      "digest": "sha256:d990e2501d6e0fabd1d326b9c6df2e0980562014bb060aa9e44163dfb2c74406",
+      "byteLength": 25
+    }
+  ],
+  "files": {
+    ".obsidian/core-plugins.json": {
+      "digest": "sha256:9cc6bb2c8a1f7a0af211504020926be7a210d0c7d5fe4ea35ed0586f13e32a84",
+      "text": "{\n  \"publish\": false,\n  \"sync\": false\n}\n"
+    },
+    "attachments/Depth chart--74e876c145b7.pdf": {
+      "digest": "sha256:d990e2501d6e0fabd1d326b9c6df2e0980562014bb060aa9e44163dfb2c74406",
+      "hex": "255044462d312e340a25e2e3cfd30a73796e7468657469630a"
+    },
+    "notes/Depth chart--74e876c145b7.md": {
+      "digest": "sha256:569cfbd9982f55cb0062b9cde19aeaddd266fb04bef70891a778792cce118ce0",
+      "text": "# Depth chart\n\nInvented soundings with \\[\\[brackets\\]\\] and a \\#tag that must stay inert.\n\n- Format: pdf\n- Source: north-desk · charts / depth-chart.pdf\n- Tags: chart\n- Original: [[attachments/Depth chart--74e876c145b7.pdf|Open the original file]]\n\n![[attachments/Depth chart--74e876c145b7.pdf]]\n\n## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n- evidences → [[Harbor plan--6ec5d50e7b5a|Harbor plan]]\n"
+    },
+    "notes/Harbor plan--6ec5d50e7b5a.md": {
+      "digest": "sha256:b86c37f743d2033090eabf69a71326c4afc741b5649eec50cc4aeeb0a136a025",
+      "text": "---\ntitle: \"Harbor plan\"\nkg:\n  id: \"north-desk:harbor-plan\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    supports:\n      - \"south-desk:tide-table\"\n    depends_on:\n      - \"north-desk:shared-a\"\n    related:\n      - \"north-desk:sealed-ledger\"\n---\n\n# Harbor plan\n\nÜberblick — café ☕ first, so byte offsets and character offsets differ.\n\nSee the [tide table](Tide%20table--8a198323462b.md#spring) and again as [[Tide table--8a198323462b|Tide table]] or [[Tide table--8a198323462b#Spring|spring tides]].\nThe [depth chart](Depth%20chart--74e876c145b7.md) is a wrapped source. The concept is in [shared](Shared%20concept--9f1852499f52.md).\n\nLeft alone: [ledger](../sealed/ledger.md), [gone](missing.md), [site](https://example.invalid/page.md) and `[[Tide table]]` in inline code.\n\n```\n[fenced](../../south-desk/tables/tide-table.md)\n[[Tide table]]\n```\n\n## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n- supports → [[Tide table--8a198323462b|Tide table]]\n- depends_on → [[Shared concept--9f1852499f52|Shared concept]]\n- evidences ← Depth chart\n- links_to → [[Depth chart--74e876c145b7|Depth chart]]\n- links_to → [[Shared concept--9f1852499f52|Shared concept]]\n- links_to → [[Tide table--8a198323462b|Tide table]]\n"
+    },
+    "notes/Shared concept--9f1852499f52.md": {
+      "digest": "sha256:f0ff39340e772377817076d3029605ea28381a2c99ecc2d2934a624fd2604142",
+      "text": "---\r\ntitle: \"Shared concept\"\r\nkg:\r\n  id: \"north-desk:shared-a\"\r\n  type: \"document\"\r\n  status: \"active\"\r\n  audience: \"team\"\r\n---\r\n\r\n# Shared concept\r\n\r\nFirst of two notes with one title.\r\nBack to the [plan](Harbor%20plan--6ec5d50e7b5a.md).\r\n\n## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n- depends_on ← Harbor plan\n- contradicts ← Shared concept\n- links_to → [[Harbor plan--6ec5d50e7b5a|Harbor plan]]\n"
+    },
+    "notes/Shared concept--eb0b05f4a215.md": {
+      "digest": "sha256:0611ec664ea7bcdd266b64575940257c9424475563680f0da4755f970fbf091f",
+      "text": "---\ntitle: \"Shared concept\"\nkg:\n  id: \"north-desk:shared-b\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n  relations:\n    contradicts:\n      - \"north-desk:shared-a\"\n---\n\n# Shared concept\n\nSecond note with the same title, and no final newline\n\n## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n- contradicts → [[Shared concept--9f1852499f52|Shared concept]]\n"
+    },
+    "notes/Signal Log--cb2cfa5faba8.md": {
+      "digest": "sha256:e40918ebaacb948dd2fadbd2a0877ff524e18226b2ec0249f6ba31bf397e31c7",
+      "text": "﻿# Signal log\n\nA byte order prefix and no front matter. naïve — ✓\n"
+    },
+    "notes/Tide table--8a198323462b.md": {
+      "digest": "sha256:cf03259cf3b29765d3299d327aed1f5e0d9fe000c706bf1e9a7eec18e3dbe80a",
+      "text": "---\ntitle: \"Tide table\"\nkg:\n  id: \"south-desk:tide-table\"\n  type: \"document\"\n  status: \"active\"\n  audience: \"team\"\n---\n\n# Tide table\n\n## Spring\n\nUsed by [[Harbor plan--6ec5d50e7b5a|the plan]]; embedded: ![[Harbor plan--6ec5d50e7b5a]]\n\n## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n- supports ← Harbor plan\n- links_to → [[Harbor plan--6ec5d50e7b5a|Harbor plan]]\n"
+    }
+  },
+  "manifestDigest": "sha256:453652705b6fa529f3365c33e168fe531f9f89d6457c7aeef99efebcd9051473"
+}

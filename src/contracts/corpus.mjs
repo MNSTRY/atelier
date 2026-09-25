@@ -196,6 +196,12 @@ export const CONTRACT_CORPUS = [
     name: `atelier-obsidian-${shape}`, contractFile: `contracts/atelier-obsidian-${shape}.v1.schema.json`,
     fixtureRoot: `fixtures/obsidian/contracts/${shape}`, registry: false,
   })),
+  // Vault layout 2's manifest: a new major, beside v1, which stays unchanged
+  // and still validates every generation an earlier release wrote.
+  {
+    name: 'atelier-obsidian-generation-manifest-v2', contractFile: 'contracts/atelier-obsidian-generation-manifest.v2.schema.json',
+    fixtureRoot: 'fixtures/obsidian/contracts/generation-manifest-v2', registry: false,
+  },
   {
     name: 'analysis-adapter-claim-output',
     contractFile: 'contracts/analysis-adapter.v1.schema.json',

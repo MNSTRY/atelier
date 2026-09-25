@@ -62,7 +62,7 @@ export function openRegularFileNoFollow(file, flags = fs.constants.O_RDONLY, mod
     // leaf before open and bind the opened descriptor back to that same file
     // identity where the filesystem supplies stable device/inode values.
     if (before && before.ino !== 0 && (before.dev !== opened.dev || before.ino !== opened.ino)) {
-      throw new Error('state leaf changed while opening')
+      throw Object.assign(new Error('state leaf changed while opening'), { code: 'ELEAFCHANGED' })
     }
     return descriptor
   } catch (error) {
@@ -78,6 +78,15 @@ export function readRegularTextNoFollow(file) {
   } finally {
     fs.closeSync(descriptor)
   }
+}
+
+// The real path of a target as the file system stores it: on a volume that
+// folds letter case (macOS by default) each component in the case it is stored
+// in, which is also how the operating system reports a working directory, while
+// Node's own resolution keeps the case it was given. On Windows Node's own
+// resolution is kept: the native one also expands short 8.3 names.
+export function realPathAsStored(target) {
+  return process.platform === 'win32' ? fs.realpathSync(target) : fs.realpathSync.native(target)
 }
 
 export function syncPrivateDirectory(directory) {

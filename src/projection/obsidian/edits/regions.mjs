@@ -1,5 +1,5 @@
 import { scanMarkdownLinks } from '../../../graph/knowledge-graph.mjs'
-import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal } from '../contracts.mjs'
+import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../contracts.mjs'
 import { readMarkdownLens, sha256Digest } from '../materialize/byte-lens.mjs'
 import { alignBodies, commonPrefixLength, commonSubsequenceLength, commonSuffixLength } from './align.mjs'
 
@@ -13,7 +13,8 @@ import { alignBodies, commonPrefixLength, commonSubsequenceLength, commonSuffixL
 // A note is three byte classes, in order:
 //
 //   prefix     bytes before regions.body.start: the source's byte order prefix
-//              or front matter, verbatim
+//              or front matter, verbatim, and in layout 2 the generated
+//              identity lines (regions.identity) inside or as that front matter
 //   authored   the body, with canonical link and embed targets rewritten; each
 //              rewrite is recorded as an inversion
 //   generated  relations, outside-selection rows and, before them, the closing
@@ -221,26 +222,41 @@ export function splitGeneratedTail({ noteEntry, publishedNoteBytes, editedNoteBy
 // Prefix
 // ---------------------------------------------------------------------------
 
-// Returns the edited authored BODY. The prefix must be byte-identical. A byte
-// order prefix is the one exception: it belongs to the source and is kept from
-// the source whether or not the editor kept it in the note.
-export function splitPrefix({ noteEntry, publishedNoteBytes, editedAuthored }) {
-  const prefix = publishedNoteBytes.subarray(0, noteEntry.regions.body.start)
+// The note's prefix as the source holds it: the published prefix without the
+// generated identity lines, and whether the source has front matter of its own.
+export function sourcePrefixOf({ noteEntry, publishedNoteBytes }) {
+  const bodyStart = noteEntry.regions.body.start
+  const prefix = publishedNoteBytes.subarray(0, bodyStart)
+  const identity = noteEntry.regions.identity ?? null
   const frontmatter = noteEntry.regions.frontmatter ?? null
+  if (identity === null || identity.end > bodyStart) return { prefix, sourcePrefix: prefix, hasFrontmatter: frontmatter !== null }
+  const sourcePrefix = Buffer.concat([prefix.subarray(0, identity.start), prefix.subarray(identity.end)])
+  // A front matter that is the identity block and nothing else was generated for a source that has none.
+  const generatedWhole = frontmatter !== null && frontmatter.start === identity.start && frontmatter.end === identity.end
+  return { prefix, sourcePrefix, hasFrontmatter: frontmatter !== null && !generatedWhole }
+}
+
+// Returns the edited authored BODY. The prefix must be byte-identical, the
+// identity lines included: a change to them, as to any front matter, is not a
+// body replacement. A byte order prefix is the one exception: it belongs to
+// the source and is kept from the source whether or not the editor kept it in
+// the note.
+export function splitPrefix({ noteEntry, publishedNoteBytes, editedAuthored }) {
+  const { prefix, sourcePrefix, hasFrontmatter } = sourcePrefixOf({ noteEntry, publishedNoteBytes })
   let body
-  if (frontmatter === null) {
+  if (noteEntry.regions.frontmatter === undefined) {
     body = startsWith(editedAuthored, UTF8_BOM) ? editedAuthored.subarray(UTF8_BOM.length) : editedAuthored
   } else {
-    if (!startsWith(editedAuthored, prefix)) {
-      refuse('unsupported-frontmatter-edit', 'the front matter of the note was edited; only the body can be replaced', { firstDifference: commonPrefixLength(editedAuthored, prefix) })
-    }
-    body = editedAuthored.subarray(prefix.length)
+    const withoutBom = startsWith(prefix, UTF8_BOM) ? prefix.subarray(UTF8_BOM.length) : null
+    if (startsWith(editedAuthored, prefix)) body = editedAuthored.subarray(prefix.length)
+    else if (withoutBom !== null && startsWith(editedAuthored, withoutBom)) body = editedAuthored.subarray(withoutBom.length)
+    else refuse('unsupported-frontmatter-edit', 'the front matter of the note was edited; only the body can be replaced', { firstDifference: commonPrefixLength(editedAuthored, prefix) })
   }
   // The body must not read as front matter of its own, and the front matter
   // must still end where it did, as the source lens reads the result.
   let lens = null
-  try { lens = readMarkdownLens(Buffer.concat([frontmatter === null ? Buffer.alloc(0) : prefix, body])) } catch { /* refused below */ }
-  const expectedEnd = frontmatter === null ? null : frontmatter.end
+  try { lens = readMarkdownLens(Buffer.concat([hasFrontmatter ? sourcePrefix : Buffer.alloc(0), body])) } catch { /* refused below */ }
+  const expectedEnd = hasFrontmatter ? sourcePrefix.length : null
   if (lens === null || (lens.frontmatter?.end ?? null) !== expectedEnd) {
     refuse('unsupported-frontmatter-edit', 'the edit changes where the front matter of the note begins or ends; only the body can be replaced')
   }
@@ -404,10 +420,52 @@ function assertCoherentPlacements({ units, placements, publishedBody, editedBody
 // The final invariant, independent of how the alignment went: every rewrite
 // of the published body is either substituted (intact) or gone (deleted), and
 // what is left of the edited body, which becomes source bytes verbatim, holds
-// no vault identity that the published authored text did not already hold.
-// A vault identity is the `--<hex>` suffix of a note or attachment path of
-// this view, wherever it appears: in a link, in code or in plain prose.
+// no vault identity that the published authored text did not already hold,
+// wherever it appears: in a link, in code or in plain prose. In layout 1 a
+// vault identity is the `--<hex>` suffix of a note or attachment path of this
+// view; in layout 2, where names are titles, it is the full vault path of one,
+// as written or percent-encoded, with or without `.md`.
 const IDENTITY = /--[0-9a-f]{12,64}(?![0-9a-f])/g
+
+const encodeSegment = (segment) => encodeURIComponent(segment).replace(/[()']/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+const latin1Of = (text) => Buffer.from(text, 'utf8').toString('latin1')
+const vaultFilesOf = (manifest) => [...manifest.notes.map((note) => note.path), ...manifest.attachments.map((attachment) => attachment.path)]
+
+// Returns (latin1 text) => [{ identity, index, length }].
+function vaultIdentityFinder(manifest) {
+  if (manifestLayoutVersion(manifest) === 1) {
+    const known = new Set()
+    for (const filePath of vaultFilesOf(manifest)) for (const match of filePath.matchAll(IDENTITY)) known.add(match[0])
+    return (text) => [...text.matchAll(IDENTITY)].filter((match) => known.has(match[0])).map((match) => ({ identity: match[0], index: match.index, length: match[0].length }))
+  }
+  // Spellings in latin1, so an index is a byte offset. Every path starts with a
+  // repository folder, so only those need to be looked for.
+  const spellings = new Set()
+  const starts = new Set()
+  let longest = 0
+  for (const filePath of vaultFilesOf(manifest)) {
+    const forms = [filePath, filePath.split('/').map(encodeSegment).join('/')]
+    for (const form of forms) {
+      for (const spelling of form.endsWith('.md') ? [form, form.slice(0, -'.md'.length)] : [form]) {
+        const bytes = latin1Of(spelling)
+        spellings.add(bytes)
+        longest = Math.max(longest, bytes.length)
+      }
+      starts.add(latin1Of(`${form.split('/')[0]}/`))
+    }
+  }
+  return (text) => {
+    const found = []
+    for (const start of starts) {
+      for (let at = text.indexOf(start); at !== -1; at = text.indexOf(start, at + 1)) {
+        let match = null
+        for (let end = at + start.length + 1; end <= Math.min(text.length, at + longest); end += 1) if (spellings.has(text.slice(at, end))) match = end
+        if (match !== null) found.push({ identity: text.slice(at, match), index: at, length: match - at })
+      }
+    }
+    return found
+  }
+}
 
 export function assertRewritesAccounted({ manifest, units, placements, publishedBody, editedBody }) {
   if (placements.length !== units.length || placements.some((placement) => placement.state !== 'intact' && placement.state !== 'deleted')) {
@@ -418,13 +476,12 @@ export function assertRewritesAccounted({ manifest, units, placements, published
       refuse('unsupported-structural-edit', 'a rewritten link is not where it was placed', { reason: 'rewrite-unaccounted' })
     }
   })
-  const known = new Set()
-  for (const item of [...manifest.notes, ...manifest.attachments]) for (const match of item.path.matchAll(IDENTITY)) known.add(match[0])
+  const find = vaultIdentityFinder(manifest)
   const identities = (body, holes) => {
     const found = []
     let cursor = 0
     for (const [start, end] of [...holes, [body.length, body.length]]) {
-      for (const match of body.toString('latin1', cursor, start).matchAll(IDENTITY)) if (known.has(match[0])) found.push({ identity: match[0], start: cursor + match.index, end: cursor + match.index + match[0].length })
+      for (const item of find(body.toString('latin1', cursor, start))) found.push({ identity: item.identity, start: cursor + item.index, end: cursor + item.index + item.length })
       cursor = end
     }
     return found
@@ -440,29 +497,64 @@ export function assertRewritesAccounted({ manifest, units, placements, published
 }
 
 const folded = (value) => value.normalize('NFC').toLowerCase()
+const parentFolder = (filePath) => (filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : '')
 
 // Every spelling under which the view's notes and attachments can be linked
-// from inside the vault.
-function vaultTargets(manifest) {
-  const targets = new Set()
-  const paths = [...manifest.notes.map((note) => note.path), ...manifest.attachments.map((attachment) => attachment.path)]
-  for (const filePath of paths) {
-    const base = filePath.split('/').at(-1)
-    for (const spelling of [filePath, base]) {
-      targets.add(folded(spelling))
-      if (spelling.endsWith('.md')) targets.add(folded(spelling.slice(0, -'.md'.length)))
+// from inside the vault, as a predicate over a link target.
+//
+// Layout 1: a full path or a basename, with or without `.md`, or anything
+// under `notes/` or `attachments/`.
+//
+// Layout 2 asks what the app would resolve: a target starting `./` or `../`
+// is resolved against the folder of the note; then a vault file of the same
+// name whose path is the target or ends with it, with or without `.md` (the
+// app's exact and suffix matches). A target written from the vault root under
+// a repository folder, where every file of the view is, names the vault even
+// when no file answers it; a relative one that no file answers is an ordinary
+// relative link, which means the same in the source.
+function vaultTargets(manifest, notePath) {
+  const files = vaultFilesOf(manifest).map(folded)
+  if (manifestLayoutVersion(manifest) === 1) {
+    const targets = new Set()
+    for (const filePath of files) {
+      for (const spelling of [filePath, filePath.split('/').at(-1)]) {
+        targets.add(spelling)
+        if (spelling.endsWith('.md')) targets.add(spelling.slice(0, -'.md'.length))
+      }
+    }
+    return (written) => {
+      const target = folded(written.replace(/^(?:\.\/)+/, '').trim())
+      return targets.has(target) || target.startsWith('notes/') || target.startsWith('attachments/')
     }
   }
-  return targets
+  const byName = new Map()
+  for (const filePath of files) {
+    const name = filePath.split('/').at(-1)
+    if (!byName.has(name)) byName.set(name, [])
+    byName.get(name).push(filePath)
+  }
+  const topFolders = new Set(files.map((filePath) => filePath.split('/')[0]))
+  const folder = folded(parentFolder(notePath ?? ''))
+  return (written) => {
+    let target = folded(written.trim())
+    const relative = target.startsWith('./') || target.startsWith('../')
+    if (relative) {
+      let base = folder
+      if (target.startsWith('./../')) target = target.slice(2)
+      if (target.startsWith('./')) target = target.slice(2)
+      else while (target.startsWith('../')) { target = target.slice(3); base = parentFolder(base) }
+      target = base === '' ? target : `${base}/${target}`
+    }
+    target = target.replace(/^\/+/, '')
+    if (!relative && target.includes('/') && topFolders.has(target.split('/')[0])) return true
+    return [target, `${target}.md`].some((spelling) => (byName.get(spelling.split('/').at(-1)) ?? []).some((filePath) => filePath.endsWith(spelling)))
+  }
 }
 
-function namesVaultFile(href, targets) {
+function namesVaultFile(href, isVaultTarget) {
   const spellings = [href]
   try { spellings.push(decodeURIComponent(href)) } catch { /* not percent-encoded */ }
-  return spellings.some((spelling) => {
-    const target = folded(spelling.replace(/^<|>$/g, '').replace(/^(?:\.\/)+/, '').trim())
-    return targets.has(target) || target.startsWith('notes/') || target.startsWith('attachments/')
-  })
+  return spellings.some((spelling) => isVaultTarget(spelling.replace(/^<|>$/g, '')))
 }
 
 // Links and embeds of `bytes` (a whole authored note, so front matter is
@@ -497,8 +589,8 @@ function vaultLinkOccurrences(bytes, bodyStart, targets) {
 // link in the published body must still be the whole target of a link, and an
 // appended alias must still be what closes its link. Text typed against
 // either one changes what the link points at once the rewrite is inverted.
-export function findStructuralLinks({ manifest, notePrefix, publishedBody, editedBody, units, placements }) {
-  const targets = vaultTargets(manifest)
+export function findStructuralLinks({ manifest, notePath = null, notePrefix, publishedBody, editedBody, units, placements }) {
+  const targets = vaultTargets(manifest, notePath)
   const within = (occurrence, start, end) => start >= occurrence.targetStart && end <= occurrence.targetEnd
   const publishedLinks = vaultLinkOccurrences(Buffer.concat([notePrefix, publishedBody]), notePrefix.length, targets)
   const editedLinks = vaultLinkOccurrences(Buffer.concat([notePrefix, editedBody]), notePrefix.length, targets)
@@ -558,7 +650,10 @@ function lensWith(primitives, { manifest, repoId, nodeId, publishedNoteBytes, ed
   const bodyStart = noteEntry.regions.body.start
   const notePrefix = publishedNoteBytes.subarray(0, bodyStart)
   const sourceLens = readMarkdownLens(baseSourceBytes)
-  if (sourceLens.body.start !== bodyStart || sourceLens.body.end !== baseSourceBytes.length || !baseSourceBytes.subarray(0, bodyStart).equals(notePrefix)) {
+  // The note's prefix is the source's, with the generated identity lines where the manifest records them.
+  const { sourcePrefix } = sourcePrefixOf({ noteEntry, publishedNoteBytes })
+  const sourceBodyStart = sourceLens.body.start
+  if (sourceBodyStart !== sourcePrefix.length || sourceLens.body.end !== baseSourceBytes.length || !baseSourceBytes.subarray(0, sourceBodyStart).equals(sourcePrefix)) {
     refuse('manifest-mismatch', 'the recorded body does not begin where the body of the base source begins')
   }
   const units = inversionUnits({ manifest, noteEntry, publishedNoteBytes, baseSourceBytes })
@@ -571,7 +666,7 @@ function lensWith(primitives, { manifest, repoId, nodeId, publishedNoteBytes, ed
   assertCoherentPlacements({ units, placements, publishedBody, editedBody })
   // Offsets in a refusal are offsets into the edited note.
   const shift = tail.authored.length - editedBody.length
-  const structural = primitives.findStructuralLinks({ manifest, notePrefix: noteEntry.regions.frontmatter ? notePrefix : Buffer.alloc(0), publishedBody, editedBody, units, placements })
+  const structural = primitives.findStructuralLinks({ manifest, notePath: noteEntry.path, notePrefix: noteEntry.regions.frontmatter ? notePrefix : Buffer.alloc(0), publishedBody, editedBody, units, placements })
   const aliasTouched = structural.find((item) => item.alias)
   if (aliasTouched) {
     refuse('link-rewrite-edited', 'text was added to the alias the emitter appended to a link', { noteStart: aliasTouched.bodyStart + shift, noteEnd: aliasTouched.bodyEnd + shift })
@@ -590,10 +685,10 @@ function lensWith(primitives, { manifest, repoId, nodeId, publishedNoteBytes, ed
   }
 
   // Between two surviving rewrites the edited bytes ARE the new source bytes.
-  const parts = [baseSourceBytes.subarray(0, bodyStart)]
+  const parts = [baseSourceBytes.subarray(0, sourceBodyStart)]
   const changedRanges = []
-  let written = bodyStart
-  let sourceCursor = bodyStart
+  let written = sourceBodyStart
+  let sourceCursor = sourceBodyStart
   let editedCursor = 0
   const segment = (editedTo, sourceTo) => {
     const next = editedBody.subarray(editedCursor, editedTo)

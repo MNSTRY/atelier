@@ -42,6 +42,8 @@ const allowedFiles = [
   // Other declaration paths still require their own reviewed admission.
   /^src\/decisions\/contracts\.d\.mts$/,
   /^templates\/[A-Za-z0-9./_-]+(?:\.(json|md)|\.?gitignore)$/,
+  // Atelier's own Obsidian plugin, copied byte for byte into the vaults it manages.
+  /^plugins\/obsidian\/(?:manifest\.json|main\.js|styles\.css)$/,
   /^docs\/[a-z0-9./_-]+\.md$/,
   /^announcements\/(keys\/)?[A-Za-z0-9.-]+\.json$/,
 ]
@@ -230,6 +232,13 @@ for (const requiredObsidianFile of [
   'src/projection/obsidian/edits/index.mjs',
   'src/projection/obsidian/proposals/index.mjs',
   'src/projection/obsidian/selection-ui/index.mjs',
+  'src/projection/obsidian/plugin-bridge/index.mjs',
+  'src/runtime/obsidian/plugin-channel.mjs',
+  'docs/obsidian-plugin.md',
+  // The plugin every managed vault receives: without these files a published vault would enable a plugin it lacks.
+  'plugins/obsidian/manifest.json',
+  'plugins/obsidian/main.js',
+  'plugins/obsidian/styles.css',
   ...obsidianSchemas,
 ]) {
   if (!paths.includes(requiredObsidianFile)) {

@@ -9,7 +9,7 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
-## Upgrading to 0.2.0-alpha.12
+## Unreleased
 
 The bundled readiness pack retains its original v1 content and digest. Existing
 locks, including the prior alpha.10 release fixture, can prepare and apply both
@@ -18,7 +18,7 @@ Discovery Harness is the architecture name; the persisted readiness entry still
 uses Discovery Engine. Actual external pack changes still require their own
 adoption procedure and are not accepted by either participant.
 
-This candidate adds the responsibility workflows, source-current ingestion,
+The next release adds the responsibility workflows, source-current ingestion,
 Trackables, governed instruction adoption and local template profiles. Template
 adoption uses the existing exact-plan transaction engine with explicit v2 policy
 and v3 plans; existing policies are never converted automatically. See
@@ -32,6 +32,26 @@ cannot be established. Preserve historical records and use the documented
 Regenerate local graph/projection artifacts through the ordinary upgrade process
 and qualify each consuming host independently. A package update supplies no
 publication permission or runtime activation.
+
+## Upgrading to 0.2.0-alpha.12
+
+This release makes the first open of an Obsidian view automatic and ships
+Atelier's own plugin. `open` adds the view's vault to Obsidian itself, whether
+Obsidian is running or not, and publishes without quitting it; a closed
+Obsidian is started so your other vaults reopen. Vaults are laid out
+readably: folders mirror your repository and file names are note titles,
+with identity kept in a properties block; a vault published by an earlier
+release is laid out again once, keeping held edits. Each managed vault gets
+the Atelier plugin (one trust prompt per vault) with a status bar. A
+maintenance service of an earlier release is replaced by `open` under the
+consent already recorded. No project or machine setting needs to change.
+Machine settings stay v1; generation manifests move to v2 (below).
+
+Node.js 24 (24.13.1 or later) is now supported alongside Node.js 22, and
+both write byte-identical graph files, so people on either can share a
+repository. `atelier dev` on a port that is already taken now says
+`port-in-use` and names `--port=<free port>`; before, it printed an internal
+error. A script that read that failure's exit code sees 2 instead of 1.
 
 ## Upgrading to 0.2.0-alpha.11
 
@@ -187,7 +207,7 @@ See `docs/contract-stability.md`.
 ## Before You Upgrade
 
 - Start from a clean Git status in the copied workspace.
-- Confirm Node.js matches the package range: `>=22.18.0 <23`.
+- Confirm Node.js matches the package range: `>=22.18.0 <23 || >=24.13.1 <25`.
 - Keep this package root and copied starter workspaces separate.
 - Keep upgrade diffs generic: placeholders only, no project-specific private
   material, transcripts, support bundles, local absolute paths, local agent
@@ -217,7 +237,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.11"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.12"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 

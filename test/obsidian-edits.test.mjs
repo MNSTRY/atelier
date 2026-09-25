@@ -40,7 +40,7 @@ import {
   placeUnits,
 } from '../src/projection/obsidian/edits/index.mjs'
 import { ObsidianContractRefusal, validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
-import { sha256Digest } from '../src/projection/obsidian/materialize/index.mjs'
+import { readMarkdownLens, sha256Digest } from '../src/projection/obsidian/materialize/index.mjs'
 import { PublicationRefusal, createRecoveryStore } from '../src/projection/obsidian/recovery/index.mjs'
 import { observeVaultEdits } from '../src/runtime/obsidian/pending-edits.mjs'
 import { createAbandonmentProof, machineDigest } from '../src/runtime/obsidian/private-lock.mjs'
@@ -63,15 +63,45 @@ import { APPLY_WORKSPACE_ID, GONE_HOLDER_PID, digestOf as bytesDigest, git, gone
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const workspace = JSON.parse(fs.readFileSync(path.join(root, 'fixtures/obsidian/edits/workspace.json'), 'utf8'))
-const ALPHA_MD = 'Alpha%20topic--2af151f3fa6d.md'
-const ALPHA_WIKI = 'Alpha topic--2af151f3fa6d'
-const BETA_WIKI = 'Beta topic--8051619ff050'
+// How the emitter spells the fixture's links in each vault layout: layout 1 by a
+// unique basename with an identity suffix, layout 2 by the full vault path.
+// The lens oracles run over both: an edit made on a layout 1 note is applied
+// after the upgrade too.
+const SPELLINGS = {
+  1: {
+    ALPHA_MD: 'Alpha%20topic--2af151f3fa6d.md', ALPHA_WIKI: 'Alpha topic--2af151f3fa6d', BETA_WIKI: 'Beta topic--8051619ff050', BETA_MD: 'notes/Beta%20topic--8051619ff050.md',
+    BETA_BARE: 'Beta%20topic--8051619ff050.md', PLAN: 'attachments/plan--f4c650b30ceb.png', RETYPED: 'Alpha%20topic--2af151f3fa6d.txt', FOLDER: 'notes/Anything at all', LOOKALIKE: '[list](notes/todo.md)',
+    SMALL: 'Small%20', LAYOUT: 1,
+  },
+  2: {
+    ALPHA_MD: 'reading-room/topics/Alpha%20topic.md', ALPHA_WIKI: 'reading-room/topics/Alpha topic.md', BETA_WIKI: 'reading-room/topics/Beta topic.md', BETA_MD: 'reading-room/topics/Beta%20topic.md',
+    BETA_BARE: 'Beta%20topic.md', PLAN: 'reading-room/assets/plan.png', RETYPED: 'reading-room/topics/Alpha%20topic.txt', FOLDER: 'reading-room/Anything at all', LOOKALIKE: '[ledger](reading-room/ledger.md)',
+    SMALL: 'big-room/Small%20', LAYOUT: 2,
+  },
+}
+const LAYOUTS = [1, 2]
+let S
+let ALPHA_MD
+let ALPHA_WIKI
+let BETA_WIKI
 
 const cleanups = []
+const casesByLayout = new Map()
 let cases
+function useLayout(layout) {
+  cases = casesByLayout.get(layout)
+  S = SPELLINGS[layout]
+  ;({ ALPHA_MD, ALPHA_WIKI, BETA_WIKI } = S)
+}
 before(() => {
-  ({ cases } = prepareWorkspace({ after: (fn) => cleanups.push(fn) }, workspace))
+  for (const layout of LAYOUTS) casesByLayout.set(layout, prepareWorkspace({ after: (fn) => cleanups.push(fn) }, workspace, { layout }).cases)
+  useLayout(2)
 })
+// A lens test, once per layout.
+const layoutTest = (name, ...rest) => {
+  const body = rest.pop()
+  for (const layout of LAYOUTS) test(`[layout ${layout}] ${name}`, ...rest, (t) => { useLayout(layout); try { return body(t) } finally { useLayout(2) } })
+}
 after(() => {
   for (const cleanup of cleanups) cleanup()
 })
@@ -97,6 +127,10 @@ const runLens = (context, editedNoteBytes, lens = applyEditLens, overrides = {})
   manifest: context.manifest, repoId: context.repoId, nodeId: context.nodeId, publishedNoteBytes: context.publishedNoteBytes, baseSourceBytes: context.baseSourceBytes, editedNoteBytes, ...overrides,
 })
 
+// Where the body of the base source begins: the note's own body starts later
+// by the generated identity lines of its front matter.
+const sourceBodyStart = (context) => readMarkdownLens(context.baseSourceBytes).body.start
+
 function assertExactSource(context, result, expected, label) {
   assert.equal(result.kind, 'body-replacement', `${label}: refused with ${result.code}`)
   assert.equal(result.newSourceBytes.toString('hex'), expected.toString('hex'), `${label}: new source bytes differ`)
@@ -107,14 +141,14 @@ function assertExactSource(context, result, expected, label) {
   const parts = []
   let cursor = 0
   for (const range of result.changedRanges) {
-    assert.ok(range.start >= cursor && range.end >= range.start && range.start >= context.note.regions.body.start, `${label}: changed ranges are ordered and inside the body`)
+    assert.ok(range.start >= cursor && range.end >= range.start && range.start >= sourceBodyStart(context), `${label}: changed ranges are ordered and inside the body`)
     parts.push(context.baseSourceBytes.subarray(cursor, range.start), result.newSourceBytes.subarray(range.newStart, range.newEnd))
     cursor = range.end
   }
   parts.push(context.baseSourceBytes.subarray(cursor))
   assert.equal(Buffer.concat(parts).toString('hex'), expected.toString('hex'), `${label}: changed ranges do not rebuild the new source`)
   // Every byte outside the authored body is the source's own.
-  const bodyStart = context.note.regions.body.start
+  const bodyStart = sourceBodyStart(context)
   assert.equal(result.newSourceBytes.subarray(0, bodyStart).toString('hex'), context.baseSourceBytes.subarray(0, bodyStart).toString('hex'), `${label}: prefix bytes changed`)
 }
 
@@ -210,7 +244,7 @@ function unchangedOracle(lens) {
   assert.ok(markdown >= 16)
 }
 
-test('lens: an unedited note inverts to the byte-identical source for every fixture', () => {
+layoutTest('lens: an unedited note inverts to the byte-identical source for every fixture', () => {
   unchangedOracle(applyEditLens)
   assert.throws(() => unchangedOracle(broken.keepsEmittedBytes), 'mutation control: a lens that leaves emitted link bytes in place')
   assert.throws(() => unchangedOracle(broken.givesSeparatorToAuthor), 'mutation control: a lens that gives a generated separator byte to the author')
@@ -222,7 +256,7 @@ test('lens: an unedited note inverts to the byte-identical source for every fixt
 
 // { name, file, note: steps over the published note, source: steps over the base source }.
 // A step is [from, to, nth] or a function. `source` defaults to `note`.
-const BODY_EDITS = [
+const BODY_EDITS = () => [
   { name: 'byte order prefix kept, text edited', file: 'log.md', note: [['naïve', 'naïve and more']] },
   { name: 'byte order prefix dropped by the editor is kept from the source', file: 'log.md', note: [['naïve', 'naïve and more'], (note) => note.subarray(3)], source: [['naïve', 'naïve and more']] },
   { name: 'rewritten link beside the byte order prefix stays inverted', file: 'log.md', note: [['a link to', 'one link to']] },
@@ -246,7 +280,7 @@ const BODY_EDITS = [
   { name: 'markdown embed label edited', file: 'guide.md', note: [['![plan](', '![floor plan](']] },
   { name: 'markdown link deleted', file: 'guide.md', note: [[`[first](${ALPHA_MD}) and `, '']], source: [['[first](topics/alpha.md) and ', '']] },
   { name: 'wikilink and its appended alias deleted', file: 'guide.md', note: [[`[[${ALPHA_WIKI}|Alpha topic]] before `, '']], source: [['[[Alpha topic]] before ', '']] },
-  { name: 'embeds deleted', file: 'guide.md', note: [['Pictures: ![plan](attachments/plan--f4c650b30ceb.png) and ![[attachments/plan--f4c650b30ceb.png|200]].\n', '']], source: [['Pictures: ![plan](assets/plan.png) and ![[assets/plan.png|200]].\n', '']] },
+  { name: 'embeds deleted', file: 'guide.md', note: [[`Pictures: ![plan](${S.PLAN}) and ![[${S.PLAN}|200]].\n`, '']], source: [['Pictures: ![plan](assets/plan.png) and ![[assets/plan.png|200]].\n', '']] },
   { name: 'text edited between two rewritten links', file: 'guide.md', note: [[' before [second]', ' well before [second]']] },
   { name: 'text inserted immediately before and after a rewritten link', file: 'guide.md', note: [['see [first](', 'see!![first]('], [`${ALPHA_MD}) and`, `${ALPHA_MD})?? and`]], source: [['see [first](', 'see!![first]('], ['(topics/alpha.md) and', '(topics/alpha.md)?? and']] },
   { name: 'link label edited', file: 'guide.md', note: [['[again](', '[once again](']] },
@@ -259,7 +293,7 @@ const BODY_EDITS = [
   { name: 'a vault-looking link the source already had stays', file: 'lookalike.md', note: [['More words follow.', 'More words follow here.']] },
 ]
 
-function bodyEditOracle(lens, rows = BODY_EDITS) {
+function bodyEditOracle(lens, rows = BODY_EDITS()) {
   for (const row of rows) {
     const context = cases.get(row.file)
     const edited = applyAll(context.publishedNoteBytes, row.note, context)
@@ -269,7 +303,7 @@ function bodyEditOracle(lens, rows = BODY_EDITS) {
   }
 }
 
-test('lens: table of body edits, each compared byte for byte with the edited source', () => {
+layoutTest('lens: table of body edits, each compared byte for byte with the edited source', () => {
   bodyEditOracle(applyEditLens)
   assert.throws(() => bodyEditOracle(broken.keepsEmittedBytes), 'mutation control: emitted bytes left in the source')
   assert.throws(() => bodyEditOracle(broken.normalizesNewlines), 'mutation control: CRLF rewritten as LF')
@@ -303,7 +337,7 @@ function finalNewlineOracle(lens) {
   assert.equal(checked, 22)
 }
 
-test('regions: every final-newline state of the authored body comes from the edited bytes, never from a generated separator', () => {
+layoutTest('regions: every final-newline state of the authored body comes from the edited bytes, never from a generated separator', () => {
   finalNewlineOracle(applyEditLens)
   assert.throws(() => finalNewlineOracle(broken.givesSeparatorToAuthor), 'mutation control')
 })
@@ -353,7 +387,7 @@ function generatedRemovedOracle(lens) {
   }
 }
 
-test('regions: a generated region that was edited, moved, duplicated or partially deleted refuses', () => {
+layoutTest('regions: a generated region that was edited, moved, duplicated or partially deleted refuses', () => {
   generatedRefusalOracle(applyEditLens)
   assert.throws(() => generatedRefusalOracle(broken.acceptsAnyGeneratedTail), 'mutation control')
 })
@@ -409,7 +443,7 @@ function generatedTruncationOracle(lens) {
   assert.ok(refused > 500, `only ${refused} truncations were tried`)
 }
 
-test('regions: a generated tail cut in the middle of a line, from either side or beside an authored edit, never reaches the source', () => {
+layoutTest('regions: a generated tail cut in the middle of a line, from either side or beside an authored edit, never reaches the source', () => {
   // The smallest case: the person selects from the middle of the generated heading to the end of the note and deletes.
   const context = cases.get('guide.md')
   const generated = generatedOf(context)
@@ -420,7 +454,7 @@ test('regions: a generated tail cut in the middle of a line, from either side or
   assert.throws(() => generatedTruncationOracle(broken.guessesWhereTheAuthorStopped), /fragment of generated text was accepted|expected generated-region-edited|new source bytes differ/, 'mutation control: complete lines only, and the end of the note taken for the author\'s')
 })
 
-test('regions: a generated region deleted entirely is not an authored edit, and its separator and fence closure are not the author\'s', () => {
+layoutTest('regions: a generated region deleted entirely is not an authored edit, and its separator and fence closure are not the author\'s', () => {
   generatedRemovedOracle(applyEditLens)
   assert.throws(() => generatedRemovedOracle(broken.keepsSeparatorOfRemovedTail), 'mutation control')
 })
@@ -429,12 +463,12 @@ test('regions: a generated region deleted entirely is not an authored edit, and 
 // Refusals
 // ---------------------------------------------------------------------------
 
-const REFUSED_EDITS = [
+const REFUSED_EDITS = () => [
   { name: 'appended alias edited', file: 'guide.md', code: 'link-rewrite-edited', note: [['|Alpha topic]] before', '|the alpha]] before']] },
   { name: 'appended alias extended', file: 'guide.md', code: 'link-rewrite-edited', note: [['|Alpha topic]] before', '|Alpha topics]] before']] },
   { name: 'appended alias removed, link kept', file: 'guide.md', code: 'link-rewrite-edited', note: [['|Alpha topic]] before', ']] before']] },
   { name: 'rewritten wikilink target removed, alias kept', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[[${ALPHA_WIKI}|Alpha topic]] before`, '[[|Alpha topic]] before']] },
-  { name: 'rewritten target partly retyped', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[first](${ALPHA_MD})`, '[first](Alpha%20topic--2af151f3fa6d.txt)']] },
+  { name: 'rewritten target partly retyped', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[first](${ALPHA_MD})`, `[first](${S.RETYPED})`]] },
   { name: 'rewritten target retargeted to another note', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[[${ALPHA_WIKI}|Alpha topic]] before`, `[[${BETA_WIKI}|Alpha topic]] before`]] },
   { name: 'text typed against a rewritten target', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[first](${ALPHA_MD})`, `[first](zz${ALPHA_MD})`]] },
   { name: 'text typed after a rewritten target', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[first](${ALPHA_MD})`, `[first](${ALPHA_MD}zz)`]] },
@@ -443,7 +477,7 @@ const REFUSED_EDITS = [
   { name: 'a code fence opened before a rewritten link', file: 'open-fence.md', code: 'unsupported-structural-edit', note: [['Before the fence', '```\nBefore the fence']] },
   { name: 'a rewritten link wrapped in inline code', file: 'guide.md', code: 'unsupported-structural-edit', note: [[`[[${ALPHA_WIKI}|Alpha topic]] before`, `\`[[${ALPHA_WIKI}|Alpha topic]]\` before`]] },
   { name: 'rewritten link copied elsewhere', file: 'guide.md', code: 'unsupported-structural-edit', note: [['Closing words.', `Closing words. [first](${ALPHA_MD})`]] },
-  { name: 'authored lookalike link duplicated', file: 'lookalike.md', code: 'unsupported-structural-edit', note: [['More words follow.', 'More words and a second [list](notes/todo.md) follow.']] },
+  { name: 'authored lookalike link duplicated', file: 'lookalike.md', code: 'unsupported-structural-edit', note: [['More words follow.', `More words and a second ${S.LOOKALIKE} follow.`]] },
   { name: 'ambiguous deletion between two spellings of one target', file: 'twins.md', code: 'ambiguous-link-alignment', note: [[`${ALPHA_MD}) [two](`, '']] },
   { name: 'front matter edited', file: 'guide.md', code: 'unsupported-frontmatter-edit', note: [['title: "Field guide"', 'title: "Field guide, revised"']] },
   { name: 'text typed before the front matter', file: 'guide.md', code: 'unsupported-frontmatter-edit', note: [(note) => Buffer.concat([utf8('x'), note])] },
@@ -454,14 +488,14 @@ const REFUSED_EDITS = [
 ]
 
 function refusalOracle(lens, only = null) {
-  for (const row of REFUSED_EDITS) {
+  for (const row of REFUSED_EDITS()) {
     if (only && !only.includes(row.code)) continue
     const context = cases.get(row.file)
     assertRefusal(runLens(context, applyAll(context.publishedNoteBytes, row.note, context), lens), row.code, row.name)
   }
 }
 
-test('lens: edits that are not a body replacement are typed refusals', () => {
+layoutTest('lens: edits that are not a body replacement are typed refusals', () => {
   refusalOracle(applyEditLens)
   assert.throws(() => refusalOracle(broken.callsEditedRewritesDeleted, ['link-rewrite-edited']), 'mutation control: edited aliases taken for deletions')
   assert.throws(() => refusalOracle(broken.seesNoStructuralLinks, ['unsupported-structural-edit']), 'mutation control: no structural check')
@@ -472,7 +506,7 @@ test('lens: edits that are not a body replacement are typed refusals', () => {
 
 function structuralOffsetsOracle(lens) {
   const context = cases.get('guide.md')
-  const typed = { wikilink: `[[${BETA_WIKI}]]`, markdown: '[beta](notes/Beta%20topic--8051619ff050.md)', bare: `[b](${BETA_WIKI.replaceAll(' ', '%20')}.md)`, embed: '[[attachments/plan--f4c650b30ceb.png]]', folder: '[[notes/Anything at all]]' }
+  const typed = { wikilink: `[[${BETA_WIKI}]]`, markdown: `[beta](${S.BETA_MD})`, bare: `[b](${S.BETA_BARE})`, embed: `[[${S.PLAN}]]`, folder: `[[${S.FOLDER}]]` }
   for (const [name, text] of Object.entries(typed)) {
     const edited = replaceNth(context.publishedNoteBytes, 'Closing words.', `Closing words and ${text}.`)
     const result = runLens(context, edited, lens)
@@ -481,7 +515,7 @@ function structuralOffsetsOracle(lens) {
   }
 }
 
-test('lens: a new vault-internal link is a structural refusal that names its byte offsets in the edited note', () => {
+layoutTest('lens: a new vault-internal link is a structural refusal that names its byte offsets in the edited note', () => {
   structuralOffsetsOracle(applyEditLens)
   assert.throws(() => structuralOffsetsOracle(broken.seesNoStructuralLinks), 'mutation control')
 })
@@ -498,7 +532,7 @@ function baseOracle(lens, staleBytes) {
   assertRefusal(runLens(context, edited, lens, { nodeId: 'reading-room:absent' }), 'unknown-note', 'identity the manifest does not hold')
 }
 
-test('lens: the base source and the published note must be the bytes the manifest recorded', () => {
+layoutTest('lens: the base source and the published note must be the bytes the manifest recorded', () => {
   const context = cases.get('guide.md')
   const staleBytes = replaceNth(context.baseSourceBytes, 'Closing words.', 'Closing words!')
   baseOracle(applyEditLens, staleBytes)
@@ -538,11 +572,18 @@ function inversionsOf(context) {
 const FUZZ_TEXTS = ['', 'x', ' words here ', '\n', '\r\n', '\n\n', '- item\n', 'é☕', '```', '```\n', '~~~\n', '`', '[', ']]', '[[', '](', '---\n']
 // Found by an earlier fuzz: an alignment that pairs a blank line with an
 // inserted one and calls the untouched rewrite beside it deleted.
+// Each edit is [anchor, offset in the anchor, bytes replaced, text], so a case
+// lands on the same authored bytes in every layout.
 const FUZZ_REGRESSIONS = [
-  { file: 'open-fence.md', edits: [[199, 199, '\r\n'], [155, 155, 'e\n\nBefore the fen']] },
-  { file: 'open-fence-crlf.md', edits: [[217, 221, '\r\n'], [156, 165, 'x']] },
-  { file: 'open-fence.md', edits: [[221, 232, 'en'], [153, 153, '.\n\n```js\nconst ans']] },
+  { file: 'open-fence.md', edits: [['```js\nconst answer', 1, 0, '\r\n'], ['Before the fence: [[', 19, 0, 'e\n\nBefore the fen']] },
+  { file: 'open-fence-crlf.md', edits: [['raw text', 3, 4, '\r\n'], ['# Open fence two\r\n\r\nSee [', 16, 9, 'x']] },
+  { file: 'open-fence.md', edits: [['const answer = 42\n[[Alpha to', 17, 11, 'en'], ['Before the fence: [[', 17, 0, '.\n\n```js\nconst ans']] },
 ]
+const regressionEdits = ({ file, edits }) => edits.map(([anchor, offset, length, text]) => {
+  const at = cases.get(file).publishedNoteBytes.indexOf(anchor)
+  assert.notEqual(at, -1, `${file} no longer holds ${JSON.stringify(anchor)}`)
+  return { at: at + offset, until: at + offset + length, text: utf8(text) }
+})
 
 function fuzzTrial(context, random, { wholeNote = false } = {}) {
   const note = context.publishedNoteBytes
@@ -593,7 +634,7 @@ function fuzzOracle(lens, { seed, trials, wholeNote = false }) {
   const files = [...cases.keys()].filter((file) => cases.get(file).note.ext[EXT].source.kind === 'markdown' && cases.get(file).note.regions.body.end - cases.get(file).note.regions.body.start >= 2)
   const tally = { exact: 0, refused: {}, wrong: [], inTail: { exact: 0, refused: 0 } }
   const planned = [
-    ...FUZZ_REGRESSIONS.map((item) => ({ file: item.file, edits: item.edits.map(([at, until, text]) => ({ at, until, text: utf8(text) })) })),
+    ...FUZZ_REGRESSIONS.map((item) => ({ file: item.file, edits: regressionEdits(item) })),
     ...Array.from({ length: trials }, (_, trial) => ({ file: files[trial % files.length], edits: fuzzTrial(cases.get(files[trial % files.length]), random, { wholeNote }) })),
   ]
   for (const { file, edits } of planned) {
@@ -601,7 +642,10 @@ function fuzzOracle(lens, { seed, trials, wholeNote = false }) {
     const context = cases.get(file)
     const bodyEnd = context.note.regions.body.end
     const inversions = inversionsOf(context)
-    const toSource = (offset) => offset - inversions.filter((item) => item.note.end <= offset).reduce((total, item) => total + (item.note.end - item.note.start) - (item.source.end - item.source.start), 0)
+    // Note offsets of the body are source offsets once the identity lines before it and every rewrite are taken out.
+    const { identity } = context.note.regions
+    const identityShift = identity && identity.end <= context.note.regions.body.start ? identity.end - identity.start : 0
+    const toSource = (offset) => offset - identityShift - inversions.filter((item) => item.note.end <= offset).reduce((total, item) => total + (item.note.end - item.note.start) - (item.source.end - item.source.start), 0)
     const inTail = edits.some((edit) => edit.until > bodyEnd)
     let edited = context.publishedNoteBytes
     let expected = context.baseSourceBytes
@@ -621,7 +665,7 @@ function fuzzOracle(lens, { seed, trials, wholeNote = false }) {
     // Second oracle, independent of the expected bytes: no emitted target
     // reaches the source unless the base or the inserted text held it, no run
     // of generated bytes does either, and nothing outside the body moved.
-    const bodyStart = context.note.regions.body.start
+    const bodyStart = sourceBodyStart(context)
     const leaked = inversions.some((item) => {
       const emitted = Buffer.from(item.ext[EXT].emitted, 'base64url')
       if (item.source.start === item.source.end) return false
@@ -639,7 +683,7 @@ function fuzzOracle(lens, { seed, trials, wholeNote = false }) {
   return tally
 }
 
-test('lens: fuzz, exact or refused, never wrong', (t) => {
+layoutTest('lens: fuzz, exact or refused, never wrong', (t) => {
   const tally = fuzzOracle(applyEditLens, { seed: Number(process.env.ATELIER_EDIT_FUZZ_SEED ?? 20260105), trials: Number(process.env.ATELIER_EDIT_FUZZ_TRIALS ?? 4000) })
   const refused = Object.values(tally.refused).reduce((total, value) => total + value, 0)
   t.diagnostic(`fuzz: ${JSON.stringify({ exact: tally.exact, refused: tally.refused, wrong: 0 })}`)
@@ -655,7 +699,7 @@ test('lens: fuzz, exact or refused, never wrong', (t) => {
   assert.throws(() => fuzzOracle(broken.normalizesNewlines, { seed: 20260105, trials: 200 }), /wrong results/, 'mutation control')
 })
 
-test('lens: fuzz over the whole note, the boundary and the generated tail included: exact or refused, and no run of generated bytes in a source', (t) => {
+layoutTest('lens: fuzz over the whole note, the boundary and the generated tail included: exact or refused, and no run of generated bytes in a source', (t) => {
   const options = { seed: Number(process.env.ATELIER_EDIT_FUZZ_SEED ?? 20260105), trials: Number(process.env.ATELIER_EDIT_FUZZ_TRIALS ?? 4000), wholeNote: true }
   const tally = fuzzOracle(applyEditLens, options)
   t.diagnostic(`fuzz, whole note: ${JSON.stringify({ exact: tally.exact, refused: tally.refused, inTail: tally.inTail, wrong: 0 })}`)
@@ -664,9 +708,9 @@ test('lens: fuzz over the whole note, the boundary and the generated tail includ
   assert.throws(() => fuzzOracle(broken.guessesWhereTheAuthorStopped, { ...options, seed: 20260105, trials: 1500 }), /wrong results/, 'mutation control: the end of the note taken for the author\'s')
 })
 
-test('lens: applying it twice gives identical results', () => {
+layoutTest('lens: applying it twice gives identical results', () => {
   const oracle = (lens) => {
-    for (const row of BODY_EDITS.slice(0, 12)) {
+    for (const row of BODY_EDITS().slice(0, 12)) {
       const context = cases.get(row.file)
       const edited = applyAll(context.publishedNoteBytes, row.note, context)
       assert.deepEqual(runLens(context, edited, lens), runLens(context, Buffer.from(edited), lens), row.name)
@@ -703,8 +747,8 @@ test('lens: a 5 MB body with edits at both ends and rewritten links between them
   assert.ok(elapsedMs < 10000, `the lens took ${elapsedMs} ms`)
 })
 
-test('lens: an edit too large to align around a rewritten link refuses instead of guessing or hanging', (t) => {
-  const { cases: large } = prepareWorkspace(t, largeWorkspace(2500))
+layoutTest('lens: an edit too large to align around a rewritten link refuses instead of guessing or hanging', (t) => {
+  const { cases: large } = prepareWorkspace(t, largeWorkspace(2500), { layout: S.LAYOUT })
   const context = large.get('large.md')
   const rewriteEveryLine = (note) => utf8(note.toString('utf8').replaceAll(' of an invented body', ' of a reworded body').replaceAll('Second half line', 'Later line'))
   const started = process.hrtime.bigint()
@@ -712,7 +756,7 @@ test('lens: an edit too large to align around a rewritten link refuses instead o
   const kept = rewriteEveryLine(context.publishedNoteBytes)
   assertExactSource(context, runLens(context, kept), rewriteEveryLine(context.baseSourceBytes), 'every line rewritten, links kept')
   // The middle link is retyped as well: nothing can say whether it was edited or deleted.
-  const retyped = replaceNth(kept, 'A [middle](Small%20note', 'A [middle](Small%20memo')
+  const retyped = replaceNth(kept, `A [middle](${S.SMALL}note`, `A [middle](${S.SMALL}memo`)
   assertRefusal(runLens(context, retyped), 'edit-too-large-to-align', 'every line rewritten and a link retyped')
   assert.ok(Number(process.hrtime.bigint() - started) / 1e6 < 10000)
 
@@ -737,10 +781,10 @@ function assertCarriesNoText(value, allowed, label) {
   else assert.ok(value === null || typeof value === 'number' || typeof value === 'boolean', label)
 }
 
-test('lens: refusals carry codes, digests and byte offsets, never note text, titles or paths', () => {
+layoutTest('lens: refusals carry codes, digests and byte offsets, never note text, titles or paths', () => {
   const allowed = new Set([...EDIT_LENS_REFUSALS, 'refusal', 'rewritten-target-edited', 'vault-link-changed', 'vault-identity-in-authored-text', 'rewrite-unaccounted'])
   let refusals = 0
-  for (const row of REFUSED_EDITS) {
+  for (const row of REFUSED_EDITS()) {
     const context = cases.get(row.file)
     const result = runLens(context, applyAll(context.publishedNoteBytes, row.note, context))
     assert.deepEqual(Object.keys(result).sort(), ['code', 'detail', 'kind'])
@@ -839,7 +883,7 @@ test('observation: identical edits over identical bases coalesce under one idemp
   }
 })
 
-test('observation: what the lens refuses is classified, never applied: proposals, conflicts and refusals', (t) => {
+layoutTest('observation: what the lens refuses is classified, never applied: proposals, conflicts and refusals', (t) => {
   const guide = cases.get('guide.md')
   const rows = [
     { name: 'new vault link', context: guide, edited: replaceNth(guide.publishedNoteBytes, 'Closing words.', `Closing words and [[${BETA_WIKI}]].`), code: 'unsupported-structural-edit', kind: 'semantic-proposal', state: 'proposed' },

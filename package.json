@@ -104,6 +104,7 @@
     "./contracts/atelier-obsidian-edit-operation.v1.schema.json": "./contracts/atelier-obsidian-edit-operation.v1.schema.json",
     "./contracts/atelier-obsidian-ext-settings.v1.schema.json": "./contracts/atelier-obsidian-ext-settings.v1.schema.json",
     "./contracts/atelier-obsidian-generation-manifest.v1.schema.json": "./contracts/atelier-obsidian-generation-manifest.v1.schema.json",
+    "./contracts/atelier-obsidian-generation-manifest.v2.schema.json": "./contracts/atelier-obsidian-generation-manifest.v2.schema.json",
     "./contracts/atelier-obsidian-proposal-receipt.v1.schema.json": "./contracts/atelier-obsidian-proposal-receipt.v1.schema.json",
     "./contracts/atelier-obsidian-publication-journal.v1.schema.json": "./contracts/atelier-obsidian-publication-journal.v1.schema.json",
     "./contracts/atelier-obsidian-scope.v1.schema.json": "./contracts/atelier-obsidian-scope.v1.schema.json",
@@ -147,7 +148,7 @@
     "collaboration:test": "node --test test/collaboration-ledger.test.mjs test/server-proposals.test.mjs",
     "sync:test": "node --test test/runtime-git-adapter.test.mjs test/runtime-observation.test.mjs test/runtime-supervisor.test.mjs",
     "boundary:test": "node --test test/boundary-policy-contract.test.mjs test/boundary-content-rules.test.mjs test/boundary-guard.test.mjs",
-    "obsidian:test": "node --test --test-concurrency=1 test/obsidian-acceptance.test.mjs test/obsidian-contract.test.mjs test/obsidian-edits.test.mjs test/obsidian-first-open-real-app.test.mjs test/obsidian-maintenance.test.mjs test/obsidian-materialization.test.mjs test/obsidian-open.test.mjs test/obsidian-package.test.mjs test/obsidian-proposals.test.mjs test/obsidian-publication-feasibility.test.mjs test/obsidian-recovery.test.mjs",
+    "obsidian:test": "node --test --test-concurrency=1 test/obsidian-acceptance.test.mjs test/obsidian-contract.test.mjs test/obsidian-edits.test.mjs test/obsidian-first-open-real-app.test.mjs test/obsidian-maintenance.test.mjs test/obsidian-materialization.test.mjs test/obsidian-open.test.mjs test/obsidian-package.test.mjs test/obsidian-plugin.test.mjs test/obsidian-proposals.test.mjs test/obsidian-publication-feasibility.test.mjs test/obsidian-recovery.test.mjs test/obsidian-vault-layout.test.mjs",
     "upgrade:test": "node --test test/upgrade-contract.test.mjs test/upgrade.test.mjs",
     "release:audit": "node scripts/check-release-tarball.mjs",
     "release:candidate": "node scripts/release-candidate.mjs",
@@ -183,7 +184,7 @@
     "url": "https://github.com/MNSTRY/atelier/issues"
   },
   "engines": {
-    "node": ">=22.18.0 <23"
+    "node": ">=22.18.0 <23 || >=24.13.1 <25"
   },
   "files": [
     "README.md",
@@ -198,6 +199,9 @@
     "skills/",
     "src/",
     "templates/",
+    "plugins/obsidian/manifest.json",
+    "plugins/obsidian/main.js",
+    "plugins/obsidian/styles.css",
     "docs/",
     "announcements/",
     "!fixtures/projects/source-formats-workspace/content/logo.png"

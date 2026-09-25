@@ -91,6 +91,18 @@ const INVALID_EXPECTATIONS = {
     'unknown-relation-type.v1.json': ['schema', /\/links\/1\/type must be one of/],
     'withheld-endpoint.v1.json': ['schema', /\/links\/2\/targetState must be one of in-scope, outside-selection/],
   },
+  'generation-manifest-v2': {
+    'case-only-collision.v2.json': ['semantic', /path-collision \/notes and \/attachments allocate one path to more than one file/],
+    'flat-note-path.v2.json': ['schema', /\/notes\/0\/path must match pattern/],
+    'hidden-folder.v2.json': ['schema', /\/notes\/0\/path must match pattern/],
+    'identity-in-the-body.v2.json': ['semantic', /identity-region-misplaced \/notes\/0\/regions\/identity/],
+    'link-breaking-name.v2.json': ['schema', /\/notes\/0\/path must match pattern/],
+    'missing-identity-region.v2.json': ['schema', /\/notes\/0\/regions must include required property identity/],
+    'missing-layout-version.v2.json': ['schema', /\/ must include required property layoutVersion/],
+    'note-named-like-a-folder.v2.json': ['semantic', /path-collision \/notes and \/attachments give a file the name of a folder/],
+    'unknown-region-kind.v2.json': ['schema', /\/notes\/1\/regions\/generated\/0\/kind must be one of relations, outside-selection, representation, identity/],
+    'v1-contract-version.v2.json': ['schema', /\/contractVersion must match pattern/],
+  },
   'publication-journal': {
     'absolute-recovery-ref.v1.json': ['schema', /\/entries\/0\/recoveryRef must match pattern/],
     'duplicate-sequence.v1.json': ['semantic', /duplicate-identity \/entries/],
@@ -147,9 +159,12 @@ const INVALID_EXPECTATIONS = {
   },
 }
 
+// A shape registered in a second major version keeps its fixtures and expectations apart.
+const keyOf = (contract) => (contract.version === 1 ? contract.shape : `${contract.shape}-v${contract.version}`)
+
 test('every Obsidian contract file is registered in the contract corpus', () => {
   const onDisk = fs.readdirSync(path.join(CORPUS_ROOT, 'contracts')).filter((name) => name.startsWith('atelier-obsidian-')).sort()
-  assert.equal(onDisk.length, 11)
+  assert.equal(onDisk.length, 12)
   assert.deepEqual(sorted(OBSIDIAN_CONTRACTS.map((contract) => path.basename(contract.contractFile))), onDisk)
   for (const contract of OBSIDIAN_CONTRACTS) {
     const entry = CONTRACT_CORPUS.find((item) => item.name === contract.name)
@@ -162,7 +177,7 @@ test('every Obsidian contract file is registered in the contract corpus', () => 
     assert.equal(schema.properties.schema.const, contract.schemaConst)
     assert.equal(schema.additionalProperties, false)
   }
-  assert.deepEqual(sorted(Object.keys(INVALID_EXPECTATIONS)), sorted(OBSIDIAN_CONTRACTS.map((contract) => contract.shape)))
+  assert.deepEqual(sorted(Object.keys(INVALID_EXPECTATIONS)), sorted(OBSIDIAN_CONTRACTS.map(keyOf)))
 })
 
 for (const contract of OBSIDIAN_CONTRACTS) {
@@ -186,7 +201,7 @@ for (const contract of OBSIDIAN_CONTRACTS) {
   test(`${contract.name} refuses each invalid fixture for the registered reason`, () => {
     const files = corpusInvalidFiles(entry)
     assert.notEqual(files.length, 0, `${contract.name} needs at least one invalid fixture`)
-    const expectations = INVALID_EXPECTATIONS[contract.shape]
+    const expectations = INVALID_EXPECTATIONS[keyOf(contract)]
     assert.deepEqual(sorted(files.map((file) => path.basename(file))), sorted(Object.keys(expectations)), 'fixtures and expectations must match one to one')
     for (const file of files) {
       const basename = path.basename(file)

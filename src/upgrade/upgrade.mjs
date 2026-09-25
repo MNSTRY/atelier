@@ -129,7 +129,7 @@ export function buildAtelierLock({ project, templateId = 'existing-workspace', a
     },
     runtime: {
       node: {
-        range: packageJson.engines?.node || '>=22.18.0 <23',
+        range: packageJson.engines?.node || '>=22.18.0 <23 || >=24.13.1 <25',
       },
       telemetry: 'none',
       egress: 'local-only',

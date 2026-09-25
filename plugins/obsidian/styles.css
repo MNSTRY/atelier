@@ -1,0 +1,22 @@
+/* Atelier's plugin: the status bar item and the status modal. */
+
+.atelier-projection-status-bar {
+  cursor: pointer;
+}
+
+.atelier-projection-status {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--size-4-1) var(--size-4-4);
+  margin: 0;
+}
+
+.atelier-projection-status dt {
+  color: var(--text-muted);
+}
+
+.atelier-projection-status dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}

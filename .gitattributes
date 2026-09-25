@@ -9,3 +9,7 @@ fixtures/capability-packages/** text eol=lf
 fixtures/inquiry-packages/** text eol=lf
 fixtures/harness-packages/** text eol=lf
 fixtures/atelier-judgment/native-decision.md text eol=lf
+
+# Atelier's Obsidian plugin is copied byte for byte into every managed vault and
+# its version is pinned to its code digest: the same bytes on every host.
+plugins/obsidian/** text eol=lf

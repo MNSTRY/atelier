@@ -72,13 +72,18 @@ A focus keeps the full vault on disk and filters the native Graph view. The
 query is
 
 ```
-path:"<note path>" OR path:"<note path>" ...
+path:/^<note path>$/ OR path:/^<note path>$/ ...
 ```
 
-in the order of the selected set (canonical-id order). Inside the quoted term
-a backslash and a double quote are escaped with a backslash; nothing else is
-changed, so a path that itself contains search operators (`tag:`, `-`, `OR`,
-parentheses) stays text. Paths are NFC-normalized before they are quoted. A
+in the order of the selected set (canonical-id order). Each term is a regular
+expression anchored at both ends, so it matches exactly one note: a plain
+`path:` term matches any path that contains it, and with titles as names one
+note's path can lie inside another's. In the term every regular-expression
+character and the `/` delimiter is escaped with a backslash, and a space and
+a double quote are written as `\x20` and `\x22`, so a path that itself
+contains search operators (`tag:`, `-`, `OR`, parentheses) stays text. Paths
+are NFC-normalized first. A persisted focus of the earlier query version
+(`obsidian-graph-search-paths/v1`, quoted substring terms) is still read. A
 path that carries a control character, a C1 control, or the U+2028 or U+2029
 line separator cannot be a search term and refuses with
 `focus-path-unrepresentable`; so does an absolute path, a backslash path or a
@@ -256,7 +261,7 @@ nothing under `scripts/obsidian/` ships.
 | --- | --- |
 | `@mnstry/atelier/obsidian` | `src/runtime/obsidian/index.mjs`: enablement, machine settings, engine, service lifecycle, production seams, app qualification |
 | `@mnstry/atelier/obsidian/contracts` | `src/projection/obsidian/contracts.mjs`: contract validation, `selectScope`, note paths |
-| `@mnstry/atelier/obsidian/materialize` | `prepareView`, settings, path registry |
+| `@mnstry/atelier/obsidian/materialize` | `prepareView`, settings (including the plugin's files and entry), path registry |
 | `@mnstry/atelier/obsidian/publication` | `publishView`, editor adapters, the exchange |
 | `@mnstry/atelier/obsidian/recovery` | recovery store, journals, late-writer recheck |
 | `@mnstry/atelier/obsidian/edits` | edit observation, arbitration, apply policy, source apply |
@@ -316,12 +321,34 @@ The maintenance service can also be managed on its own:
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
 the earlier release. `open` replaces it: when the service of this workspace
-proves itself Atelier's own but runs another entry module than the installed
-one, or refuses a tick that names a view as releases up to 0.2.0-alpha.11 do,
+proves itself Atelier's own but runs an earlier release than the installed one
+(its record names the release it runs: the package version and a digest of
+its modules; an earlier version, the same version with other modules, or no
+release named), or refuses a tick that names a view as releases up to
+0.2.0-alpha.11 do,
 `open` stops it as `service stop` would and starts the installed release under
 the consent already recorded, and says `service: restarted (outdated)`. A
-service in a long tick is not stopped (`open` answers `busy`), and a listener
-that does not prove itself this workspace's service is never touched.
+service of a later release is never replaced by an earlier one, so two
+installations used on one workspace (a global and a project-local one, say)
+do not replace each other's service on every open: `open` answers
+`service-unavailable` / `service-other-release`; run `atelier obsidian service
+stop`, then open again, or open with the later release. A service in a long
+tick is not stopped (`open` answers `busy`), and a listener that does not
+prove itself this workspace's service is never touched.
+
+The first time Obsidian opens a view's vault it asks "Do you trust the author
+of this vault?", because every vault Atelier publishes carries Atelier's own
+plugin. "Trust author and enable plugins" turns it on: a status bar item then
+says whether the view is current, updating, held for an edit you made, stale,
+or whether the maintenance service does not answer, and "Atelier: show status"
+says why. "Browse vault in Restricted Mode" keeps every community plugin off
+in that vault, and nothing else changes: maintenance, `open` and `status` work
+without the plugin, as they always did. Obsidian keeps the answer per vault in
+its own storage and asks again the next time until the vault is trusted or
+restricted mode is switched on for good in its settings. Turning the plugin
+off in a vault, or uninstalling it there, is respected from then on;
+`atelier obsidian plugin on --scope ID` brings it back. What the plugin does
+and never does is in [obsidian-plugin.md](obsidian-plugin.md).
 
 `open` and `status` answer with a freshness state, not a promise. `current`
 means the vault is the present generation, verified by read-back, and the app
@@ -333,7 +360,9 @@ and the view is not republished over it. The remaining outcomes (`indexing`,
 `publisher-conflict`, `app-missing`, `app-version-unsupported`,
 `app-cli-unavailable`, `launch-failed`, `service-unavailable`, `busy`,
 `disabled`) each name what to do next, and exit code 3 says the answer is not
-success.
+success. Both also report Atelier's plugin for each view, under `plugin`:
+present while it holds the vault open in the app, with the app and plugin
+versions, or not present with the reason.
 
 Edits made in the vault are preserved before anything is republished. A body
 replacement is held as a pending edit; under manual mode it reaches its source
@@ -358,10 +387,15 @@ Publication is proven on macOS arm64 only and is refused on Windows; see
 
 ### What `open` does in each state of Obsidian
 
-Obsidian opens a vault by path (`obsidian://open?path=`) only when the folder
-is in its own vault list, the `vaults` of `obsidian.json` in its user-data
-directory. `open` puts the view's vault there first, and never asks a person
-to open a folder by hand:
+Obsidian opens a vault from a link only when the folder is in its own vault
+list, the `vaults` of `obsidian.json` in its user-data directory. `open` puts
+the view's vault there first, and never asks a person to open a folder by
+hand. It then names the vault by its id (`obsidian://open?vault=<id>`), never
+by path where the id reaches it first: a path is matched against the list by
+string prefix, so a link for a note under `/A/strategy-lab` can open the
+listed vault `/A/strategy`. When another vault's folder is named like the id,
+or the id is unusual, the vault's own path is used, which the app matches
+exactly because the folder is listed.
 
 - **Obsidian runs and answers its command line (any vault is open).** `open`
   reads the app's vault list through its command line. A vault the app does
@@ -374,7 +408,16 @@ to open a folder by hand:
 - **Obsidian is not running.** The view is published on the path with no app,
   as before. `open` then adds the vault to the app's settings file (see
   [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list) for
-  exactly when and how that one file is written) and starts Obsidian on it.
+  exactly when and how that one file is written, marked to reopen) and starts
+  Obsidian plainly, with no link: an Obsidian started with a link opens only
+  that vault and drops the reopen flag of every other one, so your other
+  vaults would not come back the next time you start it. Started plainly, it
+  reopens every vault it had open, this one included, and once its command
+  line answers (the app itself, not the tool's "unable to find Obsidian")
+  `open` hands it the vault's link through that tool, never through the
+  operating system. On Linux a plain start is not
+  qualified yet, and Obsidian is started with the link (the other vaults'
+  reopen marks are lost there; a known limit).
   An Obsidian that never ran on this account has no settings file yet, and
   `open` does not create one: start Obsidian once, then open again.
 - **Obsidian runs with no vault open.** Its command line then answers every
@@ -385,6 +428,15 @@ to open a folder by hand:
   `app-version-unsupported` with reason `no-vault-open`: open any vault in
   Obsidian, or quit it, and open again. This is the one state of a running
   Obsidian that `open` cannot get through alone.
+- **Obsidian's command line is turned off** (the default of a new
+  installation). It then answers every command with "Command line interface
+  is not enabled", and only a link reaches it. With Obsidian running, `open`
+  adds and launches nothing. With Obsidian quit, `open` adds the vault to its
+  settings and starts it, and Obsidian opens the vault. Either way `open` then
+  answers `app-cli-unavailable` with reason `cli-turned-off` and says where to
+  turn it on: Settings > General > Advanced > Command line interface.
+  Publishing into a vault Obsidian holds needs it until Atelier's plugin takes
+  over that part.
 
 Only `open` adds a vault to Obsidian: the maintenance service never does, so
 it never opens a window nobody asked for. A declared view that was never
@@ -398,6 +450,19 @@ remove that vault from Obsidian's vault list, or keep Atelier's data root
 outside that folder. A view's vault that Obsidian lists already, below such a
 vault, is reached by its id instead (see "Which window answers" in
 [Known limits](#known-limits)).
+
+Obsidian can list one folder more than once, under another letter case or
+through a link, and then open it in one window per entry. Each of those
+windows holds the view's vault, and a publication coordinates with one window
+only, so none is made: the view reports `publisher-conflict` with reason
+`vault-open-in-several-windows`, and `open` answers the same, names the
+entries (`open in Obsidian as: …`; `duplicates` in JSON) and launches nothing.
+Remove the extra entries from Obsidian's vault list and open again. Closing
+the extra windows is not enough: Obsidian keeps the last window it closed
+marked open, so two entries can stay marked open with one window showing, and
+the view stays refused until the list names the folder once.
+While one entry of the folder has a window, `open` reaches only that one and
+never opens another entry of the same folder beside it.
 
 The publisher still writes into a vault only when it can coordinate with every
 Obsidian that may hold it, or when the process table shows, positively, that
@@ -422,6 +487,18 @@ doubles per attempt, up to the full reconciliation every five minutes. What
 the app looks like is read from the process table and the app's vault list
 alone: maintenance runs nothing in Obsidian to find out, and asks it for its
 version only when a view is about to be published, without blocking.
+
+While Atelier's plugin holds the view's vault open in the app and the command
+line gives no version (as it answers while a vault is still loading), the
+version the plugin reports stands in (reason `plugin-reported`); a version the
+command line gives always decides, and while the process table shows no app
+running, a plugin's report counts for nothing. `open` then asks the command
+line nothing: a vault the app's settings file lists is opened by path, and one
+it does not show is answered as `app-cli-unavailable` with reason
+`vault-open-cli-silent` (the app has the vault open; make sure its
+command-line interface is turned on). So is a listed vault the command line
+does not answer for once it is opened, while only the plugin reports the
+version: `open` says so at once instead of waiting for the app.
 
 ## Known limits
 
@@ -485,8 +562,10 @@ test reported as a pass.
   before, and with a backup beside it; see
   [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list). A
   Flatpak or snap build keeps its list inside its sandbox and never reads that
-  file. Such a build is recognised by its sandbox in HOME or by its
-  installation, and the file is then neither read nor written: `open` answers
+  file. Which build is in use is read from which vault list was written last
+  (every build rewrites its own when a vault window opens or closes), and only
+  when no build wrote one from its installation; for a Flatpak or snap build
+  the file is then neither read nor written: `open` answers
   `obsidian-sandboxed` and says to start Obsidian with any vault open, then
   open again, and adds the vault through the app. On Windows no location is
   known, and `open` adds the vault through the app in the same way.
@@ -498,10 +577,12 @@ test reported as a pass.
   window of the first vault in its list whose folder is the tool's working
   directory or contains it, and otherwise in the vault window that had focus
   last. A vault that takes a call is opened when it is closed. Calls about a
-  vault therefore run inside its folder while no vault listed before it at a
-  folder above it (your home folder, say) would take them there, and name its
-  id otherwise; when that id would name another vault first too (one whose
-  folder has the id as its name), no call is made. Publication calls do this
+  vault therefore name its id; only when that id would name another vault
+  first (one whose folder has the id as its name) do they run inside its
+  folder instead, and not at all when a vault listed before it at a folder
+  above it (your home folder, say) would take them there. The vault root is
+  taken in the spelling the file system stores, so a data root given in
+  another letter case on macOS changes nothing. Publication calls do this
   only while the app's list shows the view's vault open, and run in a
   directory that is no vault otherwise. So maintenance never reopens a vault
   window you closed while Obsidian keeps running, and never reaches another
@@ -556,6 +637,15 @@ test reported as a pass.
 - An edit the byte lens cannot turn into source bytes (a new or changed link
   to another note of the vault, an edited front matter) becomes a copy-only
   proposal. No operation applies one.
+- Atelier's plugin (phase 1) reports presence and status and decides
+  nothing: publication still coordinates with the app through its
+  command-line tool, which must be enabled, and the plugin only supplies the
+  app version where that tool gives none. A person who turns the plugin off
+  in a vault, or uninstalls it there, is followed: its entry is not added
+  back and a deleted folder is not made again until the person turns it on
+  in Obsidian's settings or runs
+  `atelier obsidian plugin on --scope ID`. Plugin files are never removed from
+  a vault. See [obsidian-plugin.md](obsidian-plugin.md).
 - Acceptance: a schema-valid receipt closes no gate, the package proof closes
   no gate, and no adopter acceptance is recorded in this repository.
 

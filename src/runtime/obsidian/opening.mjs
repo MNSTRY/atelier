@@ -50,7 +50,7 @@ export const OPENING_OUTCOMES = Object.freeze({
   indexing: { summary: 'the app answered for this vault but has not finished reading it', next: 'wait for Obsidian to finish indexing, then open again' },
   'publisher-conflict': { summary: 'another publisher or an uncoordinated editor holds this vault', next: 'close the other publisher or let it finish; it is retried automatically' },
   'launch-failed': { summary: 'the operating system or the app did not open this vault', next: 'run `obsidian open` again; if it fails the same way, start Obsidian with any vault open and open again' },
-  'service-unavailable': { summary: 'the maintenance service of this workspace could not be started or reached as ours', next: 'see `obsidian service status`' },
+  'service-unavailable': { summary: 'the maintenance service of this workspace could not be started or reached as ours, or runs a later release than this command', next: 'see `obsidian service status`' },
   busy: { summary: 'the maintenance service runs but is in a long tick and did not answer in time', next: 'run `obsidian open` again in a moment; nothing was stopped or restarted' },
   disabled: { summary: 'the Obsidian integration is not enabled for this project, or this view is not configured', next: 'enable it in the project configuration' },
 })
@@ -80,7 +80,9 @@ const QUIT = 'quit Obsidian (on Linux, also any app that runs on a system Electr
 // Obsidian's settings file could not be used to add the vault while the app was quit: adding it through the app works instead.
 const THROUGH_THE_APP = 'start Obsidian with any vault open, then open again: the vault is then added through the app'
 export const REASON_NEXT = Object.freeze({
+  'cli-turned-off': 'Obsidian\'s command line is turned off (the default of a new installation): turn it on in Obsidian under Settings > General > Advanced > Command line interface, then open again',
   'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again; open then adds this view\'s vault to Obsidian itself',
+  'vault-open-cli-silent': 'Obsidian has this view\'s vault open, as Atelier\'s plugin in it shows, but its command line did not answer, so the vault can be neither found nor opened through it; make sure the command-line interface is turned on in Obsidian\'s settings, then open again',
   'editor-uncoordinated': `${UNCOORDINATED}; \`atelier obsidian open\` adds this view's vault to Obsidian and publishes through it, or ${QUIT}; it is retried automatically`,
   'obsidian-settings-missing': 'Obsidian has not run on this account yet: start it once (it creates its settings), then open again with it running or quit',
   'obsidian-settings-location-unknown': THROUGH_THE_APP,
@@ -101,6 +103,8 @@ export const REASON_NEXT = Object.freeze({
   'registration-not-verified': 'Obsidian answered, but its vault list does not show this view\'s vault; quit Obsidian and open again',
   'restarted-service-in-its-first-tick': 'the maintenance service ran an earlier release and was restarted on the installed one, which is still in its first tick; run `obsidian open` again in a moment',
   'service-outdated': 'the maintenance service runs an earlier release of Atelier that could not be replaced; run `atelier obsidian service stop`, then open again',
+  'service-other-release': 'the maintenance service runs a later release of Atelier than this command, which never replaces a later release by itself; run `atelier obsidian service stop`, then open again, or open with the later release',
+  'vault-open-in-several-windows': 'Obsidian\'s vault list marks this view\'s folder open under more than one entry (in another letter case, or through a link), so it may hold the vault in more than one window, and a publication coordinates with one window only; remove the extra entries from Obsidian\'s vault list (Obsidian keeps the last window it closed marked open, so closing windows does not clear this), then open again',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 
@@ -130,8 +134,9 @@ export const OPENING_PRIMITIVES = Object.freeze({
   // Whether the app may be shown this vault at all.
   appQualifies: (qualification) => qualification.outcome === 'qualified',
   // Whether a view that is not current was kept from publication by the app: then making the app hold the vault
-  // and asking for the view again can make it current.
-  keptByApp: (view) => ['publisher-conflict', 'stale-readable', 'not-prepared'].includes(view.outcome) && ['editor-uncoordinated', 'app-version-unsupported'].includes(view.reason),
+  // and asking for the view again can make it current. A vault open in several windows is asked for again once one
+  // window is left; while more are open, open names them instead.
+  keptByApp: (view) => ['publisher-conflict', 'stale-readable', 'not-prepared'].includes(view.outcome) && ['editor-uncoordinated', 'vault-open-in-several-windows', 'app-version-unsupported'].includes(view.reason),
 })
 
 const segment = (identifier) => identifier.replaceAll(':', '_')
@@ -204,6 +209,8 @@ export function scopeReport({ workspace, scopeId, repositoryRoots, serviceState,
     freshness: entry === null ? null : { state: entry.state, reason: entry.reason, verified: entry.verified, generationId: entry.generationId, preparedGenerationId: entry.preparedGenerationId, heldNoteCount: entry.heldNotes.length, retainedEdits: entry.retainedEdits, checkedAt: entry.checkedAt },
     readBack: { readable: verification.readable, reason: verification.reason, generationId: verification.generationId, intact: verification.intact, noteCount: verification.noteCount, differing: verification.differing, missing: verification.missing },
     pendingEdits: pendingSummary(stateStore, scopeId, applyAvailable),
+    // Notes of the view worth naming, and the rule concerned; see "Notes that were laid out anyway" in docs/obsidian-contract.md.
+    ...(entry?.diagnostics ? { diagnostics: entry.diagnostics } : {}),
     vaultRoot: verification.vaultRoot ?? null,
   }
 }
@@ -230,7 +237,10 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 //     back from its list (findVaultEntry);
 //   - running with no vault open: its command line answers nothing, and its
 //     settings file is the running app's, so it is only read: a vault it lists
-//     is opened by path, and one it does not list is `no-vault-open`;
+//     is opened by path, and one it does not list is `no-vault-open`. So is an
+//     app whose version only Atelier's plugin reported: its command line gave
+//     none, so nothing is asked through it, and a vault its settings do not
+//     show is `vault-open-cli-silent` (the plugin shows the vault open);
 //   - not running: the vault is added to its settings file, which is written
 //     only while no Obsidian runs (registerVaultInObsidianSettings). An app
 //     that started just after that write may have read its list before it, and
@@ -255,7 +265,7 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
     const vaults = settings?.ok === true ? settings.vaults : null
     const entry = findVaultEntry(vaults, vaultRoot)
     if (entry) return { ok: true, path: entry.path, how: 'listed', vaults }
-    return { ok: false, reason: inside(vaults) ? 'vault-inside-another-vault' : 'no-vault-open' }
+    return { ok: false, reason: inside(vaults) ? 'vault-inside-another-vault' : observation.fromPlugin === true ? 'vault-open-cli-silent' : 'no-vault-open' }
   }
   if (observation.answering === true) {
     const listed = await attempt(() => registry.listThroughApp())
@@ -377,16 +387,27 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   //    above it would take a call run there.
   const { vaultRoot } = view
   if (typeof vaultRoot !== 'string') return finish('not-prepared', { ...common, reason: 'no-vault-folder', app: app(before) })
-  const known = await ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string', noVaultOpen }, vaultRoot, sleep, pollMs: appPollMs })
-  // An app that answered its version and then closed its last vault window is one with no vault open.
-  if (!known.ok) return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
+  // A version Atelier's plugin reported is not the command line answering (withPluginReportedVersion).
+  const fromPlugin = before.versionSource === 'plugin'
+  const known = await ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string' && !fromPlugin, noVaultOpen: noVaultOpen || fromPlugin, fromPlugin }, vaultRoot, sleep, pollMs: appPollMs })
+  // An app that answered its version and then closed its last vault window is one with no vault open; one that holds
+  // this vault open but whose command line does not answer has no usable command line.
+  if (!known.ok) return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : known.reason === 'vault-open-cli-silent' ? 'app-cli-unavailable' : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
   const registration = { how: known.how }
   const route = vaultRoute({ vaults: known.vaults, vaultRoot })
+  // Open in several windows, one per entry of the list that names its folder: each holds the vault, and a publication
+  // coordinates with one only. Nothing is launched; the entries are named.
+  if (route.how === 'duplicated') return finish('publisher-conflict', { ...common, reason: 'vault-open-in-several-windows', duplicates: route.entries, app: app(before), registration })
   if (route.how !== 'folder' && route.how !== 'id') return finish('launch-failed', { ...common, reason: route.how === 'ambiguous' ? 'vault-inside-another-vault' : 'registration-not-verified', app: app(before), registration })
 
   // 5. Launch, then wait, bounded, for the app to answer for exactly this vault.
   let launch
-  try { launch = await launcher.open({ vaultRoot: known.path }) } catch { launch = { launched: false, reason: 'launcher-threw' } }
+  // A quit app is started plainly and handed the vault once it answers, so the vaults its list flags open come back
+  // (launch-plan.mjs).
+  // The id only where the route found it reaches this vault first (another vault's folder name may equal an id);
+  // otherwise the vault's own path, which the app matches exactly since the folder is listed.
+  const target = route.how === 'id' ? { vaultId: route.id, vaultPath: known.path } : { vaultPath: known.path }
+  try { launch = await launcher.open({ vaultRoot: known.path, ...target, appRunning: before.running === true }) } catch { launch = { launched: false, reason: 'launcher-threw' } }
   if (launch?.launched !== true) return finish('launch-failed', { ...common, reason: typeof launch?.reason === 'string' ? launch.reason : 'launcher-refused', app: app(before), registration })
   const deadline = monotonic() + appWaitMs
   let after = before
@@ -398,6 +419,9 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     if (rules.appQualifies(after)) {
       try { vault = await appProbe.vaultState({ vaultRoot, route }) } catch { vault = { answered: false, indexReady: false } }
       if (vault?.answered === true && vault.indexReady === true) break
+      // Only the command line answers for a vault. An app whose version still only Atelier's plugin reports gives no
+      // answer there, and waiting changes nothing: its command line is what is missing, not a launch.
+      if (vault?.answered !== true && after.versionSource === 'plugin') return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
     }
     if (monotonic() >= deadline) break
     await sleep(appPollMs)

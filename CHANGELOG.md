@@ -6,8 +6,6 @@
   Keep profile identity in its typed adoption manifest, and refuse saved plans
   that replace the workspace lineage before installing any managed content.
 
-## 0.2.0-alpha.12
-
 - Preserve the bundled readiness pack's immutable v1 content and digest so
   previous release locks can use both exact upgrade participants without a
   separate lock rewrite. Keep Discovery Harness naming in the architecture
@@ -59,9 +57,153 @@
 
 - Recompile cached JSON Schema validators when caller-owned schemas change; preserve unchanged-schema reuse and fresh compilation for non-JSON schemas.
 
+## 0.2.0-alpha.12
+
+### Added
+
+- Atelier's own Obsidian plugin (phase 1: presence and status). Every vault
+  the maintenance service publishes now carries it under
+  `.obsidian/plugins/atelier-projection/` with its entry in
+  `.obsidian/community-plugins.json`; the person never installs anything, and
+  Obsidian asks once per vault whether to trust the vault's plugins. Once
+  trusted, a status bar item says whether the view is current, updating, held
+  for an edit, stale or out of reach of the service, and "Atelier: show
+  status" says why. The plugin writes nothing, runs nothing it is sent and
+  reaches only the workspace's maintenance service on its literal loopback
+  address. Without it (restricted mode, an app older than 1.13.7, before the
+  prompt is answered, or turned off in the vault) everything works as before.
+  See `docs/obsidian-plugin.md`.
+- A person who turns Atelier's plugin off in a vault, or uninstalls it there,
+  is followed. Once the app has the plugin's entry in
+  `community-plugins.json` (it was in place before an app opened the vault,
+  or the plugin ran there), a list without it is recorded as the person's
+  decision (private state, `state/plugin/choices/`): the entry is not added
+  back, a deleted plugin folder is not made again, and the plugin files still
+  there are kept current. An entry published while an app held the vault is
+  only offered until then, since that app may write back the list it read
+  before, and a list without it is no decision of the person's. `status`, `open` and the new
+  `atelier obsidian plugin show` report `turned-off-in-this-vault`. Turning the
+  plugin on again in Obsidian's settings is followed the same way;
+  `atelier obsidian plugin on --scope ID` brings the entry and the files back
+  (the way back after an uninstall): at once, on a tick that names the view,
+  while the maintenance service runs (with `--adapter=obsidian-cli`, one of
+  an earlier release is replaced by the installed one first, as `open` does),
+  and otherwise at the view's next publication.
+- The maintenance service answers five plugin commands (`/plugin/challenge`,
+  `/plugin/hello`, `/plugin/lease`, `/plugin/release`, `/plugin/status`,
+  protocol `atelier-obsidian-plugin-channel/v2`) and grants presence and
+  read-only status of one view to a plugin that proves it holds that vault's
+  key. The key is random per vault, kept owner-only in private state and in
+  that vault's plugin data file, and never crosses the wire: the service
+  proves it holds the key over its own exact address before the plugin sends
+  anything that names the vault, and every later request and answer is sealed
+  with a key for that session and a counter that only goes up. A program that
+  takes the service's port while the service is down learns nothing it can
+  use: an answer the session's key does not seal ends the session in the
+  plugin, so such a program receives one command of a session at most; a
+  challenge is answered once and only within thirty seconds of the time it
+  names, and at most four handshakes wait per view. `status` reports which
+  views a plugin holds open, and so do `atelier obsidian status` and `open`.
+- While one launch of the plugin holds a view open and the command-line
+  tool gives no version (no vault open yet, or no answer in time), the app
+  version the plugin reports counts as checked (reason `plugin-reported`), in
+  the service's adapter factory and in `open`, unless the process table shows
+  no app running (a lease outlives a crashed app by a few seconds, and then
+  vouches for no version). A version the tool does give
+  decides, since the tool may reach another app holding the same vault, and
+  whether the app and its tool are installed is still the probe's answer.
 
 ### Changed
 
+- Node.js 24 is supported alongside Node.js 22. The engines range is now
+  `>=22.18.0 <23 || >=24.13.1 <25`, so an install on Node 24 no longer warns.
+  Graph and projection files come out byte-identical on either major: CI runs
+  the complete suite on 24.13.1 and on the newest 24, and a new
+  `cross-node-bytes` job builds one workspace on 22 and on 24 and compares
+  every file written. The byte-determinism test names the supported majors
+  and checks them against `package.json`. The floor is 24.13.1, not the
+  first 24 LTS, because earlier 24 releases have an `fs.rmSync` defect
+  (nodejs/node#61020): removing a symbolic link to a directory throws
+  `EISDIR`, and a broken symbolic link is silently left in place. The
+  complete suite fails on 24.11.0 for that reason.
+- **Breaking:** Obsidian generation manifests of the new vault layout are
+  `atelier-obsidian-generation-manifest/v2`, a new contract major that records
+  `layoutVersion: 2` and each note's identity region, and a vault an earlier
+  release published is laid out again once (below). The v1 contract is
+  unchanged and still validates every generation an earlier release wrote; a
+  reader of generation manifests must accept both majors.
+- Obsidian views are laid out in vault layout 2, so a file name reads as the
+  note's title and the vault reads as the repositories. Folders mirror each
+  repository under a folder named after it, so a view's folders show the
+  repository identity and source directory chain of its notes, as its notes'
+  `atelier-repo` and `atelier-source` properties do; this is acceptable for
+  every vault, scoped ones included. A note's file name is its title (the
+  front-matter `title`, else its first H1, else the file stem as written),
+  with a trailing source extension dropped and made safe for macOS, Linux,
+  Windows and Obsidian links. Two notes of a view that would share a name in
+  one folder, compared case- and normalization-insensitively, are told apart
+  by the source file stem and then by a short stable id; a name that collides
+  with nothing carries no hash. A wrapped file keeps its own name beside its
+  note (`<file name>.md`), and an embedded file is copied to its mirrored
+  path. Links name their target by its full vault path. A repository folder
+  that would be `notes` or `attachments` spelled another way is told apart by
+  a short id, since an upgraded vault keeps those two folders of the earlier
+  layout.
+- Each view allocates its paths among its own notes, seeded from what its
+  prior generation published: a path does not change on retitle or when
+  other files come and go, a note that leaves the view releases its path
+  there (a renamed source takes its name back), a note of another view never
+  causes a qualifier, and a lost path registry costs no view its paths. One
+  identity may have different paths in different views. The registry keeps
+  each view's allocation in a section of its own, and drops the sections of
+  views the engine no longer maintains. `@mnstry/atelier/obsidian/materialize`
+  adds `allocateViewPaths`; `allocateWorkspacePaths` is deprecated: it still
+  allocates the earlier layout's paths for a whole workspace, exactly as
+  before, and Atelier no longer calls it.
+- A source that does not fit is laid out anyway and reported, never a reason
+  to refuse the workspace: a folder chain too long for the path budget keeps a
+  readable prefix and a short stable id, or, when not even that fits, the note
+  sits directly in its repository's folder; a source folder that meets a file
+  of the same name is qualified with an id. Only a name that does not fit even
+  in its repository's folder refuses the view. What is worth a look (these, an
+  author's own identity keys shadowing the generated ones, generated text that
+  names a note outside the view without refusing it) is recorded in the
+  manifest and the view's freshness entry, and shown by
+  `atelier obsidian status`, naming the note.
+- Every note names its identity in three generated front-matter properties,
+  `atelier-id`, `atelier-repo` and `atelier-source`, or, when its own front
+  matter could not take them unchanged in meaning, in a generated block at
+  its end. An edit to them is never applied to a source.
+- A vault published by an earlier release is laid out again once. Every
+  earlier path is retired through the publisher's remove units: moved to the
+  recovery area, or kept where it is when somebody edited it. The app's
+  bookmarks, open tabs and graph positions of the earlier paths are lost once.
+  A view that holds a note for an open edit keeps its earlier layout until the
+  edit is applied or withdrawn, and such an edit still applies; an edit that
+  closes on a tick (automatic mode applies on the tick it observes) keeps it
+  for that tick, so the file the person edited becomes the published note and
+  is retired like any other. See "Vault layout" in `docs/obsidian-contract.md`.
+- The redaction guard is re-based on the readable layout. Atelier never
+  generates a reference to a note outside a view: every path the emitter
+  writes must be one allocated to the view, and every identity block names
+  its own note. Generated prose repeats author text (the titles, summaries
+  and tags of in-view notes), which is carried as authored; the deny-list over
+  it, read as a reader sees it with the emitter's escapes removed and in NFC,
+  follows the audience, as defence in depth. For a note the audience may not
+  see it refuses an unambiguous identifier (an identity qualified by any
+  repository, a repository-qualified path, a repository-relative path with a
+  folder, a vault path) and reports a bare-word identity or a file name at a
+  repository's root (`README.md`); for a note the audience may see but the
+  view does not select it only reports. A view may newly refuse with
+  `redaction-failure`; the refusal names the rule and the in-view note, never
+  the value. Both rules run over every note, cached ones included. The deny
+  matcher is one automaton: building it takes time and memory linear in the
+  values it holds, on every preparation, and it reads each text once, however
+  many there are.
+- A focus query names each note by an anchored regular-expression path term
+  (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
+  exactly the selected notes; a focus persisted with the earlier version is
+  still read.
 - `atelier obsidian open` makes the first open of a view automatic: Obsidian
   no longer has to be quit, and no vault folder has to be opened by hand. It
   makes the app know the view's vault as one of its vaults before it opens
@@ -109,11 +251,17 @@
   not know, or a view on a stop, with 400 `request-member-unknown` instead of
   409, and checks a view against the scope contract's own identifier.
 - Command-line calls to the app reach only the vault they are about. A call
-  about a vault runs in its folder, so it reaches that vault's window
-  whichever window has focus, or names the vault first (`vault=<id>`) when a
-  vault the app lists before it at a folder above it (a home folder, say)
-  would take a call run there; when that id would name another vault first
-  too, no call is made. Publication calls do so only while the app's list
+  about a vault names it first (`vault=<id>`), so it reaches that vault's
+  window whichever window has focus; only when that id would name another
+  vault first does it run in the vault's folder, and not at all when a vault
+  the app lists before it at a folder above it (a home folder, say) would take
+  a call run there. The vault root, the settings entry, the vault check and
+  the publication bridge's check that the app holds this vault use the path as
+  the file system stores it, so on macOS a data root given in another letter
+  case neither hides a vault listed above it nor routes a call there, and a
+  store written before, or an app that holds the vault under another spelling
+  or through a link, keeps working: publication through the app, and `open`'s
+  check that the app answers for the vault. Publication calls do so only while the app's list
   shows the view's vault open; every other call runs in a directory that is
   no vault. Maintenance never reopens a vault window that was closed and never
   reaches another vault, and the directory a command or service was started
@@ -124,36 +272,107 @@
   when its last component is the vault root's, so a vault on a mount that
   does not answer is never waited on. The maintenance service is started in
   the root directory.
+- A view's vault that Obsidian has open in more than one window, one per
+  entry of its vault list that names the folder (under another letter case,
+  or through a link), is not published: a publication would coordinate with
+  one window only. The view reports `publisher-conflict` /
+  `vault-open-in-several-windows` (removing the extra entries from Obsidian's
+  vault list clears it; closing a window may not, since Obsidian keeps the last
+  window it closed marked open), and `open` answers the same, names the entries (`open in Obsidian
+  as: …`, `duplicates` in JSON) and launches nothing. While one entry of the
+  folder has a window, calls and `open` reach only that entry, so a closed
+  entry of the same folder is never opened beside it.
 - Obsidian's settings file is not written larger than 4 MiB
   (`obsidian-settings-too-large`), nor through a second name (a hard link,
   `obsidian-settings-unsafe`). Of Atelier's backups beside it, the first (the
   list as it was before Atelier wrote it) and the latest are kept. A write
   that cannot be read back is `registration-not-read-back`, no longer
   `app-started-during-registration`. A Flatpak or snap build of Obsidian on
-  Linux, which never reads that file, is recognised and the file is neither
-  read nor written for it (`obsidian-sandboxed`); the vault is added through
-  the running app. An addition the running app did not answer is looked up in
+  Linux, which never reads that file, is recognised (the build whose vault
+  list was written last; its installation only when no build wrote one), and
+  the file is neither read nor written for it (`obsidian-sandboxed`); the
+  vault is added through the running app. An addition the running app did not answer is looked up in
   its list, and is `addition-not-answered` when it is not there, no longer
   `app-did-not-list-its-vaults`. Adding a vault through the app also puts its
   folder in the operating system's recent documents (Recent Items on macOS),
   as Obsidian's own "open folder as vault" does.
 - A maintenance service still running an earlier release after an upgrade
-  is replaced by `open`: a service of the workspace that proves itself ours
-  but runs another entry module than the installed one, or refuses a tick
-  that names a view (as 0.2.0-alpha.11 and earlier do), is stopped through
-  its own listener and the installed release is started under the consent
-  already recorded; `open` shows `service: restarted (outdated)`
-  (`service.restarted` in JSON). A busy service is not stopped, and nothing
-  that does not prove itself ours is touched. `requestServiceTick` takes the
-  start options of the installed entry as `service` for this.
+  is replaced by `open`. Every service records the release it runs, the
+  package version and a digest of every runtime module it ships (`src/`,
+  `contracts/`), in its record's `executable.ext.release`
+  (`releaseIdentity()`). A service of the workspace that proves itself ours
+  but runs an earlier version than the installed one, the same version with
+  another entry module or other modules, records no release, or refuses a
+  tick that names a view (as 0.2.0-alpha.11 and earlier do), is stopped
+  through its own listener and the installed release is started under the
+  consent already recorded; `open` shows `service: restarted (outdated)`
+  (`service.restarted` in JSON). A service of a later version (versions
+  ordered as semantic versions, 0.2.0-alpha.11 < 0.2.0-alpha.12 < 0.2.0), or
+  of one that cannot be ordered, is never replaced by an earlier release, so
+  two installations used on one workspace do not replace each other's service
+  on every open: `open` answers `service-unavailable` /
+  `service-other-release`, whose next step is `atelier obsidian service stop`,
+  then open again. The same version string on both sides is compared by
+  content even when it cannot be ordered (a fork's `dev`), so that next step
+  cannot loop. A tick refused because a concurrent command replaced the
+  runtime just before is asked of the runtime that took its place, and
+  nothing is restarted. A busy service is not stopped, and nothing that does
+  not prove itself ours is touched. `requestServiceTick` takes the start
+  options of the installed entry as `service` for this (`runtimeRelease`,
+  `releaseStanding`).
 - The `status` next step for `publisher-conflict` / `editor-uncoordinated`
   names `atelier obsidian open` (which adds the vault to Obsidian and
   publishes through it) or quitting Obsidian; after `open` itself tried, it
   names quitting Obsidian. `launch-failed` no longer asks for a vault folder
   to be opened by hand.
+- The settings unit owns two more things in a vault: the `atelier-projection`
+  entry of `community-plugins.json` (appended while the person wants the
+  plugin there; every other entry kept in order; written only over the exact
+  bytes the decision was made on, so a change the person makes meanwhile
+  stops that unit as `settings-changed` and the view is tried again) and the
+  plugin's four files, whose digests are pinned in the generation manifest
+  under `ext["mnstry.atelier.obsidian"].settings`.
+  Whatever occupies a plugin path is displaced to recovery, never lost; a
+  plugin path a person has to repair (a link, a folder where a file goes, a
+  file nobody may read, a folder nobody may write) never holds a view back; a
+  generation whose plugin files the person repaired, changed or removed is
+  published again as it is at the maintenance service's next tick; and
+  another writer racing a plugin file makes the view try again.
+  `isUserOwnedSettingsPath` answers `false` for these paths.
+- Vault roots that Atelier places under its data root are created private
+  (`0700`), and an existing one is made private before the plugin's key is
+  written into it. A vault root Atelier did not place never receives the key
+  unless it is already private, and a vault path under the data root that is
+  a link to another folder never receives it, and its mode is never changed.
+- A settings file nobody may read (`core-plugins.json`, say) is reported as
+  `path-unsafe` and left for the person instead of failing the publication.
+- `plugins/` is part of the egress scan, and the release audit requires the
+  plugin's three files in the package.
 
 ### Fixed
 
+- A publication no longer stops with an untyped `state leaf changed while
+  opening` when another program replaces a note by rename at the instant the
+  publisher opens it (an editor or sync tool saving the note). The note is
+  read again, since every rename leaves a complete file; a note that keeps
+  being replaced is reported as `disk-changed` for that note only, and the
+  other notes are published. No bytes were ever lost: the publication threw
+  before writing.
+- `open` no longer makes Obsidian forget which of your vaults to reopen. A
+  quit Obsidian started with an `obsidian://` link opens only that vault and
+  drops the reopen flag of every other one; `open` now starts it plainly on
+  macOS (it reopens every vault it had open, and the view's vault, which `open`
+  added flagged to reopen) and hands it the vault's link through its command
+  line once the app itself answers there, never through the operating system.
+  On Linux a quit Obsidian is still started with the link (a known limit).
+- `open` names the vault by its id (`obsidian://open?vault=<id>`) where the id
+  reaches it first, instead of its path, which Obsidian matches against its
+  vault list by string prefix.
+- Obsidian with its command line turned off (the default of a new
+  installation) answers every command with "Command line interface is not
+  enabled"; that answer was read as an unreadable version. It is now
+  `app-cli-unavailable` / `cli-turned-off`, whose next step names the setting
+  (Settings > General > Advanced > Command line interface).
 - A view whose prepared generation was already the committed one (on the
   first tick of a service, or prepared again on request) was marked `stale`
   when the app could not be qualified, for example while it ran with no vault
@@ -172,6 +391,15 @@
 - An app whose vault window is still loading answers a command with `Error:
   Command "version" not found`; that was read as an unreadable version and
   ended `open` as `app-version-unsupported`. It is now read as not up yet.
+- `atelier dev` on a port that was already taken (8137 by default) printed
+  only `[internal-error] command failed without a safe diagnostic`, and the
+  message that says what to do appeared only with `ATELIER_DEBUG=1`. It is now
+  `port-in-use`, naming the port, with `--port=<free port>` as the next step.
+  A port the operating system refuses (EACCES, usually one below 1024) is
+  `port-permission-denied` with the same remedy, and a `--port` or `PORT`
+  value that is not a port from 0 to 65535 is `port-invalid`, naming which
+  one, instead of Node's `ERR_SOCKET_BAD_PORT`. Other failures without a
+  typed code are still redacted.
 
 ## 0.2.0-alpha.11
 

@@ -300,6 +300,8 @@ export function recoverPublications({ store, clock = () => new Date() }) {
 // Digests this view has published since its trusted manifest was committed,
 // by journals that did not reach a commit. They are valid bases: without them
 // a note published by an interrupted run would look like an outside edit.
+// Settings and Atelier's plugin files are planned from the disk, never from a
+// base, so they have no place here.
 export function publishedSinceCommit({ store }) {
   const pointer = store.readCurrent()
   const ledger = new Map()
@@ -308,7 +310,7 @@ export function publishedSinceCommit({ store }) {
     if (document.state === 'committed' || document.expectedGeneration !== (pointer?.generationId ?? null)) continue
     for (const entry of document.entries) {
       const detail = journalDetail(entry)
-      if (entry.step !== 'conditional-update' || entry.outcome !== 'ok' || detail.kind === 'settings') continue
+      if (entry.step !== 'conditional-update' || entry.outcome !== 'ok' || detail.kind === 'settings' || detail.kind === 'plugin') continue
       ledger.set(entry.notePath, detail.op === 'remove' ? null : entry.afterDigest)
     }
   }

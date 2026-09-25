@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { validateObsidianContract } from '../src/projection/obsidian/contracts.mjs'
 import {
+  OBSIDIAN_SETTINGS_FILE,
   PROTOCOL_ID,
   TransportTimeout,
   buildEvalCode,
@@ -20,7 +21,9 @@ import {
   createObsidianCliCall,
   defaultObsidianProcessProbe,
   exchangeFiles,
+  obsidianUserDataDir,
   probeExchange,
+  publicationRoute,
   publishView,
   resetExchangeProbeCache,
   resolveExchange,
@@ -704,6 +707,46 @@ test('I06 a real outside process doing atomic renames while the publisher runs n
   t.diagnostic(`I06 outcomes: ${JSON.stringify(tally)}`)
 })
 
+// Makes an outside atomic rename land exactly between the publisher's check of a note and its open: every open of
+// `file` (at most `times`) first replaces it by rename, as an editor or a sync tool saving it does.
+function renameOnOpen(t, file, bytesFor, times = Infinity) {
+  const original = fs.openSync
+  let renamed = 0
+  fs.openSync = function openSync(target, ...rest) {
+    if (target === file && renamed < times) {
+      renamed += 1
+      fs.writeFileSync(`${file}.ext~`, bytesFor(renamed))
+      fs.renameSync(`${file}.ext~`, file)
+    }
+    return original.call(this, target, ...rest)
+  }
+  t.after(() => { fs.openSync = original })
+  return () => renamed
+}
+
+test('I06b a note replaced by rename while the publisher opens it is read again: the outside bytes are kept, and nothing throws out of the publication', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const app = new ModelApp(world.vault)
+  const external = `${BASE}EXTERNAL AT OPEN\n`
+  const renames = renameOnOpen(t, world.full(NOTE), () => external, 1)
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), modelAdapter(app))
+  assert.equal(renames(), 1)
+  assert.ok(keptSomewhere(world, external), 'the outside bytes are kept')
+  assert.ok([CANDIDATE, external].includes(world.read(NOTE)), 'the note is one coherent version')
+  assert.notEqual(noteResult(result).outcome, undefined)
+})
+
+test('I06c a note that keeps being replaced while the publisher opens it is refused for that note only, as disk-changed, and the publication returns instead of throwing', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const app = new ModelApp(world.vault)
+  renameOnOpen(t, world.full(NOTE), (count) => `${BASE}CHURN ${count}\n`)
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), modelAdapter(app))
+  assert.deepEqual([noteResult(result).outcome, noteResult(result).blocking], ['disk-changed', true], JSON.stringify(noteResult(result)))
+  assert.equal(result.state, 'updating')
+  assert.equal(noteResult(result, OTHER).outcome, 'published', 'the other note is published')
+  assert.equal(world.read(OTHER), CANDIDATE)
+})
+
 test('I06a the app never writes the note as a result of publication; a following outside write survives the delayed save', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)
@@ -1030,6 +1073,36 @@ test('interrupted conditional removal: killed after the move, the bytes are in r
   const result = await world.publish(viewOf('gen-0002', { notes: { [OTHER]: BASE } }), absentAdapter())
   assert.equal(result.state, 'committed')
   assert.ok(keptTexts(world).includes(BASE))
+})
+
+// Whether this file system folds letter case (macOS by default): a folder can then be spelled in another case than it
+// is stored in.
+const CASE_FOLDING = (() => {
+  try {
+    const probe = fs.mkdtempSync(path.join(TMP, 'atelier-Case-'))
+    try { return probe !== probe.toLowerCase() && fs.existsSync(probe.toLowerCase()) } finally { fs.rmSync(probe, { recursive: true, force: true }) }
+  } catch { return false }
+})()
+
+test('a store written under another spelling of its folder keeps working: its generation is read back, and an app that holds the vault under that spelling, or through a link, is coordinated with', { ...needsExchange, ...(CASE_FOLDING && process.platform !== 'win32' ? {} : { skip: 'this file system tells letter case apart, or it is Windows: a folder has one spelling here' }) }, async (t) => {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-Spelled-')))
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }))
+  const stored = path.join(parent, 'Workspace')
+  fs.mkdirSync(stored)
+  // Written through a spelling in another letter case, as a data root typed that way gives: the first generation.
+  const lower = stored.toLowerCase()
+  const world = await seeded(t, { [NOTE]: BASE }, { root: lower })
+  // Opened again, as the next process does: the same store, whichever spelling.
+  const again = createRecoveryStore({ workspaceRoot: lower, workspaceId: 'ws-synthetic-0003', scopeId: 'scope-synthetic', repositoryRoots: [] })
+  assert.deepEqual([again.vaultRoot, again.readCurrent().generationId], [world.vault, 'gen-0001'])
+  // An app that holds the vault under the other spelling, and one that holds it through a link to it, answer for this vault.
+  const link = path.join(parent, 'linked-vault')
+  fs.symlinkSync(world.vault, link)
+  for (const [label, basePath, generation] of [['another letter case', world.vault.toLowerCase(), 'gen-0002'], ['a link', link, 'gen-0003']]) {
+    const app = new ModelApp(basePath)
+    const result = await world.publish(viewOf(generation, { notes: { [NOTE]: generation === 'gen-0002' ? CANDIDATE : BASE } }), modelAdapter(app))
+    assert.deepEqual([result.state, result.mode], ['committed', 'in-app'], `${label}: ${JSON.stringify(result).slice(0, 300)}`)
+  }
 })
 
 test('I10 the app going away mid-publication leaves a coherent note and a retryable state', needsExchange, async (t) => {
@@ -1621,6 +1694,27 @@ test('the process table is read with a bounded wait: a ps that does not answer i
     const timedOut = Object.assign(new Error('spawnSync /bin/ps ETIMEDOUT'), { code: 'ETIMEDOUT' })
     assert.equal(defaultObsidianProcessProbe({ platform, run: () => { throw timedOut } }), 'unknown')
   }
+})
+
+test('an app whose list has this vault open in several windows, one per entry that names its folder, is refused as such: a publication through one window would leave the others uncoordinated; no call is made and nothing is written', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const before = snapshotTree(world)
+  const home = fs.mkdtempSync(path.join(TMP, 'atelier-twice-home-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const userDataDir = obsidianUserDataDir({ platform: 'darwin', env: { HOME: home } })
+  fs.mkdirSync(userDataDir, { recursive: true })
+  const list = (otherOpen) => fs.writeFileSync(path.join(userDataDir, OBSIDIAN_SETTINGS_FILE), JSON.stringify({ vaults: { cccccccccccccccc: { path: world.vault, ts: 1, open: true }, dddddddddddddddd: { path: `${world.vault}${path.sep}`, ts: 2, open: otherOpen } } }))
+  // A command-line tool that does not exist: any call that is made fails as a call.
+  const adapter = createObsidianCliAdapter({ cliPath: path.join(home, 'no-such-cli'), env: { HOME: home }, processProbe: () => 'running', route: publicationRoute({ env: { HOME: home }, platform: 'darwin' }) })
+  list(true)
+  const refused = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter)
+  assert.deepEqual([refused.state, refused.refusal?.code], ['refused', 'vault-open-in-several-windows'], JSON.stringify(refused))
+  assert.deepEqual(snapshotTree(world), before)
+  // Control: with one of the windows closed, the call is made, to the window left (and fails here, as nothing answers).
+  list(false)
+  const called = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), adapter)
+  assert.deepEqual([called.state, called.refusal?.code, /CLI call failed/.test(called.refusal?.message)], ['refused', 'editor-uncoordinated', true], JSON.stringify(called))
+  assert.deepEqual(snapshotTree(world), before)
 })
 
 test('an adapter qualified while no app ran never coordinates with an app found running: it is uncoordinated and asks the app nothing', async () => {
