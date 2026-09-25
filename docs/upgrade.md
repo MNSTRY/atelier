@@ -163,7 +163,7 @@ See `docs/contract-stability.md`.
 ## Before You Upgrade
 
 - Start from a clean Git status in the copied workspace.
-- Confirm Node.js matches the package range: `>=22.18.0 <23 || >=24.11.0 <25`.
+- Confirm Node.js matches the package range: `>=22.18.0 <23 || >=24.13.1 <25`.
 - Keep this package root and copied starter workspaces separate.
 - Keep upgrade diffs generic: placeholders only, no project-specific private
   material, transcripts, support bundles, local absolute paths, local agent

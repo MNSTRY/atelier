@@ -374,7 +374,7 @@ to MNSTRY, and a document MNSTRY declines can still be fully conformant.
 
 ## Install and go deeper
 
-Node.js 22 (22.18.0 or later) or Node.js 24 (24.11.0 or later) is required.
+Node.js 22 (22.18.0 or later) or Node.js 24 (24.13.1 or later) is required.
 Pin the prerelease while the package remains in alpha:
 
 ```bash
