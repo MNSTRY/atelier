@@ -185,9 +185,10 @@ test('the store publishes a view into its allocated vault, makes it again when i
   if (POSIX) assert.equal(fs.statSync(allocation.path).mode & 0o777, 0o700)
   // A folder that is not the one made, at the recorded path (restored, or moved in), is never published into; the
   // allocation leaves it alone.
-  fs.rmSync(allocation.path, { recursive: true })
+  // Made before the original is removed, so it cannot be given the original's inode number (Linux reuses a freed one).
   fs.mkdirSync(path.join(w.dir, 'moved-in'))
   fs.writeFileSync(path.join(w.dir, 'moved-in', 'theirs.md'), 'theirs')
+  fs.rmSync(allocation.path, { recursive: true })
   fs.renameSync(path.join(w.dir, 'moved-in'), allocation.path)
   assert.throws(() => storeOf('everything'), (error) => error.code === 'vault-allocation-replaced')
   assert.deepEqual(ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW }), again)
