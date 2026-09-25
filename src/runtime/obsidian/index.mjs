@@ -27,13 +27,15 @@ export { ENGINE_LOCK_DIRECTORY, LOCK_TICKET_SCHEMA, acquirePrivateGenerationLock
 export { DEFAULT_MAX_BACKOFF_MS, DEFAULT_TICK_INTERVAL_MS, createTickLoop } from './tick-loop.mjs'
 export { HEALTH_SCHEMA, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'
 export {
-  CONSENT_COVERAGES, SERVICE_ERROR_SCHEMA, SERVICE_SETTINGS_SCHEMA, executableIdentity, publicRecord, readLastServiceError, readServiceRecord, readServiceSettings,
-  removeServiceRecord, serviceNameFor, servicePaths, validateServiceRecord, writeServiceRecord, writeServiceSettings,
+  CONSENT_COVERAGES, LAST_STARTUP_SCHEMA, SERVICE_ERROR_SCHEMA, SERVICE_SETTINGS_SCHEMA, STARTUP_OUTCOMES, executableIdentity, publicRecord, readLastServiceError, readLastStartup,
+  readServiceRecord, readServiceSettings, removeServiceRecord, serviceNameFor, servicePaths, validateServiceRecord, writeServiceRecord, writeServiceSettings,
 } from './service-record.mjs'
 export { MAX_REQUEST_BYTES, SERVICE_OPERATIONS, createServiceServer } from './service-server.mjs'
 export { PLUGIN_BEARER_SCHEMA, PLUGIN_PRESENCE_SCHEMA, createPluginChannel, createPluginSessions, ensurePluginBearer, pluginBearerDirectory, pluginPresence, readPluginBearers } from './plugin-channel.mjs'
 export { PLUGIN_PRESENCE_REASONS, pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from './plugin-presence.mjs'
 export { PLUGIN_CHOICE_SCHEMA, PLUGIN_CHOICE_STATES, confirmPluginEntry, confirmPluginSeen, currentPluginChoice, decidePluginChoice, pluginChoiceDirectory, readCommunityEntry, readPluginChoice, viewVaultRoot, writePluginChoice } from './plugin-choice.mjs'
-export { DEFAULT_SHUTDOWN_GRACE_MS, SERVICE_STATUS_SCHEMA, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
+export { DEFAULT_SHUTDOWN_GRACE_MS, RELEASE_CHANGED, SERVICE_STATUS_SCHEMA, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
 export { DEFAULT_START_TIMEOUT_MS, DEFAULT_STOP_TIMEOUT_MS, SERVICE_STATES, readServiceStatusDocument, requestServiceTick, serviceStatus, startService, stopService } from './lifecycle.mjs'
-export { STARTUP_PLATFORMS, buildStartupAdapter } from './startup-adapters.mjs'
+export { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from './startup-adapters.mjs'
+export { LOGIN_ITEM_SCHEMA, installLoginItem, loginItemStatus, removeLoginItem, resolveLoginItemEntry } from './login-item.mjs'
+export { SERVICE_MANAGER_KINDS, createLaunchdManager, createSystemdManager } from './service-managers.mjs'

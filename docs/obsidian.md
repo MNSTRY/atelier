@@ -325,9 +325,10 @@ Obsidian.
 
 The maintenance service can also be managed on its own:
 `atelier obsidian service start [--consent-actor ID] [--adapter=obsidian-cli]`,
-`service status` and `service stop`; `service unit --print` prints a startup
-unit and installs nothing. The flags are needed only until the workspace
-remembers them, as for `open`.
+`service status` and `service stop`; `service unit --print` prints the login
+item that `service unit --install` would write, and installs nothing (see
+[Start at login](#start-at-login)). The flags are needed only until the
+workspace remembers them, as for `open`.
 
 ### What this machine remembers
 
@@ -343,8 +344,8 @@ defaults (`defaults`), or carried over from an earlier release (`v1`).
 | --- | --- | --- |
 | `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you) or `audience set A,B` / `audience clear`; each withholds unclassified notes for now |
 | `location` | the absolute folder that holds this workspace's vaults | not yet: the first-run flow |
-| `loginItem` | `on` or `off` | not yet: the first-run flow |
-| `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open` or `service start` |
+| `loginItem` | `on` or `off` | `service unit --install` (on); `service unit --remove` and `uninstall` (off) |
+| `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open`, `service start` or `service unit --install` |
 
 Who allowed the maintenance service is not a second copy here: it stays the
 consent the service reads from its own settings. `atelier obsidian settings`
@@ -356,23 +357,92 @@ with it becoming that person's decision, and stays v1 on disk until the next
 write, which writes v2. A release that knows only v1 refuses a v2 file as
 `invalid-machine-settings`: after an upgrade, a maintenance service that
 still runs the earlier release fails its ticks until it is replaced, which
-`atelier obsidian open` does.
+`atelier obsidian open` and `atelier obsidian service start` do.
+
+### Start at login
+
+Without a login item the vault is complete after a restart, but nothing keeps
+it fresh until the next `open`. A login item starts the maintenance service
+when you log in:
+
+```sh
+atelier obsidian service unit --install [--consent-actor ID] [--adapter=obsidian-cli]
+atelier obsidian service unit --print    # what --install writes; writes nothing
+atelier obsidian service unit --remove
+atelier obsidian uninstall
+```
+
+- On macOS it is a launchd agent,
+  `~/Library/LaunchAgents/ai.mnstry.atelier.<project>.<workspace-id>.plist`.
+  macOS says "Background Items Added" and lists it as "node" under System
+  Settings → General → Login Items & Extensions, because there is no app to
+  name it after. Switched off there, it stays off: `status` reports
+  `installed, switched off in System Settings`, and `open` starts the service
+  for that session only.
+- On Linux it is a systemd user unit,
+  `~/.config/systemd/user/atelier-obsidian-<workspace-id>.service`
+  (`$XDG_CONFIG_HOME` when set), enabled with `systemctl --user`. Where no
+  user instance of systemd answers (WSL, a container), the answer is
+  `login-item-unavailable` and nothing is left behind.
+- Windows is not offered (`startup-platform-unqualified`), as publication
+  itself is refused there.
+
+It runs the package installed in the project
+(`<project>/node_modules/@mnstry/atelier/…`, named by that path, so the next
+start runs whatever release the project has installed then), with the Node
+that installed it and the search path you had, in the root folder. Run from
+`npx` in a project that has no package installed, it refuses with
+`login-item-needs-installed-package`: install `@mnstry/atelier` in the project
+first. Installing records that you allowed the service to run at login (the
+consent then covers startup): `--consent-actor ID` names who allows it; for a
+person at a terminal, the actor already recorded for this workspace, or else
+the account's name. A program that passes no `--consent-actor` for a
+workspace whose consent covers the service alone is refused
+(`startup-consent-required`). The answer is remembered as the `loginItem`
+decision. `--remove` takes the consent back to the service alone, removes the
+item, and starts the service again for this session only, as a process of its
+own (with the adapter given or remembered; otherwise the next `open` starts
+it). Each workspace has its own login item, port, log and consent, and
+projects may pin different releases; `launchctl list | grep ai.mnstry.atelier`
+lists every one on a Mac.
+
+Once a login item is installed, the service is started through it: `service
+start`, `open` and the replacement of an outdated service ask launchd or
+systemd to start it, never start a second one beside it, and accept only the
+service that proves itself with the installed entry. When the unit differs from
+what would be written now (the Node it names was removed, say), the next start
+writes it again and says `login item refreshed`. A refusal of the service at
+login (another service already runs, or the consent does not cover startup)
+ends the process cleanly, so it is not retried every minute, and `status` says
+`the login item did not start the service: <code>` with the next step. A crash
+is restarted after a minute.
+
+`uninstall` removes the login item and stops the service. It keeps the vaults,
+the private state, the project file and Obsidian's vault list as they are, and
+prints where each is. It does not start the service again.
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
-the earlier release. `open` replaces it: when the service of this workspace
-proves itself Atelier's own but runs an earlier release than the installed one
-(its record names the release it runs: the package version and a digest of
-its modules; an earlier version, the same version with other modules, or no
-release named), or refuses a tick that names a view as releases up to
-0.2.0-alpha.11 do,
-`open` stops it as `service stop` would and starts the installed release under
-the consent already recorded, and says `service: restarted (outdated)`. A
-service of a later release is never replaced by an earlier one, so two
-installations used on one workspace (a global and a project-local one, say)
-do not replace each other's service on every open: `open` answers
-`service-unavailable` / `service-other-release`; run `atelier obsidian service
-stop`, then open again, or open with the later release. A service in a long
-tick is not stopped (`open` answers `busy`), and a listener that does not
+the earlier release. One the login item started notices it: after each tick
+it compares the package on disk (read through the path the item names, so a
+re-pointed link or a `file:` install counts) with the release it started
+with, and when they differ it exits after that tick with code 75, and its
+service manager starts the new release within a minute. Otherwise `open` and
+`service start` replace it: when the service of this workspace proves itself
+Atelier's own but runs an earlier release than the installed one (its record
+names the release it runs: the package version and a digest of its modules;
+an earlier version, the same version with other modules, or no release
+named), or refuses a tick that names a view as releases up to 0.2.0-alpha.11
+do, they stop it as `service stop` would and start the installed release under
+the consent already recorded (through the login item when there is one), and
+say `service: restarted (outdated)`. The installed release is read from the
+package of the entry that would be started, so with a login item it is the
+project's own package. A service of a later release is never replaced by an
+earlier one, so two installations used on one workspace (a global and a
+project-local one, say) do not replace each other's service on every open:
+`open` answers `service-unavailable` / `service-other-release`, and `service
+start` answers that it runs, with `release: later`; run `atelier obsidian
+service stop`, then open again, or open with the later release. A service in a
+long tick is not stopped (`open` answers `busy`), and a listener that does not
 prove itself this workspace's service is never touched.
 
 The first time Obsidian opens a view's vault it asks "Do you trust the author
@@ -685,6 +755,17 @@ test reported as a pass.
   in Obsidian's settings or runs
   `atelier obsidian plugin on --scope ID`. Plugin files are never removed from
   a vault. See [obsidian-plugin.md](obsidian-plugin.md).
+- Login items: the tests run the launchd and systemd managers' own code
+  against stand-ins that answer as launchctl and systemctl do, and never
+  against a real session. What `launchctl print-disabled` says for an item
+  switched off in System Settings, and the exit statuses read from
+  `launchctl` and `systemctl`, are the documented ones and are not yet
+  confirmed on a host. A unit whose program cannot be loaded at all (the
+  project's package was removed) is restarted by its manager once a minute,
+  and each attempt adds a few lines to `state/service/login-item.log`, which
+  nothing bounds: `service unit --remove` or `uninstall` ends it. An upgrade
+  in the moment between a service's start and the first reading of its release
+  is not noticed until the next change.
 - Acceptance: a schema-valid receipt closes no gate, the package proof closes
   no gate, and no adopter acceptance is recorded in this repository.
 

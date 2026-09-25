@@ -20,6 +20,47 @@
 - `atelier adopt --enroll-documents [--audience AUDIENCE]` adopts and enrolls
   in one step, checking the audience against the policy before adoption
   writes anything.
+- A login item keeps a workspace's vaults fresh after you log in:
+  `atelier obsidian service unit --install --consent-actor ID
+  --adapter=obsidian-cli` installs a launchd agent on macOS
+  (`~/Library/LaunchAgents/ai.mnstry.atelier.<project>.<workspace-id>.plist`)
+  or a systemd user unit on Linux
+  (`~/.config/systemd/user/atelier-obsidian-<workspace-id>.service`), after
+  recording a consent that covers startup; `service unit --remove` removes it
+  and lowers the consent to the service alone; `service unit --print` shows
+  what `--install` writes. The unit runs the package installed in the project,
+  by its path, with the Node that installed it (its real path), the search
+  path you had (absolute, non-temporary entries), in `/`. launchd: `Standard`
+  process type, `RunAtLoad`, `KeepAlive` `SuccessfulExit` false,
+  `ThrottleInterval` 60, `ExitTimeOut` 60, output to
+  `state/service/login-item.log`. From `npx` without a package installed in
+  the project it refuses (`login-item-needs-installed-package`); Windows is not
+  offered (`startup-platform-unqualified`); without a user systemd the answer
+  is `login-item-unavailable`. The installed item is recorded in
+  `state/service/login-item.json` (`atelier-obsidian-login-item/v1`).
+- Once a login item is installed, `service start`, `open` and the replacement
+  of an outdated service start the service through launchd or systemd
+  (`kickstart -p`, `systemctl --user start`) instead of as a child, and accept
+  the service that proves itself with the entry the item runs. A unit that
+  differs from what would be written now is written again and reloaded, and
+  `open` says `login item refreshed`. An item switched off in System Settings
+  is not forced: the service is started for that command only.
+- A service started by a login item (`--startup`) keeps its own bounded
+  `service.log`, exits 0 on a refusal as well, so it is not restarted every
+  minute, and records how its start ended in `state/service/last-startup.json`
+  (`atelier-obsidian-last-startup/v1`); `status` shows the login item and
+  `the login item did not start the service: <code>` with the next step. After
+  each tick it compares its package on disk with the release it started with
+  (file status first, then a digest of `src/` and `contracts/` and the
+  version) and exits 75 after the tick when it changed, which its manager
+  restarts on the new release.
+- `atelier obsidian uninstall` removes the login item and stops the proven
+  service. Vaults, private state, the project file and Obsidian's vault list
+  are kept, and it prints where each is.
+- The production service manager refuses under the Node test runner
+  (`real-login-item-under-test`) and when HOME is not the account's own home
+  directory (`login-item-home-mismatch`), since launchd and systemd register a
+  unit in the account's real session whatever HOME says.
 
 ### Changed
 
@@ -263,6 +304,15 @@
   (`path:/^…$/`, query version `obsidian-graph-search-paths/v2`), so it matches
   exactly the selected notes; a focus persisted with the earlier version is
   still read.
+- `service unit --print` prints the unit `--install` writes: on macOS under
+  the label `ai.mnstry.atelier.<project>.<workspace-id>`, with process type
+  `Standard` instead of `Background`, the search path, `WorkingDirectory` `/`
+  and output to `login-item.log` instead of `service.log`; on Linux with
+  `Environment="PATH=…"`, `WorkingDirectory=/` and `TimeoutStopSec=60`.
+  `buildStartupAdapter` takes `searchPath`, and its working directory is `/`
+  unless one is given. A service records the path it was started by beside its
+  real path (`executable.ext.invokedAs`), and the busy proof accepts a process
+  table that names the entry through it.
 - `atelier obsidian open` makes the first open of a view automatic: Obsidian
   no longer has to be quit, and no vault folder has to be opened by hand. It
   makes the app know the view's vault as one of its vaults before it opens

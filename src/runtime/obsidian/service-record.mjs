@@ -11,11 +11,14 @@ import { LOOPBACK_HOSTS } from './service-client.mjs'
 // Private documents of the maintenance service of one workspace, under
 //
 //   <data>/obsidian/<workspace-id>/state/service/
-//     runtime.json     the adapter record of the running service (service-state v1)
-//     settings.json    what this machine chose: loopback host, port, startup consent
-//     last-error.json  the last tick that failed for a reason nobody typed
-//     service.log      the operational log of the service process
-//     start-lock/      serializes `start` for this workspace
+//     runtime.json       the adapter record of the running service (service-state v1)
+//     settings.json      what this machine chose: loopback host, port, startup consent
+//     last-error.json    the last tick that failed for a reason nobody typed
+//     last-startup.json  how the last start by the login item ended: started, or the refusal's code
+//     login-item.json    the installed login item (login-item.mjs)
+//     service.log        the operational log of the service process
+//     login-item.log     what a login item's service printed before it could open service.log
+//     start-lock/        serializes `start` for this workspace
 //
 // Owner-only, replaced atomically, outside every repository and every vault.
 // Every document is validated on every read. One that does not validate, or
@@ -24,7 +27,9 @@ import { LOOPBACK_HOSTS } from './service-client.mjs'
 
 export const SERVICE_SETTINGS_SCHEMA = 'atelier-obsidian-service-settings/v1'
 export const SERVICE_ERROR_SCHEMA = 'atelier-obsidian-service-last-error/v1'
+export const LAST_STARTUP_SCHEMA = 'atelier-obsidian-last-startup/v1'
 export const CONSENT_COVERAGES = Object.freeze(['service', 'service-and-startup'])
+export const STARTUP_OUTCOMES = Object.freeze(['started', 'refused'])
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
@@ -41,6 +46,7 @@ export function servicePaths(workspaceRoot) {
   return {
     stateLocation: path.join(workspaceRoot, 'state'), directory, record: path.join(directory, 'runtime.json'), settings: path.join(directory, 'settings.json'),
     lastError: path.join(directory, 'last-error.json'), log: path.join(directory, 'service.log'), startLock: path.join(directory, 'start-lock'),
+    lastStartup: path.join(directory, 'last-startup.json'), loginItem: path.join(directory, 'login-item.json'), loginItemLog: path.join(directory, 'login-item.log'),
   }
 }
 
@@ -192,6 +198,33 @@ export function readLastServiceError({ workspaceRoot, workspaceId }) {
 export function writeLastServiceError({ workspaceRoot, workspaceId, document }) {
   validateLastError(document, workspaceId)
   atomicReplacePrivateText(path.join(serviceDirectory(workspaceRoot), 'last-error.json'), canonicalJson(document))
+  return document
+}
+
+// ---------------------------------------------------------------------------
+// How the last start by a login item ended
+// ---------------------------------------------------------------------------
+
+// { schema, workspaceId, at, outcome: 'started' | 'refused', code }: the code of the refusal, null for a start. Written by
+// the service when it runs with `--startup`, so a login item that exits cleanly on a refusal (and is therefore not
+// started again in a loop) still says why.
+function validateLastStartup(document, workspaceId) {
+  const code = 'invalid-service-last-startup'
+  closedObject(document, { required: ['schema', 'workspaceId', 'at', 'outcome', 'code'] }, code, 'the last startup')
+  const ok = document.schema === LAST_STARTUP_SCHEMA && document.workspaceId === workspaceId && TIMESTAMP.test(document.at) && STARTUP_OUTCOMES.includes(document.outcome)
+    && (document.outcome === 'started' ? document.code === null : typeof document.code === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(document.code))
+  if (!ok) refuse(code, 'the last startup is malformed')
+  return document
+}
+
+export function readLastStartup({ workspaceRoot, workspaceId }) {
+  const document = readJson(servicePaths(workspaceRoot).lastStartup, 'invalid-service-last-startup', 'the last startup')
+  return document === null ? null : validateLastStartup(document, workspaceId)
+}
+
+export function writeLastStartup({ workspaceRoot, workspaceId, document }) {
+  validateLastStartup(document, workspaceId)
+  atomicReplacePrivateText(path.join(serviceDirectory(workspaceRoot), 'last-startup.json'), canonicalJson(document))
   return document
 }
 

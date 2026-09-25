@@ -15,15 +15,20 @@ import { ObsidianMaintenanceRefusal, refuse } from '../runtime/obsidian/errors.m
 import { BUILT_IN_OPERATIONS, UNAVAILABLE_APPLY_OPERATION, createObsidianRegistry } from '../runtime/obsidian/extension-points.mjs'
 import { LIFECYCLE_PRIMITIVES, readServiceStatusDocument, requestServiceTick, serviceStatus, startService, stopService } from '../runtime/obsidian/lifecycle.mjs'
 import {
-  DECISIONS, ONLY_YOU_AUDIENCES, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, protectedRoots,
+  DECISIONS, ONLY_YOU_AUDIENCES, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, installApplyPolicy, localPointerPath, protectedRoots,
   readInstalledApplyPolicy, readMachineSettings, revokeApplyPolicy, withDecision, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
+import {
+  currentLoginItemPlan, installLoginItem, loginItemLabel, loginItemStarter, loginItemStatus, planLoginItem, projectNameOf, readLoginItemRecord, realNodePath,
+  removeLoginItem, resolveLoginItemEntry, temporaryRoots,
+} from '../runtime/obsidian/login-item.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
 import { currentPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
 import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
-import { readServiceSettings, serviceNameFor, servicePaths } from '../runtime/obsidian/service-record.mjs'
+import { readServiceSettings } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
-import { buildStartupAdapter } from '../runtime/obsidian/startup-adapters.mjs'
+import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from '../runtime/obsidian/startup-adapters.mjs'
+import { OBSIDIAN_SETTINGS_FILE, obsidianUserDataDir } from '../projection/obsidian/publication/vault-list.mjs'
 
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
@@ -69,9 +74,15 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
   service start [--consent-actor ID] [--adapter=${PRODUCTION_ADAPTER}]
   service status | stop                The owned maintenance service of this workspace.
   service unit --print [--adapter=${PRODUCTION_ADAPTER}]
-                                       Print an operating-system startup unit. Writes and installs nothing.
+                                       Print the login item (launchd agent, systemd user unit). Writes nothing.
+  service unit --install [--consent-actor ID] [--adapter=${PRODUCTION_ADAPTER}]
+                                       Install the login item: maintenance starts when you log in. macOS and Linux.
+  service unit --remove                Remove the login item; the consent goes back to the service alone, and the
+                                       service is started for this session only.
   open [--scope ID] [--consent-actor ID] [--allow-stale] [--adapter=${PRODUCTION_ADAPTER}]
                                        Start or reconnect maintenance, verify the view, add it to Obsidian and open it.
+  uninstall                            Stop maintenance and remove the login item. Vaults, private state, the project
+                                       file and Obsidian's vault list are kept, and where each is is printed.
   plugin show [--scope ID]             Whether Atelier's plugin is on in a view's vault, and whether it holds it open.
   plugin on [--scope ID] [--adapter=${PRODUCTION_ADAPTER}]
                                        Offer Atelier's plugin again in a vault where it was turned off; a running
@@ -98,7 +109,10 @@ Pending edits additionally report ${APPLY_UNAVAILABLE} while no apply operation 
 Minimum Obsidian version: ${MINIMUM_APP_VERSION}.
 Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer is not success.`
 
-const FLAGS = Object.freeze({ json: 'flag', 'allow-stale': 'flag', print: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value' })
+const FLAGS = Object.freeze({
+  json: 'flag', 'allow-stale': 'flag', print: 'flag', install: 'flag', remove: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value',
+  'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value',
+})
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
@@ -193,6 +207,46 @@ const NEXT = Object.freeze({
   [APPLY_UNAVAILABLE]: 'no apply operation is registered on this command; edits stay preserved and queued',
   'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
   disabled: 'declare the Obsidian settings in the project configuration',
+  'startup-platform-unqualified': 'a login item is offered on macOS and Linux; `atelier obsidian open` starts maintenance when you open a view',
+  'startup-platform-unsupported': 'a login item is offered on macOS and Linux; `atelier obsidian open` starts maintenance when you open a view',
+  'login-item-needs-installed-package': 'install @mnstry/atelier in the project (`npm i -D @mnstry/atelier`), then run the command there',
+  'login-item-home-mismatch': 'run the command in your own session, with HOME set to your home directory',
+  'real-login-item-under-test': 'a test passes its own service manager',
+  'login-item-unavailable': 'no service manager of your session answered (on Linux: systemd --user); `atelier obsidian open` starts maintenance when you open a view',
+  'login-item-install-failed': 'see `atelier obsidian status`; `atelier obsidian service unit --install` tries again',
+  'login-item-remove-failed': 'see `atelier obsidian status`; `atelier obsidian service unit --remove` tries again',
+  'login-item-file-unsafe': 'the login item\'s file is a link or not a regular file and is left alone; remove it by hand, then try again',
+  'invalid-login-item': 'the login item record in private state does not validate; inspect it, remove it, then install the login item again',
+})
+
+// The login item of `status`, in words.
+function loginItemWords(item, platform) {
+  if (item.installed === null) return `unreadable (${item.reason})`
+  if (item.installed === false) return 'off'
+  const where = item.file
+  if (item.programPresent === false) return `installed, but the Node or the package it runs is gone, so it cannot start: install @mnstry/atelier in the project, then \`atelier obsidian service unit --install\`, or remove it with \`service unit --remove\`; ${where}`
+  return {
+    loaded: `on (${item.running ? 'running' : 'loaded'}); ${where}`,
+    'switched-off': `installed, ${platform === 'darwin' ? 'switched off in System Settings' : 'disabled'}; it does not start at login; ${where}`,
+    'file-missing': `installed, but its file is gone: it does not start at login; \`atelier obsidian service unit --install\` puts it back; ${where}`,
+    'not-loaded': `installed, not loaded by the service manager; it starts at the next login; ${where}`,
+  }[item.state] ?? `installed; ${where}`
+}
+
+// What a start through the login item adds to the answer of `service start` and `open`.
+function loginItemLines(item) {
+  if (item === undefined || item === null) return []
+  return [
+    ...(item.refreshed === true ? ['login item refreshed: its unit is written as it would be now, and loaded again'] : []),
+    ...(item.via === 'child' ? [`the login item did not start the service (${item.reason}); it was started for this session only`] : []),
+  ]
+}
+
+// What `status` suggests after the login item did not start the service.
+const LOGIN_ITEM_NEXT = Object.freeze({
+  'startup-consent-absent': 'install it again with `atelier obsidian service unit --install --consent-actor ID`',
+  'service-port-occupied': 'something else answers on the recorded port; see `atelier obsidian service status`',
+  'service-settings-absent': 'install it again with `atelier obsidian service unit --install --consent-actor ID`',
 })
 
 // The decisions the command's oracles are sensitive to are those of opening and of the lifecycle; tests substitute
@@ -233,11 +287,43 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
 
     // The adapter of this run: given now, or remembered by this workspace (read only when the real entry has no flag).
     const chooseAdapter = () => selectAdapter({ flag: flags.adapter, remembered: flags.adapter === undefined && production === true ? rememberedAdapter() : null, production, env })
-    const serviceSeam = async () => {
+    // The entry this command may start, and its arguments.
+    const entrySeam = async () => {
       if (seams !== null) { if (typeof seams.service?.entryPath !== 'string') refuse('seams-required', 'the service seam names the entry this command may start'); return seams.service }
       chooseAdapter()
       const { SERVICE_ENTRY_PATH } = await import('../runtime/obsidian/service-entry-path.mjs')
       return { entryPath: SERVICE_ENTRY_PATH, entryArgs: [`--adapter=${PRODUCTION_ADAPTER}`] }
+    }
+    // The service manager of a login item: the caller's (`serviceManager`, or `seams.serviceManager`), or, for the real
+    // command-line entry only, the production one, which refuses under the test runner and for a HOME that is not the
+    // account's own. Without `required`, null where none can be had.
+    const managerSeam = async ({ required = true } = {}) => {
+      const given = options.serviceManager ?? seams?.serviceManager ?? null
+      if (given !== null) return given
+      if (seams !== null || production !== true) { if (required) refuse('seams-required', 'no service manager was passed for the login item'); return null }
+      try {
+        const { createProductionServiceManager } = await import('../runtime/obsidian/service-manager-production.mjs')
+        return createProductionServiceManager({ platform, env })
+      } catch (error) {
+        if (!required && isTyped(error)) return null
+        throw error
+      }
+    }
+    const nodePath = () => options.nodePath ?? realNodePath()
+    // The service seam: once this workspace has a login item, the service is started through its manager, running the
+    // entry the item names; a unit that differs from what would be written now is written again on the way.
+    const serviceSeam = async () => {
+      const entry = await entrySeam()
+      const { project, workspace } = readable()
+      let record = null
+      try { record = workspace === null ? null : readLoginItemRecord(workspace) } catch (error) { if (!isTyped(error)) throw error }
+      if (record === null) return entry
+      const manager = await managerSeam({ required: false })
+      if (manager === null) return entry
+      const plan = currentLoginItemPlan({ record, project, workspaceRoot: workspace.workspaceRoot, dataRoot, platform, ownEntry: entry.entryPath, entryArgs: entry.entryArgs ?? [], nodePath: nodePath() })
+      // An item that names an entry that is gone, with nothing to refresh it to from here, cannot start anything.
+      if (plan === null && !fs.existsSync(record.program.entry)) return entry
+      return { ...entry, entryPath: plan?.program.entry ?? record.program.entry, loginItem: loginItemStarter({ workspace, manager, record, plan, clock }) }
     }
     const appSeams = async () => {
       if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher, registry: seams.registry }
@@ -282,14 +368,17 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // Who allows the maintenance service to run, for a start this run may make: --consent-actor; else, for a person at a
     // terminal and only while this workspace has no consent recorded, their account's name. A derived consent never
     // replaces a recorded one. `source` says which.
-    const consentOfThisRun = () => {
-      if (flags['consent-actor'] !== undefined) return { consent: { actor: flags['consent-actor'], coverage: 'service' }, source: 'flag' }
+    // With a login item installed, the service is started through it, so the consent covers startup too, or the item's
+    // own start would be refused (`seam.loginItem`).
+    const consentOfThisRun = (seam = null) => {
+      const coverage = seam?.loginItem ? 'service-and-startup' : 'service'
+      if (flags['consent-actor'] !== undefined) return { consent: { actor: flags['consent-actor'], coverage }, source: 'flag' }
       if (!interactive) return { consent: undefined, source: null }
       const { workspace } = readable()
       if (workspace !== null && readServiceSettings(workspace) !== null) return { consent: undefined, source: null }
       const actor = accountActor(account())
       // `derived`: the start records it only while no consent is recorded, checked again under the start lock.
-      return actor === null ? { consent: undefined, source: null } : { consent: { actor, coverage: 'service', derived: true }, source: 'account' }
+      return actor === null ? { consent: undefined, source: null } : { consent: { actor, coverage, derived: true }, source: 'account' }
     }
     // --adapter, given to an operation that starts or reaches the service of an enabled project, is remembered the first
     // time: the workspace is prepared and the decision written before anything starts, so no later run needs the flag.
@@ -334,6 +423,82 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const applyShown = { available: applyAvailable, state: applyAvailable ? 'available' : APPLY_UNAVAILABLE, operationId: registry.extensions.applyOperation().id }
     const [, sub, value] = positionals
 
+    // The login item's text as `--install` would write it now. Writes nothing and asks no service manager.
+    const printUnit = async () => {
+      const { project, workspace } = readable()
+      if (workspace === null) refuse('service-workspace-not-prepared', 'this workspace has no private state yet; `service start` prepares it')
+      const entry = await entrySeam()
+      const record = readLoginItemRecord(workspace)
+      const temporary = temporaryRoots()
+      const { entryPath } = resolveLoginItemEntry({ project, ownEntry: entry.entryPath, temporary })
+      const label = record?.label ?? loginItemLabel({ platform, projectName: projectNameOf(project), workspaceId: workspace.workspaceId })
+      const { platform: unitPlatform, kind, fileName, text } = planLoginItem({
+        platform, project, workspaceRoot: workspace.workspaceRoot, dataRoot, label, entryPath, entryArgs: entry.entryArgs ?? [], nodePath: nodePath(),
+        searchPath: record?.searchPath ?? startupSearchPath(env.PATH, { temporary }),
+      })
+      return { exit: EXIT.ok, document: { unit: { platform: unitPlatform, kind, fileName, text }, installed: record !== null, note: 'the service runs under this unit only with a recorded consent that covers startup; `service unit --install` records one' }, human: [text] }
+    }
+    // Installs the login item, then starts the service through it (launchd has usually started it already).
+    const installUnit = async () => {
+      configured()
+      if (!STARTUP_PLATFORMS.includes(platform)) buildStartupAdapter({ platform })
+      const entry = await entrySeam()
+      const manager = await managerSeam()
+      const installed = await installLoginItem({
+        loadProject, dataRoot, env, platform, manager, ownEntry: entry.entryPath, entryArgs: entry.entryArgs ?? [], nodePath: nodePath(), pathValue: env.PATH, clock,
+        ...(flags['consent-actor'] === undefined ? {} : { consent: { actor: flags['consent-actor'] } }),
+      })
+      if (!installed.installed) {
+        return { exit: EXIT.notSuccess, document: { loginItem: installed }, human: [`login item not installed: ${installed.reason}${installed.message ? ` (${installed.message})` : ''}`, `Next: ${NEXT[installed.reason] ?? 'see `atelier obsidian status`'}`] }
+      }
+      const remembered = rememberLoginItem('on')
+      const seam = await serviceSeam()
+      const service = (({ child: _child, ...result }) => result)(await startService({ ...lifecycle, detached: true, ...seam }, lifecycleRules))
+      const running = service.state === 'healthy' || service.state === 'busy'
+      return {
+        exit: running ? EXIT.ok : EXIT.notSuccess, document: { loginItem: installed, service, rememberedNow: { loginItem: remembered ? 'on' : null } },
+        human: [
+          `login item installed: ${installed.file}`, `it runs ${installed.entry.path}${installed.entry.source === 'project' ? ', the package installed in this project' : ''}`,
+          ...(platform === 'darwin' ? ['macOS lists it as "node" under Login Items & Extensions, and may say "Background Items Added"'] : []),
+          `service: ${service.state}${service.started ? ' (started)' : service.alreadyRunning ? ' (already running)' : ` (${service.reason})`}`, ...loginItemLines(service.loginItem),
+        ],
+      }
+    }
+    // Removes the login item. A service it runs is stopped as its manager unloads it; `open` starts one again, without it.
+    const removeUnit = async () => {
+      if (!STARTUP_PLATFORMS.includes(platform)) buildStartupAdapter({ platform })
+      const manager = await managerSeam()
+      const removed = await removeLoginItem({ loadProject, dataRoot, env, platform, manager, clock })
+      const failed = removed.removed !== true && removed.reason !== undefined && removed.reason !== 'workspace-not-prepared'
+      if (failed) return { exit: EXIT.notSuccess, document: { loginItem: removed }, human: [`login item not removed: ${removed.reason}${removed.message ? ` (${removed.message})` : ''}`, `Next: ${NEXT[removed.reason] ?? 'see `atelier obsidian status`'}`] }
+      const remembered = removed.reason === 'workspace-not-prepared' ? false : rememberLoginItem('off')
+      const service = await serviceStatus(lifecycle, lifecycleRules)
+      return {
+        exit: EXIT.ok, document: { loginItem: removed, service: { state: service.state, reason: service.reason ?? null }, rememberedNow: { loginItem: remembered ? 'off' : null } },
+        human: [removed.removed ? `login item removed: ${removed.file}` : 'no login item was installed', 'the consent now covers the service alone', `service: ${service.state}${['healthy', 'busy'].includes(service.state) ? '' : '; `atelier obsidian open` starts it again'}`],
+      }
+    }
+    // The person's answer to "start at login?", remembered for this workspace where its machine settings remember
+    // decisions (`decisions.loginItem`); settings that remember none are left as they are. Answers whether it wrote.
+    const rememberLoginItem = (choice) => {
+      if (readable().enablement.reason === 'not-configured') return false
+      const { workspace, repositoryRoots, now } = writable()
+      const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
+      if (current.decisions === null || typeof current.decisions !== 'object' || !Object.hasOwn(current.decisions, 'loginItem')) return false
+      if (current.decisions.loginItem?.choice === choice) return false
+      const decision = { choice, decidedAt: now, decidedBy: flags['consent-actor'] ?? null, via: 'command' }
+      writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...current, decisions: { ...current.decisions, loginItem: decision }, updatedAt: now } })
+      return true
+    }
+    // Where what `uninstall` keeps is: the vaults, the private state, the project file and Obsidian's vault list.
+    const keptLocations = (project, workspace) => {
+      const vaultsDirectory = workspace === null ? null : path.join(workspace.workspaceRoot, 'vaults')
+      let vaults = []
+      try { vaults = vaultsDirectory === null ? [] : fs.readdirSync(vaultsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(vaultsDirectory, entry.name)).sort() } catch { vaults = [] }
+      const userDataDir = obsidianUserDataDir({ platform, env })
+      return { vaults, privateState: workspace?.workspaceRoot ?? null, projectFile: project.configPath ?? null, pointer: project.configPath ? localPointerPath(project) : null, obsidianList: userDataDir === null ? null : path.join(userDataDir, OBSIDIAN_SETTINGS_FILE) }
+    }
+
     const operations = {
       async status() {
         const { project, enablement, workspace, workspaceId } = readable()
@@ -341,6 +506,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const running = service.state === 'healthy' ? (await readServiceStatusDocument(lifecycle, lifecycleRules)).document : null
         // What the service last learned about the app, and what a person can do about it.
         const app = running?.app ? { ...running.app, next: running.app.outcome === 'qualified' ? null : nextStep(running.app.outcome, running.app.reason) } : null
+        // The login item: its record, what its manager says (asked only when one is recorded), and how its last start ended.
+        const item = workspace === null ? { installed: false, lastStartup: null } : await loginItemStatus({ workspace, manager: () => managerSeam({ required: false }) })
+        const refusedAtLogin = item.lastStartup?.outcome === 'refused' && item.lastStartup.code !== 'service-already-running' && !['healthy', 'busy'].includes(service.state) ? item.lastStartup.code : null
+        const loginItem = { ...item, didNotStart: refusedAtLogin, next: refusedAtLogin === null ? null : LOGIN_ITEM_NEXT[refusedAtLogin] ?? NEXT[refusedAtLogin] ?? 'see `atelier obsidian service status`, and the private log it names' }
         const scopes = workspace === null
           ? enablement.scopes.map(({ scopeId }) => ({ scopeId, outcome: enablement.state === 'disabled' ? 'disabled' : 'not-prepared', reason: enablement.state === 'disabled' ? enablement.reason : 'workspace-not-prepared' }))
           : enablement.scopes.map(({ scopeId }) => {
@@ -352,7 +521,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           enablement: { state: enablement.state, reason: enablement.reason, defaultScopeId: enablement.defaultScopeId }, workspace: { workspaceId, prepared: workspace !== null },
           machine: shownMachine(machineOf(workspace), workspace), apply: applyShown,
           service: { state: service.state, reason: service.reason ?? null, address: service.address ?? null, runtimeId: service.record?.runtimeId ?? null, pid: service.record?.pid ?? null, lastTick: running?.lastTick ?? null, lastError: running?.lastError ?? null, app },
-          app: { probed: false, minimumVersion: MINIMUM_APP_VERSION }, scopes, extensions: registry.extensions.describe(), operations: registry.operations.describe(),
+          loginItem, app: { probed: false, minimumVersion: MINIMUM_APP_VERSION }, scopes, extensions: registry.extensions.describe(), operations: registry.operations.describe(),
         }
         return {
           exit: EXIT.ok, document,
@@ -361,6 +530,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             `remembered: ${decisionSummary(document.machine.decisions)}`,
             `service: ${service.state} (${service.reason ?? 'no reason'})${app ? `; app ${app.outcome} (${app.reason})` : ''}`,
             ...(app?.next ? [`Next for the app: ${app.next}`] : []),
+            `login item: ${loginItemWords(loginItem, platform)}`,
+            ...(refusedAtLogin === null ? [] : [`the login item did not start the service: ${refusedAtLogin}`, `Next: ${loginItem.next}`]),
             `apply: ${applyShown.state}`,
             ...scopes.flatMap((scope) => [
               `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}${scope.plugin ? pluginLine(scope.plugin) : ''}`,
@@ -490,7 +661,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         if (sub === 'start') {
           configured()
           const seam = await serviceSeam()
-          const consent = consentOfThisRun()
+          const consent = consentOfThisRun(seam)
           const adapterRemembered = rememberAdapter(consent.consent?.actor)
           const result = shown(await startService({ ...lifecycle, detached: true, ...seam, ...(consent.consent === undefined ? {} : { consent: consent.consent }) }, lifecycleRules))
           const recorded = consentRecorded(consent)
@@ -500,7 +671,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             document: { service: result, rememberedNow: { adapter: adapterRemembered, consentActor: recorded.source === 'account' ? recorded.consent.actor : null } },
             human: [
               result.state === 'busy' ? 'running, and busy in a long tick; nothing was started beside it' : `${result.state}${result.started ? ' (started)' : result.alreadyRunning ? ' (already running)' : ` (${result.reason})`}`,
-              ...rememberedLines({ adapterRemembered, consent: recorded }),
+              ...rememberedLines({ adapterRemembered, consent: recorded }), ...loginItemLines(result.loginItem),
             ],
           }
         }
@@ -508,23 +679,17 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           const result = await stopService(lifecycle, lifecycleRules)
           return { exit: result.refused ? EXIT.notSuccess : EXIT.ok, document: { service: result }, human: [result.refused ? `not stopped: ${result.state} (${result.reason})${result.retry ? '; ask again in a moment' : ''}` : result.stopped ? 'stopped' : `nothing to stop (${result.reason})`] }
         }
-        if (sub !== 'unit' || flags.print !== true) refuse('usage', 'service start | status | stop | unit --print (installing a startup unit is not offered here)')
-        const { project, workspace } = readable()
-        if (workspace === null) refuse('service-workspace-not-prepared', 'this workspace has no private state yet; `service start` prepares it')
-        const seam = await serviceSeam()
-        // Pure text from the builder. Nothing is written, installed or handed to a service manager.
-        const unit = buildStartupAdapter({
-          platform, label: serviceNameFor(workspace.workspaceId), nodePath: process.execPath, entryPath: seam.entryPath, logPath: servicePaths(workspace.workspaceRoot).log,
-          args: [`--project=${project.configPath}`, ...(dataRoot === undefined ? [] : [`--data-root=${dataRoot}`]), ...(seam.entryArgs ?? [])],
-        })
-        return { exit: EXIT.ok, document: { unit, installed: false, note: 'running this unit needs a recorded consent that covers operating-system startup' }, human: [unit.text] }
+        if (sub !== 'unit' || [flags.print, flags.install, flags.remove].filter((flag) => flag === true).length !== 1) refuse('usage', 'service start | status | stop | unit --print | unit --install | unit --remove')
+        if (flags.install === true) return installUnit()
+        if (flags.remove === true) return removeUnit()
+        return printUnit()
       },
 
       async open() {
         const seam = await serviceSeam()
         const app = await appSeams()
         const { appProbe } = app
-        const consent = consentOfThisRun()
+        const consent = consentOfThisRun(seam)
         const adapterRemembered = rememberAdapter(consent.consent?.actor)
         // The view whose plugin may report the app version; an unknown one is refused by open itself.
         const requested = () => { try { return resolveScope(readObsidianEnablement(loadProject()), flags.scope) } catch { return null } }
@@ -543,7 +708,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
           human: [
             `${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []),
-            ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : []),
+            ...loginItemLines(result.service?.loginItem), ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : []),
             ...rememberedLines({ adapterRemembered, consent: recorded }),
           ],
         }
@@ -593,6 +758,35 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         return {
           exit: EXIT.ok, document: { plugins },
           human: plugins.flatMap(({ scopeId, choice, presence }) => [`view ${scopeId}: plugin ${choice.state}${choice.pending ? ' (as the vault shows it; recorded at the view\'s next publication)' : ''}${pluginLine(presence)}`, ...(presence.next ? [`  Next: ${presence.next}`] : [])]),
+        }
+      },
+
+      // Maintenance of this workspace ends here: the login item goes first, so its manager does not start the service
+      // again, then the proven service stops. Everything a person made or may want back stays, and is named.
+      async uninstall() {
+        const project = loadProject()
+        let workspace = null
+        try { const found = resolveServiceWorkspace({ project, dataRoot, env, platform }); workspace = found?.workspaceRoot ? found : null } catch (error) { if (!isTyped(error)) throw error }
+        const record = workspace === null ? null : readLoginItemRecord(workspace)
+        const item = record === null ? { removed: false, reason: 'not-installed' } : await removeLoginItem({ loadProject, dataRoot, env, platform, manager: await managerSeam(), clock })
+        const service = workspace === null ? { state: 'stopped', stopped: false, refused: false, reason: 'workspace-not-prepared' } : await stopService(lifecycle, lifecycleRules)
+        const kept = keptLocations(project, workspace)
+        const itemGone = item.removed === true || item.reason === 'not-installed' || item.reason === 'workspace-not-prepared'
+        const serviceGone = service.stopped === true || service.state === 'stopped'
+        const remembered = workspace !== null && itemGone ? rememberLoginItem('off') : false
+        return {
+          exit: itemGone && serviceGone ? EXIT.ok : EXIT.notSuccess,
+          document: { loginItem: item, service, kept, rememberedNow: { loginItem: remembered ? 'off' : null } },
+          human: [
+            `login item: ${item.removed ? `removed (${item.file})` : item.reason === 'not-installed' || item.reason === 'workspace-not-prepared' ? 'none was installed' : `not removed (${item.reason})`}`,
+            `service: ${service.stopped ? 'stopped' : service.refused ? `not stopped: ${service.state} (${service.reason})` : `not running (${service.reason})`}`,
+            ...(itemGone && serviceGone ? [] : [`Next: ${!itemGone ? NEXT[item.reason] ?? 'run `atelier obsidian uninstall` again' : service.retry ? 'run `atelier obsidian uninstall` again in a moment' : 'see `atelier obsidian service status`'}`]),
+            'Kept as they are:',
+            ...kept.vaults.map((vault) => `  vault           ${vault}`),
+            ...(kept.privateState === null ? [] : [`  private state   ${kept.privateState}`]),
+            `  project file    ${kept.projectFile ?? '(none)'}; its Obsidian settings stay`,
+            ...(kept.obsidianList === null ? [] : [`  Obsidian's list ${kept.obsidianList}; the vaults stay in it`]),
+          ],
         }
       },
 

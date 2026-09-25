@@ -8,11 +8,14 @@
 //   --fail-tick-once=<CODE>       the first canonical graph build throws an untyped error with that code
 //   --crash-on-publication=<N>    the process kills itself, hard, during its Nth publication
 //   --crash-at=<point>            where in that publication (a point of the publisher's crash seam; default after-staging)
+//   --release-root=<directory>    under --startup, the package whose release it watches (a synthetic one), as a login
+//                                 item's service watches its own
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from '../../../src/project/config.mjs'
 import { createEditorAdapter, publishView } from '../../../src/projection/obsidian/publication/index.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from '../../../src/projection/obsidian/publication/test-seam.mjs'
 import { buildGraph } from '../../../src/runtime/obsidian/pipeline.mjs'
+import { createReleaseWatch } from '../../../src/runtime/obsidian/release-watch.mjs'
 import { runServiceProcess, serviceOptionsFromArgv } from '../../../src/runtime/obsidian/service-main.mjs'
 import { createNullWatcherFactory } from '../../../src/runtime/obsidian/watchers.mjs'
 
@@ -38,6 +41,7 @@ const seams = {
 
 await runServiceProcess({
   ...options,
+  ...(options.startup && typeof args['release-root'] === 'string' ? { releaseWatch: createReleaseWatch({ root: args['release-root'] }) } : {}),
   entryPath: fileURLToPath(import.meta.url),
   adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' }),
   engineOptions: { quietPeriodMs: 0, watcherFactory: createNullWatcherFactory(), seams },
