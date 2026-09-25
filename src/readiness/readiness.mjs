@@ -123,6 +123,13 @@ function buildPackageReadiness({
   }
 }
 
+// Paths in the written artifact are relative to the project config directory
+// in POSIX form, so `readiness --check` does not depend on where the project
+// is checked out and the artifact names no machine-specific directory.
+function configRelative(project, file) {
+  return path.relative(project.configDir, file).split(path.sep).join('/') || '.'
+}
+
 function buildProjectReadiness({ project, graph = null } = {}) {
   const loadedGraph = graph || (fs.existsSync(project.graphPath) ? readJson(project.graphPath) : null)
   const projectionEntry = path.join(project.outputRoot, 'index.html')
@@ -142,14 +149,14 @@ function buildProjectReadiness({ project, graph = null } = {}) {
     blockers,
     warnings,
     graph: {
-      path: project.graphPath,
+      path: configRelative(project, project.graphPath),
       nodes: loadedGraph?.counts?.nodes ?? loadedGraph?.nodes?.length ?? 0,
       edges: loadedGraph?.counts?.edges ?? loadedGraph?.edges?.length ?? 0,
       diagnostics: loadedGraph?.counts?.diagnostics ?? loadedGraph?.diagnostics?.length ?? 0,
     },
     projection: {
-      outputRoot: project.outputRoot,
-      entry: projectionEntry,
+      outputRoot: configRelative(project, project.outputRoot),
+      entry: configRelative(project, projectionEntry),
     },
     support: {
       telemetry: 'none',

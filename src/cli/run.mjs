@@ -184,6 +184,9 @@ Machine-local repo paths belong in
 
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
+  const serverHelp = (name) => `Usage: ${c} ${name} [--project ./atelier.project.json] [--port=PORT] [--review]
+
+Serves the project's built projection on 127.0.0.1 in the foreground until stopped. It builds nothing: run ${c} graph, then ${c} build, with the same --project path first. The port is --port=PORT, else the PORT environment variable, else 8137; 0 picks a free port, and the address printed on start names it. --review also serves the local review workspace at /review (docs/local-review.md).`
   const help = {
     capability: `Usage: ${c} capability seal|verify|inventory|plan|apply|status|observe|candidates|recover|fleet|graph|profiles
 Run ${c} capability help for options. Releases stay local; adoption is per repository
@@ -195,6 +198,8 @@ Read one bounded UTF-8 JSON object {workspaceId,input} from stdin inside the int
     learn: `Usage: ${c} learn capture|propose|decide|activate|withdraw|list|context|render|graph|export|plan
 
 Read a bounded JSON object from stdin in the intended Git workspace. Every request includes workspaceId. Writes include actor, requestId, expectedRevision and input. Context and render include query. Local actor identity is asserted, not authenticated. State stays in ignored .atelier-local/. Accepted content becomes context only after explicit activation for a named harness; no permission grant, file installation or sending occurs. See docs/learning.md.`,
+    dev: serverHelp('dev'),
+    server: serverHelp('server'),
     skills: `Usage: ${c} skills audit|observe|candidates|sync
 Audit bundled skills or --root DIR [--peer DIR].
 Sync previews by default; applying requires --apply --confirm PLAN_DIGEST.
