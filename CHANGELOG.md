@@ -4,6 +4,20 @@
 
 ### Fixed
 
+- The project readiness artifact (`atelier-output/atelier-readiness.json` by
+  default) records `graph.path`, `projection.outputRoot` and
+  `projection.entry` relative to the project configuration directory, in POSIX
+  form, instead of as absolute paths. `atelier readiness --check` and
+  `atelier generated check` now accept an artifact written in another checkout
+  of the same project, and the artifact no longer names the machine's
+  directories (which could include the account name). An exact upgrade
+  candidate's readiness bytes now match what `atelier readiness` regenerates
+  there; before, when the path to the candidate passed through a symlink (as
+  macOS temporary directories do), the check reported the new candidate
+  stale. `atelier upgrade explain` no longer warns that readiness bytes can
+  contain absolute host paths. An artifact written by an earlier version is
+  reported stale once; run `atelier readiness` to rewrite it and review the
+  difference.
 - `atelier dev` run before `atelier build` (straight after `atelier init`,
   for example) printed Node's raw `[ENOENT] ... lstat '<absolute path>'`
   with no next step, and after `atelier graph` alone a redacted
