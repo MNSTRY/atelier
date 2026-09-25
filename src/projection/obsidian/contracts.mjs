@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import { validateJsonSchema } from '../../export/atelier-export-contract.mjs'
+import { titleCase } from '../../graph/knowledge-graph.mjs'
 
 // Obsidian projection contracts: closed v1 document shapes, the checks a JSON
 // schema cannot express, and the scope selector algebra.
@@ -29,12 +30,15 @@ const MAX_SELECTOR_DEPTH = 64
 
 // Portable shapes may be committed or shared and must never carry a
 // machine-local absolute path, port or policy. Private shapes live only in
-// ignored machine-private state.
+// ignored machine-private state. A shape registered in more than one major
+// version is validated against the version its `schema` names; the generation
+// manifest has two, one per vault layout.
 export const OBSIDIAN_CONTRACTS = Object.freeze([
   ['corpus-profile', 'portable'],
   ['scope', 'portable'],
   ['source-snapshot', 'portable'],
   ['generation-manifest', 'portable'],
+  ['generation-manifest', 'portable', 2],
   ['publication-journal', 'private'],
   ['service-state', 'private'],
   ['edit-operation', 'portable'],
@@ -42,13 +46,14 @@ export const OBSIDIAN_CONTRACTS = Object.freeze([
   ['proposal-receipt', 'portable'],
   ['acceptance-receipt', 'portable'],
   ['ext-settings', 'portable'],
-].map(([shape, portability]) => Object.freeze({
+].map(([shape, portability, version = 1]) => Object.freeze({
   shape,
   portability,
-  name: `atelier-obsidian-${shape}`,
-  schemaConst: `atelier-obsidian-${shape}/v1`,
-  contractFile: `contracts/atelier-obsidian-${shape}.v1.schema.json`,
-  fixtureRoot: `fixtures/obsidian/contracts/${shape}`,
+  version,
+  name: version === 1 ? `atelier-obsidian-${shape}` : `atelier-obsidian-${shape}-v${version}`,
+  schemaConst: `atelier-obsidian-${shape}/v${version}`,
+  contractFile: `contracts/atelier-obsidian-${shape}.v${version}.schema.json`,
+  fixtureRoot: version === 1 ? `fixtures/obsidian/contracts/${shape}` : `fixtures/obsidian/contracts/${shape}-v${version}`,
 })))
 
 export class ObsidianContractRefusal extends Error {
@@ -80,18 +85,21 @@ function compareIds(left, right) {
 
 const schemaCache = new Map()
 
-function contractFor(shape) {
-  const contract = OBSIDIAN_CONTRACTS.find((item) => item.shape === shape)
-  if (!contract) refuse('unknown-contract-shape', 'no Obsidian contract is registered for the requested shape')
-  return contract
+// The contract a document is validated against: the registered version its
+// `schema` names, else the first version of the shape, whose refusal then
+// names the mismatch.
+function contractFor(shape, doc) {
+  const versions = OBSIDIAN_CONTRACTS.filter((item) => item.shape === shape)
+  if (versions.length === 0) refuse('unknown-contract-shape', 'no Obsidian contract is registered for the requested shape')
+  return versions.find((item) => isPlainObject(doc) && doc.schema === item.schemaConst) ?? versions[0]
 }
 
 function loadSchema(contract) {
-  if (!schemaCache.has(contract.shape)) {
+  if (!schemaCache.has(contract.name)) {
     const url = new URL(`../../../${contract.contractFile}`, import.meta.url)
-    schemaCache.set(contract.shape, JSON.parse(fs.readFileSync(url, 'utf8')))
+    schemaCache.set(contract.name, JSON.parse(fs.readFileSync(url, 'utf8')))
   }
-  return schemaCache.get(contract.shape)
+  return schemaCache.get(contract.name)
 }
 
 // Whether a value is an identifier as the contracts define one: the
@@ -184,11 +192,29 @@ const SEMANTIC_CHECKS = {
       }
     })
   },
-  'generation-manifest'(doc, errors) {
+  'generation-manifest'(doc, errors, version) {
     const identities = doc.notes.map((note) => `${note.repoId}\u0000${note.nodeId}`)
     if (duplicates(identities).length > 0) errors.push({ code: 'duplicate-identity', message: '/notes repeats a canonical identity' })
     if (duplicates(doc.notes.map((note) => note.path.toLowerCase())).length > 0) {
       errors.push({ code: 'path-collision', message: '/notes allocates one path to more than one note' })
+    }
+    if (version === 2) {
+      // Notes and files share folders in layout 2: no two of them may be one file on a case- or
+      // normalization-insensitive file system, and no file may have the name of a folder.
+      const files = [...doc.notes.map((note) => note.path), ...doc.attachments.map((attachment) => attachment.path)]
+      if (duplicates(files.map(collisionKey)).length > 0) errors.push({ code: 'path-collision', message: '/notes and /attachments allocate one path to more than one file' })
+      const folders = new Set(files.flatMap((file) => file.split('/').slice(0, -1).map((_, index, parts) => collisionKey(parts.slice(0, index + 1).join('/')))))
+      if (files.some((file) => folders.has(collisionKey(file)))) errors.push({ code: 'path-collision', message: '/notes and /attachments give a file the name of a folder' })
+      doc.notes.forEach((note, index) => {
+        const { identity, body, generated } = note.regions
+        const last = generated.at(-1)
+        const inPrefix = identity.end <= body.start
+        const atEnd = last?.kind === 'identity' && last.range.start === identity.start && last.range.end === identity.end
+        if (!inPrefix && !atEnd) errors.push({ code: 'identity-region-misplaced', message: `/notes/${index}/regions/identity is neither in the front matter nor the last generated region` })
+        if (generated.some((region, at) => region.kind === 'identity' && at !== generated.length - 1)) {
+          errors.push({ code: 'identity-region-misplaced', message: `/notes/${index}/regions/generated has an identity region that is not the last` })
+        }
+      })
     }
     if (duplicates(doc.links.map((link) => link.edgeId)).length > 0) errors.push({ code: 'duplicate-identity', message: '/links repeats an edge identity' })
     const nodeIds = new Set(doc.notes.map((note) => note.nodeId))
@@ -199,7 +225,7 @@ const SEMANTIC_CHECKS = {
       }
     })
     doc.notes.forEach((note, index) => {
-      const ranges = [note.regions.frontmatter, note.regions.body, ...note.regions.generated.map((region) => region.range)].filter(Boolean)
+      const ranges = [note.regions.frontmatter, note.regions.identity, note.regions.body, ...note.regions.generated.map((region) => region.range)].filter(Boolean)
       if (ranges.some((range) => range.end < range.start)) errors.push({ code: 'invalid-byte-range', message: `/notes/${index}/regions has a range that ends before it starts` })
     })
     if (doc.completeness.status === 'complete' && doc.completeness.writtenNotes !== doc.completeness.expectedNotes) {
@@ -239,11 +265,11 @@ const SEMANTIC_CHECKS = {
 // { layer: 'schema' | 'semantic', code, message }. Semantic checks run only on
 // schema-valid documents, so they can rely on the shape.
 export function validateObsidianContract(shape, doc) {
-  const contract = contractFor(shape)
+  const contract = contractFor(shape, doc)
   const schemaErrors = validateJsonSchema(loadSchema(contract), doc)
   if (schemaErrors.length > 0) return schemaErrors.map((message) => ({ layer: 'schema', code: 'schema-violation', message }))
   const errors = []
-  SEMANTIC_CHECKS[shape](doc, errors)
+  SEMANTIC_CHECKS[shape](doc, errors, contract.version)
   if (contract.portability === 'portable') {
     const found = []
     collectAbsolutePaths(doc, '', found)
@@ -272,8 +298,11 @@ export function readObsidianExtSettings(projectConfigDoc) {
 }
 
 // ---------------------------------------------------------------------------
-// Note identity and readable paths
+// Note identity and readable paths, vault layout 1
 // ---------------------------------------------------------------------------
+
+// Layout 1, what releases up to 0.2.0-alpha.11 wrote and what a view held for
+// an open edit is still prepared in: `notes/<readable title>--<suffix>.md`.
 
 const RESERVED_BASENAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 
@@ -323,6 +352,171 @@ export function allocateNotePaths(nodes) {
     allocated[node.id] = candidate
   }
   return allocated
+}
+
+// ---------------------------------------------------------------------------
+// Vault layout 2: readable names
+// ---------------------------------------------------------------------------
+
+// The file name is the title a person reads and the folders are the
+// repository's own. These are the pure naming rules; allocation, collisions
+// and stability are the path registry's (materialize/path-registry.mjs).
+
+export const VAULT_LAYOUT_VERSION = 2
+export const NAME_BYTES = 150
+export const FOLDER_NAME_BYTES = 120
+export const QUALIFIER_STEM_BYTES = 60
+export const MIN_NAME_BYTES = 16
+
+// Windows device names, compared on the part before the first dot.
+const WINDOWS_DEVICE_NAMES = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)$/i
+// Characters no name may hold: controls, path separators, what Windows
+// forbids, and what ends or splits an Obsidian link (`# ^ [ ] |`).
+const NAME_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f\u2028\u2029/\\:*?"<>|#^[\]]/g
+// Invisible formatting that can make a name read as another: bidirectional
+// embedding, override and isolate controls, and a stray U+FEFF.
+const NAME_INVISIBLE = /[\u202a-\u202e\u2066-\u2069\ufeff]/g
+// What a cut may leave dangling at the end of a name.
+const NAME_DANGLING = /[\p{M}\u200d\ufe00-\ufe0f]+$/u
+
+const trimName = (value) => value.replace(/^[ .]+|[ .]+$/g, '')
+
+// Two paths that a case-insensitive or normalization-insensitive file system
+// would treat as one share a collision key.
+export function collisionKey(value) {
+  return value.normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC')
+}
+
+// The longest prefix of `value` within `maxBytes` of UTF-8, cut between code
+// points, without a combining character, joiner or variation selector left
+// dangling at the end.
+export function cutName(value, maxBytes) {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value
+  let kept = ''
+  let bytes = 0
+  for (const character of value) {
+    bytes += Buffer.byteLength(character, 'utf8')
+    if (bytes > maxBytes) break
+    kept += character
+  }
+  return trimName(kept.replace(NAME_DANGLING, ''))
+}
+
+// One file or folder name made safe for macOS, Linux, Windows and Obsidian
+// links, or '' when nothing is left of it. The author's casing and words are
+// kept; see "File names" in docs/obsidian-contract.md for each rule.
+export function vaultName(value, maxBytes = NAME_BYTES) {
+  const cleaned = trimName(String(value ?? '')
+    .toWellFormed()
+    .normalize('NFC')
+    .replace(NAME_INVISIBLE, '')
+    .replace(NAME_FORBIDDEN, ' ')
+    .replace(/ {2,}/g, ' '))
+  const name = cutName(cleaned, maxBytes)
+  if (name === '' || !WINDOWS_DEVICE_NAMES.test(name.split('.')[0].trimEnd())) return name
+  return `_${cutName(name, maxBytes - 1)}`
+}
+
+export function fileNameOf(sourcePath) {
+  return String(sourcePath ?? '').split('/').at(-1)
+}
+
+// A node's extension: the canonical record's, else its path's.
+export function extensionOf(node) {
+  if (typeof node?.extension === 'string' && node.extension !== '') return node.extension
+  const name = fileNameOf(node?.path)
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot + 1) : ''
+}
+
+export function fileStemOf(sourcePath) {
+  const name = fileNameOf(sourcePath)
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(0, dot) : name
+}
+
+// A title that ends in the source's own extension (`notes.md`) came from a file
+// name; the extension is dropped. Only the source's own extension: `Node.js`
+// or `Version 2.0` keep their ending.
+function withoutOwnExtension(title, extension) {
+  if (!/^[A-Za-z0-9]{1,16}$/.test(extension)) return title
+  const trimmed = title.trimEnd()
+  const suffix = `.${extension}`
+  const before = trimmed.length - suffix.length
+  if (before < 1 || trimmed.slice(before).toLowerCase() !== suffix.toLowerCase() || /\s/.test(trimmed[before - 1])) return title
+  return trimmed.slice(0, before)
+}
+
+// The name of a Markdown note, from the node record alone: its canonical
+// title (front-matter title, else first H1), or the file stem as written when
+// the title is the graph's fallback, the title-cased file name. Never ''.
+export function noteNameOf(node) {
+  const fileName = fileNameOf(node.path)
+  const stem = fileStemOf(node.path)
+  const title = typeof node.title === 'string' ? node.title : ''
+  const chosen = title.trim() === '' || title === titleCase(fileName) ? stem : withoutOwnExtension(title, extensionOf(node))
+  return vaultName(chosen) || vaultName(stem) || 'Untitled'
+}
+
+// A wrapped or embedded file keeps its own name: `{ stem, extension }`, made
+// safe, the stem bounded so that the extension still fits. Never an empty stem.
+export function fileNameParts(sourcePath) {
+  const name = fileNameOf(sourcePath)
+  const dot = name.lastIndexOf('.')
+  const extension = dot > 0 ? vaultName(name.slice(dot + 1), 16) : ''
+  const budget = NAME_BYTES - (extension === '' ? 0 : Buffer.byteLength(extension, 'utf8') + 1)
+  const stem = vaultName(dot > 0 ? name.slice(0, dot) : name, budget) || 'Untitled'
+  return { stem, extension }
+}
+
+export const joinFileName = ({ stem, extension }) => (extension === '' ? stem : `${stem}.${extension}`)
+
+// A folder segment of the mirrored source directory, or the repository folder.
+export function folderNameOf(segment) {
+  return vaultName(segment, FOLDER_NAME_BYTES) || '_'
+}
+
+// The stable short identity a colliding name is qualified with: hexadecimal
+// characters of the SHA-256 of the repository and node identity (the digest
+// the layout 1 suffix is a prefix of).
+export function qualifierIdOf(repoId, nodeId, length = 6) {
+  return createHash('sha256').update(`${repoId}\u0000${nodeId}`).digest('hex').slice(0, length)
+}
+
+// Whether `value` is a path of layout 2: relative, every segment a name the
+// rules above can produce (no forbidden character, no leading or trailing
+// space or dot, at most 255 bytes).
+const HAS_FORBIDDEN = new RegExp(NAME_FORBIDDEN.source)
+const HAS_INVISIBLE = new RegExp(NAME_INVISIBLE.source)
+
+export function isReadableVaultPath(value) {
+  if (typeof value !== 'string' || value === '' || Buffer.byteLength(value, 'utf8') > 1024) return false
+  return value.split('/').every((segment) => segment !== ''
+    && trimName(segment) === segment
+    && !HAS_FORBIDDEN.test(segment)
+    && !HAS_INVISIBLE.test(segment)
+    && !WINDOWS_DEVICE_NAMES.test(segment.split('.')[0].trimEnd())
+    && segment === segment.normalize('NFC')
+    && Buffer.byteLength(segment, 'utf8') <= 255)
+}
+
+// The layout a generation manifest was prepared in.
+export function manifestLayoutVersion(manifest) {
+  return manifest?.schema === 'atelier-obsidian-generation-manifest/v2' ? manifest.layoutVersion : 1
+}
+
+// The three generated properties that name a note's identity, in order.
+export const IDENTITY_KEYS = Object.freeze(['atelier-id', 'atelier-repo', 'atelier-source'])
+
+// A YAML double-quoted scalar: JSON's escapes, plus `\u` for what YAML does
+// not allow unescaped (DEL, C1 controls, U+2028, U+2029, U+FEFF).
+export function yamlQuoted(value) {
+  return JSON.stringify(String(value)).replace(/[\u007f-\u009f\u2028\u2029\ufeff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`)
+}
+
+// The identity lines of one note, without line endings.
+export function identityLineTexts(node) {
+  return [[IDENTITY_KEYS[0], node.id], [IDENTITY_KEYS[1], node.repo], [IDENTITY_KEYS[2], node.path]].map(([key, value]) => `${key}: ${yamlQuoted(value)}`)
 }
 
 // ---------------------------------------------------------------------------

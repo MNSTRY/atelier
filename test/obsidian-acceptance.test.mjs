@@ -138,6 +138,9 @@ const NOW = '2026-01-05T10:00:00.000Z'
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const needsExchange = EXCHANGE_HERE ? {} : { skip: 'no atomic exchange on this platform: the publisher refuses, which is asserted separately' }
 const sha = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`
+// The focus term of one vault path, as its rules read: an anchored regular expression, metacharacters and the
+// delimiter escaped, a space and a double quote as hexadecimal escapes.
+const pathTerm = (value) => `path:/^${value.replace(/[\\^$.*+?()[\]{}|/]/g, (character) => `\\${character}`).replace(/ /g, '\\x20').replace(/"/g, '\\x22')}$/`
 const fixedRandom = (size) => Buffer.alloc(size, 9)
 const WORKSPACE_ID = `ws-${'09'.repeat(12)}`
 
@@ -216,12 +219,11 @@ test('full selection is the whole authorized corpus, as an exact scope document'
   assert.equal(selection.focus, null)
   // The withheld node x is in no list and no path.
   assert.deepEqual(Object.keys(selection.notePaths), ['a', 'b', 'c', 'd'])
+  // Vault layout 2: the repository's folders, the title as the name, a wrapped file under its own name.
   assert.deepEqual(selection.notePaths, {
-    a: 'notes/Shared concept--82f6d012eaad.md', b: 'notes/Second concept--242ab15f42c6.md', c: 'notes/Third concept--f7e3c3e2b4b1.md'.replace('f7e3c3e2b4b1', selection.notePaths.c.slice(-15, -3)), d: selection.notePaths.d,
+    a: 'north/plans/Shared concept.md', b: 'south/notes/two.json.md', c: 'west/notes/three.html.md', d: 'north/notes/Shared concept.md',
   })
-  assert.match(selection.notePaths.c, /^notes\/Third concept--[0-9a-f]{12}\.md$/)
-  assert.match(selection.notePaths.d, /^notes\/Shared concept--[0-9a-f]{12}\.md$/)
-  assert.notEqual(selection.notePaths.a, selection.notePaths.d, 'duplicate titles stay distinct through the identity suffix')
+  assert.notEqual(selection.notePaths.a, selection.notePaths.d, 'duplicate titles stay distinct: here by their folders')
 })
 
 test('scoped selection: repository, path prefix and a set expression give exactly the oracle sets', () => {
@@ -254,10 +256,10 @@ test('focus selection keeps the full vault and derives the graph query from the 
   assert.deepEqual({ nodes: focus.nodes, edges: focus.edges, vault: focus.vaultNodes, vaultEdges: focus.vaultEdges }, { nodes: ['a', 'b'], edges: ['e1'], vault: ['a', 'b', 'c', 'd'], vaultEdges: ['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', 'e9'] })
   assert.deepEqual(focus.focus, {
     version: FOCUS_QUERY_VERSION,
-    query: 'path:"notes/Shared concept--82f6d012eaad.md" OR path:"notes/Second concept--242ab15f42c6.md"',
-    queryDigest: sha('path:"notes/Shared concept--82f6d012eaad.md" OR path:"notes/Second concept--242ab15f42c6.md"'),
-    paths: ['notes/Shared concept--82f6d012eaad.md', 'notes/Second concept--242ab15f42c6.md'],
-    bookmark: { type: 'graph', title: 'Atelier focus view-focus', options: { search: 'path:"notes/Shared concept--82f6d012eaad.md" OR path:"notes/Second concept--242ab15f42c6.md"' } },
+    query: `${pathTerm('north/plans/Shared concept.md')} OR ${pathTerm('south/notes/two.json.md')}`,
+    queryDigest: sha(`${pathTerm('north/plans/Shared concept.md')} OR ${pathTerm('south/notes/two.json.md')}`),
+    paths: ['north/plans/Shared concept.md', 'south/notes/two.json.md'],
+    bookmark: { type: 'graph', title: 'Atelier focus view-focus', options: { search: `${pathTerm('north/plans/Shared concept.md')} OR ${pathTerm('south/notes/two.json.md')}` } },
   })
   // The same identity has the same path in the full view.
   const full = select({ scopeId: 'view-full', mode: 'full', selector: { all: true } })
@@ -267,15 +269,21 @@ test('focus selection keeps the full vault and derives the graph query from the 
   assert.deepEqual(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a', 'b'] } }), focus)
 })
 
-test('a persisted path registry decides the paths a focus names', () => {
-  // A registry may hold a longer suffix of the same identity (a lengthened one after a collision); an undeserved suffix is refused.
-  const longer = identitySuffix('north', 'a', 16)
-  assert.equal(longer.slice(0, 12), '82f6d012eaad')
-  const registry = { schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, entries: [{ repoId: 'north', nodeId: 'a', path: `notes/Shared concept--${longer}.md` }] }
+test('a persisted path registry decides the paths a focus names, through the view\'s own section', () => {
+  // The view's section may hold a qualified name of the same identity (one allocated after a collision); a path no rule can produce is refused.
+  const sectionOf = (entries) => ({ schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, layout: 2, entries: [], assets: [], views: { 'view-focus': { entries, assets: [] } } })
+  const registry = sectionOf([{ repoId: 'north', nodeId: 'a', path: 'north/plans/Shared concept (one).md' }])
   const focus = select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: registry })
-  assert.equal(focus.focus.query, `path:"notes/Shared concept--${longer}.md"`)
-  const forged = { ...registry, entries: [{ repoId: 'north', nodeId: 'a', path: 'notes/Shared concept--82f6d012eaad0000.md' }] }
-  assert.equal(refusalCode(() => select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: forged })), 'invalid-path-registry')
+  assert.equal(focus.focus.query, pathTerm('north/plans/Shared concept (one).md'))
+  for (const path of ['north/plans/.Shared concept.md', 'north/plans/Shared [concept].md', 'Shared concept.md']) {
+    assert.equal(refusalCode(() => select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: sectionOf([{ repoId: 'north', nodeId: 'a', path }]) })), 'invalid-path-registry', path)
+  }
+  // Another view's section decides nothing for this one.
+  const elsewhere = { ...registry, views: { 'view-other': registry.views['view-focus'] } }
+  assert.equal(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: elsewhere }).focus.query, pathTerm('north/plans/Shared concept.md'))
+  // A layout 1 registry holds no view: the paths are allocated anew.
+  const earlier = { schema: 'atelier-obsidian-path-registry/v1', workspaceId: PROFILE.workspaceId, entries: [{ repoId: 'north', nodeId: 'a', path: 'notes/Shared concept--82f6d012eaad.md' }] }
+  assert.equal(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }, { pathRegistry: earlier }).focus.query, pathTerm('north/plans/Shared concept.md'))
 })
 
 test('refusals: empty, withheld, unbounded expansion, focus of nothing, full mode with a subset', () => {
@@ -303,13 +311,24 @@ test('refusals: empty, withheld, unbounded expansion, focus of nothing, full mod
 // ---------------------------------------------------------------------------
 
 const ESCAPING_CASES = [
-  { name: 'spaces', paths: ['notes/Shared concept--82f6d012eaad.md'], query: 'path:"notes/Shared concept--82f6d012eaad.md"' },
-  { name: 'double quotes', paths: ['notes/He said "go"--0123456789ab.md'], query: 'path:"notes/He said \\"go\\"--0123456789ab.md"' },
-  { name: 'unicode, composed', paths: ['notes/Caf\u00e9 \u00fcnicode \u2014 \u5317--0123456789ab.md'], query: 'path:"notes/Caf\u00e9 \u00fcnicode \u2014 \u5317--0123456789ab.md"' },
-  { name: 'unicode, decomposed input is composed on output', paths: ['notes/Cafe\u0301--0123456789ab.md'], query: 'path:"notes/Caf\u00e9--0123456789ab.md"' },
-  { name: 'several, in the order given', paths: ['notes/B--0123456789ab.md', 'notes/A--0123456789ab.md'], query: 'path:"notes/B--0123456789ab.md" OR path:"notes/A--0123456789ab.md"' },
-  { name: 'search operators inside a quoted term stay text', paths: ['notes/tag:#x OR -y (z)--0123456789ab.md'], query: 'path:"notes/tag:#x OR -y (z)--0123456789ab.md"' },
+  { name: 'spaces', paths: ['notes/Shared concept--82f6d012eaad.md'], query: 'path:/^notes\\/Shared\\x20concept--82f6d012eaad\\.md$/' },
+  { name: 'double quotes', paths: ['notes/He said "go"--0123456789ab.md'], query: 'path:/^notes\\/He\\x20said\\x20\\x22go\\x22--0123456789ab\\.md$/' },
+  { name: 'unicode, composed', paths: ['notes/Caf\u00e9 \u00fcnicode \u2014 \u5317--0123456789ab.md'], query: 'path:/^notes\\/Caf\u00e9\\x20\u00fcnicode\\x20\u2014\\x20\u5317--0123456789ab\\.md$/' },
+  { name: 'unicode, decomposed input is composed on output', paths: ['notes/Cafe\u0301--0123456789ab.md'], query: 'path:/^notes\\/Caf\u00e9--0123456789ab\\.md$/' },
+  { name: 'several, in the order given', paths: ['notes/B--0123456789ab.md', 'notes/A--0123456789ab.md'], query: 'path:/^notes\\/B--0123456789ab\\.md$/ OR path:/^notes\\/A--0123456789ab\\.md$/' },
+  { name: 'search operators and regular-expression characters stay text', paths: ['notes/tag:#x OR -y (z) [a|b] $1.md'], query: 'path:/^notes\\/tag:#x\\x20OR\\x20-y\\x20\\(z\\)\\x20\\[a\\|b\\]\\x20\\$1\\.md$/' },
 ]
+
+test('a focus names exact paths: no path matches a term of another, whether it contains it, lies inside it, or differs in case alone', () => {
+  const built = buildFocusQuery(['r/a/Plan.md', 'r/b/Notes (2).md'])
+  // Each term is an anchored regular expression; the app's search compares a path case-insensitively.
+  const regexes = built.query.split(' OR ').map((term) => new RegExp(/^path:\/(.*)\/$/.exec(term)[1], 'i'))
+  const matched = (vaultPath) => regexes.some((regex) => regex.test(vaultPath))
+  for (const vaultPath of ['r/a/Plan.md', 'r/b/Notes (2).md', 'R/A/plan.md']) assert.equal(matched(vaultPath), true, vaultPath)
+  for (const vaultPath of ['qr/a/Plan.md', 'r/a/Plan.md.md', 'r/a/Plan (b).md', 'x/r/a/Plan.md', 'r/a/Plan.mdx', 'r/b/Notes (22).md', 'r/b/Notes 2.md']) assert.equal(matched(vaultPath), false, vaultPath)
+  assert.equal(built.version, FOCUS_QUERY_VERSION)
+  assert.equal(FOCUS_QUERY_VERSION, 'obsidian-graph-search-paths/v2')
+})
 
 test('focus query escaping: spaces, quotes and unicode give the literal expected query', () => {
   for (const item of ESCAPING_CASES) {
@@ -340,12 +359,22 @@ test('focus query refusals: nothing, a control character, a backslash path, an a
   assert.equal(refusalCode(() => focusBookmarkPayload({ scopeId: 'view-focus', query: '' })), 'focus-selection-empty')
 })
 
+test('a focus persisted with the earlier query version is still read; a new focus is written with this one', async () => {
+  const { validateSelectionState } = await import('../src/projection/obsidian/selection-ui/selection-state.mjs')
+  const query = 'path:"north/plans/Shared concept.md"'
+  const focus = { version: 'obsidian-graph-search-paths/v1', query, queryDigest: sha(query), paths: ['north/plans/Shared concept.md'], bookmark: { type: 'graph', title: 'Atelier focus view-focus', options: { search: query } } }
+  const document = { schema: SELECTION_STATE_SCHEMA, workspaceId: WORKSPACE_ID, scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] }, expansion: null, focus, updatedAt: NOW }
+  assert.deepEqual(validateSelectionState(document, WORKSPACE_ID), document)
+  assert.throws(() => validateSelectionState({ ...document, focus: { ...focus, version: 'obsidian-graph-search-paths/v9' } }, WORKSPACE_ID))
+  assert.equal(select({ scopeId: 'view-focus', mode: 'focus', selector: { ids: ['a'] } }).focus.version, 'obsidian-graph-search-paths/v2')
+})
+
 test('mutation control: a builder that drops escaping fails the escaping oracle', () => {
+  // Every case holds a separator and a dot, which an unescaped term would read as regular-expression syntax.
   const unescaped = createFocusQueryBuilderForOracleTests({ escape: (value) => value })
-  const failing = ESCAPING_CASES.filter((item) => unescaped(item.paths).query !== item.query).map((item) => item.name)
-  assert.deepEqual(failing, ['double quotes'])
-  const unquoted = createFocusQueryBuilderForOracleTests({ term: (value) => `path:${value}` })
-  assert.equal(ESCAPING_CASES.filter((item) => unquoted(item.paths).query !== item.query).length, ESCAPING_CASES.length)
+  assert.equal(ESCAPING_CASES.filter((item) => unescaped(item.paths).query !== item.query).length, ESCAPING_CASES.length)
+  const unanchored = createFocusQueryBuilderForOracleTests({ term: (value) => `path:/${value}/` })
+  assert.equal(ESCAPING_CASES.filter((item) => unanchored(item.paths).query !== item.query).length, ESCAPING_CASES.length)
   const wrongJoin = createFocusQueryBuilderForOracleTests({ join: (terms) => terms.join(' ') })
   assert.deepEqual(ESCAPING_CASES.filter((item) => wrongJoin(item.paths).query !== item.query).map((item) => item.name), ['several, in the order given'])
 })
@@ -773,8 +802,8 @@ test('selection through the command: resolve, persist, show and list bind the de
   assert.equal(focus.exit, EXIT.ok, focus.stdout)
   assert.deepEqual({ persisted: focus.json.persisted, changed: focus.json.changed, file: focus.json.file }, { persisted: true, changed: true, file: 'state/selection/view-beacon.json' })
   const beaconPath = focus.json.selection.notePaths['harbor:beacon']
-  assert.match(beaconPath, /^notes\/Beacon north side--[0-9a-f]{12}\.md$/, 'the readable title drops the quote characters the filesystem rules remove')
-  assert.equal(focus.json.selection.focus.query, `path:"${beaconPath}" OR path:"${focus.json.selection.notePaths['harbor:quay']}"`)
+  assert.equal(beaconPath, 'harbor/notes/Beacon north side.md', 'the readable title drops the quote characters the filesystem rules remove')
+  assert.equal(focus.json.selection.focus.query, `${pathTerm(beaconPath)} OR ${pathTerm(focus.json.selection.notePaths['harbor:quay'])}`)
   assert.deepEqual(focus.json.selection.vaultNodes, ['harbor:beacon', 'harbor:quay', 'orchard:apple'], 'a focus keeps the full vault')
   const shown = await world.run(['selection', 'show', 'view-beacon'])
   assert.deepEqual({ exit: shown.exit, persisted: shown.json.persisted, query: shown.json.selection.focus.query, mode: shown.json.selection.mode }, { exit: EXIT.ok, persisted: true, query: focus.json.selection.focus.query, mode: 'focus' })
@@ -1257,8 +1286,9 @@ test('the desktop derivation applies the fixture\'s withheld list and refuses a 
   const vault = path.join(temp, 'vault')
   const derived = await deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state'), vaultRoot: vault, withheld: fixture.withheldByEligibility, sentinels: fixture.sentinels })
   assert.equal(derived.state, 'committed')
-  const names = fs.readdirSync(path.join(vault, 'notes'))
-  for (const sentinel of fixture.sentinels) assert.ok(!names.some((name) => name.includes(sentinel)), `${sentinel} must not name a note`)
+  const names = fs.readdirSync(vault, { recursive: true }).map((name) => name.split(path.sep).join('/')).filter((name) => !name.startsWith('.obsidian') && !name.startsWith('.atelier-publication'))
+  assert.ok(names.some((name) => name.endsWith('.md')), 'the vault holds notes')
+  for (const sentinel of fixture.sentinels) assert.ok(!names.some((name) => name.includes(sentinel)), `${sentinel} must not name a note or a folder`)
   // Control: without the withheld list the sentinel reaches the vault and the derivation refuses to be evidence.
   await assert.rejects(() => deriveWorkspace({ projectFile: fixture.projectFile, stateRoot: path.join(temp, 'state-2'), vaultRoot: path.join(temp, 'vault-2'), sentinels: fixture.sentinels }), /withheld sentinel/)
 })

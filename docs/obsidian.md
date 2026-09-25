@@ -72,13 +72,18 @@ A focus keeps the full vault on disk and filters the native Graph view. The
 query is
 
 ```
-path:"<note path>" OR path:"<note path>" ...
+path:/^<note path>$/ OR path:/^<note path>$/ ...
 ```
 
-in the order of the selected set (canonical-id order). Inside the quoted term
-a backslash and a double quote are escaped with a backslash; nothing else is
-changed, so a path that itself contains search operators (`tag:`, `-`, `OR`,
-parentheses) stays text. Paths are NFC-normalized before they are quoted. A
+in the order of the selected set (canonical-id order). Each term is a regular
+expression anchored at both ends, so it matches exactly one note: a plain
+`path:` term matches any path that contains it, and with titles as names one
+note's path can lie inside another's. In the term every regular-expression
+character and the `/` delimiter is escaped with a backslash, and a space and
+a double quote are written as `\x20` and `\x22`, so a path that itself
+contains search operators (`tag:`, `-`, `OR`, parentheses) stays text. Paths
+are NFC-normalized first. A persisted focus of the earlier query version
+(`obsidian-graph-search-paths/v1`, quoted substring terms) is still read. A
 path that carries a control character, a C1 control, or the U+2028 or U+2029
 line separator cannot be a search term and refuses with
 `focus-path-unrepresentable`; so does an absolute path, a backslash path or a

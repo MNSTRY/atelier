@@ -76,6 +76,13 @@
       "reason": "Contract-stability epoch change, pre-public. The project-config contract already declared these objects closed with a reserved ext container; the CLI simply was not enforcing it. Every config that validates against the published contract keeps loading, so the only documents that regress are ones that were relying on an enforcement gap rather than on a documented affordance, and the extension-pack surface this enables needs ext read as authoritative structure.",
       "date": "2026-08-06",
       "reviewer": "erik@mnstry.ai (white-label program)"
+    },
+    {
+      "match": "Obsidian generation manifests of the new vault layout are",
+      "disposition": "exempt",
+      "reason": "Alpha: the Obsidian generation manifest has no external consumer yet, and existing vaults are re-laid out automatically once on upgrade (layout 1 to layout 2)",
+      "date": "2026-09-24",
+      "reviewer": "erik@mnstry.ai (owner attestation, 2026-09-24, seamless redesign)"
     }
   ]
 }

@@ -228,6 +228,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             ...scopes.flatMap((scope) => [
               `view ${scope.scopeId}: ${scope.outcome} (${scope.reason})${scope.pendingEdits?.open ? `; ${scope.pendingEdits.open} pending edit(s), apply ${scope.pendingEdits.apply}` : ''}${scope.plugin ? pluginLine(scope.plugin) : ''}`,
               ...(scope.plugin?.next ? [`  Next for the plugin: ${scope.plugin.next}`] : []),
+              ...(scope.diagnostics ?? []).map((item) => `  ${item.notePath ?? item.filePath ?? item.assetPath ?? item.nodeId ?? ''}: ${item.code}${item.rule ? ` (${item.rule})` : ''}`),
             ]),
           ],
         }

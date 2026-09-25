@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { acquirePrivateLock, publishPrivateFile, syncPrivateDirectory } from '../../../project/durable-state.mjs'
-import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract } from '../contracts.mjs'
+import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract, manifestLayoutVersion } from '../contracts.mjs'
 import { isPluginOwnedPath, isPolicySettingsPath, isUserOwnedSettingsPath, preparePolicySettingsFile } from '../materialize/settings.mjs'
 import { PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_SOURCE_MODE } from '../plugin-bridge/channel.mjs'
 import { createJournal, newJournalId } from '../recovery/journal.mjs'
@@ -217,7 +217,8 @@ function pluginFilesDrifted(preparedView, store) {
   })
 }
 
-function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = new Map() }) {
+// One unit per file the publication creates, keeps, replaces or removes. Exported for the oracle tests.
+export function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = new Map() }) {
   const trusted = new Map()
   for (const note of priorManifest?.notes ?? []) trusted.set(note.path, note.noteDigest)
   for (const attachment of priorManifest?.attachments ?? []) trusted.set(attachment.path, attachment.digest)
@@ -225,6 +226,11 @@ function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = new Map
   for (const item of pointer?.retained ?? []) if (item.priorDigest && !item.movedToRecovery) trusted.set(item.path, item.priorDigest)
   for (const [notePath, digest] of ledger) { if (digest === null) trusted.delete(notePath); else trusted.set(notePath, digest) }
 
+  // A file leaves as an attachment when the prior generation listed it as one. Layout 1 kept every file under
+  // `attachments/`, so there that folder says it too (of a file an interrupted run published); in layout 2 it is only
+  // a repository's folder.
+  const priorAttachments = new Set((priorManifest?.attachments ?? []).map((attachment) => attachment.path))
+  const underAttachments = !priorManifest || manifestLayoutVersion(priorManifest) === 1
   const units = []
   const present = new Set()
   for (const file of files) {
@@ -243,7 +249,7 @@ function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = new Map
     units.push({ path: file.path, kind: file.kind, op, baseDigest: base ?? null, candidateDigest: file.digest, bytes: file.bytes })
   }
   for (const [notePath, digest] of [...trusted].sort(([left], [right]) => (left < right ? -1 : 1))) {
-    if (!present.has(notePath)) units.push({ path: notePath, kind: notePath.startsWith('attachments/') ? 'attachment' : 'note', op: 'remove', baseDigest: digest, candidateDigest: null })
+    if (!present.has(notePath)) units.push({ path: notePath, kind: priorAttachments.has(notePath) || (underAttachments && notePath.startsWith('attachments/')) ? 'attachment' : 'note', op: 'remove', baseDigest: digest, candidateDigest: null })
   }
   units.forEach((unit, index) => { unit.unit = index })
   return units

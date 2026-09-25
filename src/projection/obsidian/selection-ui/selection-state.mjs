@@ -6,7 +6,7 @@ import { refuse } from '../../../runtime/obsidian/errors.mjs'
 import { assertOutsideRepositories } from '../../../runtime/obsidian/machine-settings.mjs'
 import { SCOPE_MODES, assertObsidianContract } from '../contracts.mjs'
 import { SETTINGS_ROOT } from '../materialize/settings.mjs'
-import { FOCUS_BOOKMARK_TYPE, FOCUS_QUERY_VERSION } from './focus.mjs'
+import { FOCUS_BOOKMARK_TYPE, FOCUS_QUERY_VERSIONS_READ } from './focus.mjs'
 import { SELECTION_SCHEMA } from './selection.mjs'
 
 // Where a selector is kept: Atelier's own private state of the workspace,
@@ -38,7 +38,7 @@ export function validateSelectionState(document, workspaceId) {
   assertObsidianContract('scope', { schema: 'atelier-obsidian-scope/v1', scopeId: document.scopeId, mode: document.mode, selector: document.selector, ...(document.expansion === null ? {} : { expansion: document.expansion }) })
   if (document.focus !== null) {
     closedObject(document.focus, { required: ['version', 'query', 'queryDigest', 'paths', 'bookmark'] }, code, 'the persisted focus')
-    if (document.focus.version !== FOCUS_QUERY_VERSION || typeof document.focus.query !== 'string' || document.focus.query === '' || !DIGEST.test(String(document.focus.queryDigest))) refuse(code, 'the persisted focus is malformed')
+    if (!FOCUS_QUERY_VERSIONS_READ.includes(document.focus.version) || typeof document.focus.query !== 'string' || document.focus.query === '' || !DIGEST.test(String(document.focus.queryDigest))) refuse(code, 'the persisted focus is malformed')
     if (!Array.isArray(document.focus.paths) || document.focus.paths.length === 0 || document.focus.paths.some((item) => typeof item !== 'string')) refuse(code, 'the persisted focus names no path')
     closedObject(document.focus.bookmark, { required: ['type', 'title', 'options'] }, code, 'the persisted bookmark payload')
     if (document.focus.bookmark.type !== FOCUS_BOOKMARK_TYPE) refuse(code, 'the persisted bookmark payload is not a graph bookmark')

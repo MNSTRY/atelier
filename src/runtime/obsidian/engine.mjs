@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
-import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
+import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
 import { PublicationRefusal } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
@@ -13,7 +13,7 @@ import {
   readMachineSettings, resolveDataRoot, workspaceStateRoot, writeMachineSettings,
 } from './machine-settings.mjs'
 import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
-import { dispatchAutomaticApply, heldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
+import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
@@ -362,10 +362,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     const pending = stateStore.readPendingEdits()
     let edits = pending.edits
     const basesOf = new Map()
+    const earlierLayout = new Set()
     for (const { scope, store } of scopes) {
       const { manifest, bases } = trustedNoteBases(store)
       basesOf.set(scope.scopeId, bases)
       if (!manifest) continue
+      if (manifestLayoutVersion(manifest) === 1) earlierLayout.add(scope.scopeId)
       const vault = reconcile({ index, files: listVaultNotes({ scopeId: scope.scopeId, vaultRoot: store.vaultRoot, manifest }), prefix: vaultKey(scope.scopeId, ''), full, hinted, lstat })
       const digestOf = (notePath) => index.get(vaultKey(scope.scopeId, notePath))?.digest ?? null
       const observed = observeVaultEdits({ store, workspaceId, scopeId: scope.scopeId, manifest, bases, digestOf, edits, now, preserve: rules.preserve })
@@ -459,12 +461,16 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     }
     const attempt = new Map()
     const invalidate = (scopeId, changeClass) => attempt.set(scopeId, new Set([...(attempt.get(scopeId) ?? []), ...(changeClass ? [changeClass] : [])]))
+    // The notes that keep a view in the vault layout they were published in (see layoutHeldPaths).
+    const layoutHeldOf = (scopeId) => layoutHeldPaths(edits, scopeId, now)
     for (const { scope } of scopes) {
       const entry = entries.get(scope.scopeId)
       // A view that did not settle is tried again, not on every tick: see the head of this file.
       const retried = RETRIED_STATES.has(entry.state)
         && (full || rules.isRetryDue({ nowMs, unsettled: unsettled.get(scope.scopeId), appState: appNow, retryMs: publicationRetryMs, maxMs: fullReconciliationIntervalMs }))
       if (firstTick || unseen.has(scope.scopeId) || requested.has(scope.scopeId) || retried) invalidate(scope.scopeId, null)
+      // A settled view still in the earlier vault layout is laid out again at the first tick where no note holds it.
+      if (earlierLayout.has(scope.scopeId) && entry.state === 'current' && layoutHeldOf(scope.scopeId).length === 0) invalidate(scope.scopeId, null)
     }
     for (const change of changes) for (const { scope } of scopes) if (change.scopeId === undefined || change.scopeId === scope.scopeId) invalidate(scope.scopeId, change.changeClass)
 
@@ -500,16 +506,23 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       for (const { scope, store } of built ? scopes.filter((item) => attempt.has(item.scope.scopeId)) : []) {
         const { scopeId } = scope
         const entry = entries.get(scopeId)
-        const settle = (state, reason, extra = {}) => entries.set(scopeId, { ...entry, ...extra, state, reason, verified: extra.verified === true, checkedAt: now })
+        // What this attempt found worth naming: notes and rules (see "Notes that were laid out anyway" in docs/obsidian-contract.md).
+        let diagnostics = []
+        const settle = (state, reason, extra = {}) => {
+          const { diagnostics: _earlier, ...rest } = { ...entry, ...extra, state, reason, verified: extra.verified === true, checkedAt: now }
+          entries.set(scopeId, diagnostics.length > 0 ? { ...rest, diagnostics } : rest)
+        }
         try {
+          const held = heldPaths(edits, scopeId)
           const prepared = seams.prepareView({
             snapshot: built.snapshot, profile: built.profile, scope, persistentPathRegistry: stateStore.readPathRegistry(), priorManifest: store.readCurrentManifest(),
             existingSettings: null, clock, vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), cache: preparationCacheFor(scopeId),
+            heldNotePaths: held, layoutHeldNotePaths: layoutHeldOf(scopeId), viewScopeIds: scopes.map((item) => item.scope.scopeId),
           })
           stateStore.writePathRegistry(prepared.persistentPathRegistry)
+          diagnostics = (prepared.manifest.ext?.[OBSIDIAN_EXT_KEY]?.diagnostics ?? []).slice(0, 100)
           const preparedGenerationId = prepared.manifest.generationId
           const trusted = () => store.readCurrent()
-          const held = heldPaths(edits, scopeId)
           const observed = new Map(held.map((notePath) => [notePath, rules.heldNoteDigest({ file: path.join(store.vaultRoot, notePath), indexed: index.get(vaultKey(scopeId, notePath))?.digest ?? null })]))
           const conflicts = rules.publicationConflicts({ prepared, held, bases: basesOf.get(scopeId) ?? new Map(), observed })
           if (conflicts.length > 0) {
@@ -552,6 +565,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           }
         } catch (error) {
           if (!isTypedRefusal(error)) { settle('stale', 'publisher-error'); persist(); throw error }
+          // A redaction refusal names the note and the rule it concerns, never the value.
+          const where = error.code === 'redaction-failure' ? error.detail ?? {} : {}
+          diagnostics = typeof where.rule === 'string' ? [{ code: error.code, rule: where.rule, ...(typeof where.notePath === 'string' ? { notePath: where.notePath } : {}), ...(typeof where.filePath === 'string' ? { filePath: where.filePath } : {}) }] : []
           settle('stale', error.code)
           if (REREAD_CODES.has(error.code)) forceFull = true
         }

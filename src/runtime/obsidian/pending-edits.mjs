@@ -91,6 +91,16 @@ export function heldPaths(edits, scopeId) {
   return [...new Set(edits.filter((edit) => edit.scopeId === scopeId && isOpenEdit(edit)).map((edit) => edit.path))].sort(compareText)
 }
 
+// The notes a view must keep in the vault layout they were published in: those
+// held for an open edit, and those whose edit closed on this tick (automatic
+// mode applies and closes an edit on the tick it observes it). The view is
+// prepared in that layout once more, so the file the person edited becomes the
+// published note, and a later tick lays the view out again and retires it.
+export function layoutHeldPaths(edits, scopeId, now) {
+  const closedNow = edits.filter((edit) => edit.scopeId === scopeId && edit.closedAt !== null && edit.closedAt === now)
+  return [...new Set([...heldPaths(edits, scopeId), ...closedNow.map((edit) => edit.path)])].sort(compareText)
+}
+
 // Automatic dispatch. `authorize()` reads the machine settings and the policy
 // from disk. It is called before the batch and again immediately before each
 // edit, so a revocation, a pause or a switch back to manual stops the very

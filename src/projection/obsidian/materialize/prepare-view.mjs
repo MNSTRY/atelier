@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto'
 import { unclosedFenceAtEnd } from '../../../graph/knowledge-graph.mjs'
-import { DERIVED_RELATION_TYPE, RELATION_TYPES, SCOPE_PRIMITIVES, assertObsidianContract, identitySuffix, readableTitle, selectScope } from '../contracts.mjs'
+import {
+  DERIVED_RELATION_TYPE, IDENTITY_KEYS, RELATION_TYPES, SCOPE_PRIMITIVES, assertObsidianContract, identityLineTexts, identitySuffix, manifestLayoutVersion, readableTitle,
+  selectScope,
+} from '../contracts.mjs'
 import { assertStrictUtf8, readMarkdownLens, refuse, sha256Digest } from './byte-lens.mjs'
-import { allocateWorkspacePaths, collisionKey, emptyPathRegistry, titleWithinBudget } from './path-registry.mjs'
+import { allocateLegacyPaths, allocateViewPaths, collisionKey, titleWithinBudget, viewsOfRegistry, withViewSection } from './path-registry.mjs'
+import { REDACTION_RULES, assertOnlyVaultIdentities, assertViewRedaction, createDenyMatcher } from './redaction.mjs'
 import { isUserOwnedSettingsPath, prepareSettings } from './settings.mjs'
 
 // prepareView: a pure preparation of one Obsidian view. It reads sources
@@ -13,25 +17,38 @@ import { isUserOwnedSettingsPath, prepareSettings } from './settings.mjs'
 // An embedded asset is copied only when the canonical graph resolved it; the
 // emitter never infers one from authored bytes.
 //
+// A view is laid out in vault layout 2: folders mirror the repository, the
+// file name is the note's title and each note names its identity in generated
+// front-matter properties (see "Vault layout" in docs/obsidian-contract.md).
+// Layout 1, the earlier release's, is kept for a view whose prior generation
+// is in layout 1 and holds a note with an open edit, and for recovering a
+// layout 1 generation as it was published.
+//
 // Redaction happens where bytes are made. Every title, path and identity that
 // reaches an output is looked up through `vault`, the set selectScope returned
-// for this view, so a node outside it cannot be serialized by any branch.
+// for this view, so a node outside it cannot be serialized by any branch; the
+// redaction guard checks the whole result before anything is returned.
 //
 // Preparation is incremental when the caller passes a preparation cache (see
 // createPreparationCache). Every note's bytes and manifest entry are a pure
-// function of a small set of inputs: the pinned source digest, the node
-// record, the allocated path, the generated rows, the outside-selection count
-// and the rewritten occurrences with their emitted targets. Those inputs are
-// serialized into a dependency key per note; a note whose key matches the
+// function of a small set of inputs: the layout, the pinned source digest, the
+// node record, the allocated paths, the generated rows, the outside-selection
+// count and the rewritten occurrences with their emitted targets. Those inputs
+// are serialized into a dependency key per note; a note whose key matches the
 // cached one reuses the cached bytes and manifest entry instead of being
 // emitted again, so the result is byte-identical to a full preparation by
 // construction. The cache holds derived state only and can be dropped at any
 // time; the redaction guard still runs over the whole result.
 
-export const EMITTER_VERSION = '1.0.0'
+export const EMITTER_VERSION = '2.0.0'
+export const VAULT_LAYOUTS = Object.freeze({
+  1: Object.freeze({ version: 1, emitterVersion: '1.0.0', manifestSchema: 'atelier-obsidian-generation-manifest/v1', contractVersion: '1.0.0' }),
+  2: Object.freeze({ version: 2, emitterVersion: EMITTER_VERSION, manifestSchema: 'atelier-obsidian-generation-manifest/v2', contractVersion: '2.0.0' }),
+})
+export const CURRENT_VAULT_LAYOUT = 2
 const EXT_KEY = 'mnstry.atelier.obsidian'
 const EMBEDDABLE = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'])
-// Bytes left for an asset's readable stem beside the longest suffix and extension.
+// Bytes left for an asset's readable stem beside the longest suffix and extension (layout 1).
 const ASSET_STEM_BYTE_BUDGET = 255 - '--'.length - 64 - '.'.length - 16
 const RELATIONS_HEADING = '## Relations (generated)\n\n%% Generated from the canonical graph. Edits to this section are not applied to any source. %%\n\n'
 
@@ -55,7 +72,22 @@ function encodeHref(fileName) {
   return encodeURIComponent(fileName).replace(/[()']/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
 }
 
-const noteBasename = (notePathValue) => notePathValue.slice('notes/'.length, -'.md'.length)
+// A vault path as a Markdown link target: every segment percent-encoded.
+const encodeVaultPath = (vaultPath) => vaultPath.split('/').map(encodeHref).join('/')
+
+const legacyBasename = (notePathValue) => notePathValue.slice('notes/'.length, -'.md'.length)
+
+// How a link names a note: layout 1 by its unique basename, layout 2 by its
+// full vault path, which the app looks up as an exact path before any other
+// match. A wikilink keeps `.md` so a note named after a file never resolves
+// to the file.
+function noteLinkTarget(layout, notePathValue) {
+  if (layout.version === 1) {
+    const stem = legacyBasename(notePathValue)
+    return { markdown: encodeHref(`${stem}.md`), wikilink: stem }
+  }
+  return { markdown: encodeVaultPath(notePathValue), wikilink: notePathValue }
+}
 
 function edgeIdentifier(edge) {
   return `e-${createHash('sha256').update(`${edge.source}\u0000${edge.type}\u0000${edge.target}`).digest('hex').slice(0, 32)}`
@@ -114,15 +146,19 @@ function isPreparationCache(cache) {
 
 // Everything the emitted bytes and the manifest entry of one note depend on,
 // in a canonical serialization. A cached note is reused only under an equal
-// key. The emitter version is part of the key so an entry states which emitter
-// produced it, should a cache ever outlive this module.
-function dependencyKey({ node, notePathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) {
+// key. The layout and emitter version are part of the key so an entry states
+// which emitter produced it, should a cache ever outlive this module. The
+// identity block and where it goes are functions of the node record and the
+// source bytes, which the key holds through the pinned digest.
+function dependencyKey({ layout, node, notePathValue, attachmentPathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) {
   // A wrapper note serializes the record's summary and tags; a Markdown note never does.
   const wrapper = node.extension === 'md' ? null : JSON.stringify([String(node.summary ?? ''), Array.isArray(node.tags) ? node.tags : null])
   const parts = [
-    EMITTER_VERSION, notePathValue, node.repo, node.id, node.path, String(node.extension), String(node.title ?? ''), String(wrapper),
+    layout.emitterVersion, notePathValue, node.repo, node.id, node.path, String(node.extension), String(node.title ?? ''), String(wrapper),
     pinned.rawDigest, String(pinned.byteLength), String(outsideCount), rows.join(''),
   ]
+  // Layout 1 keys are exactly the earlier release's; layout 2 adds its own inputs after them.
+  if (layout.version !== 1) parts.push(`layout-${layout.version}`, String(attachmentPathValue ?? ''))
   for (const occurrence of occurrences) {
     const target = emittedTarget(occurrence)
     parts.push(JSON.stringify([
@@ -212,6 +248,81 @@ function applyEdits({ source, from, to, edits, noteOffset }) {
 }
 
 // ---------------------------------------------------------------------------
+// The identity block (layout 2)
+// ---------------------------------------------------------------------------
+
+const identityText = (node, eol) => identityLineTexts(node).map((line) => `${line}${eol}`).join('')
+
+// The key of one line of a block mapping at column 0, or null when the line
+// is not one: a quoted or plain key followed by `:` and a space, a tab or the
+// end of the line.
+function blockMappingKey(line) {
+  let key
+  let rest
+  if (line.startsWith('"')) {
+    const match = /^"((?:[^"\\]|\\.)*)"/.exec(line)
+    if (!match) return null
+    try { key = JSON.parse(`"${match[1]}"`) } catch { return null }
+    rest = line.slice(match[0].length)
+  } else if (line.startsWith("'")) {
+    const match = /^'((?:[^']|'')*)'/.exec(line)
+    if (!match) return null
+    key = match[1].replaceAll("''", "'")
+    rest = line.slice(match[0].length)
+  } else {
+    if (/^[-?:,[\]{}#&*!|>%@`]/.test(line)) return null
+    const colon = /:(?:[ \t]|$)/.exec(line)
+    if (!colon) return null
+    key = line.slice(0, colon.index).trimEnd()
+    rest = line.slice(colon.index)
+    if (key === '' || /[ \t]#/.test(key)) return null
+  }
+  return /^[ \t]*:(?:[ \t]|$)/.test(rest) ? key : null
+}
+
+// Whether identity lines can be appended to this front matter without changing
+// what it means: a block mapping at column 0 (blank and comment lines aside,
+// every line at column 0 is `key:`, everything else is indented under one) that
+// does not already use one of the identity keys. Answers 'fits', 'author-keys'
+// (the author wrote one of the three keys, which would then show in Properties
+// instead of the generated one) or 'shape' (a flow or sequence root, an
+// indented root, a directive or document marker, or a line that is no key).
+function identityLinesFit(yaml) {
+  let first = true
+  let authorKeys = false
+  for (const raw of yaml.split('\n')) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+    if (line.trim() === '' || /^[ \t]*#/.test(line)) continue
+    if (/^[ \t]/.test(line)) {
+      if (first || line.startsWith('\t')) return 'shape'
+      continue
+    }
+    first = false
+    const key = blockMappingKey(line)
+    if (key === null) return 'shape'
+    if (IDENTITY_KEYS.includes(key)) authorKeys = true
+  }
+  return authorKeys ? 'author-keys' : 'fits'
+}
+
+// Where the identity lines of a Markdown note go, decided from the source
+// bytes alone: appended to its front matter, in a generated front matter of
+// their own, or, for a front matter that cannot take them, at the end.
+function identityPlacement(source, lens) {
+  if (lens.frontmatter === null) {
+    const firstBreak = source.indexOf(0x0a, lens.body.start)
+    const eol = firstBreak > lens.body.start && source[firstBreak - 1] === 0x0d ? '\r\n' : '\n'
+    return { kind: 'generated-frontmatter', eol }
+  }
+  const { start, end } = lens.frontmatter
+  const openingEnd = source.indexOf(0x0a, start) + 1
+  const closingStart = source.lastIndexOf(0x0a, end - 2) + 1
+  const fit = identityLinesFit(source.subarray(openingEnd, closingStart).toString('utf8'))
+  if (fit !== 'fits') return { kind: 'tail', authorKeys: fit === 'author-keys' }
+  return { kind: 'frontmatter-lines', at: closingStart, eol: source[closingStart - 2] === 0x0d ? '\r\n' : '\n' }
+}
+
+// ---------------------------------------------------------------------------
 // Generated sections
 // ---------------------------------------------------------------------------
 
@@ -231,14 +342,14 @@ function titleRenderings() {
   }
 }
 
-function relationRows({ node, outgoing, incoming, vaultNode, pathOf, titles }) {
+function relationRows({ layout, node, outgoing, incoming, vaultNode, pathOf, titles }) {
   const rows = []
   for (const type of RELATION_TYPES) {
     for (const edge of outgoing) {
       if (edge.type !== type) continue
       const target = vaultNode(edge.target)
       if (!target) continue
-      rows.push(`- ${type} → [[${noteBasename(pathOf(target))}|${titles.readableOf(target)}]]\n`)
+      rows.push(`- ${type} → [[${noteLinkTarget(layout, pathOf(target)).wikilink}|${titles.readableOf(target)}]]\n`)
     }
     // An incoming row is plain text: a link here would give this note an
     // outgoing native link that the canonical graph does not hold.
@@ -269,7 +380,9 @@ function fenceClosureFor(source, finalNewline) {
   return { fence: line, text: `${finalNewline === 'none' ? eol : ''}${line}${eol}` }
 }
 
-function generatedSections({ precedingBytes, offset, rows, outsideCount, closure = null }) {
+// `identity`, when given, is the text of identity lines that go at the very
+// end of the note, in a comment block, as the last generated region.
+function generatedSections({ precedingBytes, offset, rows, outsideCount, closure = null, identity = null }) {
   const regions = []
   const parts = []
   let cursor = offset
@@ -290,14 +403,25 @@ function generatedSections({ precedingBytes, offset, rows, outsideCount, closure
     const lead = rows.length > 0 ? '\n' : `${separatorAfter(precedingBytes)}${RELATIONS_HEADING}`
     push('outside-selection', `${lead}Relationships leading outside this view: ${outsideCount}\n`)
   }
+  if (identity !== null) push('identity', `${regions.length > 0 ? '\n' : separatorAfter(precedingBytes)}%%\n${identity}%%\n`)
   return { bytes: Buffer.concat(parts), regions }
 }
 
+// The wrapper's own lines. `format` and `source` are what the redaction guard
+// recognises as the node's own extension and path.
+function wrapperLines(node) {
+  return {
+    format: `- Format: ${plainText(node.extension)}`,
+    source: `- Source: ${plainText(node.repo)} · ${node.path.split('/').map(plainText).join(' / ')}`,
+  }
+}
+
 function wrapperRepresentation({ node, attachmentPath }) {
+  const own = wrapperLines(node)
   const lines = [`# ${plainText(node.title)}\n`]
   if (node.summary) lines.push(`\n${plainText(node.summary)}\n`)
-  lines.push(`\n- Format: ${plainText(node.extension)}\n`)
-  lines.push(`- Source: ${plainText(node.repo)} · ${node.path.split('/').map(plainText).join(' / ')}\n`)
+  lines.push(`\n${own.format}\n`)
+  lines.push(`${own.source}\n`)
   if (Array.isArray(node.tags) && node.tags.length > 0) lines.push(`- Tags: ${node.tags.map(plainText).join(', ')}\n`)
   lines.push(`- Original: [[${attachmentPath}|Open the original file]]\n`)
   if (EMBEDDABLE.has(String(node.extension).toLowerCase())) lines.push(`\n![[${attachmentPath}]]\n`)
@@ -320,7 +444,7 @@ function assertContained(relativePath) {
 // inversions it contributes per rewritten edge, and whether it closed a fence.
 // Nothing outside the arguments is read, which is what lets the result be
 // cached under the dependency key.
-function emitNote({ node, notePathValue, source: { bytes: source, rawDigest }, rows, outsideCount, occurrences, emittedTarget, key }) {
+function emitNote({ layout, node, notePathValue, attachmentPathValue, source: { bytes: source, rawDigest }, rows, outsideCount, occurrences, emittedTarget, key }) {
   const sourceRecord = { path: node.path, rawDigest, byteLength: source.length }
   const assetInversions = new Map()
   const edgeInversions = new Map()
@@ -329,11 +453,31 @@ function emitNote({ node, notePathValue, source: { bytes: source, rawDigest }, r
   let authored
   let regions
   let closure = null
+  let identityAtEnd = null
+  let placementOf = null
 
   if (node.extension === 'md') {
     const lens = readMarkdownLens(source, { repoId: node.repo, nodeId: node.id })
     const edits = linkEdits({ source, lens, occurrences, emittedTarget })
-    const prefix = source.subarray(0, lens.body.start)
+    const placement = layout.version === 1 ? null : identityPlacement(source, lens)
+    placementOf = placement
+    let prefix = source.subarray(0, lens.body.start)
+    let frontmatter = lens.frontmatter
+    let identity = null
+    if (placement?.kind === 'frontmatter-lines') {
+      const block = utf8(identityText(node, placement.eol))
+      prefix = Buffer.concat([source.subarray(0, placement.at), block, source.subarray(placement.at, lens.body.start)])
+      identity = { start: placement.at, end: placement.at + block.length }
+      frontmatter = { start: lens.frontmatter.start, end: lens.frontmatter.end + block.length }
+    } else if (placement?.kind === 'generated-frontmatter') {
+      // After a byte order prefix, which the app strips before it reads front matter.
+      const block = utf8(`---${placement.eol}${identityText(node, placement.eol)}---${placement.eol}`)
+      prefix = Buffer.concat([source.subarray(0, lens.body.start), block])
+      identity = { start: lens.body.start, end: lens.body.start + block.length }
+      frontmatter = identity
+    } else if (placement?.kind === 'tail') {
+      identityAtEnd = identityText(node, '\n')
+    }
     const body = applyEdits({ source, from: lens.body.start, to: lens.body.end, edits, noteOffset: prefix.length })
     authored = Buffer.concat([prefix, body.bytes])
     for (const { edgeKey, assetKey, ...inversion } of body.inversions) {
@@ -346,27 +490,34 @@ function emitNote({ node, notePathValue, source: { bytes: source, rawDigest }, r
       edgeInversions.get(edgeKey).push(inversion)
     }
     regions = {
-      ...(lens.frontmatter ? { frontmatter: lens.frontmatter } : {}),
-      body: { start: lens.body.start, end: authored.length },
+      ...(frontmatter ? { frontmatter } : {}),
+      ...(identity ? { identity } : {}),
+      body: { start: prefix.length, end: authored.length },
     }
     closure = fenceClosureFor(source, lens.finalNewline)
     Object.assign(sourceRecord, { kind: 'markdown', finalNewline: lens.finalNewline, ...(lens.bom ? { bom: lens.bom } : {}) })
   } else {
     const extension = /^[a-z0-9]{1,16}$/.test(String(node.extension).toLowerCase()) ? String(node.extension).toLowerCase() : 'bin'
-    const attachmentPath = `attachments/${noteBasename(notePathValue)}.${extension}`
+    const attachmentPath = layout.version === 1 ? `attachments/${legacyBasename(notePathValue)}.${extension}` : attachmentPathValue
     assertContained(attachmentPath)
     attachment = { path: attachmentPath, digest: rawDigest, byteLength: source.length }
     files.push({ path: attachmentPath, kind: 'attachment', bytes: source, digest: rawDigest })
-    authored = wrapperRepresentation({ node, attachmentPath })
-    regions = { body: { start: authored.length, end: authored.length }, representation: { start: 0, end: authored.length } }
+    const identityBlock = layout.version === 1 ? Buffer.alloc(0) : utf8(`---\n${identityText(node, '\n')}---\n`)
+    authored = Buffer.concat([identityBlock, wrapperRepresentation({ node, attachmentPath })])
+    regions = {
+      ...(identityBlock.length > 0 ? { frontmatter: { start: 0, end: identityBlock.length }, identity: { start: 0, end: identityBlock.length } } : {}),
+      body: { start: authored.length, end: authored.length },
+      representation: { start: identityBlock.length, end: authored.length },
+    }
     Object.assign(sourceRecord, { kind: 'wrapper', attachment: attachmentPath })
   }
 
-  const generated = generatedSections({ precedingBytes: authored, offset: authored.length, rows, outsideCount, closure })
+  const generated = generatedSections({ precedingBytes: authored, offset: authored.length, rows, outsideCount, closure, identity: identityAtEnd })
   const bytes = Buffer.concat([authored, generated.bytes])
   assertStrictUtf8(bytes)
   assertContained(notePathValue)
   const { representation, ...authoredRegions } = regions
+  if (identityAtEnd !== null) authoredRegions.identity = { ...generated.regions.at(-1).range }
   files.push({ path: notePathValue, kind: 'note', bytes, digest: sha256Digest(bytes) })
   const note = {
     repoId: node.repo,
@@ -382,12 +533,17 @@ function emitNote({ node, notePathValue, source: { bytes: source, rawDigest }, r
       [EXT_KEY]: {
         source: sourceRecord,
         ...(assetInversions.size > 0
-          ? { assetEmbeds: [...assetInversions].map(([attachment, inversions]) => ({ attachment, inversions })).sort((left, right) => compare(left.attachment, right.attachment)) }
+          ? { assetEmbeds: [...assetInversions].map(([attachmentKey, inversions]) => ({ attachment: attachmentKey, inversions })).sort((left, right) => compare(left.attachment, right.attachment)) }
           : {}),
       },
     },
   }
-  return { key, files, attachment, note, edgeInversions: [...edgeInversions], fenceClosed: Boolean(closure && generated.regions.length > 0) }
+  // Only the closure that precedes a generated section is emitted; one before the end-of-note identity block counts.
+  return {
+    key, files, attachment, note, edgeInversions: [...edgeInversions], fenceClosed: Boolean(closure && generated.regions.length > 0),
+    // The author wrote an identity key of their own: it, not the generated block, is what Properties shows.
+    authorIdentityKeys: placementOf?.authorKeys === true,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,10 +569,11 @@ function visibleAssets(graph, profile) {
   return visible
 }
 
-// attachments/<readable stem>--<identity suffix>.<ext>, from the repository and
-// asset identity alone. The suffix lengthens only when two assets of this view
-// would share a name on a case- or normalization-insensitive filesystem.
-function allocateAssetPaths(assets) {
+// Layout 1: attachments/<readable stem>--<identity suffix>.<ext>, from the
+// repository and asset identity alone. The suffix lengthens only when two
+// assets of this view would share a name on a case- or normalization-
+// insensitive filesystem.
+function allocateLegacyAssetPaths(assets) {
   const taken = new Set()
   const allocated = new Map()
   for (const asset of [...assets].sort((left, right) => compare(left.repo, right.repo) || compare(left.id, right.id))) {
@@ -450,18 +607,53 @@ function canonicalSnapshotOf(graph) {
   return { nodes: graph.nodes, edges, externalEdgeCount: graph.edges.length - edges.length }
 }
 
-// A path the prior generation published stays allocated even when the caller
-// lost the registry: the prior manifest seeds any identity the registry lacks.
-function seededRegistry({ registry, priorManifest, workspaceId }) {
-  if (!priorManifest) return registry
-  const base = registry ?? emptyPathRegistry(workspaceId)
-  if (!Array.isArray(base.entries)) return base
-  const known = new Set(base.entries.map((entry) => `${entry?.repoId}\u0000${entry?.nodeId}`))
-  const recovered = priorManifest.notes.filter((note) => !known.has(`${note.repoId}\u0000${note.nodeId}`)).map(({ repoId, nodeId, path }) => ({ repoId, nodeId, path }))
-  return { ...base, entries: [...base.entries, ...recovered] }
+// What a layout 2 prior generation published, which the view's allocation
+// keeps (see allocateViewPaths). A layout 1 prior generation offers nothing:
+// its paths are the earlier layout's.
+function publishedOf(priorManifest) {
+  if (!priorManifest || manifestLayoutVersion(priorManifest) !== CURRENT_VAULT_LAYOUT) return null
+  return {
+    notes: priorManifest.notes.map(({ repoId, nodeId, path: notePathValue, ext }) => {
+      const attachment = ext?.[EXT_KEY]?.source?.attachment
+      return { repoId, nodeId, path: notePathValue, ...(typeof attachment === 'string' ? { attachment } : {}) }
+    }),
+    assets: priorManifest.attachments
+      .filter((item) => item.ext?.[EXT_KEY]?.kind === 'embedded-asset')
+      .map((item) => ({ repoId: item.ext[EXT_KEY].repoId, assetPath: item.ext[EXT_KEY].assetPath, path: item.path })),
+  }
 }
 
-export function prepareView({ snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, plugin = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null } = {}) {
+// `layoutHeld` are the notes that hold a layout 1 view in layout 1: those of
+// open edits and of edits closed on this tick (see layoutHeldPaths in
+// src/runtime/obsidian/pending-edits.mjs).
+function layoutOf({ layout, priorManifest, layoutHeld }) {
+  if (layout !== undefined && layout !== null) {
+    if (!Object.hasOwn(VAULT_LAYOUTS, layout)) refuse('invalid-layout', 'the vault layout must be 1 or 2')
+    return VAULT_LAYOUTS[layout]
+  }
+  // A layout 1 view that holds a note stays in layout 1 until no note of it is held.
+  const held = new Set(layoutHeld)
+  if (priorManifest && manifestLayoutVersion(priorManifest) === 1 && priorManifest.notes.some((note) => held.has(note.path))) return VAULT_LAYOUTS[1]
+  return VAULT_LAYOUTS[CURRENT_VAULT_LAYOUT]
+}
+
+export function prepareView(options = {}) {
+  return prepareWithRules(REDACTION_RULES, options)
+}
+
+// Test seam only: the mutation controls of the redaction guard substitute a
+// rule through this. Runtime code uses prepareView.
+export function createViewPreparationForOracleTests(rules = REDACTION_RULES) {
+  const guard = { ...REDACTION_RULES, ...rules }
+  return (options = {}) => prepareWithRules(guard, options)
+}
+
+// `heldNotePaths` are the vault files held for an open edit: they stay in the
+// vault, so their names stay taken. `layoutHeldNotePaths`, when given, are the
+// notes that hold a layout 1 view in layout 1 (open edits and edits closed on
+// this tick); without it, `heldNotePaths` do. `viewScopeIds`, when given, are
+// the views still maintained: the registry drops the sections of any other.
+function prepareWithRules(guard, { snapshot, profile, scope, persistentPathRegistry = null, priorManifest = null, existingSettings = null, plugin = null, clock, generationId, vaultRootBytes, maxFullPathBytes, cache = null, heldNotePaths = null, layoutHeldNotePaths = null, viewScopeIds = null, layout: requestedLayout } = {}) {
   if (cache !== null && !isPreparationCache(cache)) refuse('invalid-preparation-cache', 'the preparation cache must come from createPreparationCache')
   assertObsidianContract('corpus-profile', profile)
   assertObsidianContract('scope', scope)
@@ -472,6 +664,11 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     assertObsidianContract('generation-manifest', priorManifest)
     if (priorManifest.scopeId !== scope.scopeId) refuse('prior-manifest-mismatch', 'the prior manifest belongs to another scope')
   }
+  for (const [name, value] of [['heldNotePaths', heldNotePaths], ['layoutHeldNotePaths', layoutHeldNotePaths]]) {
+    if (value !== null && !Array.isArray(value)) refuse('invalid-held-notes', `${name} must be an array of note paths`)
+  }
+  if (viewScopeIds !== null && !(Array.isArray(viewScopeIds) && viewScopeIds.every((id) => typeof id === 'string'))) refuse('invalid-view-scopes', 'viewScopeIds must be an array of scope identities')
+  const layout = layoutOf({ layout: requestedLayout, priorManifest, layoutHeld: layoutHeldNotePaths ?? heldNotePaths ?? [] })
   const checkedAt = timestampFrom(clock)
   const canonical = canonicalSnapshotOf(snapshot.graph)
 
@@ -481,19 +678,13 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   const nodeById = new Map(canonical.nodes.map((node) => [node.id, node]))
   const vault = new Set(selection.vaultNodes)
   const vaultNode = (id) => (vault.has(id) ? nodeById.get(id) : null)
-
-  const { registry, pathOf: allocatedPath } = allocateWorkspacePaths({
-    registry: seededRegistry({ registry: persistentPathRegistry, priorManifest, workspaceId: profile.workspaceId }),
-    workspaceId: profile.workspaceId,
-    nodes: universe.nodes.map((id) => nodeById.get(id)),
-    ...(vaultRootBytes === undefined ? {} : { vaultRootBytes }),
-    ...(maxFullPathBytes === undefined ? {} : { maxFullPathBytes }),
-  })
-  const pathOf = (node) => allocatedPath(node.repo, node.id)
-  for (const note of priorManifest?.notes ?? []) {
-    const current = allocatedPath(note.repoId, note.nodeId)
-    if (current !== null && current !== note.path) refuse('path-registry-divergence', 'the path registry and the prior manifest disagree about an allocated path')
-  }
+  const universeNodes = universe.nodes.map((id) => nodeById.get(id))
+  const assets = visibleAssets(snapshot.graph, profile)
+  const censusAssets = Array.isArray(snapshot.graph.assets) ? snapshot.graph.assets : []
+  const usable = (item) => item && typeof item.repo === 'string' && item.repo !== '' && typeof item.id === 'string' && item.id !== ''
+  const limits = { ...(vaultRootBytes === undefined ? {} : { vaultRootBytes }), ...(maxFullPathBytes === undefined ? {} : { maxFullPathBytes }) }
+  // Every view's allocation of the registry, this one's included; a registry of another shape or workspace refuses.
+  const views = viewsOfRegistry(persistentPathRegistry, profile.workspaceId)
 
   const edgeById = new Map(canonical.edges.map((edge) => [edge.id, edge]))
   const vaultEdges = selection.vaultEdges.map((id) => edgeById.get(id)).filter((edge) => vault.has(edge.source) && vault.has(edge.target))
@@ -509,7 +700,6 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   // Asset embeds: canonical occurrences whose source is a note of this view and
   // whose asset this view may copy. Anything else is left exactly as authored
   // and appears in no output.
-  const assets = visibleAssets(snapshot.graph, profile)
   const embeddedAssets = new Map()
   for (const embed of Array.isArray(snapshot.graph.embeds) ? snapshot.graph.embeds : []) {
     const asset = assets.get(embed?.asset?.id)
@@ -518,14 +708,43 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     if (!occurrencesBySource.has(embed.source)) occurrencesBySource.set(embed.source, [])
     occurrencesBySource.get(embed.source).push(embed)
   }
-  const assetPaths = allocateAssetPaths(embeddedAssets.values())
+
+  // Layout 2 paths are allocated for this view alone, seeded from what its
+  // prior generation published; a file held for an open edit keeps its name
+  // taken. A view prepared in layout 1 holds layout 1 files, none of which is a
+  // layout 2 path. The registry keeps the result as this view's section,
+  // whichever layout the view is prepared in.
+  const readable = allocateViewPaths({
+    published: publishedOf(priorManifest),
+    nodes: [...vault].map((id) => nodeById.get(id)),
+    assets: [...embeddedAssets.values()],
+    occupied: layout.version === 1 ? [] : heldNotePaths ?? [],
+    ...limits,
+  })
+  const legacy = layout.version === 1
+    ? allocateLegacyPaths({ nodes: universeNodes, priorManifest: priorManifest && manifestLayoutVersion(priorManifest) === 1 ? priorManifest : null, ...limits })
+    : null
+  const allocatedPath = legacy ? legacy.pathOf : readable.pathOf
+  const pathOf = (node) => allocatedPath(node.repo, node.id)
+  const attachmentOf = (node) => (legacy ? null : readable.attachmentOf(node.repo, node.id))
+  // Layout 1 paths are derived from identities; a disagreement there is state that cannot be trusted.
+  if (legacy && priorManifest && manifestLayoutVersion(priorManifest) === 1) {
+    for (const note of priorManifest.notes) {
+      const current = allocatedPath(note.repoId, note.nodeId)
+      if (current !== null && current !== note.path) refuse('path-registry-divergence', 'the path registry and the prior manifest disagree about an allocated path')
+    }
+  }
+  const assetPaths = legacy
+    ? allocateLegacyAssetPaths(embeddedAssets.values())
+    : new Map([...embeddedAssets.values()].map((asset) => [asset.id, readable.assetPathOf(asset.repo, asset.path)]))
+  for (const assetPath of assetPaths.values()) assertContained(assetPath)
   const emittedTarget = (occurrence) => {
     if (occurrence.type === 'embeds_asset') {
       const attachment = assetPaths.get(occurrence.asset.id)
-      return { key: { assetKey: attachment }, markdown: attachment.split('/').map(encodeHref).join('/'), wikilink: attachment, alias: false }
+      return { key: { assetKey: attachment }, markdown: encodeVaultPath(attachment), wikilink: attachment, alias: false }
     }
-    const stem = noteBasename(pathOf(vaultNode(occurrence.target)))
-    return { key: { edgeKey: occurrence.target }, markdown: encodeHref(`${stem}.md`), wikilink: stem, alias: true }
+    const target = noteLinkTarget(layout, pathOf(vaultNode(occurrence.target)))
+    return { key: { edgeKey: occurrence.target }, markdown: target.markdown, wikilink: target.wikilink, alias: true }
   }
 
   const read = sourceReader(snapshot)
@@ -554,26 +773,31 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   const reusable = isPreparationCache(cache) ? cache.notes : null
   const nextCache = reusable ? new Map() : null
   const preparation = { emitted: 0, reused: 0 }
+  const reusedPaths = new Set()
+  const authorKeyNotes = []
   const titles = titleRenderings()
 
   for (const node of orderedNodes) {
     const notePathValue = pathOf(node)
+    const attachmentPathValue = node.extension === 'md' ? null : attachmentOf(node)
     const pinned = read.pinned(node.repo, node.path)
     const outgoing = (outgoingBy.get(node.id) ?? []).slice().sort((left, right) => compare(left.target, right.target))
     const incoming = (incomingBy.get(node.id) ?? []).slice().sort((left, right) => compare(left.source, right.source))
-    const rows = relationRows({ node, outgoing, incoming, vaultNode, pathOf, titles })
+    const rows = relationRows({ layout, node, outgoing, incoming, vaultNode, pathOf, titles })
     const outsideCount = outsideCountBy.get(node.id) ?? 0
     const occurrences = occurrencesBySource.get(node.id) ?? []
-    const key = reusable ? dependencyKey({ node, notePathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) : null
+    const key = reusable ? dependencyKey({ layout, node, notePathValue, attachmentPathValue, pinned, rows, outsideCount, occurrences, emittedTarget }) : null
     const cached = reusable?.get(notePathValue)
     let entry
     if (cached && cached.key === key) {
       entry = cached
       preparation.reused += 1
+      reusedPaths.add(notePathValue)
     } else {
-      entry = emitNote({ node, notePathValue, source: read(node.repo, node.path), rows, outsideCount, occurrences, emittedTarget, key })
+      entry = emitNote({ layout, node, notePathValue, attachmentPathValue, source: read(node.repo, node.path), rows, outsideCount, occurrences, emittedTarget, key })
       preparation.emitted += 1
     }
+    if (entry.authorIdentityKeys) authorKeyNotes.push({ code: 'author-identity-properties', repoId: node.repo, nodeId: node.id, notePath: notePathValue })
     if (nextCache) nextCache.set(notePathValue, entry)
     // The result never aliases the cache: a caller may change what it was handed, bytes included.
     for (const file of entry.files) files.push({ ...file, bytes: Buffer.from(file.bytes) })
@@ -626,8 +850,9 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   const contentDigest = createHash('sha256')
   for (const file of files) contentDigest.update(`${file.path}\u0000${file.digest}\n`)
   const manifest = {
-    schema: 'atelier-obsidian-generation-manifest/v1',
-    contractVersion: '1.0.0',
+    schema: layout.manifestSchema,
+    contractVersion: layout.contractVersion,
+    ...(layout.version === 1 ? {} : { layoutVersion: layout.version }),
     generationId: generationId ?? `gen-${contentDigest.digest('hex').slice(0, 32)}`,
     scopeId: scope.scopeId,
     snapshotId: snapshot.document.snapshotId,
@@ -636,24 +861,98 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
     attachments,
     completeness: { status: 'complete', expectedNotes: orderedNodes.length, writtenNotes: notes.length },
     freshness: { status: 'current', checkedAt },
-    ext: { [EXT_KEY]: { emitterVersion: EMITTER_VERSION, mode: selection.mode, settings: settings.ownership } },
+    ext: { [EXT_KEY]: { emitterVersion: layout.emitterVersion, mode: selection.mode, settings: settings.ownership } },
   }
   assertObsidianContract('generation-manifest', manifest)
-  const vaultSuffixes = new Set([...orderedNodes, ...embeddedAssets.values()].map((item) => identitySuffix(item.repo, item.id, 64)))
-  assertOnlyVaultIdentities({
+  // What was laid out anyway and should be known, naming the note: a layout 2 generation records it.
+  const noteDiagnostics = legacy ? [] : [...readable.diagnostics, ...authorKeyNotes]
+
+  // The redaction guard, over the whole result. Its deny-list holds the
+  // identifiers of every census node and asset outside this view, and follows
+  // the audience. Of one the audience may not see (withheld), an unambiguous
+  // identifier refuses the view (an identity qualified by any repository of
+  // the census, a repository-qualified path, a repository-relative path with a
+  // folder, a vault path) and an ambiguous one is reported (a bare-word
+  // identity, a file name at a repository's root, such as README.md). Of one
+  // the audience may see but this view does not select, every identifier is
+  // reported. An identifier this view's own notes share names nothing outside
+  // it.
+  const viewAttachments = new Set(attachments.map((item) => item.path))
+  const visible = new Set(universe.nodes)
+  const censusRepositories = new Set([...canonical.nodes, ...censusAssets].filter(usable).map((item) => item.repo))
+  const qualified = (id) => id.indexOf(':') > 0 && censusRepositories.has(id.slice(0, id.indexOf(':')))
+  const refused = []
+  const reported = []
+  const unselected = []
+  const identifierOf = (item, withheld) => {
+    const id = String(item.id)
+    for (const [value, unambiguous] of [[id, qualified(id)], [`${item.repo}/${item.path}`, true], [item.path, item.path.includes('/')]]) {
+      ;(!withheld ? unselected : unambiguous ? refused : reported).push(value)
+    }
+  }
+  for (const item of canonical.nodes) {
+    if (!usable(item) || vault.has(item.id) || typeof item.path !== 'string') continue
+    const withheld = !visible.has(item.id)
+    identifierOf(item, withheld)
+    const allocated = legacy ? legacy.pathOf(item.repo, item.id) : null
+    if (allocated !== null) (withheld ? refused : unselected).push(allocated)
+  }
+  for (const item of censusAssets) if (usable(item) && typeof item.path === 'string' && !embeddedAssets.has(item.id)) identifierOf(item, !assets.has(item.id))
+  // Vault paths of notes and files outside this view, what other views hold for them and what this view held
+  // before: refused for what the audience may not see, reported otherwise (a note gone from the census included).
+  const inView = (repoId, nodeId) => vault.has(nodeId) && nodeById.get(nodeId)?.repo === repoId
+  const withheldNode = (repoId, nodeId) => nodeById.get(nodeId)?.repo === repoId && !visible.has(nodeId)
+  const copied = new Set([...embeddedAssets.values()].map((asset) => `${asset.repo}\u0000${asset.path}`))
+  const withheldAssets = new Set(censusAssets.filter((item) => usable(item) && typeof item.path === 'string' && !assets.has(item.id)).map((item) => `${item.repo}\u0000${item.path}`))
+  for (const section of Object.values(views)) {
+    for (const entry of section.entries) {
+      if (!inView(entry?.repoId, entry?.nodeId)) (withheldNode(entry?.repoId, entry?.nodeId) ? refused : unselected).push(entry?.path, ...(entry?.attachment ? [entry.attachment] : []))
+    }
+    for (const entry of section.assets) {
+      const key = `${entry?.repoId}\u0000${entry?.assetPath}`
+      if (!copied.has(key)) (withheldAssets.has(key) ? refused : unselected).push(entry?.path)
+    }
+  }
+  for (const note of priorManifest?.notes ?? []) if (!inView(note.repoId, note.nodeId)) (withheldNode(note.repoId, note.nodeId) ? refused : unselected).push(note.path)
+  const own = new Set()
+  for (const node of orderedNodes) for (const value of [node.id, `${node.repo}/${node.path}`, node.path, pathOf(node), attachmentOf(node)]) if (typeof value === 'string') own.add(value.normalize('NFC'))
+  for (const asset of embeddedAssets.values()) for (const value of [asset.id, `${asset.repo}/${asset.path}`, asset.path, assetPaths.get(asset.id)]) if (typeof value === 'string') own.add(value.normalize('NFC'))
+  const outside = (values) => values.filter((value) => typeof value === 'string' && value !== '' && !own.has(value.normalize('NFC')))
+  const linkTargets = new Set()
+  for (const node of orderedNodes) {
+    const target = noteLinkTarget(layout, pathOf(node))
+    linkTargets.add(target.markdown).add(target.wikilink)
+  }
+  for (const attachmentPath of viewAttachments) linkTargets.add(attachmentPath).add(encodeVaultPath(attachmentPath))
+  const allocatedInView = new Map(orderedNodes.map((node) => [node.id, pathOf(node)]))
+  const wrapperAttachments = new Set(orderedNodes.filter((node) => node.extension !== 'md').map((node) => (legacy ? `attachments/${legacyBasename(pathOf(node))}.${/^[a-z0-9]{1,16}$/.test(String(node.extension).toLowerCase()) ? String(node.extension).toLowerCase() : 'bin'}` : attachmentOf(node))))
+  const allowedAttachments = new Set([...wrapperAttachments, ...assetPaths.values()])
+  const guardReported = assertViewRedaction({
     manifest,
     files,
-    vaultSuffixes,
-    // Every census identity that is not part of this view: withheld, out of
-    // the selection, or an asset this view does not copy.
-    forbiddenSuffixes: new Set([
-      // A record without a usable identity is not in any view and has no
-      // suffix to forbid; it must not abort the view either.
-      ...[...canonical.nodes, ...(Array.isArray(snapshot.graph.assets) ? snapshot.graph.assets : [])]
-        .filter((item) => item && typeof item.repo === 'string' && item.repo !== '' && typeof item.id === 'string' && item.id !== '')
-        .map((item) => identitySuffix(item.repo, item.id, 64)),
-    ].filter((suffix) => !vaultSuffixes.has(suffix))),
-  })
+    reused: reusedPaths,
+    nodeOf: (nodeId) => nodeById.get(nodeId),
+    ownOf: (nodeId) => wrapperLines(nodeById.get(nodeId)),
+    view: { allocatedPathOf: (nodeId) => allocatedInView.get(nodeId) ?? null, attachments: allowedAttachments, linkTargets },
+    deny: createDenyMatcher({ refuse: outside(refused), diagnose: outside(reported), notice: outside(unselected) }),
+    layoutVersion: layout.version,
+  }, guard)
+  if (!legacy) noteDiagnostics.push(...guardReported)
+  if (legacy) {
+    const vaultSuffixes = new Set([...orderedNodes, ...embeddedAssets.values()].map((item) => identitySuffix(item.repo, item.id, 64)))
+    assertOnlyVaultIdentities({
+      manifest,
+      files,
+      vaultSuffixes,
+      // Every census identity that is not part of this view: withheld, out of
+      // the selection, or an asset this view does not copy.
+      forbiddenSuffixes: new Set([
+        // A record without a usable identity is not in any view and has no
+        // suffix to forbid; it must not abort the view either.
+        ...[...canonical.nodes, ...censusAssets].filter(usable).map((item) => identitySuffix(item.repo, item.id, 64)),
+      ].filter((suffix) => !vaultSuffixes.has(suffix))),
+    })
+  }
 
   const prior = new Map((priorManifest?.notes ?? []).map((note) => [note.path, note.noteDigest]))
   const changes = { added: [], changed: [], unchanged: [], removed: [] }
@@ -666,12 +965,13 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
   // The cache is replaced only by a preparation that passed every check, and
   // holds exactly the notes of this view.
   if (nextCache) cache.notes = nextCache
+  if (noteDiagnostics.length > 0) manifest.ext[EXT_KEY].diagnostics = noteDiagnostics
 
   return {
     manifest,
     manifestBytes: utf8(`${JSON.stringify(manifest, null, 2)}\n`),
     files,
-    persistentPathRegistry: registry,
+    persistentPathRegistry: withViewSection(persistentPathRegistry, { workspaceId: profile.workspaceId, scopeId: scope.scopeId, section: readable.section, keep: viewScopeIds }),
     changes,
     // How many notes were emitted on this call and how many were reused from the cache; without a cache every note is emitted.
     preparation,
@@ -681,55 +981,6 @@ export function prepareView({ snapshot, profile, scope, persistentPathRegistry =
       ...(fenceClosed ? ['unclosed-code-fence-closed-in-generated-region'] : []),
     ],
   }
-}
-
-// Last check before anything is returned. Two rules, because the two kinds of
-// bytes differ: a substring the emitter itself produced from an allocated path
-// (note and attachment paths, rewritten link targets) may name only a note or
-// asset of this view; free text in a generated region (titles, tags, source
-// paths, which are the author's words) is refused only when it names an
-// identity of the census that is outside this view. Author text that merely
-// looks like an identity suffix, such as a content-hashed asset name, is not
-// a redaction failure.
-function assertOnlyVaultIdentities({ manifest, files, vaultSuffixes, forbiddenSuffixes }) {
-  const index = (suffixes) => {
-    const byPrefix = new Map()
-    for (const full of suffixes) byPrefix.set(full.slice(0, 12), [...(byPrefix.get(full.slice(0, 12)) ?? []), full])
-    return (suffix) => (byPrefix.get(suffix.slice(0, 12)) ?? []).some((full) => full.startsWith(suffix))
-  }
-  const allowed = index(vaultSuffixes)
-  const forbidden = index(forbiddenSuffixes)
-  const suffixesIn = (text) => [...text.matchAll(/--([0-9a-f]{12,64})(?![0-9a-f])/g)].map((match) => match[1])
-  // An emitted path ends in the allocated suffix (before the extension); the
-  // readable part before it is the author's title and may look like anything.
-  // A wikilink rewrite may append `|<the author's own words>`; only the part
-  // before the first `|` is an emitted path.
-  const checkEmitted = (text) => {
-    for (const segment of text.split('|')[0].split('#')[0].split('/')) {
-      const trailing = /--([0-9a-f]{12,64})(?:\.[^./]+)?$/.exec(segment)
-      if (trailing && !allowed(trailing[1])) refuse('redaction-failure', 'an emitted path names a note that is not part of this view')
-    }
-    for (const suffix of suffixesIn(text)) if (forbidden(suffix)) refuse('redaction-failure', 'an emitted path names a note that is not part of this view')
-  }
-  const checkText = (text) => {
-    for (const suffix of suffixesIn(text)) if (forbidden(suffix)) refuse('redaction-failure', 'generated output names a note that is not part of this view')
-  }
-  const byPath = new Map(files.map((file) => [file.path, file.bytes]))
-  for (const note of manifest.notes) {
-    const bytes = byPath.get(note.path)
-    for (const region of note.regions.generated) checkText(bytes.subarray(region.range.start, region.range.end).toString('utf8'))
-  }
-  for (const link of manifest.links) {
-    for (const inversion of link.inversions ?? []) checkEmitted(Buffer.from(inversion.ext[EXT_KEY].emitted, 'base64url').toString('utf8'))
-  }
-  for (const note of manifest.notes) {
-    for (const embed of note.ext[EXT_KEY].assetEmbeds ?? []) {
-      checkEmitted(embed.attachment)
-      for (const inversion of embed.inversions) checkEmitted(Buffer.from(inversion.ext[EXT_KEY].emitted, 'base64url').toString('utf8'))
-    }
-  }
-  for (const note of manifest.notes) checkEmitted(note.path)
-  for (const attachment of manifest.attachments) checkEmitted(attachment.path)
 }
 
 // Adds the fail-closed eligibility flag selectScope reads. A node is eligible
