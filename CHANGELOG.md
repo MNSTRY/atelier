@@ -220,6 +220,8 @@
   note (`public`, `team`, `operator`, `staff`, `private`) except `sensitive`,
   which a vault takes only when it is named (`audience set me,sensitive`).
   Any other list is the person's own; either is remembered as their decision.
+  Notes without a classification are still withheld from every vault,
+  "only you" included; a later change lets an "only you" vault show them.
 
 - `atelier obsidian open` makes the first open of a view automatic: Obsidian
   no longer has to be quit, and no vault folder has to be opened by hand. It

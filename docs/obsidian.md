@@ -295,7 +295,11 @@ Obsidian.
      audience of a note but `sensitive`, which a vault takes only by name
      (`audience set me,sensitive`); `audience set A,B` names the audiences
      instead. No audience is admitted by default, so a view is empty until one
-     is set; `audience clear` empties it again.
+     is set; `audience clear` empties it again. Notes that carry no
+     classification (no `kg` block) are withheld from every vault in this
+     release, "only you" included; the decision already records whether they
+     are shown, and a later change lets an "only you" vault show them. A list
+     of audiences never shows them.
    - `atelier obsidian mode set manual` keeps every queued edit waiting for a
      person. `mode set automatic` is refused until an active automatic policy
      is installed.
