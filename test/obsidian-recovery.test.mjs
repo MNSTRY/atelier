@@ -707,6 +707,46 @@ test('I06 a real outside process doing atomic renames while the publisher runs n
   t.diagnostic(`I06 outcomes: ${JSON.stringify(tally)}`)
 })
 
+// Makes an outside atomic rename land exactly between the publisher's check of a note and its open: every open of
+// `file` (at most `times`) first replaces it by rename, as an editor or a sync tool saving it does.
+function renameOnOpen(t, file, bytesFor, times = Infinity) {
+  const original = fs.openSync
+  let renamed = 0
+  fs.openSync = function openSync(target, ...rest) {
+    if (target === file && renamed < times) {
+      renamed += 1
+      fs.writeFileSync(`${file}.ext~`, bytesFor(renamed))
+      fs.renameSync(`${file}.ext~`, file)
+    }
+    return original.call(this, target, ...rest)
+  }
+  t.after(() => { fs.openSync = original })
+  return () => renamed
+}
+
+test('I06b a note replaced by rename while the publisher opens it is read again: the outside bytes are kept, and nothing throws out of the publication', needsExchange, async (t) => {
+  const world = await seeded(t)
+  const app = new ModelApp(world.vault)
+  const external = `${BASE}EXTERNAL AT OPEN\n`
+  const renames = renameOnOpen(t, world.full(NOTE), () => external, 1)
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE } }), modelAdapter(app))
+  assert.equal(renames(), 1)
+  assert.ok(keptSomewhere(world, external), 'the outside bytes are kept')
+  assert.ok([CANDIDATE, external].includes(world.read(NOTE)), 'the note is one coherent version')
+  assert.notEqual(noteResult(result).outcome, undefined)
+})
+
+test('I06c a note that keeps being replaced while the publisher opens it is refused for that note only, as disk-changed, and the publication returns instead of throwing', needsExchange, async (t) => {
+  const world = await seeded(t, { [NOTE]: BASE, [OTHER]: BASE })
+  const app = new ModelApp(world.vault)
+  renameOnOpen(t, world.full(NOTE), (count) => `${BASE}CHURN ${count}\n`)
+  const result = await world.publish(viewOf('gen-0002', { notes: { [NOTE]: CANDIDATE, [OTHER]: CANDIDATE } }), modelAdapter(app))
+  assert.deepEqual([noteResult(result).outcome, noteResult(result).blocking], ['disk-changed', true], JSON.stringify(noteResult(result)))
+  assert.equal(result.state, 'updating')
+  assert.equal(noteResult(result, OTHER).outcome, 'published', 'the other note is published')
+  assert.equal(world.read(OTHER), CANDIDATE)
+})
+
 test('I06a the app never writes the note as a result of publication; a following outside write survives the delayed save', needsExchange, async (t) => {
   const world = await seeded(t)
   const app = new ModelApp(world.vault)

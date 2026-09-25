@@ -42,8 +42,17 @@ const iso = (clock) => { const value = clock(); return (value instanceof Date ? 
 const REFUSED_BY_EDIT = new Set(['editor-edit', 'disk-changed'])
 const unreleased = new Map()
 
+// A note another program replaces by rename can change between the check of its leaf and the open
+// (ELEAFCHANGED). Every rename leaves a complete file, so it is read again; one that keeps changing is left to
+// publishView, which reports it for that unit only.
+const READ_ATTEMPTS = 5
 function readNote(file) {
-  try { return readFileBytes(file) } catch (error) { if (error.code === 'ENOENT') return null; throw error }
+  for (let attempt = 1; ; attempt += 1) {
+    try { return readFileBytes(file) } catch (error) {
+      if (error.code === 'ENOENT') return null
+      if (error.code !== 'ELEAFCHANGED' || attempt >= READ_ATTEMPTS) throw error
+    }
+  }
 }
 
 function validatePreparedView(preparedView, store) {
@@ -324,7 +333,12 @@ export async function publishView(options = {}) {
         results.push({ path: unit.path, kind: unit.kind, op: unit.op, outcome: context.uncoordinated ? 'editor-uncoordinated' : 'unchanged', blocking: false })
         continue
       }
-      results.push(await publishUnit(unit, context))
+      try { results.push(await publishUnit(unit, context)) } catch (error) {
+        if (error.code !== 'ELEAFCHANGED') throw error
+        // Another program kept replacing this file while it was read: its bytes are left as they are, the unit's
+        // journal stays open for recovery like an interrupted one, and the other units go on.
+        results.push({ path: unit.path, kind: unit.kind, op: unit.op, outcome: 'disk-changed', blocking: true })
+      }
     }
 
     const blocking = results.filter((result) => result.blocking)

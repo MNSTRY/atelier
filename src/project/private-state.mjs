@@ -62,7 +62,7 @@ export function openRegularFileNoFollow(file, flags = fs.constants.O_RDONLY, mod
     // leaf before open and bind the opened descriptor back to that same file
     // identity where the filesystem supplies stable device/inode values.
     if (before && before.ino !== 0 && (before.dev !== opened.dev || before.ino !== opened.ino)) {
-      throw new Error('state leaf changed while opening')
+      throw Object.assign(new Error('state leaf changed while opening'), { code: 'ELEAFCHANGED' })
     }
     return descriptor
   } catch (error) {
