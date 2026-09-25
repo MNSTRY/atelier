@@ -658,7 +658,7 @@ test('the plugin proves the real path of the vault the app has open without send
 // service proves the vault as the file system stores its path, and so does the plugin, whatever spelling the app has.
 const FOLDS_CASE = (() => { const probe = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-Case-')); try { return fs.existsSync(probe.toUpperCase()) && fs.existsSync(probe.toLowerCase()) } finally { fs.rmSync(probe, { recursive: true, force: true }) } })()
 
-test('the vault proof compares the spelling the file system stores: a data root given in another letter case, and an app that has the vault in a third, still hold the view', { skip: !FOLDS_CASE && 'a file system that tells letter cases apart' }, async (t) => {
+test('the vault proof compares the spelling the file system stores: a data root given in another letter case, and an app that has the vault in a third, still hold the view', { skip: (!FOLDS_CASE && 'a file system that tells letter cases apart') || (process.platform === 'win32' && 'on Windows the stored spelling is Node\'s own resolution, which keeps the case it was given (the native one expands short names), and the plugin is never installed there: publication refuses on Windows') }, async (t) => {
   // The service's workspace root as a data root given in capitals resolves it: Node's own resolution keeps that case.
   const world = await channelWorld(t, { channelRoot: (root) => fs.realpathSync(path.join(path.dirname(root), 'WORKSPACE')) })
   const appSpelling = path.join(world.dir, 'Workspace', 'vaults', SCOPE)
