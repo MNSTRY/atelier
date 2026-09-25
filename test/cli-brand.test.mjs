@@ -261,6 +261,40 @@ test('dev before build names graph and build as the next step, with no path or s
   expectRefusal('outside', 'the projection output folder does not exist')
 })
 
+// Regression: any error with a string code was printed verbatim, so Node's
+// own errors reached the terminal with the absolute path in their message.
+test('only typed codes print verbatim; Node errors are redacted to code and system call', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-codes-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const executor = path.join(ROOT, 'src', 'cli', 'execute-command.mjs')
+  const { ATELIER_DEBUG, ...env } = process.env
+  const redacted = (detail) => [
+    `[internal-error] command failed without a safe diagnostic${detail}`,
+    'Next: rerun with ATELIER_DEBUG=1 to inspect the stack locally.',
+    '',
+  ].join('\n')
+  for (const [name, body, status, stderr] of [
+    ['system.mjs', "import fs from 'node:fs'\nfs.lstatSync(new URL('./missing-leaf', import.meta.url))\n", 1, redacted(' (ENOENT from lstat)')],
+    ['internal.mjs', 'Buffer.alloc(-1)\n', 1, redacted(' (ERR_OUT_OF_RANGE)')],
+    ['dotted.mjs', "throw Object.assign(new Error('detail'), { code: 'signature.invalid' })\n", 1, redacted('')],
+    ['typed.mjs', "throw Object.assign(new Error('the widget is missing'), { code: 'widget-missing', hint: 'Add a widget.' })\n", 2,
+      '[widget-missing] the widget is missing\nNext: Add a widget.\n'],
+  ]) {
+    const script = path.join(dir, name)
+    fs.writeFileSync(script, body)
+    const result = spawnSync(process.execPath, [executor, script], { env, encoding: 'utf8' })
+    assert.equal(result.status, status, `${name}: ${result.stderr}`)
+    assert.equal(result.stderr, stderr, name)
+  }
+
+  const debug = spawnSync(process.execPath, [executor, path.join(dir, 'system.mjs')], {
+    env: { ...env, ATELIER_DEBUG: '1' },
+    encoding: 'utf8',
+  })
+  assert.equal(debug.status, 1)
+  assert.match(debug.stderr, /ENOENT.*missing-leaf/)
+})
+
 test('expected project failures are typed, actionable, and stack-free by default', (t) => {
   const sample = makeSampleProject(t)
   const missingArtifact = runBin(['project', '--project', sample.config], { cwd: sample.dir })

@@ -291,6 +291,13 @@
   and the next step: run `atelier graph`, then `atelier build`, with the same
   `--project` path. `atelier dev --help` (and `server --help`) now documents
   `--port=PORT`, the `PORT` variable, the 8137 default, and `--review`.
+- The CLI printed any error that carried a string code verbatim, so Node's own
+  errors (`ENOENT`, `EACCES`, `ERR_*`) reached the terminal with the absolute
+  path Node puts in their message, no next step, and exit 2. Only Atelier's
+  typed codes (lowercase words joined by hyphens) are now printed verbatim.
+  Any other error is `[internal-error]` with exit 1, naming only Node's code
+  and system call, for example `(ENOENT from lstat)`. `ATELIER_DEBUG=1` still
+  prints the full error.
 - A publication no longer stops with an untyped `state leaf changed while
   opening` when another program replaces a note by rename at the instant the
   publisher opens it (an editor or sync tool saving the note). The note is
