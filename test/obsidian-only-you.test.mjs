@@ -31,7 +31,6 @@ for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 
 syncBuiltinESMExports()
 
 const { resolveProjectConfig, writeJson } = await import('../src/project/config.mjs')
-const { identitySuffix } = await import('../src/projection/obsidian/contracts.mjs')
 const { prepareView } = await import('../src/projection/obsidian/materialize/index.mjs')
 const { resolveExchange } = await import('../src/projection/obsidian/publication/index.mjs')
 const { createSelectionContribution } = await import('../src/projection/obsidian/selection-ui/contribution.mjs')
@@ -128,16 +127,13 @@ test('an "only you" vault admits a note without a classification only when its b
   assert.equal(reader.isEligible({ ...admitted['drafts/own-front-matter.md'], repo: 'elsewhere' }), false, 'a repository the project does not enrol')
 })
 
-// A classified note whose title names the unclassified note's identity, so the relations region generated for the note it
-// supports carries that identity: the redaction guard's free-text rule.
+// A classified note whose title names the unclassified note by its repository-qualified source path, an unambiguous
+// identifier, so the relations region generated for the note it supports carries it: the redaction guard's free-text rule.
 function guardProject(t) {
   const plain = { ...UNCLASSIFIED }['drafts/plain.md']
-  const probe = makeProject(t, { 'drafts/plain.md': plain })
-  const draftId = buildGraph({ project: probe.project, eligibility: DEFAULT_ELIGIBILITY }).nodes[0].id
-  const suffix = identitySuffix('harbor', draftId, 64).slice(0, 12)
   return makeProject(t, {
     'notes/plan.md': noteText({ id: 'harbor:plan', title: 'Harbor plan', body: 'The plan. See the [draft](../drafts/plain.md).' }),
-    'notes/naming.md': `---\ntitle: "Names it--${suffix}"\nkg:\n  id: "harbor:naming"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "harbor:plan"\n---\n\n# Names it\n`,
+    'notes/naming.md': `---\ntitle: "Names harbor/drafts/plain.md"\nkg:\n  id: "harbor:naming"\n  type: "document"\n  status: "active"\n  audience: "team"\n  relations:\n    supports:\n      - "harbor:plan"\n---\n\n# Names it\n`,
     'drafts/plain.md': plain,
   })
 }
@@ -157,13 +153,13 @@ test('the redaction guard: an admitted note without a classification is part of 
   const view = mine.run()
   const entry = view.manifest.notes.find((note) => note.nodeId === draft.id)
   assert.ok(entry, 'the note is in the view')
-  assert.match(entry.path, new RegExp(`--${identitySuffix('harbor', draft.id, 64).slice(0, 12)}[0-9a-f]*\\.md$`), 'under its own identity')
+  assert.equal(entry.path, 'harbor/drafts/plain.md', 'at its readable path, as every note of the view')
   const link = view.manifest.links.find((item) => item.sourceNodeId === 'harbor:plan' && item.targetNodeId === draft.id)
   assert.equal(link?.targetState, 'in-scope', 'the plan\'s link to it is a link inside the view')
   // Any other audience decision, with the very same audiences: the note is withheld, and the generated text that
   // names it is refused.
   const theirs = prepared({ project, eligibility: DEFAULT_ELIGIBILITY })
-  assert.throws(() => theirs.run(), /redaction-failure/)
+  assert.throws(() => theirs.run(), (error) => error.code === 'redaction-failure' && error.detail?.rule === 'deny-list', 'refused by the free-text rule')
 })
 
 test('the selection operation resolves the view the engine publishes: with the note under "only you", without it under a list', async (t) => {
