@@ -418,8 +418,10 @@ windows holds the view's vault, and a publication coordinates with one window
 only, so none is made: the view reports `publisher-conflict` with reason
 `vault-open-in-several-windows`, and `open` answers the same, names the
 entries (`open in Obsidian as: …`; `duplicates` in JSON) and launches nothing.
-Close the extra windows, or remove the extra entries from Obsidian's vault
-list, and open again; maintenance tries again by itself once a window closes.
+Remove the extra entries from Obsidian's vault list and open again. Closing
+the extra windows is not enough: Obsidian keeps the last window it closed
+marked open, so two entries can stay marked open with one window showing, and
+the view stays refused until the list names the folder once.
 While one entry of the folder has a window, `open` reaches only that one and
 never opens another entry of the same folder beside it.
 

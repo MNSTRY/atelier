@@ -102,7 +102,7 @@ export const REASON_NEXT = Object.freeze({
   'restarted-service-in-its-first-tick': 'the maintenance service ran an earlier release and was restarted on the installed one, which is still in its first tick; run `obsidian open` again in a moment',
   'service-outdated': 'the maintenance service runs an earlier release of Atelier that could not be replaced; run `atelier obsidian service stop`, then open again',
   'service-other-release': 'the maintenance service runs a later release of Atelier than this command, which never replaces a later release by itself; run `atelier obsidian service stop`, then open again, or open with the later release',
-  'vault-open-in-several-windows': 'Obsidian has this view\'s vault open in more than one window, one for each entry of its vault list that names the folder (in another letter case, or through a link), and a publication coordinates with one window only; close the extra windows, or remove the extra entries from Obsidian\'s vault list, then open again',
+  'vault-open-in-several-windows': 'Obsidian\'s vault list marks this view\'s folder open under more than one entry (in another letter case, or through a link), so it may hold the vault in more than one window, and a publication coordinates with one window only; remove the extra entries from Obsidian\'s vault list (Obsidian keeps the last window it closed marked open, so closing windows does not clear this), then open again',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 

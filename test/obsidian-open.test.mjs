@@ -1120,6 +1120,10 @@ test('a vault the app has open in several windows, one per entry of its list tha
   const answer = await refused.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
   assert.deepEqual([answer.json.outcome, answer.json.reason, answer.json.next, answer.json.duplicates], ['publisher-conflict', 'vault-open-in-several-windows', REASON_NEXT['vault-open-in-several-windows'], named(refused)], JSON.stringify(answer.json))
   assert.deepEqual([app.launches, app.registrations, app.reached], [[], [], []], 'nothing is launched, added or asked')
+  // The app keeps the last window it closed marked open, so two entries can be marked open with one window showing:
+  // the step that always clears it is removing the extra entries; closing windows is not offered as the remedy.
+  assert.match(answer.json.next, /remove the extra entries from Obsidian's vault list/)
+  assert.doesNotMatch(answer.json.next, /close the extra windows/)
   const shown = await refused.run(['open', '--consent-actor', CONSENT.actor], { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
   assert.ok(`${shown.stdout}\n${shown.stderr}`.split('\n').includes(`open in Obsidian as: ${named(refused).map((entry) => entry.path).join(', ')}`), shown.stderr)
 
@@ -2184,6 +2188,21 @@ test('which runtime the installed release replaces: an earlier version, this ver
     recording({ release: release('not a version') }), recording({ release: {} }), recording({ release: 'x' }),
   ]
   assert.deepEqual(later.map(standing), later.map(() => 'later'))
+})
+
+test('a version that cannot be ordered, the same on both sides (a fork\'s "dev", say), is compared by content: the runtime open just started is current, and other content is outdated, so "service stop, then open" never loops', () => {
+  const content = `sha256:${'a'.repeat(64)}`
+  const other = `sha256:${'0'.repeat(64)}`
+  const entry = `sha256:${'e'.repeat(64)}`
+  for (const version of ['dev', 'not a version']) {
+    const installed = { entry, release: { version, digest: content } }
+    const recording = (release, digest = entry) => ({ path: '/installed/service-main.mjs', digest, ext: { runner: '/node', release } })
+    assert.equal(releaseStanding(recording({ version, digest: content }), installed), 'current', version)
+    assert.equal(releaseStanding(recording({ version, digest: other }), installed), 'outdated', version)
+    assert.equal(releaseStanding(recording({ version, digest: content }, other), installed), 'outdated', version)
+    // Another version string that cannot be ordered against this one stays a release of its own.
+    assert.equal(releaseStanding(recording({ version: '0.2.0-alpha.12', digest: content }), installed), 'later', version)
+  }
 })
 
 test('a service of a later release than the installed one is neither replaced nor asked by open, which answers service-other-release with its next step; stopped, the next open starts the installed release', async (t) => {

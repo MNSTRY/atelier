@@ -840,7 +840,10 @@ folder is open, each window holds the vault and a call reaches one of them
 only (`vaultRoute` answers `duplicated`): no publication call is made (the
 publisher refuses `vault-open-in-several-windows`, a `publisher-conflict`),
 and `open` answers `publisher-conflict` with that reason, names the entries
-(`duplicates`) and launches nothing. While one entry has a window, a call
+(`duplicates`) and launches nothing. The entries are read from the list's
+`open` marks, and the app keeps the last window it closed marked open, so this
+can hold with a single window showing; the next step is to remove the extra
+entries from the list. While one entry has a window, a call
 reaches only that entry, and `open` finds and launches it, so a closed entry of
 the same folder is never opened beside it.
 

@@ -218,13 +218,16 @@ ordered as semantic versions, a prerelease below its release
 `lifecycle.mjs`). It is stopped as `stop` stops it and the installed entry is
 started, detached, under the consent already recorded; the answer carries
 `restarted: "outdated"`, and `open` shows `service: restarted (outdated)`. A
-runtime that records a later version, or one that cannot be ordered, is never
+runtime that records a later version, or another version that cannot be
+ordered against the installed one, is never
 replaced by this release, nor asked for the tick: the answer is
 `service-other-release` (`open`: `service-unavailable`, with the next step
 `atelier obsidian service stop`, then open again). So two installations used
 on one workspace, a global and a project-local one for example, do not replace
 each other's runtime on every open; within one version, other content is
-replaced. A listener of now refuses a tick only when it names another runtime,
+replaced. The same version string is compared by content even when it cannot
+be ordered (a fork's `dev`, say), so the runtime `open` just started is always
+this release and "service stop, then open" cannot loop. A listener of now refuses a tick only when it names another runtime,
 which happens when a concurrent command replaced the runtime between the check
 and the request: the record is read again, the runtime that took its place is
 asked, and nothing is restarted. A `busy` runtime is not stopped, and anything

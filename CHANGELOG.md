@@ -154,8 +154,9 @@
   entry of its vault list that names the folder (under another letter case,
   or through a link), is not published: a publication would coordinate with
   one window only. The view reports `publisher-conflict` /
-  `vault-open-in-several-windows` (maintenance tries again once a window
-  closes), and `open` answers the same, names the entries (`open in Obsidian
+  `vault-open-in-several-windows` (removing the extra entries from Obsidian's
+  vault list clears it; closing a window may not, since Obsidian keeps the last
+  window it closed marked open), and `open` answers the same, names the entries (`open in Obsidian
   as: …`, `duplicates` in JSON) and launches nothing. While one entry of the
   folder has a window, calls and `open` reach only that entry, so a closed
   entry of the same folder is never opened beside it.
@@ -189,7 +190,9 @@
   two installations used on one workspace do not replace each other's service
   on every open: `open` answers `service-unavailable` /
   `service-other-release`, whose next step is `atelier obsidian service stop`,
-  then open again. A tick refused because a concurrent command replaced the
+  then open again. The same version string on both sides is compared by
+  content even when it cannot be ordered (a fork's `dev`), so that next step
+  cannot loop. A tick refused because a concurrent command replaced the
   runtime just before is asked of the runtime that took its place, and
   nothing is restarted. A busy service is not stopped, and nothing that does
   not prove itself ours is touched. `requestServiceTick` takes the start

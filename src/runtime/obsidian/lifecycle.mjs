@@ -246,13 +246,15 @@ async function askProvenRuntime(options, rules, { method, operation, timeoutMs, 
 //   current   the same version, entry module and modules;
 //   outdated  an earlier version; the same version with another entry module or other modules; or no release named,
 //             as releases before the one that began recording it record none;
-//   later     a later version, or one that cannot be ordered. The installed release never replaces it, so two
+//   later     a later version, or another version that cannot be ordered. The installed release never replaces it, so two
 //             installations used on one workspace do not replace each other's runtime.
 // Versions are ordered as semantic versions, a prerelease below its release (0.2.0-alpha.11 < 0.2.0-alpha.12 < 0.2.0).
 export function releaseStanding(executable, installed) {
   const recorded = executable?.ext?.release
   if (recorded === undefined || recorded === null) return 'outdated'
-  const order = compareAppVersions(recorded.version, installed.release.version)
+  // The same version string is compared by content, whether or not it can be ordered: a fork's "dev" on both sides
+  // is this release when its modules match, and outdated otherwise, never later.
+  const order = recorded.version === installed.release.version ? 0 : compareAppVersions(recorded.version, installed.release.version)
   if (order === null || order > 0) return 'later'
   if (order < 0) return 'outdated'
   return executable.digest === installed.entry && recorded.digest === installed.release.digest ? 'current' : 'outdated'
