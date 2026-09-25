@@ -26,10 +26,10 @@ import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { buildStartupAdapter } from '../src/runtime/obsidian/startup-adapters.mjs'
 import { TICK_LOOP_PRIMITIVES, createTickLoopForOracleTests } from '../src/runtime/obsidian/tick-loop.mjs'
 import {
-  FRESHNESS_STATES, ObsidianMaintenanceRefusal, UNAVAILABLE_APPLY_OPERATION, authorizeAutomaticApply, createFsWatcherFactory, createMaintenanceEngine,
-  createMaintenanceExtensions, createMaintenanceStateStore, defaultDataRoot, ensureWorkspaceIdentity, installApplyPolicy, localPointerPath, protectedRoots,
-  readLocalPointer, readMachineSettings, readObsidianEnablement, resolveDataRoot, validateFreshness, validatePendingEdits, workspaceStateRoot, writeLocalPointer,
-  writeMachineSettings,
+  DECISIONS, FRESHNESS_STATES, MACHINE_SETTINGS_SCHEMA, ONLY_YOU_AUDIENCES, ObsidianMaintenanceRefusal, UNAVAILABLE_APPLY_OPERATION, authorizeAutomaticApply,
+  createFsWatcherFactory, createMaintenanceEngine, createMaintenanceExtensions, createMaintenanceStateStore, defaultDataRoot, defaultMachineSettings, ensureWorkspaceIdentity,
+  installApplyPolicy, localPointerPath, protectedRoots, readLocalPointer, readMachineSettings, readObsidianEnablement, resolveDataRoot, validateFreshness, validatePendingEdits,
+  withDecision, workspaceStateRoot, writeLocalPointer, writeMachineSettings,
 } from '../src/runtime/obsidian/index.mjs'
 
 // Continuous maintenance, on a real filesystem in temporary directories, with
@@ -147,7 +147,7 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
       const pointer = ensureWorkspaceIdentity({ project, randomBytes: fixedRandom })
       const root = workspaceStateRoot(dataRoot, pointer.workspaceId)
       const current = fs.existsSync(root) ? readMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId }) : null
-      return writeMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(project), settings: { schema: 'atelier-obsidian-machine-settings/v1', workspaceId: pointer.workspaceId, applyPolicy: null, ...(current ?? {}), ...settings, updatedAt: world.clock().toISOString() } })
+      return writeMachineSettings({ workspaceRoot: root, workspaceId: pointer.workspaceId, repositoryRoots: protectedRoots(project), settings: { ...(current ?? defaultMachineSettings({ workspaceId: pointer.workspaceId, updatedAt: world.clock().toISOString() })), ...settings, updatedAt: world.clock().toISOString() } })
     },
     installPolicy(overrides = {}) {
       const project = loadProject()
@@ -314,6 +314,97 @@ test('machine settings live outside every repository, owner-only, strictly valid
   assert.throws(() => readLocalPointer(project), (error) => error.code === 'invalid-local-pointer')
 })
 
+// What releases up to 0.2.0-alpha.12 wrote, byte for byte in shape: no remembered decision.
+const v1Settings = (fields = {}) => ({ schema: 'atelier-obsidian-machine-settings/v1', workspaceId: WORKSPACE_ID, maintenanceMode: 'manual', audienceAllow: [], applyPolicy: null, updatedAt: '2026-01-05T10:00:00.000Z', ...fields })
+const STAMP = Object.freeze({ decidedAt: '2026-01-05T11:00:00.000Z', decidedBy: 'someone', via: 'command' })
+
+test('a v1 machine settings document is read as v2, stays v1 on disk until the next write, and is never written again', (t) => {
+  const world = makeWorld(t, { machine: null })
+  const root = workspaceStateRoot(world.dataRoot, WORKSPACE_ID)
+  const file = path.join(root, 'state', 'settings', 'machine.json')
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const nothingDecided = { audience: null, location: null, loginItem: null, adapter: null }
+
+  // An empty audience list was nobody's decision; a list somebody set is theirs, carried over as one, by nobody known.
+  fs.writeFileSync(file, JSON.stringify(v1Settings()))
+  assert.deepEqual(readMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID }), { ...v1Settings(), schema: MACHINE_SETTINGS_SCHEMA, decisions: nothingDecided })
+  const v1 = JSON.stringify(v1Settings({ maintenanceMode: 'automatic', audienceAllow: ['team'], applyPolicy: { policyId: 'policy-synthetic', version: 2, digest: digest('p') } }))
+  fs.writeFileSync(file, v1)
+  const read = readMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID })
+  assert.equal(read.schema, 'atelier-obsidian-machine-settings/v2')
+  assert.deepEqual(read.decisions, { ...nothingDecided, audience: { choice: 'custom', unclassified: 'withheld', decidedAt: '2026-01-05T10:00:00.000Z', decidedBy: null, via: 'v1' } }, 'withheld, as they were')
+  assert.deepEqual({ mode: read.maintenanceMode, audiences: read.audienceAllow, policy: read.applyPolicy }, { mode: 'automatic', audiences: ['team'], policy: { policyId: 'policy-synthetic', version: 2, digest: digest('p') } })
+  assert.equal(fs.readFileSync(file, 'utf8'), v1, 'reading changes nothing on disk')
+  assert.deepEqual(authorizeAutomaticApply({ workspaceRoot: root, workspaceId: WORKSPACE_ID }).reason, 'apply-policy-absent', 'a v1 document still authorizes exactly what it did')
+
+  // The next write writes v2, whatever it was handed; a v1 document handed to the writer is carried over the same way.
+  const written = writeMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID, repositoryRoots: [], settings: JSON.parse(v1) })
+  assert.deepEqual(written, read)
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(onDisk, read)
+  // What a release that knows only v1 checks: its closed shape and its schema name. The v2 document fails both, so such a
+  // release refuses it rather than reading settings it does not understand.
+  const v1Keys = ['schema', 'workspaceId', 'maintenanceMode', 'audienceAllow', 'applyPolicy', 'updatedAt']
+  assert.deepEqual(Object.keys(onDisk).filter((key) => !v1Keys.includes(key)), ['decisions'])
+  assert.notEqual(onDisk.schema, 'atelier-obsidian-machine-settings/v1')
+  assert.deepEqual(defaultMachineSettings({ workspaceId: WORKSPACE_ID, updatedAt: '2026-01-05T10:00:00.000Z' }), { ...v1Settings(), schema: MACHINE_SETTINGS_SCHEMA, decisions: nothingDecided })
+
+  // A v1 document is as strictly validated as ever: nothing it could not carry before is carried over.
+  for (const broken of [v1Settings({ decisions: nothingDecided }), v1Settings({ maintenanceMode: 'always' }), v1Settings({ workspaceId: 'ws-another' })]) {
+    fs.writeFileSync(file, JSON.stringify(broken))
+    assert.throws(() => readMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID }), (error) => error.code === 'invalid-machine-settings', JSON.stringify(broken))
+  }
+})
+
+test('remembered decisions are closed documents: each says what was decided, when, by whom when known, and how', (t) => {
+  const world = makeWorld(t, { machine: null })
+  const root = workspaceStateRoot(world.dataRoot, WORKSPACE_ID)
+  const base = defaultMachineSettings({ workspaceId: WORKSPACE_ID, updatedAt: '2026-01-05T10:00:00.000Z' })
+  const decided = withDecision(withDecision(withDecision(withDecision({ ...base, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'shown' }, STAMP),
+    'location', { parent: path.join(TMP, 'Atelier') }, { ...STAMP, via: 'question' }), 'loginItem', { choice: 'on' }, { ...STAMP, via: 'defaults', decidedBy: null }), 'adapter', { choice: 'obsidian-cli' }, STAMP)
+  assert.deepEqual(DECISIONS, ['audience', 'location', 'loginItem', 'adapter'])
+  assert.deepEqual(decided.decisions.location, { parent: path.join(TMP, 'Atelier'), ...STAMP, via: 'question' })
+  assert.deepEqual(base.decisions, { audience: null, location: null, loginItem: null, adapter: null }, 'withDecision changes nothing it is handed')
+  const written = writeMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID, repositoryRoots: [], settings: decided })
+  assert.deepEqual(readMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID }), written)
+
+  const decision = (name, change) => ({ ...decided, decisions: { ...decided.decisions, [name]: change(decided.decisions[name]) } })
+  const refusals = [
+    ['an unknown decision', { ...decided, decisions: { ...decided.decisions, colour: null } }],
+    ['a missing decision', { ...decided, decisions: { audience: null, location: null, loginItem: null } }],
+    ['an unknown member', decision('adapter', (item) => ({ ...item, surprise: true }))],
+    ['a missing member', decision('adapter', ({ choice: _choice, ...rest }) => rest)],
+    ['an unknown adapter', decision('adapter', (item) => ({ ...item, choice: 'obsidian-plugin' }))],
+    ['an unknown login item answer', decision('loginItem', (item) => ({ ...item, choice: 'yes' }))],
+    ['a relative location', decision('location', (item) => ({ ...item, parent: 'Atelier' }))],
+    ['a location that is not written plainly', decision('location', (item) => ({ ...item, parent: `${path.join(TMP, 'Atelier')}${path.sep}..${path.sep}Atelier` }))],
+    ['a location with a control character', decision('location', (item) => ({ ...item, parent: path.join(TMP, 'At\u0007elier') }))],
+    ['an unknown audience answer', decision('audience', (item) => ({ ...item, choice: 'everyone' }))],
+    ['"only you" beside an audience it does not stand for', { ...decided, audienceAllow: ['private', 'partner'] }],
+    ['"only you" admitting nobody', { ...decided, audienceAllow: [] }],
+    ['"only you" with sensitive added', { ...decided, audienceAllow: [...ONLY_YOU_AUDIENCES, 'sensitive'] }],
+    ['an audience decision that does not say whether unclassified notes are shown', decision('audience', ({ unclassified: _unclassified, ...rest }) => rest)],
+    ['an unknown answer about unclassified notes', decision('audience', (item) => ({ ...item, unclassified: 'sometimes' }))],
+    ['unclassified notes shown to a list of audiences', { ...decision('audience', (item) => ({ ...item, choice: 'custom' })), audienceAllow: ['private', 'team'] }],
+    ['unclassified notes shown to a list that holds every audience of "only you"', decision('audience', (item) => ({ ...item, choice: 'custom' }))],
+    ['a time that is not UTC', decision('adapter', (item) => ({ ...item, decidedAt: '2026-01-05 11:00' }))],
+    ['a decider that is not an identifier', decision('adapter', (item) => ({ ...item, decidedBy: 'some one' }))],
+    ['an unknown source', decision('adapter', (item) => ({ ...item, via: 'guess' }))],
+  ]
+  for (const [label, settings] of refusals) {
+    assert.throws(() => writeMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID, repositoryRoots: [], settings }), (error) => error.code === 'invalid-machine-settings', label)
+  }
+  assert.throws(() => withDecision(base, 'colour', { choice: 'red' }, STAMP), TypeError)
+  assert.throws(() => withDecision(base, 'audience', { choice: 'only-you', unclassified: 'shown' }, STAMP), (error) => error.code === 'invalid-machine-settings', 'only you needs its audiences')
+  assert.throws(() => withDecision({ ...base, audienceAllow: ['team'] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, STAMP), (error) => error.code === 'invalid-machine-settings', 'only you is decided as its whole set')
+  // Unclassified notes are shown only to "only you", which may also withhold them; any other list always withholds them.
+  assert.equal(withDecision({ ...base, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, STAMP).decisions.audience.unclassified, 'withheld')
+  assert.equal(withDecision({ ...base, audienceAllow: ['team'] }, 'audience', { choice: 'custom', unclassified: 'withheld' }, STAMP).decisions.audience.choice, 'custom')
+  // "Only you" is every audience of a note but sensitive, which a vault takes only by name.
+  assert.deepEqual(ONLY_YOU_AUDIENCES, ['operator', 'private', 'public', 'staff', 'team'])
+  assert.equal(ONLY_YOU_AUDIENCES.includes('sensitive'), false)
+})
+
 // ---------------------------------------------------------------------------
 // 3. Disabled does nothing
 // ---------------------------------------------------------------------------
@@ -338,6 +429,26 @@ for (const [label, ext, reason] of [['absent settings', null, 'not-configured'],
     await assertDisabledDoesNothing(world, () => engine.tick())
   })
 }
+
+test('"only you" recorded under another release\'s set of audiences stays readable and writable; deciding it again records this release\'s set', (t) => {
+  const world = makeWorld(t, { machine: null })
+  const root = workspaceStateRoot(world.dataRoot, WORKSPACE_ID)
+  const file = path.join(root, 'state', 'settings', 'machine.json')
+  // What a release whose "only you" had one audience fewer recorded (a later release adds one to it).
+  const earlierSet = ONLY_YOU_AUDIENCES.filter((audience) => audience !== 'staff')
+  const recorded = { ...defaultMachineSettings({ workspaceId: WORKSPACE_ID, updatedAt: '2026-01-05T10:00:00.000Z' }), audienceAllow: earlierSet, decisions: { audience: { choice: 'only-you', unclassified: 'withheld', ...STAMP }, location: null, loginItem: null, adapter: null } }
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(recorded))
+  const read = readMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID })
+  assert.deepEqual(read.audienceAllow, earlierSet, 'the list recorded is the one the engine reads')
+  // Another change (the mode, say) writes it back as it is.
+  const written = writeMachineSettings({ workspaceRoot: root, workspaceId: WORKSPACE_ID, repositoryRoots: [], settings: { ...read, maintenanceMode: 'automatic' } })
+  assert.deepEqual([written.audienceAllow, written.decisions.audience.choice], [earlierSet, 'only-you'])
+  assert.equal(authorizeAutomaticApply({ workspaceRoot: root, workspaceId: WORKSPACE_ID }).reason, 'no-apply-policy-installed', 'and automatic apply reads the settings, not an invalid file')
+  // Deciding "only you" again records this release's whole set.
+  const again = withDecision({ ...written, audienceAllow: [...ONLY_YOU_AUDIENCES] }, 'audience', { choice: 'only-you', unclassified: 'withheld' }, STAMP)
+  assert.deepEqual(again.audienceAllow, [...ONLY_YOU_AUDIENCES])
+})
 
 test('mutation control: a tick that leaves a file behind fails the disabled oracle', async (t) => {
   const world = makeWorld(t, { ext: null, machine: null })

@@ -291,9 +291,15 @@ Obsidian.
    `atelier obsidian scope list` shows what was declared.
 2. Set the private machine settings. They live outside every repository and
    are never committed:
-   - `atelier obsidian audience set A,B` names the audiences this machine lets
-     into a view. No audience is admitted by default, so a view is empty until
-     one is set; `audience clear` empties it again.
+   - `atelier obsidian audience set me` lets "only you" into a view: every
+     audience of a note but `sensitive`, which a vault takes only by name
+     (`audience set me,sensitive`); `audience set A,B` names the audiences
+     instead. No audience is admitted by default, so a view is empty until one
+     is set; `audience clear` empties it again. Notes that carry no
+     classification (no `kg` block) are withheld from every vault in this
+     release, "only you" included; the decision already records whether they
+     are shown, and a later change lets an "only you" vault show them. A list
+     of audiences never shows them.
    - `atelier obsidian mode set manual` keeps every queued edit waiting for a
      person. `mode set automatic` is refused until an active automatic policy
      is installed.
@@ -302,11 +308,14 @@ Obsidian.
      unchanged; `policy revoke` returns the mode to `manual` and stops every
      later apply.
 3. Open a view:
-   `atelier obsidian open --scope ID --consent-actor ID --adapter=obsidian-cli`.
+   `atelier obsidian open --scope ID --adapter=obsidian-cli`.
    That's it. Reaching the installed app is never a default, so
-   `--adapter=obsidian-cli` is required, and the first open of a workspace
-   records who allowed the maintenance service to run (`--consent-actor`;
-   later opens reconnect to it and need no consent). `open` starts or
+   `--adapter=obsidian-cli` is needed the first time; the workspace remembers
+   it, and later runs need no flag. The first open of a workspace records who
+   allowed the maintenance service to run: for a person at a terminal, the
+   account's name; for a program, `--consent-actor ID`, which it must pass.
+   Later opens reconnect and need neither. `atelier obsidian settings` shows
+   what was remembered and how to change it. `open` starts or
    reconnects maintenance and asks it for a tick, makes Obsidian (version
    1.13.7 or later) know the view's vault as one of its vaults, opens it,
    publishes the view, verifies the vault by reading it back, and waits until
@@ -315,9 +324,39 @@ Obsidian.
    [What `open` does in each state of Obsidian](#what-open-does-in-each-state-of-obsidian).
 
 The maintenance service can also be managed on its own:
-`atelier obsidian service start --consent-actor ID --adapter=obsidian-cli`,
-`service status` and `service stop`; `service unit --print
---adapter=obsidian-cli` prints a startup unit and installs nothing.
+`atelier obsidian service start [--consent-actor ID] [--adapter=obsidian-cli]`,
+`service status` and `service stop`; `service unit --print` prints a startup
+unit and installs nothing. The flags are needed only until the workspace
+remembers them, as for `open`.
+
+### What this machine remembers
+
+A workspace's machine settings (`atelier-obsidian-machine-settings/v2`, owner
+only, under the private data root, never in a repository) hold what a person
+decided once, so no later run asks again or has to be told again. Each
+decision is null until it is made, and otherwise records what was decided,
+when, by whom when that is known (an actor identifier), and how: answered at
+a terminal (`question`), given on the command line (`command`), taken as the
+defaults (`defaults`), or carried over from an earlier release (`v1`).
+
+| Decision | Holds | Made today by |
+| --- | --- | --- |
+| `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you) or `audience set A,B` / `audience clear`; each withholds unclassified notes for now |
+| `location` | the absolute folder that holds this workspace's vaults | not yet: the first-run flow |
+| `loginItem` | `on` or `off` | not yet: the first-run flow |
+| `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open` or `service start` |
+
+Who allowed the maintenance service is not a second copy here: it stays the
+consent the service reads from its own settings. `atelier obsidian settings`
+shows all of it, and how each answer is changed.
+
+Releases up to 0.2.0-alpha.12 wrote `atelier-obsidian-machine-settings/v1`.
+Such a file is read as the v2 document it stands for, an audience list set
+with it becoming that person's decision, and stays v1 on disk until the next
+write, which writes v2. A release that knows only v1 refuses a v2 file as
+`invalid-machine-settings`: after an upgrade, a maintenance service that
+still runs the earlier release fails its ticks until it is replaced, which
+`atelier obsidian open` does.
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
 the earlier release. `open` replaces it: when the service of this workspace
