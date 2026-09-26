@@ -1102,6 +1102,36 @@ test('app not running: the view is published on the path with no app, the vault 
   assert.deepEqual([again.json.outcome, again.json.registration?.how, app.registrations.length], ['current', 'listed', 1])
 })
 
+// After the launch, the first `silentRounds` rounds see a version only Atelier's plugin gave (the tool's own version
+// call timed out) and no answer for the vault; the rounds after that see the app as it is.
+async function openThroughSilentRounds(t, silentRounds) {
+  const world = makeWorld(t)
+  await world.service()
+  const app = fakeApp()
+  const rounds = []
+  let silent = silentRounds
+  const appProbe = {
+    inspect: async () => { const seen = await app.appProbe.inspect(); return app.launches.length > 0 && silent > 0 ? { ...seen, version: '1.13.7', versionSource: 'plugin' } : seen },
+    vaultState: async (input) => {
+      if (silent > 0) { silent -= 1; rounds.push('silent'); return { answered: false, indexReady: false } }
+      rounds.push('asked')
+      return app.appProbe.vaultState(input)
+    },
+  }
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app, appProbe }, open: { appWaitMs: 5000, appPollMs: 5 } })
+  return { opened, rounds, app }
+}
+
+test('one silent round after the launch, with a version only the plugin gave, is waited out; two in a row answer at once that the command line is what is missing', needsExchange, async (t) => {
+  // The tool's version call timed out once while the app opened the window: open waits, and the vault answers.
+  const once = await openThroughSilentRounds(t, 1)
+  assert.deepEqual([once.opened.json.outcome, once.opened.json.launched, once.rounds], ['current', true, ['silent', 'asked']], JSON.stringify(once.opened.json))
+  // Silent every round: answered at the second, not after the whole wait.
+  const always = await openThroughSilentRounds(t, Number.POSITIVE_INFINITY)
+  assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.opened.json.launched, always.rounds], ['app-cli-unavailable', 'vault-open-cli-silent', true, ['silent', 'silent']])
+  assert.equal(always.app.launches.length, 1)
+})
+
 test('the launch names the vault by its id and says whether the app runs: a quit app is started plainly, so it reopens the vaults its list marks open, and handed the vault by id once it answers', needsExchange, async (t) => {
   const world = makeWorld(t)
   const app = fakeApp({ running: false, vaults: { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })

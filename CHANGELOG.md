@@ -289,7 +289,12 @@
   already running while that service fails every tick on the new machine
   settings. A service of a later release is left running (`release:
   'later'`).
-
+- `atelier obsidian open` no longer answers `app-cli-unavailable` /
+  `vault-open-cli-silent` on the first silent round after it launched the
+  vault. A version only Atelier's plugin gave, with no answer for the vault,
+  now has to be seen in two rounds in a row: one version call that timed out
+  while Obsidian was busy opening its window made `open` report a command
+  line that was only slow as switched off.
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
   worked, and `atelier obsidian help` showed them). A test now fails when a

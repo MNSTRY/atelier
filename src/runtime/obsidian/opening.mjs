@@ -264,6 +264,9 @@ const defaultSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) 
 const READABLE = new Set(['stale-readable', 'held-for-your-edit', 'updating', 'publisher-conflict'])
 // After a launch: the app is still starting, or still opening the vault it was asked for.
 const NOT_UP_YET = new Set(['version-unknown', 'no-vault-open'])
+// After a launch: how many rounds in a row the command line must be silent, with only the plugin giving the version,
+// before `open` says the command line is what is missing.
+const SILENT_ROUNDS = 2
 const REGISTRY_OPERATIONS = ['listThroughApp', 'registerThroughApp', 'readSettings', 'registerInSettings']
 
 const attempt = async (operation) => { try { return await operation() } catch { return null } }
@@ -518,6 +521,8 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   const deadline = monotonic() + appWaitMs
   let after = before
   let vault = { answered: false, indexReady: false }
+  // Rounds in a row in which only Atelier's plugin gave the version and the command line did not answer for the vault.
+  let silentRounds = 0
   for (;;) {
     after = qualifyApp(await inspectApp(appProbe), { requireVersion: true })
     // A running app below the floor is final; an app that has not come up yet, or not yet opened a vault, is asked again.
@@ -526,9 +531,12 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
       try { vault = await appProbe.vaultState({ vaultRoot, route }) } catch { vault = { answered: false, indexReady: false } }
       if (vault?.answered === true && vault.indexReady === true) break
       // Only the command line answers for a vault. An app whose version still only Atelier's plugin reports gives no
-      // answer there, and waiting changes nothing: its command line is what is missing, not a launch.
-      if (vault?.answered !== true && after.versionSource === 'plugin') return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
-    }
+      // answer there, and waiting changes nothing: its command line is what is missing, not a launch. One such round
+      // is not enough: a tool call that timed out while the app was busy opening the window looks the same once, so
+      // the answer is given at the second round in a row.
+      silentRounds = vault?.answered !== true && after.versionSource === 'plugin' ? silentRounds + 1 : 0
+      if (silentRounds >= SILENT_ROUNDS) return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
+    } else silentRounds = 0
     if (monotonic() >= deadline) break
     await sleep(appPollMs)
   }
