@@ -3199,6 +3199,24 @@ test('a published view whose allocation record was lost is refused and says how 
   assert.equal(fs.existsSync(underDataRoot), false)
 })
 
+test('location show and location set say which view\'s record cannot be read, typed, and still show and decide for the others', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'])
+  const report = await world.engine().tick()
+  assert.deepEqual(report.scopes.map((entry) => entry.state), ['current', 'current'])
+  fs.writeFileSync(allocationFile(world.workspaceRoot(), EAST_SCOPE.scopeId), 'not json')
+  const unreadable = { scopeId: EAST_SCOPE.scopeId, path: null, origin: 'unreadable', reason: 'invalid-vault-allocation' }
+  const whole = { scopeId: FULL_SCOPE.scopeId, path: path.join(world.dir, 'Atelier', 'opening-fixture (scope-whole)'), origin: 'allocated' }
+  const show = await world.run(['location', 'show', '--json'])
+  assert.equal(show.exit, EXIT.ok, JSON.stringify(show.json))
+  assert.deepEqual(show.json.views, [whole, unreadable])
+  assert.match((await world.run(['location', 'show'])).stdout, /^view scope-east: no vault yet \(unreadable: invalid-vault-allocation\)$/m)
+  const set = await world.run(['location', 'set', path.join(world.dir, 'Other'), '--json'])
+  assert.equal(set.exit, EXIT.ok, JSON.stringify(set.json))
+  assert.deepEqual(set.json.views, [whole, unreadable])
+})
+
 test('no vault folder is allocated while the app\'s list cannot be read: the view says why and is allocated at a later tick, once the list reads', needsExchange, async (t) => {
   const world = makeWorld(t)
   const parent = path.join(world.dir, 'Atelier')

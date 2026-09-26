@@ -30,7 +30,7 @@ import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from '../runtime/obsidian/startup-adapters.mjs'
 import { OBSIDIAN_SETTINGS_FILE, obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../projection/obsidian/publication/vault-list.mjs'
 import { checkVaultParent, projectDisplayName, vaultFolderName } from '../runtime/obsidian/vault-location.mjs'
-import { hasCommittedGeneration, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
+import { PublicationRefusal, hasCommittedGeneration, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
 
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
@@ -232,7 +232,7 @@ function obsidianSettingsLines(settings) {
   return [`Obsidian's settings, written while it was quit: ${what}.`, ...(settings.backupPath ? [`  The file as it was is kept in ${settings.backupPath}.`] : [])]
 }
 
-const isTyped = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal
+const isTyped = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
 const plainMessage = (error) => String(error.message ?? '').replace(new RegExp(`^${error.code}: `), '')
 const NEXT = Object.freeze({
   usage: 'run `atelier obsidian --help`',
@@ -622,9 +622,14 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
 
     // Where a view's vault is, or will be: { path, origin }. A view the next tick will place is shown where it would go,
     // if that name is still free then (`to-be-allocated`).
+    // A view whose record cannot be read, or was lost, says why, as `status` does, and the other views are still shown.
     const vaultWhere = (workspace, scopeId, decided, projectName) => {
       if (workspace === null) return { path: null, origin: 'workspace-not-prepared' }
-      const found = vaultRootFor({ ...workspace, scopeId })
+      let found
+      try { found = vaultRootFor({ ...workspace, scopeId }) } catch (error) {
+        if (!isTyped(error)) throw error
+        return { path: null, origin: 'unreadable', reason: error.code }
+      }
       if (found.origin === 'legacy-data-root' && decided !== null && !hasCommittedGeneration({ ...workspace, scopeId })) {
         return { path: path.join(decided.parent, vaultFolderName({ projectName, scopeId })), origin: 'to-be-allocated' }
       }
@@ -701,7 +706,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       async location() {
         const where = vaultWhere
         const views = (project, enablement, workspace, decided) => enablement.scopes.map(({ scopeId }) => ({ scopeId, ...where(workspace, scopeId, decided, projectDisplayName(project)) }))
-        const lines = (list) => list.map((view) => `view ${view.scopeId}: ${view.path ?? 'no vault yet'} (${view.origin})`)
+        const lines = (list) => list.map((view) => `view ${view.scopeId}: ${view.path ?? 'no vault yet'} (${view.origin}${view.reason === undefined ? '' : `: ${view.reason}`})`)
         if (sub === 'show' || sub === undefined) {
           const { project, enablement, workspace } = readable()
           const { decisions } = shownMachine(machineOf(workspace), workspace)
@@ -716,7 +721,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         // Resolved, so a trailing separator (as tab completion leaves it) is no refusal.
         const parent = tilde ? path.resolve(path.join(homedir, value.slice(1))) : path.resolve(cwd, value)
         const { project, enablement, workspace, repositoryRoots, now } = writable()
-        const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultRootFor({ ...workspace, scopeId })).filter((found) => found.origin === 'allocated').map((found) => found.path)
+        // A record that cannot be read names no folder here; the engine refuses its view on its own.
+        const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultWhere(workspace, scopeId, null, null)).filter((found) => found.origin === 'allocated').map((found) => found.path)
         // A folder inside, or holding, a vault the app lists is refused now; when the list cannot be read, it is checked
         // again, and has to be read, before any vault is allocated there.
         const list = await appVaultList()
