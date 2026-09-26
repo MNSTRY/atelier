@@ -1215,6 +1215,91 @@ test('the launch is carried out without ever handing a URL to the operating syst
   assert.deepEqual(await runLaunchPlan({ ok: false, reason: 'vault-id-unknown' }, world({}).io), { launched: false, reason: 'vault-id-unknown' })
 })
 
+test('the production launcher\'s executors: each step runs the program it names, with no shell, in the neutral directory, with the given env and its timeout; a started app never gets the system opener', needsAppIsolation, (t) => {
+  // In a child with a private HOME, since this process never loads the production seams. Every way that child could
+  // start a program is replaced first by one that starts nothing and records the attempt, so only the stand-in
+  // execFile handed to the launcher answers, and a launcher that did not use it fails here instead of running anything.
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-launcher-executors-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const work = path.join(dir, 'neutral')
+  fs.mkdirSync(work)
+  const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
+  const script = `import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+const unguarded = []
+for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
+  childProcess[method] = (file, ...rest) => {
+    unguarded.push([method, String(file)])
+    const callback = rest.find((item) => typeof item === 'function')
+    if (!callback) throw new Error('nothing is started here')
+    setImmediate(() => callback(new Error('nothing is started here'), '', ''))
+    return { on() {}, once() {} }
+  }
+}
+syncBuiltinESMExports()
+const { createProductionLauncher } = await import(${JSON.stringify(seams)})
+const CLI = '/stand-in/bin/tool'
+const UNABLE = 'The CLI is unable to find Obsidian. Please make sure Obsidian is running and try again.'
+const VERSION = '1.13.7 (installer 1.12.7)'
+const isLink = (args) => args.length === 1 && args[0].includes('://')
+// Per run: how the stand-in answers a call, given how many version calls came before it.
+const RUNS = {
+  quitThenTaken: { platform: 'darwin', appRunning: false, answer: (file, args, versions) => (file === CLI && args[0] === 'version' ? { stdout: versions <= 2 ? UNABLE : VERSION } : file === CLI && isLink(args) ? { stdout: 'Processed URI ' + args[0] } : {}) },
+  quitLinkNotTaken: { platform: 'darwin', appRunning: false, answer: (file, args) => (file === CLI && args[0] === 'version' ? { stdout: VERSION } : {}) },
+  quitVersionFailed: { platform: 'darwin', appRunning: false, answer: (file, args) => (file === CLI ? { stdout: VERSION, failed: true } : {}) },
+  quitStartFailed: { platform: 'darwin', appRunning: false, answer: (file) => (file === '/usr/bin/open' ? { failed: true } : { stdout: VERSION }) },
+  runningNotTaken: { platform: 'darwin', appRunning: true, answer: () => ({}) },
+  linuxQuit: { platform: 'linux', appRunning: false, answer: () => ({}) },
+  linuxRunningTaken: { platform: 'linux', appRunning: true, answer: (file, args) => (file === CLI && isLink(args) ? { stdout: 'Processed URI ' + args[0] } : {}) },
+}
+const out = { unguarded, runs: {} }
+for (const [name, { platform, appRunning, answer }] of Object.entries(RUNS)) {
+  const calls = []
+  let versions = 0
+  const execFile = (file, args, options, callback) => {
+    if (file === CLI && args[0] === 'version') versions += 1
+    calls.push({ file, args, cwd: options.cwd, run: options.env.STAND_IN_RUN, home: options.env.HOME, timeout: options.timeout, killSignal: options.killSignal, shell: options.shell ?? null })
+    const reply = answer(file, args, versions)
+    setImmediate(() => callback(reply.failed ? new Error('exit 1') : null, reply.stdout ?? '', reply.stderr ?? ''))
+  }
+  const launcher = createProductionLauncher({ platform, env: { ...process.env, STAND_IN_RUN: name }, cliPath: CLI, workingDirectory: ${JSON.stringify(work)}, execFile, waitMs: 200, pollMs: 20 })
+  const result = await launcher.open({ vaultId: '0123456789abcdef', vaultPath: '/stand-in/vault', appRunning })
+  out.runs[name] = { result, calls }
+}
+process.stdout.write(JSON.stringify(out))`
+  const env = privateHomeEnv(dir)
+  const child = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 60000, env })
+  assert.equal(child.status, 0, child.stderr)
+  const { unguarded, runs } = JSON.parse(child.stdout)
+  assert.deepEqual(unguarded, [], 'nothing but the stand-in was asked to run a program')
+  const CLI = '/stand-in/bin/tool'
+  const link = 'obsidian://open?vault=0123456789abcdef'
+  const steps = (name) => runs[name].calls.map((call) => [call.file, ...call.args])
+  for (const [name, { calls }] of Object.entries(runs)) {
+    for (const call of calls) {
+      assert.deepEqual([call.cwd, call.run, call.home, call.killSignal, call.shell], [work, name, env.HOME, 'SIGKILL', null], `${name}: ${call.file} ${call.args.join(' ')}`)
+      // The command-line tool is given five seconds a call; the operating system's opener fifteen.
+      assert.equal(call.timeout, call.file === CLI ? 5000 : 15000, `${name}: ${call.file}`)
+    }
+  }
+  // A quit app on macOS: started plainly, asked its version until it answers itself (the tool's own "unable to find"
+  // line is no answer), then handed the link through the tool.
+  assert.deepEqual(runs.quitThenTaken.result, { launched: true, reason: 'plain-start-then-url' })
+  assert.deepEqual(steps('quitThenTaken'), [['/usr/bin/open', '-b', 'md.obsidian'], [CLI, 'version'], [CLI, 'version'], [CLI, 'version'], [CLI, link]])
+  // A link the started app did not take is left to it: never the system opener.
+  assert.deepEqual(runs.quitLinkNotTaken.result, { launched: true, reason: 'app-started-link-not-taken' })
+  assert.deepEqual(steps('quitLinkNotTaken'), [['/usr/bin/open', '-b', 'md.obsidian'], [CLI, 'version'], [CLI, link]])
+  // A version printed by a call that failed is no answer: nothing is handed over.
+  assert.deepEqual(runs.quitVersionFailed.result, { launched: true, reason: 'app-started-not-answering' })
+  assert.ok(steps('quitVersionFailed').length >= 3 && steps('quitVersionFailed').slice(1).every((step) => step.join(' ') === `${CLI} version`), JSON.stringify(steps('quitVersionFailed')))
+  assert.deepEqual([runs.quitStartFailed.result, steps('quitStartFailed')], [{ launched: false, reason: 'os-open-failed' }, [['/usr/bin/open', '-b', 'md.obsidian']]])
+  // A running app: the tool first, the system opener only when the tool did not take the link.
+  assert.deepEqual([runs.runningNotTaken.result, steps('runningNotTaken')], [{ launched: true, reason: 'os-open-accepted' }, [[CLI, link], ['/usr/bin/open', link]]])
+  // Linux: a quit app is started with the link by the system opener; a running one takes it through the tool.
+  assert.deepEqual([runs.linuxQuit.result, steps('linuxQuit')], [{ launched: true, reason: 'os-open-accepted' }, [['xdg-open', link]]])
+  assert.deepEqual([runs.linuxRunningTaken.result, steps('linuxRunningTaken')], [{ launched: true, reason: 'url-accepted' }, [[CLI, link]]])
+})
+
 test('Obsidian with its command line turned off answers every command with one line: it is no version, it is app-cli-unavailable / cli-turned-off with the setting to turn on, and open adds and launches nothing', async (t) => {
   const OFF = 'Command line interface is not enabled. Please turn it on in Settings > General > Advanced.'
   assert.deepEqual(readVersionAnswer({ stdout: `${OFF}\n` }), { version: null, noVaultOpen: false, cliOff: true })
