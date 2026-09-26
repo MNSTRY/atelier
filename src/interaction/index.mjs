@@ -11,12 +11,15 @@ export function selectInteractionAct({ act, policy, context, state, at }) {
   const reasons = [], scope = policy.scope, purpose = policy.purpose
   if (act.scope !== scope || act.purpose !== purpose) reasons.push('scope-or-purpose-differs')
   if (Date.parse(act.expiresAt) <= Date.parse(at)) reasons.push('expired')
+  // Reflective and coaching acts are Reflection whatever their origin; only
+  // ordinary Companion and work acts function with Reflection off.
+  const reflective = act.origin === 'witness' || act.mode !== 'ordinary'
   if (act.origin === 'witness' && act.mode === 'ordinary') reasons.push('reflective-mode-required')
-  if (act.origin === 'witness' && !policy.reflectionEnabled) reasons.push('reflection-disabled')
+  if (reflective && !policy.reflectionEnabled) reasons.push('reflection-disabled')
   if (act.mode === 'coaching' && (!policy.coachingEnabled || !act.dependencies.some(p => p.kind === 'intention'))) reasons.push('coaching-unavailable')
   if (act.kind === 'challenge' && !policy.challengeEnabled) reasons.push('challenge-disabled')
-  if (act.origin === 'witness' && !act.dependencies.some(p => p.kind === 'assessment')) reasons.push('reflective-assessment-missing')
-  if (act.origin === 'witness' && policy.initiative === 'responsive' && state.requestedReflection !== true) reasons.push('reflection-not-requested')
+  if (reflective && !act.dependencies.some(p => p.kind === 'assessment')) reasons.push('reflective-assessment-missing')
+  if (reflective && policy.initiative === 'responsive' && state.requestedReflection !== true) reasons.push('reflection-not-requested')
   if (!context || Object.keys(context).sort().join() !== 'assessments,observations,orientations' || !Array.isArray(context.observations) || !Array.isArray(context.assessments) || !Array.isArray(context.orientations) || context.observations.length > 128 || context.assessments.length > 64 || context.orientations.length > 64) throw new Error('bounded current interaction context required')
   const refs = []
   for (const observation of context.observations) {

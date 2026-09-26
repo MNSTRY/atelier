@@ -92,3 +92,12 @@ test('changed evidence during reservation cancels delivery; lost native response
   f.host.authorize = async () => false
   await assert.rejects(controller.deliver({ ...work, id: 'not-authorized' }), /authorize/)
 })
+test('reflective acts need Reflection enabled, an assessment and a request whatever their origin', () => {
+  const disabled = { ...current(), policy: { ...policy, reflectionEnabled: false } }
+  for (const origin of ['work', 'companion', 'witness']) {
+    const off = selectInteractionAct({ act: { ...act, origin }, ...disabled })
+    assert.equal(off.selection, 'declined'); assert.ok(off.reasons.includes('reflection-disabled'), JSON.stringify(off.reasons))
+    const bare = selectInteractionAct({ act: { ...act, origin, dependencies: act.dependencies.filter(p => p.kind !== 'assessment') }, ...current() })
+    assert.ok(bare.reasons.includes('reflective-assessment-missing'), JSON.stringify(bare.reasons))
+  }
+})
