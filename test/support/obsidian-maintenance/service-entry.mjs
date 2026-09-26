@@ -8,11 +8,16 @@
 //   --fail-tick-once=<CODE>       the first canonical graph build throws an untyped error with that code
 //   --crash-on-publication=<N>    the process kills itself, hard, during its Nth publication
 //   --crash-at=<point>            where in that publication (a point of the publisher's crash seam; default after-staging)
+//   --release-root=<directory>    under --startup, the package whose release it watches (a synthetic one), as a login
+//                                 item's service watches its own
+//   --first-tick-block-ms=<N>     the first canonical graph build holds the process for N milliseconds without yielding,
+//                                 so health does not answer in time and the service is busy
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from '../../../src/project/config.mjs'
 import { createEditorAdapter, publishView } from '../../../src/projection/obsidian/publication/index.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from '../../../src/projection/obsidian/publication/test-seam.mjs'
 import { buildGraph } from '../../../src/runtime/obsidian/pipeline.mjs'
+import { createReleaseWatch } from '../../../src/runtime/obsidian/release-watch.mjs'
 import { runServiceProcess, serviceOptionsFromArgv } from '../../../src/runtime/obsidian/service-main.mjs'
 import { createNullWatcherFactory } from '../../../src/runtime/obsidian/watchers.mjs'
 
@@ -23,9 +28,11 @@ const { adapter: _never, ...options } = serviceOptionsFromArgv(argv)
 let failuresLeft = typeof args['fail-tick-once'] === 'string' ? 1 : 0
 const crashOn = Number(args['crash-on-publication'] ?? 0)
 let publications = 0
+let blockFirstTick = Number(args['first-tick-block-ms'] ?? 0)
 
 const seams = {
   buildGraph(input) {
+    if (blockFirstTick > 0) { const until = Date.now() + blockFirstTick; blockFirstTick = 0; while (Date.now() < until) { /* held */ } }
     if (failuresLeft > 0) { failuresLeft -= 1; throw Object.assign(new Error('injected: no space left on device'), { code: args['fail-tick-once'] }) }
     return buildGraph(input)
   },
@@ -38,6 +45,7 @@ const seams = {
 
 await runServiceProcess({
   ...options,
+  ...(options.startup && typeof args['release-root'] === 'string' ? { releaseWatch: createReleaseWatch({ root: args['release-root'] }) } : {}),
   entryPath: fileURLToPath(import.meta.url),
   adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' }),
   engineOptions: { quietPeriodMs: 0, watcherFactory: createNullWatcherFactory(), seams },

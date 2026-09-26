@@ -11,11 +11,14 @@ import { LOOPBACK_HOSTS } from './service-client.mjs'
 // Private documents of the maintenance service of one workspace, under
 //
 //   <data>/obsidian/<workspace-id>/state/service/
-//     runtime.json     the adapter record of the running service (service-state v1)
-//     settings.json    what this machine chose: loopback host, port, startup consent
-//     last-error.json  the last tick that failed for a reason nobody typed
-//     service.log      the operational log of the service process
-//     start-lock/      serializes `start` for this workspace
+//     runtime.json       the adapter record of the running service (service-state v1)
+//     settings.json      what this machine chose: loopback host, port, startup consent
+//     last-error.json    the last tick that failed for a reason nobody typed
+//     last-startup.json  how the last start by the login item ended: started, or the refusal's code
+//     login-item.json    the installed login item (login-item.mjs)
+//     service.log        the operational log of the service process
+//     login-item.log     what a login item's service printed before it could open service.log
+//     start-lock/        serializes `start` for this workspace
 //
 // Owner-only, replaced atomically, outside every repository and every vault.
 // Every document is validated on every read. One that does not validate, or
@@ -24,7 +27,9 @@ import { LOOPBACK_HOSTS } from './service-client.mjs'
 
 export const SERVICE_SETTINGS_SCHEMA = 'atelier-obsidian-service-settings/v1'
 export const SERVICE_ERROR_SCHEMA = 'atelier-obsidian-service-last-error/v1'
+export const LAST_STARTUP_SCHEMA = 'atelier-obsidian-last-startup/v1'
 export const CONSENT_COVERAGES = Object.freeze(['service', 'service-and-startup'])
+export const STARTUP_OUTCOMES = Object.freeze(['started', 'refused'])
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
@@ -41,6 +46,7 @@ export function servicePaths(workspaceRoot) {
   return {
     stateLocation: path.join(workspaceRoot, 'state'), directory, record: path.join(directory, 'runtime.json'), settings: path.join(directory, 'settings.json'),
     lastError: path.join(directory, 'last-error.json'), log: path.join(directory, 'service.log'), startLock: path.join(directory, 'start-lock'),
+    lastStartup: path.join(directory, 'last-startup.json'), loginItem: path.join(directory, 'login-item.json'), loginItemLog: path.join(directory, 'login-item.log'),
   }
 }
 
@@ -73,27 +79,58 @@ const releases = new Map()
 // maintains; outside those it reads nothing else of the package but the
 // version in `package.json`. A release that changes any of it, and not only
 // the entry, differs. A package without `plugins/` reads as one with an empty
-// one. Computed once per process and package root, so a service keeps the
-// identity of the code it loaded.
-export function releaseIdentity({ root = PACKAGE_ROOT } = {}) {
-  if (!releases.has(root)) {
-    const hash = createHash('sha256')
-    const walk = (relative, { optional = false } = {}) => {
-      let entries
-      try { entries = fs.readdirSync(path.join(root, relative), { withFileTypes: true }) } catch (error) { if (optional && error.code === 'ENOENT') return; throw error }
-      for (const entry of entries.sort(byName)) {
-        const child = `${relative}/${entry.name}`
-        if (entry.isDirectory()) walk(child)
-        else if (entry.isFile()) hash.update(`${child}\0${createHash('sha256').update(fs.readFileSync(path.join(root, child))).digest('hex')}\n`)
-      }
+// one.
+
+// Every regular file a release identity covers, in a fixed order: `visit(relative, absolute)`. A missing `src/` or
+// `contracts/` throws (the package cannot be read); a missing `plugins/` is empty.
+export function walkRelease(root, visit) {
+  const walk = (relative, { optional = false } = {}) => {
+    let entries
+    try { entries = fs.readdirSync(path.join(root, relative), { withFileTypes: true }) } catch (error) { if (optional && error.code === 'ENOENT') return; throw error }
+    for (const entry of entries.sort(byName)) {
+      const child = `${relative}/${entry.name}`
+      if (entry.isDirectory()) walk(child)
+      else if (entry.isFile()) visit(child, path.join(root, child))
     }
-    for (const part of ['src', 'contracts']) walk(part)
-    walk('plugins', { optional: true })
-    let version = null
-    try { const read = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; version = typeof read === 'string' ? read : null } catch { version = null }
-    releases.set(root, Object.freeze({ version, digest: `sha256:${hash.digest('hex')}` }))
   }
+  for (const part of ['src', 'contracts']) walk(part)
+  walk('plugins', { optional: true })
+}
+
+// The release identity of the package at `root`, read now and never cached: { version, digest }.
+export function readReleaseIdentity({ root }) {
+  if (typeof root !== 'string' || !path.isAbsolute(root)) throw new TypeError('a release identity is read from the absolute root of a package')
+  const hash = createHash('sha256')
+  walkRelease(root, (relative, absolute) => { hash.update(`${relative}\0${createHash('sha256').update(fs.readFileSync(absolute)).digest('hex')}\n`) })
+  let version = null
+  try { const read = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; version = typeof read === 'string' ? read : null } catch { version = null }
+  return Object.freeze({ version, digest: `sha256:${hash.digest('hex')}` })
+}
+
+// readReleaseIdentity, computed once per process and package root, so a service keeps the identity of the code it
+// loaded.
+export function releaseIdentity({ root = PACKAGE_ROOT } = {}) {
+  if (!releases.has(root)) releases.set(root, readReleaseIdentity({ root }))
   return releases.get(root)
+}
+
+const ENTRY_IN_PACKAGE = Object.freeze(['src', 'runtime', 'obsidian', 'service-main.mjs'])
+
+// The root of the package whose service entry is `entryPath` (`<root>/src/runtime/obsidian/service-main.mjs`), as that
+// path names it, without resolving links; null for any other entry.
+export function packageRootOfEntry(entryPath) {
+  if (typeof entryPath !== 'string' || !path.isAbsolute(entryPath)) return null
+  const parts = path.resolve(entryPath).split(path.sep)
+  if (parts.length <= ENTRY_IN_PACKAGE.length || ENTRY_IN_PACKAGE.some((part, index) => parts[parts.length - ENTRY_IN_PACKAGE.length + index] !== part)) return null
+  return parts.slice(0, parts.length - ENTRY_IN_PACKAGE.length).join(path.sep) || path.sep
+}
+
+// The release that starting `entryPath` would run, read now from the package that path names (so a link pointed
+// elsewhere, or a `file:` install, is the package it leads to now); for an entry that is not a package's service entry,
+// this package's own, as it was loaded.
+export function releaseOfEntry(entryPath) {
+  const root = packageRootOfEntry(entryPath)
+  return root === null ? releaseIdentity() : readReleaseIdentity({ root })
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +229,33 @@ export function readLastServiceError({ workspaceRoot, workspaceId }) {
 export function writeLastServiceError({ workspaceRoot, workspaceId, document }) {
   validateLastError(document, workspaceId)
   atomicReplacePrivateText(path.join(serviceDirectory(workspaceRoot), 'last-error.json'), canonicalJson(document))
+  return document
+}
+
+// ---------------------------------------------------------------------------
+// How the last start by a login item ended
+// ---------------------------------------------------------------------------
+
+// { schema, workspaceId, at, outcome: 'started' | 'refused', code }: the code of the refusal, null for a start. Written by
+// the service when it runs with `--startup`, so a login item that exits cleanly on a refusal (and is therefore not
+// started again in a loop) still says why.
+function validateLastStartup(document, workspaceId) {
+  const code = 'invalid-service-last-startup'
+  closedObject(document, { required: ['schema', 'workspaceId', 'at', 'outcome', 'code'] }, code, 'the last startup')
+  const ok = document.schema === LAST_STARTUP_SCHEMA && document.workspaceId === workspaceId && TIMESTAMP.test(document.at) && STARTUP_OUTCOMES.includes(document.outcome)
+    && (document.outcome === 'started' ? document.code === null : typeof document.code === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(document.code))
+  if (!ok) refuse(code, 'the last startup is malformed')
+  return document
+}
+
+export function readLastStartup({ workspaceRoot, workspaceId }) {
+  const document = readJson(servicePaths(workspaceRoot).lastStartup, 'invalid-service-last-startup', 'the last startup')
+  return document === null ? null : validateLastStartup(document, workspaceId)
+}
+
+export function writeLastStartup({ workspaceRoot, workspaceId, document }) {
+  validateLastStartup(document, workspaceId)
+  atomicReplacePrivateText(path.join(serviceDirectory(workspaceRoot), 'last-startup.json'), canonicalJson(document))
   return document
 }
 

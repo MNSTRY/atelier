@@ -282,15 +282,153 @@ proceeds.
   accepts a connection and does not answer in time proves nothing.
   `inspectPrivateGenerationLock` reports the holder without changing anything.
 
-### Operating-system startup
+### Operating-system startup: the login item
 
 `buildStartupAdapter` returns the text of a launchd user agent (macOS) or a
 systemd user unit (Linux) from the values it is given. It writes no file,
 installs nothing, runs no service manager and looks nothing up on the machine.
 Windows startup has not been qualified and refuses with
-`startup-platform-unqualified`. Installing a unit is a separate system change
-that needs explicit user authorization; the service refuses to run with
-`--startup` unless the recorded consent covers startup.
+`startup-platform-unqualified`. The unit runs the service entry with
+`--startup` in the root directory, with the search path it is given, and is
+restarted after a crash or a non-zero exit but never after a clean one:
+
+| Key | launchd | systemd |
+| --- | --- | --- |
+| Program | `ProgramArguments`: Node, the entry, `--startup`, `--project`, `--data-root`, `--workspace-id`, `--adapter` | `ExecStart`, the same words |
+| Search path | `EnvironmentVariables` `PATH` | `Environment="PATH=…"` |
+| Directory | `WorkingDirectory` `/` | `WorkingDirectory=/` |
+| Start | `RunAtLoad` | `WantedBy=default.target` |
+| Restart | `KeepAlive` `SuccessfulExit` false, `ThrottleInterval` 60 | `Restart=on-failure`, `RestartSec=60`, `RestartPreventExitStatus=2` |
+| Stop | `ExitTimeOut` 60 (a tick in flight gets 30 s) | `TimeoutStopSec=60` |
+| Process type | `Standard`: the service's budgets were measured without background I/O throttling | – |
+| Output | `StandardOutPath`, `StandardErrorPath`: `state/service/login-item.log` | `StandardOutput`, `StandardError`: `append:` the same file |
+
+Installing one is an explicit request (`service unit --install`), never a
+side effect (`src/runtime/obsidian/login-item.mjs`):
+
+1. The entry is the one of the package installed for the project, found as
+   Node finds a package from the project's folder and named by that path,
+   not its real path, so an upgrade or a re-pointed link is what the next
+   start runs. Without one, the command's own package is used unless it lies
+   in a package runner's cache (npx, pnpm dlx, bunx) or a temporary folder:
+   `login-item-needs-installed-package`. Node is named by its real path, so a
+   version manager's per-shell link is never named. The search path keeps
+   absolute entries once, and none in a temporary folder. The unit always
+   names the data root the workspace was resolved under (the flag, the
+   pointer, the overlay's preference or the platform default, such as
+   `$XDG_DATA_HOME/atelier`) and the workspace identity, because the
+   manager's environment carries only the search path: the service at login
+   finds the same workspace, and, when the project no longer leads to it (it
+   moved, or its pointer is gone), records its refusal in the workspace the
+   unit names, if that exists.
+2. The consent is recorded before the unit is loaded, because the manager
+   starts the service as soon as it loads it: `--consent-actor ID`; for a
+   person at a terminal, the actor already recorded for the workspace or else
+   the account's name (asking for the login item there is that person's
+   consent); or a recorded consent that already covers startup. Otherwise
+   `startup-consent-required`. Its coverage becomes `service-and-startup`.
+   A proven service of an earlier release than the entry the unit will run
+   is stopped then, as `service stop` stops it, so the unit's own start at
+   load runs that entry instead of refusing beside the earlier one; if the
+   manager then refuses the unit, the entry is started as a child for this
+   session.
+3. The injected service manager (`service-managers.mjs`) writes the unit
+   atomically with mode 0644 and loads it. launchd: bootout of a loaded job
+   (it keeps the definition it was loaded with), a bounded wait until launchd
+   lets it go, then `bootstrap gui/<uid>`. systemd: `daemon-reload`, `enable`.
+   A unit file written where none was is removed again when the manager
+   does not take it, since launchd loads every property list in
+   `~/Library/LaunchAgents` at login.
+   A manager that refuses the unit takes the consent back to the one recorded
+   before; when none was, the consent just recorded stays for the actor, but
+   covers the service alone.
+4. `state/service/login-item.json` (`atelier-obsidian-login-item/v1`) records
+   the label, allocated once and kept, the unit file, the digest of its text,
+   the program and the search path. The answer is remembered as the
+   `loginItem` decision of the machine settings (`on`), by the actor named or
+   the person at the terminal; `--adapter=obsidian-cli`, when given, is
+   remembered as for `service start`.
+
+The production manager (`service-manager-production.mjs`) is the only code
+that runs `launchctl` or `systemctl` or writes into `~/Library/LaunchAgents`
+or the user's systemd folder. It is imported only by the command entry, and
+refuses under the Node test runner (`real-login-item-under-test`) and when
+HOME is not the account's own home directory (`login-item-home-mismatch`):
+a unit is registered in the account's real session whatever HOME says, so a
+private HOME never installs one.
+
+Once installed, `startService` starts the service through the manager
+(`launchctl kickstart -p`, `systemctl --user start`) instead of spawning a
+child, so two starts never compete, and accepts the runtime that proves itself
+with a record naming the digest of the entry the unit runs; the runtime
+identifier is the service's own there. As for a child, it waits for that
+runtime to be healthy and answers `busy` only when the wait is over and the
+runtime is still in its first tick. A listener that has not written its
+record yet is waited for as that service, never adopted. On the way, a unit
+whose text differs from what would be written now, keeping the recorded
+search path, is written and loaded again (`loginItem: { refreshed: true }`).
+The manager is asked first whether the person switched the item off (System
+Settings on macOS, `systemctl --user disable` on Linux); one that is off is
+neither written again, reloaded, enabled nor started through the manager
+(`login-item-switched-off`). A unit that is switched off, whose file is gone,
+or that the manager does not have loaded (no user systemd), is not forced: a
+child is started for that command only, and the answer says why (`loginItem:
+{ via: 'child', reason }`). `requestServiceTick` replaces an outdated service the same way,
+and so does `startService` with `replaceOutdated` (`service start`): a proven
+runtime of an earlier release is stopped through its own listener, under the
+start lock, and the installed entry started in its place
+(`replaced: 'outdated'`); one of a later release is left running and
+answered as `release: 'later'`.
+
+Which release is installed is read from the entry that would be started
+(`runtimeRelease`): the digest of that entry, and `readReleaseIdentity({
+root })` of the package that entry's path names (its root is the folder above
+`src/runtime/obsidian/service-main.mjs`, read without resolving links), read
+now and never cached. With a login item that is the project's own package,
+whatever package the command runs from, and a re-pointed link or a `file:`
+install is read where it leads now. An entry that is not a package's service
+entry (a test entry) is measured against this package's own release,
+`releaseIdentity()`, the cached form a service records when it starts. Both
+cover the package version and every file under `src/`, `contracts/` and
+`plugins/`; a package without `plugins/` reads as one with an empty one.
+
+Under `--startup` the service:
+
+- writes its log into its own bounded `service.log`, as under `start`; the
+  unit's output file receives only what happens before that log is open;
+- exits 0 on a refusal as well (another runtime of this workspace answers, no
+  consent that covers startup, an occupied port, arguments it cannot use), so
+  its manager does not start it again every minute, and records how the start
+  ended in `state/service/last-startup.json`
+  (`atelier-obsidian-last-startup/v1`: `at`, `outcome` `started` or
+  `refused`, `code`); `status` reports a refusal while the service is not
+  running. A refusal here is any error that carries a code, Node's system
+  errors included (`EACCES`, `EADDRNOTAVAIL` or `EMFILE` from listening,
+  `EPERM` where macOS privacy settings deny a folder): those, too, wait for
+  the next login or `open` instead of a restart every minute. Only an error
+  without a code exits 1 and is restarted;
+- records the path it was started by beside its real path
+  (`executable.ext.invokedAs`), so the busy proof reads a process table that
+  names the entry through a link;
+- after every tick, compares the release on disk, read through the path it
+  was started by, with the one it started with (`readReleaseIdentity`: the
+  package version and a digest of every file under `src/`, `contracts/` and
+  `plugins/`). The files' status is
+  compared first and the digest computed only when that differs; a package
+  that cannot be read is not a change yet. When they differ, the service
+  finishes the tick, removes its record and exits 75, which its manager
+  restarts on the new release.
+
+`service unit --remove` lowers the consent to the service alone first, so a
+unit a failed removal left behind could only refuse, then unloads it (launchd
+`bootout`, systemd `disable --now`, which stop a service it runs) and deletes
+the file and the record, and remembers `off`. It then starts the service again
+at once as a detached child for this session, under the consent now recorded,
+when the adapter is given or remembered; otherwise the next `open` starts it.
+`uninstall` removes the login item and stops the proven service, remembers
+`off`, starts nothing, and keeps the vaults, the private state, the project
+file and Obsidian's vault list. Removing Obsidian's vault entries is not part
+of it.
 
 The service entry refuses to run without an explicitly selected editor
 adapter. Public Atelier tests start only a test entry whose adapter reports
@@ -311,22 +449,29 @@ error, 3 the operation ran and its answer is not success.
 | `audience show`, `audience set me\|A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. `me` is only you: every audience but `sensitive`, which is added by name. The answer is remembered as the person's decision. A change invalidates every view at the next tick | private machine settings |
 | `mode show`, `mode set manual\|automatic` | `automatic` refuses without an installed, matching, active automatic policy | private machine settings |
 | `policy show`, `policy install FILE`, `policy revoke` | `install` validates against the apply-policy contract and stores the policy owner-only beside the machine settings, never in a project, a repository or a note. `revoke` marks the stored policy revoked, which the engine reads before its very next dispatch, and returns the mode to manual | private machine settings |
-| `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start records who allowed it: `--consent-actor ID`, or for a person at a terminal the account's name | what the lifecycle writes |
-| `service unit --print` | the text `buildStartupAdapter` returns. Installing a unit is not offered | nothing |
+| `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start records who allowed it: `--consent-actor ID`, or for a person at a terminal the account's name. `service start` replaces a proven service of an earlier release (`replaced: 'outdated'`) and never one of a later release (`release: 'later'`); with a login item it starts the service through it | what the lifecycle writes |
+| `service unit --print` | the text `service unit --install` would write now | nothing |
+| `service unit --install` | installs the login item and starts the service through it (see above). macOS and Linux | the service settings (consent), the unit file, `login-item.json`, the `loginItem` decision |
+| `service unit --remove` | lowers the consent to the service alone, unloads and deletes the unit, and starts the service again as a detached child for this session | the service settings, the unit file, `login-item.json`, the `loginItem` decision |
+| `uninstall` | removes the login item, stops the proven service, and prints where the vaults, the private state, the project file and Obsidian's vault list are; each is kept, and nothing is started again | the login item's files, the `loginItem` decision |
 | `open [--scope ID]` | starts or reconnects the owned service, asks it for a tick, reads the view back, qualifies the installed app, makes the app know the vault (through the app while it runs; in its settings while none runs), has the vault opened, and asks again for a view the app kept from publication | what the service writes; the app's vault list (see [Obsidian's vault list](obsidian-contract.md#obsidians-vault-list)) |
 
 Reaching the installed app or the operating system is never a default.
 `open`, `service start` and `service unit` refuse with
 `app-adapter-not-selected` unless `--adapter=obsidian-cli` is given, or was
 given once before to `open` or `service start` of this workspace, which
-remembers it (`selectAdapter`). The service entry keeps its own explicit
-rule. The modules that talk to an app are loaded only after that selection. A
-remembered adapter is used only by the real command-line entry and never
-under the Node test runner (`remembered-adapter-under-test`). Tests pass their
-own seams and a guard in the test file throws if anything tries to start the
-app, its command-line tool, an operating-system opener or a service manager,
-or starts the `obsidian` command's `open` or `service` outside the test
-runner's context with an environment that leads to the developer's app.
+remembers it (`selectAdapter`); `service unit --install` refuses the same way.
+The service entry keeps its own explicit rule. The modules that talk to an app
+are loaded only after that selection. A remembered adapter is used only by the
+real command-line entry and never under the Node test runner
+(`remembered-adapter-under-test`). A service manager is the caller's
+(`serviceManager`, or `seams.serviceManager`), or, for the real command-line
+entry only, the production one. Tests pass their own seams and a guard in the
+test file throws if anything tries to start the app, its command-line tool, an
+operating-system opener or a service manager, touches the account's real
+LaunchAgents or systemd folder, or starts the `obsidian` command's `open` or
+`service` outside the test runner's context with an environment that leads to
+the developer's app.
 
 A person at a terminal is never asked anything by these operations, but the
 first start of the maintenance service records the account's name as the
