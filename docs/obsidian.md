@@ -298,14 +298,14 @@ Obsidian.
 2. Set the private machine settings. They live outside every repository and
    are never committed:
    - `atelier obsidian audience set me` lets "only you" into a view: every
-     audience of a note but `sensitive`, which a vault takes only by name
-     (`audience set me,sensitive`); `audience set A,B` names the audiences
-     instead. No audience is admitted by default, so a view is empty until one
-     is set; `audience clear` empties it again. Notes that carry no
-     classification (no `kg` block) are withheld from every vault in this
-     release, "only you" included; the decision already records whether they
-     are shown, and a later change lets an "only you" vault show them. A list
-     of audiences never shows them.
+     audience of a note but `sensitive`, and the notes that carry no
+     classification, which only a vault that is yours alone shows.
+     `audience set A,B` names the audiences instead, and never shows notes
+     without a classification; `sensitive` is added by name
+     (`audience set me,sensitive`, which is such a list). No audience is
+     admitted by default, so a view is empty until one is set;
+     `audience clear` empties it again. See
+     [Notes without a classification](#notes-without-a-classification).
    - `atelier obsidian mode set manual` keeps every queued edit waiting for a
      person. `mode set automatic` is refused until an active automatic policy
      is installed.
@@ -350,11 +350,18 @@ atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo 
 - The first view declared is the default; `--default` makes a later one the
   default.
 - Before writing, the command counts the notes the view would show on this
-  machine, for the audiences the machine admits (for "only you" while nobody
-  decided who may see), and names how many of the notes it selects are
-  withheld: those without a classification (a `kg` block), and those whose
-  audience is not admitted. A view that would show no note is refused with
+  machine, as the machine decided who may see (as "only you", with the notes
+  without a classification it shows, while nobody decided), and names how
+  many of the notes it selects are withheld: those without a classification
+  (a `kg` block) that the decision does not show, and those whose audience is
+  not admitted. A view that would show no note is refused with
   `view-would-be-empty` and the counts; `--allow-empty` declares it anyway.
+  When the machine admits no audience at all (`audience clear`), the refusal
+  says so and names `atelier obsidian audience set me`.
+- While nobody decided who may see, the maintenance service publishes no
+  note, whatever the counts say: the next step `view add` names is then
+  `atelier obsidian audience set me`, before `atelier obsidian open` (`next`
+  under `--json`, in order).
 - A person at a terminal sees the change and the counts and is asked
   `Write this change? [Y/n]`; `--yes` answers beforehand, and no answer within
   10 minutes writes nothing (`unanswered`). For anyone else the command is the
@@ -376,6 +383,37 @@ atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo 
   `html`), not its `kg.type`, so `view add` does not offer it; a view by
   `kg.type` needs a contract change.
 
+### Notes without a classification
+
+A note whose front matter carries no `kg` block (or that has no front matter)
+is unclassified: the knowledge graph gives it the `private` audience, and by
+default no view shows it. A vault that is only yours shows it: the audience
+decision `only-you` with `unclassified: shown`, which `audience set me`
+records. A list of audiences never shows one, even a list that names every
+audience "only you" stands for, so a vault for anyone else can never carry
+them.
+
+A note whose labels cannot be known is never shown, in any vault: front
+matter Atelier cannot read (a block scalar such as `description: |`, a value
+wrapped onto a second line, a flow mapping), or a top-level `kg` key that is
+not a block (a list, a flow value). Such a note may say `sensitive`, which
+"only you" leaves out. Only a note with no front matter, or with front matter
+that reads and has no `kg` key at all, counts as one without a classification.
+
+In an "only you" vault such a note is shown only when its bytes read as a note
+the way the emitter reads every note, so one file that cannot be published
+(front matter that opens and never closes, closes at once, or carries a
+trailing space on its first line; bytes that are not UTF-8) never stops the
+vault: it stays withheld, as does a file that cannot be read. A shown note is
+part of the view in every respect: links to it are links inside the view,
+generated text may name it, the selection operation resolves it, and an edit
+to it is applied to its source like any other.
+
+A decision recorded before this release, "only you" with those notes
+withheld, keeps them withheld until `audience set me` is run again. Changing
+the decision rebuilds every view at the next tick (the eligibility revision
+changes).
+
 ### What this machine remembers
 
 A workspace's machine settings (`atelier-obsidian-machine-settings/v2`, owner
@@ -388,7 +426,7 @@ defaults (`defaults`), or carried over from an earlier release (`v1`).
 
 | Decision | Holds | Made today by |
 | --- | --- | --- |
-| `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you) or `audience set A,B` / `audience clear`; each withholds unclassified notes for now |
+| `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you, shown) or `audience set A,B` / `audience clear` (withheld) |
 | `location` | the absolute folder that holds this workspace's vaults | `location set DIR` |
 | `loginItem` | `on` or `off` | not yet: the first-run flow |
 | `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open` or `service start` |
