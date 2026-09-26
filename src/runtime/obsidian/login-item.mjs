@@ -189,7 +189,8 @@ function checkManager(manager, platform) {
 // which starts the service at once: the command stops a service of an earlier release there, so that start runs the
 // entry the unit names instead of finding the earlier one running.
 // { installed: true, label, file, kind, entry: { path, source }, node, searchPath } or, when the manager did not take
-// the unit, { installed: false, reason, label } with the consent as it was.
+// the unit, { installed: false, reason, label } with the consent recorded before, or, when none was, the one just
+// recorded covering the service alone.
 export async function installLoginItem(options = {}) {
   const { loadProject, dataRoot, env = process.env, platform = process.platform, manager, consent, ownEntry, entryArgs = [], nodePath = realNodePath(), pathValue = env.PATH, clock = () => new Date(), temporary = temporaryRoots(), beforeInstall = null } = options
   checkManager(manager, platform)

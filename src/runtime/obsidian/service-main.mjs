@@ -23,7 +23,9 @@ import { RELEASE_CHANGED, resolveServiceWorkspace, runMaintenanceService } from 
 //
 // Exit codes: 0 after a clean stop, and under `--startup` after a refusal too;
 // 2 (EXIT_REFUSED) after a refusal otherwise; 75 (EXIT_RELEASE_CHANGED) under
-// `--startup` once the package changed on disk; 1 after an error nobody typed.
+// `--startup` once the package changed on disk; 1 after an error without a
+// code. A refusal is any error that carries a string code, Node's system
+// errors (EACCES, EADDRNOTAVAIL, EPERM) included.
 
 // Reaching a real app happens here and nowhere else in the service: the
 // production probe and the CLI transport are imported only once `--adapter`
@@ -153,7 +155,8 @@ const invokedDirectly = (() => { try { return Boolean(process.argv[1]) && fs.rea
 
 if (invokedDirectly) {
   const argv = process.argv.slice(2)
-  // Before anything else is loaded, so the release it notes is the one this process loads.
+  // As early as this entry can: its static imports have already loaded most of the modules, so a release that changes
+  // between this process's start and this reading is not noticed until the next change (docs/obsidian.md says so).
   const releaseWatch = argv.includes('--startup') ? watchRelease(process.argv[1]) : null
   let options = null
   try {

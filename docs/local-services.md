@@ -339,7 +339,9 @@ side effect (`src/runtime/obsidian/login-item.mjs`):
    A unit file written where none was is removed again when the manager
    does not take it, since launchd loads every property list in
    `~/Library/LaunchAgents` at login.
-   A manager that refuses the unit leaves the consent as it was.
+   A manager that refuses the unit takes the consent back to the one recorded
+   before; when none was, the consent just recorded stays for the actor, but
+   covers the service alone.
 4. `state/service/login-item.json` (`atelier-obsidian-login-item/v1`) records
    the label, allocated once and kept, the unit file, the digest of its text,
    the program and the search path. The answer is remembered as the
@@ -400,7 +402,11 @@ Under `--startup` the service:
   ended in `state/service/last-startup.json`
   (`atelier-obsidian-last-startup/v1`: `at`, `outcome` `started` or
   `refused`, `code`); `status` reports a refusal while the service is not
-  running;
+  running. A refusal here is any error that carries a code, Node's system
+  errors included (`EACCES`, `EADDRNOTAVAIL` or `EMFILE` from listening,
+  `EPERM` where macOS privacy settings deny a folder): those, too, wait for
+  the next login or `open` instead of a restart every minute. Only an error
+  without a code exits 1 and is restarted;
 - records the path it was started by beside its real path
   (`executable.ext.invokedAs`), so the busy proof reads a process table that
   names the entry through a link;
