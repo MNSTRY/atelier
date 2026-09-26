@@ -24,8 +24,11 @@ import { fileURLToPath } from 'node:url'
 
 const BANNED_PROGRAMS = ['obsidian-cli', 'obsidian', 'open', 'xdg-open', 'launchctl', 'systemctl', 'osascript']
 const WRAPPERS = ['sh', 'bash', 'zsh', 'dash', 'env', 'cmd', 'powershell', 'pwsh', 'nohup', 'sudo']
-// A child that could reach the session's own service manager or app: it must run under a private HOME.
+// A child that could reach the session's own service manager or app: it must run under a private HOME. Besides the
+// words that name them, the obsidian command's `uninstall` and `service unit` reach the production manager with a
+// remembered adapter or none at all.
 const REACHES_THE_SESSION = /--adapter=obsidian-cli|app-production-seams|service-manager-production/
+const reachesTheSession = (words) => words.some((word) => REACHES_THE_SESSION.test(word)) || (words.includes('obsidian') && words.some((word) => word === 'uninstall' || word === 'unit'))
 const REAL_HOMES = [os.homedir(), process.env.HOME].filter((home) => typeof home === 'string' && home !== '').map((home) => path.resolve(home))
 const PROTECTED = [...new Set(REAL_HOMES.flatMap((home) => [
   path.join(home, 'Library', 'LaunchAgents'), path.join(home, '.config', 'systemd'), path.join(home, 'Library', 'Application Support', 'obsidian'), path.join(home, '.config', 'obsidian'),
@@ -42,7 +45,7 @@ function guardSpawn(command, args, options) {
     throw error
   }
   const home = (options?.env ?? process.env).HOME
-  if (words.some((word) => REACHES_THE_SESSION.test(word)) && (typeof home !== 'string' || home === '' || REAL_HOMES.includes(path.resolve(home)))) {
+  if (reachesTheSession(words) && (typeof home !== 'string' || home === '' || REAL_HOMES.includes(path.resolve(home)))) {
     const error = new Error('spawn guard: a child that can reach the session\'s service manager or app needs a private HOME, never the developer\'s own')
     guardErrors.push(error.message)
     throw error
@@ -706,13 +709,17 @@ test('the guards throw before a service manager starts or a real unit folder is 
   for (const program of ['launchctl', '/bin/launchctl', 'systemctl', '/usr/bin/systemctl', 'osascript', 'open', 'obsidian-cli']) assert.throws(() => childProcess.spawnSync(program, ['print']), /spawn guard/, program)
   assert.throws(() => childProcess.spawnSync('/usr/bin/env', ['launchctl', 'bootstrap']), /spawn guard/)
   assert.throws(() => childProcess.spawnSync(process.execPath, ['-e', '0', '--', 'service-manager-production'], { env: { ...process.env } }), /private HOME/)
+  // The obsidian command's uninstall and service unit reach the production manager without naming it.
+  assert.throws(() => childProcess.spawnSync(process.execPath, ['-e', '0', '--', 'obsidian', 'uninstall'], { env: { ...process.env } }), /private HOME/)
+  assert.throws(() => childProcess.spawnSync(process.execPath, ['-e', '0', '--', 'obsidian', 'service', 'unit', '--remove'], { env: { ...process.env } }), /private HOME/)
   for (const root of PROTECTED) {
     assert.throws(() => fs.writeFileSync(path.join(root, 'ai.mnstry.atelier.guard.plist'), 'x'), /fs guard/)
     assert.throws(() => fs.mkdirSync(path.join(root, 'user'), { recursive: true }), /fs guard/)
   }
-  assert.equal(guardErrors.length, before + 9 + 2 * PROTECTED.length)
+  assert.equal(guardErrors.length, before + 11 + 2 * PROTECTED.length)
   guardErrors.length = before
   assert.doesNotThrow(() => guardSpawn('node', ['--version']))
+  assert.doesNotThrow(() => guardSpawn('node', ['bin/atelier.mjs', 'obsidian', 'uninstall'], { env: { HOME: path.join(TMP, 'a-private-home') } }))
 })
 
 // ---------------------------------------------------------------------------
