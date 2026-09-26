@@ -307,6 +307,13 @@
   (`settings-changed`) is still `publisher-conflict`, but its next step no
   longer tells the person to close another publisher: it names the file as
   the cause and says that the view is retried automatically.
+- A plugin-file drift that publishing cannot repair (the data file of a vault
+  root that is a link, say) was published twice whenever the maintenance
+  service started: once by the start's own tick and once more when the
+  service first compared the plugin files with the disk, or when that tick's
+  publication changed the pinned files. What a publication leaves on disk is
+  now taken as seen, so such a view is published once per start, as every
+  view is. A plugin file a person changes later is still written again.
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
   worked, and `atelier obsidian help` showed them). A test now fails when a

@@ -207,6 +207,12 @@ export async function runMaintenanceService(options = {}) {
       log({ at: isoTime(clock), event: 'plugin-drift-not-read', code: errorCode(error), name: errorName(error) })
     }
   }
+  // What a publication of this tick left is no drift to ask about again (plugin-drift.mjs).
+  const settleDriftLooks = () => {
+    try { pluginDrift.settle([...pluginChannel.bearers().keys()]) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-drift-not-read', code: errorCode(error), name: errorName(error) })
+    }
+  }
 
   // A package that changed on disk: another release, loaded module by module into this process from then on.
   const releaseChanged = () => {
@@ -220,7 +226,11 @@ export async function runMaintenanceService(options = {}) {
       // The service runs only while its record names it: a replaced or removed record ends it, cleanly.
       if (!recordIsOurs()) { void shutdown('record-no-longer-names-this-runtime'); return { state: 'stopping', reason: 'record-no-longer-names-this-runtime' } }
       askForDriftedViews()
-      try { return await engine.tick() } finally {
+      try {
+        const report = await engine.tick()
+        if (report?.state === 'ticked') settleDriftLooks()
+        return report
+      } finally {
         // After the tick, whether it succeeded or not: the next one runs in a process of the release now on disk.
         if (!stopping && releaseChanged()) { log({ at: isoTime(clock), event: RELEASE_CHANGED }); void shutdown(RELEASE_CHANGED) }
       }

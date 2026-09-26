@@ -18,6 +18,9 @@ import { viewVaultRoot } from './plugin-choice.mjs'
 // where a file goes) is asked about once, not at every tick; a change to it is
 // asked about again. Where the plugin is turned off in the vault, a pinned
 // file that is gone is no drift: the publisher never makes one again.
+// `settle(scopeIds)` looks again after each tick, and takes what a publication
+// of that tick left as seen, so a drift publishing cannot repair is not
+// published a second time at the next look (at a service's start, say).
 
 const segment = (identifier) => identifier.replaceAll(':', '_')
 const TURNED_OFF = 'turned-off-in-this-vault'
@@ -33,7 +36,7 @@ function pinnedPlugin(workspaceRoot, workspaceId, scopeId) {
     if (sha256Digest(bytes) !== pointer.manifestDigest) return null
     const owned = JSON.parse(bytes.toString('utf8'))?.ext?.[OBSIDIAN_EXT_KEY]?.settings?.pluginOwned
     if (!Array.isArray(owned?.files)) return null
-    return { files: owned.files.filter((file) => typeof file?.path === 'string' && typeof file?.digest === 'string'), off: owned.withheldBecause === TURNED_OFF }
+    return { manifest: pointer.manifestDigest, files: owned.files.filter((file) => typeof file?.path === 'string' && typeof file?.digest === 'string'), off: owned.withheldBecause === TURNED_OFF }
   } catch {
     return null
   }
@@ -54,25 +57,49 @@ function onDisk(vaultRoot, relativePath) {
 }
 
 export function createPluginDriftObserver({ workspaceRoot, workspaceId }) {
+  // Per view: the signature of the last look, and the committed manifest it was taken under.
   const looked = new Map()
+  // The views the last observe asked to be prepared again: the tick that follows publishes them.
+  let asked = new Set()
+  // What the pinned plugin files of a view look like on disk now; null when its committed generation pins none.
+  const look = (scopeId) => {
+    const pinned = pinnedPlugin(workspaceRoot, workspaceId, scopeId)
+    if (pinned === null || pinned.files.length === 0) return null
+    // The view's vault wherever it is; one that cannot be found is refused by the engine, not observed here.
+    let vaultRoot
+    try { vaultRoot = viewVaultRoot(workspaceRoot, scopeId, workspaceId) } catch (error) { if (typeof error?.code !== 'string') throw error; return null }
+    let root = 'absent'
+    try { const stat = fs.lstatSync(vaultRoot); root = stat.isSymbolicLink() ? 'link' : (stat.mode & 0o777).toString(8) } catch { root = 'absent' }
+    const disk = pinned.files.map((file) => onDisk(vaultRoot, file.path))
+    const differs = disk.some((found, index) => found !== pinned.files[index].digest && !(pinned.off && found === 'absent'))
+    return { differs, signature: JSON.stringify([root, pinned.files.map((file) => file.digest), disk]), manifest: pinned.manifest }
+  }
   return {
     observe(scopeIds) {
       const drifted = []
       for (const scopeId of scopeIds) {
-        const pinned = pinnedPlugin(workspaceRoot, workspaceId, scopeId)
-        if (pinned === null || pinned.files.length === 0) { looked.delete(scopeId); continue }
-        // The view's vault wherever it is; one that cannot be found is refused by the engine, not observed here.
-        let vaultRoot
-        try { vaultRoot = viewVaultRoot(workspaceRoot, scopeId, workspaceId) } catch (error) { if (typeof error?.code !== 'string') throw error; looked.delete(scopeId); continue }
-        let root = 'absent'
-        try { const stat = fs.lstatSync(vaultRoot); root = stat.isSymbolicLink() ? 'link' : (stat.mode & 0o777).toString(8) } catch { root = 'absent' }
-        const disk = pinned.files.map((file) => onDisk(vaultRoot, file.path))
-        const differs = disk.some((found, index) => found !== pinned.files[index].digest && !(pinned.off && found === 'absent'))
-        const signature = JSON.stringify([root, pinned.files.map((file) => file.digest), disk])
-        if (differs && looked.get(scopeId) !== signature) drifted.push(scopeId)
-        looked.set(scopeId, signature)
+        const seen = look(scopeId)
+        if (seen === null) { looked.delete(scopeId); continue }
+        if (seen.differs && looked.get(scopeId)?.signature !== seen.signature) drifted.push(scopeId)
+        looked.set(scopeId, { signature: seen.signature, manifest: seen.manifest })
       }
+      asked = new Set(drifted)
       return drifted
+    },
+    // After a tick. A view this tick published (one the last observe asked for, one whose committed generation
+    // changed since the last look, or one never looked at before) had every plugin file it pins written or left for
+    // the person by its publisher: what the disk shows now is taken as seen, without asking. So a drift publishing
+    // cannot repair (the data file of a vault root that is a link, say) is not published again at the next look,
+    // whether that publication moved the pins or repaired another file. Any other view keeps its last look, so a
+    // change made during the tick is seen at the next one.
+    settle(scopeIds) {
+      for (const scopeId of scopeIds) {
+        const seen = look(scopeId)
+        if (seen === null) { looked.delete(scopeId); continue }
+        const last = looked.get(scopeId)
+        if (asked.has(scopeId) || last === undefined || last.manifest !== seen.manifest) looked.set(scopeId, { signature: seen.signature, manifest: seen.manifest })
+      }
+      asked = new Set()
     },
   }
 }
