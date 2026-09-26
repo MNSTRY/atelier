@@ -151,9 +151,12 @@ test('source references, private placement, exact plans and writer ownership fai
   const p = plan(store, ['../outside.md', 'redirect.md', 'notes.md']);
   assert.deepEqual(p.items.map(item => item.initialStatus), ['unavailable', 'unavailable', 'pending']);
   assert.throws(() => store.run({ ...reference(p), planDigest: `sha256:${'0'.repeat(64)}` }), { code: 'INGESTION_STALE' });
-  assert.throws(() => createIngestionStore({ ...options, workspaceId: 'another' }), { code: 'INGESTION_WORKSPACE' });
+  const another = createIngestionStore({ ...options, workspaceId: 'another' });
+  assert.throws(() => another.status(reference(p)), { code: 'INGESTION_WORKSPACE' });
+  assert.throws(() => another.plan({ scope, purpose: 'Refuse another workspace.', budget, sources: [{ id: 'notes', ref: 'notes.md' }] }), { code: 'INGESTION_WORKSPACE' });
   const release = acquirePrivateLock(path.join(root, '.atelier-local/ingestion/operation.lock'));
-  try { assert.throws(() => store.run(reference(p)), /locked/); } finally { release(); }
+  // A writer holding the operation lock refuses another writer, never a reader.
+  try { assert.throws(() => store.run(reference(p)), /locked/); assert.equal(store.status(reference(p)).usage.attempts, 0); } finally { release(); }
   assert.equal(store.status(reference(p)).usage.attempts, 0);
   const file = path.join(root, '.atelier-local/ingestion/plans', p.planId, 'plan.json');
   const body = JSON.parse(fs.readFileSync(file)); body.purpose = 'Modified after planning.'; fs.writeFileSync(file, JSON.stringify(body));
@@ -210,4 +213,15 @@ test('external operation envelopes reject unknown keys and missing reads create 
   const missing = { planId: 'plan-missing', planDigest: `sha256:${'a'.repeat(64)}` };
   assert.throws(() => store.status(missing), { code: 'INGESTION_MISSING' });
   assert.equal(fs.existsSync(path.join(root, '.atelier-local/ingestion/plans/plan-missing')), false);
+});
+
+test('reads neither bind a workspace identity nor create private state', t => {
+  const { root, options } = fixture(t);
+  const typo = createIngestionStore({ ...options, workspaceId: 'garden-workspce' });
+  const missing = { planId: `plan-${'a'.repeat(40)}`, planDigest: `sha256:${'0'.repeat(64)}` };
+  assert.throws(() => typo.status(missing), { code: 'INGESTION_MISSING' });
+  assert.throws(() => typo.query({ ...missing, query: 'garden' }), { code: 'INGESTION_MISSING' });
+  assert.equal(fs.existsSync(path.join(root, '.atelier-local/ingestion/workspace.json')), false);
+  const p = plan(createIngestionStore(options));
+  assert.equal(p.workspaceId, options.workspaceId);
 });

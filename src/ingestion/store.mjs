@@ -114,8 +114,12 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
     return directory(...parts);
   }
   placement();
-  const identityPath = path.join(directory(), 'workspace.json'), identity = { schema: schema('workspace'), workspaceId };
-  withPrivateLock(path.join(directory(), 'operation.lock'), () => {
+  const identityPath = path.join(root, '.atelier-local', 'ingestion', 'workspace.json'), identity = { schema: schema('workspace'), workspaceId };
+  // Only plan binds the workspace identity, under the operation lock. Reads
+  // take no lock and create nothing, so they neither wait on a running
+  // ingestion nor bind a mistyped workspace id.
+  function bindIdentity() {
+    directory();
     if (fs.existsSync(identityPath)) {
       if (!same(valid('workspace', readJson(identityPath)), identity)) refuse('INGESTION_WORKSPACE', 'ingestion workspace identity differs');
     } else {
@@ -123,9 +127,11 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
       if (fs.existsSync(plans) && fs.readdirSync(plans).length) refuse('INGESTION_INTEGRITY', 'ingestion workspace identity is missing');
       publishPrivateFile(identityPath, canonicalize(identity) + '\n');
     }
-  });
+  }
   function checkIdentity() {
-    placement(); directory();
+    placement(); existingDirectory();
+    try { fs.lstatSync(identityPath); }
+    catch (error) { if (error.code === 'ENOENT') refuse('INGESTION_MISSING', 'ingestion plan state is unavailable'); throw error; }
     if (!same(valid('workspace', readJson(identityPath)), identity)) refuse('INGESTION_WORKSPACE', 'ingestion workspace identity differs');
   }
   const readers = new Map();
@@ -267,7 +273,7 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
       input = ingestionJson(input); valid('planInput', input);
       if (new Set(input.sources.map(source => source.id)).size !== input.sources.length) refuse('INGESTION_INVALID', 'source identifiers must be unique');
       return withPrivateLock(path.join(directory(), 'operation.lock'), () => {
-        checkIdentity();
+        bindIdentity();
         const items = withIntakeReadScope(intake, () => input.sources.map(source => {
           const processor = valid('processor', describeIngestionProcessor(source.ref));
           try {
