@@ -336,6 +336,9 @@ side effect (`src/runtime/obsidian/login-item.mjs`):
    atomically with mode 0644 and loads it. launchd: bootout of a loaded job
    (it keeps the definition it was loaded with), a bounded wait until launchd
    lets it go, then `bootstrap gui/<uid>`. systemd: `daemon-reload`, `enable`.
+   A unit file written where none was is removed again when the manager
+   does not take it, since launchd loads every property list in
+   `~/Library/LaunchAgents` at login.
    A manager that refuses the unit leaves the consent as it was.
 4. `state/service/login-item.json` (`atelier-obsidian-login-item/v1`) records
    the label, allocated once and kept, the unit file, the digest of its text,

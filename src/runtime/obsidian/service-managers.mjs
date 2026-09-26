@@ -18,7 +18,9 @@ import { atomicReplacePrivateText, readRegularTextNoFollow } from '../../project
 //   launchd  install  write the property list (mode 0644, atomically); boot
 //                     the job out if it is loaded, because a loaded job keeps
 //                     the definition it was loaded with, and wait until
-//                     launchd has let it go; bootstrap it (RunAtLoad starts it)
+//                     launchd has let it go; bootstrap it (RunAtLoad starts it);
+//                     a file written where none was is removed again when
+//                     launchd did not take it
 //            start    kickstart -p: starts the job when it is not running and
 //                     prints its PID either way
 //            remove   bootout; delete the file
@@ -161,12 +163,18 @@ export function createLaunchdManager({ run, uid, directory, waitMs = BOOTOUT_WAI
     readUnit({ label, fileName }) { checkUnit({ label, fileName }); return files.read(fileName) },
     async install({ label, fileName, text }) {
       checkUnit({ label, fileName })
+      // launchd loads every property list in LaunchAgents at login: one this installation wrote where none was is
+      // removed again when launchd did not take it.
+      const existed = files.present(fileName)
       const written = files.write(fileName, text)
       if (!written.ok) return written
       const out = await bootout(label)
-      if (!out.ok) return out
+      if (!out.ok) { if (!existed) files.remove(fileName); return out }
       const answer = await launchctl('bootstrap', domain, files.fileFor(fileName))
-      if (answer.status !== 0) return failed(answer.status === null ? 'login-item-unavailable' : 'login-item-install-failed', answer)
+      if (answer.status !== 0) {
+        if (!existed) files.remove(fileName)
+        return failed(answer.status === null ? 'login-item-unavailable' : 'login-item-install-failed', answer)
+      }
       return { ok: true, file: files.fileFor(fileName) }
     },
     async start({ label, fileName }) {

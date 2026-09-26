@@ -554,6 +554,20 @@ test('launchd: a refused bootstrap, a start of a job it does not have and a job 
   assert.equal(fs.readFileSync(elsewhere, 'utf8'), 'somebody else\'s')
 })
 
+test('launchd: a refused bootstrap leaves no property list behind when there was none before, and keeps the one there was', async (t) => {
+  const { createLaunchdManager } = await managers()
+  const { directory } = await managerWorld(t)
+  const label = 'ai.mnstry.atelier.harbor-notes.ws-1'
+  const file = path.join(directory, `${label}.plist`)
+  const refusing = createLaunchdManager({ run: recordingRun((program, args) => (args[0] === 'bootout' ? { status: 3 } : args[0] === 'print' ? { status: 113 } : args[0] === 'bootstrap' ? { status: 5, stderr: 'Bootstrap failed: 5: Input/output error' } : undefined)).run, uid: 501, directory, pollMs: 1 })
+  assert.equal((await refusing.install({ label, fileName: `${label}.plist`, text: 'new' })).code, 'login-item-install-failed')
+  assert.equal(fs.existsSync(file), false, 'launchd loads every property list in LaunchAgents at login')
+  // One that was there stays: it is the item somebody installed, now in the text of this installation.
+  fs.writeFileSync(file, 'earlier')
+  assert.equal((await refusing.install({ label, fileName: `${label}.plist`, text: 'new' })).code, 'login-item-install-failed')
+  assert.equal(fs.readFileSync(file, 'utf8'), 'new')
+})
+
 test('mutation control: a launchd manager that bootstraps before it writes the file fails the order oracle', async (t) => {
   const { createLaunchdManager } = await managers()
   const { directory } = await managerWorld(t)
