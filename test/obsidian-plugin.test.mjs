@@ -58,6 +58,7 @@ import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP, PLUGIN_FILES_WAIT_NEXT, pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
 import { readServiceRecord, releaseIdentity, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
 import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
+import { OPENING_OUTCOMES, REASON_NEXT, nextStep } from '../src/runtime/obsidian/opening.mjs'
 import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { createMaintenanceStateStore } from '../src/runtime/obsidian/state-store.mjs'
 import {
@@ -1426,6 +1427,18 @@ test('a plugin file another writer changes under a publication is a race: the vi
   assert.ok(world.recovered().some((bytes) => bytes.toString() === '/* written meanwhile */\n'), 'the replaced bytes are kept')
 })
 
+test('a view held by a churning plugin or settings file is told what holds it and that it is retried, never to close another publisher', () => {
+  for (const reason of ['plugin-file-changed', 'settings-changed']) {
+    const next = nextStep('publisher-conflict', reason)
+    assert.equal(next, REASON_NEXT[reason], reason)
+    assert.notEqual(next, OPENING_OUTCOMES['publisher-conflict'].next, reason)
+    assert.match(next, /^no other publisher holds this vault: /, reason)
+    assert.match(next, /retried automatically/, reason)
+  }
+  assert.match(REASON_NEXT['plugin-file-changed'], /\.obsidian\/plugins/)
+  assert.match(REASON_NEXT['settings-changed'], /not written over/)
+})
+
 test('a plugin or settings file another program keeps replacing while the publisher opens it is a race of that file, never a person\'s edit, and the notes go on', needsExchange, async (t) => {
   const world = publicationWorld(t)
   assert.equal((await world.publish(pluginViewOf('gen-0001'))).state, 'committed')
@@ -2267,6 +2280,9 @@ test('a change the person makes to the list while a publication runs is never wr
   world.advance(1000)
   assert.ok((await service.tickNow()).ok)
   assert.deepEqual([world.freshness().state, world.freshness().reason], ['publisher-conflict', 'settings-changed'], 'held: the list changed under the publication')
+  // Status names the settings file as the cause, not another publisher or an editor.
+  const held = (await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0]
+  assert.deepEqual([held.outcome, held.reason, held.next], ['publisher-conflict', 'settings-changed', REASON_NEXT['settings-changed']])
   assert.equal(fs.readFileSync(vault.list, 'utf8'), '[]', 'the entry is not written back over the change')
   assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'], 'nothing is decided from a change seen in passing')
 

@@ -302,6 +302,11 @@
   there, and `status` and `open` add `plugin files wait for the app` to the
   plugin line, with a next step (`files: "waits-for-app"` and `next` on
   `plugin` in `--json`).
+- A view held because a program kept replacing a plugin file
+  (`plugin-file-changed`) or a settings file changed while it was published
+  (`settings-changed`) is still `publisher-conflict`, but its next step no
+  longer tells the person to close another publisher: it names the file as
+  the cause and says that the view is retried automatically.
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
   worked, and `atelier obsidian help` showed them). A test now fails when a
