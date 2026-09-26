@@ -165,6 +165,9 @@ Generate `graph` and `project` output before starting the preview. Existing laun
 configs are not rewritten by these template changes. Append server arguments
 following a `--` separator after the configured Node arguments. The host process
 lifecycle still needs qualification before relying on preview restarts.
+A repository that tracks `.html`, `.pdf` or `.docx` files needs a sidecar for
+each before its first graph; see
+[documents in an adopted repository](#documents-in-an-adopted-repository).
 
 Upgrade planning and application use the same optional `gh api user` fallback
 as ordinary boundary checks. Supply a valid explicit selector or mapped identity
@@ -201,6 +204,80 @@ atelier readiness export --dry-run --project ./atelier.project.json
 ```
 
 These commands read local files and write generated local outputs only.
+
+### Documents in an adopted repository
+
+The knowledge graph reads every `.md`, `.html`, `.pdf` and `.docx` file that
+Git does not ignore. Markdown carries its own metadata. Each of the other
+three needs an adjacent `<file>.kg.json` sidecar, and `atelier graph` fails
+until every one has one. A vault with a PDF attachment, a static website or a
+folder of documents therefore fails its first graph after `adopt`.
+
+`atelier enroll documents` writes the missing sidecars:
+
+```bash
+atelier enroll documents --dry-run   # list what would be written
+atelier enroll documents             # write them
+atelier graph
+```
+
+Each sidecar is the smallest classification that lets the graph pass: the
+document's title (an HTML page's `atelier:title` or `<title>`, otherwise its
+file name), an empty summary and tag list, no relations, the domain,
+lifecycle and status the graph already infers from the path, the id
+`<repo>:asset:<path>`, and the audience `private`. Two paths that fold to the
+same id, such as `About Us.html` and `about-us.html`, each get a short digest
+of their exact path. Enrollment never changes a sidecar that exists, including
+one Git ignores or a link with the sidecar's name, and never changes a
+source. It reads only what the graph reads (for HTML, the page's title), so
+it honors the scope below and Git's ignore rules.
+
+`--audience` chooses another audience. The repository's boundary policy must
+allow it: a shared repository forbids `private`, so it needs, for example,
+`--audience team`. A policy in `legacy-warning` mode only warns. Review the
+sidecars, then commit them with the sources.
+
+`atelier adopt --enroll-documents [--audience AUDIENCE]` adopts and enrolls
+in one step. The audience is checked against the policy before adoption writes
+anything.
+
+### Scoping what the graph reads
+
+Decision (2026-09-25): a project-level scope for tracked paths belongs in
+`atelier.project.json`, and it already has a place there: `setup.include`
+and `setup.exclude`, which `adopt --include` and `adopt --exclude` record.
+
+- Git's ignore rules cannot leave out a tracked file, and should not be asked
+  to: ignoring a committed build folder would hide it from Git as well.
+- The scope must be tracked. The graph is committed, so it has to come out the
+  same on every machine; that is why Git-ignored paths are skipped. A scope in
+  `atelier.local.json` or `.atelier-local/` would make it differ per machine.
+- The v1 project config contract already declares both fields, one path each.
+  Adoption wrote them and the `monorepo` profile requires `--include`, but
+  until this release nothing read them. Giving them their meaning does not
+  widen the contract. A new field, or a list, would widen a closed object,
+  which [contract stability](contract-stability.md) makes a new major version.
+
+Each value is a path pattern relative to the folder that holds
+`atelier.project.json`, in the dialect the boundary policy's `forbiddenPaths`
+uses: `*` stays within one folder name, `**` crosses folders, case does not
+matter, and a pattern without a slash matches a name at any depth (`_site`
+leaves out every folder named `_site`). A path is outside the graph when it
+or a folder above it matches `exclude`, or, when `include` is set, when
+neither it nor a folder above it matches `include`. `exclude` wins. A sidecar
+follows its source. A path outside the graph is treated exactly like a
+Git-ignored one: no node, no sidecar demand, no orphan-sidecar error, and it
+cannot be a link target or an embedded asset.
+
+```json
+{ "setup": { "profile": "single-repo", "exclude": "_site" } }
+```
+
+Use `exclude` for tracked material that is not a source, such as a built
+site. Use `atelier enroll documents` for documents that are sources. Each
+field holds one pattern in v1; if one is not enough, open an issue, since a
+list is a contract change. A project that already sets either field now gets
+a graph over that scope: run `atelier graph` and commit the result.
 
 ## Upgrade path
 

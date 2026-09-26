@@ -19,6 +19,18 @@ export const VALID_AUDIENCES = PROJECTION_AUDIENCES
 export const VALID_RELATIONS = VALID_RELATION_TYPES
 export const parseFrontmatterYaml = parseYamlSubset
 
+// setup.include and setup.exclude scope the census. Both are path patterns
+// relative to the project config's folder, so each repository learns where its
+// root sits relative to that folder.
+function censusScope(project, repoPath) {
+  const setup = project.config?.setup
+  const include = typeof setup?.include === 'string' && setup.include.trim() ? setup.include : null
+  const exclude = typeof setup?.exclude === 'string' && setup.exclude.trim() ? setup.exclude : null
+  if (!include && !exclude) return null
+  const base = path.relative(project.configDir, repoPath).split(path.sep).join('/')
+  return { base, include, exclude }
+}
+
 function canonicalInput(project) {
   const loadedAccess = loadRepoAccess(project)
   const managed = []
@@ -31,7 +43,8 @@ function canonicalInput(project) {
       missing.push(`configured repo is missing or unreadable: ${repo.name ?? '(unnamed)'}`)
       continue
     }
-    managed.push({ name: repo.name, path: repo.path })
+    const scope = censusScope(project, repo.path)
+    managed.push({ name: repo.name, path: repo.path, ...(scope ? { censusScope: scope } : {}) })
     accessRepos[repo.name] = {
       readBoundary:
         loadedAccess.repos?.[repo.name]?.readBoundary ?? repo.readBoundary ?? loadedAccess.defaultReadBoundary ?? 'team',
@@ -211,6 +224,9 @@ export function runGraphCommand(argv = process.argv.slice(2)) {
   for (const warning of ignoredSidecarWarnings(project)) console.warn(`warning: ${warning.message}`)
   if (graph.errors.length) {
     console.error(graph.errors.join('\n'))
+    if (graph.errors.some((error) => error.includes(': non-Markdown source requires sidecar '))) {
+      console.error('Next: run atelier enroll documents with the same --project path to write private sidecars for documents that have none, review them, then rerun atelier graph.')
+    }
     process.exit(1)
   }
   if (check) {
