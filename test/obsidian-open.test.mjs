@@ -3079,6 +3079,65 @@ test('a bad location or allocation stops only its own view: the others go on, ea
   assert.deepEqual([unreadable.state, stateOf(unreadable, FULL_SCOPE.scopeId)[0], stateOf(unreadable, EAST_SCOPE.scopeId)], ['ticked', 'current', ['stale', 'invalid-vault-allocation']])
 })
 
+// A folder moved in where a view's allocated vault was, made before the vault is removed (Linux gives a new folder
+// the inode number of one just removed), holding a note of somebody else.
+function moveInOver(world, vault) {
+  const movedIn = path.join(world.dir, 'moved-in')
+  fs.mkdirSync(movedIn)
+  fs.writeFileSync(path.join(movedIn, 'theirs.md'), 'theirs')
+  fs.rmSync(vault, { recursive: true })
+  fs.renameSync(movedIn, vault)
+}
+const touchCompass = (world, body) => fs.writeFileSync(world.source('east-wing/notes/compass.md'), note({ id: 'east-wing:compass', title: 'Compass rose', body }))
+
+test('a running service never publishes into a folder that replaced its allocated vault, nor through a link put there into the person\'s own vault: the view says so and nothing is written', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const personal = path.join(world.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
+  const listed = { aaaaaaaaaaaaaaaa: { path: personal, ts: 1 } }
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'])
+  const engine = world.engine({ readAppVaultList: () => ({ ok: true, vaults: listed }) })
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId })
+
+  // The same engine, whose store for the view was made for the folder it allocated.
+  moveInOver(world, vault)
+  touchCompass(world, 'North is painted blue.')
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+  assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in')
+  if (process.platform !== 'win32') {
+    fs.rmSync(vault, { recursive: true })
+    fs.symlinkSync(personal, vault)
+    touchCompass(world, 'North is painted green.')
+    world.advance(10 * 60 * 1000)
+    const [state, reason] = stateOf(await engine.tick())
+    assert.equal(state, 'stale')
+    assert.ok(['vault-allocation-replaced', 'managed-root-symlink-alias'].includes(reason), reason)
+    assert.deepEqual(fs.readdirSync(personal), ['diary.md'], 'nothing is written into the person\'s own vault')
+  }
+})
+
+test('the publisher checks an allocated vault again before it writes anything, so a folder replaced during a tick is not published into', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'])
+  const { buildGraph } = await import('../src/runtime/obsidian/pipeline.mjs')
+  let replaceDuringBuild = null
+  // The folder is replaced after the engine chose the view's store, while the graph is built.
+  const engine = world.engine({ seams: { buildGraph: (input) => { const replace = replaceDuringBuild; replaceDuringBuild = null; replace?.(); return buildGraph(input) } } })
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId })
+  replaceDuringBuild = () => moveInOver(world, vault)
+  touchCompass(world, 'North is painted blue.')
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+  assert.equal(replaceDuringBuild, null, 'the folder was replaced during the tick')
+  assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in, not even the vault lock')
+})
+
 test('no vault folder is allocated while the app\'s list cannot be read: the view says why and is allocated at a later tick, once the list reads', needsExchange, async (t) => {
   const world = makeWorld(t)
   const parent = path.join(world.dir, 'Atelier')

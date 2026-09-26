@@ -258,10 +258,16 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   }
 
   function storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) {
-    // A view's vault can be allocated, or moved, while the engine runs: the store follows its record.
-    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots, readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path ?? null])
+    // A view's vault can be allocated, made again or moved while the engine runs: the store follows its record. A
+    // store is used again only while its allocated folder is still the one the record names; otherwise it is dropped,
+    // and the store made in its place refuses, typed (vault-allocation-replaced, say), so a folder replaced while the
+    // service runs, or a link put where it was, is never published into.
+    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots, readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })])
     const cached = stores.get(scope.scopeId)
-    if (cached?.signature === signature) return cached.store
+    if (cached?.signature === signature) {
+      try { cached.store.checkAllocatedVault?.(); return cached.store } catch (error) { if (!isTypedRefusal(error)) throw error }
+    }
+    stores.delete(scope.scopeId)
     const store = seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId: scope.scopeId, repositoryRoots })
     stores.set(scope.scopeId, { signature, store })
     return store

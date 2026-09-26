@@ -292,7 +292,11 @@ export async function publishView(options = {}) {
       }
     }
     acquire(store.lockPath, () => acquirePrivateLock(store.lockPath), 'of this view')
+    // A vault allocated for the view is still the folder it made, before anything is written in it (the vault lock
+    // included) and again once the lock is held: a store kept by a long-running service may outlive its folder.
+    store.checkAllocatedVault?.()
     acquire(store.vaultLockPath, () => acquireVaultLock(store), 'into this vault')
+    store.checkAllocatedVault?.()
     const recovered = recoverPublicationsLocked({ store, clock })
     const pointer = store.readCurrent()
     if (pointer?.generationId === manifest.generationId && !pluginFilesDrifted(preparedView, store)) {

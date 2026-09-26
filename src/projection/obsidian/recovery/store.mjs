@@ -183,6 +183,16 @@ export function allocatedFolderState(allocation) {
   return found.directory && !found.link && found.device === allocation.device && found.inode === allocation.inode ? 'same' : 'replaced'
 }
 
+// Refuses, typed, unless the folder at an allocation's path is the one it recorded: checked when a store is made, by
+// the maintenance engine before it uses a store again, and by the publisher before and after it takes the vault lock,
+// so a folder replaced while a service runs is never published into.
+export function assertAllocatedFolder(allocation) {
+  const found = allocatedFolderState(allocation)
+  if (found === 'missing') refuse('vault-allocation-missing', 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick', { path: allocation.path })
+  if (found === 'replaced') refuse('vault-allocation-replaced', 'another folder is where this view\'s vault was allocated; Atelier publishes only into the folder it made', { path: allocation.path })
+  return allocation
+}
+
 // Written only by the maintenance engine, under its lock, and by what moves a vault under the same lock.
 export function writeVaultAllocation({ workspaceRoot, allocation }) {
   validateVaultAllocation(allocation, allocation)
@@ -226,11 +236,7 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
   const namedVault = vaultRoot ?? allocation?.path
   const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(namedVault === undefined ? [] : [namedVault])], repositoryRoots })
   if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
-  if (allocation !== null) {
-    const found = allocatedFolderState(allocation)
-    if (found === 'missing') refuse('vault-allocation-missing', 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick', { path: allocation.path })
-    if (found === 'replaced') refuse('vault-allocation-replaced', 'another folder is where this view\'s vault was allocated; Atelier publishes only into the folder it made', { path: allocation.path })
-  }
+  if (allocation !== null) assertAllocatedFolder(allocation)
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
   // Both as the file system stores them: the vault root is what the app is told, and what it compares its own
   // working-directory spelling with.
@@ -265,6 +271,9 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
     // Where the vault is and why: named by the caller, allocated for the view, or under the data root.
     vaultOrigin: vaultRoot !== undefined ? 'explicit' : allocation === null ? 'legacy-data-root' : 'allocated',
     allocation,
+    // Refuses, typed, once the folder of an allocated vault is no longer the one this store was made for (see
+    // assertAllocatedFolder); a vault under the data root or named by the caller has nothing to check.
+    checkAllocatedVault() { if (allocation !== null) assertAllocatedFolder(allocation) },
     journalsRoot: journals,
     lockPath: path.join(locks, `${segment(scopeId)}.lock`),
     // One publisher per vault, whichever view or workspace state it belongs to.
