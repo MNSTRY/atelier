@@ -89,8 +89,9 @@
   see, `view add` then names `atelier obsidian audience set me` as the next
   step, before `open`; and a view refused as empty because no audience is
   admitted (`audience clear`) is told to decide who may see, not to classify
-  notes.
-
+  notes. A note whose labels cannot be known is never shown: front matter
+  Atelier cannot read, or a top-level `kg` key that is not a block, may say
+  `sensitive`.
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the

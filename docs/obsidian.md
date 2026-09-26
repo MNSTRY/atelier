@@ -393,6 +393,13 @@ records. A list of audiences never shows one, even a list that names every
 audience "only you" stands for, so a vault for anyone else can never carry
 them.
 
+A note whose labels cannot be known is never shown, in any vault: front
+matter Atelier cannot read (a block scalar such as `description: |`, a value
+wrapped onto a second line, a flow mapping), or a top-level `kg` key that is
+not a block (a list, a flow value). Such a note may say `sensitive`, which
+"only you" leaves out. Only a note with no front matter, or with front matter
+that reads and has no `kg` key at all, counts as one without a classification.
+
 In an "only you" vault such a note is shown only when its bytes read as a note
 the way the emitter reads every note, so one file that cannot be published
 (front matter that opens and never closes, closes at once, or carries a

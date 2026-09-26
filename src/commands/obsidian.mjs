@@ -216,7 +216,7 @@ const NEXT = Object.freeze({
   [APPLY_UNAVAILABLE]: 'no apply operation is registered on this command; edits stay preserved and queued',
   'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
   disabled: 'declare the Obsidian settings in the project configuration: `atelier obsidian view add everything --all` does it',
-  'view-would-be-empty': 'check the folders or the tag, and who may see them (`atelier obsidian audience show`; `audience set me` admits every note that is only yours, those without a classification included); --allow-empty declares the view anyway',
+  'view-would-be-empty': 'check the folders or the tag, and who may see them (`atelier obsidian audience show`; `audience set me` admits every note that is only yours, those without a classification included, and leaves out `sensitive`; a list such as `me,sensitive` shows no note without a classification); --allow-empty declares the view anyway',
   'view-exists': 'choose another name; `atelier obsidian view list` shows the views declared',
   'view-repository-ambiguous': 'name the repository the folders are in with --repo',
   'project-config-format-unknown': 'add the member shown under "detail" to the project configuration by hand, under "ext"',

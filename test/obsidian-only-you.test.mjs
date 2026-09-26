@@ -56,6 +56,11 @@ const UNCLASSIFIED = {
   'drafts/empty.md': '---\n---\n\n# Empty front matter\n',
   'drafts/spaced.md': '--- \ntitle: "Spaced"\n---\n\n# A delimiter with a trailing space\n',
   'drafts/latin1.md': Buffer.from('# Caf\u00e9\n', 'latin1'),
+  // Front matter Atelier cannot read, or a kg key that is not a block: the note's own labels are unknown, so it is
+  // withheld, whatever audience it says (these all say sensitive).
+  'drafts/block-scalar.md': '---\ndescription: |\n  Two lines\n  of text.\nkg:\n  audience: sensitive\n---\n\n# Block scalar\n',
+  'drafts/flow-kg.md': '---\nkg: {audience: sensitive, id: "harbor:flow"}\n---\n\n# Flow kg\n',
+  'drafts/list-kg.md': '---\nkg:\n  - audience: sensitive\n---\n\n# List kg\n',
 }
 const READ_AS_NOTES = ['drafts/malformed.md', 'drafts/own-front-matter.md', 'drafts/plain.md']
 
@@ -116,7 +121,7 @@ test('an "only you" vault admits a note without a classification only when its b
   for (const relative of Object.keys(UNCLASSIFIED)) {
     assert.equal(withheld[relative]?.classification, 'unclassified', `${relative} carries no classification`)
     assert.equal(withheld[relative].eligible, false, `${relative}: withheld by default`)
-    assert.equal(admitted[relative].eligible, READ_AS_NOTES.includes(relative), `${relative}: ${READ_AS_NOTES.includes(relative) ? 'admitted' : 'withheld, since the emitter would refuse its bytes and stop the vault'}`)
+    assert.equal(admitted[relative].eligible, READ_AS_NOTES.includes(relative), `${relative}: ${READ_AS_NOTES.includes(relative) ? 'admitted' : 'withheld: the emitter would refuse its bytes, or its labels are unknown'}`)
   }
   assert.equal(admitted['notes/lantern.md'].eligible, true, 'a classified note is eligible, as always')
   assert.equal(withheld['notes/lantern.md'].eligible, true)
