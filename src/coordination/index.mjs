@@ -55,21 +55,37 @@ export function coordinationView({ records, at, maxAgeMs = 86400000 }) {
     adjacency.get(key(consumer)).push(key(pin))
     dependencies.push({ reference: coordinationReference(record), producer: pin, consumer, receiving, reasons, nativeReceiptVerified: false })
   }
-  const cycles = [], visiting = new Set(), visited = new Set()
-  function walk(node, trail) {
-    if (visiting.has(node)) { cycles.push([...trail.slice(trail.indexOf(node)), node]); return }
-    if (visited.has(node)) return
-    visiting.add(node)
-    for (const next of adjacency.get(node) ?? []) walk(next, [...trail, node])
-    visiting.delete(node); visited.add(node)
+  // Strongly connected components (Tarjan): every dependency inside one lies on
+  // a cycle, whatever order the records arrive in.
+  const cycles = [], component = new Map(), index = new Map(), low = new Map(), stack = [], onStack = new Set()
+  let counter = 0
+  function connect(node) {
+    index.set(node, counter); low.set(node, counter++); stack.push(node); onStack.add(node)
+    for (const next of adjacency.get(node) ?? []) {
+      if (!index.has(next)) { connect(next); low.set(node, Math.min(low.get(node), low.get(next))) }
+      else if (onStack.has(next)) low.set(node, Math.min(low.get(node), index.get(next)))
+    }
+    if (low.get(node) !== index.get(node)) return
+    const members = []
+    let member
+    do { member = stack.pop(); onStack.delete(member); members.push(member) } while (member !== node)
+    if (members.length > 1 || (adjacency.get(node) ?? []).includes(node)) {
+      members.sort()
+      for (const m of members) component.set(m, cycles.length)
+      cycles.push(members)
+    }
   }
-  for (const node of adjacency.keys()) walk(node, [])
-  for (const dependency of dependencies) if (cycles.some(cycle => cycle.includes(key(dependency.consumer)) && cycle.includes(key(dependency.producer)))) dependency.reasons.push('dependency-cycle')
+  for (const node of [...adjacency.keys()].sort()) if (!index.has(node)) connect(node)
+  for (const dependency of dependencies) {
+    const group = component.get(key(dependency.consumer))
+    if (group !== undefined && group === component.get(key(dependency.producer))) dependency.reasons.push('dependency-cycle')
+  }
   const directives = records.filter(r => r.kind === 'directive').map(directive => {
     const pin = coordinationReference(directive)
     const replacements = records.filter(r => r.kind === 'directive' && r.body.supersedes && digest(r.body.supersedes) === digest(pin) &&
-      r.repository === directive.repository && key(r.body.target) === key(directive.body.target) && digest([...r.scope].sort()) === digest([...directive.scope].sort()) &&
-      freshness.get(key(r)) === 'current-reported')
+      r.repository === directive.repository && key(r.body.target) === key(directive.body.target) && digest([...r.scope].sort()) === digest([...directive.scope].sort()))
+    // Supersession is permanent: a replacement going stale withdraws its own
+    // report, never revives the directive it replaced.
     const superseded = replacements.length > 0
     const reports = records.filter(r => r.kind === 'disposition' && digest(r.body.directive) === digest(pin))
     return { reference: pin, target: directive.body.target, freshness: freshness.get(key(directive)), supersedes: directive.body.supersedes,

@@ -44,3 +44,23 @@ test('same-owner supersession withholds an old directive; another repository can
   assert.equal(result.supersededBy[0].id, 'new')
   assert.equal(view([original, { ...replacement, repository: 'outsider' }]).directives[0].activeReported, true)
 })
+test('every dependency on a cycle is blocked, whatever order the records arrive in', () => {
+  const [oa, ob, oc, od] = ['a', 'b', 'c', 'd'].map(id => outcome('ring', id))
+  const needs = (consumer, producer) => record('dependency', 'ring', `${consumer.id}-needs-${producer.id}`, { ...dep.body, producer: coordinationReference(producer), consumer: { repository: 'ring', id: consumer.id } })
+  // a<-b, b<-c, c<-a closes one ring; a<-d, d<-b closes a second ring through d.
+  const edges = [needs(oa, ob), needs(ob, oc), needs(oc, oa), needs(oa, od), needs(od, ob)]
+  for (const order of [edges, [...edges].reverse(), [edges[3], edges[0], edges[4], edges[2], edges[1]]]) {
+    const result = view([oa, ob, oc, od, ...order])
+    assert.ok(result.dependencies.every(d => d.reasons.includes('dependency-cycle')), JSON.stringify(result.dependencies.map(d => [d.reference.id, d.reasons])))
+    assert.ok(result.outcomes.find(o => o.reference.id === 'd').blockers.includes('dependency-cycle'))
+  }
+})
+test('a replacement going stale never revives the directive it superseded', () => {
+  const original = record('directive', 'alpha', 'delete-branch', { target: { repository: 'beta', id: 'consumer' }, instruction: 'Delete the staging branch.', supersedes: null })
+  const replacement = { ...record('directive', 'alpha', 'keep-branch', { ...original.body, instruction: 'Do not delete the staging branch.', supersedes: coordinationReference(original) }), observedAt: '2025-12-01T00:00:00Z', expiresAt: '2025-12-02T00:00:00Z' }
+  const report = record('disposition', 'beta', 'applied', { directive: coordinationReference(original), recipient: original.body.target, stage: 'applied', evidence: receipt, detail: 'Reported applied.' })
+  const result = view([original, replacement, report]).directives.find(d => d.reference.id === 'delete-branch')
+  assert.equal(result.activeReported, false)
+  assert.equal(result.reports[0].applicable, false)
+  assert.equal(result.supersededBy[0].id, 'keep-branch')
+})
