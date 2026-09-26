@@ -19,7 +19,7 @@ import {
   readInstalledApplyPolicy, readMachineSettings, revokeApplyPolicy, withDecision, writeMachineSettings,
 } from '../runtime/obsidian/machine-settings.mjs'
 import {
-  currentLoginItemPlan, installLoginItem, loginItemLabel, loginItemStarter, loginItemStatus, planLoginItem, projectNameOf, readLoginItemRecord, realNodePath,
+  currentLoginItemPlan, installLoginItem, loginItemDataRoot, loginItemLabel, loginItemStarter, loginItemStatus, planLoginItem, projectNameOf, readLoginItemRecord, realNodePath,
   removeLoginItem, resolveLoginItemEntry, temporaryRoots,
 } from '../runtime/obsidian/login-item.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
@@ -334,7 +334,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       if (record === null) return entry
       const manager = await managerSeam({ required: false })
       if (manager === null) return entry
-      const plan = currentLoginItemPlan({ record, project, workspaceRoot: workspace.workspaceRoot, dataRoot, platform, ownEntry: entry.entryPath, entryArgs: entry.entryArgs ?? [], nodePath: nodePath() })
+      const plan = currentLoginItemPlan({ record, project, workspaceRoot: workspace.workspaceRoot, dataRoot, env, platform, ownEntry: entry.entryPath, entryArgs: entry.entryArgs ?? [], nodePath: nodePath() })
       // An item that names an entry that is gone, with nothing to refresh it to from here, cannot start anything.
       if (plan === null && !fs.existsSync(record.program.entry)) return entry
       return { ...entry, entryPath: plan?.program.entry ?? record.program.entry, loginItem: loginItemStarter({ workspace, manager, record, plan, clock }) }
@@ -447,7 +447,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const { entryPath } = resolveLoginItemEntry({ project, ownEntry: entry.entryPath, temporary })
       const label = record?.label ?? loginItemLabel({ platform, projectName: projectNameOf(project), workspaceId: workspace.workspaceId })
       const { platform: unitPlatform, kind, fileName, text } = planLoginItem({
-        platform, project, workspaceRoot: workspace.workspaceRoot, dataRoot, label, entryPath, entryArgs: entry.entryArgs ?? [], nodePath: nodePath(),
+        platform, project, workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId, dataRoot: loginItemDataRoot({ project, dataRoot, env, platform }), label, entryPath,
+        entryArgs: entry.entryArgs ?? [], nodePath: nodePath(),
         searchPath: record?.searchPath ?? startupSearchPath(env.PATH, { temporary }),
       })
       return { exit: EXIT.ok, document: { unit: { platform: unitPlatform, kind, fileName, text }, installed: record !== null, note: 'the service runs under this unit only with a recorded consent that covers startup; `service unit --install` records one' }, human: [text] }

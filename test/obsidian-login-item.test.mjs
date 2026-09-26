@@ -723,6 +723,64 @@ test('under --startup beside a service that runs: service-already-running, exit 
   assert.deepEqual([world.lastStartup().outcome, world.lastStartup().code, world.record().runtimeId], ['refused', 'service-already-running', running.identity.runtimeId])
 })
 
+// The words of a systemd unit's ExecStart, unquoted.
+const execStartWords = (text) => [...(/^ExecStart=(.*)$/m.exec(text)?.[1] ?? '').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((match) => match[1].replace(/\\(.)/g, '$1'))
+
+test('a unit names the data root its workspace was resolved under and the workspace, so the service at login finds it without the installing shell\'s environment', needsPosix, async (t) => {
+  if (!await entryIsStable()) return t.skip('the test entry lies in a temporary folder here, which a login item refuses to name')
+  const { currentLoginItemPlan, installLoginItem, readLoginItemRecord } = await loginItems()
+  const { createSystemdManager } = await managers()
+  const { serviceOptionsFromArgv } = await import('../src/runtime/obsidian/service-main.mjs')
+  const { resolveServiceWorkspace } = await import('../src/runtime/obsidian/service.mjs')
+  const world = await makeWorld(t, { withLaunchd: false })
+  // The person's shell sets XDG_DATA_HOME; the systemd user manager's environment does not, and carries PATH only. The
+  // runner's context stays in the unit's environment, so a data root it does not name refuses here instead of reading
+  // this account's own.
+  const { NODE_TEST_CONTEXT: _runner, ...shell } = world.env
+  const xdg = path.join(world.dir, 'xdg-data')
+  const installEnv = { ...shell, XDG_DATA_HOME: xdg }
+  const unitEnv = { PATH: '/usr/bin:/bin', HOME: world.home, NODE_TEST_CONTEXT: 'child-v8' }
+  const directory = path.join(world.dir, 'systemd', 'user')
+  const manager = createSystemdManager({ run: recordingRun().run, systemctl: '/usr/bin/systemctl', directory })
+  const nodePath = fs.realpathSync(process.execPath)
+  const installed = await installLoginItem({ loadProject: world.loadProject, env: installEnv, platform: 'linux', manager, consent: { actor: CONSENT_ACTOR }, ownEntry: TEST_SERVICE_ENTRY, nodePath, pathValue: '/usr/bin:/bin' })
+  assert.equal(installed.installed, true, JSON.stringify(installed))
+  const atInstall = resolveServiceWorkspace({ project: world.loadProject(), env: installEnv, platform: 'linux' })
+  assert.equal(atInstall.workspaceRoot, fs.realpathSync(workspaceStateRoot(path.join(xdg, 'atelier'), WORKSPACE_ID)))
+  const text = fs.readFileSync(installed.file, 'utf8')
+  const words = execStartWords(text)
+  assert.ok(words.includes(`--data-root=${path.join(xdg, 'atelier')}`) && words.includes(`--workspace-id=${WORKSPACE_ID}`), text)
+  // What the service resolves at login, from the unit's words and environment alone.
+  const options = serviceOptionsFromArgv(words.slice(2), { env: unitEnv })
+  assert.deepEqual(resolveServiceWorkspace({ project: options.loadProject(), dataRoot: options.dataRoot, env: unitEnv, platform: 'linux' }), atInstall)
+  // The refresh on the way of a start plans the same unit, so it is not written again for nothing.
+  const record = readLoginItemRecord(atInstall)
+  const plan = currentLoginItemPlan({ record, project: world.loadProject(), workspaceRoot: atInstall.workspaceRoot, env: installEnv, platform: 'linux', ownEntry: TEST_SERVICE_ENTRY, nodePath })
+  assert.equal(plan.text, text)
+})
+
+test('under --startup a service that cannot find its workspace from the project records the refusal in the workspace its unit names', needsPosix, async (t) => {
+  const world = await makeWorld(t, { withLaunchd: false })
+  serviceSettings(world, await freePort(), 'service-and-startup')
+  const named = [`--workspace-id=${WORKSPACE_ID}`, '--startup']
+  // The project's pointer is gone: the project leads to no workspace.
+  const pointer = path.join(world.projectDir, '.atelier-local', 'obsidian.json')
+  const kept = fs.readFileSync(pointer)
+  fs.rmSync(pointer)
+  const unpointed = childProcess.spawnSync(process.execPath, entryWords(world, named), { env: world.env, encoding: 'utf8', windowsHide: true })
+  assert.equal(unpointed.status, 0, unpointed.stdout + unpointed.stderr)
+  assert.deepEqual([world.lastStartup()?.outcome, world.lastStartup()?.code], ['refused', 'service-workspace-not-prepared'])
+  fs.writeFileSync(pointer, kept)
+  // The project moved: its configuration is not where the unit names it.
+  const moved = childProcess.spawnSync(process.execPath, [TEST_SERVICE_ENTRY, `--project=${path.join(world.dir, 'moved', 'atelier.project.json')}`, `--data-root=${world.dataRoot}`, ...named], { env: world.env, encoding: 'utf8', windowsHide: true })
+  assert.equal(moved.status, 0, moved.stdout + moved.stderr)
+  assert.deepEqual([world.lastStartup()?.outcome, world.lastStartup()?.code], ['refused', 'project-config-missing'])
+  // A workspace the unit names that does not exist is never created to record it.
+  const other = `ws-${'08'.repeat(12)}`
+  childProcess.spawnSync(process.execPath, [TEST_SERVICE_ENTRY, `--project=${path.join(world.dir, 'moved', 'atelier.project.json')}`, `--data-root=${world.dataRoot}`, `--workspace-id=${other}`, '--startup'], { env: world.env, encoding: 'utf8', windowsHide: true })
+  assert.equal(fs.existsSync(workspaceStateRoot(world.dataRoot, other)), false)
+})
+
 async function syntheticPackage(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(TMP, 'atelier-release-')))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -994,7 +1052,7 @@ test('service unit --install records the consent that covers startup first, inst
   assert.deepEqual([installed.json.loginItem.installed, installed.json.loginItem.label, installed.json.loginItem.file, installed.json.loginItem.entry], [true, label, file, { path: TEST_SERVICE_ENTRY, source: 'command' }])
   assert.equal(world.settings().consent.coverage, 'service-and-startup')
   const unit = readPlist(fs.readFileSync(file, 'utf8'))
-  assert.deepEqual(unit.words.slice(1), [TEST_SERVICE_ENTRY, '--startup', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`, `--interval-ms=${IDLE_INTERVAL}`])
+  assert.deepEqual(unit.words.slice(1), [TEST_SERVICE_ENTRY, '--startup', `--project=${world.configPath}`, `--data-root=${world.dataRoot}`, `--workspace-id=${WORKSPACE_ID}`, `--interval-ms=${IDLE_INTERVAL}`])
   assert.equal(unit.words[0], fs.realpathSync(process.execPath))
   assert.equal(unit.cwd, '/')
   // The service that answers is the one the unit started, and startService started nothing beside it.

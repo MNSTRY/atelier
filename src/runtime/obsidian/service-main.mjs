@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { firstString, parseArgs, resolveProjectConfig } from '../../project/config.mjs'
+import { workspaceStateRoot } from './machine-settings.mjs'
 import { RELEASE_CHANGED, resolveServiceWorkspace, runMaintenanceService } from './service.mjs'
 
 // The process of the maintenance service. `start` runs it as a child; a unit
@@ -10,6 +11,8 @@ import { RELEASE_CHANGED, resolveServiceWorkspace, runMaintenanceService } from 
 //
 //   --project=<absolute atelier.project.json>   required
 //   --data-root=<absolute directory>            optional; otherwise the pointer, the overlay or the platform default
+//   --workspace-id=<identifier>                 named by a login item: under `--startup`, where a refusal is recorded
+//                                               when the project no longer leads to a workspace
 //   --runtime-id=<identifier>                   given by `start`, so it can recognise the child it created
 //   --interval-ms=<milliseconds>                optional
 //   --startup                                   run by a login item; needs a consent that covers startup
@@ -64,11 +67,18 @@ export const EXIT_RELEASE_CHANGED = 75
 const printed = (entry) => { try { process.stdout.write(`${JSON.stringify(entry)}\n`) } catch { /* a closed log never ends the service */ } }
 
 // The workspace of a service a login item started, when it can be found: where it keeps its log and records how its
-// start ended. Null otherwise; a refusal is then printed only, into the unit's own output file.
-function startupWorkspace({ loadProject, dataRoot, env = process.env, platform = process.platform }) {
+// start ended. When the project no longer leads to one (it moved, its pointer is gone), the workspace the unit names by
+// its data root and identity, if that exists; it is never created here. Null otherwise; a refusal is then printed
+// only, into the unit's own output file.
+function startupWorkspace({ loadProject, dataRoot, workspaceId, env = process.env, platform = process.platform }) {
   try {
     const workspace = resolveServiceWorkspace({ project: loadProject(), dataRoot, env, platform })
-    return workspace?.workspaceRoot ? workspace : null
+    if (workspace?.workspaceRoot) return workspace
+  } catch { /* the workspace the unit names, below */ }
+  if (typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot) || typeof workspaceId !== 'string') return null
+  try {
+    const root = workspaceStateRoot(path.resolve(dataRoot), workspaceId)
+    return fs.lstatSync(root).isDirectory() ? { workspaceId, workspaceRoot: fs.realpathSync(root) } : null
   } catch { return null }
 }
 
@@ -128,11 +138,12 @@ export function serviceOptionsFromArgv(argv, { env = process.env } = {}) {
   const configPath = firstString(args.project)
   if (!configPath || !path.isAbsolute(configPath)) throw Object.assign(new Error('--project must be the absolute path of a project configuration'), { code: 'service-arguments-invalid' })
   const dataRoot = firstString(args['data-root']) ?? undefined
+  const workspaceId = firstString(args['workspace-id']) ?? undefined
   const intervalMs = args['interval-ms'] === undefined ? undefined : Number(args['interval-ms'])
   if (intervalMs !== undefined && (!Number.isInteger(intervalMs) || intervalMs < 1)) throw Object.assign(new Error('--interval-ms must be a positive integer'), { code: 'service-arguments-invalid' })
   return {
     loadProject: () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: path.dirname(configPath), env, writeLocalState: false }),
-    ...(dataRoot === undefined ? {} : { dataRoot }), ...(intervalMs === undefined ? {} : { intervalMs }),
+    ...(dataRoot === undefined ? {} : { dataRoot }), ...(workspaceId === undefined ? {} : { workspaceId }), ...(intervalMs === undefined ? {} : { intervalMs }),
     ...(firstString(args['runtime-id']) ? { runtimeId: firstString(args['runtime-id']) } : {}),
     startup: args.startup === true, adapter: firstString(args.adapter),
   }

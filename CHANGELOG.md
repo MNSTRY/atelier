@@ -36,7 +36,11 @@
   remembered as the machine settings' `loginItem` decision (`on`, `off`), and
   `atelier obsidian settings` names these commands as the way to change it. The unit runs the package installed in the project,
   by its path, with the Node that installed it (its real path), the search
-  path you had (absolute, non-temporary entries), in `/`. launchd: `Standard`
+  path you had (absolute, non-temporary entries), in `/`, and names the data
+  root the workspace was resolved under and the workspace
+  (`--data-root`, `--workspace-id`), so the service at login finds that
+  workspace whatever its manager's environment carries, and records a refusal
+  there when the project no longer leads to it. launchd: `Standard`
   process type, `RunAtLoad`, `KeepAlive` `SuccessfulExit` false,
   `ThrottleInterval` 60, `ExitTimeOut` 60, output to
   `state/service/login-item.log`. From `npx` without a package installed in

@@ -294,7 +294,7 @@ restarted after a crash or a non-zero exit but never after a clean one:
 
 | Key | launchd | systemd |
 | --- | --- | --- |
-| Program | `ProgramArguments`: Node, the entry, `--startup`, `--project`, `--data-root` when given, `--adapter` | `ExecStart`, the same words |
+| Program | `ProgramArguments`: Node, the entry, `--startup`, `--project`, `--data-root`, `--workspace-id`, `--adapter` | `ExecStart`, the same words |
 | Search path | `EnvironmentVariables` `PATH` | `Environment="PATH=…"` |
 | Directory | `WorkingDirectory` `/` | `WorkingDirectory=/` |
 | Start | `RunAtLoad` | `WantedBy=default.target` |
@@ -313,7 +313,14 @@ side effect (`src/runtime/obsidian/login-item.mjs`):
    in a package runner's cache (npx, pnpm dlx, bunx) or a temporary folder:
    `login-item-needs-installed-package`. Node is named by its real path, so a
    version manager's per-shell link is never named. The search path keeps
-   absolute entries once, and none in a temporary folder.
+   absolute entries once, and none in a temporary folder. The unit always
+   names the data root the workspace was resolved under (the flag, the
+   pointer, the overlay's preference or the platform default, such as
+   `$XDG_DATA_HOME/atelier`) and the workspace identity, because the
+   manager's environment carries only the search path: the service at login
+   finds the same workspace, and, when the project no longer leads to it (it
+   moved, or its pointer is gone), records its refusal in the workspace the
+   unit names, if that exists.
 2. The consent is recorded before the unit is loaded, because the manager
    starts the service as soon as it loads it: `--consent-actor ID`; for a
    person at a terminal, the actor already recorded for the workspace or else

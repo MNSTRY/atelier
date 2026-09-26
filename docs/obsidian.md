@@ -390,7 +390,9 @@ atelier obsidian uninstall
 It runs the package installed in the project
 (`<project>/node_modules/@mnstry/atelier/…`, named by that path, so the next
 start runs whatever release the project has installed then), with the Node
-that installed it and the search path you had, in the root folder. Run from
+that installed it and the search path you had, in the root folder. It names
+the data folder and the workspace it was installed for, so it finds them at
+login whatever variables your shell set. Run from
 `npx` in a project that has no package installed, it refuses with
 `login-item-needs-installed-package`: install `@mnstry/atelier` in the project
 first. Installing records that you allowed the service to run at login (the

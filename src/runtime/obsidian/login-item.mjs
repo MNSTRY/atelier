@@ -6,7 +6,7 @@ import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularT
 import { canonicalJson, closedObject, isoTime } from './documents.mjs'
 import { refuse } from './errors.mjs'
 import { ensureServiceSettings } from './lifecycle.mjs'
-import { ensureWorkspaceIdentity } from './machine-settings.mjs'
+import { ensureWorkspaceIdentity, readLocalPointer, resolveDataRoot } from './machine-settings.mjs'
 import { SERVICE_MANAGER_KINDS } from './service-managers.mjs'
 import { readLastStartup, readServiceSettings, serviceNameFor, servicePaths, writeServiceSettings } from './service-record.mjs'
 import { resolveServiceWorkspace } from './service.mjs'
@@ -26,8 +26,12 @@ import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from './sta
 // upgrade in the project is what the next start runs; the Node that ran the
 // installing command, by its real path, so a per-shell link of a version
 // manager is never named; the search path the person had then, absolute
-// entries only; and `--startup`, under which the service refuses to run
-// without a consent that covers startup.
+// entries only; the data root the workspace was resolved under and the
+// workspace, so the service at login finds the same workspace whatever its
+// manager's environment carries (XDG_DATA_HOME, the overlay's variable), and
+// records a refusal there even when the project no longer leads to it; and
+// `--startup`, under which the service refuses to run without a consent that
+// covers startup.
 //
 // Installing records that consent first, since the manager starts the
 // service as soon as it loads the unit, then hands the text to the injected
@@ -150,10 +154,16 @@ export function resolveLoginItemEntry({ project, ownEntry, temporary = temporary
 // The Node a unit names: the one running this command, by its real path.
 export const realNodePath = (execPath = process.execPath) => { try { return fs.realpathSync(execPath) } catch { return execPath } }
 
-// The unit this workspace's login item would have now. `entryArgs` follow `--project` and `--data-root`. Pure but
-// for the builder's refusals.
-export function planLoginItem({ platform, project, workspaceRoot, dataRoot, label, entryPath, entryArgs = [], nodePath, searchPath = null }) {
-  const args = [`--project=${project.configPath}`, ...(dataRoot === undefined ? [] : [`--data-root=${dataRoot}`]), ...entryArgs]
+// The data root this workspace is resolved under for this command (the flag, the pointer, the overlay's preference or
+// the platform default), which a unit names.
+export const loginItemDataRoot = ({ project, dataRoot, env = process.env, platform = process.platform }) => resolveDataRoot({ dataRoot, pointer: readLocalPointer(project), project, env, platform })
+
+// The unit this workspace's login item would have now. `dataRoot` is the resolved one (loginItemDataRoot), always named;
+// `entryArgs` follow `--project`, `--data-root` and `--workspace-id`. Pure but for the builder's refusals.
+export function planLoginItem({ platform, project, workspaceRoot, workspaceId, dataRoot, label, entryPath, entryArgs = [], nodePath, searchPath = null }) {
+  if (!isAbsolutePlain(dataRoot)) throw new TypeError('a login item names the absolute data root of its workspace')
+  if (typeof workspaceId !== 'string' || workspaceId === '') throw new TypeError('a login item names its workspace')
+  const args = [`--project=${project.configPath}`, `--data-root=${dataRoot}`, `--workspace-id=${workspaceId}`, ...entryArgs]
   const unit = buildStartupAdapter({ platform, label, nodePath, entryPath, args, logPath: servicePaths(workspaceRoot).loginItemLog, searchPath })
   return { ...unit, label, digest: sha256(unit.text), program: { node: nodePath, entry: entryPath }, searchPath }
 }
@@ -188,7 +198,10 @@ export async function installLoginItem(options = {}) {
   const { entryPath, source } = resolveLoginItemEntry({ project, ownEntry, temporary })
   const recorded = readLoginItemRecord(workspace)
   const label = recorded?.label ?? loginItemLabel({ platform, projectName: projectNameOf(project), workspaceId: workspace.workspaceId })
-  const plan = planLoginItem({ platform, project, workspaceRoot: workspace.workspaceRoot, dataRoot, label, entryPath, entryArgs, nodePath, searchPath: startupSearchPath(pathValue, { temporary }) })
+  const plan = planLoginItem({
+    platform, project, workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId, dataRoot: loginItemDataRoot({ project, dataRoot, env, platform }), label, entryPath, entryArgs, nodePath,
+    searchPath: startupSearchPath(pathValue, { temporary }),
+  })
 
   // The consent first: the manager starts the service as soon as it loads the unit.
   const now = isoTime(clock)
@@ -243,10 +256,13 @@ export async function removeLoginItem(options = {}) {
 // The unit this workspace's installed login item would have now, keeping its label and the search path recorded when
 // it was installed; null when no entry for it can be found from here (the command runs from a package runner and the
 // project has no package installed): what is installed then stays as it is.
-export function currentLoginItemPlan({ record, project, workspaceRoot, dataRoot, platform, ownEntry, entryArgs = [], nodePath = realNodePath(), temporary = temporaryRoots() }) {
+export function currentLoginItemPlan({ record, project, workspaceRoot, dataRoot, env = process.env, platform, ownEntry, entryArgs = [], nodePath = realNodePath(), temporary = temporaryRoots() }) {
   try {
     const { entryPath } = resolveLoginItemEntry({ project, ownEntry, temporary })
-    return planLoginItem({ platform, project, workspaceRoot, dataRoot, label: record.label, entryPath, entryArgs, nodePath, searchPath: record.searchPath })
+    return planLoginItem({
+      platform, project, workspaceRoot, workspaceId: record.workspaceId, dataRoot: loginItemDataRoot({ project, dataRoot, env, platform }), label: record.label, entryPath, entryArgs, nodePath,
+      searchPath: record.searchPath,
+    })
   } catch (error) {
     if (error?.code === 'login-item-needs-installed-package' || error?.code === 'startup-adapter-input-invalid') return null
     throw error
