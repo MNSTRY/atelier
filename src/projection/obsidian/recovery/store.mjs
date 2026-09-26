@@ -206,9 +206,19 @@ export function writeVaultAllocation({ workspaceRoot, allocation }) {
   return allocation
 }
 
+// A view without a record that was published, and has no vault under the data root, where a view published there
+// always has its folder: its record was lost (removed, or a backup restored without it). Refused, typed, rather than
+// published again into a new, empty vault under the data root while the vault it had stays orphaned.
+function refuseLostAllocation({ workspaceRoot, scopeId }) {
+  const legacy = legacyVaultRoot(workspaceRoot, scopeId)
+  if (!hasCommittedGeneration({ workspaceRoot, scopeId }) || fs.lstatSync(legacy, { throwIfNoEntry: false }) !== undefined) return
+  refuse('vault-allocation-lost', `this view was published, and neither the record of where its vault was allocated nor a vault under the data root is there; restore ${allocationFile(workspaceRoot, scopeId)} from a backup, or make the folder ${legacy} to publish this view there again`, { record: allocationFile(workspaceRoot, scopeId), path: legacy })
+}
+
 // Where a view's vault is, without creating anything: { path, origin, allocation }.
 export function vaultRootFor({ workspaceRoot, workspaceId, scopeId }) {
   const allocation = readVaultAllocation({ workspaceRoot, workspaceId, scopeId })
+  if (allocation === null) refuseLostAllocation({ workspaceRoot, scopeId })
   return allocation === null
     ? { path: legacyVaultRoot(workspaceRoot, scopeId), origin: 'legacy-data-root', allocation: null }
     : { path: allocation.path, origin: 'allocated', allocation }
@@ -227,7 +237,9 @@ export const hasCommittedGeneration = ({ workspaceRoot, scopeId }) => fs.existsS
 // the workspace's `vaults/` (vaultRootFor). An allocated folder must be the
 // very folder the record names (device and inode): one that has gone is made
 // again by the maintenance engine under its lock (ensureVaultAllocation), and
-// until then, like one that another folder replaced, the store refuses.
+// until then, like one that another folder replaced, the store refuses. A
+// published view whose record was lost is refused too, never published again
+// into a new vault under the data root.
 export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vaultRoot, repositoryRoots } = {}) {
   if (typeof workspaceRoot !== 'string' || !path.isAbsolute(workspaceRoot)) throw new TypeError('workspaceRoot must be an absolute path')
   for (const [label, value] of [['workspaceId', workspaceId], ['scopeId', scopeId]]) {
@@ -242,6 +254,7 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
   const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(namedVault === undefined ? [] : [namedVault])], repositoryRoots })
   if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
   if (allocation !== null) assertAllocatedFolder(allocation)
+  else if (vaultRoot === undefined) refuseLostAllocation({ workspaceRoot, scopeId })
   fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 })
   // Both as the file system stores them: the vault root is what the app is told, and what it compares its own
   // working-directory spelling with.

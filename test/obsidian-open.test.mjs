@@ -3179,6 +3179,26 @@ test('a vault folder that has gone is made again only where its record leads and
   assert.deepEqual(listing(personal), before, 'nothing is written in it')
 })
 
+test('a published view whose allocation record was lost is refused and says how to recover, never published again into a new vault under the data root', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'])
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await world.engine().tick())[0], 'current')
+  const record = allocationFile(world.workspaceRoot(), FULL_SCOPE.scopeId)
+  const kept = fs.readFileSync(record)
+  fs.rmSync(record)
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await world.engine().tick()), ['stale', 'vault-allocation-lost'])
+  const underDataRoot = path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)
+  assert.equal(fs.existsSync(underDataRoot), false, 'no new vault under the data root')
+  assert.deepEqual((await world.run(['status', '--json'])).json.scopes[0].vault, { path: null, origin: 'unreadable', reason: 'vault-allocation-lost' })
+  // The record restored from a backup: the view is found where it was.
+  fs.writeFileSync(record, kept, { mode: 0o600 })
+  world.advance(10 * 60 * 1000)
+  assert.equal(stateOf(await world.engine().tick())[0], 'current')
+  assert.equal(fs.existsSync(underDataRoot), false)
+})
+
 test('no vault folder is allocated while the app\'s list cannot be read: the view says why and is allocated at a later tick, once the list reads', needsExchange, async (t) => {
   const world = makeWorld(t)
   const parent = path.join(world.dir, 'Atelier')
