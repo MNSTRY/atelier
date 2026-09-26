@@ -337,7 +337,7 @@ function fakeApp(overrides = {}) {
         const cliTurnedOn = state.cliSetting !== true
         state.cliSetting = true
         const known = Object.keys(state.vaults).find((id) => state.vaults[id].path === vaultRoot)
-        if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: true }, confirmed: true, vaults: structuredClone(state.vaults), file, cliTurnedOn, ...(cliTurnedOn ? { backupPath } : {}) }
+        if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: state.vaults[known].open === true }, confirmed: true, vaults: structuredClone(state.vaults), file, cliTurnedOn, ...(cliTurnedOn ? { backupPath } : {}) }
         if (Object.values(state.vaults).some((entry) => vaultRoot.startsWith(entry.path + path.sep))) { state.cliSetting = !cliTurnedOn; return { ok: false, code: 'vault-inside-another-vault', message: 'fake' } }
         add(vaultRoot, 'settings')
         // `settingsUnconfirmed`: an app started right after the write, and may have read the list before it; or, when it
@@ -1144,6 +1144,40 @@ test('the launch names the vault by its id and says whether the app runs: a quit
   const listedClosed = fakeApp({ running: true, vaults: { [ours]: { path: world.vault(), ts: 1 } } })
   await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...listedClosed }, open: FAST_APP })
   assert.deepEqual(listedClosed.launchArgs, [{ vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault(), appRunning: true }])
+})
+
+// A quit app that the launcher starts plainly and that refuses the link (`refusals` times): it reopens a vault its list
+// flags open by itself, never a closed one. A link it takes opens the vault.
+async function openAfterRefusedLink(t, { flaggedOpen, refusals }) {
+  const world = makeWorld(t)
+  await world.service()
+  const id = '0123456789abcdef'
+  const app = fakeApp({ running: false, vaults: { [id]: { path: world.vault(), ts: 1, ...(flaggedOpen ? { open: true } : {}) } } })
+  const open = app.launcher.open
+  let refused = 0
+  app.launcher.open = async (args) => {
+    if (refused >= refusals) return open(args)
+    refused += 1
+    app.launchArgs.push({ vaultRoot: args.vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning })
+    app.state.running = true
+    if (flaggedOpen) app.launches.push(args.vaultRoot)
+    return { launched: true, reason: 'app-started-link-not-taken' }
+  }
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  return { opened, app, world, id }
+}
+
+test('a link the started app refused is handed once more to the running app when the vault is listed closed, since a plain start does not reopen it; a vault flagged open is not asked twice', needsExchange, async (t) => {
+  const once = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: 1 })
+  assert.deepEqual([once.opened.json.outcome, once.opened.json.registration?.how], ['current', 'listed'], JSON.stringify(once.opened.json))
+  const asked = { vaultRoot: once.world.vault(), vaultId: once.id, vaultPath: once.world.vault() }
+  assert.deepEqual(once.app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true }])
+  // Only once: a link refused again leaves the vault not answering.
+  const always = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: Number.POSITIVE_INFINITY })
+  assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.app.launchArgs.map((item) => item.appRunning)], ['launch-failed', 'app-did-not-answer-for-this-vault', [false, true]])
+  // Flagged open, the plainly started app reopens it: the link is not handed again.
+  const flagged = await openAfterRefusedLink(t, { flaggedOpen: true, refusals: 1 })
+  assert.deepEqual([flagged.opened.json.outcome, flagged.app.launchArgs.map((item) => item.appRunning)], ['current', [false]], JSON.stringify(flagged.opened.json))
 })
 
 test('the launch plan: a vault is named by id; a quit app on macOS is started plainly, waited for, then handed the URL; a running app is handed the URL; Linux starts a quit app with the URL; elsewhere nothing', () => {

@@ -294,8 +294,9 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 // (`vault-inside-another-vault`): the app would show its notes in that vault
 // too, and a call run in its folder would reach that vault.
 //
-// { ok: true, path, how, vaults } with the path the app knows the vault by and
-// the list it was found in, or { ok: false, reason }.
+// { ok: true, path, how, open, vaults } with the path the app knows the vault
+// by, whether its list flags it open (an app started plainly reopens it then),
+// and the list it was found in, or { ok: false, reason }.
 //
 // The window the app opens for an added vault takes the next command-line
 // call while it may still be loading, and can then answer that a command
@@ -308,14 +309,14 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
     const settings = await attempt(() => registry.readSettings())
     const vaults = settings?.ok === true ? settings.vaults : null
     const entry = findVaultEntry(vaults, vaultRoot)
-    if (entry) return { ok: true, path: entry.path, how: 'listed', vaults }
+    if (entry) return { ok: true, path: entry.path, how: 'listed', open: entry.open === true, vaults }
     return { ok: false, reason: inside(vaults) ? 'vault-inside-another-vault' : observation.fromPlugin === true ? 'vault-open-cli-silent' : 'no-vault-open' }
   }
   if (observation.answering === true) {
     const listed = await attempt(() => registry.listThroughApp())
     if (listed?.answered !== true) return { ok: false, reason: listed?.reason === 'no-vault-open' ? 'no-vault-open' : 'app-did-not-list-its-vaults' }
     const known = findVaultEntry(listed.vaults, vaultRoot)
-    if (known) return { ok: true, path: known.path, how: 'listed', vaults: listed.vaults }
+    if (known) return { ok: true, path: known.path, how: 'listed', open: known.open === true, vaults: listed.vaults }
     if (inside(listed.vaults)) return { ok: false, reason: 'vault-inside-another-vault' }
     const asked = await attempt(() => registry.registerThroughApp({ vaultRoot }))
     if (asked?.answered !== true && asked?.reason === 'no-vault-open') return { ok: false, reason: 'no-vault-open' }
@@ -324,7 +325,7 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
     for (let attempts = 1; ; attempts += 1) {
       const again = await attempt(() => registry.listThroughApp())
       const added = again?.answered === true ? findVaultEntry(again.vaults, vaultRoot) : null
-      if (added) return { ok: true, path: added.path, how: 'added-through-app', vaults: again.vaults }
+      if (added) return { ok: true, path: added.path, how: 'added-through-app', open: true, vaults: again.vaults }
       if (attempts >= VERIFY_ATTEMPTS) return { ok: false, reason: asked?.answered === true ? 'registration-not-verified' : 'addition-not-answered' }
       await sleep(pollMs)
     }
@@ -335,7 +336,8 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
   const settings = settingsWritten(written)
   if (written.confirmed !== true) return { ok: false, reason: written.reason === 'registration-not-read-back' ? 'registration-not-read-back' : 'app-started-during-registration', ...(settings === null ? {} : { settings }) }
   const how = written.registered === 'created' ? 'created-settings' : written.registered === 'already' ? 'listed' : 'added-to-settings'
-  return { ok: true, path: written.entry.path, how, vaults: written.vaults, ...(settings === null ? {} : { settings }) }
+  // A vault already listed keeps its own open flag; one written here is written flagged open.
+  return { ok: true, path: written.entry.path, how, open: written.registered === 'already' ? written.entry.open === true : true, vaults: written.vaults, ...(settings === null ? {} : { settings }) }
 }
 
 // What was written to Obsidian's settings file, for the answer to show: null when nothing was.
@@ -526,7 +528,13 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   let vault = { answered: false, indexReady: false }
   // Rounds in a row in which only Atelier's plugin gave the version and the command line did not answer for the vault.
   let silentRounds = 0
+  // A quit app started plainly reopens only the vaults its list flags open. A listed vault that is closed opens through
+  // the link alone, so a link the started app did not take (it answered its tool, then refused the link) is handed
+  // once more, to the app that now runs, one round later, before the vault counts as not answering.
+  let linkRetry = launch.reason === 'app-started-link-not-taken' && known.open !== true ? 'due' : 'none'
+  let rounds = 0
   for (;;) {
+    rounds += 1
     after = qualifyApp(await inspectApp(appProbe), { requireVersion: true })
     // A running app below the floor is final; an app that has not come up yet, or not yet opened a vault, is asked again.
     if (!rules.appQualifies(after) && !NOT_UP_YET.has(after.reason)) return finish(after.outcome, { ...common, launched: true, reason: after.reason, app: app(after), registration })
@@ -539,6 +547,10 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
       // the answer is given at the second round in a row.
       silentRounds = vault?.answered !== true && after.versionSource === 'plugin' ? silentRounds + 1 : 0
       if (silentRounds >= SILENT_ROUNDS) return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
+      if (linkRetry === 'due' && rounds >= 2 && vault?.answered !== true) {
+        linkRetry = 'done'
+        try { await launcher.open({ vaultRoot: known.path, ...target, appRunning: true }) } catch { /* the wait decides */ }
+      }
     } else silentRounds = 0
     if (monotonic() >= deadline) break
     await sleep(appPollMs)

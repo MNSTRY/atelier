@@ -314,6 +314,12 @@
   publication changed the pinned files. What a publication leaves on disk is
   now taken as seen, so such a view is published once per start, as every
   view is. A plugin file a person changes later is still written again.
+- `atelier obsidian open` with Obsidian quit and the view's vault already in
+  Obsidian's list but closed: Obsidian started plainly does not reopen such a
+  vault, so a link it refused just after starting left `open` to wait and
+  answer `launch-failed` / `app-did-not-answer-for-this-vault`. `open` now
+  hands the link once more to the Obsidian that now runs before it answers
+  that. A vault the list flags open is not asked twice.
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
   worked, and `atelier obsidian help` showed them). A test now fails when a
