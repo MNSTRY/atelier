@@ -111,7 +111,11 @@ if that app does not qualify, nothing is written, the view stays `current`
 (a committed generation needs no app, so an app that cannot be qualified
 never makes a current view stale), and the file is written at a later
 attempt, on the retry schedule of an unsettled view, once the app
-qualifies. (The settings files are held to the same rule for a file nobody
+qualifies. Until then the view's reason is
+`verified-by-read-back-plugin-waits-for-app` rather than
+`verified-by-read-back`, and `status` and `open` add `plugin files wait for
+the app` to the plugin line (`files: "waits-for-app"` in `--json`), with a
+next step for the plugin. (The settings files are held to the same rule for a file nobody
 may read.) A plugin file that another program changes while a publication runs
 is a race and is handled like one on a note: that publication does not
 commit, the view is tried again, and the file is planned from the disk anew

@@ -25,7 +25,7 @@ import {
 } from '../runtime/obsidian/login-item.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
 import { currentPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
-import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
+import { pluginPresenceOf, turnPluginOnNext, withPluginFilesPending, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
 import { planViewAdd, viewFromRequest, writeViewPlan } from '../runtime/obsidian/project-views.mjs'
 import { askGoAhead, createQuestioner } from '../runtime/obsidian/questions.mjs'
 import { readServiceSettings } from '../runtime/obsidian/service-record.mjs'
@@ -456,7 +456,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       return { present: false, reason: 'turned-off-in-this-vault', next: turnPluginOnNext(scopeId) }
     }
     const pluginOf = async (scopeId) => pluginPresenceOf((await readServiceStatusDocument(lifecycle, lifecycleRules)).document, scopeId)
-    const pluginLine = (plugin) => (plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : plugin.reason === 'turned-off-in-this-vault' ? '; plugin turned off in this vault' : `; plugin not present (${plugin.reason})`)
+    const pluginLine = (plugin) => `${plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : plugin.reason === 'turned-off-in-this-vault' ? '; plugin turned off in this vault' : `; plugin not present (${plugin.reason})`}${plugin.files === 'waits-for-app' ? '; plugin files wait for the app' : ''}`
 
     const configured = () => {
       const project = loadProject()
@@ -714,7 +714,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
             const { vaultRoot: _vault, summary: _summary, ...found } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
             // A view whose vault the next tick allocates elsewhere says where, not the data root it will not use.
             const report = found.vault?.origin === 'legacy-data-root' ? { ...found, vault: vaultWhere(workspace, scopeId, machineOf(workspace)?.decisions.location ?? null, projectDisplayName(project)) } : found
-            const plugin = pluginView(running, workspace, scopeId)
+            const plugin = withPluginFilesPending(pluginView(running, workspace, scopeId), report.freshness)
             return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next, plugin } : { ...report, plugin }
           })
         const document = {
@@ -1003,13 +1003,13 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         }, openingRules, lifecycleRules)
         const recorded = consentRecorded(consent)
         const { ok: _ok, ...opened } = result
-        const plugin = typeof result.scopeId === 'string' ? await pluginOf(result.scopeId) : null
+        const plugin = typeof result.scopeId === 'string' ? withPluginFilesPending(await pluginOf(result.scopeId), result.freshness) : null
         const rememberedNow = { adapter: adapterRemembered, consentActor: recorded.source === 'account' ? recorded.consent.actor : null }
         const document = plugin === null ? { ...opened, rememberedNow } : { ...opened, plugin, rememberedNow }
         return {
           exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
           human: [
-            `${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []),
+            `${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(plugin?.files === 'waits-for-app' ? [`Next for the plugin: ${plugin.next}`] : []), ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []),
             ...loginItemLines(result.service?.loginItem), ...restartLines(result.restart), ...obsidianSettingsLines(result.obsidianSettings),
             ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : []),
             ...rememberedLines({ adapterRemembered, consent: recorded }),

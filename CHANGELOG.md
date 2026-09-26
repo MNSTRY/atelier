@@ -295,6 +295,13 @@
   now has to be seen in two rounds in a row: one version call that timed out
   while Obsidian was busy opening its window made `open` report a command
   line that was only slow as switched off.
+- A view kept `current` while a plugin file it pins waits for Obsidian (a
+  drifted `data.json`, say, while the app cannot be coordinated with) now
+  says so. Its reason is `verified-by-read-back-plugin-waits-for-app`
+  instead of the `verified-by-read-back` of a view whose plugin files are all
+  there, and `status` and `open` add `plugin files wait for the app` to the
+  plugin line, with a next step (`files: "waits-for-app"` and `next` on
+  `plugin` in `--json`).
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
   worked, and `atelier obsidian help` showed them). A test now fails when a

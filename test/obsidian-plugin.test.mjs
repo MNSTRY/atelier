@@ -55,7 +55,7 @@ import { runObsidianCommandForOracleTests } from '../src/commands/obsidian.mjs'
 import { MINIMUM_APP_VERSION, createQualifiedAdapterFactory, inspectApp, parseAppVersion, qualifyApp, readVersionAnswer } from '../src/runtime/obsidian/app-capability.mjs'
 import { ensureWorkspaceIdentity, protectedRoots, workspaceStateRoot, writeMachineSettings } from '../src/runtime/obsidian/machine-settings.mjs'
 import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
-import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
+import { PLUGIN_FILES_WAIT_FOR_APP, PLUGIN_FILES_WAIT_NEXT, pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
 import { readServiceRecord, releaseIdentity, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
 import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
 import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
@@ -1726,7 +1726,8 @@ function serviceWorld(t) {
     async run(argv, { seams }) {
       const out = []
       const exit = await runObsidianCommandForOracleTests({ argv: [...argv, `--project=${configPath}`, `--data-root=${dataRoot}`], seams, env, cwd: projectDir, clock: world.clock, contributions: [], probeTimeoutMs: 1500, stdout: (text) => out.push(text), stderr: () => {} })
-      return { exit, json: JSON.parse(out.join('\n')) }
+      // Without --json, the lines a person reads.
+      return argv.includes('--json') ? { exit, json: JSON.parse(out.join('\n')) } : { exit, lines: out.join('\n').split('\n') }
     },
     // Where the vaults live, decided before the service's first tick: the view's vault is then allocated there, and
     // `world.vault` names that folder.
@@ -2130,7 +2131,7 @@ test('a plugin file that drifted is written again at the service\'s next tick, w
   assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
 })
 
-test('a drifted plugin file never makes a committed view need the app: while the app does not qualify the view stays current, and the file is written once it does', needsExchange, async (t) => {
+test('a drifted plugin file never makes a committed view need the app: while the app does not qualify the view stays current, says the file waits for the app, and the file is written once it does', needsExchange, async (t) => {
   const world = serviceWorld(t)
   let qualifies = true
   let built = 0
@@ -2153,6 +2154,13 @@ test('a drifted plugin file never makes a committed view need the app: while the
   assert.equal(built, before + 1, 'the drift asked for the app once')
   assert.deepEqual([kept.state, kept.generationId, kept.verified], ['current', generation, true], 'the committed view stays current')
   assert.equal(fs.existsSync(data), false, 'nothing was published without a qualified app')
+  // Current, and said so: the reason is not the one of a view whose plugin files are all there, and the plugin line shows the file waiting.
+  assert.equal(kept.reason, PLUGIN_FILES_WAIT_FOR_APP)
+  const waiting = await world.run(['status', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual([waiting.json.scopes[0].outcome, waiting.json.scopes[0].reason, waiting.json.scopes[0].plugin.files, waiting.json.scopes[0].plugin.next], ['current', PLUGIN_FILES_WAIT_FOR_APP, 'waits-for-app', PLUGIN_FILES_WAIT_NEXT])
+  const lines = (await world.run(['status'], { seams: QUIET_SEAMS })).lines
+  assert.ok(lines.some((line) => line.startsWith(`view ${SCOPE}: current (${PLUGIN_FILES_WAIT_FOR_APP})`) && line.endsWith('; plugin files wait for the app')), lines.join('\n'))
+  assert.ok(lines.includes(`  Next for the plugin: ${PLUGIN_FILES_WAIT_NEXT}`), lines.join('\n'))
   const again = await tick()
   assert.deepEqual([again.state, built], ['current', before + 1], 'not asked again before the retry is due')
 
@@ -2161,7 +2169,9 @@ test('a drifted plugin file never makes a committed view need the app: while the
   world.advance(31_000)
   const repaired = await tick()
   assert.deepEqual([repaired.state, repaired.generationId], ['current', generation])
+  assert.notEqual(repaired.reason, PLUGIN_FILES_WAIT_FOR_APP)
   assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE)
+  assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.files, undefined, 'nothing waits once the file is written')
 })
 
 // What the release before vault layout 2 prepared: layout 1 paths, recorded in a layout 1 registry.
