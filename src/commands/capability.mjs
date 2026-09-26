@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import * as capability from '../capabilities/index.mjs'
 import { jsonAt } from '../capabilities/files.mjs'
+import { reportCommandFailure } from '../cli/command-failure.mjs'
 
 const USAGE = `Usage: atelier capability <command> [options]
 
@@ -68,6 +69,5 @@ try {
   if (command === 'profiles') result = capability.HOST_PROFILES
   console.log(JSON.stringify(result, null, 2))
 } catch (error) {
-  console.log(JSON.stringify({ ok: false, error: error.message }))
-  process.exitCode = 1
+  reportCommandFailure(error, 'stdout')
 }

@@ -7,6 +7,18 @@
   that replace the workspace lineage before installing any managed content.
 - Verify exact upgrades from a real 0.2.0-alpha.12 lock as well as the
   alpha.10 lock, and check that the upgraded lock records the installed version.
+- A long-lived reader of verified history (learning and ingestion stores) no
+  longer wedges after one refused read; it replays from a clean copy.
+- Ingestion reads take no lock and bind no workspace identity; only `plan`
+  binds it, so reads work during a run and a mistyped id is not recorded.
+- Inquiry graph proposals label each file with the most restrictive audience of
+  the sources it quotes.
+- Coordination reports every dependency cycle regardless of record order, and a
+  superseded directive stays superseded when its replacement goes stale.
+- Reflective and coaching acts require Reflection, an assessment and a request
+  whatever their origin.
+- The responsibility commands print only their own refusals; Node, git and
+  parser errors go through the typed-code rule and never show paths or input.
 
 - Preserve the bundled readiness pack's immutable v1 content and digest so
   previous release locks can use both exact upgrade participants without a

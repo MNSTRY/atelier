@@ -1,4 +1,5 @@
 import { architectureEntry, responsibilityCatalog, resolveBehaviorBinding } from '../architecture/index.mjs'
+import { reportCommandFailure, parseJsonRequest } from '../cli/command-failure.mjs'
 
 try {
   const [command, name, ...rest] = process.argv.slice(2)
@@ -15,13 +16,12 @@ try {
       if (bytes > 256 * 1024) throw new Error('architecture request exceeds limit')
       chunks.push(chunk)
     }
-    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
+    const value = parseJsonRequest(Buffer.concat(chunks), 'architecture request')
     if (!value || Object.keys(value).sort().join(',') !== 'binding,consumers') throw new Error('binding and consumers required')
     result = resolveBehaviorBinding(value)
     if (!result.resolved) process.exitCode = 1
   } else throw new Error('Usage: atelier architecture catalog|entry NAME|resolve (JSON stdin)')
   console.log(JSON.stringify(result, null, 2))
 } catch (error) {
-  console.error(JSON.stringify({ ok: false, error: error.message }))
-  process.exitCode = 1
+  reportCommandFailure(error)
 }

@@ -1,4 +1,5 @@
 import { planInstructionAdoption, applyInstructionAdoption, recoverInstructionAdoption, abandonInstructionAdoption, inspectInstructionAdoption, consumeInstructionContext } from '../capabilities/instructions.mjs'
+import { reportCommandFailure, parseJsonRequest } from '../cli/command-failure.mjs'
 
 const methods = { plan: planInstructionAdoption, apply: applyInstructionAdoption, recover: recoverInstructionAdoption, abandon: abandonInstructionAdoption, status: inspectInstructionAdoption, context: consumeInstructionContext }
 const fields = {
@@ -15,10 +16,9 @@ try {
     if (bytes > 256 * 1024) throw new Error('practice request exceeds limit')
     chunks.push(chunk)
   }
-  const body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
+  const body = parseJsonRequest(Buffer.concat(chunks), 'practice request')
   if (!body || Array.isArray(body) || typeof body !== 'object' || Object.keys(body).some(k => !fields[command].includes(k))) throw new Error('invalid practice request fields')
   console.log(JSON.stringify(methods[command]({ ...body, workspaceRoot: process.cwd() }), null, 2))
 } catch (error) {
-  console.error(JSON.stringify({ ok: false, error: error.message }))
-  process.exitCode = 1
+  reportCommandFailure(error)
 }

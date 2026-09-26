@@ -5,6 +5,7 @@ import * as harness from '../harnesses/index.mjs'
 import { knowledgeGraphProposal, prepareIntakeContribution, prepareKnowledgeImport } from '../knowledge/index.mjs'
 import { prepareGitCandidate } from '../build/git.mjs'
 import { jsonAt } from '../capabilities/files.mjs'
+import { reportCommandFailure } from '../cli/command-failure.mjs'
 const HELP = `Usage: atelier harness <command> [options]
 knowledge|build append --record FILE --confirm DIGEST [--workspace DIR]
 knowledge|build status|export --run ID [--workspace DIR]
@@ -75,4 +76,4 @@ try {
   else if (command === 'verify') { const handoff = read(need('handoff')); result = harness.verifyHarnessHandoff({ handoff, records: history(need('history'), handoff.source.profile), dependencySnapshots }) }
   else if (command === 'feedback') result = harness.prepareHarnessFeedback({ ...read(need('event')), profile: need('profile'), records: history(need('history'), options.profile) })
   console.log(JSON.stringify(result, null, 2))
-} catch (error) { console.log(JSON.stringify({ ok: false, error: error.message })); process.exitCode = 1 }
+} catch (error) { reportCommandFailure(error, 'stdout') }

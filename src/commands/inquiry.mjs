@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import * as inquiry from '../inquiry/index.mjs'
 import { jsonAt } from '../capabilities/files.mjs'
+import { reportCommandFailure } from '../cli/command-failure.mjs'
 
 const USAGE = `Usage: atelier inquiry <command> [options]
 validate --record FILE                 Validate a single record's shape only.
@@ -62,4 +63,4 @@ try {
     }
   }
   console.log(JSON.stringify(result, null, 2))
-} catch (error) { console.log(JSON.stringify({ ok: false, error: error.message })); process.exitCode = 1 }
+} catch (error) { reportCommandFailure(error, 'stdout') }

@@ -1,5 +1,6 @@
 import { createLearningStore } from '../learning/store.mjs'
 import { planLearningWork } from '../learning/assistance.mjs'
+import { reportCommandFailure } from '../cli/command-failure.mjs'
 
 const commands = ['capture', 'propose', 'decide', 'activate', 'withdraw', 'list', 'context', 'render', 'graph', 'export', 'plan']
 const writes = new Set(commands.slice(0, 5))
@@ -55,7 +56,6 @@ if (command === '--help' || command === 'help') {
     else result = store[command]()
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
-    console.error(JSON.stringify({ ok: false, error: error.message }))
-    process.exitCode = 1
+    reportCommandFailure(error)
   }
 }

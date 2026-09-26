@@ -1,4 +1,5 @@
 import { createIngestionStore } from '../ingestion/store.mjs'
+import { reportCommandFailure } from '../cli/command-failure.mjs'
 
 const commands = ['plan', 'run', 'status', 'query']
 const usage = `Usage: atelier ingest plan|run|status|query
@@ -34,6 +35,5 @@ try {
   }
 } catch (error) {
   // Parser exceptions above are replaced before they can echo source text.
-  console.error(JSON.stringify({ ok: false, error: error.message }))
-  process.exitCode = 1
+  reportCommandFailure(error)
 }

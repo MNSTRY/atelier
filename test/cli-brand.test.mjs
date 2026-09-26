@@ -435,3 +435,28 @@ test('runCli default-brand help and version match the pinned defaults', async ()
   assert.equal(versionCode, 0)
   assert.deepEqual(versionOut, [VERSION])
 })
+
+// Regression: the responsibility commands caught their own errors and printed
+// Node's messages verbatim, bypassing the typed-code rule above.
+test('responsibility commands never print absolute paths, git commands or stdin excerpts', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-leak-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const { ATELIER_DEBUG, GIT_EDITOR, ...env } = process.env
+  const spellings = [dir, dir.replace(/^\/private/, ''), os.tmpdir()]
+  for (const [stdin, args] of [
+    ['', ['capability', 'plan', '--adoption', path.join(dir, 'nope', 'secret-name.json')]],
+    ['', ['inquiry', 'validate', '--record', path.join(dir, 'secret-name.json')]],
+    ['', ['harness', 'validate', '--record', path.join(dir, 'secret-name.json'), '--profile', 'inquiry']],
+    ['{}', ['practice', 'status']],
+    ['PRIVATE CLIENT NOTE: merger', ['trackable', 'preview']],
+    ['PRIVATE-SECRET', ['architecture', 'resolve']],
+    ['PRIVATE CLIENT NOTE', ['learn', 'list']],
+    ['PRIVATE CLIENT NOTE', ['ingest', 'status']],
+  ]) {
+    const result = spawnSync(process.execPath, [BIN, ...args], { cwd: dir, env, input: stdin, encoding: 'utf8' })
+    const output = result.stdout + result.stderr
+    assert.notEqual(result.status, 0, args.join(' '))
+    for (const spelling of spellings) assert.ok(!output.includes(spelling), `${args.join(' ')} printed a path: ${output}`)
+    assert.ok(!/PRIVATE|secret-name|Command failed|git -C/.test(output), `${args.join(' ')} leaked: ${output}`)
+  }
+})
