@@ -149,3 +149,19 @@ test('legacy succession binds exact bytes and refuses a newly created legacy wri
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
   assert.throws(() => acquirePrivateLock(lock), /legacy process exists/);
 });
+
+test('a refused read leaves the verified value untouched, so the next read replays cleanly', t => {
+  const dir = fixture(t);
+  let failOnce = true;
+  const current = createVerifiedFileSequence({ directory: dir, initial: () => ({ items: [] }),
+    apply: (text, value) => {
+      value.items.push(text);
+      if (text === 'two' && failOnce) { failOnce = false; throw new Error('transient read refusal'); }
+      return value;
+    } });
+  publishPrivateFile(path.join(dir, '001'), 'one');
+  assert.deepEqual(current().items, ['one']);
+  publishPrivateFile(path.join(dir, '002'), 'two');
+  assert.throws(() => current(), /transient read refusal/);
+  assert.deepEqual(current().items, ['one', 'two']);
+});

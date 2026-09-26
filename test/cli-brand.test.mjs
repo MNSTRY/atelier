@@ -70,7 +70,15 @@ Core commands:
   review run|history|handoff       Evidence-bound local human review.
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
+  architecture catalog|entry|resolve Inspect responsibility names and consumer bindings.
+  trackable preview|execute|view     Follow adopted definitions and occurrence evidence.
+  practice plan|apply|status|context Adopt scoped instruction guidance and inspect use.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
+  capability seal|plan|apply|status Publish local capability bundles and govern adoption.
+  harness                         Govern knowledge and build workflows.
+  inquiry append|handoff|status|graph Run the local Discovery and Research Harness workflow.
+  learn capture|propose|decide|activate|withdraw Manage scoped lessons and their evidence.
+  ingest plan|run|status|query     Preserve selected sources and search bounded evidence.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -107,8 +115,11 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
   assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
+  assert.deepEqual(commandMap.get('capability'), ['src/commands/capability.mjs'])
+  assert.deepEqual(commandMap.get('learn'), ['src/commands/learn.mjs'])
+  assert.deepEqual(commandMap.get('ingest'), ['src/commands/ingest.mjs'])
   assert.deepEqual(commandMap.get('enroll'), ['src/commands/enroll.mjs'])
-  assert.equal(commandMap.size, 58)
+  assert.equal(commandMap.size, 66)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {
@@ -423,4 +434,29 @@ test('runCli default-brand help and version match the pinned defaults', async ()
   const versionCode = await runCli({ argv: ['--version'], stdout: (line) => versionOut.push(line) })
   assert.equal(versionCode, 0)
   assert.deepEqual(versionOut, [VERSION])
+})
+
+// Regression: the responsibility commands caught their own errors and printed
+// Node's messages verbatim, bypassing the typed-code rule above.
+test('responsibility commands never print absolute paths, git commands or stdin excerpts', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-leak-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const { ATELIER_DEBUG, GIT_EDITOR, ...env } = process.env
+  const spellings = [dir, dir.replace(/^\/private/, ''), os.tmpdir()]
+  for (const [stdin, args] of [
+    ['', ['capability', 'plan', '--adoption', path.join(dir, 'nope', 'secret-name.json')]],
+    ['', ['inquiry', 'validate', '--record', path.join(dir, 'secret-name.json')]],
+    ['', ['harness', 'validate', '--record', path.join(dir, 'secret-name.json'), '--profile', 'inquiry']],
+    ['{}', ['practice', 'status']],
+    ['PRIVATE CLIENT NOTE: merger', ['trackable', 'preview']],
+    ['PRIVATE-SECRET', ['architecture', 'resolve']],
+    ['PRIVATE CLIENT NOTE', ['learn', 'list']],
+    ['PRIVATE CLIENT NOTE', ['ingest', 'status']],
+  ]) {
+    const result = spawnSync(process.execPath, [BIN, ...args], { cwd: dir, env, input: stdin, encoding: 'utf8' })
+    const output = result.stdout + result.stderr
+    assert.notEqual(result.status, 0, args.join(' '))
+    for (const spelling of spellings) assert.ok(!output.includes(spelling), `${args.join(' ')} printed a path: ${output}`)
+    assert.ok(!/PRIVATE|secret-name|Command failed|git -C/.test(output), `${args.join(' ')} leaked: ${output}`)
+  }
 })

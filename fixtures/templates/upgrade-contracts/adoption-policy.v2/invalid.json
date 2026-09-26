@@ -1,0 +1,16 @@
+{
+  "schema": "mnstry.atelier-adoption-policy@v2",
+  "enabled": true,
+  "mode": "manual-exact-plan",
+  "maxAgeSeconds": 86400,
+  "recoveryCoverage": "local-only",
+  "allowedEffects": [
+    "template-adoption",
+    "lock-and-projections",
+    "git-commit"
+  ],
+  "participant": "local-template-profile@1",
+  "ext": {
+    "execute": true
+  }
+}

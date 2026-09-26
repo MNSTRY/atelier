@@ -1,0 +1,17 @@
+{
+  "schema": "mnstry.atelier-capability-event@v1",
+  "id": "example-observation",
+  "kind": "exercise",
+  "package": "atelier.examples/evidence-review",
+  "releaseDigest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913",
+  "generation": "sha256:e8c2ce0b0d23db47456c38a8fca2ebb1acb38d37abf54a0f0eaaebdc92ae1869",
+  "binding": ".agents/skills/evidence-review",
+  "bindingDigest": "sha256:c3d023d9b8cd8f7ed519b653ac0a65326fe750623e5bff4cae2770ff548f75ad",
+  "host": "codex-repo-v1",
+  "session": "example-session",
+  "observer": "fixture-generator",
+  "outcome": "unknown",
+  "cause": "unknown",
+  "evidenceDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "at": "2026-01-01T00:00:00.000Z"
+}

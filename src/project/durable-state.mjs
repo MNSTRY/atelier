@@ -149,7 +149,9 @@ export function createVerifiedFileSequence({ directory, initial, apply, ignoreFi
     if (next.length < names.length) throw new Error('history shortened; preserve and inspect');
     const ids = next.map(n => identity(path.join(directory, n)));
     const reuse = names.every((n, i) => n === next[i] && identities[i] === ids[i]);
-    let result = reuse ? value : initial();
+    // Replay into a copy: a refused read must not leave the verified value
+    // half-applied, or every later read of this reader would be refused.
+    let result = reuse ? structuredClone(value) : initial();
     for (let i = reuse ? names.length : 0; i < next.length; i++) {
       const file = path.join(directory, next[i]);
       result = apply(readRegularTextNoFollow(file), result, i + 1, next[i]);

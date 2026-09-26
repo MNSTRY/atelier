@@ -1,0 +1,82 @@
+{
+  "schema": "mnstry.atelier-upgrade-plan@v3",
+  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "operation": "prepare-local-candidate",
+  "workspace": "/example/workspace",
+  "repositoryId": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "configPath": "atelier.project.json",
+  "baseHead": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "baseTree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "branch": "refs/heads/example-upgrade",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "expiresAt": "2026-01-02T00:00:00Z",
+  "policy": {
+    "schema": "mnstry.atelier-adoption-policy@v2",
+    "enabled": true,
+    "mode": "manual-exact-plan",
+    "maxAgeSeconds": 86400,
+    "recoveryCoverage": "local-only",
+    "allowedEffects": [
+      "template-adoption",
+      "lock-and-projections",
+      "git-commit"
+    ],
+    "participant": "local-template-profile@1"
+  },
+  "policyDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "executorDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "gitDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "gitConfigDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "hooksDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "hooksPath": "/example/git/hooks",
+  "readSet": [],
+  "migration": {
+    "schema": "mnstry.atelier-migration@v3",
+    "id": "local-template-profile@1",
+    "executorDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "readScope": "whole-enrolled-repository",
+    "allowedWrites": [
+      "atelier.lock.json"
+    ],
+    "sideEffects": [
+      "git-index",
+      "git-commit"
+    ],
+    "postChecks": [
+      "exact-inventory",
+      "lock-schema",
+      "exact-index",
+      "commit-parent-tree-message",
+      "template-adoption",
+      "template-current-source"
+    ]
+  },
+  "writes": [],
+  "releaseEvidence": null,
+  "dependencyInstallation": "excluded",
+  "mode": "manual-exact-plan",
+  "recoveryCoverage": "local-only",
+  "message": "Prepare Atelier local lock and projections",
+  "gitAuxDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "participant": {
+    "id": "local-template-profile@1",
+    "profileFile": "next-profile.json",
+    "selectionFile": "next-selection.json",
+    "profileDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selectionDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "templateRef": {
+      "kind": "TemplateRef",
+      "id": "sample.library",
+      "version": "1.0.0",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "bindingRef": {
+      "kind": "BindingRef",
+      "id": "sample.binding",
+      "version": "1.0.0",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "previousAdoptionDigest": null,
+    "adoptionDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "schema": "mnstry.atelier-capability-plan@v1",
+  "workspace": "sha256:dd04b5069104872d3067129a6b013b655711712c4b8126021585a7e06e0a8548",
+  "enrollment": "example-research-workspace",
+  "policyDigest": "sha256:e008a4b547aea1c663d603779740560b7aa7167b2ecdd61dde716deb8b06b2b2",
+  "stateDigest": null,
+  "sources": [
+    {
+      "id": "atelier.examples/evidence-review",
+      "digest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913"
+    },
+    {
+      "id": "atelier.examples/research",
+      "digest": "sha256:f4ecc6d8d0ea9640ec5a45c92c8872a425d479df0a71867cde09ada99af8c63d"
+    }
+  ],
+  "tools": [],
+  "notices": [],
+  "actions": [
+    {
+      "type": "add",
+      "package": "atelier.examples/evidence-review",
+      "target": ".agents/skills/evidence-review",
+      "currentDigest": null,
+      "nextDigest": "sha256:c3d023d9b8cd8f7ed519b653ac0a65326fe750623e5bff4cae2770ff548f75ad"
+    },
+    {
+      "type": "add",
+      "package": "atelier.examples/evidence-review",
+      "target": ".claude/skills/evidence-review",
+      "currentDigest": null,
+      "nextDigest": "sha256:c3d023d9b8cd8f7ed519b653ac0a65326fe750623e5bff4cae2770ff548f75ad"
+    },
+    {
+      "type": "add",
+      "package": "atelier.examples/research",
+      "target": ".agents/skills/research-plan",
+      "currentDigest": null,
+      "nextDigest": "sha256:fc2719f33230925d21076ba00e69977d4eef3143c21d2956648020022a6d361e"
+    },
+    {
+      "type": "add",
+      "package": "atelier.examples/research",
+      "target": ".claude/skills/research-plan",
+      "currentDigest": null,
+      "nextDigest": "sha256:fc2719f33230925d21076ba00e69977d4eef3143c21d2956648020022a6d361e"
+    },
+    {
+      "type": "add",
+      "package": "atelier.examples/research",
+      "target": ".agents/skills/research-synthesize",
+      "currentDigest": null,
+      "nextDigest": "sha256:7a20d216f8b7c66ed73d7008b7094905b5c1675beb7a488c14c77ed7b2ec8983"
+    },
+    {
+      "type": "add",
+      "package": "atelier.examples/research",
+      "target": ".claude/skills/research-synthesize",
+      "currentDigest": null,
+      "nextDigest": "sha256:7a20d216f8b7c66ed73d7008b7094905b5c1675beb7a488c14c77ed7b2ec8983"
+    },
+    {
+      "type": "add",
+      "package": "atelier.examples/research",
+      "target": ".agents/skills/research-integrate",
+      "currentDigest": null,
+      "nextDigest": "sha256:793d92e0147dcae720419c2f5446424456d23abe50dcf4caf33dc6b24cf62903"
+    },
+    {
+      "type": "add",
+      "package": "atelier.examples/research",
+      "target": ".claude/skills/research-integrate",
+      "currentDigest": null,
+      "nextDigest": "sha256:793d92e0147dcae720419c2f5446424456d23abe50dcf4caf33dc6b24cf62903"
+    }
+  ],
+  "changes": [
+    {
+      "package": "atelier.examples/evidence-review",
+      "fromDigest": null,
+      "toDigest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913",
+      "fromMode": null,
+      "toMode": "managed",
+      "toolsAdded": [],
+      "effectsAdded": [
+        "read-workspace"
+      ]
+    },
+    {
+      "package": "atelier.examples/research",
+      "fromDigest": null,
+      "toDigest": "sha256:f4ecc6d8d0ea9640ec5a45c92c8872a425d479df0a71867cde09ada99af8c63d",
+      "fromMode": null,
+      "toMode": "managed",
+      "toolsAdded": [],
+      "effectsAdded": [
+        "read-workspace",
+        "write-workspace",
+        "network"
+      ]
+    }
+  ],
+  "blockers": [],
+  "applyAllowed": true,
+  "planDigest": "sha256:e8c2ce0b0d23db47456c38a8fca2ebb1acb38d37abf54a0f0eaaebdc92ae1869",
+  "unexpectedAuthority": true
+}

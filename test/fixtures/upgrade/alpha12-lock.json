@@ -1,0 +1,77 @@
+{
+  "schema": "mnstry.atelier-lock@v1",
+  "generatedAt": "2026-09-25T12:02:42.332Z",
+  "package": {
+    "name": "@mnstry/atelier",
+    "version": "0.2.0-alpha.12",
+    "source": {
+      "type": "local_path",
+      "path": ".",
+      "repository": "https://github.com/MNSTRY/atelier.git",
+      "gitSha": null
+    }
+  },
+  "template": {
+    "id": "existing-workspace",
+    "version": "0.2.0-alpha.12"
+  },
+  "runtime": {
+    "node": {
+      "range": ">=22.18.0 <23 || >=24.13.1 <25"
+    },
+    "telemetry": "none",
+    "egress": "local-only",
+    "mutation": "not-implemented",
+    "runtimeImport": false,
+    "analysisExecution": false
+  },
+  "contracts": {
+    "projectConfig": "mnstry.atelier-project-config@v1",
+    "knowledgeGraph": "mnstry.atelier-knowledge-graph@v1",
+    "boundaryPolicy": "mnstry.atelier-boundary-policy@v1",
+    "exportContract": "atelier-export@v1"
+  },
+  "extensionPacks": [
+    {
+      "id": "mnstry-readiness-pack",
+      "version": "v1",
+      "digest": "sha256:134a618e6854e2d30bd2e1439a28671cdb0df3e5ed0ac1e8689fcd989f0f8d5a"
+    }
+  ],
+  "boundaryPolicy": {
+    "path": "boundary-policy.v1.json",
+    "digest": "sha256:1b405b52ee8318c63ce407daaad695cc2b22c30fed70311dba39b0c5576febba",
+    "snapshot": {
+      "schema": "mnstry.atelier-boundary-policy@v1",
+      "mode": "strict",
+      "actors": {
+        "author": {
+          "githubLogin": "author",
+          "gitEmails": [
+            "author@example.invalid"
+          ],
+          "privateDomainRepo": "workspace"
+        }
+      },
+      "repos": {
+        "workspace": {
+          "kind": "private_domain",
+          "ownerActor": "author",
+          "readBoundary": "private",
+          "allowedAudiences": [
+            "private"
+          ],
+          "forbiddenAudiences": [],
+          "autoCommit": "guarded"
+        }
+      },
+      "promotion": {
+        "requiresGitPromote": true,
+        "recordsPath": "governance/events.jsonl"
+      },
+      "forbiddenPaths": []
+    }
+  },
+  "lastSuccessfulUpgrade": null,
+  "appliedMigrations": []
+}

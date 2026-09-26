@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+- Preserve workspace template lineage during profile adoption and updates.
+  Keep profile identity in its typed adoption manifest, and refuse saved plans
+  that replace the workspace lineage before installing any managed content.
+- Verify exact upgrades from a real 0.2.0-alpha.12 lock as well as the
+  alpha.10 lock, and check that the upgraded lock records the installed version.
+- A long-lived reader of verified history (learning and ingestion stores) no
+  longer wedges after one refused read; it replays from a clean copy.
+- Ingestion reads take no lock and bind no workspace identity; only `plan`
+  binds it, so reads work during a run and a mistyped id is not recorded.
+- Inquiry graph proposals label each file with the most restrictive audience of
+  the sources it quotes.
+- Coordination reports every dependency cycle regardless of record order, and a
+  superseded directive stays superseded when its replacement goes stale.
+- Reflective and coaching acts require Reflection, an assessment and a request
+  whatever their origin.
+- The responsibility commands print only their own refusals; Node, git and
+  parser errors go through the typed-code rule and never show paths or input.
+
+- Preserve the bundled readiness pack's immutable v1 content and digest so
+  previous release locks can use both exact upgrade participants without a
+  separate lock rewrite. Keep Discovery Harness naming in the architecture
+  catalog; retain Discovery Engine in the persisted readiness pack. Add a
+  real alpha.10 lock fixture, plan/application regressions and digest refusal
+  controls.
+
+- Add portable template profiles, digest-bound project bindings, staged structural
+  validation and canonical read-only presentation through installed package APIs.
+- Add explicit local template adoption and updates through the existing exact-plan
+  upgrade engine, preserving source, local customization and adoption history.
+- Reuse Git placement checks within synchronous ingestion read operations;
+  recheck at operation boundaries and around writes without caching source bytes
+  or integrity verdicts.
+
+- Preserve recorded Trackable calendar resolutions across host timezone-data changes; retain verified-chain export when legacy replay cannot reconstruct state.
+
+- Correct unchanged instruction re-adoption and preserve literal replacement text during revisions; add recovery and neighboring-slot regressions.
+- Recover recognized dead capability operation locks without requiring an adoption journal; preserve live, uncertain and replacement owners.
+- Add portable Trackable definitions, shared preview/runtime rules, durable scoped reference storage and correction.
+- Add evidence-qualified Reflection, one-authority Interaction delivery, and bounded cross-repository Coordination views.
+
+- Reconcile eight responsibility names and typed consumer bindings; preserve historical aliases.
+- Connect durable ingestion to source-current knowledge context and graph proposals.
+- Add situated judgment and native ADR adapters, capability feedback, and recoverable scoped instruction adoption.
+- Include a provider-agnostic research starter and Practical Judgment operating skill.
+
+- Add Knowledge Harness, Fabric-derived Build Harness and shared typed handoffs, with immutable local history, intake and inquiry bridges, graph activation, correction propagation and version-bound skill feedback.
+
+- Add local Discovery and Research Harnesses with versioned inquiry records,
+  portable research handoffs, reproducible basic belief calculations, evidence
+  dependence and withdrawal checks, and reviewable graph proposals. Add separate
+  capability packages and version-bound Skill Steward feedback. Rename the
+  discovery workflow through the architecture catalog while retaining the
+  bundled readiness pack's persisted title, identifiers and digest.
+- Add an experimental progressive local ingestion runner with exact plans,
+  bounded deterministic text/CSV/JSON extraction, immutable intake reuse,
+  resumable attempt accounting and source-verified lexical queries. Add a
+  JSON stdin CLI and structural evaluation that retains missing cases and
+  unknown costs. No model dispatch, automatic semantic acceptance or native
+  desktop admission is provided by the portable runner.
+
+- Add a portable local learning lifecycle: Evidence, proposals, exact decisions,
+  explicit harness activation, withdrawal and retained history. Include a JSON
+  stdin CLI, private graph/export projections, bounded proposal-assistance
+  adapters and compatibility with existing skill observations. Local actor
+  assertions do not authenticate users; check artifacts remain inert and hosts
+  retain execution and access authority.
+
+- Recompile cached JSON Schema validators when caller-owned schemas change; preserve unchanged-schema reuse and fresh compilation for non-JSON schemas.
+
 ### Added
 
 - `atelier enroll documents [--audience private] [--dry-run] [--json]` writes
