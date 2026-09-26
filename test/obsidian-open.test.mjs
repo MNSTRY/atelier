@@ -3138,6 +3138,47 @@ test('the publisher checks an allocated vault again before it writes anything, s
   assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in, not even the vault lock')
 })
 
+test('a vault folder that has gone is made again only where its record leads and outside every vault the app lists, and a vault reached through a link is not published into: the view says why, and nothing is written', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
+  const world = makeWorld(t)
+  const home = path.join(world.dir, 'home')
+  const icloud = path.join(home, 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents', 'Field Notes')
+  fs.mkdirSync(icloud, { recursive: true })
+  let listed = { aaaaaaaaaaaaaaaa: { path: icloud, ts: 1 } }
+  const parent = path.join(home, 'Atelier')
+  assert.equal((await world.run(['location', 'set', parent, '--json'], { homedir: home })).exit, EXIT.ok)
+  const engine = world.engine({ readAppVaultList: () => ({ ok: true, vaults: listed }) })
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  const tick = async (body) => { touchCompass(world, body); world.advance(10 * 60 * 1000); return stateOf(await engine.tick()) }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId })
+
+  // The vault has gone, and the folder that held it is now a link into the listed iCloud vault.
+  fs.rmSync(parent, { recursive: true })
+  fs.symlinkSync(icloud, parent)
+  assert.deepEqual(await tick('North is painted blue.'), ['stale', 'vault-allocation-moved'])
+  assert.deepEqual(fs.readdirSync(icloud), [], 'nothing is made or written inside the listed vault')
+  // A real folder again, which the app now lists as a vault: the list is read before the vault is made again.
+  fs.rmSync(parent)
+  fs.mkdirSync(parent, { mode: 0o700 })
+  listed = { ...listed, bbbbbbbbbbbbbbbb: { path: parent, ts: 1 } }
+  assert.deepEqual(await tick('North is painted green.'), ['stale', 'vault-location-inside-vault'])
+  assert.equal(fs.existsSync(vault), false)
+  // Nothing in the way: made again where it was, and published.
+  listed = { aaaaaaaaaaaaaaaa: listed.aaaaaaaaaaaaaaaa }
+  assert.deepEqual(await tick('North is painted white.'), ['current', 'published-and-verified'])
+  assert.equal(fs.statSync(vault).isDirectory(), true)
+
+  // The folder that holds it is moved into a vault the app lists and linked back: the same folder, which keeps its
+  // device and inode, reached through the link, is not published into by the running engine.
+  const personal = path.join(world.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.renameSync(parent, path.join(personal, 'Atelier'))
+  fs.symlinkSync(path.join(personal, 'Atelier'), parent)
+  const before = listing(personal)
+  assert.deepEqual(await tick('North is painted black.'), ['stale', 'vault-allocation-moved'])
+  assert.deepEqual(listing(personal), before, 'nothing is written in it')
+})
+
 test('no vault folder is allocated while the app\'s list cannot be read: the view says why and is allocated at a later tick, once the list reads', needsExchange, async (t) => {
   const world = makeWorld(t)
   const parent = path.join(world.dir, 'Atelier')

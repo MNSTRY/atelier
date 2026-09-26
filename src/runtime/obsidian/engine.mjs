@@ -3,7 +3,7 @@ import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
-import { PublicationRefusal, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
+import { PublicationRefusal, allocatedFolderState, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
@@ -392,7 +392,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       for (const scope of enablement.scopes) {
         try {
           let vaults = null
-          if (readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId }) === null && !hasCommittedGeneration({ workspaceRoot, scopeId: scope.scopeId })) {
+          // The list is read where a folder is about to be made: a first allocation, or an allocated folder that has gone.
+          const record = readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })
+          if (record === null ? !hasCommittedGeneration({ workspaceRoot, scopeId: scope.scopeId }) : allocatedFolderState(record) === 'missing') {
             const known = await appList()
             if (!known.ok) refuse('app-vault-list-unreadable', 'Obsidian\'s vault list could not be read, so no folder is allocated for this view yet; it is tried again at the next tick', { cause: known.code })
             vaults = known.vaults

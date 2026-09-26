@@ -272,6 +272,43 @@ test('the checks see through links and letter case: a folder reached through a l
   assert.equal(taken.name, 'Café (tides 2)')
 })
 
+test('an allocated vault is published into, and made again, only where its record leads: never through a link put on the way since, nor inside a vault the app now lists', { skip: POSIX ? false : 'links need privileges on Windows' }, (t) => {
+  const w = world(t)
+  const allocate = (extra = {}) => ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW, ...extra })
+  const storeOf = () => createRecoveryStore({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', repositoryRoots: w.repositoryRoots })
+  const codeOf = (run) => { try { run(); return null } catch (error) { return error.code } }
+  const recorded = () => readVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything' })
+  const allocation = allocate()
+  // The folder that holds the vaults is moved into a vault the app lists and linked back: the vault keeps its device
+  // and inode, and is reached through the link.
+  const personal = path.join(w.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.renameSync(w.parent, path.join(personal, 'Atelier'))
+  fs.symlinkSync(path.join(personal, 'Atelier'), w.parent)
+  assert.equal(codeOf(storeOf), 'vault-allocation-moved')
+  assert.deepEqual(fs.readdirSync(path.join(personal, 'Atelier', 'harbor-notes (everything)')), [], 'nothing is made in it')
+  assert.deepEqual(allocate(), allocation, 'a folder that is there is not made again')
+
+  // The vault has gone, and the folder that held it is now a link into a vault the app lists, kept in iCloud.
+  fs.rmSync(w.parent)
+  fs.rmSync(path.join(personal, 'Atelier'), { recursive: true })
+  const icloud = path.join(w.dir, 'home', 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents', 'Field Notes')
+  fs.mkdirSync(icloud, { recursive: true })
+  fs.symlinkSync(icloud, w.parent)
+  assert.equal(codeOf(() => allocate({ vaults: { aaaaaaaaaaaaaaaa: { path: icloud } } })), 'vault-allocation-moved')
+  assert.deepEqual(fs.readdirSync(icloud), [], 'nothing is made inside the listed vault')
+  assert.deepEqual(recorded(), allocation, 'the record is left as it was')
+
+  // A real folder again, which the app now lists as a vault: its vault is not made again inside it.
+  fs.rmSync(w.parent)
+  fs.mkdirSync(w.parent, { mode: 0o700 })
+  assert.equal(codeOf(() => allocate({ vaults: { bbbbbbbbbbbbbbbb: { path: w.parent } } })), 'vault-location-inside-vault')
+  assert.equal(fs.existsSync(allocation.path), false)
+  // Nothing in the way: it is made again where it was, and published into.
+  assert.equal(allocate({ vaults: {} }).path, allocation.path)
+  assert.equal(storeOf().vaultRoot, allocation.path)
+})
+
 test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {
   const slept = []
   const sleep = async (ms) => { slept.push(ms) }

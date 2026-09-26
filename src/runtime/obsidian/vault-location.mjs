@@ -207,7 +207,8 @@ export function checkVaultParent({ parent, workspaceRoot, repositoryRoots, vault
 export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, location, projectName, repositoryRoots, vaults = null, allocatedPaths = [], homedir, now }) {
   const existing = readVaultAllocation({ workspaceRoot, workspaceId, scopeId })
   // An allocated folder that has gone is made again where it was, private, and recorded as the folder it now is; one
-  // another folder replaced is left alone, and the store refuses to publish into it.
+  // another folder replaced is left alone, and the store refuses to publish into it. `vaults` is the app's list here
+  // too: a folder is made again only where one would be allocated.
   if (existing !== null && allocatedFolderState(existing) === 'missing') {
     // Only where the store would publish: a record that names a folder inside a repository, the project or the
     // private state (edited, or copied from elsewhere) makes nothing there.
@@ -216,9 +217,23 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
     if (spellings(workspaceRoot).some((root) => spellings(existing.path).some((candidate) => foldedInside(root, candidate)))) {
       refuse('vault-location-inside-private-state', 'vaults never live inside Atelier\'s private state for this workspace')
     }
+    // Only where it was: the folder that held it leads where it did, through no link put on the way since (into a
+    // vault the app lists, a synced folder), and passes every check a location is decided with.
+    const moved = (leadsTo) => refuse('vault-allocation-moved', 'the folder that held this view\'s vault now leads somewhere else, through a link; its vault is not made again there', { parent: existing.parent, leadsTo })
+    let realParent = null
+    try { realParent = realPathOfLocation(existing.parent) } catch { /* not reachable */ }
+    if (realParent !== existing.parent) moved(realParent)
+    checkVaultParent({ parent: existing.parent, workspaceRoot, repositoryRoots, vaults, allocatedPaths: allocatedPaths.filter((allocated) => allocated !== existing.path), allowSynced: true, homedir })
     try { fs.mkdirSync(existing.parent, { recursive: true, mode: 0o700 }); fs.mkdirSync(existing.path, { mode: 0o700 }) } catch (error) {
       if (error?.code === 'EEXIST') return existing
       refuse('vault-location-unusable', 'the folder for this view\'s vault cannot be made again there', { parent: existing.parent, cause: error?.code ?? null })
+    }
+    // Made where the record says and nowhere else: a link put on the way between the check and the folder is found here.
+    let madeAt = null
+    try { madeAt = realPathAsStored(existing.path) } catch { /* not reachable */ }
+    if (madeAt !== existing.path) {
+      try { fs.rmdirSync(existing.path) } catch { /* not ours to remove */ }
+      moved(madeAt)
     }
     const made = folderIdentity(existing.path)
     return writeVaultAllocation({ workspaceRoot, allocation: { ...existing, device: made.device, inode: made.inode } })

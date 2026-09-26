@@ -183,13 +183,18 @@ export function allocatedFolderState(allocation) {
   return found.directory && !found.link && found.device === allocation.device && found.inode === allocation.inode ? 'same' : 'replaced'
 }
 
-// Refuses, typed, unless the folder at an allocation's path is the one it recorded: checked when a store is made, by
+// Refuses, typed, unless the folder at an allocation's path is the one it recorded, at that real path: checked when a store is made, by
 // the maintenance engine before it uses a store again, and by the publisher before and after it takes the vault lock,
 // so a folder replaced while a service runs is never published into.
 export function assertAllocatedFolder(allocation) {
   const found = allocatedFolderState(allocation)
   if (found === 'missing') refuse('vault-allocation-missing', 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick', { path: allocation.path })
   if (found === 'replaced') refuse('vault-allocation-replaced', 'another folder is where this view\'s vault was allocated; Atelier publishes only into the folder it made', { path: allocation.path })
+  // Reached through no link: the record holds the folder's real path, so the same folder moved elsewhere (into a
+  // vault the app lists, say) and linked back, which keeps its device and inode, is not published into either.
+  let real = null
+  try { real = realPathAsStored(allocation.path) } catch { /* not reachable: refused below */ }
+  if (real !== allocation.path) refuse('vault-allocation-moved', 'this view\'s vault is now reached through a link, somewhere else than where it was allocated; Atelier publishes only into the folder at the path it recorded', { path: allocation.path, leadsTo: real })
   return allocation
 }
 
