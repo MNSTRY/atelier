@@ -61,6 +61,11 @@ const UNCLASSIFIED = {
   'drafts/block-scalar.md': '---\ndescription: |\n  Two lines\n  of text.\nkg:\n  audience: sensitive\n---\n\n# Block scalar\n',
   'drafts/flow-kg.md': '---\nkg: {audience: sensitive, id: "harbor:flow"}\n---\n\n# Flow kg\n',
   'drafts/list-kg.md': '---\nkg:\n  - audience: sensitive\n---\n\n# List kg\n',
+  'drafts/quoted-kg.md': '---\n"kg":\n  audience: sensitive\n---\n\n# Quoted kg\n',
+  'drafts/single-quoted-kg.md': "---\n'kg':\n  audience: sensitive\n---\n\n# Single-quoted kg\n",
+  'drafts/json-front-matter.md': '---\n{"kg": {"audience": "sensitive", "id": "harbor:json"}}\n---\n\n# JSON front matter\n',
+  'drafts/flow-front-matter.md': '---\n{title: x, kg: {audience: sensitive}}\n---\n\n# Flow front matter\n',
+  'drafts/complex-key.md': '---\n? kg\n: {audience: sensitive}\n---\n\n# Complex key\n',
 }
 const READ_AS_NOTES = ['drafts/malformed.md', 'drafts/own-front-matter.md', 'drafts/plain.md']
 

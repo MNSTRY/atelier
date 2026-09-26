@@ -396,10 +396,12 @@ them.
 
 A note whose labels cannot be known is never shown, in any vault: front
 matter Atelier cannot read (a block scalar such as `description: |`, a value
-wrapped onto a second line, a flow mapping), or a top-level `kg` key that is
-not a block (a list, a flow value). Such a note may say `sensitive`, which
-"only you" leaves out. Only a note with no front matter, or with front matter
-that reads and has no `kg` key at all, counts as one without a classification.
+wrapped onto a second line), front matter that is not plain `key: value`
+lines at its top level (a quoted key such as `"kg":`, a one-line flow or JSON
+mapping, a complex key), or any top-level `kg` key that is not a block. Such a
+note may say `sensitive`, which "only you" leaves out. Only a note with no
+front matter, or with front matter of plain top-level keys none of which is
+`kg`, counts as one without a classification.
 
 In an "only you" vault such a note is shown only when its bytes read as a note
 the way the emitter reads every note, so one file that cannot be published

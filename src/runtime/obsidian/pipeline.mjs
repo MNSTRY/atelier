@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
-import { markdownMetadata } from '../../graph/knowledge-graph.mjs'
 import { EMITTER_VERSION, createPreparationCache, prepareView, readMarkdownLens, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
@@ -39,7 +38,7 @@ export const DEFAULT_ELIGIBILITY = Object.freeze({
 // one that cannot be read. A note whose labels are unknown is never admitted: front matter Atelier could not read
 // (`malformed-frontmatter`: a block scalar, a wrapped value, a flow mapping), or any top-level `kg` key that is not a
 // block, may carry an audience such as `sensitive` that "only you" leaves out. Only a note with no front matter, or
-// front matter that reads and has no `kg` key at all, is the person's plain note. Assets follow the documents that
+// front matter of plain top-level keys none of which is `kg` (plainTopLevelKeys), is the person's plain note. Assets follow the documents that
 // embed them, as always.
 export function onlyYouEligibility({ project }) {
   const roots = new Map((project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => [repo.name, repo.path]))
@@ -47,19 +46,32 @@ export function onlyYouEligibility({ project }) {
     const root = roots.get(node.repo)
     if (root === undefined || node.extension !== 'md' || typeof node.path !== 'string') return false
     let bytes
-    try { bytes = readFileBytes(path.join(root, ...node.path.split('/'))); readMarkdownLens(bytes) } catch { return false }
-    if (node.classificationReason === 'absent-frontmatter') return true
+    let lens
+    try { bytes = readFileBytes(path.join(root, ...node.path.split('/'))); lens = readMarkdownLens(bytes) } catch { return false }
+    // Read now, not as the graph saw it: a file that gained front matter since is judged by what it holds now.
+    if (lens.frontmatter === null) return node.classificationReason === 'absent-frontmatter'
     if (node.classificationReason !== 'missing-kg-block') return false
-    const text = bytes.toString('utf8')
-    const block = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
-    if (block === null) return false
-    if (/^kg[ \t]*:/m.test(block[1])) return false
-    try { return !Object.hasOwn(markdownMetadata(text), 'kg') } catch { return false }
+    const block = bytes.toString('utf8').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+    return block !== null && plainTopLevelKeys(block[1])
   }
   return Object.freeze({
-    revision: () => 'classified-documents/v2+unclassified-notes-read-as-notes-for-only-you/v2+assets-embedded-by-eligible-documents/v1',
+    revision: () => 'classified-documents/v2+unclassified-notes-read-as-notes-for-only-you/v3+assets-embedded-by-eligible-documents/v1',
     isEligible: (node) => node.classification === 'classified' || (node.classification === 'unclassified' && readsAsNote(node)),
   })
+}
+
+// Whether front matter is plain `key: value` lines at its top level, none of them `kg`: every line that is not blank,
+// a comment, or indented (a nested value or a continuation) starts with a bare key. A quoted key, a flow or JSON
+// mapping, a complex key (`? `), a top-level list or anything else unusual is not plain, so a label it may hold (a
+// `kg.audience: sensitive` Atelier did not read) keeps the note withheld. An allow-list, never a pattern to find.
+const PLAIN_KEY = /^([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]|$)/
+function plainTopLevelKeys(frontmatter) {
+  for (const line of frontmatter.split(/\r?\n/)) {
+    if (line.trim() === '' || line.startsWith('#') || /^[ \t]/.test(line)) continue
+    const key = PLAIN_KEY.exec(line)
+    if (key === null || key[1] === 'kg') return false
+  }
+  return true
 }
 
 // The eligibility a workspace's machine settings decide: the one above only for "only you" with unclassified notes
