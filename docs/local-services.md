@@ -362,10 +362,13 @@ runtime is still in its first tick. A listener that has not written its
 record yet is waited for as that service, never adopted. On the way, a unit
 whose text differs from what would be written now, keeping the recorded
 search path, is written and loaded again (`loginItem: { refreshed: true }`).
-A unit whose file is gone, or that the manager does not have loaded (switched
-off in System Settings, no user systemd), is not forced: a child is started
-for that command only, and the answer says why (`loginItem: { via: 'child',
-reason }`). `requestServiceTick` replaces an outdated service the same way,
+The manager is asked first whether the person switched the item off (System
+Settings on macOS, `systemctl --user disable` on Linux); one that is off is
+neither written again, reloaded, enabled nor started through the manager
+(`login-item-switched-off`). A unit that is switched off, whose file is gone,
+or that the manager does not have loaded (no user systemd), is not forced: a
+child is started for that command only, and the answer says why (`loginItem:
+{ via: 'child', reason }`). `requestServiceTick` replaces an outdated service the same way,
 and so does `startService` with `replaceOutdated` (`service start`): a proven
 runtime of an earlier release is stopped through its own listener, under the
 start lock, and the installed entry started in its place

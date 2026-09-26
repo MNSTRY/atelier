@@ -54,7 +54,9 @@
   the service that proves itself with the entry the item runs. A unit that
   differs from what would be written now is written again and reloaded, and
   `open` says `login item refreshed`. An item switched off in System Settings
-  is not forced: the service is started for that command only.
+  or with `systemctl --user disable` is not forced: it is neither written
+  again nor started through its manager, and the service is started for that
+  command only.
 - A service started by a login item (`--startup`) keeps its own bounded
   `service.log`, exits 0 on a refusal as well, so it is not restarted every
   minute, and records how its start ended in `state/service/last-startup.json`

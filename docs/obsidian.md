@@ -381,9 +381,11 @@ atelier obsidian uninstall
   for that session only.
 - On Linux it is a systemd user unit,
   `~/.config/systemd/user/atelier-obsidian-<workspace-id>.service`
-  (`$XDG_CONFIG_HOME` when set), enabled with `systemctl --user`. Where no
-  user instance of systemd answers (WSL, a container), the answer is
-  `login-item-unavailable` and nothing is left behind.
+  (`$XDG_CONFIG_HOME` when set), enabled with `systemctl --user`. Disabled
+  with `systemctl --user disable`, it stays disabled: `status` reports
+  `installed, disabled`, and `open` starts the service for that session
+  only. Where no user instance of systemd answers (WSL, a container), the
+  answer is `login-item-unavailable` and nothing is left behind.
 - Windows is not offered (`startup-platform-unqualified`), as publication
   itself is refused there.
 

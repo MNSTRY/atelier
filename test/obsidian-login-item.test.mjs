@@ -603,6 +603,34 @@ test('systemd: install writes the unit, reloads and enables it; start, remove an
   assert.deepEqual(readSystemdShow('LoadState=not-found\nActiveState=inactive\nUnitFileState=\n'), { loadState: 'not-found', activeState: 'inactive', subState: null, unitFileState: '', pid: null, lastExit: null })
 })
 
+test('systemd: a unit the person disabled is neither written again, reloaded, enabled nor started through the manager on the way of a start', async (t) => {
+  const { createSystemdManager } = await managers()
+  const { loginItemStarter } = await loginItems()
+  const { dir } = await managerWorld(t)
+  const directory = path.join(dir, 'systemd', 'user')
+  const label = 'atelier-obsidian-ws-1'
+  const fileName = `${label}.service`
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, fileName), 'the unit as installed')
+  const show = `--user show -p LoadState,ActiveState,SubState,UnitFileState,MainPID,ExecMainStatus ${fileName}`
+  const record = {
+    schema: 'atelier-obsidian-login-item/v1', workspaceId: 'ws-1', kind: 'systemd-user-unit', label, file: path.join(directory, fileName), digest: sha256('the unit as installed'),
+    program: { node: '/opt/synthetic/node', entry: '/srv/synthetic/entry.mjs' }, searchPath: null, installedAt: iso(START), updatedAt: iso(START),
+  }
+  // A unit that differs from what would be written now (an upgraded Node, say): a refresh is due.
+  const plan = { fileName, text: 'the unit as it would be now', digest: sha256('the unit as it would be now'), program: record.program }
+  const disabled = recordingRun({ [show]: { stdout: 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=disabled\nMainPID=0\n' } })
+  const manager = createSystemdManager({ run: disabled.run, systemctl: '/usr/bin/systemctl', directory })
+  const asked = await loginItemStarter({ workspace: { workspaceRoot: dir, workspaceId: 'ws-1' }, manager, record, plan }).start()
+  assert.deepEqual([asked.ok, asked.code, asked.refreshed], [false, 'login-item-switched-off', false])
+  assert.deepEqual(disabled.calls, [`/usr/bin/systemctl ${show}`], 'the manager is asked, and nothing else')
+  assert.equal(fs.readFileSync(path.join(directory, fileName), 'utf8'), 'the unit as installed')
+  // Control: an enabled unit is started through the manager.
+  const enabled = recordingRun({ [show]: { stdout: 'LoadState=loaded\nActiveState=inactive\nUnitFileState=enabled\n' } })
+  const started = await loginItemStarter({ workspace: { workspaceRoot: dir, workspaceId: 'ws-1' }, manager: createSystemdManager({ run: enabled.run, systemctl: '/usr/bin/systemctl', directory }), record }).start()
+  assert.deepEqual([started.ok, enabled.calls.at(-1)], [true, `/usr/bin/systemctl --user start ${fileName}`])
+})
+
 // ---------------------------------------------------------------------------
 // 3. The production manager is reached only by the real entry, and refuses a private HOME and the test runner
 // ---------------------------------------------------------------------------
@@ -1220,16 +1248,24 @@ test('a package upgraded under a service the login item started: it exits 75 aft
   assert.equal((await world.healthy()).record.runtimeId, second.runtimeId)
 })
 
-test('a login item its manager does not have loaded is not forced: the service is started for this command only, and the answer says why', await commandTest(), async (t) => {
+test('a login item its manager does not have loaded, or that the person switched off, is not forced: the service is started for this command only, and the answer says why', await commandTest(), async (t) => {
   const world = await makeWorld(t)
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
+  const childSeams = () => world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, entryArgs: [`--interval-ms=${IDLE_INTERVAL}`], spawn: followingSpawn(t) } })
   await world.launchd.bootoutBehindTheBack(label)
-  world.launchd.disable(label)
   await waitFor(async () => (await serviceStatus(world.lifecycle())).state !== 'healthy', { label: 'the service to stop' })
-  const started = await world.run(['service', 'start'], { seams: world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, entryArgs: [`--interval-ms=${IDLE_INTERVAL}`], spawn: followingSpawn(t) } }) })
+  const unloaded = await world.run(['service', 'start'], { seams: childSeams() })
+  assert.equal(unloaded.exit, EXIT.ok, unloaded.stderr)
+  assert.match(unloaded.stdout, /the login item did not start the service \(login-item-not-loaded\); it was started for this session only/)
+  assert.equal((await stopAskingAgain(world)).stopped, true)
+  // Switched off in System Settings: launchd is asked first, and nothing is loaded or started through it.
+  world.launchd.disable(label)
+  const calls = world.launchd.calls.length
+  const started = await world.run(['service', 'start'], { seams: childSeams() })
   assert.equal(started.exit, EXIT.ok, started.stderr)
-  assert.match(started.stdout, /the login item did not start the service \(login-item-not-loaded\); it was started for this session only/)
+  assert.match(started.stdout, /the login item did not start the service \(login-item-switched-off\); it was started for this session only/)
+  assert.deepEqual(world.launchd.calls.slice(calls).filter((call) => /^(bootout|bootstrap|kickstart)/.test(call)), [])
   const status = await world.run(['status', '--json'])
   assert.deepEqual([status.json.loginItem.state, status.json.service.state], ['switched-off', 'healthy'])
   assert.match((await world.run(['status'])).stdout, /login item: installed, switched off in System Settings/)

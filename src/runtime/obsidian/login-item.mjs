@@ -47,9 +47,10 @@ import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from './sta
 // that way and reloaded, keeping the search path recorded at installation.
 // Removing lowers the consent to the service alone first, so a unit left
 // behind by a failed removal could only refuse, then removes the unit and
-// the record. A person who switched the item off in System Settings is not
-// overridden: the manager does not start it, and the service is started as
-// a child for that command only.
+// the record. A person who switched the item off (System Settings, or
+// `systemctl --user disable`) is not overridden: the manager is asked first,
+// the unit is neither written again nor started through it, and the service
+// is started as a child for that command only.
 
 export const LOGIN_ITEM_SCHEMA = 'atelier-obsidian-login-item/v1'
 export const LOGIN_ITEM_PACKAGE = '@mnstry/atelier'
@@ -269,9 +270,11 @@ export function currentLoginItemPlan({ record, project, workspaceRoot, dataRoot,
   }
 }
 
-// { entryPath, start() } for startService: the entry the item runs, and a start through its manager. A unit that
-// differs from `plan` is written again and reloaded first (the answer then carries `refreshed: true`); a unit whose
-// file is gone was removed by somebody and is not put back.
+// { entryPath, start() } for startService: the entry the item runs, and a start through its manager. The manager is
+// asked first whether the person switched the item off (System Settings, `systemctl --user disable`): one that is off
+// is neither written again, reloaded, enabled nor started (`login-item-switched-off`), and startService starts a child
+// for that command only. A unit that differs from `plan` is written again and reloaded first (the answer then carries
+// `refreshed: true`); a unit whose file is gone was removed by somebody and is not put back.
 export function loginItemStarter({ workspace, manager, record, plan = null, clock = () => new Date() }) {
   const fileName = path.basename(record.file)
   let entryPath = record.program.entry
@@ -281,6 +284,9 @@ export function loginItemStarter({ workspace, manager, record, plan = null, cloc
       let refreshed = false
       const text = manager.readUnit({ label: record.label, fileName })
       if (text === null) return { ok: false, code: 'login-item-file-missing', refreshed }
+      let seen = null
+      try { seen = await manager.inspect({ label: record.label, fileName }) } catch { seen = null }
+      if (seen?.ok === true && seen.disabled === true) return { ok: false, code: 'login-item-switched-off', refreshed }
       if (plan !== null && plan.fileName === fileName && text !== plan.text) {
         const installed = await manager.install({ label: record.label, fileName, text: plan.text })
         if (!installed.ok) return { ok: false, code: installed.code, refreshed }
