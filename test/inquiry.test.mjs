@@ -261,3 +261,25 @@ capabilityWriteTest('two repositories adopt both harnesses and feedback stays bo
     assert.throws(() => capability.recordCapabilityEvent({ workspaceRoot: root, event: { ...observation.event, id: 'bad-generation', generation: digest('wrong') } }), /current installed binding/)
   }
 })
+
+test('graph proposal files carry the most restrictive audience of the sources they quote', () => {
+  const specimen = JSON.parse(fs.readFileSync(new URL('../fixtures/inquiry/workshop.json', import.meta.url), 'utf8'))
+  const known = new Map()
+  const repin = value => {
+    if (value && typeof value === 'object') {
+      if (value.id && value.digest && Object.keys(value).length === 2 && known.has(value.id)) return inquiry.inquiryRef(known.get(value.id))
+      for (const key of Object.keys(value)) value[key] = repin(value[key])
+    }
+    return value
+  }
+  const records = structuredClone(specimen).map(record => {
+    if (record.id === 'counterstudy') record.data.audience = 'sensitive'
+    const pinned = repin(record); known.set(record.id, pinned); return pinned
+  })
+  const files = inquiry.inquiryGraphProposal(records, { namespace: 'corpus' }).files
+  const audienceOf = file => /audience: "([a-z]+)"/.exec(file.content)[1]
+  const quoting = files.filter(file => file.content.includes('Invented counterevidence'))
+  assert.ok(quoting.length > 0)
+  for (const file of quoting) assert.equal(audienceOf(file), 'sensitive', file.path)
+  assert.equal(audienceOf(files.find(file => file.path === 'counterstudy.md')), 'sensitive')
+})

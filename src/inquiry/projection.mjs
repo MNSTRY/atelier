@@ -1,6 +1,7 @@
 import { assertDocument } from '../capabilities/package.mjs'
 import { inquiryDigest, inquiryRef } from './contracts.mjs'
 import { inspectInquiry } from './ledger.mjs'
+import { restrictiveAudience } from '../harnesses/contracts.mjs'
 
 // Files are proposed source edits. No graph source, relation, or review status
 // is written by this function. The receiver owns disclosure and promotion.
@@ -14,12 +15,14 @@ export function inquiryGraphProposal(records, { namespace }) {
     const fence = '`'.repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(m => m[0].length + 1)))
     return `${fence}text\n${text}\n${fence}`
   }
-  function add(record, body) {
+  // A file carries the most restrictive audience of the campaign and of every
+  // source whose material it copies; a sensitive quote is never labelled private.
+  function add(record, body, audience = state.campaign.data.audience) {
     const id = node(record)
     if (files.has(id)) return
     files.set(id, { path: `${record.id}.md`, content: [
       '---', `title: ${JSON.stringify(`Inquiry ${record.kind}: ${record.id}`)}`, 'kg:', `  id: ${JSON.stringify(id)}`, '  type: "document"',
-      '  status: "draft"', `  audience: ${JSON.stringify(state.campaign.data.audience)}`, '  relations: {}', '---', '',
+      '  status: "draft"', `  audience: ${JSON.stringify(audience)}`, '  relations: {}', '---', '',
       `# Inquiry ${record.kind}: ${record.id}`, '', `Record digest: ${inquiryDigest(record)}`, '',
       'Proposed source. Review and admission belong to the receiving repository. Caller-reported evidence is not authenticated.', '', literal(body), '',
     ].join('\n') })
@@ -30,20 +33,22 @@ export function inquiryGraphProposal(records, { namespace }) {
   }
   for (const decision of records.filter(r => r.kind === 'decision' && r.data.disposition === 'accepted' && !stale.has(r.id))) {
     const assessment = byId.get(decision.data.assessment.id), hypothesis = byId.get(assessment.data.hypothesis.id)
-    add(decision, { conclusion: decision.data.conclusion, reason: decision.data.reason, reviewerReport: { by: decision.by, at: decision.at, basis: decision.data.reviewBasis }, nextQuestions: decision.data.nextQuestions })
+    const quoted = assessment.data.evidence.map(item => byId.get(byId.get(item.bundle.id).data.assertions.find(a => a.id === item.assertion).source.id).data.audience)
+    const audience = restrictiveAudience(state.campaign.data.audience, ...quoted)
+    add(decision, { conclusion: decision.data.conclusion, reason: decision.data.reason, reviewerReport: { by: decision.by, at: decision.at, basis: decision.data.reviewBasis }, nextQuestions: decision.data.nextQuestions }, audience)
     add(assessment, { model: assessment.data.model, result: state.assessments[assessment.id], rationale: assessment.data.rationale,
       evidence: assessment.data.evidence.map(item => {
         const bundle = byId.get(item.bundle.id)
         return { bundle: item.bundle, request: bundle.data.request, provider: bundle.data.provider,
           assertion: bundle.data.assertions.find(a => a.id === item.assertion), conflicts: bundle.data.conflicts, gaps: bundle.data.gaps, newQuestions: bundle.data.newQuestions }
-      }) })
+      }) }, audience)
     add(hypothesis, hypothesis.data)
     edge(decision, 'depends_on', assessment); edge(assessment, 'related', hypothesis)
     for (const item of assessment.data.evidence) {
       const bundle = byId.get(item.bundle.id), assertion = bundle.data.assertions.find(a => a.id === item.assertion), source = byId.get(assertion.source.id)
       // Preserve selected statements, provenance and conflicts, without copying
       // raw captures or unrelated assertions into accepted knowledge proposals.
-      add(source, { locator: source.data.locator, digest: source.data.digest, family: source.data.family, scope: source.data.scope, method: source.data.method })
+      add(source, { locator: source.data.locator, digest: source.data.digest, family: source.data.family, scope: source.data.scope, method: source.data.method }, restrictiveAudience(state.campaign.data.audience, source.data.audience))
       edge(source, 'evidences', assessment)
       edge(source, assertion.stance === 'neutral' ? 'related' : assertion.stance, hypothesis)
     }
