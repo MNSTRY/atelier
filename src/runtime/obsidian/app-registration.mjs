@@ -53,13 +53,14 @@ const currentUid = () => (typeof process.getuid === 'function' ? process.getuid(
 const compactUtc = (ms) => new Date(ms).toISOString().replace(/[-:.]/g, '')
 const BACKUP = new RegExp(`^${OBSIDIAN_SETTINGS_FILE.replaceAll('.', '\\.')}\\.atelier-backup-\\d{8}T\\d{9}Z$`)
 
-// Keeps the first backup, the list as it was before Atelier ever wrote it, and `latest`; removes the ones between.
-// Their names sort as their times. A backup that cannot be removed stays.
-function pruneBackups(directory, latest) {
+// Keeps the first backup, the list as it was before Atelier ever wrote it, `latest`, and the names in `keep` (a copy
+// the same run took before it quit the app); removes the others between. Their names sort as their times. A backup
+// that cannot be removed stays.
+function pruneBackups(directory, latest, keep = []) {
   let names
   try { names = fs.readdirSync(directory).filter((name) => BACKUP.test(name)).sort() } catch { return }
   for (const name of names.slice(1)) {
-    if (name === latest) continue
+    if (name === latest || keep.includes(name)) continue
     const file = path.join(directory, name)
     try { if (fs.lstatSync(file).isFile()) fs.unlinkSync(file) } catch { /* it stays */ }
   }
@@ -168,7 +169,9 @@ function createObsidianSettings({ userDataDir, vaultRoot, absent, now, randomByt
 // entry (`registration-not-read-back`). `vaults` is the list as it was found or written. `processProbe()` answers
 // 'absent', 'running' or 'unknown'; only 'absent' allows a write. `sandbox` names a Flatpak or snap build found for
 // this account, which refuses (`obsidian-sandboxed`).
-export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe, sandbox = null, now = () => Date.now(), randomBytes = cryptoRandomBytes, uid = currentUid() } = {}) {
+// `keepBackups`: backup names (in the file's directory) this write must not prune: the copy `open` kept before it
+// quit the app for this write.
+export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe, sandbox = null, now = () => Date.now(), randomBytes = cryptoRandomBytes, uid = currentUid(), keepBackups = [] } = {}) {
   if (typeof processProbe !== 'function') throw new TypeError('registering a vault needs a process probe')
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot) || vaultRoot.includes('\u0000')) throw new TypeError('vaultRoot must be an absolute path')
   if (sandbox !== null) return refused('obsidian-sandboxed', `this Obsidian is a ${sandbox} build, which reads its vault list inside its sandbox, where Atelier does not write`)
@@ -223,7 +226,7 @@ export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, proces
   }
   created.splice(0)
   try { syncPrivateDirectory(directory) } catch { /* the rename is done; a directory that cannot be fsynced is not undone */ }
-  pruneBackups(directory, path.basename(backupPath))
+  pruneBackups(directory, path.basename(backupPath), (Array.isArray(keepBackups) ? keepBackups : []).filter((name) => typeof name === 'string').map((name) => path.basename(name)))
   const stillAbsent = absent()
   const written = readObsidianSettings({ userDataDir, uid })
   const entry = written.ok ? findVaultEntry(written.vaults, vaultRoot) : null
@@ -236,30 +239,47 @@ export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, proces
 
 // Read-only, for `open` before it quits a running app to restart it: whether registerVaultInObsidianSettings would
 // write this vault into the settings file `settings` (a readObsidianSettings answer, read while the app runs), as far
-// as a read can tell. { ok: true } or { ok: false, code } with the refusal the write would give: an unreadable,
-// linked, foreign, sandboxed or too large file, a vault inside another listed vault, a vault folder that is missing.
+// as a read can tell. { ok: true, create } or { ok: false, code } with the refusal the write would give: an
+// unreadable, linked, foreign, sandboxed or too large file, a vault inside another listed vault, a vault folder that
+// is missing. A file that does not exist (an app that has shown only its starter window writes none) is the create
+// case, `create: true`, checked as createObsidianSettings checks before it writes: the vault folder is a directory,
+// and the user-data directory is this user's own real directory, or is absent inside this user's own real parent.
 // What only the moment of the write can tell (an app that appears, a file that changes) is still checked then.
-export function settingsWriteOutlook({ settings, vaultRoot, now = () => Date.now() } = {}) {
+export function settingsWriteOutlook({ settings, vaultRoot, now = () => Date.now(), uid = currentUid() } = {}) {
   const no = (code) => ({ ok: false, code })
-  if (settings?.ok !== true) return no(typeof settings?.code === 'string' ? settings.code : 'obsidian-settings-unreadable')
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) return no('vault-root-missing')
+  if (settings?.ok !== true && settings?.code === 'obsidian-settings-missing') {
+    const userDataDir = settings.userDataDir
+    if (typeof userDataDir !== 'string' || !path.isAbsolute(userDataDir)) return no('obsidian-settings-location-unknown')
+    try { if (!fs.statSync(realPathAsStored(vaultRoot)).isDirectory()) return no('vault-root-missing') } catch { return no('vault-root-missing') }
+    const owned = (stat) => uid === null || stat.uid === uid
+    let directory = null
+    try { directory = fs.lstatSync(userDataDir) } catch (error) { if (error.code !== 'ENOENT') return no('obsidian-settings-unreadable') }
+    if (directory !== null) {
+      if (directory.isSymbolicLink() || !directory.isDirectory()) return no('obsidian-settings-unsafe')
+      return owned(directory) ? { ok: true, create: true } : no('obsidian-settings-not-owned')
+    }
+    let above = null
+    try { above = fs.lstatSync(path.dirname(userDataDir)) } catch { above = null }
+    return above !== null && !above.isSymbolicLink() && above.isDirectory() && owned(above) ? { ok: true, create: true } : no('obsidian-settings-missing')
+  }
+  if (settings?.ok !== true) return no(typeof settings?.code === 'string' ? settings.code : 'obsidian-settings-unreadable')
   if (typeof settings.links === 'number' && settings.links > 1) return no('obsidian-settings-unsafe')
   const size = Buffer.isBuffer(settings.bytes) ? settings.bytes.length : 0
   const known = findVaultEntry(settings.vaults, vaultRoot)
-  if (known) return size + 16 > MAX_OBSIDIAN_SETTINGS_BYTES ? no('obsidian-settings-too-large') : { ok: true }
+  if (known) return size + 16 > MAX_OBSIDIAN_SETTINGS_BYTES ? no('obsidian-settings-too-large') : { ok: true, create: false }
   if (enclosingVaults({ vaults: settings.vaults, vaultRoot }).length > 0) return no('vault-inside-another-vault')
   let folder
   try { folder = realPathAsStored(vaultRoot); if (!fs.statSync(folder).isDirectory()) return no('vault-root-missing') } catch { return no('vault-root-missing') }
   const entry = Buffer.byteLength(JSON.stringify({ '0123456789abcdef': { path: folder, ts: now(), open: true } }), 'utf8')
-  return size + entry + 16 > MAX_OBSIDIAN_SETTINGS_BYTES ? no('obsidian-settings-too-large') : { ok: true }
+  return size + entry + 16 > MAX_OBSIDIAN_SETTINGS_BYTES ? no('obsidian-settings-too-large') : { ok: true, create: false }
 }
 
 // Keeps a copy of the settings file as it is, beside it, under the backup name the write uses
 // (`obsidian.json.atelier-backup-<UTC time>`), fsynced, with the file's mode. Read-only for the file itself. `open`
-// takes it before it sends a running app any signal, so a list the app was writing when it ended can be restored.
-// { ok: true, backupPath } or a typed refusal (readObsidianSettings's, or `obsidian-settings-unwritable`). A later
-// write of the list that succeeds keeps the first and the latest backup, as always, and removes this one when it is
-// neither: that write read the file whole, and its own backup holds it.
+// takes it right before the first signal to a running app, so a list the app was writing when it ended can be
+// restored. { ok: true, backupPath } or a typed refusal (readObsidianSettings's, or `obsidian-settings-unwritable`).
+// The write that follows in the same run keeps it (`keepBackups`); a later write prunes it as any other backup.
 export function backupObsidianSettings({ userDataDir, now = () => Date.now(), uid = currentUid() } = {}) {
   const settings = readObsidianSettings({ userDataDir, uid })
   if (!settings.ok) return settings

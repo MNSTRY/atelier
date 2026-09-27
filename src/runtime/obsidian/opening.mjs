@@ -102,7 +102,7 @@ export const REASON_NEXT = Object.freeze({
   'app-not-started-again': 'Obsidian was quit to add this view\'s vault and could not be started again; start Obsidian yourself: it reopens the vaults it had open',
   'vault-open-cli-silent': 'Obsidian has this view\'s vault open, as Atelier\'s plugin in it shows, but its command line did not answer, so the vault can be neither found nor opened through it; make sure the command-line interface is turned on in Obsidian\'s settings, then open again',
   'editor-uncoordinated': `${UNCOORDINATED}; \`atelier obsidian open\` adds this view's vault to Obsidian and publishes through it, or ${QUIT}; it is retried automatically`,
-  'obsidian-settings-missing': 'Obsidian has not run on this account yet, and the folder its settings would be in does not exist: start Obsidian once (it creates its settings), then open again',
+  'obsidian-settings-missing': 'Obsidian has no settings file on this account, and the folder it would be in does not exist or is not yours, so Atelier cannot create it: open any vault in Obsidian (starting it if it is not running; it then writes its settings), then open again',
   'obsidian-settings-location-unknown': THROUGH_THE_APP,
   'obsidian-settings-unsafe': `Obsidian's settings file is a link or not a regular file, so it is not written; ${THROUGH_THE_APP}`,
   'obsidian-settings-not-owned': `Obsidian's settings file belongs to another user, so it is not written; ${THROUGH_THE_APP}`,
@@ -278,7 +278,7 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 // does not exist yet: the list is asked again, a bounded number of times,
 // before an addition counts as not verified.
 const VERIFY_ATTEMPTS = 10
-async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, pollMs }) {
+async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, pollMs, keepBackups = [] }) {
   const inside = (vaults) => enclosingVaults({ vaults, vaultRoot }).length > 0
   if (observation.noVaultOpen === true) {
     const settings = await attempt(() => registry.readSettings())
@@ -305,7 +305,7 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
       await sleep(pollMs)
     }
   }
-  const written = await attempt(() => registry.registerInSettings({ vaultRoot }))
+  const written = await attempt(() => registry.registerInSettings({ vaultRoot, keepBackups }))
   if (written === null) return { ok: false, reason: 'obsidian-settings-unwritable' }
   if (written.ok !== true) return { ok: false, reason: typeof written.code === 'string' ? written.code : 'obsidian-settings-unwritable' }
   const settings = settingsWritten(written)
@@ -428,13 +428,13 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     if (typeof view.vaultRoot !== 'string') return notRestarted('not-prepared', 'no-vault-folder')
     const outlook = settingsWriteOutlook({ settings: await attempt(() => registry.readSettings()), vaultRoot: view.vaultRoot })
     if (!outlook.ok) return notRestarted('launch-failed', outlook.code)
-    // A copy of the settings as they are, kept beside them, before the app is sent any signal.
-    const copy = await attempt(() => registry.backupSettings())
-    if (copy?.ok !== true) return notRestarted('launch-failed', typeof copy?.code === 'string' ? copy.code : 'obsidian-settings-unwritable')
-    const quit = await attempt(() => quitter.quit())
+    // A copy of the settings as they are, kept beside them once the main process is proven, right before the first
+    // signal; a copy that cannot be kept sends nothing. An app that has shown only its starter window has no file yet:
+    // there is nothing to copy, and the write creates it.
+    const quit = await attempt(() => quitter.quit({ beforeSignal: outlook.create === true ? null : () => registry.backupSettings() }))
     restart = {
       asked: true, state, quit: quit?.quit === true, signalled: quit?.signalled === true, ...(Number.isSafeInteger(quit?.pid) ? { pid: quit.pid } : {}),
-      signals: Number.isSafeInteger(quit?.signals) ? quit.signals : 0, ...(typeof copy.backupPath === 'string' ? { settingsCopy: copy.backupPath } : {}),
+      signals: Number.isSafeInteger(quit?.signals) ? quit.signals : 0, ...(typeof quit?.settingsCopy === 'string' ? { settingsCopy: quit.settingsCopy } : {}),
     }
     if (quit?.quit === true) { before = qualifyApp(QUIT_APP, { requireVersion: false }); return { quit: true } }
     restart.reason = typeof quit?.reason === 'string' ? quit.reason : 'app-did-not-quit'
@@ -467,7 +467,7 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   if (typeof vaultRoot !== 'string') { await giveBack(); return finish('not-prepared', { ...common, reason: 'no-vault-folder', app: app(before) }) }
   // A version Atelier's plugin reported is not the command line answering (withPluginReportedVersion).
   const fromPlugin = before.versionSource === 'plugin'
-  const knowVault = () => ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string' && !fromPlugin, noVaultOpen: before.reason === 'no-vault-open' || fromPlugin, fromPlugin }, vaultRoot, sleep, pollMs: appPollMs })
+  const knowVault = () => ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string' && !fromPlugin, noVaultOpen: before.reason === 'no-vault-open' || fromPlugin, fromPlugin }, vaultRoot, sleep, pollMs: appPollMs, keepBackups: typeof restart?.settingsCopy === 'string' ? [restart.settingsCopy] : [] })
   let known = await knowVault()
   // With no vault open, a vault the app does not list cannot be added while it runs: a restart the person asked for.
   if (!known.ok && known.reason === 'no-vault-open' && restart === null) {

@@ -1,5 +1,6 @@
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import { performance } from 'node:perf_hooks'
 import path from 'node:path'
 import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
@@ -128,7 +129,7 @@ function vaultRegisterCode(vaultRoot) {
 //   listThroughApp()                  -> { answered: true, vaults } | { answered: false, reason }
 //   registerThroughApp({ vaultRoot }) -> { answered: true, result } | { answered: false, reason }
 //   readSettings()                    -> readObsidianSettings answer (never writes)
-//   registerInSettings({ vaultRoot }) -> registerVaultInObsidianSettings answer
+//   registerInSettings({ vaultRoot, keepBackups }) -> registerVaultInObsidianSettings answer
 //   backupSettings()                  -> backupObsidianSettings answer (a copy beside the file; the file is not written)
 //
 // Through the app only while it runs and answers; in its settings file only
@@ -161,9 +162,9 @@ export function createProductionAppRegistry({
     backupSettings: () => (sandbox !== null ? sandboxed : userDataDir === null
       ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
       : backupObsidianSettings({ userDataDir })),
-    registerInSettings: ({ vaultRoot }) => (sandbox !== null ? sandboxed : userDataDir === null
+    registerInSettings: ({ vaultRoot, keepBackups = [] }) => (sandbox !== null ? sandboxed : userDataDir === null
       ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
-      : registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe })),
+      : registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe, keepBackups })),
   }
 }
 
@@ -209,6 +210,8 @@ export function createProductionAppQuitter({ platform = process.platform, proces
     readTable: () => ps(['-ww', '-A', '-o', 'pid=,ppid=,uid=,comm=']),
     readProcess: (pid) => ps(['-ww', '-o', 'ppid=,uid=,lstart=,comm=', '-p', String(pid)]),
     signal: (pid) => process.kill(pid, 'SIGTERM'),
+    // The wait and the linger are measured on a monotonic clock: a step of the wall clock changes neither.
+    now: () => performance.now(),
     ...(waitMs === undefined ? {} : { waitMs }),
   })
 }

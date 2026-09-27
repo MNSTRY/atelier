@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 
 // Quitting a running Obsidian so that `open` can add a vault and turn its
 // command line on, only when a person asked for it (`--restart-obsidian`).
@@ -8,8 +9,9 @@ import path from 'node:path'
 // does not list the view's vault). The settings file then belongs to the
 // running app, which would write its own list back over any change, and the
 // app cannot be asked to add a vault. Before anything is sent, `open` checks,
-// read-only, that the write the restart is for can succeed, and keeps a copy of
-// the settings file (opening.mjs).
+// read-only, that the write the restart is for can succeed (opening.mjs); right
+// before the first signal, once the main process is proven, `beforeSignal` keeps
+// a copy of the settings file, and a copy that cannot be kept sends nothing.
 //
 // SIGTERM, which Electron handles as a quit, is sent to one process: the app's
 // main process, proven from the process table, and never to anything else. The
@@ -36,9 +38,11 @@ import path from 'node:path'
 // open flagged open in its list, and its helper processes end; on macOS the main
 // process can then stay, with no window, as a macOS app does. Electron handles
 // only the first SIGTERM as a quit: a second one ends the process at once,
-// without its quit handlers. It is sent only when the app has nothing left to
-// do in them: when that same process has stayed alone (no helper, so no window)
-// at two readings at least `lingerMs` apart. There is never a third signal, and
+// without its quit handlers. It is sent only after that same process has shown
+// no window and no helper (it is alone in the table, and reads the same) at
+// every reading for at least `lingerMs`, measured on a monotonic clock; a
+// reading that cannot be parsed does not count as alone. That is a margin, not
+// a proof that nothing is left to save. There is never a third signal, and
 // never another kind; an app that is still not gone is reported
 // (`app-did-not-quit`) and left to the person. `signals` counts the signals
 // that were delivered.
@@ -86,10 +90,13 @@ export function provenMainProcess({ table, uid } = {}) {
 // `signal(pid)`      -> sends SIGTERM to exactly that pid; throws when it was not delivered
 // `processProbe()`   -> 'running' | 'absent' | 'unknown', the probe the settings write uses
 //
-// quit() answers { quit: true, pid, signalled, signals } once the probe says `absent`, or { quit: false, reason,
-// signalled, signals, pid?, detail? }: `restart-platform-unqualified` and `app-main-process-unproven` before any
-// signal, `app-did-not-quit` after one, when the probe did not say `absent` within `waitMs`.
-export function createAppQuitter({ platform, uid, readTable, readProcess, signal, processProbe, sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) }), now = () => Date.now(), waitMs = 30_000, pollMs = 250, lingerMs = 5000 } = {}) {
+// quit({ beforeSignal }) answers { quit: true, pid, signalled, signals, settingsCopy? } once the probe says `absent`,
+// or { quit: false, reason, signalled, signals, pid?, detail?, settingsCopy? }: `restart-platform-unqualified`,
+// `app-main-process-unproven` and the refusal of `beforeSignal` before any signal, `app-did-not-quit` after one, when
+// the probe did not say `absent` within `waitMs`. `beforeSignal()`, when given, runs once the main process is proven
+// and read again, immediately before the first signal: { ok: true, backupPath? } lets it be sent, anything else
+// ({ ok: false, code }) sends nothing. `now` is a monotonic clock in milliseconds.
+export function createAppQuitter({ platform, uid, readTable, readProcess, signal, processProbe, sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) }), now = () => performance.now(), waitMs = 30_000, pollMs = 250, lingerMs = 5000 } = {}) {
   for (const [name, seam] of Object.entries({ readTable, readProcess, signal, processProbe })) if (typeof seam !== 'function') throw new TypeError(`quitting Obsidian needs an injected ${name}`)
   const probe = () => { try { return processProbe() } catch { return 'unknown' } }
   const describe = (pid) => { try { const line = readProcess(pid); return typeof line === 'string' && line.trim() !== '' ? line.trim() : null } catch { return null } }
@@ -101,11 +108,13 @@ export function createAppQuitter({ platform, uid, readTable, readProcess, signal
   }
   // The proven main process alone in the table, still the process `seen` described: its windows closed, it did not quit.
   const lingersAlone = (found, seen) => {
-    const rows = rowsOf(table()).filter((match) => match !== null && APP_PROCESS.test(path.posix.basename(match[4])))
+    const matches = rowsOf(table())
+    if (matches.length === 0 || matches.some((match) => match === null)) return false
+    const rows = matches.filter((match) => APP_PROCESS.test(path.posix.basename(match[4])))
     return rows.length === 1 && Number(rows[0][1]) === found.pid && describe(found.pid) === seen
   }
   return {
-    async quit() {
+    async quit({ beforeSignal = null } = {}) {
       if (!RESTART_PLATFORMS.includes(platform)) return { quit: false, reason: 'restart-platform-unqualified', signalled: false, signals: 0 }
       const found = provenMainProcess({ table: table(), uid })
       if (found.state === 'absent') return probe() === 'absent' ? { quit: true, pid: null, signalled: false, signals: 0 } : { quit: false, reason: 'app-main-process-unproven', detail: 'the process table shows no Obsidian, and the process probe does not say it is gone', signalled: false, signals: 0 }
@@ -114,14 +123,21 @@ export function createAppQuitter({ platform, uid, readTable, readProcess, signal
       if (!isFound(seen, found)) return { quit: false, reason: 'app-main-process-unproven', detail: 'the main process read again is not the one the table showed', signalled: false, signals: 0 }
       // Immediately before the signal: still the same process.
       if (describe(found.pid) !== seen) return { quit: false, reason: 'app-main-process-unproven', detail: 'the main process changed while it was being proven', signalled: false, signals: 0 }
-      try { signal(found.pid) } catch { return { quit: false, reason: 'app-main-process-unproven', detail: 'the main process could not be signalled', signalled: false, signals: 0 } }
+      let copy = {}
+      if (typeof beforeSignal === 'function') {
+        let kept
+        try { kept = await beforeSignal() } catch { kept = null }
+        if (kept?.ok !== true) return { quit: false, reason: typeof kept?.code === 'string' ? kept.code : 'obsidian-settings-unwritable', signalled: false, signals: 0 }
+        if (typeof kept.backupPath === 'string') copy = { settingsCopy: kept.backupPath }
+      }
+      try { signal(found.pid) } catch { return { quit: false, reason: 'app-main-process-unproven', detail: 'the main process could not be signalled', signalled: false, signals: 0, ...copy } }
       let signals = 1
       let second = false
       let aloneSince = null
       const deadline = now() + waitMs
       for (;;) {
-        if (probe() === 'absent') return { quit: true, pid: found.pid, signalled: true, signals }
-        if (now() >= deadline) return { quit: false, reason: 'app-did-not-quit', pid: found.pid, signalled: true, signals }
+        if (probe() === 'absent') return { quit: true, pid: found.pid, signalled: true, signals, ...copy }
+        if (now() >= deadline) return { quit: false, reason: 'app-did-not-quit', pid: found.pid, signalled: true, signals, ...copy }
         if (!second) {
           if (!lingersAlone(found, seen)) aloneSince = null
           else if (aloneSince === null) aloneSince = now()

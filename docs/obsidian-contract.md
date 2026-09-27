@@ -960,12 +960,16 @@ open and the view's vault not in its list. Module:
 0. Read-only, before anything is sent (`settingsWriteOutlook`): the view's
    vault folder exists, the settings file reads as in step 2 above (no
    Flatpak or snap build), has one name, would stay within 4 MiB with the
-   entry, and lists no vault at a folder above the vault's. Otherwise `open`
-   answers that refusal and the app keeps running. Then a copy of the file is
-   kept beside it under the backup name (`backupObsidianSettings`, fsynced,
-   the file's mode; `restart.settingsCopy`); a copy that cannot be kept
-   refuses as well. A later write of the list that succeeds prunes backups as
-   step 7 says.
+   entry, and lists no vault at a folder above the vault's. A file that does
+   not exist (the app has shown only its starter window, which writes none)
+   is the create case, checked as "Obsidian never started" checks before it
+   writes (step 1 there); it is created after the quit. Otherwise `open`
+   answers that refusal and the app keeps running. Once the main process is
+   proven (step 2 below), right before the first signal, a copy of an existing
+   file is kept beside it under the backup name (`backupObsidianSettings`,
+   fsynced, the file's mode; `restart.settingsCopy`); a copy that cannot be
+   kept sends nothing. The write in the same run does not prune that copy
+   (`keepBackups`); a later write prunes it as step 7 says.
 1. The app's main process is proven from the process table
    (`ps -ww -A -o pid=,ppid=,uid=,comm=`; a uid is signed, since macOS shows
    `nobody` as -2): every Obsidian process (the names the process probe

@@ -95,8 +95,10 @@
   implied and every other operation refuses it. Every write and the restart
   are shown in the answer (`obsidianSettings`, `restart`). Before any signal,
   `open` checks, reading only, that the write can succeed (otherwise it
-  answers that refusal and leaves Obsidian running) and keeps a copy of
-  `obsidian.json`. On macOS the main process can stay after the first
+  answers that refusal and leaves Obsidian running; an Obsidian at its
+  starter window with no `obsidian.json` yet is the create case) and, right
+  before the first signal, keeps a copy of `obsidian.json` that the same
+  run's write does not prune. On macOS the main process can stay after the first
   SIGTERM, with its windows closed; Electron handles only the first SIGTERM as
   a quit, and a second one ends the process at once, without its quit
   handlers. `open` sends that second one only when the same process has

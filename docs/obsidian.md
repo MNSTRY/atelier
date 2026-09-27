@@ -569,10 +569,15 @@ restart Obsidian once:
    restart is for can succeed: the view's vault folder exists, Obsidian's
    settings file can be read and is yours, is no link and has no second
    name, is not a Flatpak or snap build's, is not too large to take the
-   vault, and lists no vault at a folder above the view's. Otherwise it
-   answers that refusal and leaves Obsidian running. It then keeps a copy of
-   the settings file beside it (`obsidian.json.atelier-backup-<time>`), and
-   the answer names it.
+   vault, and lists no vault at a folder above the view's. An Obsidian that
+   has shown only its starter window has written no settings file yet; then
+   the folder it goes in must be yours (or be missing inside a folder of
+   yours), and the file is created after the quit, as for an Obsidian that
+   never started. Otherwise `open` answers that refusal and leaves Obsidian
+   running. Right before the first signal, once the process below is proven,
+   it keeps a copy of the settings file beside it
+   (`obsidian.json.atelier-backup-<time>`), which this run's write does not
+   prune, and the answer names it; a copy that cannot be kept sends nothing.
 2. It sends SIGTERM to Obsidian's main process, and to nothing else. That
    process is found in the process table and must be the only Obsidian main
    process there, one of yours, named by the app bundle's path, with every
@@ -586,8 +591,8 @@ restart Obsidian once:
    macOS its main process can then stay, with no window. Electron handles
    only the first SIGTERM as a quit: a second one ends the process at once,
    without its quit handlers. `open` sends that second SIGTERM only when the
-   same process has stayed alone, with no window and no helper, at two
-   readings at least 5 seconds apart, when it has nothing left to save. There
+   same process has shown no window and no helper at every reading for at
+   least 5 seconds (a margin, not a proof that it has nothing left to save). There
    is never a third signal, and never a stronger one: an Obsidian that is not
    gone within 30 seconds is answered `launch-failed` with reason
    `app-did-not-quit`, and nothing is written. The answer says how many

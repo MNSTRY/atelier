@@ -307,4 +307,31 @@ test('real isolated Obsidian: open adds the view\'s vault and publishes, with th
         await finish(app, world)
       }
     })
+    await t.test('S6, a fresh profile started to its starter window (no obsidian.json written): without --restart-obsidian open names the flag; with it, nothing to copy, the app is quit, the settings file created, and the app started again on the vault', async () => {
+      const app = createIsolatedApp({ settings: null })
+      let world = null
+      try {
+        const answered = await app.launch({ anyAnswer: true })
+        const written = fs.existsSync(app.settingsFile)
+        t.diagnostic(`isolated app answered "${answered}" at its starter window; settings file written by the app: ${written}`)
+        assert.equal(written, false, 'the starter window writes no settings file (DESIGN S6)')
+        world = await projectBeside(app)
+        const refused = await world.run(['open', '--consent-actor', 'real-app-suite'])
+        t.diagnostic(`open without the flag answered ${refused.outcome} (${refused.reason})`)
+        assert.ok(['cli-turned-off', 'no-vault-open'].includes(refused.reason), JSON.stringify(refused, null, 2))
+        assert.match(refused.next, /--restart-obsidian/)
+        assert.deepEqual([app.running(), fs.existsSync(app.settingsFile), refused.restart], [true, false, undefined])
+        const opened = await world.run(['open', '--consent-actor', 'real-app-suite', '--restart-obsidian'])
+        t.diagnostic(`open --restart-obsidian answered ${opened.outcome} (${opened.reason}); registration ${JSON.stringify(opened.registration ?? null)}; restart ${JSON.stringify(opened.restart ?? null)}; settings ${JSON.stringify(opened.obsidianSettings ?? null)}`)
+        assert.deepEqual([opened.outcome, opened.ok, opened.registration?.how, opened.restart?.quit, opened.restart?.startedAgain, opened.restart?.settingsCopy], ['current', true, 'created-settings', true, true, undefined], JSON.stringify(opened, null, 2))
+        assert.deepEqual(backupsOf(app), [], 'nothing to copy, nothing to back up')
+        const { store } = await journalModes(world.dataRoot)
+        const after = settingsOf(app)
+        assert.equal(after.cli, true)
+        assert.equal(Object.values(after.vaults).filter((entry) => entry.path === store.vaultRoot).length, 1)
+        assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route: vaultRoute({ vaults: after.vaults, vaultRoot: store.vaultRoot }) }), { answered: true, indexReady: true })
+      } finally {
+        await finish(app, world)
+      }
+    })
   })
