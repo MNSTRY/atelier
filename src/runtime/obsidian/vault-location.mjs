@@ -267,7 +267,14 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
     const made = folderIdentity(folder)
     // Recorded as the file system stores the folder's path, which is what every later check reads back: a volume that
     // stores names in another Unicode form (HFS+ stores NFD) would otherwise never match the name as it was asked for.
-    const stored = storedPathOf(folder)
+    let stored = null
+    try { stored = storedPathOf(folder) } catch { /* not reachable: refused below */ }
+    // Only the folder just made, under the parent that was checked: its name may come back in another Unicode form, and
+    // nothing else may differ. A link put on the way since would otherwise be recorded, and then trusted.
+    if (stored === null || path.dirname(stored) !== realParent || path.basename(stored).normalize('NFC') !== name.normalize('NFC')) {
+      try { fs.rmdirSync(folder) } catch { /* not ours to remove */ }
+      refuse('vault-allocation-moved', 'the folder that holds the vaults led somewhere else once this view\'s folder was made; nothing is recorded', { parent: realParent, leadsTo: stored })
+    }
     return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: stored, name: path.basename(stored), parent: path.dirname(stored), device: made.device, inode: made.inode, allocatedAt: now } })
   }
   return refuse('vault-location-full', 'no free vault name is left for this view in that folder', { parent })

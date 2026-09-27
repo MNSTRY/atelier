@@ -350,6 +350,25 @@ test('an allocation records its folder as the file system stores its path, so a 
   assert.notEqual(allocation.path, made, 'the name as the volume stores it, not as it was asked for')
 })
 
+test('a first allocation records only the folder it made under the parent it checked: a link put on the way in between is refused, and nothing is recorded', { skip: POSIX ? false : 'links need privileges on Windows' }, (t) => {
+  const w = world(t)
+  const personal = path.join(w.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
+  // Another program of the same account, between the folder's creation and the reading of its real path: the folder is
+  // moved into the person's vault, and the parent becomes a link to it.
+  const storedPathOf = (folder) => {
+    const parent = path.dirname(folder)
+    fs.renameSync(folder, path.join(personal, path.basename(folder)))
+    fs.renameSync(parent, `${parent}.away`)
+    fs.symlinkSync(personal, parent)
+    return fs.realpathSync.native(folder)
+  }
+  assert.throws(() => ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW, storedPathOf }), (error) => error.code === 'vault-allocation-moved')
+  assert.equal(readVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything' }), null, 'nothing is recorded')
+  assert.deepEqual(fs.readdirSync(personal), ['diary.md'], 'the empty folder it made is removed again')
+})
+
 test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {
   const slept = []
   const sleep = async (ms) => { slept.push(ms) }
