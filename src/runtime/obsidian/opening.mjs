@@ -3,6 +3,7 @@ import path from 'node:path'
 import { enclosingVaults, findVaultEntry, vaultRoute } from '../../projection/obsidian/publication/vault-list.mjs'
 import { createRecoveryStore as createStore, readFileBytes, sha256Digest } from '../../projection/obsidian/recovery/store.mjs'
 import { inspectApp, qualifyApp } from './app-capability.mjs'
+import { settingsWriteOutlook } from './app-registration.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { UNAVAILABLE_APPLY_OPERATION } from './extension-points.mjs'
@@ -40,9 +41,11 @@ import { OPEN_EDIT_STATES, createMaintenanceStateStore } from './state-store.mjs
 // Two states of a running app cannot be got through that way: its command line
 // is turned off, or it has no vault open and does not list this one. Only when
 // the person asked for it (`restartApp`, `--restart-obsidian`; never implied),
-// the app is quit (app-restart.mjs), the vault added with the switch on while it
-// is quit, and the app started again plainly, which reopens every vault it had
-// open. Without that, those states are answered, naming the flag.
+// and only after a read-only check that the write can succeed and a copy of the
+// settings file kept beside it, the app is quit (app-restart.mjs), the vault
+// added with the switch on while it is quit, and the app started again plainly,
+// which reopens every vault it had open. Without that, those states are
+// answered, naming the flag.
 //
 // Nothing here talks to an app or an operating system itself: `appProbe`,
 // `registry`, `launcher` and `quitter` are injected, and there is no default for
@@ -94,7 +97,7 @@ export const REASON_NEXT = Object.freeze({
   'no-vault-open': 'Obsidian runs with no vault open, so it can be asked nothing: run `atelier obsidian open --restart-obsidian` to let Atelier quit Obsidian (no vault is open, so nothing closes), add this view\'s vault and start it again; or open any vault in Obsidian, or quit Obsidian, then open again',
   'restart-platform-unqualified': 'Atelier restarts Obsidian on macOS only; turn its command line on yourself (Settings > General > Advanced > Command line interface), or open any vault in Obsidian, or quit it, then open again',
   'restart-unavailable': 'this command was given no way to quit Obsidian; quit Obsidian yourself, then open again',
-  'app-main-process-unproven': 'Obsidian was not asked to quit: its main process could not be told apart for certain (more than one Obsidian runs, one runs as another user, or the process table could not be read); quit Obsidian yourself, then open again',
+  'app-main-process-unproven': 'Obsidian was not asked to quit: its main process could not be proven from the process table (`restart.detail` says why: more than one Obsidian main process, an Obsidian process of another user, a helper that is not its child, or a table that could not be read); quit Obsidian yourself, then open again',
   'app-did-not-quit': 'Obsidian was asked to quit and did not within the wait; nothing was written to its settings. Quit it yourself, or wait until it has quit, then open again',
   'app-not-started-again': 'Obsidian was quit to add this view\'s vault and could not be started again; start Obsidian yourself: it reopens the vaults it had open',
   'vault-open-cli-silent': 'Obsidian has this view\'s vault open, as Atelier\'s plugin in it shows, but its command line did not answer, so the vault can be neither found nor opened through it; make sure the command-line interface is turned on in Obsidian\'s settings, then open again',
@@ -418,11 +421,24 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   const QUIT_APP = { installed: true, cli: true, running: false, version: null }
   const quitToRestart = async (state, stateOutcome) => {
     if (!restartApp) return { answer: finish(stateOutcome, { ...common, reason: state, app: app(before) }) }
-    if (typeof quitter?.quit !== 'function' || typeof launcher.startPlain !== 'function') return { answer: finish(stateOutcome, { ...common, reason: 'restart-unavailable', app: app(before) }) }
+    if (typeof quitter?.quit !== 'function' || typeof launcher.startPlain !== 'function' || typeof registry.backupSettings !== 'function') return { answer: finish(stateOutcome, { ...common, reason: 'restart-unavailable', app: app(before) }) }
+    // Read-only, before anything is sent: the write the restart is for can succeed. What it would refuse is answered
+    // now, with the app left running.
+    const notRestarted = (outcome, reason) => { restart = { asked: true, state, quit: false, signalled: false, signals: 0, reason }; return { answer: finish(outcome, { ...common, reason, app: app(before) }) } }
+    if (typeof view.vaultRoot !== 'string') return notRestarted('not-prepared', 'no-vault-folder')
+    const outlook = settingsWriteOutlook({ settings: await attempt(() => registry.readSettings()), vaultRoot: view.vaultRoot })
+    if (!outlook.ok) return notRestarted('launch-failed', outlook.code)
+    // A copy of the settings as they are, kept beside them, before the app is sent any signal.
+    const copy = await attempt(() => registry.backupSettings())
+    if (copy?.ok !== true) return notRestarted('launch-failed', typeof copy?.code === 'string' ? copy.code : 'obsidian-settings-unwritable')
     const quit = await attempt(() => quitter.quit())
-    restart = { asked: true, state, quit: quit?.quit === true, signalled: quit?.signalled === true, ...(Number.isSafeInteger(quit?.pid) ? { pid: quit.pid } : {}), ...(Number.isSafeInteger(quit?.signals) ? { signals: quit.signals } : {}) }
+    restart = {
+      asked: true, state, quit: quit?.quit === true, signalled: quit?.signalled === true, ...(Number.isSafeInteger(quit?.pid) ? { pid: quit.pid } : {}),
+      signals: Number.isSafeInteger(quit?.signals) ? quit.signals : 0, ...(typeof copy.backupPath === 'string' ? { settingsCopy: copy.backupPath } : {}),
+    }
     if (quit?.quit === true) { before = qualifyApp(QUIT_APP, { requireVersion: false }); return { quit: true } }
     restart.reason = typeof quit?.reason === 'string' ? quit.reason : 'app-did-not-quit'
+    if (typeof quit?.detail === 'string') restart.detail = quit.detail
     // An app that was signalled and has not gone is neither started again nor written for: the person decides.
     return { answer: finish(quit?.signalled === true ? 'launch-failed' : stateOutcome, { ...common, reason: restart.reason, app: app(before) }) }
   }

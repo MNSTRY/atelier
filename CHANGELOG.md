@@ -93,10 +93,15 @@
   those states answer `app-cli-unavailable` / `cli-turned-off` and
   `app-version-unsupported` / `no-vault-open`, naming it. The flag is never
   implied and every other operation refuses it. Every write and the restart
-  are shown in the answer (`obsidianSettings`, `restart`). An Obsidian with
-  only its starter window keeps running after SIGTERM closes it, as a macOS
-  app does; that same process, left alone, gets SIGTERM once more, and never
-  anything stronger. `atelier obsidian --help` names every option of the
+  are shown in the answer (`obsidianSettings`, `restart`). Before any signal,
+  `open` checks, reading only, that the write can succeed (otherwise it
+  answers that refusal and leaves Obsidian running) and keeps a copy of
+  `obsidian.json`. On macOS the main process can stay after the first
+  SIGTERM, with its windows closed; Electron handles only the first SIGTERM as
+  a quit, and a second one ends the process at once, without its quit
+  handlers. `open` sends that second one only when the same process has
+  stayed alone, with no window or helper, at two readings at least 5 seconds
+  apart; never a third, and never another kind. `atelier obsidian --help` names every option of the
   command, `--wait-ms` included. See "What `open` does in each state of
   Obsidian" in `docs/obsidian.md` and "Obsidian's vault list" in
   `docs/obsidian-contract.md`.

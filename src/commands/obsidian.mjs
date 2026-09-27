@@ -210,9 +210,12 @@ const STATE_WORDS = Object.freeze({ 'cli-turned-off': 'its command line was turn
 function restartLines(restart) {
   if (restart === undefined || restart === null) return []
   const why = STATE_WORDS[restart.state] ?? restart.state
-  if (restart.quit !== true) return [`Obsidian: not restarted (${restart.reason}); ${restart.signalled ? `it was asked to quit (SIGTERM to process ${restart.pid}) and has not` : 'it was not asked to quit'}.`]
-  const quit = restart.signalled ? `quit (SIGTERM to its main process, ${restart.pid}${restart.signals === 2 ? ', twice: once to close its window, once to quit' : ''})` : 'already gone'
-  return [`Obsidian: restarted as you asked, because ${why}: ${quit}, ${restart.startedAgain === true ? 'then started again plainly, which reopens the vaults it had open' : restart.startedAgain === false ? 'and could not be started again: start it yourself' : 'not started again yet'}.`]
+  const copy = restart.settingsCopy ? [`  A copy of Obsidian's settings as they were before any signal is kept in ${restart.settingsCopy}.`] : []
+  if (restart.quit !== true) return [`Obsidian: not restarted (${restart.reason}${restart.detail ? `: ${restart.detail}` : ''}); ${restart.signalled ? `it was asked to quit (SIGTERM to process ${restart.pid}) and has not` : 'it was not asked to quit'}.`, ...copy]
+  const quit = !restart.signalled ? 'already gone'
+    : restart.signals === 2 ? `quit: SIGTERM to its main process, ${restart.pid}, closed its windows, and a second SIGTERM ended that process, left without a window, at once, without its quit handlers`
+      : `quit (SIGTERM to its main process, ${restart.pid})`
+  return [`Obsidian: restarted as you asked, because ${why}: ${quit}; ${restart.startedAgain === true ? 'then started again plainly, which reopens the vaults it had open' : restart.startedAgain === false ? 'it could not be started again: start it yourself' : 'not started again yet'}.`, ...copy]
 }
 function obsidianSettingsLines(settings) {
   if (settings === undefined || settings === null) return []

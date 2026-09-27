@@ -40,7 +40,8 @@ export function withPluginReportedVersion(appProbe, readPresence, { maxAgeMs = 1
   return {
     async inspect() {
       const [observation, presence] = await Promise.all([appProbe.inspect(), presenceNow()])
-      if (presence?.present !== true || observation?.installed !== true || observation?.cli !== true || observation.running === false || typeof observation.version === 'string') return observation
+      // A command line that answered it is turned off stays that answer: a plugin's version never hides it.
+      if (presence?.present !== true || observation?.installed !== true || observation?.cli !== true || observation.running === false || typeof observation.version === 'string' || observation.cliOff === true) return observation
       return { ...observation, running: true, version: presence.appVersion, noVaultOpen: false, versionSource: 'plugin' }
     },
     vaultState: (input) => appProbe.vaultState(input),

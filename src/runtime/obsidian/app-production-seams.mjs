@@ -5,7 +5,7 @@ import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedC
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
 import { realPathAsStored } from '../../project/private-state.mjs'
 import { appAnswered, readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
-import { registerVaultInObsidianSettings } from './app-registration.mjs'
+import { backupObsidianSettings, registerVaultInObsidianSettings } from './app-registration.mjs'
 import { createAppQuitter } from './app-restart.mjs'
 import { launchPlan, runLaunchPlan, urlProcessed } from './launch-plan.mjs'
 
@@ -129,6 +129,7 @@ function vaultRegisterCode(vaultRoot) {
 //   registerThroughApp({ vaultRoot }) -> { answered: true, result } | { answered: false, reason }
 //   readSettings()                    -> readObsidianSettings answer (never writes)
 //   registerInSettings({ vaultRoot }) -> registerVaultInObsidianSettings answer
+//   backupSettings()                  -> backupObsidianSettings answer (a copy beside the file; the file is not written)
 //
 // Through the app only while it runs and answers; in its settings file only
 // while no Obsidian runs, which registerVaultInObsidianSettings checks itself.
@@ -156,6 +157,10 @@ export function createProductionAppRegistry({
       return answer.answered ? { answered: true, result: answer.value?.result ?? null } : answer
     },
     readSettings: () => (sandbox === null ? readObsidianSettings({ userDataDir }) : sandboxed),
+    // A copy of the settings file as it is, before a restart sends the app any signal (backupObsidianSettings).
+    backupSettings: () => (sandbox !== null ? sandboxed : userDataDir === null
+      ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
+      : backupObsidianSettings({ userDataDir })),
     registerInSettings: ({ vaultRoot }) => (sandbox !== null ? sandboxed : userDataDir === null
       ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
       : registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe })),

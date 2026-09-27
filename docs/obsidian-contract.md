@@ -957,24 +957,40 @@ where the app runs and cannot be reached: its command line off, or no vault
 open and the view's vault not in its list. Module:
 `src/runtime/obsidian/app-restart.mjs`.
 
+0. Read-only, before anything is sent (`settingsWriteOutlook`): the view's
+   vault folder exists, the settings file reads as in step 2 above (no
+   Flatpak or snap build), has one name, would stay within 4 MiB with the
+   entry, and lists no vault at a folder above the vault's. Otherwise `open`
+   answers that refusal and the app keeps running. Then a copy of the file is
+   kept beside it under the backup name (`backupObsidianSettings`, fsynced,
+   the file's mode; `restart.settingsCopy`); a copy that cannot be kept
+   refuses as well. A later write of the list that succeeds prunes backups as
+   step 7 says.
 1. The app's main process is proven from the process table
-   (`ps -A -o pid=,ppid=,uid=,comm=`): every Obsidian process (the
-   executables the process probe counts) runs as this user, exactly one runs
-   the main executable from an app bundle (`…/Contents/MacOS/Obsidian`), and
-   every other one is its child. Otherwise nothing is sent
-   (`app-main-process-unproven`).
-2. That process is read again (parent, user, start time, executable) and must
-   be unchanged; then it, and only it, gets SIGTERM, which Electron handles as
-   a normal quit. A quitting app keeps the vaults it has open flagged open
-   (1.13.7, checked on an isolated instance).
-3. The process probe must say `absent` within 30 seconds. With only its
-   starter window open, the first SIGTERM closes the window and ends every
-   helper, but the main process stays (1.13.7, checked on an isolated
-   instance); once, after 5 seconds, when the table shows that same process
-   alone and it reads the same again, it gets a second SIGTERM, which quits
-   it. There is never a third signal, and never a stronger one. Otherwise
-   `open` answers `launch-failed` / `app-did-not-quit`, writes nothing and
-   starts nothing.
+   (`ps -ww -A -o pid=,ppid=,uid=,comm=`; a uid is signed, since macOS shows
+   `nobody` as -2): every Obsidian process (the names the process probe
+   counts) runs as this user, exactly one names the app bundle's main
+   executable by an absolute path (`…/Contents/MacOS/Obsidian`), and every
+   other one is its child. `comm` is the process's argv[0], not a verified
+   image: a process of the same user could take that name, which proves
+   nothing while the real app runs too (two main processes). Otherwise nothing
+   is sent (`app-main-process-unproven`, with `restart.detail`).
+2. That process is read again (`ps -o ppid=,uid=,lstart=,comm=`): it must be
+   this user's, under the parent the table showed, with the same name, and
+   read the same twice in a row; then it, and only it, gets SIGTERM, which
+   Electron handles as a quit. The app closes every window, keeping the
+   vaults that were open flagged open, and its helpers end (1.13.7, checked on
+   an isolated instance).
+3. The process probe must say `absent` within 30 seconds. On macOS the main
+   process can stay after the first SIGTERM, with no window (seen on
+   an isolated 1.13.7, with vaults open and with only the starter window).
+   Electron handles only the first SIGTERM as a quit; a second one ends the
+   process at once, without its quit handlers. It is sent once, only when the
+   table shows that same process alone (no helper) and it reads the same, at
+   two readings at least 5 seconds apart. There is never a third signal, and
+   never another kind; `restart.signals` counts the signals delivered.
+   Otherwise `open` answers `launch-failed` / `app-did-not-quit`, writes
+   nothing and starts nothing.
 4. The file is written as above, with the vault and the switch.
 5. The app is started plainly (`open -b md.obsidian`) by the launch steps
    below, and reopens its vaults and this one. An answer given after the quit
@@ -982,8 +998,11 @@ open and the view's vault not in its list. Module:
    app plainly first, as it was; a start that fails is said, with the next
    step to start it by hand.
 
-The answer carries `restart: { asked, state, quit, signalled, pid,
-startedAgain }`. Qualified on macOS only; elsewhere the answer is
+The answer carries `restart: { asked, state, quit, signalled, pid, signals,
+settingsCopy, startedAgain }`, and `reason` and `detail` when it did not quit.
+An `open` interrupted between the quit and the start leaves the app quit (a
+known limit). At a terminal the restart still needs the flag; the question the
+design asks in that state comes with the first-run command. Qualified on macOS only; elsewhere the answer is
 `restart-platform-unqualified`, since a quit app there is started with a
 link, which would drop the other vaults' reopen flags.
 

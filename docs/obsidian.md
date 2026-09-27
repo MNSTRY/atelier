@@ -565,32 +565,52 @@ exactly because the folder is listed.
 vault not in its list), `atelier obsidian open --restart-obsidian` lets `open`
 restart Obsidian once:
 
-1. It sends SIGTERM, a normal quit, to Obsidian's main process, and to nothing
-   else. That process is found in the process table and must be the only
-   Obsidian main process there, run by you from an app bundle, with every
-   other Obsidian process its child; it is read again just before the signal.
-   Anything else (two Obsidians, another user's, a table that cannot be read)
-   is answered `app-main-process-unproven`, and nothing is sent.
-2. It waits, up to 30 seconds, until no Obsidian runs. With only its starter
-   window (no vault open), Obsidian closes the window and keeps running
-   without one, as macOS apps do; when that same process is left alone,
-   `open` sends it SIGTERM once more, which quits it. There is never a third
-   signal, and never a stronger one: an Obsidian that does not quit is
-   answered `launch-failed` with reason `app-did-not-quit`, and nothing is
-   written.
-3. It adds the vault to Obsidian's settings and turns the command line on, in
+1. Before anything is sent, it checks, reading only, that the write the
+   restart is for can succeed: the view's vault folder exists, Obsidian's
+   settings file can be read and is yours, is no link and has no second
+   name, is not a Flatpak or snap build's, is not too large to take the
+   vault, and lists no vault at a folder above the view's. Otherwise it
+   answers that refusal and leaves Obsidian running. It then keeps a copy of
+   the settings file beside it (`obsidian.json.atelier-backup-<time>`), and
+   the answer names it.
+2. It sends SIGTERM to Obsidian's main process, and to nothing else. That
+   process is found in the process table and must be the only Obsidian main
+   process there, one of yours, named by the app bundle's path, with every
+   other Obsidian process its child; it is read again just before the signal
+   and must be the same process, yours, under the same parent. Anything else
+   (two Obsidians, another user's, a helper of another process, a table that
+   cannot be read) is answered `app-main-process-unproven`, with the reason in
+   `restart.detail`, and nothing is sent.
+3. Obsidian handles that SIGTERM as a quit: it closes every window, keeping
+   the vaults it had open flagged to reopen, and its helper processes end. On
+   macOS its main process can then stay, with no window. Electron handles
+   only the first SIGTERM as a quit: a second one ends the process at once,
+   without its quit handlers. `open` sends that second SIGTERM only when the
+   same process has stayed alone, with no window and no helper, at two
+   readings at least 5 seconds apart, when it has nothing left to save. There
+   is never a third signal, and never a stronger one: an Obsidian that is not
+   gone within 30 seconds is answered `launch-failed` with reason
+   `app-did-not-quit`, and nothing is written. The answer says how many
+   signals were delivered.
+4. It adds the vault to Obsidian's settings and turns the command line on, in
    the one write described above.
-4. It starts Obsidian plainly. A quitting Obsidian keeps the vaults it had
-   open flagged to reopen, so they come back, with this one beside them. If
-   the vault could not be added after all, Obsidian is still started again,
-   as it was.
+5. It starts Obsidian plainly, and the vaults it had open come back, with this
+   one beside them. If the vault could not be added after all, Obsidian is
+   still started again, as it was.
 
 The answer says that Obsidian was restarted, which process was signalled,
-and what was written. The flag is never implied by any other flag or answer;
-every other operation refuses it. The restart is qualified on macOS only (on
-Linux a quit Obsidian is started with a link, which would drop the other
-vaults' reopen flags): elsewhere `open` answers
+how, and what was written. The flag is never implied by any other flag or
+answer; every other operation refuses it. The restart is qualified on macOS
+only (on Linux a quit Obsidian is started with a link, which would drop the
+other vaults' reopen flags): elsewhere `open` answers
 `restart-platform-unqualified`.
+
+Two limits. `open` asks nothing at a terminal yet: the restart needs the flag
+there too, until the first-run command asks "Obsidian must restart once to add
+this vault … Restart now?" in that state. And if `open` itself is interrupted
+(Ctrl-C, or its process ended) after Obsidian quit and before it was started
+again, Obsidian stays quit: start it yourself, and it reopens its vaults; run
+`open` again to add the view's vault.
 
 Only `open` adds a vault to Obsidian: the maintenance service never does, so
 it never opens a window nobody asked for. A declared view that was never

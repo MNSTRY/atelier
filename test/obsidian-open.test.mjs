@@ -200,7 +200,7 @@ const unreachable = (name) => () => { throw new Error(`the ${name} was reached`)
 const UNREACHABLE_SEAMS = Object.freeze({
   appProbe: { inspect: unreachable('app probe'), inspectSync: unreachable('app probe'), vaultState: unreachable('app probe') },
   launcher: { open: unreachable('launcher'), startPlain: unreachable('launcher') },
-  registry: { listThroughApp: unreachable('app registry'), registerThroughApp: unreachable('app registry'), readSettings: unreachable('app registry'), registerInSettings: unreachable('app registry') },
+  registry: { listThroughApp: unreachable('app registry'), registerThroughApp: unreachable('app registry'), readSettings: unreachable('app registry'), registerInSettings: unreachable('app registry'), backupSettings: unreachable('app registry') },
   quitter: { quit: unreachable('quitter') },
   service: { entryPath: TEST_SERVICE_ENTRY, spawn() { throw new Error('a service was started') } },
 })
@@ -218,9 +218,11 @@ function fakeApp(overrides = {}) {
   // out); 'added' when the app added the vault all the same, 'not-added' when it did not.
   // `cliSetting`: the command-line switch its settings file holds, which a start reads (`cliOff` is the running app's);
   // `settingsMissing`: it never started, and has no settings file. `quitResult`: what quitting it answers instead of
-  // quitting; `startPlainResult`: whether a plain start works.
+  // quitting; `startPlainResult`: whether a plain start works. `settingsReadExtra`: what reading its settings file adds
+  // (`links`, `bytes`); `settingsRefusalOnWrite`: a refusal only the write gives, after a read found nothing wrong;
+  // `backupRefusal`: keeping a copy of its settings fails.
   const state = {
-    cliSetting: overrides.cliOff !== true, settingsMissing: false, quitResult: null, startPlainResult: true,
+    cliSetting: overrides.cliOff !== true, settingsMissing: false, quitResult: null, startPlainResult: true, settingsReadExtra: {}, settingsRefusalOnWrite: null, backupRefusal: null,
     installed: true, cli: true, running: false, version: '1.13.7 (installer 1.12.7)', answered: true, indexReady: true, launchResult: { launched: true, reason: 'fake' }, comesUp: true, noVaultAnswers: 0,
     noVaultUntilLaunch: false, vaults: {}, settingsRefusal: null, registerResult: true, registerForgets: false, listAnswers: true, loadingAnswers: 0, listNoVault: false, registerNoVault: false,
     registerUnanswered: null, cliOff: false, ...overrides,
@@ -231,6 +233,8 @@ function fakeApp(overrides = {}) {
   // Each time it was asked to quit, and each plain start that gave it back.
   const quits = []
   const startsPlain = []
+  // Each copy of its settings kept before a signal.
+  const backups = []
   // A start reads the switch from its settings file.
   const startApp = () => { state.running = true; state.cliOff = state.cliSetting !== true }
   const registrations = []
@@ -249,7 +253,7 @@ function fakeApp(overrides = {}) {
     return ids.find((id) => { const folder = path.resolve(state.vaults[id].path); return route.cwd === folder || route.cwd.startsWith(folder + path.sep) }) ?? null
   }
   return {
-    state, launches, launchArgs, registrations, reached, noVaultNow, quits, startsPlain,
+    state, launches, launchArgs, registrations, reached, noVaultNow, quits, startsPlain, backups,
     appProbe: {
       inspect: async () => {
         // With its command line turned off the running app answers every command with the same line, never a version.
@@ -275,7 +279,7 @@ function fakeApp(overrides = {}) {
         if (state.quitResult !== null) return state.quitResult
         // A quitting app keeps its open vaults flagged open; it has no window left.
         Object.assign(state, { running: false, noVaultAnswers: 0, noVaultUntilLaunch: false })
-        return { quit: true, pid: 4242, signalled: true }
+        return { quit: true, pid: 4242, signalled: true, signals: 1 }
       },
     },
     registry: {
@@ -293,10 +297,16 @@ function fakeApp(overrides = {}) {
         if (state.registerResult === true) add(vaultRoot, 'app')
         return { answered: true, result: state.registerResult }
       },
-      readSettings: () => (state.settingsRefusal ?? { ok: true, vaults: structuredClone(state.vaults) }),
+      readSettings: () => (state.settingsRefusal ?? { ok: true, vaults: structuredClone(state.vaults), ...state.settingsReadExtra }),
+      backupSettings: () => {
+        if (state.backupRefusal) return state.backupRefusal
+        backups.push({ running: state.running })
+        return { ok: true, backupPath: '/fake-home/obsidian/obsidian.json.atelier-backup-20260105T095959000Z' }
+      },
       registerInSettings: ({ vaultRoot }) => {
         if (state.running) return { ok: false, code: 'app-may-be-running', message: 'fake' }
         if (state.settingsRefusal) return state.settingsRefusal
+        if (state.settingsRefusalOnWrite) return state.settingsRefusalOnWrite
         const file = '/fake-home/obsidian/obsidian.json'
         const backupPath = `${file}.atelier-backup-20260105T100000000Z`
         if (state.settingsMissing) {
@@ -2050,11 +2060,12 @@ const MAIN = '/Applications/Obsidian.app/Contents/MacOS/Obsidian'
 const HELPER = (kind) => `/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (${kind}).app/Contents/MacOS/Obsidian Helper (${kind})`
 const UID = 501
 const row = (pid, ppid, uid, executable) => `${String(pid).padStart(5)} ${String(ppid).padStart(5)} ${String(uid).padStart(5)} ${executable}`
-const APP_TABLE = [row(1, 0, 0, '/sbin/launchd'), row(700, 1, UID, MAIN), row(701, 700, UID, HELPER('GPU')), row(702, 700, UID, HELPER('Renderer')), row(703, 700, UID, HELPER('Plugin')), row(800, 1, UID, '/Applications/Obsidian.app/Contents/MacOS/obsidian-cli'), row(900, 1, UID, '/usr/bin/ssh-agent')].join('\n')
+// macOS prints the uid of `nobody` as -2.
+const APP_TABLE = [row(1, 0, 0, '/sbin/launchd'), row(64269, 1, -2, '/usr/libexec/dhcp6d'), row(700, 1, UID, MAIN), row(701, 700, UID, HELPER('GPU')), row(702, 700, UID, HELPER('Renderer')), row(703, 700, UID, HELPER('Plugin')), row(800, 1, UID, '/Applications/Obsidian.app/Contents/MacOS/obsidian-cli'), row(900, 1, UID, '/usr/bin/ssh-agent')].join('\n')
 
 test('the main process of the app is proven from the process table only when it is the one main executable of this user, and every other process of the app is its child', async () => {
   const { provenMainProcess } = await import('../src/runtime/obsidian/app-restart.mjs')
-  assert.deepEqual(provenMainProcess({ table: APP_TABLE, uid: UID }), { state: 'proven', pid: 700, executable: MAIN })
+  assert.deepEqual(provenMainProcess({ table: APP_TABLE, uid: UID }), { state: 'proven', pid: 700, ppid: 1, executable: MAIN })
   assert.deepEqual(provenMainProcess({ table: [row(1, 0, 0, '/sbin/launchd'), row(800, 1, UID, '/usr/bin/ssh-agent')].join('\n'), uid: UID }), { state: 'absent' })
   const unproven = [
     ['two instances', `${APP_TABLE}\n${row(710, 1, UID, MAIN)}`],
@@ -2069,24 +2080,45 @@ test('the main process of the app is proven from the process table only when it 
   ]
   for (const [name, table] of unproven) assert.equal(provenMainProcess({ table, uid: UID }).reason, 'app-main-process-unproven', name)
   assert.equal(provenMainProcess({ table: APP_TABLE, uid: null }).reason, 'app-main-process-unproven', 'an unknown account proves nothing')
+  // A negative uid is a process, never this account's.
+  assert.equal(provenMainProcess({ table: `${APP_TABLE}\n${row(740, 1, -2, MAIN)}`, uid: UID }).reason, 'app-main-process-unproven')
+})
+
+test('the process table of this machine, read (never signalled), is one the proof can read: every line is a process', { skip: process.platform === 'darwin' ? false : 'the restart is qualified on macOS only' }, async () => {
+  const { PROCESS_ROW, provenMainProcess } = await import('../src/runtime/obsidian/app-restart.mjs')
+  const table = childProcess.execFileSync('/bin/ps', ['-ww', '-A', '-o', 'pid=,ppid=,uid=,comm='], { encoding: 'utf8', timeout: 5000 })
+  const lines = table.split('\n').filter((line) => line.trim() !== '')
+  assert.ok(lines.length > 10)
+  assert.deepEqual(lines.filter((line) => PROCESS_ROW.exec(line) === null), [], 'every line parses')
+  const found = provenMainProcess({ table, uid: process.getuid() })
+  assert.notEqual(found.detail, 'the process table has a line that is not a process')
 })
 
 test('quitting the app sends SIGTERM to the proven main process only, after reading it again, waits until no Obsidian runs, and never kills; on another platform, or unproven, nothing is sent', async () => {
   const { createAppQuitter } = await import('../src/runtime/obsidian/app-restart.mjs')
   const described = (pid) => `    1   ${UID} Sat Sep 26 10:00:00 2026     ${pid === 700 ? MAIN : '/usr/bin/other'}`
-  // `table` is the table as read before the first signal, `afterSignal` as read after it.
-  const world = ({ table = APP_TABLE, afterSignal = APP_TABLE, readProcess = described, probes = ['running', 'running', 'absent'], platform = 'darwin', waitMs = 1000 } = {}) => {
+  // `table` is the table as read before the first signal, `afterSignal` as read after it (a function of the clock, or
+  // a table). `signal` may refuse a delivery (throw).
+  const world = ({ table = APP_TABLE, afterSignal = APP_TABLE, readProcess = described, probes = ['running', 'running', 'absent'], platform = 'darwin', waitMs = 1000, deliver = () => {} } = {}) => {
     const signals = []
+    const at = []
     let clock = 0
     let probed = 0
     const quitter = createAppQuitter({
-      platform, uid: UID, readTable: () => (signals.length === 0 ? table : afterSignal), readProcess, signal: (pid) => { signals.push(pid) }, processProbe: () => probes[Math.min(probed++, probes.length - 1)],
+      platform, uid: UID, readTable: () => (signals.length === 0 ? table : typeof afterSignal === 'function' ? afterSignal(clock) : afterSignal), readProcess,
+      signal: (pid) => { deliver(signals.length); signals.push(pid); at.push(clock) }, processProbe: () => probes[Math.min(probed++, probes.length - 1)],
       sleep: async (ms) => { clock += ms }, now: () => clock, waitMs, pollMs: 100, lingerMs: 300,
     })
-    return { quitter, signals }
+    return { quitter, signals, at }
   }
   const quitting = world()
   assert.deepEqual(await quitting.quitter.quit(), { quit: true, pid: 700, signalled: true, signals: 1 })
+  // The process read again must be this user's, under the parent the table showed: otherwise nothing is sent.
+  for (const [name, line] of [['another account', `    1     0 Sat Sep 26 10:00:00 2026     ${MAIN}`], ['another parent', `  999   ${UID} Sat Sep 26 10:00:00 2026     ${MAIN}`], ['another name', `    1   ${UID} Sat Sep 26 10:00:00 2026     /usr/bin/other`]]) {
+    const other = world({ readProcess: () => line })
+    const answer = await other.quitter.quit()
+    assert.deepEqual([answer.quit, answer.reason, answer.signalled, other.signals], [false, 'app-main-process-unproven', false, []], name)
+  }
   assert.deepEqual(quitting.signals, [700], 'one signal, to the main process')
   // Still running after the wait, its windows still open: reported, never killed, never signalled again.
   const stubborn = world({ probes: ['running'] })
@@ -2097,7 +2129,19 @@ test('quitting the app sends SIGTERM to the proven main process only, after read
   const alone = row(700, 1, UID, MAIN)
   const windowless = world({ afterSignal: alone, probes: ['running', 'running', 'running', 'running', 'running', 'absent'] })
   assert.deepEqual(await windowless.quitter.quit(), { quit: true, pid: 700, signalled: true, signals: 2 })
-  assert.deepEqual(windowless.signals, [700, 700])
+  assert.deepEqual([windowless.signals, windowless.at], [[700, 700], [0, 300]], 'alone at two readings 300 ms apart')
+  // Its helpers end just before the linger time: the time counts from when it was first seen alone, not from the signal.
+  const late = world({ afterSignal: (clock) => (clock < 490 ? APP_TABLE : alone), probes: ['running'] })
+  await late.quitter.quit()
+  assert.deepEqual(late.signals, [700, 700])
+  assert.ok(late.at[1] >= 500 + 300, `the second signal came ${late.at[1]} ms after the first, alone since 500 ms`)
+  // Alone, then a helper again (still shutting down), then alone: the wait starts over.
+  const flapping = world({ afterSignal: (clock) => (clock === 200 ? APP_TABLE : alone), probes: ['running'] })
+  await flapping.quitter.quit()
+  assert.ok(flapping.at[1] >= 300 + 300, `the wait started over after the helper was seen again: ${flapping.at[1]}`)
+  // A second signal that is not delivered is not counted, and there is no third.
+  const undelivered = world({ afterSignal: alone, probes: ['running'], deliver: (sent) => { if (sent === 1) throw Object.assign(new Error('gone'), { code: 'ESRCH' }) } })
+  assert.deepEqual([(await undelivered.quitter.quit()).signals, undelivered.signals], [1, [700]])
   const lingering = world({ afterSignal: alone, probes: ['running'] })
   assert.deepEqual(await lingering.quitter.quit(), { quit: false, reason: 'app-did-not-quit', pid: 700, signalled: true, signals: 2 })
   assert.deepEqual(lingering.signals, [700, 700], 'never a third signal')
@@ -2123,7 +2167,7 @@ test('quitting the app sends SIGTERM to the proven main process only, after read
   }
   // No app left in the table, and the probe agrees: already quit, nothing sent.
   const gone = world({ table: row(900, 1, UID, '/usr/bin/ssh-agent'), probes: ['absent'] })
-  assert.deepEqual([await gone.quitter.quit(), gone.signals], [{ quit: true, pid: null, signalled: false }, []])
+  assert.deepEqual([await gone.quitter.quit(), gone.signals], [{ quit: true, pid: null, signalled: false, signals: 0 }, []])
   // Every seam is injected: there is no default that could reach a real process.
   for (const missing of ['readTable', 'readProcess', 'signal', 'processProbe']) {
     const seams = { readTable: () => APP_TABLE, readProcess: described, signal: () => {}, processProbe: () => 'absent' }
@@ -2161,7 +2205,8 @@ for (const [state, stateOutcome, overrides] of [
 
     const opened = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
     assert.deepEqual([opened.exit, opened.json.outcome, opened.json.launched, opened.json.registration?.how], [EXIT.ok, 'current', true, 'added-to-settings'], JSON.stringify(opened.json).slice(0, 600))
-    assert.deepEqual(opened.json.restart, { asked: true, state, quit: true, signalled: true, pid: 4242, startedAgain: true })
+    assert.deepEqual(opened.json.restart, { asked: true, state, quit: true, signalled: true, pid: 4242, signals: 1, settingsCopy: '/fake-home/obsidian/obsidian.json.atelier-backup-20260105T095959000Z', startedAgain: true })
+    assert.deepEqual(app.backups, [{ running: true }], 'a copy of the settings was kept while the app still ran, before it was asked to quit')
     assert.deepEqual(opened.json.obsidianSettings, { file: '/fake-home/obsidian/obsidian.json', created: false, vaultAdded: true, cliTurnedOn: state === 'cli-turned-off', backupPath: '/fake-home/obsidian/obsidian.json.atelier-backup-20260105T100000000Z' })
     assert.equal(app.quits.length, 1, 'quit once')
     assert.deepEqual(app.registrations, [{ via: 'settings', vaultRoot: world.vault() }], 'added to its settings while it was quit, never through the running app')
@@ -2185,7 +2230,16 @@ test('what open did to Obsidian is said in words: the restart, the process it si
   const human = await world.run(['open', '--consent-actor', CONSENT.actor, '--restart-obsidian'], { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
   assert.equal(human.exit, EXIT.ok, human.stderr)
   const lines = human.stdout.split('\n')
-  assert.ok(lines.includes('Obsidian: restarted as you asked, because its command line was turned off: quit (SIGTERM to its main process, 4242), then started again plainly, which reopens the vaults it had open.'), human.stdout)
+  assert.ok(lines.includes('Obsidian: restarted as you asked, because its command line was turned off: quit (SIGTERM to its main process, 4242); then started again plainly, which reopens the vaults it had open.'), human.stdout)
+  assert.ok(lines.includes('  A copy of Obsidian\'s settings as they were before any signal is kept in /fake-home/obsidian/obsidian.json.atelier-backup-20260105T095959000Z.'), human.stdout)
+  // Two signals are said as what they are.
+  const twice = makeWorld(t)
+  const second = fakeApp({ running: true, cliOff: true })
+  const quit = second.quitter.quit
+  second.quitter.quit = async () => ({ ...(await quit()), signals: 2 })
+  await serviceBehindApp(twice, second, { adapterFactory: refusingWhileUnreachable(second) })
+  const both = await twice.run(['open', '--consent-actor', CONSENT.actor, '--restart-obsidian'], { seams: { ...UNREACHABLE_SEAMS, ...second }, open: FAST_APP })
+  assert.ok(both.stdout.split('\n').includes('Obsidian: restarted as you asked, because its command line was turned off: quit: SIGTERM to its main process, 4242, closed its windows, and a second SIGTERM ended that process, left without a window, at once, without its quit handlers; then started again plainly, which reopens the vaults it had open.'), both.stdout)
   assert.ok(lines.includes('Obsidian\'s settings, written while it was quit: added this vault to the vault list in /fake-home/obsidian/obsidian.json, flagged open; turned the command line on (cli: true).'), human.stdout)
   assert.ok(lines.includes('  The file as it was is kept in /fake-home/obsidian/obsidian.json.atelier-backup-20260105T100000000Z.'), human.stdout)
 })
@@ -2213,13 +2267,13 @@ test('a restart that cannot be made safely is answered, typed, and nothing is wr
     const result = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...withoutQuitter, quitter: undefined }, open: FAST_APP })
     assert.deepEqual([result.json.outcome, result.json.reason, result.json.next, app.quits, app.registrations], ['app-cli-unavailable', 'restart-unavailable', REASON_NEXT['restart-unavailable'], [], []])
   }
-  // Quit, and then its settings cannot take the vault: started again plainly, as it was.
+  // Quit, and then the write refuses what the read before the quit could not tell: started again plainly, as it was.
   {
     const world = makeWorld(t)
-    const app = fakeApp({ running: true, cliOff: true, settingsRefusal: { ok: false, code: 'obsidian-settings-unsafe', message: 'fake' } })
+    const app = fakeApp({ running: true, cliOff: true, settingsRefusalOnWrite: { ok: false, code: 'obsidian-settings-changed', message: 'fake' } })
     await serviceBehindApp(world, app, { adapterFactory: refusingWhileUnreachable(app) })
     const result = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
-    assert.deepEqual([result.json.outcome, result.json.reason, result.json.restart?.startedAgain, app.startsPlain, app.launches, app.state.running], ['launch-failed', 'obsidian-settings-unsafe', true, [false], [], true], JSON.stringify(result.json).slice(0, 500))
+    assert.deepEqual([result.json.outcome, result.json.reason, result.json.restart?.startedAgain, app.startsPlain, app.launches, app.state.running], ['launch-failed', 'obsidian-settings-changed', true, [false], [], true], JSON.stringify(result.json).slice(0, 500))
   }
   // Quit, the vault added, and the app cannot be started again: the next step says to start it.
   {
@@ -2229,6 +2283,71 @@ test('a restart that cannot be made safely is answered, typed, and nothing is wr
     const result = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
     assert.deepEqual([result.json.outcome, result.json.reason, result.json.restart?.startedAgain, result.json.next], ['launch-failed', 'os-open-failed', false, REASON_NEXT['app-not-started-again']], JSON.stringify(result.json).slice(0, 500))
   }
+})
+
+test('before a restart sends anything, open checks read-only that the write can succeed and keeps a copy of the settings; what the write would refuse is answered with the app left running, and never quit', needsExchange, async (t) => {
+  const refusal = (code) => ({ ok: false, code, message: 'fake' })
+  const cases = [
+    ['a link, or a file of another user', { settingsRefusal: refusal('obsidian-settings-unsafe') }, 'obsidian-settings-unsafe'],
+    ['a file of another user', { settingsRefusal: refusal('obsidian-settings-not-owned') }, 'obsidian-settings-not-owned'],
+    ['a Flatpak or snap build', { settingsRefusal: refusal('obsidian-sandboxed') }, 'obsidian-sandboxed'],
+    ['a file that is not JSON', { settingsRefusal: refusal('obsidian-settings-unreadable') }, 'obsidian-settings-unreadable'],
+    ['a second name', { settingsReadExtra: { links: 2 } }, 'obsidian-settings-unsafe'],
+    ['a file too large to take the vault', { settingsReadExtra: { bytes: Buffer.alloc(MAX_OBSIDIAN_SETTINGS_BYTES - 20) } }, 'obsidian-settings-too-large'],
+    ['a copy that cannot be kept', { backupRefusal: refusal('obsidian-settings-unwritable') }, 'obsidian-settings-unwritable'],
+  ]
+  for (const [state, stateOverrides] of [['cli-turned-off', { cliOff: true }], ['no-vault-open', { noVaultAnswers: Number.POSITIVE_INFINITY }]]) {
+    for (const [name, overrides, reason] of cases) {
+      const world = makeWorld(t)
+      const app = fakeApp({ running: true, ...stateOverrides, ...overrides })
+      await serviceBehindApp(world, app, { adapterFactory: refusingWhileUnreachable(app) })
+      const result = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+      assert.deepEqual([result.json.outcome, result.json.reason, result.json.restart, app.quits, app.registrations, app.launches, app.startsPlain, app.state.running], ['launch-failed', reason, { asked: true, state, quit: false, signalled: false, signals: 0, reason }, [], [], [], [], true], `${state}, ${name}: ${JSON.stringify(result.json).slice(0, 400)}`)
+    }
+    // A vault the list has at a folder above the view's vault.
+    const world = makeWorld(t)
+    const app = fakeApp({ running: true, ...stateOverrides, vaults: { bbbbbbbbbbbbbbbb: { path: world.dir, ts: 1 } } })
+    await serviceBehindApp(world, app, { adapterFactory: refusingWhileUnreachable(app) })
+    const result = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+    assert.deepEqual([result.json.outcome, result.json.reason, app.quits, app.backups, app.state.running], ['launch-failed', 'vault-inside-another-vault', [], [], true], `${state}: ${JSON.stringify(result.json).slice(0, 400)}`)
+  }
+})
+
+test('the read-only check before a restart, on real files: what the write would refuse is found without writing; and the copy kept before a signal is the file\'s bytes, beside it, under the backup name', async (t) => {
+  const { backupObsidianSettings, settingsWriteOutlook } = await import('../src/runtime/obsidian/app-registration.mjs')
+  const world = settingsWorld(t)
+  const read = () => readObsidianSettings({ userDataDir: world.userDataDir })
+  const before = world.bytes()
+  assert.deepEqual(settingsWriteOutlook({ settings: read(), vaultRoot: world.vaultRoot }), { ok: true })
+  assert.deepEqual(settingsWriteOutlook({ settings: { ok: false, code: 'obsidian-sandboxed' }, vaultRoot: world.vaultRoot }), { ok: false, code: 'obsidian-sandboxed' })
+  assert.deepEqual(settingsWriteOutlook({ settings: null, vaultRoot: world.vaultRoot }), { ok: false, code: 'obsidian-settings-unreadable' })
+  assert.deepEqual(settingsWriteOutlook({ settings: { ...read(), links: 2 }, vaultRoot: world.vaultRoot }), { ok: false, code: 'obsidian-settings-unsafe' })
+  assert.deepEqual(settingsWriteOutlook({ settings: { ...read(), bytes: Buffer.alloc(MAX_OBSIDIAN_SETTINGS_BYTES - 40) }, vaultRoot: world.vaultRoot }), { ok: false, code: 'obsidian-settings-too-large' })
+  assert.deepEqual(settingsWriteOutlook({ settings: { ...read(), vaults: { b: { path: world.dir, ts: 1 } } }, vaultRoot: world.vaultRoot }), { ok: false, code: 'vault-inside-another-vault' })
+  assert.deepEqual(settingsWriteOutlook({ settings: read(), vaultRoot: path.join(world.dir, 'vaults', 'no-such-view') }), { ok: false, code: 'vault-root-missing' })
+  // A listed vault needs only the switch: its folder is not looked at.
+  assert.deepEqual(settingsWriteOutlook({ settings: { ...read(), vaults: { c: { path: path.join(world.dir, 'gone'), ts: 1 } } }, vaultRoot: path.join(world.dir, 'gone') }), { ok: true })
+  assert.deepEqual(world.bytes(), before, 'the check writes nothing')
+  const copy = backupObsidianSettings({ userDataDir: world.userDataDir, now: () => START })
+  assert.deepEqual([copy.ok, path.basename(copy.backupPath)], [true, `${OBSIDIAN_SETTINGS_FILE}.atelier-backup-20260105T100000000Z`])
+  assert.deepEqual([fs.readFileSync(copy.backupPath), world.bytes()], [before, before], 'the copy is the file as it is, and the file is unchanged')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(copy.backupPath).mode & 0o777, 0o640, 'with the file\'s mode')
+  // Taken again in the same millisecond: a name of its own.
+  assert.notEqual(backupObsidianSettings({ userDataDir: world.userDataDir, now: () => START }).backupPath, copy.backupPath)
+  const missing = settingsWorld(t, { text: null })
+  assert.deepEqual([backupObsidianSettings({ userDataDir: missing.userDataDir }).code, missing.names()], ['obsidian-settings-missing', []])
+})
+
+test('a command line that answers it is turned off stays that answer when Atelier\'s plugin reports a version: open names --restart-obsidian, never vault-open-cli-silent', async () => {
+  const { withPluginReportedVersion } = await import('../src/runtime/obsidian/plugin-presence.mjs')
+  const off = { installed: true, cli: true, running: true, version: null, cliOff: true }
+  const probe = withPluginReportedVersion({ inspect: async () => off, vaultState: async () => ({ answered: false, indexReady: false }) }, async () => ({ present: true, appVersion: '1.13.7' }))
+  const seen = await probe.inspect()
+  assert.deepEqual(seen, off)
+  assert.deepEqual([qualifyApp(seen).outcome, qualifyApp(seen).reason], ['app-cli-unavailable', 'cli-turned-off'])
+  // Without the switch answer, the plugin's version still stands in, as before.
+  const silent = withPluginReportedVersion({ inspect: async () => ({ installed: true, cli: true, running: true, version: null }), vaultState: async () => ({}) }, async () => ({ present: true, appVersion: '1.13.7' }))
+  assert.equal((await silent.inspect()).versionSource, 'plugin')
 })
 
 test('--restart-obsidian is asked of open by name and of nothing else, and a reachable or quit app is never quit for it', needsExchange, async (t) => {
