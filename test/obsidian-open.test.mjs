@@ -3146,35 +3146,66 @@ test('the publisher checks an allocated vault again before it writes anything, s
   assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in, not even the vault lock')
 })
 
-test('a folder replaced during a publication, while the app is asked, between units or before the commit, is refused and never reported current; nothing is written into the person\'s vault', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
+test('a folder replaced or removed during a publication (while the app is asked, between units or before the commit) is refused and never reported current, nothing is written into the person\'s vault, and once the folder is back the same service publishes again', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
   const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
   const { CRASH_INJECTION_TEST_SEAM } = await import('../src/projection/obsidian/publication/test-seam.mjs')
   // `when`: the nth time the app is asked about the vault (1: path selection, 2: before the first unit), or 'commit'.
-  for (const when of [1, 2, 'commit']) {
+  // `how`: a link into the person's vault put in its place, or the folder removed; `legacy`: the vault is under the data root.
+  const cases = [
+    { when: 1, how: 'link', refused: 'vault-allocation-replaced' },
+    { when: 2, how: 'link', refused: 'vault-allocation-replaced' },
+    { when: 'commit', how: 'link', refused: 'vault-allocation-replaced' },
+    { when: 2, how: 'remove', refused: 'vault-allocation-missing' },
+    { when: 2, how: 'remove', legacy: true, refused: 'vault-root-moved' },
+  ]
+  for (const { when, how, legacy = false, refused } of cases) {
+    const label = `${how} at ${when}${legacy ? ', under the data root' : ''}`
     const world = makeWorld(t)
-    await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+    if (!legacy) await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+    const vaultOf = () => (legacy ? path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId) : readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }).path)
     const personal = path.join(world.dir, 'Personal Vault')
     fs.mkdirSync(personal)
     fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
     let armed = false
     let swapped = false
     let asked = 0
-    const swap = () => { if (!armed || swapped) return; swapped = true; const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }); fs.renameSync(vault, path.join(world.dir, 'moved-away')); fs.symlinkSync(personal, vault) }
+    const swap = () => {
+      if (!armed || swapped) return
+      swapped = true
+      if (how === 'remove') fs.rmSync(vaultOf(), { recursive: true })
+      else { fs.renameSync(vaultOf(), path.join(world.dir, 'moved-away')); fs.symlinkSync(personal, vaultOf()) }
+    }
     const adapterFactory = (...args) => {
       const inner = absentAdapter(...args)
       return { ...inner, probe: async (input) => { if (armed) { asked += 1; if (asked === when) swap() } return inner.probe(input) } }
     }
     const seams = when === 'commit' ? { publishView: (input) => publishView({ ...input, [CRASH_INJECTION_TEST_SEAM]: { at: 'before-manifest-commit', halt: swap } }) } : {}
     const engine = world.engine({ adapterFactory, seams })
-    assert.equal((await engine.tick()).scopes[0].state, 'current')
+    const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+    assert.equal(stateOf(await engine.tick())[0], 'current', label)
     armed = true
     touchCompass(world, 'North is painted blue.')
     world.advance(10 * 60 * 1000)
-    const report = await engine.tick()
-    assert.equal(swapped, true, `the folder was replaced (${when})`)
-    const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId)
-    assert.deepEqual([entry.state, entry.reason], ['stale', 'vault-allocation-replaced'], String(when))
-    assert.deepEqual(fs.readdirSync(personal), ['diary.md'], `nothing is written into the person's vault (${when})`)
+    assert.deepEqual(stateOf(await engine.tick()), ['stale', refused], label)
+    assert.equal(swapped, true, `the folder was replaced or removed (${label})`)
+    assert.deepEqual(fs.readdirSync(personal), ['diary.md'], `nothing is written into the person's vault (${label})`)
+    // Back: the link is taken away (the service makes an allocated folder again), or the folder under the data root is
+    // made again. The same service publishes into it at the next change.
+    armed = false
+    if (how === 'link') fs.unlinkSync(vaultOf())
+    if (legacy) fs.mkdirSync(vaultOf(), { mode: 0o700 })
+    touchCompass(world, 'North is painted green.')
+    world.advance(10 * 60 * 1000)
+    let again = stateOf(await engine.tick())
+    // Stopped just before its commit, the publication's journal is finished by restart recovery first: that tick meets
+    // the generation it did not expect, and the view is published at the retry that follows.
+    if (when === 'commit') {
+      assert.deepEqual(again, ['publisher-conflict', 'generation-mismatch'], label)
+      world.advance(10 * 60 * 1000)
+      again = stateOf(await engine.tick())
+    }
+    assert.deepEqual(again, ['current', 'published-and-verified'], `published again (${label})`)
+    assert.match(fs.readFileSync(path.join(vaultOf(), 'east-wing', 'notes', 'Compass rose.md'), 'utf8'), /painted green/, label)
   }
 })
 

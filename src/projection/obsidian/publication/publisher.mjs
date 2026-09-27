@@ -49,6 +49,9 @@ const hex = (digest) => digest.slice('sha256:'.length)
 const iso = (clock) => { const value = clock(); return (value instanceof Date ? value : new Date(value)).toISOString() }
 const REFUSED_BY_EDIT = new Set(['editor-edit', 'disk-changed'])
 const unreleased = new Map()
+// A lock whose folder has gone (the vault moved away, deleted or replaced while it was held) holds nothing: its release
+// is not kept to be tried again, where it would fail for ever and hold every later publication of that vault back.
+const lockFolderGone = (error) => error?.code === 'ENOENT' || error?.code === 'ENOTDIR'
 
 // A note another program replaces by rename can change between the check of its leaf and the open
 // (ELEAFCHANGED). Every rename leaves a complete file, so it is read again; one that keeps changing is left to
@@ -280,7 +283,7 @@ export async function publishView(options = {}) {
     // A release that could not be written (a full disk) is finished first.
     for (const lockPath of [store.vaultLockPath, store.lockPath]) {
       if (!unreleased.has(lockPath)) continue
-      try { unreleased.get(lockPath)() } catch (error) { refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) }) }
+      try { unreleased.get(lockPath)() } catch (error) { if (!lockFolderGone(error)) refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) }) }
       unreleased.delete(lockPath)
     }
     // Two locks, the view's and then the vault's: a second view or a second
@@ -440,7 +443,7 @@ export async function publishView(options = {}) {
     }
     return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail }, notes: [], retainedEdits: [], lateWriters: [] }
   } finally {
-    for (const [lockPath, release] of releases.reverse()) try { release() } catch { unreleased.set(lockPath, release) }
+    for (const [lockPath, release] of releases.reverse()) try { release() } catch (error) { if (!lockFolderGone(error)) unreleased.set(lockPath, release) }
   }
 }
 

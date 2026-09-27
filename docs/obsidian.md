@@ -528,8 +528,12 @@ put on the way since, into a vault the app lists, say
 (`vault-allocation-moved`). A folder that has gone is made again at the next
 tick, only where its recorded real path leads and only where a location would
 be accepted (not inside a repository, the private state, a vault Atelier
-publishes or one the app lists, and on the data root's volume). A view that
-was published and whose vault Atelier cannot find is refused
+publishes or one the app lists, and on the data root's volume). A vault
+removed, moved or replaced while it is being published stops that publication
+(`vault-allocation-missing`, `vault-allocation-replaced`, or
+`vault-root-moved` for a vault under the data root), and once the folder is
+back the running service publishes into it again; no restart is needed. A
+view that was published and whose vault Atelier cannot find is refused
 (`vault-allocation-lost`) rather than published again into a new, empty vault
 under the data root: its record was lost, or, for a view that never had a
 record (published under the data root), its `vaults/<view>` folder was

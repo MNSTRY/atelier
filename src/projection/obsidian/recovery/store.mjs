@@ -296,8 +296,13 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
     vaultOrigin: vaultRoot !== undefined ? 'explicit' : allocation === null ? 'legacy-data-root' : 'allocated',
     allocation,
     // Refuses, typed, once the folder of an allocated vault is no longer the one this store was made for (see
-    // assertAllocatedFolder); a vault under the data root or named by the caller has nothing to check.
-    checkAllocatedVault() { if (allocation !== null) assertAllocatedFolder(allocation) },
+    // assertAllocatedFolder), and once any other vault root is gone or leads elsewhere (vault-root-moved).
+    checkAllocatedVault() {
+      if (allocation !== null) { assertAllocatedFolder(allocation); return }
+      let real = null
+      try { real = realPathAsStored(vault) } catch { /* gone: refused below */ }
+      if (real !== vault) refuse('vault-root-moved', 'this view\'s vault is gone, or its path now leads somewhere else; nothing more is written into it', { path: vault, leadsTo: real })
+    },
     journalsRoot: journals,
     lockPath: path.join(locks, `${segment(scopeId)}.lock`),
     // One publisher per vault, whichever view or workspace state it belongs to.
