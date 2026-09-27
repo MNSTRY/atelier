@@ -1427,13 +1427,16 @@ test('a plugin file another writer changes under a publication is a race: the vi
   assert.ok(world.recovered().some((bytes) => bytes.toString() === '/* written meanwhile */\n'), 'the replaced bytes are kept')
 })
 
-test('a view held by a churning plugin or settings file is told what holds it and that it is retried, never to close another publisher', () => {
+test('a view held by a changed plugin or settings file is told which file held it, by whom it may have been changed, and that it is retried, never to close another publisher', () => {
   for (const reason of ['plugin-file-changed', 'settings-changed']) {
     const next = nextStep('publisher-conflict', reason)
     assert.equal(next, REASON_NEXT[reason], reason)
     assert.notEqual(next, OPENING_OUTCOMES['publisher-conflict'].next, reason)
-    assert.match(next, /^no other publisher holds this vault: /, reason)
     assert.match(next, /retried automatically/, reason)
+    // One change stops a publication, the person's own included, and the reason names only the first file that did:
+    // the step claims neither a program that kept replacing the file nor that no other publisher is involved.
+    assert.match(next, /changed while the view was published, by .*you\b/, reason)
+    assert.doesNotMatch(next, /kept replacing|no other publisher/, reason)
   }
   assert.match(REASON_NEXT['plugin-file-changed'], /\.obsidian\/plugins/)
   assert.match(REASON_NEXT['settings-changed'], /not written over/)

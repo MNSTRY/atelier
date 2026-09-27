@@ -129,9 +129,11 @@ export const REASON_NEXT = Object.freeze({
   'vault-note-missing': 'a note of the generation this view last published is missing from its vault; the view is published again, and the note written back, at the next change at its sources',
   'vault-root-moved': 'this view\'s vault was removed, moved or replaced by a link while it was being published, and nothing more was written into it; a vault allocated for the view is made again at the next tick and published into; a vault under the data root is asked for as lost until its folder is there again',
   'vault-allocation-missing': 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick, and publishes the view into it',
-  // A publisher-conflict whose cause is a file Atelier writes in the vault's settings folder, not another publisher.
-  'plugin-file-changed': 'no other publisher holds this vault: a program kept replacing a file of Atelier\'s plugin in it (under .obsidian/plugins) while the view was published, so the publication did not finish; it is retried automatically, and if this does not clear, stop what keeps writing there (a sync tool, say)',
-  'settings-changed': 'no other publisher holds this vault: a settings file Atelier writes in it (the plugin list or a plugin setting under .obsidian) changed while the view was published, by Obsidian, another program or you, and was not written over; it is retried automatically, reading the file as it is then',
+  // A publisher-conflict whose first blocking cause is a file Atelier writes in the vault's settings folder. One change
+  // is enough to stop a publication, and the reason names only the first file that did: nothing says that no other
+  // publisher or editor is involved.
+  'plugin-file-changed': 'a file of Atelier\'s plugin in this vault (under .obsidian/plugins) changed while the view was published, by another program or by you, so the publication did not finish; it is retried automatically, and if this keeps happening, stop what keeps writing there (a sync tool, say)',
+  'settings-changed': 'a settings file Atelier writes in this vault (the plugin list or a plugin setting under .obsidian) changed while the view was published, by Obsidian, another program or you, and was not written over; it is retried automatically, reading the file as it is then',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 

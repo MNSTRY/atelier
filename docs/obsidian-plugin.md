@@ -131,8 +131,11 @@ is a race and is handled like one on a note: that publication does not
 commit, the view is tried again, and the file is planned from the disk anew
 (`plugin-file-changed`); nothing reads a plugin file as an edit of a note.
 The view is then `publisher-conflict`, and its next step in `status` and
-`open` names that file, not another publisher, as what holds it (the same
-holds for a settings file, `settings-changed`).
+`open` names that file as what stopped the publication (changed by another
+program or by the person; one change is enough), rather than asking the
+person to close another publisher; the same holds for a settings file
+(`settings-changed`). The reason is the first unit that stopped the
+publication, so other causes are not ruled out.
 Upgrades replace the plugin files the same way. The plugin's version in
 `manifest.json` changes whenever its code does, and the test suite holds the
 two together: the app keeps running the `main.js` it loaded until it reloads

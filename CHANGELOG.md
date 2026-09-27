@@ -306,11 +306,12 @@
   a folder where a file goes) is no longer a reason to publish a committed
   generation again, so it never waits for the app and never gets that
   reason.
-- A view held because a program kept replacing a plugin file
-  (`plugin-file-changed`) or a settings file changed while it was published
-  (`settings-changed`) is still `publisher-conflict`, but its next step no
-  longer tells the person to close another publisher: it names the file as
-  the cause and says that the view is retried automatically.
+- A view held because a plugin file (`plugin-file-changed`) or a settings
+  file (`settings-changed`) changed while it was published, by another
+  program or by the person, is still `publisher-conflict`, but its next step
+  no longer tells the person to close another publisher: it names the file
+  that stopped the publication and says that the view is retried
+  automatically.
 - A plugin-file drift that publishing cannot repair (the data file of a vault
   root that is a link, say) was published twice whenever the maintenance
   service started: once by the start's own tick and once more when the
