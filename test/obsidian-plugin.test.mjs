@@ -2148,7 +2148,7 @@ test('a plugin file that drifted is written again at the service\'s next tick, w
   assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
 })
 
-test('a drift publishing cannot repair is published once at a service\'s start, not again at the next look; a change the person makes later is still seen', needsExchange, async (t) => {
+test('a drift publishing cannot repair is published once at a service\'s start, and asking about it again writes nothing; a change the person makes later is still seen', needsExchange, async (t) => {
   if (process.platform === 'win32') return t.skip('a vault root that is a link')
   // A vault root that is a link never receives the data file: that drift stays whatever is published.
   const world = serviceWorld(t)
@@ -2156,26 +2156,54 @@ test('a drift publishing cannot repair is published once at a service\'s start, 
   t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }))
   fs.mkdirSync(path.join(world.workspaceRoot, 'vaults'), { recursive: true, mode: 0o700 })
   fs.symlinkSync(elsewhere, world.vault)
-  let published = 0
-  const seams = { publishView: (input) => { published += 1; return publishView(input) } }
-  // The publications after each tick; the service's start is its first tick.
-  const ticks = async (service, count) => { const seen = []; for (let index = 0; index < count; index += 1) { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); seen.push(published) } return seen }
+  // Every call of the publisher, and the publications among them that wrote through a journal (not one that found the
+  // committed generation standing and returned).
+  let calls = 0
+  let journaled = 0
+  const seams = { publishView: async (input) => { calls += 1; const result = await publishView(input); if (result.alreadyCommitted !== true) journaled += 1; return result } }
+  // After each tick; the service's start is its first tick.
+  const ticks = async (service, count) => { const seen = []; for (let index = 0; index < count; index += 1) { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); seen.push([calls, journaled]) } return seen }
   const first = await world.service({ seams })
-  assert.deepEqual(await ticks(first, 4), [1, 1, 1, 1], 'the first publication, and none at the looks after it')
+  // The first publication; the next look asks about the data file it left once, which writes nothing; then nothing.
+  assert.deepEqual(await ticks(first, 4), [[2, 1], [2, 1], [2, 1], [2, 1]])
   assert.equal(fs.existsSync(path.join(elsewhere, PLUGIN_DATA_PATH)), false)
   await first.shutdown('restart')
-  // Restarted on the same listener: the start publishes every view once, and the looks after it ask nothing.
+  // Restarted on the same listener: the start prepares every view, and the committed generation stands; nothing is written.
   const kept = await world.service({ seams, port: world.port })
-  assert.deepEqual(await ticks(kept, 3), [2, 2, 2])
+  assert.deepEqual(await ticks(kept, 3), [[3, 1], [3, 1], [3, 1]])
   await kept.shutdown('restart')
-  // On another listener, the data file the view pins changes with it: still once.
+  // On another listener, the data file the view pins changes with it: one publication, and one ask that writes nothing.
   const moved = await world.service({ seams })
-  assert.deepEqual(await ticks(moved, 3), [3, 3, 3])
+  assert.deepEqual(await ticks(moved, 3), [[5, 2], [5, 2], [5, 2]])
   // A plugin file the person removes afterwards is still written again, once.
   fs.rmSync(path.join(elsewhere, PLUGIN_DIRECTORY, 'main.js'))
-  assert.deepEqual(await ticks(moved, 2), [4, 4])
+  assert.deepEqual(await ticks(moved, 2), [[6, 3], [6, 3]])
   assert.ok(fs.readFileSync(path.join(elsewhere, PLUGIN_DIRECTORY, 'main.js')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))))
   assert.equal(world.freshness().state, 'current')
+})
+
+test('a plugin path a publication left for the person and the person repaired before the tick ended is written at the next tick', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  const data = path.join(world.vault, PLUGIN_DATA_PATH)
+  let published = 0
+  let afterPublish = null
+  const seams = { publishView: async (input) => { published += 1; const result = await publishView(input); if (afterPublish) { const act = afterPublish; afterPublish = null; act() } return result } }
+  const service = await world.service({ seams })
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return published }
+  await tick()
+  // A folder where the data file goes: left for the person.
+  fs.rmSync(data)
+  fs.mkdirSync(data)
+  await tick()
+  // A new generation leaves it again, and the person removes the folder right after that publication, within the tick.
+  fs.appendFileSync(world.source('harbor/notes/tides.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  afterPublish = () => fs.rmdirSync(data)
+  await tick()
+  assert.equal(fs.existsSync(data), false)
+  await tick()
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE, 'written at the next tick')
+  assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
 })
 
 test('a plugin file another writer removes after its view was published, while the tick goes on, is written again at the next tick', needsExchange, async (t) => {
