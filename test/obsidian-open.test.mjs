@@ -278,7 +278,7 @@ function fakeApp(overrides = {}) {
       },
     },
     launcher: {
-      open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push(Object.fromEntries(Object.entries({ vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning }).filter(([, value]) => value !== undefined))); if (state.launchResult.launched && state.comesUp && !state.running) startApp(); return state.launchResult },
+      open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push(Object.fromEntries(Object.entries({ vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning, startedByThisOpen: args.startedByThisOpen }).filter(([, value]) => value !== undefined))); if (state.launchResult.launched && state.comesUp && !state.running) startApp(); return state.launchResult },
       startPlain: async () => { startsPlain.push(state.running); if (state.startPlainResult && !state.running) startApp(); return state.startPlainResult },
     },
     quitter: {
@@ -1171,7 +1171,8 @@ test('a link the started app refused is handed once more to the running app when
   const once = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: 1 })
   assert.deepEqual([once.opened.json.outcome, once.opened.json.registration?.how], ['current', 'listed'], JSON.stringify(once.opened.json))
   const asked = { vaultRoot: once.world.vault(), vaultId: once.id, vaultPath: once.world.vault() }
-  assert.deepEqual(once.app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true }])
+  // Handed once more through the app's tool only: this open started the app, so never through the operating system.
+  assert.deepEqual(once.app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true, startedByThisOpen: true }])
   // Only once: a link refused again leaves the vault not answering.
   const always = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: Number.POSITIVE_INFINITY })
   assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.app.launchArgs.map((item) => item.appRunning)], ['launch-failed', 'app-did-not-answer-for-this-vault', [false, true]])
@@ -1283,11 +1284,13 @@ const RUNS = {
   quitVersionFailed: { platform: 'darwin', appRunning: false, answer: (file, args) => (file === CLI ? { stdout: VERSION, failed: true } : {}) },
   quitStartFailed: { platform: 'darwin', appRunning: false, answer: (file) => (file === '/usr/bin/open' ? { failed: true } : { stdout: VERSION }) },
   runningNotTaken: { platform: 'darwin', appRunning: true, answer: () => ({}) },
+  // The link handed once more to an app this open started (opening.mjs): refused again, it never reaches the system opener.
+  retryNotTaken: { platform: 'darwin', appRunning: true, startedByThisOpen: true, answer: () => ({}) },
   linuxQuit: { platform: 'linux', appRunning: false, answer: () => ({}) },
   linuxRunningTaken: { platform: 'linux', appRunning: true, answer: (file, args) => (file === CLI && isLink(args) ? { stdout: 'Processed URI ' + args[0] } : {}) },
 }
 const out = { unguarded, runs: {} }
-for (const [name, { platform, appRunning, answer }] of Object.entries(RUNS)) {
+for (const [name, { platform, appRunning, startedByThisOpen, answer }] of Object.entries(RUNS)) {
   const calls = []
   let versions = 0
   const execFile = (file, args, options, callback) => {
@@ -1297,7 +1300,7 @@ for (const [name, { platform, appRunning, answer }] of Object.entries(RUNS)) {
     setImmediate(() => callback(reply.failed ? new Error('exit 1') : null, reply.stdout ?? '', reply.stderr ?? ''))
   }
   const launcher = createProductionLauncher({ platform, env: { ...process.env, STAND_IN_RUN: name }, cliPath: CLI, workingDirectory: ${JSON.stringify(work)}, execFile, waitMs: 200, pollMs: 20 })
-  const result = await launcher.open({ vaultId: '0123456789abcdef', vaultPath: '/stand-in/vault', appRunning })
+  const result = await launcher.open({ vaultId: '0123456789abcdef', vaultPath: '/stand-in/vault', appRunning, ...(startedByThisOpen ? { startedByThisOpen } : {}) })
   out.runs[name] = { result, calls }
 }
 process.stdout.write(JSON.stringify(out))`
@@ -1329,6 +1332,7 @@ process.stdout.write(JSON.stringify(out))`
   assert.deepEqual([runs.quitStartFailed.result, steps('quitStartFailed')], [{ launched: false, reason: 'os-open-failed' }, [['/usr/bin/open', '-b', 'md.obsidian']]])
   // A running app: the tool first, the system opener only when the tool did not take the link.
   assert.deepEqual([runs.runningNotTaken.result, steps('runningNotTaken')], [{ launched: true, reason: 'os-open-accepted' }, [[CLI, link], ['/usr/bin/open', link]]])
+  assert.deepEqual([runs.retryNotTaken.result, steps('retryNotTaken')], [{ launched: true, reason: 'app-started-link-not-taken' }, [[CLI, link]]])
   // Linux: a quit app is started with the link by the system opener; a running one takes it through the tool.
   assert.deepEqual([runs.linuxQuit.result, steps('linuxQuit')], [{ launched: true, reason: 'os-open-accepted' }, [['xdg-open', link]]])
   assert.deepEqual([runs.linuxRunningTaken.result, steps('linuxRunningTaken')], [{ launched: true, reason: 'url-accepted' }, [[CLI, link]]])

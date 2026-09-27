@@ -549,7 +549,8 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
       if (silentRounds >= SILENT_ROUNDS) return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
       if (linkRetry === 'due' && rounds >= 2 && vault?.answered !== true) {
         linkRetry = 'done'
-        try { await launcher.open({ vaultRoot: known.path, ...target, appRunning: true }) } catch { /* the wait decides */ }
+        // Through the app's tool only: this `open` started the app, so the link never goes to the operating system.
+        try { await launcher.open({ vaultRoot: known.path, ...target, appRunning: true, startedByThisOpen: true }) } catch { /* the wait decides */ }
       }
     } else silentRounds = 0
     if (monotonic() >= deadline) break

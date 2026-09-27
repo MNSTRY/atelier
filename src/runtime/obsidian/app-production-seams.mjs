@@ -189,9 +189,11 @@ export function createProductionLauncher({
     // Starts a quit app with no URL, so it reopens the vaults its list flags open: for giving back an app `open`
     // quit to restart it, when the vault could not be added after all. macOS only, as the restart is.
     startPlain: async () => platform === 'darwin' && !(await run(osCommand, ['-b', 'md.obsidian'])).failed,
-    open({ vaultId = null, vaultPath = null, appRunning }) {
+    // `startedByThisOpen`: this `open` started the app with an earlier launch; the link goes through its tool only.
+    open({ vaultId = null, vaultPath = null, appRunning, startedByThisOpen = false }) {
       const plan = launchPlan({ platform, appRunning, vaultId, vaultPath })
       return runLaunchPlan(plan, {
+        startedEarlier: startedByThisOpen === true,
         start: async () => !(await run(osCommand, ['-b', 'md.obsidian'])).failed,
         answered: async () => { const reply = await run(cliPath, ['version'], CLI_TIMEOUT_MS); return appAnswered({ stdout: reply.stdout, stderr: reply.stderr, exited: !reply.failed }) },
         handLink: async (uri) => urlProcessed((await run(cliPath, [uri], CLI_TIMEOUT_MS)).stdout),

@@ -689,7 +689,8 @@ exactly because the folder is listed.
   `open` hands it the vault's link through that tool, never through the
   operating system. A vault Obsidian already lists but had closed is not
   reopened by a plain start, so if Obsidian refuses that link just after it
-  started, `open` hands it the link once more before it gives up. On Linux a plain start is not
+  started, `open` hands it the link once more, again through that tool and
+  never through the operating system, before it gives up. On Linux a plain start is not
   qualified yet, and Obsidian is started with the link (the other vaults'
   reopen marks are lost there; a known limit).
   In the same write, `open` turns Obsidian's command line on (`cli: true`)
