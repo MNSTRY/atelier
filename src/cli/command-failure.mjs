@@ -2,15 +2,33 @@
 // detail (Node system errors, child-process failures, parser excerpts, or a
 // message naming an absolute path) is rethrown to the command executor, which
 // prints only a typed code or `[internal-error]` with Node's code.
-const TYPED_CODE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
-const ABSOLUTE_PATH = /(?:^|[\s'"(=:,])(?:\/[^\s'"/]+|[A-Za-z]:\\)/
+import fs from 'node:fs'
+import os from 'node:os'
+
+// Node's system errors always carry errno and syscall; child-process failures
+// carry status and stderr. Atelier's own refusals carry neither, even when
+// their code is EEXIST. A message naming a host directory is never printed;
+// schema instance paths such as `/data/0` are not host paths.
+const NODE_DETAIL_KEYS = ['errno', 'syscall', 'path', 'dest', 'status', 'signal', 'stderr', 'stdout', 'cmd']
+const HOST_ROOT = /(?:^|[\s'"(=,])(?:\/(?:Users|home|private|var|tmp|Volumes|opt|etc|root|mnt|srv|usr|Library|System|Applications)\/|[A-Za-z]:\\|\\\\|~\/)/
+
+function hostPrefixes() {
+  const prefixes = new Set()
+  for (const directory of [process.cwd(), os.homedir(), os.tmpdir()]) {
+    if (!directory || directory === '/') continue
+    prefixes.add(directory)
+    try { prefixes.add(fs.realpathSync(directory)) } catch {}
+  }
+  return [...prefixes]
+}
 
 export function safeCommandMessage(error) {
   if (!(error instanceof Error) || error instanceof SyntaxError) return null
-  if (error.code !== undefined && !(typeof error.code === 'string' && (TYPED_CODE.test(error.code) || /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(error.code) && !/^ERR_/.test(error.code)))) return null
-  if (['errno', 'syscall', 'path', 'status', 'stderr', 'stdout', 'cmd'].some(key => key in error)) return null
-  if (typeof error.message !== 'string' || ABSOLUTE_PATH.test(error.message)) return null
-  return error.message
+  if (typeof error.code === 'string' && error.code.startsWith('ERR_')) return null
+  if (NODE_DETAIL_KEYS.some(key => Object.hasOwn(error, key))) return null
+  const message = error.message
+  if (typeof message !== 'string' || HOST_ROOT.test(message) || hostPrefixes().some(prefix => message.includes(prefix))) return null
+  return message
 }
 
 export function reportCommandFailure(error, stream = 'stderr') {

@@ -460,3 +460,18 @@ test('responsibility commands never print absolute paths, git commands or stdin 
     assert.ok(!/PRIVATE|secret-name|Command failed|git -C/.test(output), `${args.join(' ')} leaked: ${output}`)
   }
 })
+
+test('responsibility commands still print their own refusals, including schema paths and held locks', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-refusal-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const { ATELIER_DEBUG, GIT_EDITOR, ...env } = process.env
+  const run = (args, input) => spawnSync(process.execPath, [BIN, ...args], { cwd: dir, env, input, encoding: 'utf8' })
+  const invalid = run(['architecture', 'resolve'], JSON.stringify({ binding: { schema: 'not-a-binding' }, consumers: [] }))
+  assert.equal(invalid.status, 1)
+  assert.match(invalid.stderr, /^\{"ok":false,"error":"[^"]+"\}\n$/)
+  assert.doesNotMatch(invalid.stderr, /internal-error/)
+  const release = run(['trackable', 'release'], JSON.stringify({ definition: { schema: 'not-a-definition' } }))
+  assert.equal(release.status, 1)
+  assert.doesNotMatch(release.stderr, /internal-error/)
+  assert.match(release.stderr, /"ok":false/)
+})
