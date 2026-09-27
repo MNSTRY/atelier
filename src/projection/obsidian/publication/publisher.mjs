@@ -216,17 +216,44 @@ function currentDigestOf(vaultRoot, relativePath) {
   try { return readFileDigest(path.join(vaultRoot, relativePath)) } catch { return null }
 }
 
+// Whether publishing would only leave this plugin path for the person, as it
+// stands: a parent that is a link or not a directory, a leaf that is not a
+// regular file (path-unsafe), or the data file where the vault root cannot hold
+// the bearer and is not one Atelier makes private itself (vault-not-private;
+// see ensurePrivateVaultRoot). Read-only.
+function leftForThePerson(store, relativePath) {
+  let current = store.vaultRoot
+  for (const part of relativePath.split('/').slice(0, -1)) {
+    current = path.join(current, part)
+    const stat = fs.lstatSync(current, { throwIfNoEntry: false })
+    if (!stat) break
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return true
+  }
+  const leaf = fs.lstatSync(path.join(store.vaultRoot, relativePath), { throwIfNoEntry: false })
+  if (leaf && !leaf.isFile()) return true
+  if (relativePath !== PLUGIN_DATA_PATH) return false
+  if (store.linkedVaultRoot === true) return true
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  const root = fs.lstatSync(store.vaultRoot, { throwIfNoEntry: false })
+  if (!root?.isDirectory() || uid === null || root.uid !== uid) return true
+  return (root.mode & 0o077) !== 0 && store.managedVaultRoot !== true
+}
+
 // A generation that is already committed is published again, as it is, when a
 // plugin file it carries is not on disk as it pins it: the person repaired a
 // path Atelier had to leave, or removed or changed a file. The bytes are
 // Atelier's and nothing else of the view changed, so the generation stays the
 // same; its notes are kept, and its plugin units are planned from the disk as
-// ever. A file prepared only where present that is gone is not a drift.
+// ever. A file prepared only where present that is gone is not a drift, and
+// neither is one that publishing would only leave for the person again: it
+// would change nothing, and it would need the app for nothing (a view that
+// waits for an app for it would wait for a write that never comes).
 function pluginFilesDrifted(preparedView, store) {
   return preparedView.files.some((file) => {
     if (file.kind !== 'plugin') return false
     const current = currentDigestOf(store.vaultRoot, file.path)
-    return current !== file.digest && !(current === null && file.onlyIfPresent === true)
+    if (current === file.digest || (current === null && file.onlyIfPresent === true)) return false
+    try { return !leftForThePerson(store, file.path) } catch { return true }
   })
 }
 

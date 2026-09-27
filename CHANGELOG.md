@@ -301,7 +301,11 @@
   instead of the `verified-by-read-back` of a view whose plugin files are all
   there, and `status` and `open` add `plugin files wait for the app` to the
   plugin line, with a next step (`files: "waits-for-app"` and `next` on
-  `plugin` in `--json`).
+  `plugin` in `--json`). A drift that publishing would only leave for the
+  person again (the data file of a vault root that is a link or not private,
+  a folder where a file goes) is no longer a reason to publish a committed
+  generation again, so it never waits for the app and never gets that
+  reason.
 - A view held because a program kept replacing a plugin file
   (`plugin-file-changed`) or a settings file changed while it was published
   (`settings-changed`) is still `publisher-conflict`, but its next step no

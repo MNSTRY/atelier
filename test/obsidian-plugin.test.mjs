@@ -2245,6 +2245,66 @@ test('a drifted plugin file never makes a committed view need the app: while the
   assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.files, undefined, 'nothing waits once the file is written')
 })
 
+test('a drift publishing would only leave for the person again never waits for the app: the view stays current with its plain reason, and the app is not asked', needsExchange, async (t) => {
+  if (process.platform === 'win32') return t.skip('a vault root that is a link; permission bits')
+  let qualifies = true
+  let built = 0
+  const adapterFactory = () => {
+    built += 1
+    if (!qualifies) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'the installed Obsidian does not qualify', { reason: 'below-minimum-version' })
+    return absentAdapter()
+  }
+  const tick = async (service) => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return world.freshness() }
+  // A vault root that is a link never receives the data file.
+  const world = serviceWorld(t)
+  const elsewhere = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-linked-root-'))
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(world.workspaceRoot, 'vaults'), { recursive: true, mode: 0o700 })
+  fs.symlinkSync(elsewhere, world.vault)
+  const first = await world.service({ adapterFactory })
+  assert.equal((await tick(first)).state, 'current')
+  assert.equal(fs.existsSync(path.join(elsewhere, PLUGIN_DATA_PATH)), false)
+  await first.shutdown('restart')
+  // Restarted while the app does not qualify: the start prepares the view again, and the committed generation stands.
+  qualifies = false
+  const before = built
+  const again = await world.service({ adapterFactory, port: world.port })
+  const kept = await tick(again)
+  assert.deepEqual([kept.state, kept.reason, built], ['current', 'verified-by-read-back', before], 'no wait for the app for a file it would never write')
+  assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.files, undefined)
+
+})
+
+test('a folder where the plugin\'s data file goes, while the app does not qualify, is left for the person without waiting for the app', needsExchange, async (t) => {
+  let qualifies = true
+  let built = 0
+  const adapterFactory = () => {
+    built += 1
+    if (!qualifies) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'the installed Obsidian does not qualify', { reason: 'below-minimum-version' })
+    return absentAdapter()
+  }
+  const world = serviceWorld(t)
+  const service = await world.service({ adapterFactory })
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return world.freshness() }
+  assert.equal((await tick()).state, 'current')
+  const data = path.join(world.vault, PLUGIN_DATA_PATH)
+  qualifies = false
+  fs.rmSync(data)
+  fs.mkdirSync(data)
+  const counted = built
+  const unsafe = await tick()
+  assert.deepEqual([unsafe.state, unsafe.reason, built], ['current', 'verified-by-read-back', counted], 'left for the person: no wait for the app')
+  assert.ok(fs.statSync(data).isDirectory())
+  // Repaired by the person: a drift again, which waits for the app while it does not qualify, and is written once it does.
+  fs.rmdirSync(data)
+  const waiting = await tick()
+  assert.deepEqual([waiting.state, waiting.reason], ['current', PLUGIN_FILES_WAIT_FOR_APP])
+  qualifies = true
+  world.advance(31_000)
+  await tick()
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE)
+})
+
 // What the release before vault layout 2 prepared: layout 1 paths, recorded in a layout 1 registry.
 const LAYOUT_1_RELEASE = (input) => {
   const prepared = prepareView({ ...input, layout: 1 })

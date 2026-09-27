@@ -117,7 +117,11 @@ if that app does not qualify, nothing is written, the view stays `current`
 (a committed generation needs no app, so an app that cannot be qualified
 never makes a current view stale), and the file is written at a later
 attempt, on the retry schedule of an unsettled view, once the app
-qualifies. Until then the view's reason is
+qualifies. A drift that publishing would only leave for the person again
+(the data file of a vault root that is a link or not private, a folder where
+a file goes) is no reason to publish again and needs no app: it stays
+reported, and the view keeps its plain reason. Until the app qualifies, a
+view waiting for it has the reason
 `verified-by-read-back-plugin-waits-for-app` rather than
 `verified-by-read-back`, and `status` and `open` add `plugin files wait for
 the app` to the plugin line (`files: "waits-for-app"` in `--json`), with a
