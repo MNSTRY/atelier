@@ -311,9 +311,12 @@
   root that is a link, say) was published twice whenever the maintenance
   service started: once by the start's own tick and once more when the
   service first compared the plugin files with the disk, or when that tick's
-  publication changed the pinned files. What a publication leaves on disk is
-  now taken as seen, so such a view is published once per start, as every
-  view is. A plugin file a person changes later is still written again.
+  publication changed the pinned files. What that publication could not
+  change (a file as pinned, one it reported as left for the person, or one
+  that holds what it held before the tick) is now taken as seen, so such a
+  view is published once per start, as every view is. A plugin file another
+  writer removes or changes after the publication, even during the same
+  tick, is still written again at the next tick.
 - `atelier obsidian open` with Obsidian quit and the view's vault already in
   Obsidian's list but closed: Obsidian started plainly does not reopen such a
   vault, so a link it refused just after starting left `open` to wait and

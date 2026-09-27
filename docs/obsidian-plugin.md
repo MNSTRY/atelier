@@ -105,10 +105,12 @@ sources: the service compares the plugin files each committed generation pins
 with the disk, has a view whose files differ prepared again, and a generation
 that is already committed is published again, as it is, with its notes kept.
 A drift left for the person is asked about once, and again once it changes.
-What a publication leaves on disk is not asked about again: a drift that
+What a publication could not change is not asked about again: a drift that
 publishing cannot repair (the data file of a vault root that is a link, say)
 is published once when the service starts, as every view is, and not again
-at the next look;
+at the next look. A plugin file another writer removes or changes after the
+publication, even while the same tick goes on, is asked about at the next
+look and written again;
 where the plugin is turned off in the vault, a pinned file that is gone is no
 drift. Publishing a committed generation again needs the app when one runs;
 if that app does not qualify, nothing is written, the view stays `current`

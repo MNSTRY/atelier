@@ -462,7 +462,7 @@ export async function publishView(options = {}) {
 // writer changed under this run is a race: it blocks like a note, so the view
 // is tried again and the file is planned from the disk anew. Nothing reads a
 // plugin file as a person's edit of a note: its outcomes carry their own names.
-const PLUGIN_LEFT_FOR_A_PERSON = new Set(['path-unsafe', 'vault-not-private', 'create-failed', 'exchange-failed'])
+export const PLUGIN_LEFT_FOR_A_PERSON = Object.freeze(new Set(['path-unsafe', 'vault-not-private', 'create-failed', 'exchange-failed']))
 // A leaf or a parent nobody may look into or read (another owner, mode 000) or a link loop: the person's to repair,
 // like a leaf that is not a file. It is reported, never thrown, so the rest of the view and every later view go on.
 const UNREADABLE_PATH = new Set(['EACCES', 'EPERM', 'ELOOP'])

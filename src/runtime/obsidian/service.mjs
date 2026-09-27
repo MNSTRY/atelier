@@ -5,7 +5,7 @@ import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
 import { prepareView as productionPrepareView } from '../../projection/obsidian/materialize/index.mjs'
 import { preparePluginFiles } from '../../projection/obsidian/plugin-bridge/bundle.mjs'
-import { publishView as productionPublishView } from '../../projection/obsidian/publication/publisher.mjs'
+import { PLUGIN_LEFT_FOR_A_PERSON, publishView as productionPublishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { isoTime } from './documents.mjs'
 import { createMaintenanceEngine } from './engine.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
@@ -159,10 +159,17 @@ export async function runMaintenanceService(options = {}) {
       return null
     }
   }
+  // A plugin file a view's committed generation pins that is not on disk as pinned has the view prepared again, so the
+  // publisher writes it again; a drift is asked about once, not at every tick.
+  const pluginDrift = createPluginDriftObserver({ workspaceRoot, workspaceId })
   const prepareWithPlugin = (input) => (engineOptions.seams?.prepareView ?? productionPrepareView)({ ...input, plugin: pluginFor(input.scope.scopeId) })
   // An entry offered to a vault and now in place is confirmed: from then on, a list without it is the person's decision.
   const publishAndConfirm = async (input) => {
     const result = await (engineOptions.seams?.publishView ?? productionPublishView)(input)
+    // The plugin paths it left for the person are no drift to ask about again (plugin-drift.mjs).
+    try { pluginDrift.publishedLeaving(input.recoveryStore.scopeId, (result?.notes ?? []).filter((note) => note?.kind === 'plugin' && PLUGIN_LEFT_FOR_A_PERSON.has(note.outcome)).map((note) => note.path)) } catch (error) {
+      log({ at: isoTime(clock), event: 'plugin-drift-not-read', code: errorCode(error), name: errorName(error) })
+    }
     try { confirmPluginEntry({ workspaceRoot, workspaceId, scopeId: input.recoveryStore.scopeId, result, clock }) } catch (error) {
       log({ at: isoTime(clock), event: 'plugin-entry-not-confirmed', code: errorCode(error), name: errorName(error) })
     }
@@ -199,9 +206,6 @@ export async function runMaintenanceService(options = {}) {
     writeLastServiceError({ workspaceRoot, workspaceId, document: { schema: SERVICE_ERROR_SCHEMA, workspaceId, runtimeId, code: errorCode(outcome.error), name: errorName(outcome.error), at, consecutiveFailures, totalFailures: (previous?.totalFailures ?? 0) + 1, resolvedAt: null } })
   }
 
-  // A plugin file a view's committed generation pins that is not on disk as pinned has the view prepared again, so the
-  // publisher writes it again; a drift is asked about once, not at every tick.
-  const pluginDrift = createPluginDriftObserver({ workspaceRoot, workspaceId })
   const askForDriftedViews = () => {
     try { for (const scopeId of pluginDrift.observe([...pluginChannel.bearers().keys()])) engine.requestPreparation(scopeId) } catch (error) {
       log({ at: isoTime(clock), event: 'plugin-drift-not-read', code: errorCode(error), name: errorName(error) })

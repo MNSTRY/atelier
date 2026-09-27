@@ -56,11 +56,18 @@ function onDisk(vaultRoot, relativePath) {
   try { return readFileDigest(path.join(vaultRoot, relativePath)) ?? 'absent' } catch { return 'unreadable' }
 }
 
+// A look, as it is compared: the vault root, and each pinned file with its pin and what the disk holds.
+const signatureOf = (record) => JSON.stringify([record.root, record.files.map((file) => file.digest), record.files.map((file) => file.state)])
+// Never what a look finds on disk: a path recorded so is asked about at the next look whatever it holds then.
+const NOT_SEEN = 'not-seen'
+
 export function createPluginDriftObserver({ workspaceRoot, workspaceId }) {
-  // Per view: the signature of the last look, and the committed manifest it was taken under.
+  // Per view: the last look ({ root, files: [{ path, digest, state }], manifest }).
   const looked = new Map()
   // The views the last observe asked to be prepared again: the tick that follows publishes them.
   let asked = new Set()
+  // Per view, the plugin paths a publication of this tick reported as left for the person.
+  let left = new Map()
   // What the pinned plugin files of a view look like on disk now; null when its committed generation pins none.
   const look = (scopeId) => {
     const pinned = pinnedPlugin(workspaceRoot, workspaceId, scopeId)
@@ -70,9 +77,9 @@ export function createPluginDriftObserver({ workspaceRoot, workspaceId }) {
     try { vaultRoot = viewVaultRoot(workspaceRoot, scopeId, workspaceId) } catch (error) { if (typeof error?.code !== 'string') throw error; return null }
     let root = 'absent'
     try { const stat = fs.lstatSync(vaultRoot); root = stat.isSymbolicLink() ? 'link' : (stat.mode & 0o777).toString(8) } catch { root = 'absent' }
-    const disk = pinned.files.map((file) => onDisk(vaultRoot, file.path))
-    const differs = disk.some((found, index) => found !== pinned.files[index].digest && !(pinned.off && found === 'absent'))
-    return { differs, signature: JSON.stringify([root, pinned.files.map((file) => file.digest), disk]), manifest: pinned.manifest }
+    const files = pinned.files.map((file) => ({ path: file.path, digest: file.digest, state: onDisk(vaultRoot, file.path) }))
+    const drifted = (file) => file.state !== file.digest && !(pinned.off && file.state === 'absent')
+    return { root, files, manifest: pinned.manifest, drifted, differs: files.some(drifted) }
   }
   return {
     observe(scopeIds) {
@@ -80,26 +87,40 @@ export function createPluginDriftObserver({ workspaceRoot, workspaceId }) {
       for (const scopeId of scopeIds) {
         const seen = look(scopeId)
         if (seen === null) { looked.delete(scopeId); continue }
-        if (seen.differs && looked.get(scopeId)?.signature !== seen.signature) drifted.push(scopeId)
-        looked.set(scopeId, { signature: seen.signature, manifest: seen.manifest })
+        const last = looked.get(scopeId)
+        if (seen.differs && (last === undefined || signatureOf(last) !== signatureOf(seen))) drifted.push(scopeId)
+        looked.set(scopeId, { root: seen.root, files: seen.files, manifest: seen.manifest })
       }
       asked = new Set(drifted)
+      left = new Map()
       return drifted
     },
+    // A publication of this tick left these plugin paths of the view for the person (the publisher's outcomes).
+    publishedLeaving(scopeId, paths) {
+      if (typeof scopeId !== 'string') return
+      left.set(scopeId, new Set([...(left.get(scopeId) ?? []), ...paths]))
+    },
     // After a tick. A view this tick published (one the last observe asked for, one whose committed generation
-    // changed since the last look, or one never looked at before) had every plugin file it pins written or left for
-    // the person by its publisher: what the disk shows now is taken as seen, without asking. So a drift publishing
-    // cannot repair (the data file of a vault root that is a link, say) is not published again at the next look,
-    // whether that publication moved the pins or repaired another file. Any other view keeps its last look, so a
-    // change made during the tick is seen at the next one.
+    // changed since the last look, or one never looked at before) had its plugin files written or left for the person
+    // by its publisher. Of what the disk shows now, only what that publication could not change is taken as seen,
+    // without asking: a file as it pins it, one the publication reported as left for the person, or one that holds
+    // what it held before the tick. So a drift publishing cannot repair (the data file of a vault root that is a
+    // link, say) is not published again at the next look. Anything else (a file another writer removed or changed
+    // after the publication, while the tick went on) is not taken as seen, and the next look asks about it. Any other
+    // view keeps its last look.
     settle(scopeIds) {
       for (const scopeId of scopeIds) {
         const seen = look(scopeId)
         if (seen === null) { looked.delete(scopeId); continue }
         const last = looked.get(scopeId)
-        if (asked.has(scopeId) || last === undefined || last.manifest !== seen.manifest) looked.set(scopeId, { signature: seen.signature, manifest: seen.manifest })
+        if (!asked.has(scopeId) && last !== undefined && last.manifest === seen.manifest) continue
+        const leftHere = left.get(scopeId) ?? new Set()
+        const before = new Map((last?.files ?? []).map((file) => [file.path, file.state]))
+        const files = seen.files.map((file) => (!seen.drifted(file) || leftHere.has(file.path) || before.get(file.path) === file.state ? file : { ...file, state: NOT_SEEN }))
+        looked.set(scopeId, { root: seen.root, files, manifest: seen.manifest })
       }
       asked = new Set()
+      left = new Map()
     },
   }
 }

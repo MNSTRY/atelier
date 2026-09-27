@@ -2175,6 +2175,33 @@ test('a drift publishing cannot repair is published once at a service\'s start, 
   assert.equal(world.freshness().state, 'current')
 })
 
+test('a plugin file another writer removes after its view was published, while the tick goes on, is written again at the next tick', needsExchange, async (t) => {
+  // A sync tool that reacts to Atelier's own writes: it removes a plugin file right after the view's publication returns.
+  const world = serviceWorld(t)
+  const folder = path.join(world.vault, PLUGIN_DIRECTORY)
+  let published = 0
+  let afterPublish = null
+  const seams = { publishView: async (input) => { published += 1; const result = await publishView(input); if (afterPublish) { const act = afterPublish; afterPublish = null; act() } return result } }
+  const service = await world.service({ seams })
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return published }
+  assert.equal(await tick(), 1)
+  // A view the drift asked for: main.js changed, the publication repairs it, and it is removed before the tick ends.
+  fs.writeFileSync(path.join(folder, 'main.js'), '/* changed */\n')
+  afterPublish = () => fs.rmSync(path.join(folder, 'main.js'))
+  assert.equal(await tick(), 2)
+  assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
+  assert.deepEqual([await tick(), await tick()], [3, 3], 'asked about at the next look, and written again once')
+  assert.ok(fs.readFileSync(path.join(folder, 'main.js')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))))
+  // A new generation (a change at the sources): styles.css is removed after its publication, before the tick ends.
+  fs.appendFileSync(world.source('harbor/notes/tides.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  afterPublish = () => fs.rmSync(path.join(folder, 'styles.css'))
+  assert.equal(await tick(), 4)
+  assert.deepEqual([await tick(), await tick()], [5, 5])
+  assert.ok(fs.readFileSync(path.join(folder, 'styles.css')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'styles.css'))))
+  assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
+})
+
 test('a drifted plugin file never makes a committed view need the app: while the app does not qualify the view stays current, says the file waits for the app, and the file is written once it does', needsExchange, async (t) => {
   const world = serviceWorld(t)
   let qualifies = true
