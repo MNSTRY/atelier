@@ -793,9 +793,13 @@ each open item is discharged with its own evidence.
 Obsidian opens a vault from a link only when the folder is in its own vault
 list. `atelier obsidian open` puts the view's vault there.
 Outside its own storage (the data root, which holds the vaults and their
-policy-owned `.obsidian/core-plugins.json`), the list is the only file of
-another application that Atelier writes; to write it, Atelier writes nothing
-else outside the app's user-data directory, and no vault note.
+policy-owned `.obsidian/core-plugins.json`), the settings file that holds the
+list is the only file of another application that Atelier writes, and in it
+only two things: the view's vault entry and the command-line switch `cli`. To
+write it, Atelier writes nothing else outside the app's user-data directory,
+and no vault note. Every write is shown in `open`'s answer
+(`obsidianSettings`: the file, whether it was created, whether the vault was
+added, whether the switch was turned on, and the backup).
 
 **The file.** `obsidian.json` in the app's user-data directory:
 `$HOME/Library/Application Support/obsidian/` on macOS and
@@ -833,7 +837,14 @@ root under another name is not recognised.
 **While Obsidian runs with no vault open**, its command line answers nothing
 and the file is still the running app's: it is read, never written. A vault
 it already lists is opened by path; one it does not is refused as
-`no-vault-open`.
+`no-vault-open`, unless the person asked for a restart (below).
+
+**While Obsidian runs with its command line off**, it answers every command
+but a link with "Command line interface is not enabled", read as
+`app-cli-unavailable` / `cli-turned-off`. The file is the running app's, which
+holds the switch in memory and writes it back with its list, so it is not
+written; the switch is turned on only while no Obsidian runs, or through the
+restart below.
 
 **Never inside another vault.** In every state, a vault inside a folder the
 list has as a vault already (compared as written, against the vault root and
@@ -879,19 +890,21 @@ then:
    a JSON object whose `vaults`, when present, is an object, of at most 4 MiB.
    A file with a second name (a hard link) is refused as
    `obsidian-settings-unsafe`: the replacement would leave that name with the
-   old list. A missing
-   directory or file means Obsidian has not run on this account and is
-   refused (`obsidian-settings-missing`): the file is never created. The other
+   old list. A missing file means Obsidian never started on this account; it
+   is created as described under "Obsidian never started" below. The other
    refusals are `obsidian-settings-unsafe`, `obsidian-settings-not-owned`,
    `obsidian-settings-unreadable` and `obsidian-settings-not-object`.
-3. A vault whose real path an entry already has is left as it is; nothing is
-   written. A vault inside a folder an entry has is refused
-   (`vault-inside-another-vault`).
+3. A vault whose real path an entry already has is left as it is. When `cli`
+   is already `true` too, nothing is written. A vault inside a folder an
+   entry has is refused (`vault-inside-another-vault`).
 4. The new document is the file's object with one entry added under a fresh
    random 16-hex id that no entry has: `{ path: <the vault root's real path>,
-   ts: <now, ms>, open: true }`. Every other key and every other entry is kept
-   in its place, as values. A document that would be larger than 4 MiB is
-   refused (`obsidian-settings-too-large`).
+   ts: <now, ms>, open: true }`, unless the vault is listed already, and with
+   `cli` set to `true` when it is not (the command-line switch: in its place
+   when the file has the key, otherwise last, as the app adds it). Every
+   other key and every other entry is kept in its place, as values. A
+   document that would be larger than 4 MiB is refused
+   (`obsidian-settings-too-large`).
 5. A temporary file in the same directory is written with the file's mode and
    fsynced; the bytes as they were are written, fsynced, to
    `obsidian.json.atelier-backup-<UTC time>` beside it.
@@ -912,6 +925,68 @@ then:
 
 Every refusal writes nothing and leaves nothing behind: a temporary file or
 backup created on the way is removed again whichever later step fails.
+
+**Obsidian never started.** When the file does not exist and the process
+table says, positively, `absent` (read before, and again immediately before
+the file appears), the file is created, and only then:
+
+1. The user-data directory must be this user's own real directory. When it
+   does not exist, it is created with mode 0700, only inside an existing
+   parent directory that is this user's own and no link; a missing parent is
+   `obsidian-settings-missing`, and nothing is created above the directory.
+2. The content is exactly `{ "vaults": { "<16 hex>": { "path": <the vault
+   root's real path>, "ts": <now, ms>, "open": true } }, "cli": true }`, mode
+   0600. The app reads the file at start-up (a missing or unreadable one reads
+   as no settings) and opens every vault flagged open, so a plain start opens
+   this one, with its command line on.
+3. The bytes are written and fsynced to a temporary file in the directory,
+   which is then hard-linked to `obsidian.json` and removed: the file appears
+   complete or not at all, and the link fails on any file there, one the app
+   wrote meanwhile included, which is kept (`obsidian-settings-changed`). The
+   directory is fsynced. There is nothing to back up.
+4. An app that appears before the link refuses (`app-may-be-running`); one
+   that appears right after it leaves the addition unconfirmed, as in step 7
+   above. A refusal removes the temporary file and a directory created on the
+   way.
+
+`open` answers `registration.how: 'created-settings'` for it.
+
+**Restart, only when the person asks** (`open --restart-obsidian`; never
+implied, and refused by every other operation). Only in the two states above
+where the app runs and cannot be reached: its command line off, or no vault
+open and the view's vault not in its list. Module:
+`src/runtime/obsidian/app-restart.mjs`.
+
+1. The app's main process is proven from the process table
+   (`ps -A -o pid=,ppid=,uid=,comm=`): every Obsidian process (the
+   executables the process probe counts) runs as this user, exactly one runs
+   the main executable from an app bundle (`…/Contents/MacOS/Obsidian`), and
+   every other one is its child. Otherwise nothing is sent
+   (`app-main-process-unproven`).
+2. That process is read again (parent, user, start time, executable) and must
+   be unchanged; then it, and only it, gets SIGTERM, which Electron handles as
+   a normal quit. A quitting app keeps the vaults it has open flagged open
+   (1.13.7, checked on an isolated instance).
+3. The process probe must say `absent` within 30 seconds. With only its
+   starter window open, the first SIGTERM closes the window and ends every
+   helper, but the main process stays (1.13.7, checked on an isolated
+   instance); once, after 5 seconds, when the table shows that same process
+   alone and it reads the same again, it gets a second SIGTERM, which quits
+   it. There is never a third signal, and never a stronger one. Otherwise
+   `open` answers `launch-failed` / `app-did-not-quit`, writes nothing and
+   starts nothing.
+4. The file is written as above, with the vault and the switch.
+5. The app is started plainly (`open -b md.obsidian`) by the launch steps
+   below, and reopens its vaults and this one. An answer given after the quit
+   and before the launch (the file could not take the vault, say) starts the
+   app plainly first, as it was; a start that fails is said, with the next
+   step to start it by hand.
+
+The answer carries `restart: { asked, state, quit, signalled, pid,
+startedAgain }`. Qualified on macOS only; elsewhere the answer is
+`restart-platform-unqualified`, since a quit app there is started with a
+link, which would drop the other vaults' reopen flags.
+
 `open` then shows the vault by the steps of `launchPlan`
 (`src/runtime/obsidian/launch-plan.mjs`, carried out by `runLaunchPlan`),
 naming it `obsidian://open?vault=<id>` when the id reaches it first (a path is

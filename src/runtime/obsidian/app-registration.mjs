@@ -5,7 +5,7 @@ import { MAX_OBSIDIAN_SETTINGS_BYTES, OBSIDIAN_SETTINGS_FILE, enclosingVaults, f
 import { openRegularFileNoFollow, realPathAsStored, syncPrivateDirectory } from '../../project/private-state.mjs'
 
 // Adding a view's vault to Obsidian's own vault list while Obsidian is not
-// running, so that `obsidian://open?path=` finds it when the app starts.
+// running, so that the app opens it when it starts.
 //
 // Outside Atelier's own storage, it is the only file of another application
 // Atelier writes. The list is `obsidian.json` in the app's user-data directory
@@ -18,10 +18,11 @@ import { openRegularFileNoFollow, realPathAsStored, syncPrivateDirectory } from 
 //
 //   - never for a Flatpak or snap build, which reads its list inside its
 //     sandbox and never this file (`sandbox`, see obsidianSandboxedBuild);
-//   - only an existing file, in an existing user-data directory, both this
+//   - an existing file only in an existing user-data directory, both this
 //     user's own, a real directory and a regular file (no link, and no second
-//     name: a hard link would keep the old list), holding a JSON object: a file
-//     Obsidian has not written is never created;
+//     name: a hard link would keep the old list), holding a JSON object;
+//   - a file that does not exist (Obsidian never started on this account) is
+//     created, and only then: see createObsidianSettings below;
 //   - never for a vault inside a folder the list has as a vault already: the
 //     app would show its notes in that vault too, and a call run in its folder
 //     would reach that vault (see vault-list.mjs);
@@ -29,6 +30,12 @@ import { openRegularFileNoFollow, realPathAsStored, syncPrivateDirectory } from 
 //     it, as values: the app itself rewrites the file with JSON.stringify;
 //   - the new entry is { path: the vault root's real path, ts: now, open:
 //     true } under a fresh 16-hex id that no entry has;
+//   - the command-line switch: whenever the list is written, `cli` is set to
+//     true when it is not (the default of a new installation is off, and
+//     `open` needs the command line while the app holds the vault). A vault the
+//     list has already, with `cli` not true, is written for the switch alone.
+//     Only here, so only while no Obsidian runs: a running app keeps its
+//     switch in memory and would write it back;
 //   - the new file is no larger than a settings file this module reads;
 //   - the bytes as they were are kept beside it in
 //     `obsidian.json.atelier-backup-<UTC time>`, fsynced, before the file is
@@ -82,14 +89,84 @@ function readBytesNoFollow(file) {
   try { return fs.readFileSync(descriptor) } finally { try { fs.closeSync(descriptor) } catch { /* read already, or failed */ } }
 }
 
-// { ok: true, registered: 'already' | 'written', entry: { id, path, open }, confirmed, vaults, backupPath?, reason? }
-// or a typed refusal { ok: false, code, message }. `confirmed` is false when an
-// app appeared right after the rename (`app-started-during-registration`): it
-// may have read the list before it, so whoever asked verifies through the
-// app; and when the written file could not be read back to find the entry
-// (`registration-not-read-back`). `vaults` is the list as it was found or
-// written. `processProbe()` answers 'absent', 'running' or 'unknown'; only
-// 'absent' allows a write. `sandbox` names a Flatpak or snap build found for
+// Creates the settings file of an Obsidian that never started on this account:
+// the file does not exist, and the process table says, positively, that no
+// Obsidian runs, read before and again immediately before the file appears.
+// The app reads the file when it starts (a missing or unreadable one reads as
+// no settings) and opens every vault flagged open, so a plain start opens this
+// one, with its command line on. Only:
+//
+//   - in the user-data directory as it is when that is this user's own real
+//     directory, or, when it does not exist, in one created here with mode
+//     0700 inside an existing real parent directory (a missing parent is
+//     `obsidian-settings-missing`: nothing is created above the directory);
+//   - with exactly { "vaults": { "<16 hex>": { path, ts, open: true } },
+//     "cli": true }, mode 0600;
+//   - by an exclusive create: the complete bytes are written, fsynced, to a
+//     temporary file in the directory, which is then linked to the file's name
+//     (a link fails on any name there, a file the app wrote meanwhile
+//     included, which is kept: `obsidian-settings-changed`), and the
+//     temporary name removed. A reader never sees a part of the file.
+//
+// There is nothing to back up. A refusal removes what it created, the
+// directory included.
+function createObsidianSettings({ userDataDir, vaultRoot, absent, now, randomBytes, uid }) {
+  const owned = (stat) => uid === null || stat.uid === uid
+  let directory = null
+  try { directory = fs.lstatSync(userDataDir) } catch (error) { if (error.code !== 'ENOENT') return refused('obsidian-settings-unreadable', 'the Obsidian settings directory cannot be read') }
+  let folder
+  try { folder = realPathAsStored(vaultRoot) } catch { return refused('vault-root-missing', 'the view\'s vault folder does not exist') }
+  if (!fs.statSync(folder).isDirectory()) return refused('vault-root-missing', 'the view\'s vault folder is not a directory')
+  let madeDirectory = false
+  if (directory === null) {
+    const parent = path.dirname(userDataDir)
+    let above
+    try { above = fs.lstatSync(parent) } catch { above = null }
+    if (above === null || above.isSymbolicLink() || !above.isDirectory() || !owned(above)) return refused('obsidian-settings-missing', 'Obsidian has no settings directory on this account, and the folder it would be in is missing, a link or not this user\'s own')
+    try { fs.mkdirSync(userDataDir, { mode: 0o700 }) } catch (error) {
+      return refused(error.code === 'EEXIST' ? 'obsidian-settings-changed' : 'obsidian-settings-unwritable', 'the Obsidian settings directory cannot be created')
+    }
+    madeDirectory = true
+    directory = fs.lstatSync(userDataDir)
+  }
+  const removeDirectory = () => { if (madeDirectory) try { fs.rmdirSync(userDataDir) } catch { /* something else is in it now: it stays */ } }
+  if (directory.isSymbolicLink() || !directory.isDirectory()) return refused('obsidian-settings-unsafe', 'the Obsidian settings directory is a link or not a directory')
+  if (!owned(directory)) return refused('obsidian-settings-not-owned', 'the Obsidian settings directory belongs to another user')
+  const id = randomBytes(8).toString('hex')
+  const at = now()
+  const document = { vaults: { [id]: { path: folder, ts: at, open: true } }, cli: true }
+  const bytes = Buffer.from(JSON.stringify(document), 'utf8')
+  if (bytes.length > MAX_OBSIDIAN_SETTINGS_BYTES) { removeDirectory(); return refused('obsidian-settings-too-large', 'with this vault the Obsidian settings file would be larger than a settings file can be') }
+  const file = path.join(userDataDir, OBSIDIAN_SETTINGS_FILE)
+  const temporary = path.join(userDataDir, `.${OBSIDIAN_SETTINGS_FILE}.atelier-${randomBytes(6).toString('hex')}.tmp`)
+  const undo = () => { try { fs.unlinkSync(temporary) } catch { /* already gone */ } removeDirectory() }
+  try { writeNewFile(temporary, bytes, 0o600) } catch { undo(); return refused('obsidian-settings-unwritable', 'the Obsidian settings directory cannot be written') }
+  // Immediately before the file appears: still no app.
+  if (!absent()) { undo(); return refused('app-may-be-running', 'an Obsidian process appeared, and its settings belong to it') }
+  try { fs.linkSync(temporary, file) } catch (error) {
+    undo()
+    return refused(error.code === 'EEXIST' ? 'obsidian-settings-changed' : 'obsidian-settings-unwritable', error.code === 'EEXIST' ? 'an Obsidian settings file appeared while it was being created, and it was kept as it is' : 'the Obsidian settings file cannot be created')
+  }
+  try { fs.unlinkSync(temporary) } catch { /* the file is complete; a second name is refused by the next write */ }
+  try { syncPrivateDirectory(userDataDir); if (madeDirectory) syncPrivateDirectory(path.dirname(userDataDir)) } catch { /* the file exists; a directory that cannot be fsynced is not undone */ }
+  const stillAbsent = absent()
+  const written = readObsidianSettings({ userDataDir, uid })
+  const entry = written.ok ? findVaultEntry(written.vaults, vaultRoot) : null
+  const reason = !stillAbsent ? 'app-started-during-registration' : entry === null ? 'registration-not-read-back' : null
+  return {
+    ok: true, registered: 'created', entry: entry ?? { id, path: folder, open: true }, confirmed: reason === null, vaults: written.ok ? written.vaults : document.vaults,
+    file, created: { directory: madeDirectory }, cliTurnedOn: true, ...(reason === null ? {} : { reason }),
+  }
+}
+
+// { ok: true, registered: 'already' | 'written' | 'created', entry: { id, path, open }, confirmed, vaults, file, cliTurnedOn,
+// backupPath?, created?, reason? } or a typed refusal { ok: false, code, message }. `registered` is 'already' when the
+// list had the vault (then the file was written only to turn the command line on, `cliTurnedOn`), 'written' when this
+// vault was added to an existing file, 'created' when the file was created (createObsidianSettings). `confirmed` is
+// false when an app appeared right after the rename (`app-started-during-registration`): it may have read the list
+// before it, so whoever asked verifies through the app; and when the written file could not be read back to find the
+// entry (`registration-not-read-back`). `vaults` is the list as it was found or written. `processProbe()` answers
+// 'absent', 'running' or 'unknown'; only 'absent' allows a write. `sandbox` names a Flatpak or snap build found for
 // this account, which refuses (`obsidian-sandboxed`).
 export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe, sandbox = null, now = () => Date.now(), randomBytes = cryptoRandomBytes, uid = currentUid() } = {}) {
   if (typeof processProbe !== 'function') throw new TypeError('registering a vault needs a process probe')
@@ -98,19 +175,25 @@ export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, proces
   const absent = () => { try { return processProbe() === 'absent' } catch { return false } }
   if (!absent()) return refused('app-may-be-running', 'an Obsidian process may be running, and its vault list belongs to it')
   const settings = readObsidianSettings({ userDataDir, uid })
+  // No file: Obsidian never started on this account. A missing directory is refused as missing when it has no parent.
+  if (!settings.ok && settings.code === 'obsidian-settings-missing' && typeof userDataDir === 'string' && path.isAbsolute(userDataDir)) return createObsidianSettings({ userDataDir, vaultRoot, absent, now, randomBytes, uid })
   if (!settings.ok) return settings
   const known = findVaultEntry(settings.vaults, vaultRoot)
-  if (known) return { ok: true, registered: 'already', entry: known, confirmed: true, vaults: settings.vaults }
+  const switchOn = settings.document.cli !== true
+  if (known && !switchOn) return { ok: true, registered: 'already', entry: known, confirmed: true, vaults: settings.vaults, file: settings.file, cliTurnedOn: false }
   if (settings.links > 1) return refused('obsidian-settings-unsafe', 'the Obsidian settings file has a second name (a hard link), which a replacement would leave with the old list')
-  if (enclosingVaults({ vaults: settings.vaults, vaultRoot }).length > 0) return refused('vault-inside-another-vault', 'Obsidian lists a vault at a folder that contains this vault\'s folder')
+  if (!known && enclosingVaults({ vaults: settings.vaults, vaultRoot }).length > 0) return refused('vault-inside-another-vault', 'Obsidian lists a vault at a folder that contains this vault\'s folder')
 
-  let folder
-  try { folder = realPathAsStored(vaultRoot) } catch { return refused('vault-root-missing', 'the view\'s vault folder does not exist') }
-  if (!fs.statSync(folder).isDirectory()) return refused('vault-root-missing', 'the view\'s vault folder is not a directory')
-  let id
-  do { id = randomBytes(8).toString('hex') } while (Object.hasOwn(settings.vaults, id))
+  let folder = null
+  let id = null
+  if (!known) {
+    try { folder = realPathAsStored(vaultRoot) } catch { return refused('vault-root-missing', 'the view\'s vault folder does not exist') }
+    if (!fs.statSync(folder).isDirectory()) return refused('vault-root-missing', 'the view\'s vault folder is not a directory')
+    do { id = randomBytes(8).toString('hex') } while (Object.hasOwn(settings.vaults, id))
+  }
   const at = now()
-  const document = { ...settings.document, vaults: { ...settings.vaults, [id]: { path: folder, ts: at, open: true } } }
+  // The switch keeps its place when the file has one; otherwise it is added last, as the app would.
+  const document = { ...settings.document, ...(known ? {} : { vaults: { ...settings.vaults, [id]: { path: folder, ts: at, open: true } } }), ...(switchOn ? { cli: true } : {}) }
   const bytes = Buffer.from(JSON.stringify(document), 'utf8')
   if (bytes.length > MAX_OBSIDIAN_SETTINGS_BYTES) return refused('obsidian-settings-too-large', 'with this vault the Obsidian settings file would be larger than a settings file can be')
   const directory = path.dirname(settings.file)
@@ -146,8 +229,8 @@ export function registerVaultInObsidianSettings({ userDataDir, vaultRoot, proces
   const entry = written.ok ? findVaultEntry(written.vaults, vaultRoot) : null
   const reason = !stillAbsent ? 'app-started-during-registration' : entry === null ? 'registration-not-read-back' : null
   return {
-    ok: true, registered: 'written', entry: entry ?? { id, path: folder, open: true }, backupPath, confirmed: reason === null, vaults: written.ok ? written.vaults : document.vaults,
-    ...(reason === null ? {} : { reason }),
+    ok: true, registered: known ? 'already' : 'written', entry: entry ?? known ?? { id, path: folder, open: true }, backupPath, confirmed: reason === null, vaults: written.ok ? written.vaults : document.vaults,
+    file: settings.file, cliTurnedOn: switchOn, ...(reason === null ? {} : { reason }),
   }
 }
 

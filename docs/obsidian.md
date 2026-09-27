@@ -531,25 +531,66 @@ exactly because the folder is listed.
   operating system. On Linux a plain start is not
   qualified yet, and Obsidian is started with the link (the other vaults'
   reopen marks are lost there; a known limit).
-  An Obsidian that never ran on this account has no settings file yet, and
-  `open` does not create one: start Obsidian once, then open again.
+  In the same write, `open` turns Obsidian's command line on (`cli: true`)
+  when it is off: publishing into a vault Obsidian holds needs it until
+  Atelier's plugin takes over that part, and it is off in a new installation.
+  The answer says what was written and where the backup of the file as it
+  was is kept.
+- **Obsidian is installed and never started** (no `obsidian.json` yet). When
+  the process table says, positively, that no Obsidian runs, `open` creates
+  the file, with this vault flagged open and the command line on, and starts
+  Obsidian plainly; Obsidian opens the vault. Nothing else is in the file,
+  and the settings folder is created private to you when it does not exist
+  yet. The file is created exclusively: if Obsidian writes its own first,
+  that one is kept and `open` says so. While an Obsidian may run, nothing is
+  created (`app-may-be-running`).
 - **Obsidian runs with no vault open.** Its command line then answers every
   command with "Vault not found.", so nothing can be asked of it, and its
   settings file belongs to the running app, so it is only read. A vault the
   app already lists is opened by path and published through the app as
-  above. A vault it does not list yet is answered as outcome
-  `app-version-unsupported` with reason `no-vault-open`: open any vault in
-  Obsidian, or quit it, and open again. This is the one state of a running
-  Obsidian that `open` cannot get through alone.
-- **Obsidian's command line is turned off** (the default of a new
+  above. For a vault it does not list yet, see "Restart, only when you ask"
+  below; without that, `open` answers `app-version-unsupported` with reason
+  `no-vault-open` and names `--restart-obsidian`.
+- **Obsidian runs with its command line turned off** (the default of a new
   installation). It then answers every command with "Command line interface
-  is not enabled", and only a link reaches it. With Obsidian running, `open`
-  adds and launches nothing. With Obsidian quit, `open` adds the vault to its
-  settings and starts it, and Obsidian opens the vault. Either way `open` then
-  answers `app-cli-unavailable` with reason `cli-turned-off` and says where to
-  turn it on: Settings > General > Advanced > Command line interface.
-  Publishing into a vault Obsidian holds needs it until Atelier's plugin takes
-  over that part.
+  is not enabled", only a link reaches it, and its settings belong to the
+  running app, which keeps the switch in memory and would write it back. See
+  "Restart, only when you ask" below; without that, `open` adds and launches
+  nothing, and answers `app-cli-unavailable` with reason `cli-turned-off`,
+  naming `--restart-obsidian` and where to turn the switch on yourself:
+  Settings > General > Advanced > Command line interface.
+
+**Restart, only when you ask.** In the two states where Obsidian runs but
+`open` cannot reach it (its command line off, or no vault open and the view's
+vault not in its list), `atelier obsidian open --restart-obsidian` lets `open`
+restart Obsidian once:
+
+1. It sends SIGTERM, a normal quit, to Obsidian's main process, and to nothing
+   else. That process is found in the process table and must be the only
+   Obsidian main process there, run by you from an app bundle, with every
+   other Obsidian process its child; it is read again just before the signal.
+   Anything else (two Obsidians, another user's, a table that cannot be read)
+   is answered `app-main-process-unproven`, and nothing is sent.
+2. It waits, up to 30 seconds, until no Obsidian runs. With only its starter
+   window (no vault open), Obsidian closes the window and keeps running
+   without one, as macOS apps do; when that same process is left alone,
+   `open` sends it SIGTERM once more, which quits it. There is never a third
+   signal, and never a stronger one: an Obsidian that does not quit is
+   answered `launch-failed` with reason `app-did-not-quit`, and nothing is
+   written.
+3. It adds the vault to Obsidian's settings and turns the command line on, in
+   the one write described above.
+4. It starts Obsidian plainly. A quitting Obsidian keeps the vaults it had
+   open flagged to reopen, so they come back, with this one beside them. If
+   the vault could not be added after all, Obsidian is still started again,
+   as it was.
+
+The answer says that Obsidian was restarted, which process was signalled,
+and what was written. The flag is never implied by any other flag or answer;
+every other operation refuses it. The restart is qualified on macOS only (on
+Linux a quit Obsidian is started with a link, which would drop the other
+vaults' reopen flags): elsewhere `open` answers
+`restart-platform-unqualified`.
 
 Only `open` adds a vault to Obsidian: the maintenance service never does, so
 it never opens a window nobody asked for. A declared view that was never
