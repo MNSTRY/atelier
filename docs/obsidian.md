@@ -809,11 +809,15 @@ test reported as a pass.
   again at both, and a vault made again, or published into, through a link on
   the way is refused (`vault-allocation-moved`).
 - Replacing a vault during a publication: the allocated folder is checked
-  before the vault lock is taken, after the app is asked about the vault,
-  before each note and before the generation is committed. A program of the
-  same account that puts a link in its place between one check and the write
-  that follows it can still have that one write go through the link; the next
-  check refuses the publication, and it is never reported current.
+  before the vault lock is taken and again once its folder is made, after the
+  app is asked about the vault, before each note and before the generation is
+  committed. A program of the same account that puts a link in its place
+  between one check and what follows it can still have that go through the
+  link: one note's writes (the folders on its way and the note), or the vault
+  lock's empty folder. For a note replaced or removed while the app holds the
+  vault, the app is asked about that note between the check and the write, so
+  that window lasts a round trip to the app. The next check refuses the
+  publication, and it is never reported current.
 - Vault identity: an allocated folder is known by its real path, device and
   inode. On Linux a folder made at the same path after the allocated one was
   removed can be given the same inode number (ext4 reuses a freed one), and is

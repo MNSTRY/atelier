@@ -369,6 +369,25 @@ test('a first allocation records only the folder it made under the parent it che
   assert.deepEqual(fs.readdirSync(personal), ['diary.md'], 'the empty folder it made is removed again')
 })
 
+test('the vault lock\'s own folder is checked once it is made: a link put there between the check of the vault and the lock gets no ticket', { skip: POSIX ? false : 'links need privileges on Windows' }, (t) => {
+  const w = world(t)
+  const allocation = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  const store = createRecoveryStore({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', repositoryRoots: w.repositoryRoots })
+  const personal = path.join(w.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
+  fs.rmSync(allocation.path, { recursive: true })
+  fs.symlinkSync(personal, allocation.path)
+  // The first check still sees the vault it was made for, as it would have an instant before the link was put there.
+  const native = fs.realpathSync.native
+  fs.realpathSync.native = (target, ...rest) => (target === allocation.path ? allocation.path : native(target, ...rest))
+  t.after(() => { fs.realpathSync.native = native })
+  assert.throws(() => acquireVaultLock(store), (error) => error.code === 'vault-allocation-moved')
+  fs.realpathSync.native = native
+  const lockFolder = path.join(personal, '.atelier-publication')
+  assert.deepEqual(fs.existsSync(lockFolder) ? fs.readdirSync(lockFolder, { recursive: true }) : [], [], 'no ticket is written in the folder the link leads to')
+})
+
 test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {
   const slept = []
   const sleep = async (ms) => { slept.push(ms) }

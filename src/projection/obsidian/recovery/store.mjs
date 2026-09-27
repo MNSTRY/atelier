@@ -56,6 +56,9 @@ export function acquireVaultLock(store) {
   try { real = realPathAsStored(store.vaultRoot) } catch { /* not reachable: refused below */ }
   if (real !== store.vaultRoot) refuse(store.allocation ? 'vault-allocation-moved' : 'vault-root-moved', 'the vault is no longer the folder this publication was prepared for: its path now leads somewhere else; nothing was written', { path: store.vaultRoot, leadsTo: real })
   const directory = ensureContainedPrivateDirectory({ workspaceRoot: store.vaultRoot, directory: path.dirname(store.vaultLockPath), label: 'vault publication lock' })
+  // The lock's folder resolved, again, to the one inside the vault: a link put there after the check above is refused
+  // before any ticket is written (only the empty folder may have been made through it).
+  if (directory !== path.dirname(store.vaultLockPath)) refuse(store.allocation ? 'vault-allocation-moved' : 'vault-root-moved', 'the vault is no longer the folder this publication was prepared for: its path now leads somewhere else; no lock was taken', { path: store.vaultRoot, leadsTo: path.dirname(directory) })
   const release = acquirePrivateLock(path.join(directory, path.basename(store.vaultLockPath)))
   try {
     const owners = `${store.vaultLockPath}.owners`
