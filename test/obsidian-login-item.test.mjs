@@ -1425,6 +1425,9 @@ test('uninstall names each vault allocated where the workspace decided its vault
   fs.writeFileSync(path.join(workspaceRoot, 'state', 'allocations', 'nothing.json'), 'null')
   fs.writeFileSync(path.join(workspaceRoot, 'state', 'allocations', 'listed.json'), '[]')
   fs.copyFileSync(path.join(workspaceRoot, 'state', 'allocations', `${FULL_SCOPE.scopeId}.json`), path.join(workspaceRoot, 'state', 'allocations', 'misnamed.json'))
+  // Nor what is not a regular file: a FIFO (which a plain read would wait on for ever) and a folder.
+  if (process.platform !== 'win32') childProcess.execFileSync('mkfifo', [path.join(workspaceRoot, 'state', 'allocations', 'pipe.json')])
+  fs.mkdirSync(path.join(workspaceRoot, 'state', 'allocations', 'folder.json'))
   const result = await world.run(['uninstall', '--json'])
   assert.equal(result.exit, EXIT.ok, result.stdout)
   assert.deepEqual(result.json.kept.vaults, [declared, retired, underDataRoot].sort())

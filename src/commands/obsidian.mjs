@@ -5,6 +5,7 @@ import path from 'node:path'
 import tty from 'node:tty'
 import { fileURLToPath } from 'node:url'
 import { AtelierDiagnosticError, resolveProjectConfig } from '../project/config.mjs'
+import { readRegularTextNoFollow } from '../project/private-state.mjs'
 import { ObsidianContractRefusal } from '../projection/obsidian/contracts.mjs'
 import { applyPolicyDigest } from '../projection/obsidian/edits/policy.mjs'
 import { MINIMUM_APP_VERSION, inspectApp } from '../runtime/obsidian/app-capability.mjs'
@@ -624,10 +625,11 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         let names = []
         try { names = fs.readdirSync(records).filter((name) => name.endsWith('.json')) } catch { names = [] }
         for (const name of names) {
-          // Whatever the file holds (not JSON, `null`, another view's record), it names a folder only when it is a valid
-          // record of its own view; nothing here can stop `uninstall`.
+          // Whatever the file is or holds (a link, a FIFO, not JSON, `null`, another view's record), it names a folder only
+          // when it is a valid record of its own view, which the store would read too; nothing here can stop `uninstall`.
           try {
-            const scopeId = JSON.parse(fs.readFileSync(path.join(records, name), 'utf8'))?.scopeId
+            // Read as the store reads a record: a regular file only, never through a link, never a FIFO that would block.
+            const scopeId = JSON.parse(readRegularTextNoFollow(path.join(records, name)))?.scopeId
             if (typeof scopeId !== 'string' || path.basename(allocationFile(workspace.workspaceRoot, scopeId)) !== name) continue
             const allocation = readVaultAllocation({ ...workspace, scopeId })
             if (allocation !== null) allocated.push(allocation.path)
