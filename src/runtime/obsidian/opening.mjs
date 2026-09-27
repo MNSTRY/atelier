@@ -323,6 +323,8 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   //    release, under the consent already recorded, when a tick is asked of it (requestServiceTick).
   let status = await serviceStatus(lifecycle, lifecycleRules)
   if (status.state === 'busy') return finish('busy', { scopeId, reason: status.reason, service: { state: status.state } })
+  // How a login item took part in starting the service (started through it, refreshed, or not used and why).
+  let loginItem = null
   if (status.state !== 'healthy') {
     let started
     try {
@@ -331,8 +333,10 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
       if (!(error instanceof ObsidianMaintenanceRefusal)) throw error
       return finish('service-unavailable', { scopeId, reason: error.code, service: { state: status.state } })
     }
-    if (started.state === 'busy') return finish('busy', { scopeId, reason: started.reason, service: { state: 'busy', started: started.started } })
-    if (started.state !== 'healthy') return finish('service-unavailable', { scopeId, reason: started.reason ?? started.state, service: { state: started.state } })
+    loginItem = started.loginItem ?? null
+    const item = loginItem === null ? {} : { loginItem }
+    if (started.state === 'busy') return finish('busy', { scopeId, reason: started.reason, service: { state: 'busy', started: started.started, ...item } })
+    if (started.state !== 'healthy') return finish('service-unavailable', { scopeId, reason: started.reason ?? started.state, service: { state: started.state, ...item } })
     status = started
   }
   let runtimeId = status.record?.runtimeId ?? null
@@ -346,7 +350,7 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     const asked = await requestServiceTick({ ...lifecycle, tickTimeoutMs, scopeId, service }, lifecycleRules)
     if (asked.restarted) restarted = asked.restarted
     if (typeof asked.runtimeId === 'string') runtimeId = asked.runtimeId
-    const serviceShown = { state: asked.state, runtimeId, ...(restarted === null ? {} : { restarted }) }
+    const serviceShown = { state: asked.state, runtimeId, ...(restarted === null ? {} : { restarted }), ...(loginItem === null ? {} : { loginItem }) }
     if (asked.state === 'busy') return { answer: { outcome: 'busy', extra: { scopeId, reason: asked.reason, service: serviceShown } } }
     if (!asked.requested) return { answer: { outcome: 'service-unavailable', extra: { scopeId, reason: asked.reason, service: serviceShown } } }
     let view = report()

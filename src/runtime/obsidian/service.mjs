@@ -1,5 +1,6 @@
 import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import fs from 'node:fs'
+import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { ObsidianContractRefusal } from '../../projection/obsidian/contracts.mjs'
 import { prepareView as productionPrepareView } from '../../projection/obsidian/materialize/index.mjs'
@@ -48,9 +49,16 @@ import { createFsWatcherFactory } from './watchers.mjs'
 //
 // `adapterFactory` has no default here either: whoever starts the service
 // decides whether it may reach a running app.
+//
+// Started by a login item (`startup`), the service also asks `releaseWatch`
+// after every tick whether the package it runs from changed on disk; when it
+// did, it finishes that tick and shuts down with the reason RELEASE_CHANGED,
+// which its process turns into an exit code the service manager restarts, on
+// the new release (release-watch.mjs, service-main.mjs).
 
 export const SERVICE_STATUS_SCHEMA = 'atelier-obsidian-service-status/v1'
 export const DEFAULT_SHUTDOWN_GRACE_MS = 30 * 1000
+export const RELEASE_CHANGED = 'release-changed'
 
 // Where a workspace keeps its private state, without creating an identity.
 export function resolveServiceWorkspace({ project, dataRoot, env = process.env, platform = process.platform, create = false }) {
@@ -85,6 +93,11 @@ export async function runMaintenanceService(options = {}) {
     engineOptions = {}, createEngine = createMaintenanceEngine,
     // What the adapter factory last learned about the installed app, when it qualifies one. Codes and versions only.
     appStatus = null,
+    // Under `startup`: { changed() } (createReleaseWatch), asked after every tick.
+    releaseWatch = null,
+    // The entry as this process was started by it (`process.argv[1]`), when that is not its real path: a login item
+    // names the installed entry by its path. It is recorded, so the process table can still prove this process ours.
+    invokedAs = null,
   } = options
   if (typeof loadProject !== 'function') throw new TypeError('the service needs loadProject')
   if (typeof adapterFactory !== 'function') throw new TypeError('the service needs an adapterFactory')
@@ -107,6 +120,7 @@ export async function runMaintenanceService(options = {}) {
   }
 
   const executable = executableIdentity(entryPath)
+  const alias = typeof invokedAs === 'string' && path.isAbsolute(invokedAs) && path.resolve(invokedAs) !== executable.path ? path.resolve(invokedAs) : null
   const startedAt = isoTime(clock)
   const identity = { serviceName: serviceNameFor(workspaceId), workspaceId, runtimeId, pid, host, port, executableDigest: executable.digest, startedAt }
   const bearer = randomBytes(32).toString('base64url')
@@ -194,13 +208,22 @@ export async function runMaintenanceService(options = {}) {
     }
   }
 
+  // A package that changed on disk: another release, loaded module by module into this process from then on.
+  const releaseChanged = () => {
+    if (!startup || releaseWatch === null) return false
+    try { return releaseWatch.changed() === true } catch { return false }
+  }
+
   const loop = createTickLoop({
     intervalMs, maxBackoffMs, onOutcome: recordOutcome,
     async tick() {
       // The service runs only while its record names it: a replaced or removed record ends it, cleanly.
       if (!recordIsOurs()) { void shutdown('record-no-longer-names-this-runtime'); return { state: 'stopping', reason: 'record-no-longer-names-this-runtime' } }
       askForDriftedViews()
-      return engine.tick()
+      try { return await engine.tick() } finally {
+        // After the tick, whether it succeeded or not: the next one runs in a process of the release now on disk.
+        if (!stopping && releaseChanged()) { log({ at: isoTime(clock), event: RELEASE_CHANGED }); void shutdown(RELEASE_CHANGED) }
+      }
     },
   })
 
@@ -296,7 +319,7 @@ export async function runMaintenanceService(options = {}) {
       workspaceRoot, workspaceId,
       record: {
         schema: 'atelier-obsidian-service-state/v1', contractVersion: '1.0.0', workspaceId, serviceName: identity.serviceName, host, port, runtimeId, pid,
-        executable: { path: executable.path, digest: executable.digest, ext: { runner: process.execPath, release: releaseIdentity() } }, stateLocation: servicePaths(workspaceRoot).stateLocation,
+        executable: { path: executable.path, digest: executable.digest, ext: { runner: process.execPath, release: releaseIdentity(), ...(alias === null ? {} : { invokedAs: alias }) } }, stateLocation: servicePaths(workspaceRoot).stateLocation,
         health: { status: 'healthy', checkedAt: startedAt }, consent: settings.consent, ext: { bearer },
       },
     })

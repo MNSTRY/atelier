@@ -562,7 +562,7 @@ test('the production seams are imported in exactly two places, dynamically, behi
   }
   const command = fs.readFileSync(path.join(REPOSITORY_ROOT, 'src/commands/obsidian.mjs'), 'utf8')
   // Each production seam is loaded only after the adapter is selected, in the function that loads it.
-  for (const [seam, loaded] of [['const serviceSeam', "import('../runtime/obsidian/service-entry-path.mjs')"], ['const appSeams', "import('../runtime/obsidian/app-production-seams.mjs')"]]) {
+  for (const [seam, loaded] of [['const entrySeam', "import('../runtime/obsidian/service-entry-path.mjs')"], ['const appSeams', "import('../runtime/obsidian/app-production-seams.mjs')"]]) {
     const body = command.slice(command.indexOf(seam), command.indexOf(loaded))
     assert.ok(command.indexOf(seam) > 0 && body.length > 0 && body.length < 600, `${seam} loads ${loaded}`)
     // A line of its own; a checkout with CRLF line endings (Windows) ends it with \r.

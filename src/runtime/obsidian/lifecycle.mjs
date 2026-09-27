@@ -12,7 +12,7 @@ import { processRunsRecordedExecutable } from './process-identity.mjs'
 import { DEFAULT_PROBE_TIMEOUT_MS, LOOPBACK_HOSTS, probeHealth, requestLoopback } from './service-client.mjs'
 import { SERVICE_ENTRY_PATH } from './service-entry-path.mjs'
 import {
-  CONSENT_COVERAGES, SERVICE_SETTINGS_SCHEMA, executableIdentity, openServiceLog, publicRecord, readServiceRecord, readServiceSettings, releaseIdentity, removeServiceRecord,
+  CONSENT_COVERAGES, SERVICE_SETTINGS_SCHEMA, executableIdentity, openServiceLog, publicRecord, readLastStartup, readServiceRecord, readServiceSettings, releaseOfEntry, removeServiceRecord,
   serviceNameFor, servicePaths, writeServiceSettings,
 } from './service-record.mjs'
 import { resolveServiceWorkspace } from './service.mjs'
@@ -105,6 +105,13 @@ function freeLoopbackPort(host) {
   })
 }
 
+// The service settings of this workspace with the address and consent given, written when that changes anything: the
+// first start needs a consent naming its actor, and a consent for another actor or coverage replaces the recorded one.
+// Installing and removing a login item raise and lower the coverage through it (login-item.mjs).
+export async function ensureServiceSettings(workspace, { host, port, consent, now }) {
+  return resolveSettings(workspace, { host, port, consent, now })
+}
+
 async function resolveSettings({ workspaceRoot, workspaceId }, { host, port, consent: given, now }) {
   const current = readServiceSettings({ workspaceRoot, workspaceId })
   // A consent derived from the account of a person at a terminal (`derived: true`) stands only for a workspace that has
@@ -124,11 +131,55 @@ async function resolveSettings({ workspaceRoot, workspaceId }, { host, port, con
   return changed ? writeServiceSettings({ workspaceRoot, workspaceId, settings: next }) : current
 }
 
+// Asks the service manager of the installed login item to start the service, and waits, bounded, for this
+// workspace's service to prove itself (healthy, or busy in its first tick) with a record naming the digest of the
+// entry the item runs. The runtime identifier is the service's own there, so that digest is what makes it the one
+// asked for. A service that refused under the item exited cleanly and recorded why (`last-startup.json`); that code is
+// the answer. { result } or, when the manager did not start it (the item is not loaded: switched off in System
+// Settings, or no user service manager), { fallback: code }.
+async function startThroughLoginItem({ workspace, loginItem, entryPath, deadline, probeTimeoutMs, alive, rules }) {
+  const { workspaceRoot, workspaceId } = workspace
+  const lastStartup = () => { try { return JSON.stringify(readLastStartup(workspace)) } catch { return null } }
+  const before = lastStartup()
+  let asked
+  try { asked = await loginItem.start() } catch { asked = { ok: false, code: 'login-item-start-failed' } }
+  const item = { via: 'login-item', ...(asked?.refreshed === true ? { refreshed: true } : {}) }
+  if (asked?.ok !== true) return { fallback: typeof asked?.code === 'string' ? asked.code : 'login-item-start-failed', refreshed: asked?.refreshed === true }
+  // A unit written again on the way names the entry of now. One whose entry cannot be read cannot prove anything.
+  let expected
+  try { expected = executableIdentity(typeof asked.entryPath === 'string' ? asked.entryPath : entryPath).digest } catch { return { result: { state: 'start-failed', started: false, alreadyRunning: false, workspaceId, reason: 'login-item-entry-missing', observed: null, logPath: servicePaths(workspaceRoot).loginItemLog, loginItem: item } } }
+  let last = null
+  const proves = (status) => status?.record?.executable?.digest === expected
+  while (Date.now() < deadline) {
+    last = await evaluate(workspace, { probeTimeoutMs, alive, rules }).catch((error) => ({ state: 'refused', reason: error.code ?? 'untyped-error' }))
+    if (last.state === 'healthy' && proves(last)) return { result: { ...shown(last), started: true, alreadyRunning: false, loginItem: item } }
+    const now = lastStartup()
+    if (now !== before && now !== null) {
+      const startup = JSON.parse(now)
+      if (startup?.outcome === 'refused') return { result: { state: 'start-failed', started: false, alreadyRunning: false, workspaceId, reason: startup.code, observed: last.state ?? null, logPath: servicePaths(workspaceRoot).log, loginItem: item } }
+    }
+    await sleep(50)
+  }
+  // As for a child started here: a service that proved itself and went straight into a long first tick runs, and is
+  // answered as busy only once the wait for it to be healthy is over.
+  if (last?.state === 'busy' && proves(last)) return { result: { ...shown(last), started: true, alreadyRunning: false, busy: true, loginItem: item } }
+  return { result: { state: 'start-failed', started: false, alreadyRunning: false, workspaceId, reason: 'health-never-proved-ownership', observed: last?.state ?? null, logPath: servicePaths(workspaceRoot).loginItemLog, loginItem: item } }
+}
+
+// `loginItem`, for a workspace with an installed login item: { start() }, which asks its service manager to start the
+// service (login-item.mjs). The service is then started through it, never as a child beside it, so two starts never
+// compete; `entryPath` is the entry the item runs. When the manager does not start it, the service is started as a
+// child, and the answer says why (`loginItem: { via: 'child', reason }`).
+//
+// `replaceOutdated`: a proven runtime of this workspace that runs an earlier release than the entry this start would run
+// (runtimeRelease) is stopped as `stopService` stops it and started again in its place, under the consent already
+// recorded (`replaced: 'outdated'`); one of a later release is never replaced (`release: 'later'`). Without it, any
+// proven runtime is answered as already running.
 export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
   const {
     loadProject, dataRoot, host, port, consent, detached = false, entryPath = SERVICE_ENTRY_PATH, entryArgs = [], intervalMs,
     startTimeoutMs = DEFAULT_START_TIMEOUT_MS, probeTimeoutMs, clock = () => new Date(), env = process.env, platform = process.platform,
-    spawn = childProcess.spawn, execPath = process.execPath, alive = isProcessAlive, randomBytes = cryptoRandomBytes,
+    spawn = childProcess.spawn, execPath = process.execPath, alive = isProcessAlive, randomBytes = cryptoRandomBytes, loginItem = null, replaceOutdated = false,
   } = options
   const { project, workspace } = context({ loadProject, dataRoot, env, platform, create: true })
   const { workspaceRoot, workspaceId } = workspace
@@ -149,11 +200,26 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
 
   let child = null
   try {
-    const before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
-    if (rules.isOurs(before)) return { ...shown(before), started: false, alreadyRunning: true }
+    let before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
+    // A runtime of an earlier release, still running after an upgrade, is replaced when asked to; it is stopped through its
+    // own listener, as its owner stops it, and nothing else is ever stopped here.
+    let replaced = null
+    if (rules.isOurs(before)) {
+      const standing = replaceOutdated ? runtimeRelease(before, entryPath) : null
+      if (standing === 'later') return { ...shown(before), started: false, alreadyRunning: true, release: 'later' }
+      if (standing !== 'outdated') return { ...shown(before), started: false, alreadyRunning: true }
+      const stopped = await stopService({ loadProject, dataRoot, env, platform, probeTimeoutMs, alive }, rules)
+      if (!stopped.stopped) return { ...shown(before), started: false, alreadyRunning: true, release: 'outdated', reason: stopped.reason ?? 'the-runtime-was-not-stopped' }
+      replaced = 'outdated'
+      before = await evaluate(workspace, { probeTimeoutMs, alive, rules })
+    }
     // Running, and in a long tick: nothing is started beside it and nothing replaces it.
     if (before.state === 'busy') return { ...shown(before), started: false, alreadyRunning: true, busy: true }
-    if (rules.refusesOccupied(before)) refuse('service-port-occupied', 'something that is not this service answers on the loopback port; it is never taken over', { reason: before.reason, address: before.address })
+    // With a login item, a listener that has not written its record yet may be the service its manager is starting
+    // right now (it listens before it records itself): the start below asks the manager, which starts nothing beside
+    // a running job, and accepts only a runtime that proves itself. Anything else stays occupied and is never adopted.
+    const starting = loginItem !== null && before.state === 'occupied' && before.reason === 'a-listener-without-a-record'
+    if (rules.refusesOccupied(before) && !starting) refuse('service-port-occupied', 'something that is not this service answers on the loopback port; it is never taken over', { reason: before.reason, address: before.address })
     // `stale-record` and `pid-not-ours`: nothing listens, so the recorded runtime is not serving. Its PID is never signalled;
     // the new service replaces the record once it listens. Nothing under recovery or staging is touched on the way.
     const settings = await resolveSettings(workspace, { host, port, consent, now: isoTime(clock) })
@@ -161,6 +227,15 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
       const moved = await probeHealth({ host: settings.host, port: settings.port, timeoutMs: probeTimeoutMs })
       if (moved.kind !== 'refused') refuse('service-port-occupied', 'something already answers on the selected loopback port; it is never taken over', { address: { host: settings.host, port: settings.port } })
     }
+
+    // An installed login item starts it. Only when its manager does not is a child started, and the answer says why.
+    let fallback = null
+    if (loginItem !== null) {
+      const managed = await startThroughLoginItem({ workspace, loginItem, entryPath, deadline, probeTimeoutMs, alive, rules })
+      if (managed.result) return replaced === null ? managed.result : { ...managed.result, replaced }
+      fallback = { via: 'child', reason: managed.fallback, ...(managed.refreshed ? { refreshed: true } : {}) }
+    }
+    const withFallback = (result) => ({ ...result, ...(fallback === null ? {} : { loginItem: fallback }), ...(replaced === null ? {} : { replaced }) })
 
     const runtimeId = `rt-${randomBytes(16).toString('hex')}`
     const executable = executableIdentity(entryPath)
@@ -183,19 +258,19 @@ export async function startService(options = {}, rules = LIFECYCLE_PRIMITIVES) {
       last = await evaluate(workspace, { probeTimeoutMs, alive, rules }).catch((error) => ({ state: 'refused', reason: error.code ?? 'untyped-error' }))
       if (last.state === 'healthy' && last.record.runtimeId === runtimeId && last.record.pid === child.pid) {
         if (detached) child.unref()
-        return { ...shown(last), started: true, alreadyRunning: false, ...(detached ? {} : { child }) }
+        return withFallback({ ...shown(last), started: true, alreadyRunning: false, ...(detached ? {} : { child }) })
       }
       await sleep(50)
     }
     // The child created here wrote the record and went straight into a long first tick: it runs, and is not stopped.
     if (exited === null && last?.state === 'busy' && last.record?.runtimeId === runtimeId && last.record?.pid === child.pid) {
       if (detached) child.unref()
-      return { ...shown(last), started: true, alreadyRunning: false, busy: true, ...(detached ? {} : { child }) }
+      return withFallback({ ...shown(last), started: true, alreadyRunning: false, busy: true, ...(detached ? {} : { child }) })
     }
     // Ownership was never proven: only the child created here is stopped, by its handle.
     if (exited === null) { child.kill(); const until = Date.now() + 5000; while (exited === null && Date.now() < until) await sleep(25) }
     removeServiceRecord({ workspaceRoot, workspaceId, runtimeId, pid: child.pid })
-    return { state: 'start-failed', started: false, alreadyRunning: false, workspaceId, reason: exited?.error ?? (exited?.code === null || exited === null ? 'health-never-proved-ownership' : `service-exited-${exited.code}`), observed: last?.state ?? null, logPath: log.file }
+    return withFallback({ state: 'start-failed', started: false, alreadyRunning: false, workspaceId, reason: exited?.error ?? (exited?.code === null || exited === null ? 'health-never-proved-ownership' : `service-exited-${exited.code}`), observed: last?.state ?? null, logPath: log.file })
   } finally {
     lock.release()
   }
@@ -245,7 +320,7 @@ async function askProvenRuntime(options, rules, { method, operation, timeoutMs, 
 
 // Pure. How the release a runtime recorded at its start (`executable.ext.release`, see releaseIdentity: the package
 // version and a digest of every runtime module) stands to the installed one, `installed` being { entry, release }, the
-// digest of the entry this command would start and releaseIdentity():
+// digest of the entry this command would start and the release that entry's package holds now (releaseOfEntry):
 //   current   the same version, entry module and modules;
 //   outdated  an earlier version; the same version with another entry module or other modules; or no release named,
 //             as releases before the one that began recording it record none;
@@ -264,11 +339,13 @@ export function releaseStanding(executable, installed) {
 }
 
 // How the release the proven runtime runs stands to the installed one (releaseStanding), `entryPath` being the entry
-// this command would start. Null when the runtime is not proven, or the installed side cannot be read.
+// this command would start: its digest and the release are both read from that entry, so with a login item the
+// installed release is the project's own package, read through the path the item names, whichever package this command
+// runs from. Null when the runtime is not proven, or the installed side cannot be read.
 export function runtimeRelease(status, entryPath) {
   if (status?.state !== 'healthy' || typeof status.record?.executable?.digest !== 'string' || typeof entryPath !== 'string') return null
   let installed
-  try { installed = { entry: executableIdentity(entryPath).digest, release: releaseIdentity() } } catch { return null }
+  try { installed = { entry: executableIdentity(entryPath).digest, release: releaseOfEntry(entryPath) } } catch { return null }
   return releaseStanding(status.record.executable, installed)
 }
 
