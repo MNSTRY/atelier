@@ -120,7 +120,8 @@
   allocation is recorded once in the workspace's private state
   (`atelier-obsidian-vault-allocation/v1`, `state/allocations/<view>.json`,
   with the folder's real path, device and inode, which the maintenance service
-  checks at every tick and the publisher before it writes: another folder put
+  checks at every tick and the publisher before it writes, before each note
+  and before its commit: another folder put
   where the one made was is not published into, `vault-allocation-replaced`,
   nor is the same folder reached through a link put on the way since,
   `vault-allocation-moved`; on Linux a folder made after the original was
@@ -134,7 +135,8 @@
   `vault-allocation-lost`, never published again into a new, empty vault;
   `status` and `open` name the way back),
   which the recovery store reads: the engine, source apply, the proposal
-  adapter and `open` all find the same vault. A vault published before stays
+  adapter, `open` and the plugin's service paths (its hello, the person's
+  choice to turn it off, drift) all find the same vault. A vault published before stays
   under the data root, and a workspace that decides nothing publishes there as
   before. A folder inside a repository or the project, inside a vault Atelier
   publishes or one the app lists, or on another volume than the data root is
@@ -151,7 +153,8 @@
   repository, each stops its own view only. `location show`
   and `status` (`scopes[].vault`) say where each view's vault is, or why it
   cannot be read. Consent to a synced folder is not recorded, so it is not
-  checked again when a folder is allocated (Known limits).
+  checked again when a folder is allocated or made again; a link on the way is
+  followed only at a view's first allocation (Known limits).
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the

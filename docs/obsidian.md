@@ -520,7 +520,8 @@ view's vault is, or will be, or why its record cannot be read.
 
 Atelier publishes only into the folder it made. The allocation records the
 folder's real path, device and inode, and the maintenance service checks them
-at every tick, as the publisher does before it writes anything. Another folder
+at every tick, as the publisher does before it writes anything and again
+before each note and before its commit (see Known limits). Another folder
 put where the one made was (moved in, or a link) is not published into
 (`vault-allocation-replaced`), nor is the same folder reached through a link
 put on the way since, into a vault the app lists, say
@@ -794,11 +795,21 @@ test reported as a pass.
   Command "…" not found`, which is read as not up yet, never as a version.
 - Vault location: consent to a folder a sync client keeps in step
   (`--allow-synced-location`) is given when `location set` decides the folder,
-  and is not recorded. The maintenance service does not check for sync clients
-  again when it allocates a view's folder or makes one again, so a folder on
-  the way that becomes a link into a synced folder after the decision is not
-  refused then. Every other check runs again, through links, and an allocated
-  vault reached through a link is refused (`vault-allocation-moved`).
+  and is not recorded, so the maintenance service does not check for sync
+  clients again. The decision keeps the folder as it was written, so at a
+  view's first allocation a folder on the way that has since become a link
+  into a synced folder is followed, and its vault is allocated there without
+  being asked; a folder that becomes synced without any link (iCloud's
+  "Desktop & Documents Folders" turned on, say) is not refused either, at the
+  first allocation or when a vault is made again. Every other check runs
+  again at both, and a vault made again, or published into, through a link on
+  the way is refused (`vault-allocation-moved`).
+- Replacing a vault during a publication: the allocated folder is checked
+  before the vault lock is taken, after the app is asked about the vault,
+  before each note and before the generation is committed. A program of the
+  same account that puts a link in its place between one check and the write
+  that follows it can still have that one write go through the link; the next
+  check refuses the publication, and it is never reported current.
 - Vault identity: an allocated folder is known by its real path, device and
   inode. On Linux a folder made at the same path after the allocated one was
   removed can be given the same inode number (ext4 reuses a freed one), and is
