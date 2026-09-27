@@ -3239,6 +3239,30 @@ test('a published view whose allocation record was lost is refused and says how 
   assert.equal(fs.existsSync(underDataRoot), false)
 })
 
+test('a view published under the data root whose folder was removed is refused as lost by a running service too, status names the way back, and a folder made there brings it back', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const engine = world.engine()
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const underDataRoot = path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)
+  fs.rmSync(underDataRoot, { recursive: true })
+  touchCompass(world, 'North is painted blue.')
+  world.advance(10 * 60 * 1000)
+  // The same engine, whose store was made for the folder that is gone, says why, as a fresh one does.
+  assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-lost'])
+  assert.deepEqual(stateOf(await world.engine().tick()), ['stale', 'vault-allocation-lost'])
+  assert.equal(fs.existsSync(underDataRoot), false, 'no new, empty vault')
+  const status = (await world.run(['status', '--json'])).json.scopes[0]
+  assert.deepEqual([status.outcome, status.reason, status.next], ['not-prepared', 'vault-allocation-lost', REASON_NEXT['vault-allocation-lost']])
+  assert.doesNotMatch(OPENING_OUTCOMES['not-prepared'].summary, /has been published yet/, 'open does not say a published view was never published')
+  // The way back the answer names: the folder, made again; the view is published there at the next change.
+  fs.mkdirSync(underDataRoot, { mode: 0o700 })
+  touchCompass(world, 'North is painted green.')
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await engine.tick()), ['current', 'published-and-verified'])
+  for (const code of ['vault-allocation-lost', 'vault-allocation-moved', 'vault-allocation-replaced', 'vault-allocation-missing']) assert.equal(typeof REASON_NEXT[code], 'string', code)
+})
+
 test('location show and location set say which view\'s record cannot be read, typed, and still show and decide for the others', needsExchange, async (t) => {
   const world = makeWorld(t)
   world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))

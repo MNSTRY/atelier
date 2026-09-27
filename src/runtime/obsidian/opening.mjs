@@ -56,7 +56,7 @@ export const OPENING_OUTCOMES = Object.freeze({
   updating: { summary: 'maintenance is publishing or has not finished; the vault is not confirmed current', next: 'run `obsidian open` again in a moment' },
   'held-for-your-edit': { summary: 'a note you edited is preserved and held; the view is not republished over it', next: 'apply or withdraw the pending edit, then open again' },
   'stale-readable': { summary: 'a last good vault exists and can be read, but it is not proven to be the present generation', next: 'see `obsidian status` for the reason; `obsidian open --allow-stale` opens it as it is' },
-  'not-prepared': { summary: 'no generation of this view has been published yet', next: 'see `obsidian status` for the reason' },
+  'not-prepared': { summary: 'no generation of this view can be read back: none was published yet, or its vault cannot be found or used (the reason says which)', next: 'see `obsidian status` for the reason' },
   'app-missing': { summary: 'no Obsidian installation was found', next: 'install Obsidian, then open again' },
   'app-version-unsupported': { summary: 'the installed Obsidian is below the minimum supported version, or its version cannot be read', next: 'update Obsidian, then open again' },
   'app-cli-unavailable': { summary: 'the installed Obsidian has no usable command-line capability', next: 'enable the command-line interface in Obsidian, then open again' },
@@ -123,6 +123,10 @@ export const REASON_NEXT = Object.freeze({
   'service-outdated': 'the maintenance service runs an earlier release of Atelier that could not be replaced; run `atelier obsidian service stop`, then open again',
   'service-other-release': 'the maintenance service runs a later release of Atelier than this command, which never replaces a later release by itself; run `atelier obsidian service stop`, then open again, or open with the later release',
   'vault-open-in-several-windows': 'Obsidian\'s vault list marks this view\'s folder open under more than one entry (in another letter case, or through a link), so it may hold the vault in more than one window, and a publication coordinates with one window only; remove the extra entries from Obsidian\'s vault list (Obsidian keeps the last window it closed marked open, so closing windows does not clear this), then open again',
+  'vault-allocation-lost': 'this view was published, but its vault is not where Atelier can find it: no record of a folder allocated for it (state/allocations/<view>.json in Atelier\'s private state), and no folder under the data root (vaults/<view>); restore that record from a backup if its vault was allocated elsewhere, or else make the folder vaults/<view> under the data root: the view is published there at the next change at its sources',
+  'vault-allocation-moved': 'this view\'s vault is now reached through a link, or leads somewhere other than where it was allocated, and Atelier publishes only into the folder at the path it recorded; put that folder back at the path `atelier obsidian location show` names, with no link on the way',
+  'vault-allocation-replaced': 'another folder, or a link, is where this view\'s vault was allocated, and Atelier publishes only into the folder it made; put the vault back there, or move what is there away: a folder that is gone is made again at the next tick, and the view published into it',
+  'vault-allocation-missing': 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick, and publishes the view into it',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 

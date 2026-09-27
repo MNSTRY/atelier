@@ -264,7 +264,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // service runs, or a link put where it was, is never published into.
     const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots, readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })])
     const cached = stores.get(scope.scopeId)
-    if (cached?.signature === signature) {
+    // A vault root that is gone (a folder under the data root the person removed, say) is looked for again too, so the
+    // store made in its place says why rather than failing on the folder that is not there.
+    if (cached?.signature === signature && fs.lstatSync(cached.store.vaultRoot, { throwIfNoEntry: false }) !== undefined) {
       try { cached.store.checkAllocatedVault?.(); return cached.store } catch (error) { if (!isTypedRefusal(error)) throw error }
     }
     stores.delete(scope.scopeId)

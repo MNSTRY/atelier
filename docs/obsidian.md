@@ -528,10 +528,15 @@ put on the way since, into a vault the app lists, say
 tick, only where its recorded real path leads and only where a location would
 be accepted (not inside a repository, the private state, a vault Atelier
 publishes or one the app lists, and on the data root's volume). A view that
-was published and whose record was lost is refused (`vault-allocation-lost`)
-rather than published again into a new vault under the data root: restore the
-record from a backup, or make the folder `vaults/<view>` under the data root
-to publish the view there again.
+was published and whose vault Atelier cannot find is refused
+(`vault-allocation-lost`) rather than published again into a new, empty vault
+under the data root: its record was lost, or, for a view that never had a
+record (published under the data root), its `vaults/<view>` folder was
+removed. Restore the record from a backup if its vault was allocated
+elsewhere; otherwise make the folder `vaults/<view>` under the data root, and
+the view is published there at the next change at its sources. `status` and
+`open` name that next step for this code, and for `vault-allocation-moved`,
+`vault-allocation-replaced` and `vault-allocation-missing`.
 
 `DIR` is refused inside an enrolled repository or the project, inside a vault
 Atelier publishes, inside a folder Obsidian lists as a vault, and on another

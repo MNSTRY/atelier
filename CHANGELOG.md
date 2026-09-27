@@ -128,9 +128,11 @@
   `docs/obsidian.md`. A folder that has gone is made again by the next tick,
   only where its recorded real path leads and only where a location would be
   accepted: never inside a repository, the project, the private state, a vault
-  Atelier publishes or one the app lists. A published view whose record was
-  lost is refused, `vault-allocation-lost`, never published again into a new
-  vault under the data root),
+  Atelier publishes or one the app lists. A published view whose vault cannot
+  be found (its record was lost, or a view published under the data root lost
+  its `vaults/<view>` folder, which was made again before) is refused,
+  `vault-allocation-lost`, never published again into a new, empty vault;
+  `status` and `open` name the way back),
   which the recovery store reads: the engine, source apply, the proposal
   adapter and `open` all find the same vault. A vault published before stays
   under the data root, and a workspace that decides nothing publishes there as

@@ -212,12 +212,13 @@ export function writeVaultAllocation({ workspaceRoot, allocation }) {
 }
 
 // A view without a record that was published, and has no vault under the data root, where a view published there
-// always has its folder: its record was lost (removed, or a backup restored without it). Refused, typed, rather than
-// published again into a new, empty vault under the data root while the vault it had stays orphaned.
+// always has its folder: its record was lost (removed, or a backup restored without it), or, for a view that was never
+// allocated a folder, its folder under the data root was removed. Refused, typed, rather than published again into a
+// new, empty vault under the data root while a vault it had elsewhere stays orphaned.
 function refuseLostAllocation({ workspaceRoot, scopeId }) {
   const legacy = legacyVaultRoot(workspaceRoot, scopeId)
   if (!hasCommittedGeneration({ workspaceRoot, scopeId }) || fs.lstatSync(legacy, { throwIfNoEntry: false }) !== undefined) return
-  refuse('vault-allocation-lost', `this view was published, and neither the record of where its vault was allocated nor a vault under the data root is there; restore ${allocationFile(workspaceRoot, scopeId)} from a backup, or make the folder ${legacy} to publish this view there again`, { record: allocationFile(workspaceRoot, scopeId), path: legacy })
+  refuse('vault-allocation-lost', `this view was published, and its vault is not where Atelier can find it: there is no record of a folder allocated for it, and no folder under the data root. If its vault was allocated elsewhere, restore ${allocationFile(workspaceRoot, scopeId)} from a backup; otherwise, or to publish the view under the data root from now on, make the folder ${legacy}: the view is published there at the next change at its sources`, { record: allocationFile(workspaceRoot, scopeId), path: legacy })
 }
 
 // Where a view's vault is, without creating anything: { path, origin, allocation }.
