@@ -57,7 +57,7 @@ export function onlyYouEligibility({ project }) {
     const block = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
     if (block === null || !plainTopLevelKeys(block[1])) return false
     // A second layer: the graph's own reading of the front matter has no kg key either.
-    try { return !Object.hasOwn(markdownMetadata(text), 'kg') } catch { return false }
+    try { return !('kg' in markdownMetadata(text)) } catch { return false }
   }
   return Object.freeze({
     revision: () => 'classified-documents/v2+unclassified-notes-read-as-notes-for-only-you/v4+assets-embedded-by-eligible-documents/v1',
@@ -71,6 +71,8 @@ export function onlyYouEligibility({ project }) {
 // `kg.audience: sensitive` Atelier did not read) keeps the note withheld. An allow-list, never a pattern to find.
 const PLAIN_KEY = /^([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]|$)/
 function plainTopLevelKeys(frontmatter) {
+  // Line breaks YAML 1.1 readers honour and this reading does not (NEL, LS, PS) could hide a kg from it.
+  if (/[\u0085\u2028\u2029]/.test(frontmatter)) return false
   let rooted = false
   for (const line of frontmatter.split(/\r?\n/)) {
     const trimmed = line.trim()

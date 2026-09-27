@@ -73,6 +73,10 @@ const UNCLASSIFIED = {
   'drafts/indented-quoted.md': '---\n  "kg":\n    audience: sensitive\n---\n\n# Indented quoted\n',
   // The graph reads a top-level kg here although the line is indented below another key.
   'drafts/kg-under-scalar.md': '---\ntitle: x\n  kg: {audience: sensitive}\n---\n\n# kg under a scalar\n',
+  // A line break YAML 1.1 readers honour (NEL) that turns a comment into a kg line for them.
+  'drafts/nel-kg.md': '---\ntitle: x\n# c\u0085kg: {audience: sensitive}\n---\n\n# NEL\n',
+  // A key the graph's parser stores as the object's prototype, so kg is inherited, not its own.
+  'drafts/proto-kg.md': '---\n__proto__:\n  kg: {audience: sensitive}\n---\n\n# Proto\n',
 }
 const READ_AS_NOTES = ['drafts/malformed.md', 'drafts/own-front-matter.md', 'drafts/plain.md']
 
