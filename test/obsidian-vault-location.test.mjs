@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { VAULT_ALLOCATION_SCHEMA, allocationFile, createRecoveryStore, hasCommittedGeneration, readVaultAllocation, vaultRootFor, writeVaultAllocation } from '../src/projection/obsidian/recovery/index.mjs'
+import { VAULT_ALLOCATION_SCHEMA, acquireVaultLock, allocationFile, createRecoveryStore, hasCommittedGeneration, readVaultAllocation, vaultRootFor, writeVaultAllocation } from '../src/projection/obsidian/recovery/index.mjs'
 import {
   MAX_PROJECT_NAME_BYTES, checkVaultParent, ensureVaultAllocation, projectDisplayName, protectedFolderOf, readAppVaultListForAllocation, safeFolderPart, syncedFolderOf, vaultFolderName,
 } from '../src/runtime/obsidian/vault-location.mjs'
@@ -322,6 +322,20 @@ test('an allocated vault is published into, and made again, only where its recor
   // Nothing in the way: it is made again where it was, and published into.
   assert.equal(allocate({ vaults: {} }).path, allocation.path)
   assert.equal(storeOf().vaultRoot, allocation.path)
+})
+
+test('the vault lock is taken only in the folder the store was made for: a link put there since is refused before anything is made in it', { skip: POSIX ? false : 'links need privileges on Windows' }, (t) => {
+  const w = world(t)
+  const allocation = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  const store = createRecoveryStore({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', repositoryRoots: w.repositoryRoots })
+  store.checkAllocatedVault()
+  const personal = path.join(w.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
+  fs.rmSync(allocation.path, { recursive: true })
+  fs.symlinkSync(personal, allocation.path)
+  assert.throws(() => acquireVaultLock(store), (error) => error.code === 'vault-allocation-moved')
+  assert.deepEqual(fs.readdirSync(personal), ['diary.md'], 'no lock is made in the folder the link leads to')
 })
 
 test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {

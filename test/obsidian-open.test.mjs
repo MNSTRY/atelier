@@ -3146,6 +3146,38 @@ test('the publisher checks an allocated vault again before it writes anything, s
   assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in, not even the vault lock')
 })
 
+test('a folder replaced during a publication, while the app is asked, between units or before the commit, is refused and never reported current; nothing is written into the person\'s vault', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
+  const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+  const { CRASH_INJECTION_TEST_SEAM } = await import('../src/projection/obsidian/publication/test-seam.mjs')
+  // `when`: the nth time the app is asked about the vault (1: path selection, 2: before the first unit), or 'commit'.
+  for (const when of [1, 2, 'commit']) {
+    const world = makeWorld(t)
+    await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+    const personal = path.join(world.dir, 'Personal Vault')
+    fs.mkdirSync(personal)
+    fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
+    let armed = false
+    let swapped = false
+    let asked = 0
+    const swap = () => { if (!armed || swapped) return; swapped = true; const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }); fs.renameSync(vault, path.join(world.dir, 'moved-away')); fs.symlinkSync(personal, vault) }
+    const adapterFactory = (...args) => {
+      const inner = absentAdapter(...args)
+      return { ...inner, probe: async (input) => { if (armed) { asked += 1; if (asked === when) swap() } return inner.probe(input) } }
+    }
+    const seams = when === 'commit' ? { publishView: (input) => publishView({ ...input, [CRASH_INJECTION_TEST_SEAM]: { at: 'before-manifest-commit', halt: swap } }) } : {}
+    const engine = world.engine({ adapterFactory, seams })
+    assert.equal((await engine.tick()).scopes[0].state, 'current')
+    armed = true
+    touchCompass(world, 'North is painted blue.')
+    world.advance(10 * 60 * 1000)
+    const report = await engine.tick()
+    assert.equal(swapped, true, `the folder was replaced (${when})`)
+    const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId)
+    assert.deepEqual([entry.state, entry.reason], ['stale', 'vault-allocation-replaced'], String(when))
+    assert.deepEqual(fs.readdirSync(personal), ['diary.md'], `nothing is written into the person's vault (${when})`)
+  }
+})
+
 test('a vault folder that has gone is made again only where its record leads and outside every vault the app lists, and a vault reached through a link is not published into: the view says why, and nothing is written', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
   const world = makeWorld(t)
   const home = path.join(world.dir, 'home')

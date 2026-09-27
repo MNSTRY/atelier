@@ -287,13 +287,17 @@ export async function publishView(options = {}) {
     // workspace state pointed at the same vault refuses instead of racing.
     const acquire = (lockPath, take, held) => {
       try { releases.push([lockPath, take()]) } catch (error) {
+        if (error instanceof PublicationRefusal) throw error
         if (error.code === 'EEXIST') refuse('publication-in-progress', `another publication ${held} holds the lock`)
         refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
       }
     }
     acquire(store.lockPath, () => acquirePrivateLock(store.lockPath), 'of this view')
     // A vault allocated for the view is still the folder it made, before anything is written in it (the vault lock
-    // included) and again once the lock is held: a store kept by a long-running service may outlive its folder.
+    // included) and again once the lock is held: a store kept by a long-running service may outlive its folder. It is
+    // checked again after every wait on the app, before each unit and before the commit, so a folder replaced during a
+    // publication refuses it and is never reported current. (Only this account can replace it; the check and the
+    // write that follows it are still two steps.)
     store.checkAllocatedVault?.()
     acquire(store.vaultLockPath, () => acquireVaultLock(store), 'into this vault')
     store.checkAllocatedVault?.()
@@ -307,6 +311,7 @@ export async function publishView(options = {}) {
     // Path selection. An app with this vault open in several windows is refused as such: publishing through one of
     // them would leave the others uncoordinated.
     const probe = await adapter.probe({ vaultRoot: store.vaultRoot })
+    store.checkAllocatedVault?.()
     if (probe.state !== 'coordinated' && probe.state !== 'absent') refuse(probe.code === 'vault-open-in-several-windows' ? probe.code : 'editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
     const mode = probe.state === 'coordinated' ? 'in-app' : 'direct'
     const channel = mode === 'in-app' ? adapter : createDirectAdapter({ crashSeam: seam })
@@ -390,6 +395,7 @@ export async function publishView(options = {}) {
         const again = await adapter.probe({ vaultRoot: store.vaultRoot })
         if (again.state !== 'absent') context.uncoordinated = again.reason
       }
+      store.checkAllocatedVault?.()
       if (unit.op === 'keep' && unchanged.has(unit.path)) {
         results.push({ path: unit.path, kind: unit.kind, op: unit.op, outcome: context.uncoordinated ? 'editor-uncoordinated' : 'unchanged', blocking: false })
         continue
@@ -420,6 +426,7 @@ export async function publishView(options = {}) {
     }
     journal.append({ step: 'verify', outcome: 'ok', state: 'verifying', detail: { settled: true, retained: retainedEdits } })
     crash('before-manifest-commit')
+    store.checkAllocatedVault?.()
     store.commitManifest({ manifestBytes, generationId: manifest.generationId, journalId, retained: retainedEdits, committedAt: iso(clock) })
     crash('after-manifest-pointer')
     journal.append({ step: 'manifest-commit', outcome: 'ok', state: 'committed', detail: { manifestDigest: sha256Digest(manifestBytes) } })

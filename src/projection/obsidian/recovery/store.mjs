@@ -50,6 +50,11 @@ export const VAULT_LOCK_DIRECTORY = '.atelier-publication'
 // marker before its ticket, so the directory does not grow inside a person's
 // vault and an interrupted removal never leaves a marker without its ticket.
 export function acquireVaultLock(store) {
+  // Only in the vault the store was made for, reached through no link: the lock's folder is made inside whatever the
+  // vault root leads to.
+  let real = null
+  try { real = realPathAsStored(store.vaultRoot) } catch { /* not reachable: refused below */ }
+  if (real !== store.vaultRoot) refuse(store.allocation ? 'vault-allocation-moved' : 'vault-root-moved', 'the vault is no longer the folder this publication was prepared for: its path now leads somewhere else; nothing was written', { path: store.vaultRoot, leadsTo: real })
   const directory = ensureContainedPrivateDirectory({ workspaceRoot: store.vaultRoot, directory: path.dirname(store.vaultLockPath), label: 'vault publication lock' })
   const release = acquirePrivateLock(path.join(directory, path.basename(store.vaultLockPath)))
   try {
