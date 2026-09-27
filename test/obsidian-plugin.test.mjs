@@ -2248,6 +2248,27 @@ test('a drifted plugin file never makes a committed view need the app: while the
   assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.files, undefined, 'nothing waits once the file is written')
 })
 
+test('a plugin file another writer brings back to its old bytes after a publication that changed its pin, while the tick goes on, is written again at the next tick', needsExchange, async (t) => {
+  // A restart on another listener changes the data file's pin; a sync tool whose older copy wins restores the old file
+  // right after the publication returns.
+  const world = serviceWorld(t)
+  const data = path.join(world.vault, PLUGIN_DATA_PATH)
+  const first = await world.service()
+  assert.ok((await first.tickNow()).ok)
+  const oldBytes = fs.readFileSync(data)
+  const oldPort = world.port
+  await first.shutdown('restart')
+  let published = 0
+  let afterPublish = () => fs.writeFileSync(data, oldBytes)
+  const seams = { publishView: async (input) => { published += 1; const result = await publishView(input); if (afterPublish) { const act = afterPublish; afterPublish = null; act() } return result } }
+  const again = await world.service({ seams })
+  assert.notEqual(world.port, oldPort)
+  const tick = async () => { const outcome = await again.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return published }
+  assert.deepEqual([await tick(), await tick(), await tick()], [2, 2, 2], 'the start publishes; the next look asks about the old file, which is written again once')
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).channel.port, world.port, 'the data file names the listener of the service now running')
+  assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
+})
+
 test('a drift publishing would only leave for the person again never waits for the app: the view stays current with its plain reason, and the app is not asked', needsExchange, async (t) => {
   if (process.platform === 'win32') return t.skip('a vault root that is a link; permission bits')
   let qualifies = true

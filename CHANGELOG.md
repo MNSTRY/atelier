@@ -322,7 +322,8 @@
   that holds what it held before the tick) is now taken as seen, so such a
   view is published once per start, as every view is. A plugin file another
   writer removes or changes after the publication, even during the same
-  tick, is still written again at the next tick.
+  tick (brought back to its old bytes after a publication that changed its
+  pin, say), is still written again at the next tick.
 - `atelier obsidian open` with Obsidian quit and the view's vault already in
   Obsidian's list but closed: Obsidian started plainly does not reopen such a
   vault, so a link it refused just after starting left `open` to wait and
