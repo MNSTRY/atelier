@@ -212,7 +212,8 @@ function makeHoldingFolder(parent) {
 // and was never published under the data root; null when the view's vault stays under the data root. The folder is
 // made here, exclusively and private to this user, under the first name that is free: taken by nothing on the disk
 // and, when the app's list is known, by no vault it lists with that name in any letter case.
-export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, location, projectName, repositoryRoots, vaults = null, allocatedPaths = [], homedir, now }) {
+// `storedPathOf` answers a folder's real path as the file system stores it (realPathAsStored).
+export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, location, projectName, repositoryRoots, vaults = null, allocatedPaths = [], homedir, now, storedPathOf = realPathAsStored }) {
   const existing = readVaultAllocation({ workspaceRoot, workspaceId, scopeId })
   // An allocated folder that has gone is made again where it was, private, and recorded as the folder it now is; one
   // another folder replaced is left alone, and the store refuses to publish into it. `vaults` is the app's list here
@@ -264,7 +265,10 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
     try { fs.mkdirSync(folder, { mode: 0o700 }) } catch (error) { if (error.code === 'EEXIST') continue; unusable(error) }
     try { fs.chmodSync(folder, 0o700) } catch { /* a file system without modes */ }
     const made = folderIdentity(folder)
-    return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: folder, name, parent: realParent, device: made.device, inode: made.inode, allocatedAt: now } })
+    // Recorded as the file system stores the folder's path, which is what every later check reads back: a volume that
+    // stores names in another Unicode form (HFS+ stores NFD) would otherwise never match the name as it was asked for.
+    const stored = storedPathOf(folder)
+    return writeVaultAllocation({ workspaceRoot, allocation: { schema: VAULT_ALLOCATION_SCHEMA, workspaceId, scopeId, path: stored, name: path.basename(stored), parent: path.dirname(stored), device: made.device, inode: made.inode, allocatedAt: now } })
   }
   return refuse('vault-location-full', 'no free vault name is left for this view in that folder', { parent })
 }

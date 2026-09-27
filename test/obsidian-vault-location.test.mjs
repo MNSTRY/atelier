@@ -338,6 +338,18 @@ test('the vault lock is taken only in the folder the store was made for: a link 
   assert.deepEqual(fs.readdirSync(personal), ['diary.md'], 'no lock is made in the folder the link leads to')
 })
 
+test('an allocation records its folder as the file system stores its path, so a volume that stores names in another Unicode form finds it again', (t) => {
+  const w = world(t)
+  const asked = []
+  // A volume that stores every name decomposed (HFS+ stores NFD), standing in for the real path such a volume answers.
+  const storedPathOf = (folder) => { asked.push(folder); return folder.normalize('NFD') }
+  const allocation = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'Café', repositoryRoots: w.repositoryRoots, now: NOW, storedPathOf })
+  const made = path.join(w.parent, 'Café (everything)')
+  assert.deepEqual(asked, [made])
+  assert.deepEqual([allocation.path, allocation.name, allocation.parent], [made.normalize('NFD'), 'Café (everything)'.normalize('NFD'), w.parent.normalize('NFD')])
+  assert.notEqual(allocation.path, made, 'the name as the volume stores it, not as it was asked for')
+})
+
 test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {
   const slept = []
   const sleep = async (ms) => { slept.push(ms) }
