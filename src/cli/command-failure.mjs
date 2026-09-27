@@ -2,32 +2,22 @@
 // detail (Node system errors, child-process failures, parser excerpts, or a
 // message naming an absolute path) is rethrown to the command executor, which
 // prints only a typed code or `[internal-error]` with Node's code.
-import fs from 'node:fs'
-import os from 'node:os'
-
 // Node's system errors always carry errno and syscall; child-process failures
 // carry status and stderr. Atelier's own refusals carry neither, even when
-// their code is EEXIST. A message naming a host directory is never printed;
-// schema instance paths such as `/data/0` are not host paths.
+// their code is EEXIST.
 const NODE_DETAIL_KEYS = ['errno', 'syscall', 'path', 'dest', 'status', 'signal', 'stderr', 'stdout', 'cmd']
 const HOST_ROOT = /(?:^|[\s'"(=,])(?:\/(?:Users|home|private|var|tmp|Volumes|opt|etc|root|mnt|srv|usr|Library|System|Applications)\/|[A-Za-z]:\\|\\\\|~\/)/
-
-function hostPrefixes() {
-  const prefixes = new Set()
-  for (const directory of [process.cwd(), os.homedir(), os.tmpdir()]) {
-    if (!directory || directory === '/') continue
-    prefixes.add(directory)
-    try { prefixes.add(fs.realpathSync(directory)) } catch {}
-  }
-  return [...prefixes]
-}
+// A quoted absolute path, as Node and git print them, whatever its root.
+const QUOTED_ABSOLUTE = /['"`](?:\/[^'"`\s/]+\/|[A-Za-z]:[\\/]|\\\\)/
 
 export function safeCommandMessage(error) {
   if (!(error instanceof Error) || error instanceof SyntaxError) return null
   if (typeof error.code === 'string' && error.code.startsWith('ERR_')) return null
   if (NODE_DETAIL_KEYS.some(key => Object.hasOwn(error, key))) return null
   const message = error.message
-  if (typeof message !== 'string' || HOST_ROOT.test(message) || hostPrefixes().some(prefix => message.includes(prefix))) return null
+  // Atelier's own messages never interpolate host paths; Node and git quote
+  // theirs. Unquoted text such as a schema instance path `/data/0` stays.
+  if (typeof message !== 'string' || HOST_ROOT.test(message) || QUOTED_ABSOLUTE.test(message)) return null
   return message
 }
 

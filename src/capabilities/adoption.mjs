@@ -287,7 +287,8 @@ export function applyCapabilityAdoption(options) {
     } catch (error) {
       journal.phase = 'recovery-required'
       replaceJson(root, `${base}/journal.json`, journal)
-      throw new Error(`adoption interrupted; inspect capability recovery: ${error.message}`)
+      // The cause stays attached for local debugging; the message names no host path.
+      throw new Error('adoption interrupted; inspect capability recovery', { cause: error })
     }
   })
 }

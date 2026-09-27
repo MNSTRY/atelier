@@ -475,3 +475,30 @@ test('responsibility commands still print their own refusals, including schema p
   assert.doesNotMatch(release.stderr, /internal-error/)
   assert.match(release.stderr, /"ok":false/)
 })
+
+test('the failure classifier keeps refusals, schema paths and lock reasons, and hides quoted host paths from any root', async () => {
+  const { safeCommandMessage } = await import('../src/cli/command-failure.mjs')
+  for (const message of ['invalid inquiry record: /data/0: must have required property', '/data: must NOT have additional properties'])
+    assert.equal(safeCommandMessage(new Error(message)), message)
+  const locked = Object.assign(new Error('EEXIST: private state is locked (release without owner: operation.lock); inspectPrivateLock and preserve ownership records before offline recovery'), { code: 'EEXIST' })
+  assert.equal(safeCommandMessage(locked), locked.message)
+  for (const message of [
+    "adoption failed: EACCES: permission denied, rename '/workspaces/client-acme/.atelier-local/a' -> '/workspaces/client-acme/.claude/skills/a'",
+    'could not read "/builds/project/notes.md"',
+    "open 'D:\\shared\\notes.json'",
+    'read /Volumes/shared/notes.json',
+  ]) assert.equal(safeCommandMessage(new Error(message)), null, message)
+  const system = Object.assign(new Error("ENOENT: no such file, lstat '/x/y'"), { code: 'ENOENT', errno: -2, syscall: 'lstat' })
+  assert.equal(safeCommandMessage(system), null)
+})
+
+test('stdout commands keep their refusals on stdout', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-stdout-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(dir, 'history.json'), JSON.stringify([{ schema: 'not-an-inquiry-record' }]))
+  const { ATELIER_DEBUG, GIT_EDITOR, ...env } = process.env
+  const result = spawnSync(process.execPath, [BIN, 'inquiry', 'inspect', '--history', 'history.json'], { cwd: dir, env, encoding: 'utf8' })
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stdout, /^\{"ok":false,"error":"[^"]+"\}\n$/)
+  assert.equal(result.stderr, '')
+})
