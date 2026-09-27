@@ -200,6 +200,14 @@ export function checkVaultParent({ parent, workspaceRoot, repositoryRoots, vault
   return { synced, protected: anySpelling((candidate, home) => protectedFolderOf(candidate, { homedir: home, platform }), parent, homedir) }
 }
 
+// The folder that holds the vaults, made when it is missing: private to this user, as each vault in it is. A folder on
+// the way to it that is missing too is made as any other folder is, so naming ~/Projects/Atelier makes ~/Projects an
+// ordinary folder.
+function makeHoldingFolder(parent) {
+  fs.mkdirSync(path.dirname(parent), { recursive: true })
+  try { fs.mkdirSync(parent, { mode: 0o700 }) } catch (error) { if (error?.code !== 'EEXIST') throw error }
+}
+
 // The view's allocation, allocated now when this workspace decided where its vaults live and the view has none yet
 // and was never published under the data root; null when the view's vault stays under the data root. The folder is
 // made here, exclusively and private to this user, under the first name that is free: taken by nothing on the disk
@@ -224,7 +232,7 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
     try { realParent = realPathOfLocation(existing.parent) } catch { /* not reachable */ }
     if (realParent !== existing.parent) moved(realParent)
     checkVaultParent({ parent: existing.parent, workspaceRoot, repositoryRoots, vaults, allocatedPaths: allocatedPaths.filter((allocated) => allocated !== existing.path), allowSynced: true, homedir })
-    try { fs.mkdirSync(existing.parent, { recursive: true, mode: 0o700 }); fs.mkdirSync(existing.path, { mode: 0o700 }) } catch (error) {
+    try { makeHoldingFolder(existing.parent); fs.mkdirSync(existing.path, { mode: 0o700 }) } catch (error) {
       if (error?.code === 'EEXIST') return existing
       refuse('vault-location-unusable', 'the folder for this view\'s vault cannot be made again there', { parent: existing.parent, cause: error?.code ?? null })
     }
@@ -244,7 +252,7 @@ export function ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, loc
   // A synced location was allowed when it was decided; it is checked again for everything else.
   checkVaultParent({ parent, workspaceRoot, repositoryRoots, vaults, allocatedPaths, allowSynced: true, homedir })
   const unusable = (error) => refuse('vault-location-unusable', 'the folder for this view\'s vault cannot be made there', { parent, cause: error?.code ?? String(error?.message ?? error) })
-  try { fs.mkdirSync(parent, { recursive: true, mode: 0o700 }) } catch (error) { unusable(error) }
+  try { makeHoldingFolder(parent) } catch (error) { unusable(error) }
   // The folder is recorded by its real path, as the file system stores it: a link on the way to the location decided
   // then leads nowhere else later, and the path is the one the app and every check see.
   const realParent = realPathAsStored(parent)

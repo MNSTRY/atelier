@@ -161,6 +161,21 @@ test('a view\'s vault is allocated once, private to this user, under the first f
   assert.throws(() => allocate('listed', { vaults: { bbbbbbbbbbbbbbbb: { path: w.parent } } }), (error) => error.code === 'vault-location-inside-vault')
 })
 
+test('only the folder that holds the vaults is made private when Atelier makes it; a folder on the way to it is made as any other', { skip: POSIX ? false : 'no modes on Windows' }, (t) => {
+  const w = world(t)
+  const ordinary = path.join(w.dir, 'ordinary')
+  fs.mkdirSync(ordinary)
+  const expected = fs.statSync(ordinary).mode & 0o777
+  const parent = path.join(w.dir, 'deep', 'er', 'Atelier')
+  const allocation = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  assert.deepEqual([path.join(w.dir, 'deep'), path.join(w.dir, 'deep', 'er')].map((folder) => fs.statSync(folder).mode & 0o777), [expected, expected])
+  assert.deepEqual([parent, allocation.path].map((folder) => fs.statSync(folder).mode & 0o777), [0o700, 0o700])
+  // Made again after both are gone: the same.
+  fs.rmSync(path.join(w.dir, 'deep'), { recursive: true })
+  ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  assert.deepEqual([path.join(w.dir, 'deep'), path.join(w.dir, 'deep', 'er'), parent, allocation.path].map((folder) => fs.statSync(folder).mode & 0o777), [expected, expected, 0o700, 0o700])
+})
+
 test('the store publishes a view into its allocated vault, makes it again when it has gone, and refuses a record it cannot trust', (t) => {
   const w = world(t)
   const storeOf = (scopeId) => createRecoveryStore({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId, repositoryRoots: w.repositoryRoots })
