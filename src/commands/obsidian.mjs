@@ -30,7 +30,7 @@ import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from '../runtime/obsidian/startup-adapters.mjs'
 import { OBSIDIAN_SETTINGS_FILE, obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../projection/obsidian/publication/vault-list.mjs'
 import { checkVaultParent, projectDisplayName, vaultFolderName } from '../runtime/obsidian/vault-location.mjs'
-import { PublicationRefusal, hasCommittedGeneration, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
+import { PublicationRefusal, allocationFile, hasCommittedGeneration, readVaultAllocation, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
 
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
@@ -611,11 +611,28 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
       return true
     }
-    // Where what `uninstall` keeps is: the vaults, the private state, the project file and Obsidian's vault list.
+    // Where what `uninstall` keeps is: the vaults, the private state, the project file and Obsidian's vault list. The
+    // vaults are those under the data root and every folder allocated to a view where the workspace decided its vaults
+    // live, a view no longer declared included; a record that cannot be read names none.
     const keptLocations = (project, workspace) => {
       const vaultsDirectory = workspace === null ? null : path.join(workspace.workspaceRoot, 'vaults')
-      let vaults = []
-      try { vaults = vaultsDirectory === null ? [] : fs.readdirSync(vaultsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(vaultsDirectory, entry.name)).sort() } catch { vaults = [] }
+      let underDataRoot = []
+      try { underDataRoot = vaultsDirectory === null ? [] : fs.readdirSync(vaultsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(vaultsDirectory, entry.name)) } catch { underDataRoot = [] }
+      const allocated = []
+      if (workspace !== null) {
+        const records = path.join(workspace.workspaceRoot, 'state', 'allocations')
+        let names = []
+        try { names = fs.readdirSync(records).filter((name) => name.endsWith('.json')) } catch { names = [] }
+        for (const name of names) {
+          try {
+            const { scopeId } = JSON.parse(fs.readFileSync(path.join(records, name), 'utf8'))
+            if (typeof scopeId !== 'string' || path.basename(allocationFile(workspace.workspaceRoot, scopeId)) !== name) continue
+            const allocation = readVaultAllocation({ ...workspace, scopeId })
+            if (allocation !== null) allocated.push(allocation.path)
+          } catch (error) { if (!isTyped(error) && !(error instanceof SyntaxError) && !(typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code))) throw error }
+        }
+      }
+      const vaults = [...new Set([...underDataRoot, ...allocated])].sort()
       const userDataDir = obsidianUserDataDir({ platform, env })
       return { vaults, privateState: workspace?.workspaceRoot ?? null, projectFile: project.configPath ?? null, pointer: project.configPath ? localPointerPath(project) : null, obsidianList: userDataDir === null ? null : path.join(userDataDir, OBSIDIAN_SETTINGS_FILE) }
     }

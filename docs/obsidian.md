@@ -423,7 +423,9 @@ is restarted after a minute.
 
 `uninstall` removes the login item and stops the service. It keeps the vaults,
 the private state, the project file and Obsidian's vault list as they are, and
-prints where each is. It does not start the service again.
+prints where each is: every vault under the data root and every folder
+allocated to a view where the workspace decided its vaults live, a view no
+longer declared included. It does not start the service again.
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
 the earlier release. One the login item started notices it: after each tick

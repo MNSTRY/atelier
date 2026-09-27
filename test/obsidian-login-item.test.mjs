@@ -1410,6 +1410,26 @@ test('uninstall removes the login item and stops the proven service, keeps vault
   assert.ok(words.stdout.includes(`vault           ${path.join(vaults, FULL_SCOPE.scopeId)}`), words.stdout)
 })
 
+test('uninstall names each vault allocated where the workspace decided its vaults live, a view no longer declared included, beside those under the data root', async (t) => {
+  const world = await makeWorld(t)
+  const { ensureVaultAllocation } = await import('../src/runtime/obsidian/vault-location.mjs')
+  const { workspaceRoot, workspaceId } = world.workspace()
+  const parent = path.join(world.dir, 'Atelier')
+  const allocate = (scopeId) => ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId, location: { parent }, projectName: 'Harbor Notes', repositoryRoots: protectedRoots(world.loadProject()), now: iso(START) }).path
+  const declared = allocate(FULL_SCOPE.scopeId)
+  const retired = allocate('retired-view')
+  const underDataRoot = path.join(workspaceRoot, 'vaults', 'older-view')
+  fs.mkdirSync(underDataRoot, { recursive: true })
+  // A record that cannot be read names no folder, and stops nothing.
+  fs.writeFileSync(path.join(workspaceRoot, 'state', 'allocations', 'broken.json'), 'not json')
+  const result = await world.run(['uninstall', '--json'])
+  assert.equal(result.exit, EXIT.ok, result.stdout)
+  assert.deepEqual(result.json.kept.vaults, [declared, retired, underDataRoot].sort())
+  const words = await world.run(['uninstall'])
+  for (const vault of [declared, retired, underDataRoot]) assert.ok(words.stdout.includes(`vault           ${vault}`), words.stdout)
+  assert.deepEqual([declared, retired, underDataRoot].map((folder) => fs.statSync(folder).isDirectory()), [true, true, true], 'each is kept as it is')
+})
+
 // ---------------------------------------------------------------------------
 // 8. Nothing is left running
 // ---------------------------------------------------------------------------
