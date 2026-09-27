@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
+import { markdownMetadata } from '../../graph/knowledge-graph.mjs'
 import { EMITTER_VERSION, createPreparationCache, prepareView, readMarkdownLens, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
@@ -36,9 +37,10 @@ export const DEFAULT_ELIGIBILITY = Object.freeze({
 // are the person's own files, in a vault only they see. One is admitted only when its bytes read as a note (the byte
 // lens the emitter reads it with), so a file the emitter would refuse never stops the vault: it stays withheld, as does
 // one that cannot be read. A note whose labels are unknown is never admitted: front matter Atelier could not read
-// (`malformed-frontmatter`: a block scalar, a wrapped value, a flow mapping), or any top-level `kg` key that is not a
+// (`malformed-frontmatter`: a block scalar, a wrapped value), or any top-level `kg` key that is not a
 // block, may carry an audience such as `sensitive` that "only you" leaves out. Only a note with no front matter, or
-// front matter of plain top-level keys none of which is `kg` (plainTopLevelKeys), is the person's plain note. Assets follow the documents that
+// front matter of plain top-level keys at column 0 none of which is `kg` (plainTopLevelKeys) and in which the graph
+// reads no `kg` either, is the person's plain note. Assets follow the documents that
 // embed them, as always.
 export function onlyYouEligibility({ project }) {
   const roots = new Map((project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => [repo.name, repo.path]))
@@ -51,11 +53,14 @@ export function onlyYouEligibility({ project }) {
     // Read now, not as the graph saw it: a file that gained front matter since is judged by what it holds now.
     if (lens.frontmatter === null) return node.classificationReason === 'absent-frontmatter'
     if (node.classificationReason !== 'missing-kg-block') return false
-    const block = bytes.toString('utf8').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
-    return block !== null && plainTopLevelKeys(block[1])
+    const text = bytes.toString('utf8')
+    const block = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+    if (block === null || !plainTopLevelKeys(block[1])) return false
+    // A second layer: the graph's own reading of the front matter has no kg key either.
+    try { return !Object.hasOwn(markdownMetadata(text), 'kg') } catch { return false }
   }
   return Object.freeze({
-    revision: () => 'classified-documents/v2+unclassified-notes-read-as-notes-for-only-you/v3+assets-embedded-by-eligible-documents/v1',
+    revision: () => 'classified-documents/v2+unclassified-notes-read-as-notes-for-only-you/v4+assets-embedded-by-eligible-documents/v1',
     isEligible: (node) => node.classification === 'classified' || (node.classification === 'unclassified' && readsAsNote(node)),
   })
 }
@@ -66,10 +71,16 @@ export function onlyYouEligibility({ project }) {
 // `kg.audience: sensitive` Atelier did not read) keeps the note withheld. An allow-list, never a pattern to find.
 const PLAIN_KEY = /^([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]|$)/
 function plainTopLevelKeys(frontmatter) {
+  let rooted = false
   for (const line of frontmatter.split(/\r?\n/)) {
-    if (line.trim() === '' || line.startsWith('#') || /^[ \t]/.test(line)) continue
+    const trimmed = line.trim()
+    if (trimmed === '' || trimmed.startsWith('#')) continue
+    // An indented line is a nested value or a continuation only below a key at column 0; YAML also lets a whole root
+    // mapping be indented, and then its keys (kg among them) are indented too.
+    if (/^[ \t]/.test(line)) { if (!rooted) return false; continue }
     const key = PLAIN_KEY.exec(line)
     if (key === null || key[1] === 'kg') return false
+    rooted = true
   }
   return true
 }

@@ -66,6 +66,13 @@ const UNCLASSIFIED = {
   'drafts/json-front-matter.md': '---\n{"kg": {"audience": "sensitive", "id": "harbor:json"}}\n---\n\n# JSON front matter\n',
   'drafts/flow-front-matter.md': '---\n{title: x, kg: {audience: sensitive}}\n---\n\n# Flow front matter\n',
   'drafts/complex-key.md': '---\n? kg\n: {audience: sensitive}\n---\n\n# Complex key\n',
+  // A root mapping YAML allows to be indented as a whole: every key is indented, kg among them.
+  'drafts/indented-root.md': '---\n  kg: {audience: sensitive}\n---\n\n# Indented root\n',
+  'drafts/indented-root-crlf.md': '---\r\n  title: x\r\n  kg: {audience: sensitive}\r\n---\r\n\r\n# Indented root, CRLF\r\n',
+  'drafts/indented-after-comment.md': '---\n# note\n  kg: {audience: sensitive}\n---\n\n# Indented after a comment\n',
+  'drafts/indented-quoted.md': '---\n  "kg":\n    audience: sensitive\n---\n\n# Indented quoted\n',
+  // The graph reads a top-level kg here although the line is indented below another key.
+  'drafts/kg-under-scalar.md': '---\ntitle: x\n  kg: {audience: sensitive}\n---\n\n# kg under a scalar\n',
 }
 const READ_AS_NOTES = ['drafts/malformed.md', 'drafts/own-front-matter.md', 'drafts/plain.md']
 
@@ -130,8 +137,17 @@ test('an "only you" vault admits a note without a classification only when its b
   }
   assert.equal(admitted['notes/lantern.md'].eligible, true, 'a classified note is eligible, as always')
   assert.equal(withheld['notes/lantern.md'].eligible, true)
-  // A note that cannot be read any more is withheld, not a failure.
+  // A note the graph saw without front matter is judged by what the file holds when it is read: one that gained a
+  // kg block since (saying sensitive) is withheld until the graph reads it again.
   const reader = onlyYouEligibility({ project })
+  const gained = path.join(project.repos[0].path, 'drafts', 'plain.md')
+  const before = fs.readFileSync(gained)
+  fs.writeFileSync(gained, `---\nkg:\n  audience: sensitive\n---\n\n${before}`)
+  assert.equal(admitted['drafts/plain.md'].classificationReason, 'absent-frontmatter')
+  assert.equal(reader.isEligible(admitted['drafts/plain.md']), false, 'front matter gained since the graph read it')
+  fs.writeFileSync(gained, before)
+  assert.equal(reader.isEligible(admitted['drafts/plain.md']), true)
+  // A note that cannot be read any more is withheld, not a failure.
   fs.rmSync(path.join(project.repos[0].path, 'drafts', 'plain.md'))
   assert.equal(reader.isEligible(admitted['drafts/plain.md']), false)
   assert.equal(reader.isEligible({ ...admitted['drafts/own-front-matter.md'], repo: 'elsewhere' }), false, 'a repository the project does not enrol')
