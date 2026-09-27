@@ -119,10 +119,18 @@
   The folder is created exclusively and private to this user, and its
   allocation is recorded once in the workspace's private state
   (`atelier-obsidian-vault-allocation/v1`, `state/allocations/<view>.json`,
-  with the folder's device and inode: a folder that is not the one made,
-  restored or moved in, is never published into, `vault-allocation-replaced`,
-  and one that has gone is made again by the next tick, never inside a
-  repository, the project or the private state),
+  with the folder's real path, device and inode, which the maintenance service
+  checks at every tick and the publisher before it writes: another folder put
+  where the one made was is not published into, `vault-allocation-replaced`,
+  nor is the same folder reached through a link put on the way since,
+  `vault-allocation-moved`; on Linux a folder made after the original was
+  removed can be given its inode number, see Known limits in
+  `docs/obsidian.md`. A folder that has gone is made again by the next tick,
+  only where its recorded real path leads and only where a location would be
+  accepted: never inside a repository, the project, the private state, a vault
+  Atelier publishes or one the app lists. A published view whose record was
+  lost is refused, `vault-allocation-lost`, never published again into a new
+  vault under the data root),
   which the recovery store reads: the engine, source apply, the proposal
   adapter and `open` all find the same vault. A vault published before stays
   under the data root, and a workspace that decides nothing publishes there as
@@ -139,7 +147,9 @@
   (`vault-location-inside-private-state`, refused by `location set` too), an
   allocation record that cannot be read or names a folder inside a
   repository, each stops its own view only. `location show`
-  and `status` (`scopes[].vault`) say where each view's vault is.
+  and `status` (`scopes[].vault`) say where each view's vault is, or why it
+  cannot be read. Consent to a synced folder is not recorded, so it is not
+  checked again when a folder is allocated (Known limits).
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the

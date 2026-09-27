@@ -509,11 +509,27 @@ across projects and views. The first name that is free is taken, with a number
 inside the parentheses when needed (`harbor-notes (everything 2)`): free means
 nothing on the disk has it, and no vault Obsidian lists has it in any letter
 case. The folder is created private to this user (mode 0700), and so is `DIR`
-when Atelier creates it. The allocation is recorded in the workspace's private
+when Atelier creates it; a missing folder on the way to `DIR` is made as any
+other folder is. The allocation is recorded in the workspace's private
 state (`state/allocations/<view>.json`) and is never recomputed: renaming the
 project or deciding another folder later moves no vault, and a vault published
 before under the data root stays there. `location show` says where each
-view's vault is, or will be.
+view's vault is, or will be, or why its record cannot be read.
+
+Atelier publishes only into the folder it made. The allocation records the
+folder's real path, device and inode, and the maintenance service checks them
+at every tick, as the publisher does before it writes anything. Another folder
+put where the one made was (moved in, or a link) is not published into
+(`vault-allocation-replaced`), nor is the same folder reached through a link
+put on the way since, into a vault the app lists, say
+(`vault-allocation-moved`). A folder that has gone is made again at the next
+tick, only where its recorded real path leads and only where a location would
+be accepted (not inside a repository, the private state, a vault Atelier
+publishes or one the app lists, and on the data root's volume). A view that
+was published and whose record was lost is refused (`vault-allocation-lost`)
+rather than published again into a new vault under the data root: restore the
+record from a backup, or make the folder `vaults/<view>` under the data root
+to publish the view there again.
 
 `DIR` is refused inside an enrolled repository or the project, inside a vault
 Atelier publishes, inside a folder Obsidian lists as a vault, and on another
@@ -769,6 +785,19 @@ test reported as a pass.
   own launch `open` waits, bounded, while the app is still opening the vault;
   an app whose vault window is still loading answers a command with `Error:
   Command "…" not found`, which is read as not up yet, never as a version.
+- Vault location: consent to a folder a sync client keeps in step
+  (`--allow-synced-location`) is given when `location set` decides the folder,
+  and is not recorded. The maintenance service does not check for sync clients
+  again when it allocates a view's folder or makes one again, so a folder on
+  the way that becomes a link into a synced folder after the decision is not
+  refused then. Every other check runs again, through links, and an allocated
+  vault reached through a link is refused (`vault-allocation-moved`).
+- Vault identity: an allocated folder is known by its real path, device and
+  inode. On Linux a folder made at the same path after the allocated one was
+  removed can be given the same inode number (ext4 reuses a freed one), and is
+  then taken for the one made; macOS (APFS) did not reuse one in 200 tries.
+  Such a folder is published into only at the recorded real path, and the
+  plugin's bearer only when this account owns it.
 - Obsidian's settings file: `open` adds a view's vault to the app's own list,
   `obsidian.json` in its user-data directory: `~/Library/Application
   Support/obsidian` on macOS and `$XDG_CONFIG_HOME/obsidian` (else
