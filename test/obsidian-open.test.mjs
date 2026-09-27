@@ -3121,9 +3121,11 @@ test('a running service never publishes into a folder that replaced its allocate
     fs.symlinkSync(personal, vault)
     touchCompass(world, 'North is painted green.')
     world.advance(10 * 60 * 1000)
-    const [state, reason] = stateOf(await engine.tick())
-    assert.equal(state, 'stale')
-    assert.ok(['vault-allocation-replaced', 'managed-root-symlink-alias'].includes(reason), reason)
+    assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+    // At every later tick too, whose store is made anew: the same reason, and its next step.
+    world.advance(10 * 60 * 1000)
+    assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+    assert.equal((await world.run(['status', '--json'])).json.scopes[0].next, REASON_NEXT['vault-allocation-replaced'])
     assert.deepEqual(fs.readdirSync(personal), ['diary.md'], 'nothing is written into the person\'s own vault')
   }
 })

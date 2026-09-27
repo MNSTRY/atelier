@@ -257,6 +257,9 @@ export function createRecoveryStore({ workspaceRoot, workspaceId, scopeId, vault
   if (vaultRoot !== undefined && (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot))) throw new TypeError('vaultRoot must be an absolute path')
   const allocation = vaultRoot === undefined ? readVaultAllocation({ workspaceRoot, workspaceId, scopeId }) : null
   const namedVault = vaultRoot ?? allocation?.path
+  // A folder that is there but is not the one allocated (a link put where it was, say) is refused as such first, with
+  // its own next step; the checks below only read. One that has gone is checked against the repositories first.
+  if (allocation !== null && allocatedFolderState(allocation) !== 'missing') assertAllocatedFolder(allocation)
   const guard = checkManagedRoots({ managedRoots: [workspaceRoot, ...(namedVault === undefined ? [] : [namedVault])], repositoryRoots })
   if (!guard.ok) refuse(guard.refusals[0].code, guard.refusals[0].message, { refusals: guard.refusals })
   if (allocation !== null) assertAllocatedFolder(allocation)

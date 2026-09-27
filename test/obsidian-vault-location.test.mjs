@@ -213,7 +213,7 @@ test('the store publishes a view into its allocated vault, makes it again when i
   if (POSIX) {
     fs.mkdirSync(path.join(w.dir, 'elsewhere'))
     fs.symlinkSync(path.join(w.dir, 'elsewhere'), allocation.path)
-    assert.throws(() => storeOf('everything'), (error) => ['vault-allocation-replaced', 'managed-root-symlink-alias'].includes(error.code), 'a link where the folder was')
+    assert.throws(() => storeOf('everything'), (error) => error.code === 'vault-allocation-replaced', 'a link where the folder was, refused with its own next step')
     fs.rmSync(allocation.path)
   }
   ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
