@@ -388,6 +388,15 @@ test('the vault lock\'s own folder is checked once it is made: a link put there 
   assert.deepEqual(fs.existsSync(lockFolder) ? fs.readdirSync(lockFolder, { recursive: true }) : [], [], 'no ticket is written in the folder the link leads to')
 })
 
+test('the plugin\'s services find a view\'s vault through its record, and only with the workspace id named', async (t) => {
+  const { viewVaultRoot } = await import('../src/runtime/obsidian/plugin-choice.mjs')
+  const w = world(t)
+  const allocation = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
+  assert.equal(viewVaultRoot(w.workspaceRoot, 'everything', WORKSPACE_ID), allocation.path)
+  assert.equal(viewVaultRoot(w.workspaceRoot, 'older', WORKSPACE_ID), path.join(w.workspaceRoot, 'vaults', 'older'))
+  assert.throws(() => viewVaultRoot(w.workspaceRoot, 'everything'), TypeError, 'no workspace id is guessed')
+})
+
 test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {
   const slept = []
   const sleep = async (ms) => { slept.push(ms) }

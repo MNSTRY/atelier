@@ -45,8 +45,12 @@ const segment = (identifier) => identifier.replaceAll(':', '_')
 export const pluginChoiceDirectory = (workspaceRoot) => path.join(workspaceRoot, 'state', 'plugin', 'choices')
 // Where a view's vault is, as the recovery store finds it (vaultRootFor): the folder allocated to the view where the
 // workspace decided its vaults live, else its folder under the data root. A record that cannot be read, or was lost,
-// refuses, typed. `workspaceId` is the workspace's; a workspace's private state is named by it, which is the default.
-export const viewVaultRoot = (workspaceRoot, scopeId, workspaceId = path.basename(workspaceRoot)) => vaultRootFor({ workspaceRoot, workspaceId, scopeId }).path
+// refuses, typed. `workspaceId` is required: the record names its workspace, and the folder of the private state is
+// not a safe stand-in for it (a workspace id with `:` is written otherwise there, and the folder may be reached through a link).
+export function viewVaultRoot(workspaceRoot, scopeId, workspaceId) {
+  if (typeof workspaceId !== 'string' || workspaceId === '') throw new TypeError('viewVaultRoot needs the workspace id')
+  return vaultRootFor({ workspaceRoot, workspaceId, scopeId }).path
+}
 const choiceFile = (workspaceRoot, scopeId) => path.join(pluginChoiceDirectory(workspaceRoot), `${segment(scopeId)}.json`)
 
 function validChoice(document, { workspaceId, scopeId }) {
