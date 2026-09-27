@@ -4,6 +4,7 @@ import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularF
 import { PLUGIN_ID } from '../../projection/obsidian/plugin-bridge/channel.mjs'
 import { COMMUNITY_PLUGINS_PATH } from '../../projection/obsidian/materialize/settings.mjs'
 import { sha256Digest } from '../../projection/obsidian/materialize/byte-lens.mjs'
+import { vaultRootFor } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, isPlainObject, isoTime } from './documents.mjs'
 
 // Whether the person wants Atelier's plugin in one vault, as the vault itself
@@ -42,8 +43,10 @@ const MAX_SETTINGS_BYTES = 256 * 1024
 const segment = (identifier) => identifier.replaceAll(':', '_')
 
 export const pluginChoiceDirectory = (workspaceRoot) => path.join(workspaceRoot, 'state', 'plugin', 'choices')
-// Where the recovery store places a view's vault.
-export const viewVaultRoot = (workspaceRoot, scopeId) => path.join(workspaceRoot, 'vaults', segment(scopeId))
+// Where a view's vault is, as the recovery store finds it (vaultRootFor): the folder allocated to the view where the
+// workspace decided its vaults live, else its folder under the data root. A record that cannot be read, or was lost,
+// refuses, typed. `workspaceId` is the workspace's; a workspace's private state is named by it, which is the default.
+export const viewVaultRoot = (workspaceRoot, scopeId, workspaceId = path.basename(workspaceRoot)) => vaultRootFor({ workspaceRoot, workspaceId, scopeId }).path
 const choiceFile = (workspaceRoot, scopeId) => path.join(pluginChoiceDirectory(workspaceRoot), `${segment(scopeId)}.json`)
 
 function validChoice(document, { workspaceId, scopeId }) {
@@ -142,7 +145,10 @@ export function decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultR
 // `pending` (the view's next preparation records it).
 export function currentPluginChoice({ workspaceRoot, workspaceId, scopeId }) {
   const recorded = readPluginChoice({ workspaceRoot, workspaceId, scopeId })
-  const change = changeShown(recorded, readCommunityEntry(viewVaultRoot(workspaceRoot, scopeId)).entry)
+  // A view whose vault cannot be found (its record cannot be read) shows what was recorded; its view says why.
+  let vaultRoot
+  try { vaultRoot = viewVaultRoot(workspaceRoot, scopeId, workspaceId) } catch (error) { if (typeof error?.code !== 'string') throw error; return recorded }
+  const change = changeShown(recorded, readCommunityEntry(vaultRoot).entry)
   return change === null ? recorded : { ...change, since: null, pending: true }
 }
 
