@@ -220,7 +220,10 @@ function currentDigestOf(vaultRoot, relativePath) {
 // stands: a parent that is a link or not a directory, a leaf that is not a
 // regular file (path-unsafe), or the data file where the vault root cannot hold
 // the bearer and is not one Atelier makes private itself (vault-not-private;
-// see ensurePrivateVaultRoot). Read-only.
+// see ensurePrivateVaultRoot). Read-only. Conservative: a leaf nobody may
+// read, a parent that cannot be looked into, and a vault root Atelier keeps
+// whose mode cannot be changed are left for the person too, but count here as
+// a drift, as before.
 function leftForThePerson(store, relativePath) {
   let current = store.vaultRoot
   for (const part of relativePath.split('/').slice(0, -1)) {

@@ -306,7 +306,8 @@
   person again (the data file of a vault root that is a link or not private,
   a folder where a file goes) is no longer a reason to publish a committed
   generation again, so it never waits for the app and never gets that
-  reason.
+  reason; the path is left as it is (nothing names it in `status` yet, and
+  the plugin shows as not present).
 - A view held because a plugin file (`plugin-file-changed`) or a settings
   file (`settings-changed`) changed while it was published, by another
   program or by the person, is still `publisher-conflict`, but its next step

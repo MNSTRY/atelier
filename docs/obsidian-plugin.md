@@ -120,8 +120,13 @@ never makes a current view stale), and the file is written at a later
 attempt, on the retry schedule of an unsettled view, once the app
 qualifies. A drift that publishing would only leave for the person again
 (the data file of a vault root that is a link or not private, a folder where
-a file goes) is no reason to publish again and needs no app: it stays
-reported, and the view keeps its plain reason. Until the app qualifies, a
+a file goes) is no reason to publish again and needs no app: the path is
+left as it is, and the view keeps its plain reason. Nothing in `status` or
+`open` names such a path yet; without its data file the plugin cannot reach
+the service, so it shows as not present (`no-live-lease`). A few paths the
+publisher leaves for the person still count as a drift here, and wait for the
+app as one: a file nobody may read, a parent folder that cannot be looked
+into, and a vault root Atelier keeps whose mode cannot be changed. Until the app qualifies, a
 view waiting for it has the reason
 `verified-by-read-back-plugin-waits-for-app` rather than
 `verified-by-read-back`, and `status` and `open` add `plugin files wait for
