@@ -283,3 +283,29 @@ test('graph proposal files carry the most restrictive audience of the sources th
   for (const file of quoting) assert.equal(audienceOf(file), 'sensitive', file.path)
   assert.equal(audienceOf(files.find(file => file.path === 'counterstudy.md')), 'sensitive')
 })
+
+test('an assessment copying bundle conflicts carries the audience of every source in that bundle', () => {
+  const specimen = JSON.parse(fs.readFileSync(new URL('../fixtures/inquiry/workshop.json', import.meta.url), 'utf8'))
+  const known = new Map()
+  const repin = value => {
+    if (value && typeof value === 'object') {
+      if (value.id && value.digest && Object.keys(value).length === 2 && known.has(value.id)) return inquiry.inquiryRef(known.get(value.id))
+      for (const key of Object.keys(value)) value[key] = repin(value[key])
+    }
+    return value
+  }
+  const records = structuredClone(specimen).map(record => {
+    if (record.id === 'different-population') record.data.audience = 'sensitive'
+    if (record.id === 'counter-report') {
+      const population = known.get('different-population')
+      record.data.assertions.push({ ...record.data.assertions[0], id: 'side', statement: 'Uncited side statement.', quote: population.data.content.slice(0, 20), source: inquiry.inquiryRef(population), stance: 'neutral' })
+      record.data.conflicts = ['The different-population source (SENSITIVE-DETAIL) contradicts the counterstudy.']
+    }
+    const pinned = repin(record); known.set(record.id, pinned); return pinned
+  })
+  const proposal = inquiry.inquiryGraphProposal(records, { namespace: 'corpus' })
+  const carrying = proposal.files.filter(file => file.content.includes('SENSITIVE-DETAIL'))
+  assert.ok(carrying.length > 0)
+  for (const file of carrying) assert.equal(/audience: "([a-z]+)"/.exec(file.content)[1], 'sensitive', file.path)
+  assert.equal(proposal.audience, 'sensitive')
+})

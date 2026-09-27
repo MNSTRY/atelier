@@ -17,9 +17,11 @@ export function inquiryGraphProposal(records, { namespace }) {
   }
   // A file carries the most restrictive audience of the campaign and of every
   // source whose material it copies; a sensitive quote is never labelled private.
+  const fileAudience = new Map()
   function add(record, body, audience = state.campaign.data.audience) {
     const id = node(record)
     if (files.has(id)) return
+    fileAudience.set(`${record.id}.md`, audience)
     files.set(id, { path: `${record.id}.md`, content: [
       '---', `title: ${JSON.stringify(`Inquiry ${record.kind}: ${record.id}`)}`, 'kg:', `  id: ${JSON.stringify(id)}`, '  type: "document"',
       '  status: "draft"', `  audience: ${JSON.stringify(audience)}`, '  relations: {}', '---', '',
@@ -33,7 +35,12 @@ export function inquiryGraphProposal(records, { namespace }) {
   }
   for (const decision of records.filter(r => r.kind === 'decision' && r.data.disposition === 'accepted' && !stale.has(r.id))) {
     const assessment = byId.get(decision.data.assessment.id), hypothesis = byId.get(assessment.data.hypothesis.id)
-    const quoted = assessment.data.evidence.map(item => byId.get(byId.get(item.bundle.id).data.assertions.find(a => a.id === item.assertion).source.id).data.audience)
+    // The assessment copies each cited bundle's conflicts, gaps and questions,
+    // so its label covers every source that bundle reports or asserts from.
+    const quoted = assessment.data.evidence.flatMap(item => {
+      const bundle = byId.get(item.bundle.id)
+      return [...bundle.data.reports.map(ref => ref.id), ...bundle.data.assertions.map(a => a.source.id)].map(id => byId.get(id).data.audience)
+    })
     const audience = restrictiveAudience(state.campaign.data.audience, ...quoted)
     add(decision, { conclusion: decision.data.conclusion, reason: decision.data.reason, reviewerReport: { by: decision.by, at: decision.at, basis: decision.data.reviewBasis }, nextQuestions: decision.data.nextQuestions }, audience)
     add(assessment, { model: assessment.data.model, result: state.assessments[assessment.id], rationale: assessment.data.rationale,
@@ -53,7 +60,7 @@ export function inquiryGraphProposal(records, { namespace }) {
       edge(source, assertion.stance === 'neutral' ? 'related' : assertion.stance, hypothesis)
     }
   }
-  return { schema: 'atelier-inquiry-graph-proposal@v1', campaign: state.campaign?.id ?? null, historyDigest: state.head, audience: state.campaign?.data.audience ?? null, files: [...files.values()], claims, reconsider: state.reconsider, canonicalMutation: false, authority: 'none' }
+  return { schema: 'atelier-inquiry-graph-proposal@v1', campaign: state.campaign?.id ?? null, historyDigest: state.head, audience: state.campaign ? restrictiveAudience(state.campaign.data.audience, ...[...files.values()].map(file => fileAudience.get(file.path))) : null, files: [...files.values()], claims, reconsider: state.reconsider, canonicalMutation: false, authority: 'none' }
 }
 
 export function inquiryStewardObservation(records, feedbackId) {

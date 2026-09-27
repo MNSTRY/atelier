@@ -11,8 +11,8 @@
   longer wedges after one refused read; it replays from a clean copy.
 - Ingestion reads take no lock and bind no workspace identity; only `plan`
   binds it, so reads work during a run and a mistyped id is not recorded.
-- Inquiry graph proposals label each file with the most restrictive audience of
-  the sources it quotes.
+- Inquiry graph proposals label each file, and the proposal, with the most
+  restrictive audience of the sources whose material they carry.
 - Coordination reports every dependency cycle regardless of record order, and a
   superseded directive stays superseded when its replacement goes stale.
 - Reflective and coaching acts require Reflection, an assessment and a request
