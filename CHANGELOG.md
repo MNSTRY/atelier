@@ -294,7 +294,8 @@
   vault. A version only Atelier's plugin gave, with no answer for the vault,
   now has to be seen in two rounds in a row: one version call that timed out
   while Obsidian was busy opening its window made `open` report a command
-  line that was only slow as switched off.
+  line that was only slow as switched off. A wait that ends right after one
+  such round still gives that answer, not `launch-failed`.
 - A view kept `current` while a plugin file it pins waits for Obsidian (a
   drifted `data.json`, say, while the app cannot be coordinated with) now
   says so. Its reason is `verified-by-read-back-plugin-waits-for-app`

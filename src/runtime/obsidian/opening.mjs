@@ -559,6 +559,8 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
     await sleep(appPollMs)
   }
   if (!rules.appQualifies(after)) return finish(after.outcome, { ...common, launched: true, reason: after.reason, app: app(after), registration })
+  // The wait ended on a silent round with only the plugin giving the version: the command line is what did not answer.
+  if (vault?.answered !== true && silentRounds > 0) return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
   if (vault?.answered !== true) return finish('launch-failed', { ...common, launched: true, reason: 'app-did-not-answer-for-this-vault', app: app(after), registration })
   if (vault.indexReady !== true) return finish('indexing', { ...common, launched: true, reason: 'metadata-cache-not-ready', app: app(after), registration })
 

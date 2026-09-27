@@ -449,7 +449,8 @@ answer decides wherever it gives one:
   would change nothing. After a launch that answer is given at the second
   such round in a row, not the first: one tool call that timed out while the
   app was busy opening its window looks the same once, and `open` then goes
-  on waiting for the vault.
+  on waiting for the vault. A wait that ends right after one such round gives
+  the same answer.
 - Whether an app runs is the process table's answer, which says no only when
   it finds no Obsidian process at all. A lease outlives its app by up to the
   lease time (six seconds after a crash), and any process that holds the

@@ -1104,7 +1104,7 @@ test('app not running: the view is published on the path with no app, the vault 
 
 // After the launch, the first `silentRounds` rounds see a version only Atelier's plugin gave (the tool's own version
 // call timed out) and no answer for the vault; the rounds after that see the app as it is.
-async function openThroughSilentRounds(t, silentRounds) {
+async function openThroughSilentRounds(t, silentRounds, { appWaitMs = 5000 } = {}) {
   const world = makeWorld(t)
   await world.service()
   const app = fakeApp()
@@ -1118,7 +1118,7 @@ async function openThroughSilentRounds(t, silentRounds) {
       return app.appProbe.vaultState(input)
     },
   }
-  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app, appProbe }, open: { appWaitMs: 5000, appPollMs: 5 } })
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app, appProbe }, open: { appWaitMs, appPollMs: 5 } })
   return { opened, rounds, app }
 }
 
@@ -1130,6 +1130,9 @@ test('one silent round after the launch, with a version only the plugin gave, is
   const always = await openThroughSilentRounds(t, Number.POSITIVE_INFINITY)
   assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.opened.json.launched, always.rounds], ['app-cli-unavailable', 'vault-open-cli-silent', true, ['silent', 'silent']])
   assert.equal(always.app.launches.length, 1)
+  // The wait ends after one such round: still the precise answer, not a launch that failed.
+  const cut = await openThroughSilentRounds(t, Number.POSITIVE_INFINITY, { appWaitMs: 0 })
+  assert.deepEqual([cut.opened.json.outcome, cut.opened.json.reason, cut.rounds], ['app-cli-unavailable', 'vault-open-cli-silent', ['silent']])
 })
 
 test('the launch names the vault by its id and says whether the app runs: a quit app is started plainly, so it reopens the vaults its list marks open, and handed the vault by id once it answers', needsExchange, async (t) => {
