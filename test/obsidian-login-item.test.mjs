@@ -1420,8 +1420,11 @@ test('uninstall names each vault allocated where the workspace decided its vault
   const retired = allocate('retired-view')
   const underDataRoot = path.join(workspaceRoot, 'vaults', 'older-view')
   fs.mkdirSync(underDataRoot, { recursive: true })
-  // A record that cannot be read names no folder, and stops nothing.
+  // A record that cannot be read names no folder, and stops nothing: not JSON, `null`, a list, another view's record.
   fs.writeFileSync(path.join(workspaceRoot, 'state', 'allocations', 'broken.json'), 'not json')
+  fs.writeFileSync(path.join(workspaceRoot, 'state', 'allocations', 'nothing.json'), 'null')
+  fs.writeFileSync(path.join(workspaceRoot, 'state', 'allocations', 'listed.json'), '[]')
+  fs.copyFileSync(path.join(workspaceRoot, 'state', 'allocations', `${FULL_SCOPE.scopeId}.json`), path.join(workspaceRoot, 'state', 'allocations', 'misnamed.json'))
   const result = await world.run(['uninstall', '--json'])
   assert.equal(result.exit, EXIT.ok, result.stdout)
   assert.deepEqual(result.json.kept.vaults, [declared, retired, underDataRoot].sort())

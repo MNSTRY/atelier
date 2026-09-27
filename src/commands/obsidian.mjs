@@ -624,12 +624,14 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         let names = []
         try { names = fs.readdirSync(records).filter((name) => name.endsWith('.json')) } catch { names = [] }
         for (const name of names) {
+          // Whatever the file holds (not JSON, `null`, another view's record), it names a folder only when it is a valid
+          // record of its own view; nothing here can stop `uninstall`.
           try {
-            const { scopeId } = JSON.parse(fs.readFileSync(path.join(records, name), 'utf8'))
+            const scopeId = JSON.parse(fs.readFileSync(path.join(records, name), 'utf8'))?.scopeId
             if (typeof scopeId !== 'string' || path.basename(allocationFile(workspace.workspaceRoot, scopeId)) !== name) continue
             const allocation = readVaultAllocation({ ...workspace, scopeId })
             if (allocation !== null) allocated.push(allocation.path)
-          } catch (error) { if (!isTyped(error) && !(error instanceof SyntaxError) && !(typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code))) throw error }
+          } catch { /* a record that cannot be read names no folder */ }
         }
       }
       const vaults = [...new Set([...underDataRoot, ...allocated])].sort()
@@ -969,9 +971,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         let workspace = null
         try { const found = resolveServiceWorkspace({ project, dataRoot, env, platform }); workspace = found?.workspaceRoot ? found : null } catch (error) { if (!isTyped(error)) throw error }
         const record = workspace === null ? null : readLoginItemRecord(workspace)
+        // What is kept is read before anything is stopped or removed, so nothing it finds can stop the answer after that.
+        const kept = keptLocations(project, workspace)
         const item = record === null ? { removed: false, reason: 'not-installed' } : await removeLoginItem({ loadProject, dataRoot, env, platform, manager: await managerSeam(), clock })
         const service = workspace === null ? { state: 'stopped', stopped: false, refused: false, reason: 'workspace-not-prepared' } : await stopService(lifecycle, lifecycleRules)
-        const kept = keptLocations(project, workspace)
         const itemGone = item.removed === true || item.reason === 'not-installed' || item.reason === 'workspace-not-prepared'
         const serviceGone = service.stopped === true || service.state === 'stopped'
         const remembered = workspace !== null && itemGone ? rememberLoginItem('off') : false
