@@ -760,7 +760,8 @@ test('under --startup beside a service that runs: service-already-running, exit 
   const running = await runMaintenanceService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, adapterFactory: absent, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }) } })
   t.after(() => running.shutdown('test-teardown'))
   // Its first tick publishes, and the publication holds this process for a second or more; under load, longer than
-  // the child's health probe waits. The child starts once that tick is done, beside a runtime that answers at once.
+  // the child's health probe waits. `tickNow` returns after the tick in flight and one tick more (or after one tick,
+  // when none is in flight); the next is an hour away, so the child starts beside a runtime that answers at once.
   await running.tickNow()
   // Run asynchronously: this process answers the health the child asks for.
   const second = await runChild(t, entryWords(world, ['--startup']), world.env)
