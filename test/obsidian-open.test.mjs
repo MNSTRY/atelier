@@ -3209,6 +3209,7 @@ test('a folder replaced, removed or moved away during a publication (while the a
     // Two ticks with nothing changed at the sources: the same answer at both.
     assert.deepEqual(await tick(), untouched, `with nothing changed since it is back (${label})`)
     assert.deepEqual(await tick(), untouched, `and again (${label})`)
+    if (untouched[1] === 'vault-note-missing') assert.equal((await world.run(['status', '--json'])).json.scopes[0].next, REASON_NEXT['vault-note-missing'], `status names when it is published again (${label})`)
     touchCompass(world, 'North is painted green.')
     assert.deepEqual(await tick(), ['current', 'published-and-verified'], `published again at the next change (${label})`)
     assert.match(fs.readFileSync(path.join(vaultOf(), 'east-wing', 'notes', 'Compass rose.md'), 'utf8'), /painted green/, label)
