@@ -2183,8 +2183,12 @@ test('a drift publishing cannot repair is published once at a service\'s start, 
   assert.equal(world.freshness().state, 'current')
 })
 
-test('a plugin path a publication left for the person and the person repaired before the tick ended is written at the next tick', needsExchange, async (t) => {
+// In a vault under the data root, and in one allocated where the workspace decided its vaults live.
+const VAULT_PLACES = [['under the data root', false], ['allocated where the workspace decided', true]]
+
+for (const [place, allocated] of VAULT_PLACES) test(`a plugin path a publication left for the person and the person repaired before the tick ended is written at the next tick (a vault ${place})`, needsExchange, async (t) => {
   const world = serviceWorld(t)
+  if (allocated) await world.decideLocation(path.join(world.dir, 'Atelier'))
   const data = path.join(world.vault, PLUGIN_DATA_PATH)
   let published = 0
   let afterPublish = null
@@ -2205,6 +2209,7 @@ test('a plugin path a publication left for the person and the person repaired be
   await tick()
   assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE, 'written at the next tick')
   assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
+  if (allocated) assert.equal(fs.existsSync(path.join(world.workspaceRoot, 'vaults')), false, 'nothing under the data root')
 })
 
 test('a plugin file another writer removes after its view was published, while the tick goes on, is written again at the next tick', needsExchange, async (t) => {
@@ -2326,10 +2331,11 @@ test('a vault root changed during the tick is a new look: a data file left becau
   assert.deepEqual([three.tick(), three.tick()], [1, 0])
 })
 
-test('a plugin file another writer brings back to its old bytes after a publication that changed its pin, while the tick goes on, is written again at the next tick', needsExchange, async (t) => {
+for (const [place, allocated] of VAULT_PLACES) test(`a plugin file another writer brings back to its old bytes after a publication that changed its pin, while the tick goes on, is written again at the next tick (a vault ${place})`, needsExchange, async (t) => {
   // A restart on another listener changes the data file's pin; a sync tool whose older copy wins restores the old file
   // right after the publication returns.
   const world = serviceWorld(t)
+  if (allocated) await world.decideLocation(path.join(world.dir, 'Atelier'))
   const data = path.join(world.vault, PLUGIN_DATA_PATH)
   const first = await world.service()
   assert.ok((await first.tickNow()).ok)
@@ -2345,6 +2351,7 @@ test('a plugin file another writer brings back to its old bytes after a publicat
   assert.deepEqual([await tick(), await tick(), await tick()], [2, 2, 2], 'the start publishes; the next look asks about the old file, which is written again once')
   assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).channel.port, world.port, 'the data file names the listener of the service now running')
   assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
+  if (allocated) assert.equal(fs.existsSync(path.join(world.workspaceRoot, 'vaults')), false, 'nothing under the data root')
 })
 
 test('a drift publishing would only leave for the person again never waits for the app: the view stays current with its plain reason, and the app is not asked', needsExchange, async (t) => {
