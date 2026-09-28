@@ -804,16 +804,29 @@ Why this loses nothing a person wrote, whoever holds the vault: no editor can
 hold an unsaved buffer of a file that does not exist; the link either makes
 the whole file appear or fails because something is there, which is kept; and
 an editor that later saves over a created file wins, and is read as an edit.
-The list evidence is for the experience: the app is first told about the vault
-(`open`) only after the generation is committed. Lists this account's app
-does not keep are covered by that argument alone: another user-data folder,
-another machine through a synced folder.
+The list evidence is for the experience, and it holds only for a run that
+completes: that run is committed before `open` first tells the app about the
+vault. A run that stops partway commits nothing. That happens when the list
+names the folder meanwhile, a settings file with other bytes is already there,
+or an interrupted run left a replacement or a removal. The view then reports
+`editor-uncoordinated` and falls back to the coordinated path: `open` may add
+the vault to the app and open it before it is complete, and what is left,
+every replacement and removal included, is published through the app with its
+usual base and buffer checks. The person may see an incomplete vault then;
+nothing they write is at risk. Lists this account's app does not keep are
+covered by the argument above alone: another user-data folder, another
+machine through a synced folder.
 
 A maintenance service whose app does not qualify (its command line off, no
 vault open, a version below the floor) no longer keeps such a view from its
 first publication: the publisher is reached with an adapter that coordinates
-with nothing, and takes this path when every condition holds. Otherwise the
-view reports the app's refusal, as before.
+with nothing, and takes this path when every condition holds. When the path
+does not apply, or the run stops partway at a unit refused as
+`editor-uncoordinated`, the view reports the app's refusal, as before. `open`
+then answers that refusal without adding the vault to the app, unless the
+person asks it to restart Obsidian (`--restart-obsidian`): the vault is then
+added and opened, and may be incomplete until the app has published the rest.
+A run that stops on a file in its way reports that (`create-conflict`).
 
 ### Proven boundary
 

@@ -214,11 +214,19 @@
   replace or remove a file, or write a settings file over one that is there,
   refuses as `editor-uncoordinated` and writes nothing. The evidence is read
   again before the first file and every two seconds, and once it is gone
-  nothing more is written or committed. `open` adds the vault to Obsidian and
-  opens it only once that generation is committed, so the app never shows a
-  half-filled vault. The plugin's entry written this way counts as offered
-  until the plugin says hello. A later generation, a vault under the data
-  root, and every other case publish and refuse as before.
+  nothing more is written or committed. A run that completes is committed
+  before `open` adds the vault to Obsidian and opens it. A run that stops
+  partway commits nothing: the list names the folder meanwhile, a settings
+  file with other bytes is already there, or an interrupted run left a
+  replacement or a removal. The view then falls back to the coordinated path,
+  so `open` may add the vault to Obsidian and open it before it is complete,
+  and the rest, every replacement and removal included, is published through
+  the app with its usual checks. While the app does not qualify, a run stopped
+  that way reports the app's own refusal (`app-cli-unavailable`, say), and
+  `open` answers it without adding the vault unless asked to restart
+  Obsidian. The plugin's entry written this way counts as offered until the
+  plugin says hello. A later generation, a vault under the data root, and
+  every other case publish and refuse as before.
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the
