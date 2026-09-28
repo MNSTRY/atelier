@@ -4,13 +4,13 @@ import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
+import { reservePort } from './helpers/loopback-port.mjs'
 
 // ---------------------------------------------------------------------------
 // 0. The spawn guard. Installed before anything else is imported, for every
@@ -377,14 +377,6 @@ async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condit
   }
 }
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.once('error', reject)
-    server.listen({ host: '127.0.0.1', port: 0 }, () => { const { port } = server.address(); server.close(() => resolve(port)) })
-  })
-}
-
 async function listenOn(t, port, handler) {
   const server = http.createServer(handler)
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: '127.0.0.1', port }, resolve) })
@@ -464,7 +456,7 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
     },
     // A maintenance service inside this process, reachable by the lifecycle exactly like a child.
     async service({ engineOptions = {}, ...rest } = {}) {
-      const port = await freePort()
+      const port = await reservePort(t)
       writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: iso(START), ...CONSENT }, updatedAt: iso(START) } })
       const service = await runMaintenanceService({
         loadProject, dataRoot, env, adapterFactory: absentAdapter, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, clock: world.clock,
@@ -852,8 +844,7 @@ const SCENARIOS = {
   'service-unavailable': {
     async run(t, rules) {
       const world = makeWorld(t)
-      const port = await freePort()
-      await listenOn(t, port, (request, response) => { response.writeHead(200, { 'Content-Type': 'text/plain', Connection: 'close' }); response.end('somebody else') })
+      const { port } = (await listenOn(t, 0, (request, response) => { response.writeHead(200, { 'Content-Type': 'text/plain', Connection: 'close' }); response.end('somebody else') })).address()
       writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: iso(START), ...CONSENT }, updatedAt: iso(START) } })
       return { result: await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...fakeApp() }, rules }), world }
     },
@@ -861,8 +852,7 @@ const SCENARIOS = {
   busy: {
     async run(t, rules) {
       const world = makeWorld(t)
-      const port = await freePort()
-      await listenOn(t, port, () => { /* accepts, never answers: a service in a long tick */ })
+      const { port } = (await listenOn(t, 0, () => { /* accepts, never answers: a service in a long tick */ })).address()
       writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: iso(START), ...CONSENT }, updatedAt: iso(START) } })
       plantRecord(world, { port, pid: process.pid })
       // This process stands for the recorded service: its command line is made to name the recorded entry.
@@ -3801,7 +3791,7 @@ const currentRelease = () => (typeof releaseIdentity === 'function' ? releaseIde
 // Starts a stand-in runtime of `world`'s workspace that proves itself ours: service settings, the record, the process,
 // and health. Its record names the installed test entry and `release` (none when undefined), or `ext` as given.
 async function standInRuntime(t, world, { mode, release = currentRelease(), ext = release === undefined ? undefined : { release }, next = 'rt-replacing-runtime' }) {
-  const port = await freePort()
+  const port = await reservePort(t)
   const consent = { grantedAt: iso(START), actor: 'first-actor', coverage: 'service' }
   writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent, updatedAt: iso(START) } })
   const runtimeId = 'rt-stand-in'
@@ -3958,8 +3948,7 @@ test('a tick refused because another runtime took the service\'s place just befo
 
 async function assertBusyIsToldApart(t, provesOurProcess) {
   const world = makeWorld(t)
-  const silent = await freePort()
-  await listenOn(t, silent, () => { /* accepts, never answers */ })
+  const silent = (await listenOn(t, 0, () => { /* accepts, never answers */ })).address().port
   const lifecycle = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, probeTimeoutMs: 300, entryPath: TEST_SERVICE_ENTRY, spawn: () => { throw new Error('a service was started') }, kill: () => { throw new Error('a PID was signalled') } }
   const using = { ...LIFECYCLE_PRIMITIVES, provesOurProcess }
   writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port: silent, consent: { grantedAt: iso(START), ...CONSENT }, updatedAt: iso(START) } })
@@ -3981,7 +3970,7 @@ async function assertBusyIsToldApart(t, provesOurProcess) {
   assert.deepEqual([refused.state, refused.refused, refused.retry ?? false], ['occupied', true, false])
 
   // A closed port with a live recorded PID: not ours, whatever the process looks like.
-  const closed = await freePort()
+  const closed = await reservePort(t)
   writeServiceSettings({ ...world.workspace(), settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port: closed, consent: { grantedAt: iso(START), ...CONSENT }, updatedAt: iso(START) } })
   plantRecord(world, { port: closed, pid: process.pid, runtimeId: 'rt-ours' })
   assert.equal((await serviceStatus(lifecycle, using)).state, 'pid-not-ours')
@@ -4082,9 +4071,8 @@ test('a real service in a long tick is busy: open says so, start starts nothing,
 })
 
 async function assertTimeoutIsNotAbandonment(t, proofOf) {
-  const silent = await freePort()
-  const closed = await freePort()
-  await listenOn(t, silent, () => { /* a busy owner: accepts, never answers */ })
+  const silent = (await listenOn(t, 0, () => { /* a busy owner: accepts, never answers */ })).address().port
+  const closed = await reservePort(t)
   const ticket = (port) => ({ machine: machineDigest(), pid: process.ppid > 0 ? process.ppid : 1, acquiredAt: iso(START), service: { host: '127.0.0.1', port, runtimeId: 'rt-holder' } })
   const prove = proofOf({ probe: ({ host, port }) => probeHealth({ host, port, timeoutMs: 300 }), alive: () => true })
   assert.deepEqual(await prove(ticket(silent), { nowMs: START }), { abandoned: false, reason: 'live-process-unproven' }, 'a timeout proves nothing: the lock of a busy owner is never taken')

@@ -4,11 +4,11 @@ import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { ephemeralRange, isEphemeral, releaseReservation, reservePort } from './helpers/loopback-port.mjs'
 import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { resolveProjectConfig, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
 import { createEditorAdapter, publishView, resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
@@ -1677,14 +1677,6 @@ async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condit
   }
 }
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.once('error', reject)
-    server.listen({ host: '127.0.0.1', port: 0 }, () => { const { port } = server.address(); server.close(() => resolve(port)) })
-  })
-}
-
 // A process that does nothing, stands for "some unrelated program" and is killed in teardown.
 function sleeper(t) {
   const child = childProcess.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
@@ -1757,11 +1749,10 @@ test('the engine lock left by a real process that exited is taken under the prod
 
 async function assertLiveHoldersKeepTheLock(t, acquireWith) {
   const unrelated = sleeper(t)
-  const closedPort = await freePort()
-  const answering = await freePort()
-  const silent = await freePort()
-  await listenOn(t, answering, healthOf({ schema: HEALTH_SCHEMA, serviceName: 'atelier-obsidian-ws-lock', workspaceId: 'ws-lock', runtimeId: 'rt-holder', pid: unrelated.pid, host: '127.0.0.1', port: answering, executableDigest: digest('entry') }))
-  await listenOn(t, silent, () => { /* accepts, never answers */ })
+  const closedPort = await reservePort(t)
+  // The listeners are the test's own for its whole run: each listens on a port it is given and keeps it.
+  const answering = (await listenOn(t, 0, healthOf(() => ({ schema: HEALTH_SCHEMA, serviceName: 'atelier-obsidian-ws-lock', workspaceId: 'ws-lock', runtimeId: 'rt-holder', pid: unrelated.pid, host: '127.0.0.1', port: answering, executableDigest: digest('entry') })))).address().port
+  const silent = (await listenOn(t, 0, () => { /* accepts, never answers */ })).address().port
   lockWorld.silentPort = silent
   const service = (port, runtimeId = 'rt-holder') => ({ host: '127.0.0.1', port, runtimeId })
   const cases = [
@@ -1845,7 +1836,7 @@ function raw({ port, method = 'GET', route = '/health', headers = {}, body = nul
 }
 
 async function assertOnlyAuthorisedRequestsAct(t, primitives) {
-  const port = await freePort()
+  const port = await reservePort(t)
   const bearer = randomBytes(32).toString('base64url')
   const calls = { status: 0, tick: 0, stop: 0 }
   const identity = { serviceName: 'atelier-obsidian-ws-listener', workspaceId: 'ws-listener', runtimeId: 'rt-listener', pid: process.pid, host: '127.0.0.1', port, executableDigest: digest('entry'), startedAt: iso(START) }
@@ -1928,7 +1919,7 @@ const callService = (record, method, route, payload = null) => requestLoopback({
 const tickService = (record) => callService(record, 'POST', '/tick', { runtimeId: record.runtimeId })
 
 async function inProcessService(t, world, options = {}) {
-  const port = await freePort()
+  const port = await reservePort(t)
   writeSettings(world, port, options.coverage)
   const { coverage: _coverage, engineOptions = {}, ...rest } = options
   const service = await runMaintenanceService({
@@ -2061,7 +2052,7 @@ test('the service refuses without its adapter, without settings, under a startup
   const base = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL }
   await assert.rejects(runMaintenanceService(base), /adapterFactory/, 'no default adapter: only whoever starts the service may point it at a running app')
   await assert.rejects(runMaintenanceService({ ...base, adapterFactory: absentAdapter }), (error) => error.code === 'service-settings-absent')
-  const port = await freePort()
+  const port = await reservePort(t)
   writeSettings(world, port, 'service')
   await assert.rejects(runMaintenanceService({ ...base, adapterFactory: absentAdapter, startup: true }), (error) => error.code === 'startup-consent-absent')
   assert.equal((await probeHealth({ host: '127.0.0.1', port })).kind, 'refused', 'a refused service never listened')
@@ -2079,6 +2070,79 @@ test('the service refuses without its adapter, without settings, under a startup
     assert.deepEqual([result.status, /service-adapter-not-selected/.test(result.stdout)], [2, true])
   }
   assert.deepEqual(listing(other.dir), before)
+})
+
+// The port a test gives its service, and whatever else binds ports on this host between the choice and the service's
+// listen. The thief is a separate process. A process asking for port 0 gets a free port of the system's ephemeral range,
+// so the thief takes exactly the chosen port whenever it lies in that range: the system may hand it out at any moment,
+// and under load it does. Outside that range the thief is another test process, reserving exactly that port through
+// the shared helper. It prints whether it holds the port, and keeps it until teardown.
+const PORT_THIEF = `
+import net from 'node:net'
+const [port, helper] = [Number(process.argv[1]), process.argv[2]]
+const { isEphemeral, reservePort } = await import(helper)
+let as = null
+if (isEphemeral(port)) as = 'a port-0 binder'
+else { try { if (await reservePort(null, { choose: () => [port] }) === port) as = 'another test process reserving it' } catch { as = null } }
+if (as !== null) { const server = net.createServer(); await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: '127.0.0.1', port }, resolve) }) }
+process.stdout.write(JSON.stringify({ held: as !== null, as }) + '\\n')
+setInterval(() => {}, 1000)
+`
+const LOOPBACK_PORT_HELPER = pathToFileURL(path.join(REPOSITORY_ROOT, 'test', 'helpers', 'loopback-port.mjs')).href
+
+async function portThief(t, port) {
+  const child = childProcess.spawn(process.execPath, ['--input-type=module', '-e', PORT_THIEF, String(port), LOOPBACK_PORT_HELPER], { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true })
+  const entry = registerProcess(t, child, 'a process that takes the chosen port if it can')
+  t.after(() => endProcess(entry))
+  const line = await new Promise((resolve, reject) => {
+    let text = ''
+    child.stdout.on('data', (chunk) => { text += chunk; if (text.includes('\n')) resolve(text.split('\n')[0]) })
+    child.once('exit', (code) => reject(new Error(`the thief exited with ${code}`)))
+  })
+  return JSON.parse(line)
+}
+
+async function assertChosenPortSurvivesAThief(t, choosePort) {
+  const world = makeWorld(t)
+  const port = await choosePort(t)
+  const thief = await portThief(t, port)
+  writeSettings(world, port)
+  let outcome = 'started'
+  try {
+    const service = await runMaintenanceService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, adapterFactory: absentAdapter, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }), seams: { publishView: async () => REFUSED_PUBLICATION } } })
+    t.after(() => service.shutdown('test-teardown'))
+  } catch (error) { outcome = error.code ?? String(error) }
+  assert.deepEqual([outcome, thief.held], ['started', false], `the service's port was taken by ${thief.as}`)
+  assert.equal(recordOf(world).port, port)
+}
+
+test('a reserved port is taken neither by a port-0 binder nor by another test process between its choice and the service listening there', async (t) => {
+  await assertChosenPortSurvivesAThief(t, reservePort)
+})
+
+test('mutation control: a port found by listening on port 0 and closing again, as the tests chose one before, fails the port-thief oracle', async (t) => {
+  const probedAndClosed = () => new Promise((resolve, reject) => {
+    const server = http.createServer()
+    server.once('error', reject)
+    server.listen({ host: '127.0.0.1', port: 0 }, () => { const { port } = server.address(); server.close(() => resolve(port)) })
+  })
+  await assert.rejects(assertChosenPortSurvivesAThief(t, probedAndClosed), (error) => error instanceof assert.AssertionError && /service-port-occupied/.test(error.message))
+})
+
+test('mutation control: a reservation other test processes cannot see fails the port-thief oracle', async (t) => {
+  // Outside the ephemeral range, and claimed nowhere.
+  const unclaimed = async () => { const port = await reservePort(null); releaseReservation(port); return port }
+  await assert.rejects(assertChosenPortSurvivesAThief(t, unclaimed), (error) => error instanceof assert.AssertionError && /service-port-occupied/.test(error.message))
+})
+
+test('the system hands a port-0 binder only ports of the range reservations keep clear of', async (t) => {
+  const servers = []
+  t.after(() => Promise.all(servers.map((server) => new Promise((resolve) => { server.close(() => resolve()) }))))
+  for (let index = 0; index < 256; index += 1) servers.push(await new Promise((resolve, reject) => { const server = http.createServer(); server.once('error', reject); server.listen({ host: '127.0.0.1', port: 0 }, () => resolve(server)) }))
+  const outside = servers.map((server) => server.address().port).filter((port) => !isEphemeral(port))
+  assert.deepEqual(outside, [], `ports outside ${JSON.stringify(ephemeralRange())}`)
+  const reserved = await reservePort(t)
+  assert.equal(isEphemeral(reserved), false)
 })
 
 // ---------------------------------------------------------------------------
@@ -2223,10 +2287,9 @@ test('mutation control: a service that ends with its launcher fails the survival
 async function assertUnownedListenerIsLeftAlone(t, rules) {
   const world = serviceWorld(t)
   for (const [label, handler, answer] of [['a plain web server', (request, response) => { response.end('hello') }, 'foreign'], ['a listener that accepts and never answers', () => {}, 'timeout']]) {
-    const port = await freePort()
-    writeSettings(world, port)
     const requests = []
-    const server = await listenOn(t, port, (request, response) => { requests.push(`${request.method} ${request.url}`); handler(request, response) })
+    const server = await listenOn(t, 0, (request, response) => { requests.push(`${request.method} ${request.url}`); handler(request, response) })
+    writeSettings(world, server.address().port)
     const status = await world.status({ probeTimeoutMs: 400 }, rules)
     assert.deepEqual([status.state, status.reason, status.answer], ['occupied', 'a-listener-without-a-record', answer], label)
     await assert.rejects(world.start({ probeTimeoutMs: 400, startTimeoutMs: 8000 }, rules), (error) => error.code === 'service-port-occupied', label)
@@ -2259,10 +2322,10 @@ async function assertWrongIdentityIsNeverOurs(t, rules) {
   const variants = { runtimeId: 'rt-somebody-else', pid: 1, workspaceId: 'ws-another', serviceName: 'atelier-obsidian-ws-another', executableDigest: digest('another executable'), host: '::1', port: 1 }
   for (const [field, value] of Object.entries(variants)) {
     const world = serviceWorld(t)
-    const port = await freePort()
-    const record = world.plantRecord({ port, pid: process.pid })
     const requests = []
-    await listenOn(t, port, (request, response) => { requests.push(`${request.method} ${request.url}`); healthOf(healthFor(record, { [field]: value }))(request, response) })
+    let record = null
+    const server = await listenOn(t, 0, (request, response) => { requests.push(`${request.method} ${request.url}`); healthOf(healthFor(record, { [field]: value }))(request, response) })
+    record = world.plantRecord({ port: server.address().port, pid: process.pid })
     const status = await world.status({}, rules)
     assert.deepEqual([status.state, status.reason, status.disagreements], ['occupied', 'health-identity-differs', [field]], field)
     const stopped = await world.stop({}, rules)
@@ -2287,7 +2350,7 @@ test('mutation control: a stop that does not insist on a healthy status fails th
 async function assertUnrelatedPidSurvives(t, stopWith) {
   const world = serviceWorld(t)
   const unrelated = sleeper(t)
-  const record = world.plantRecord({ port: await freePort(), pid: unrelated.pid })
+  const record = world.plantRecord({ port: await reservePort(t), pid: unrelated.pid })
   const status = await world.status()
   assert.deepEqual([status.state, status.reason], ['pid-not-ours', 'recorded-pid-is-alive-but-nothing-listens'])
   const stopped = await stopWith(world, record)

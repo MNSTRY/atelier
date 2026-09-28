@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { reservePort } from './helpers/loopback-port.mjs'
 
 // ---------------------------------------------------------------------------
 // 0. The guards, installed before anything else is imported.
@@ -152,14 +153,6 @@ async function waitFor(check, { timeoutMs = 20000, everyMs = 25, label = 'condit
     if (Date.now() > until) throw new Error(`timed out waiting for ${label}`)
     await sleep(everyMs)
   }
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.once('error', reject)
-    server.listen({ host: '127.0.0.1', port: 0 }, () => { const { port } = server.address(); server.close(() => resolve(port)) })
-  })
 }
 
 function listing(directory) {
@@ -742,7 +735,7 @@ const entryWords = (world, extra = []) => [TEST_SERVICE_ENTRY, `--project=${worl
 
 test('under --startup a refusal exits 0 and records why, so the manager does not start it again; without --startup it still exits 2', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
-  serviceSettings(world, await freePort(), 'service')
+  serviceSettings(world, await reservePort(t), 'service')
   const withoutConsent = childProcess.spawnSync(process.execPath, entryWords(world, ['--startup']), { env: world.env, encoding: 'utf8', windowsHide: true })
   assert.equal(withoutConsent.status, 0, withoutConsent.stdout + withoutConsent.stderr)
   assert.deepEqual((({ at: _at, ...rest }) => rest)(world.lastStartup()), { schema: 'atelier-obsidian-last-startup/v1', workspaceId: WORKSPACE_ID, outcome: 'refused', code: 'startup-consent-absent' })
@@ -762,7 +755,7 @@ test('under --startup a refusal exits 0 and records why, so the manager does not
 
 test('under --startup beside a service that runs: service-already-running, exit 0, recorded; the running one keeps its record', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
-  serviceSettings(world, await freePort(), 'service-and-startup')
+  serviceSettings(world, await reservePort(t), 'service-and-startup')
   const absent = () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' })
   const running = await runMaintenanceService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, adapterFactory: absent, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }) } })
   t.after(() => running.shutdown('test-teardown'))
@@ -810,7 +803,7 @@ test('a unit names the data root its workspace was resolved under and the worksp
 
 test('under --startup a service that cannot find its workspace from the project records the refusal in the workspace its unit names', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
-  serviceSettings(world, await freePort(), 'service-and-startup')
+  serviceSettings(world, await reservePort(t), 'service-and-startup')
   const named = [`--workspace-id=${WORKSPACE_ID}`, '--startup']
   // The project's pointer is gone: the project leads to no workspace.
   const pointer = path.join(world.projectDir, '.atelier-local', 'obsidian.json')
@@ -843,7 +836,7 @@ async function syntheticPackage(t) {
 
 test('a service a login item started exits 75 after the tick that finds another release on disk; one that `start` started keeps running', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
-  serviceSettings(world, await freePort(), 'service-and-startup')
+  serviceSettings(world, await reservePort(t), 'service-and-startup')
   const root = await syntheticPackage(t)
   const child = follow(t, childProcess.spawn(process.execPath, entryWords(world, ['--startup', '--interval-ms=100', `--release-root=${root}`]), { env: world.env, stdio: 'ignore', windowsHide: true }), 'a service under --startup')
   const exited = new Promise((resolve) => { child.once('exit', (code, signal) => resolve({ code, signal })) })
@@ -857,7 +850,7 @@ test('a service a login item started exits 75 after the tick that finds another 
   assert.ok(/"event":"release-changed"/.test(log) && /"reason":"release-changed"/.test(log))
 
   // Started by `start`, not by a login item: the same change is nobody's business but the next `open`'s.
-  serviceSettings(world, await freePort(), 'service')
+  serviceSettings(world, await reservePort(t), 'service')
   const plain = follow(t, childProcess.spawn(process.execPath, entryWords(world, ['--interval-ms=100', `--release-root=${root}`]), { env: world.env, stdio: 'ignore', windowsHide: true }), 'a service without --startup')
   await world.healthy()
   fs.writeFileSync(path.join(root, 'src', 'runtime', 'a.mjs'), 'export const a = 3\n')
@@ -868,7 +861,7 @@ test('a service a login item started exits 75 after the tick that finds another 
 
 test('the release is asked after the tick, never before it: the tick in flight finishes, then the service stops as release-changed', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
-  serviceSettings(world, await freePort(), 'service-and-startup')
+  serviceSettings(world, await reservePort(t), 'service-and-startup')
   const order = []
   let changed = false
   const service = await runMaintenanceService({
@@ -889,7 +882,7 @@ test('the release is asked after the tick, never before it: the tick in flight f
 test('control: a service not started by a login item, or one that never asks, is not ended by a new release', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
   for (const variant of [{ startup: false, releaseWatch: { changed: () => true } }, { startup: true, releaseWatch: null }]) {
-    serviceSettings(world, await freePort(), 'service-and-startup')
+    serviceSettings(world, await reservePort(t), 'service-and-startup')
     const service = await runMaintenanceService({
       loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, ...variant,
       adapterFactory: () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' }),
@@ -1051,7 +1044,7 @@ async function silentListener(t, port) {
 
 test('a service a login item started that is busy in its first tick is waited for until it is healthy, as a child started here is', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
-  serviceSettings(world, await freePort(), 'service-and-startup')
+  serviceSettings(world, await reservePort(t), 'service-and-startup')
   const loginItem = {
     async start() {
       follow(t, childProcess.spawn(process.execPath, entryWords(world, ['--startup', `--interval-ms=${IDLE_INTERVAL}`, '--first-tick-block-ms=2500']), { env: world.env, stdio: 'ignore', windowsHide: true }), 'the service a manager started')
@@ -1065,7 +1058,7 @@ test('a service a login item started that is busy in its first tick is waited fo
 
 test('with a login item, a listener that has not recorded itself yet is waited for as the service its manager is starting, and only a runtime that proves itself is taken', needsPosix, async (t) => {
   const world = await makeWorld(t, { withLaunchd: false })
-  const port = await freePort()
+  const port = await reservePort(t)
   serviceSettings(world, port, 'service-and-startup')
   const listener = await silentListener(t, port)
   // The manager's start: the process that listened goes, and the real service comes up on the port, as launchd starts it.
