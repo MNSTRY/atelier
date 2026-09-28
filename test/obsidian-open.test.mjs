@@ -2446,6 +2446,31 @@ for (const [state, stateOutcome, overrides] of [
   })
 }
 
+test('a restart and a refused link together: Obsidian with its command line off, this view\'s vault listed closed; open quits it, turns the switch on, starts it plainly, and hands the refused link once more through its tool only; current', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const ours = '0123456789abcdef'
+  const vaults = { [OTHER_VAULT]: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true }, [ours]: { path: world.vault(), ts: 2 } }
+  const app = fakeApp({ running: true, cliOff: true, vaults })
+  await serviceBehindApp(world, app, { adapterFactory: refusingWhileUnreachable(app) })
+  // The app started plainly refuses the link once: it reopens the other vault, which its list flags open, not this one.
+  const open = app.launcher.open
+  let refused = false
+  app.launcher.open = async (args) => {
+    if (refused) return open(args)
+    refused = true
+    app.launchArgs.push({ vaultRoot: args.vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning })
+    Object.assign(app.state, { running: true, cliOff: app.state.cliSetting !== true })
+    return { launched: true, reason: 'app-started-link-not-taken' }
+  }
+  const opened = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.exit, opened.json.outcome, opened.json.registration?.how], [EXIT.ok, 'current', 'listed'], JSON.stringify(opened.json).slice(0, 600))
+  assert.deepEqual([opened.json.restart?.quit, opened.json.restart?.startedAgain], [true, true])
+  assert.deepEqual([opened.json.obsidianSettings?.vaultAdded, opened.json.obsidianSettings?.cliTurnedOn], [false, true])
+  const asked = { vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault() }
+  assert.deepEqual(app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true, startedByThisOpen: true }], 'started plainly, then the link once more through the tool only')
+  assert.deepEqual([app.startsPlain, app.state.vaults[OTHER_VAULT].open], [[], true], 'no other plain start, and the other vault stays flagged open')
+})
+
 test('what open did to Obsidian is said in words: the restart, the process it signalled, and each write to its settings with the backup', needsExchange, async (t) => {
   const world = makeWorld(t)
   const app = fakeApp({ running: true, cliOff: true })
