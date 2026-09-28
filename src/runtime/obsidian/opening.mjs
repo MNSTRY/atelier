@@ -3,6 +3,7 @@ import path from 'node:path'
 import { enclosingVaults, findVaultEntry, vaultRoute } from '../../projection/obsidian/publication/vault-list.mjs'
 import { createRecoveryStore as createStore, readFileBytes, sha256Digest } from '../../projection/obsidian/recovery/store.mjs'
 import { inspectApp, qualifyApp } from './app-capability.mjs'
+import { settingsWriteOutlook } from './app-registration.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
 import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { UNAVAILABLE_APPLY_OPERATION } from './extension-points.mjs'
@@ -30,13 +31,25 @@ import { OPEN_EDIT_STATES, createMaintenanceStateStore } from './state-store.mjs
 //
 // Nothing a person does by hand is needed on the way. The app is made to know
 // the vault: through the app itself while it runs and answers, or, while no
-// Obsidian runs, in the app's own vault list (app-registration.mjs). A view
-// that the app kept from being published (an app that runs without the vault,
-// or that could not be qualified) is published again once the app holds the
-// vault, through the app, before the answer is given.
+// Obsidian runs, in the app's own vault list (app-registration.mjs), which is
+// created for an Obsidian that never started, and whose command-line switch is
+// turned on in the same write. A view that the app kept from being published
+// (an app that runs without the vault, or that could not be qualified) is
+// published again once the app holds the vault, through the app, before the
+// answer is given.
+//
+// Two states of a running app cannot be got through that way: its command line
+// is turned off, or it has no vault open and does not list this one. Only when
+// the person asked for it (`restartApp`, `--restart-obsidian`; never implied),
+// and only after a read-only check that the write can succeed and a copy of the
+// settings file kept beside it, the app is quit (app-restart.mjs), the vault
+// added with the switch on while it is quit, and the app started again plainly,
+// which reopens every vault it had open. Without that, those states are
+// answered, naming the flag.
 //
 // Nothing here talks to an app or an operating system itself: `appProbe`,
-// `registry` and `launcher` are injected, and there is no default for any.
+// `registry`, `launcher` and `quitter` are injected, and there is no default for
+// any.
 
 export const OPENING_OUTCOMES = Object.freeze({
   current: { summary: 'the vault is the present generation, verified by read-back, and the app has it open', next: 'nothing to do' },
@@ -80,11 +93,16 @@ const QUIT = 'quit Obsidian (on Linux, also any app that runs on a system Electr
 // Obsidian's settings file could not be used to add the vault while the app was quit: adding it through the app works instead.
 const THROUGH_THE_APP = 'start Obsidian with any vault open, then open again: the vault is then added through the app'
 export const REASON_NEXT = Object.freeze({
-  'cli-turned-off': 'Obsidian\'s command line is turned off (the default of a new installation): turn it on in Obsidian under Settings > General > Advanced > Command line interface, then open again',
-  'no-vault-open': 'open any vault in Obsidian, or quit Obsidian, then open again; open then adds this view\'s vault to Obsidian itself',
+  'cli-turned-off': 'Obsidian\'s command line is turned off (the default of a new installation), and it runs, so its settings are its own: run `atelier obsidian open --restart-obsidian` to let Atelier quit Obsidian, turn its command line on, add this view\'s vault and start it again (the vaults it has open reopen); or turn it on yourself in Obsidian under Settings > General > Advanced > Command line interface, then open again',
+  'no-vault-open': 'Obsidian runs with no vault open, so it can be asked nothing: run `atelier obsidian open --restart-obsidian` to let Atelier quit Obsidian (no vault is open, so nothing closes), add this view\'s vault and start it again; or open any vault in Obsidian, or quit Obsidian, then open again',
+  'restart-platform-unqualified': 'Atelier restarts Obsidian on macOS only; turn its command line on yourself (Settings > General > Advanced > Command line interface), or open any vault in Obsidian, or quit it, then open again',
+  'restart-unavailable': 'this command was given no way to quit Obsidian; quit Obsidian yourself, then open again',
+  'app-main-process-unproven': 'Obsidian was not asked to quit: its main process could not be proven from the process table (`restart.detail` says why: more than one Obsidian main process, an Obsidian process of another user, a helper that is not its child, or a table that could not be read); quit Obsidian yourself, then open again',
+  'app-did-not-quit': 'Obsidian was asked to quit and did not within the wait; nothing was written to its settings. Quit it yourself, or wait until it has quit, then open again',
+  'app-not-started-again': 'Obsidian was quit to add this view\'s vault and could not be started again; start Obsidian yourself: it reopens the vaults it had open',
   'vault-open-cli-silent': 'Obsidian has this view\'s vault open, as Atelier\'s plugin in it shows, but its command line did not answer, so the vault can be neither found nor opened through it; make sure the command-line interface is turned on in Obsidian\'s settings, then open again',
   'editor-uncoordinated': `${UNCOORDINATED}; \`atelier obsidian open\` adds this view's vault to Obsidian and publishes through it, or ${QUIT}; it is retried automatically`,
-  'obsidian-settings-missing': 'Obsidian has not run on this account yet: start it once (it creates its settings), then open again with it running or quit',
+  'obsidian-settings-missing': 'Obsidian has no settings file on this account, and the folder it would be in does not exist or is not yours, so Atelier cannot create it: open any vault in Obsidian (starting it if it is not running; it then writes its settings), then open again',
   'obsidian-settings-location-unknown': THROUGH_THE_APP,
   'obsidian-settings-unsafe': `Obsidian's settings file is a link or not a regular file, so it is not written; ${THROUGH_THE_APP}`,
   'obsidian-settings-not-owned': `Obsidian's settings file belongs to another user, so it is not written; ${THROUGH_THE_APP}`,
@@ -136,7 +154,9 @@ export const OPENING_PRIMITIVES = Object.freeze({
   // Whether a view that is not current was kept from publication by the app: then making the app hold the vault
   // and asking for the view again can make it current. A vault open in several windows is asked for again once one
   // window is left; while more are open, open names them instead.
-  keptByApp: (view) => ['publisher-conflict', 'stale-readable', 'not-prepared'].includes(view.outcome) && ['editor-uncoordinated', 'vault-open-in-several-windows', 'app-version-unsupported'].includes(view.reason),
+  // A view the service did not publish because the app's command line is turned off is one of them: once the app runs
+  // with it on and holds the vault, it is published through it.
+  keptByApp: (view) => ['publisher-conflict', 'stale-readable', 'not-prepared'].includes(view.outcome) && ['editor-uncoordinated', 'vault-open-in-several-windows', 'app-version-unsupported', 'app-cli-unavailable'].includes(view.reason),
 })
 
 const segment = (identifier) => identifier.replaceAll(':', '_')
@@ -258,7 +278,7 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 // does not exist yet: the list is asked again, a bounded number of times,
 // before an addition counts as not verified.
 const VERIFY_ATTEMPTS = 10
-async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, pollMs }) {
+async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, pollMs, keepBackups = [] }) {
   const inside = (vaults) => enclosingVaults({ vaults, vaultRoot }).length > 0
   if (observation.noVaultOpen === true) {
     const settings = await attempt(() => registry.readSettings())
@@ -285,11 +305,24 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
       await sleep(pollMs)
     }
   }
-  const written = await attempt(() => registry.registerInSettings({ vaultRoot }))
+  const written = await attempt(() => registry.registerInSettings({ vaultRoot, keepBackups }))
   if (written === null) return { ok: false, reason: 'obsidian-settings-unwritable' }
   if (written.ok !== true) return { ok: false, reason: typeof written.code === 'string' ? written.code : 'obsidian-settings-unwritable' }
-  if (written.confirmed !== true) return { ok: false, reason: written.reason === 'registration-not-read-back' ? 'registration-not-read-back' : 'app-started-during-registration' }
-  return { ok: true, path: written.entry.path, how: written.registered === 'already' ? 'listed' : 'added-to-settings', vaults: written.vaults }
+  const settings = settingsWritten(written)
+  if (written.confirmed !== true) return { ok: false, reason: written.reason === 'registration-not-read-back' ? 'registration-not-read-back' : 'app-started-during-registration', ...(settings === null ? {} : { settings }) }
+  const how = written.registered === 'created' ? 'created-settings' : written.registered === 'already' ? 'listed' : 'added-to-settings'
+  return { ok: true, path: written.entry.path, how, vaults: written.vaults, ...(settings === null ? {} : { settings }) }
+}
+
+// What was written to Obsidian's settings file, for the answer to show: null when nothing was.
+function settingsWritten(written) {
+  const created = written.registered === 'created'
+  const cliTurnedOn = written.cliTurnedOn === true
+  if (!created && written.registered !== 'written' && !cliTurnedOn) return null
+  return {
+    ...(typeof written.file === 'string' ? { file: written.file } : {}), created, ...(created ? { directoryCreated: written.created?.directory === true } : {}),
+    vaultAdded: written.registered !== 'already', cliTurnedOn, ...(typeof written.backupPath === 'string' ? { backupPath: written.backupPath } : {}),
+  }
 }
 
 // Starts or reconnects the owned service, asks it for a tick, reads the view
@@ -297,7 +330,7 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
 // again for a view the app kept from being published, and reports one outcome.
 export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIMITIVES, lifecycleRules = LIFECYCLE_PRIMITIVES) {
   const {
-    loadProject, dataRoot, scopeId: requestedScope, appProbe, launcher, registry, service = {}, consent, allowStale = false, extensions = null,
+    loadProject, dataRoot, scopeId: requestedScope, appProbe, launcher, registry, quitter = null, restartApp = false, service = {}, consent, allowStale = false, extensions = null,
     tickTimeoutMs = 120 * 1000, appWaitMs = 30 * 1000, appPollMs = 500, sleep = defaultSleep, monotonic = () => Date.now(),
     env = process.env, platform = process.platform, probeTimeoutMs,
   } = options
@@ -311,9 +344,13 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   const project = loadProject()
   const enablement = readObsidianEnablement(project)
   const applyAvailable = extensions !== null && extensions.applyOperation() !== UNAVAILABLE_APPLY_OPERATION
+  // A restart this run made, and what it wrote to Obsidian's settings: every answer after them shows both.
+  let restart = null
+  let settingsShown = null
   const finish = (outcome, extra = {}) => {
     const { afterOpen = false, ...shown } = extra
-    return { ok: outcome === 'current', ...describeOutcome(outcome), next: nextStep(outcome, shown.reason, { afterOpen }), launched: false, ...shown }
+    const next = restart?.quit === true && restart.startedAgain === false ? REASON_NEXT['app-not-started-again'] : nextStep(outcome, shown.reason, { afterOpen })
+    return { ok: outcome === 'current', ...describeOutcome(outcome), next, launched: false, ...shown, ...(restart === null ? {} : { restart }), ...(settingsShown === null ? {} : { obsidianSettings: settingsShown }) }
   }
   if (enablement.state === 'disabled') return finish('disabled', { reason: enablement.reason, scopeId: requestedScope ?? null })
   const scopeId = resolveScope(enablement, requestedScope)
@@ -376,8 +413,45 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   if (view.outcome !== 'current' && !readable && !keptByApp) return finish(view.outcome, common)
 
   // 3. The app, before anything is launched. With no vault open it answers nothing; a vault it already lists can still be opened by path.
-  const before = qualifyApp(await inspectApp(appProbe), { requireVersion: false })
+  let before = qualifyApp(await inspectApp(appProbe), { requireVersion: false })
   const app = (qualification) => ({ outcome: qualification.outcome, reason: qualification.reason, version: qualification.version, floor: qualification.floor })
+
+  // A running app that cannot be reached (`state`: its command line is off, or it has no vault open and does not list
+  // this one) is quit, only when the person asked for it. { quit: true } with the app gone, or { answer } to give.
+  const QUIT_APP = { installed: true, cli: true, running: false, version: null }
+  const quitToRestart = async (state, stateOutcome) => {
+    if (!restartApp) return { answer: finish(stateOutcome, { ...common, reason: state, app: app(before) }) }
+    if (typeof quitter?.quit !== 'function' || typeof launcher.startPlain !== 'function' || typeof registry.backupSettings !== 'function') return { answer: finish(stateOutcome, { ...common, reason: 'restart-unavailable', app: app(before) }) }
+    // Read-only, before anything is sent: the write the restart is for can succeed. What it would refuse is answered
+    // now, with the app left running.
+    const notRestarted = (outcome, reason) => { restart = { asked: true, state, quit: false, signalled: false, signals: 0, reason }; return { answer: finish(outcome, { ...common, reason, app: app(before) }) } }
+    if (typeof view.vaultRoot !== 'string') return notRestarted('not-prepared', 'no-vault-folder')
+    const outlook = settingsWriteOutlook({ settings: await attempt(() => registry.readSettings()), vaultRoot: view.vaultRoot })
+    if (!outlook.ok) return notRestarted('launch-failed', outlook.code)
+    // A copy of the settings as they are, kept beside them once the main process is proven, right before the first
+    // signal; a copy that cannot be kept sends nothing. An app that has shown only its starter window has no file yet:
+    // there is nothing to copy, and the write creates it.
+    const quit = await attempt(() => quitter.quit({ beforeSignal: outlook.create === true ? null : () => registry.backupSettings() }))
+    restart = {
+      asked: true, state, quit: quit?.quit === true, signalled: quit?.signalled === true, ...(Number.isSafeInteger(quit?.pid) ? { pid: quit.pid } : {}),
+      signals: Number.isSafeInteger(quit?.signals) ? quit.signals : 0, ...(typeof quit?.settingsCopy === 'string' ? { settingsCopy: quit.settingsCopy } : {}),
+    }
+    if (quit?.quit === true) { before = qualifyApp(QUIT_APP, { requireVersion: false }); return { quit: true } }
+    restart.reason = typeof quit?.reason === 'string' ? quit.reason : 'app-did-not-quit'
+    if (typeof quit?.detail === 'string') restart.detail = quit.detail
+    // An app that was signalled and has not gone is neither started again nor written for: the person decides.
+    return { answer: finish(quit?.signalled === true ? 'launch-failed' : stateOutcome, { ...common, reason: restart.reason, app: app(before) }) }
+  }
+  // After a restart, every answer given before the launch starts the app again as it was: plainly, so it reopens the
+  // vaults it had open. Nothing was added for this view.
+  const giveBack = async () => {
+    if (restart?.quit !== true || restart.startedAgain !== undefined) return
+    restart.startedAgain = (await attempt(() => launcher.startPlain())) === true
+  }
+  if (before.reason === 'cli-turned-off') {
+    const stopped = await quitToRestart('cli-turned-off', before.outcome)
+    if (stopped.answer) return stopped.answer
+  }
   const noVaultOpen = before.reason === 'no-vault-open'
   if (!rules.appQualifies(before) && !noVaultOpen) {
     // No app answered and none is known to run (a process table that could not be read, on Linux any app on a system
@@ -390,19 +464,27 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   //    call about it then reaches it and no other vault: in its folder, or by its id when a vault listed at a folder
   //    above it would take a call run there.
   const { vaultRoot } = view
-  if (typeof vaultRoot !== 'string') return finish('not-prepared', { ...common, reason: 'no-vault-folder', app: app(before) })
+  if (typeof vaultRoot !== 'string') { await giveBack(); return finish('not-prepared', { ...common, reason: 'no-vault-folder', app: app(before) }) }
   // A version Atelier's plugin reported is not the command line answering (withPluginReportedVersion).
   const fromPlugin = before.versionSource === 'plugin'
-  const known = await ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string' && !fromPlugin, noVaultOpen: noVaultOpen || fromPlugin, fromPlugin }, vaultRoot, sleep, pollMs: appPollMs })
+  const knowVault = () => ensureAppKnowsVault({ registry, observation: { answering: typeof before.version === 'string' && !fromPlugin, noVaultOpen: before.reason === 'no-vault-open' || fromPlugin, fromPlugin }, vaultRoot, sleep, pollMs: appPollMs, keepBackups: typeof restart?.settingsCopy === 'string' ? [restart.settingsCopy] : [] })
+  let known = await knowVault()
+  // With no vault open, a vault the app does not list cannot be added while it runs: a restart the person asked for.
+  if (!known.ok && known.reason === 'no-vault-open' && restart === null) {
+    const stopped = await quitToRestart('no-vault-open', 'app-version-unsupported')
+    if (stopped.answer) return stopped.answer
+    known = await knowVault()
+  }
+  if (known.settings) settingsShown = known.settings
   // An app that answered its version and then closed its last vault window is one with no vault open; one that holds
   // this vault open but whose command line does not answer has no usable command line.
-  if (!known.ok) return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : known.reason === 'vault-open-cli-silent' ? 'app-cli-unavailable' : 'launch-failed', { ...common, reason: known.reason, app: app(before) })
+  if (!known.ok) { await giveBack(); return finish(known.reason === 'no-vault-open' ? 'app-version-unsupported' : known.reason === 'vault-open-cli-silent' ? 'app-cli-unavailable' : 'launch-failed', { ...common, reason: known.reason, app: app(before) }) }
   const registration = { how: known.how }
   const route = vaultRoute({ vaults: known.vaults, vaultRoot })
   // Open in several windows, one per entry of the list that names its folder: each holds the vault, and a publication
   // coordinates with one only. Nothing is launched; the entries are named.
-  if (route.how === 'duplicated') return finish('publisher-conflict', { ...common, reason: 'vault-open-in-several-windows', duplicates: route.entries, app: app(before), registration })
-  if (route.how !== 'folder' && route.how !== 'id') return finish('launch-failed', { ...common, reason: route.how === 'ambiguous' ? 'vault-inside-another-vault' : 'registration-not-verified', app: app(before), registration })
+  if (route.how === 'duplicated') { await giveBack(); return finish('publisher-conflict', { ...common, reason: 'vault-open-in-several-windows', duplicates: route.entries, app: app(before), registration }) }
+  if (route.how !== 'folder' && route.how !== 'id') { await giveBack(); return finish('launch-failed', { ...common, reason: route.how === 'ambiguous' ? 'vault-inside-another-vault' : 'registration-not-verified', app: app(before), registration }) }
 
   // 5. Launch, then wait, bounded, for the app to answer for exactly this vault.
   let launch
@@ -412,6 +494,8 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   // otherwise the vault's own path, which the app matches exactly since the folder is listed.
   const target = route.how === 'id' ? { vaultId: route.id, vaultPath: known.path } : { vaultPath: known.path }
   try { launch = await launcher.open({ vaultRoot: known.path, ...target, appRunning: before.running === true }) } catch { launch = { launched: false, reason: 'launcher-threw' } }
+  // A restart ends here: the app was started again, or could not be (the next step then says to start it).
+  if (restart?.quit === true) restart.startedAgain = launch?.launched === true
   if (launch?.launched !== true) return finish('launch-failed', { ...common, reason: typeof launch?.reason === 'string' ? launch.reason : 'launcher-refused', app: app(before), registration })
   const deadline = monotonic() + appWaitMs
   let after = before

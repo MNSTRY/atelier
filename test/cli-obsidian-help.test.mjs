@@ -22,3 +22,16 @@ test('both helps name the login item\'s flags, service unit --install and --remo
     assert.match(text, /\n {2}(\S+ obsidian )?uninstall\b/)
   }
 })
+
+test('`atelier obsidian --help` and the command\'s own usage name every option the command takes, --restart-obsidian with what it does', async () => {
+  const { FLAGS, USAGE } = await import('../src/commands/obsidian.mjs')
+  const help = buildCommandHelpText('obsidian')
+  // `help` is -h/--help itself; `project-config` is the older spelling of --project.
+  for (const flag of Object.keys(FLAGS).filter((name) => name !== 'help' && name !== 'project-config')) {
+    assert.match(help, new RegExp(`--${flag}\\b`), `atelier obsidian --help names --${flag}`)
+    assert.match(USAGE, new RegExp(`--${flag}\\b`), `the command's usage names --${flag}`)
+  }
+  assert.match(help, /obsidian open \[[^\n]*--restart-obsidian/)
+  assert.match(help, /only with --restart-obsidian, which no other flag implies/)
+  assert.match(USAGE, /open \[[^\n]*--restart-obsidian/)
+})

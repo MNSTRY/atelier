@@ -1,16 +1,18 @@
-import { execFile, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import { performance } from 'node:perf_hooks'
 import path from 'node:path'
 import { NEUTRAL_DIRECTORY, defaultCliPath, defaultObsidianProcessProbe, routedCall } from '../../projection/obsidian/publication/transport.mjs'
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
 import { realPathAsStored } from '../../project/private-state.mjs'
 import { appAnswered, readEvalAnswer, readVersionAnswer } from './app-capability.mjs'
-import { registerVaultInObsidianSettings } from './app-registration.mjs'
+import { backupObsidianSettings, registerVaultInObsidianSettings } from './app-registration.mjs'
+import { createAppQuitter } from './app-restart.mjs'
 import { launchPlan, runLaunchPlan, urlProcessed } from './launch-plan.mjs'
 
 // The production seams of `obsidian open` and of the service's adapter
-// factory: the only code that asks the installed Obsidian anything or asks the
-// operating system to open it.
+// factory: the only code that asks the installed Obsidian anything, asks the
+// operating system to open it, or quits it (for a restart a person asked for).
 //
 // This module is imported by exactly two places, both real command-line
 // entries and both behind an explicit `--adapter=obsidian-cli`: the service
@@ -127,7 +129,8 @@ function vaultRegisterCode(vaultRoot) {
 //   listThroughApp()                  -> { answered: true, vaults } | { answered: false, reason }
 //   registerThroughApp({ vaultRoot }) -> { answered: true, result } | { answered: false, reason }
 //   readSettings()                    -> readObsidianSettings answer (never writes)
-//   registerInSettings({ vaultRoot }) -> registerVaultInObsidianSettings answer
+//   registerInSettings({ vaultRoot, keepBackups }) -> registerVaultInObsidianSettings answer
+//   backupSettings()                  -> backupObsidianSettings answer (a copy beside the file; the file is not written)
 //
 // Through the app only while it runs and answers; in its settings file only
 // while no Obsidian runs, which registerVaultInObsidianSettings checks itself.
@@ -155,9 +158,13 @@ export function createProductionAppRegistry({
       return answer.answered ? { answered: true, result: answer.value?.result ?? null } : answer
     },
     readSettings: () => (sandbox === null ? readObsidianSettings({ userDataDir }) : sandboxed),
-    registerInSettings: ({ vaultRoot }) => (sandbox !== null ? sandboxed : userDataDir === null
+    // A copy of the settings file as it is, before a restart sends the app any signal (backupObsidianSettings).
+    backupSettings: () => (sandbox !== null ? sandboxed : userDataDir === null
       ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
-      : registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe })),
+      : backupObsidianSettings({ userDataDir })),
+    registerInSettings: ({ vaultRoot, keepBackups = [] }) => (sandbox !== null ? sandboxed : userDataDir === null
+      ? { ok: false, code: 'obsidian-settings-location-unknown', message: 'where Obsidian keeps its settings on this system is not known' }
+      : registerVaultInObsidianSettings({ userDataDir, vaultRoot, processProbe, keepBackups })),
   }
 }
 
@@ -176,6 +183,9 @@ export function createProductionLauncher({
     execFile(file, args, { env, cwd: workingDirectory, timeout, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => resolve({ failed: Boolean(error), stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }))
   })
   return {
+    // Starts a quit app with no URL, so it reopens the vaults its list flags open: for giving back an app `open`
+    // quit to restart it, when the vault could not be added after all. macOS only, as the restart is.
+    startPlain: async () => platform === 'darwin' && !(await run(osCommand, ['-b', 'md.obsidian'])).failed,
     open({ vaultId = null, vaultPath = null, appRunning }) {
       const plan = launchPlan({ platform, appRunning, vaultId, vaultPath })
       return runLaunchPlan(plan, {
@@ -189,6 +199,23 @@ export function createProductionLauncher({
   }
 }
 
+// Quits the running app for a restart a person asked for (app-restart.mjs): SIGTERM to its main process only, proven
+// from this machine's process table (`ps`, never a pattern search) as this account's, then waits until the process
+// probe says no Obsidian runs. The table is `pid ppid uid executable`; one process is described again by its parent,
+// user, start time and executable immediately before the signal.
+export function createProductionAppQuitter({ platform = process.platform, processProbe = () => defaultObsidianProcessProbe({ platform }), waitMs } = {}) {
+  const ps = (args) => execFileSync('/bin/ps', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024, timeout: 5000, killSignal: 'SIGKILL' })
+  return createAppQuitter({
+    platform, uid: typeof process.getuid === 'function' ? process.getuid() : null, processProbe,
+    readTable: () => ps(['-ww', '-A', '-o', 'pid=,ppid=,uid=,comm=']),
+    readProcess: (pid) => ps(['-ww', '-o', 'ppid=,uid=,lstart=,comm=', '-p', String(pid)]),
+    signal: (pid) => process.kill(pid, 'SIGTERM'),
+    // The wait and the linger are measured on a monotonic clock: a step of the wall clock changes neither.
+    now: () => performance.now(),
+    ...(waitMs === undefined ? {} : { waitMs }),
+  })
+}
+
 export function createProductionAppSeams(options = {}) {
-  return { appProbe: createProductionAppProbe(options), launcher: createProductionLauncher(options), registry: createProductionAppRegistry(options) }
+  return { appProbe: createProductionAppProbe(options), launcher: createProductionLauncher(options), registry: createProductionAppRegistry(options), quitter: createProductionAppQuitter(options) }
 }

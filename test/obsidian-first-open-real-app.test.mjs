@@ -5,9 +5,10 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 // Opt-in: `atelier obsidian open` against a real, isolated, disposable
-// Obsidian, in the two states of the app a first open meets on a desktop, and
-// with a vault listed at a folder above the view's vault. It opens application
-// windows, so it never runs by default:
+// Obsidian, in the states of the app a first open meets on a desktop (running
+// with a vault open, quit, never started, running with its command line off,
+// running with no vault open), and with a vault listed at a folder above the
+// view's vault. It opens application windows, so it never runs by default:
 //
 //   ATELIER_OBSIDIAN_FIRST_OPEN=1 [ATELIER_OBSIDIAN_ASAR=<pinned app build>] node --test test/obsidian-first-open-real-app.test.mjs
 //
@@ -57,11 +58,14 @@ async function projectBeside(app) {
   const { MNSTRY_ATELIER_PROJECT_CONFIG: _config, MNSTRY_ATELIER_LOCAL_CONFIG: _overlay, ...env } = app.env
   const seams = {
     appProbe: createProductionAppProbe({ env, processProbe: app.processProbe, cliPath: app.cliPath }), registry: createProductionAppRegistry({ env, processProbe: app.processProbe, cliPath: app.cliPath }), launcher: app.launcher,
+    // `open --restart-obsidian` quits only this isolated app (isolated-app.mjs).
+    quitter: app.quitter,
     service: { entryPath: SERVICE_ENTRY, entryArgs: [`--isolated-profile=${app.userDataDir}`] },
   }
   const run = async (argv) => {
     const out = []
-    await runObsidianCommand({ argv: [...argv, '--json', `--project=${configPath}`, `--data-root=${dataRoot}`], seams, env, cwd: projectDir, stdout: (text) => out.push(text), stderr: () => {}, open: { appWaitMs: 60000 } })
+    // A service busy in a tick on a loaded host answers its health late; this suite is about the app, not that latency.
+    await runObsidianCommand({ argv: [...argv, '--json', `--project=${configPath}`, `--data-root=${dataRoot}`], seams, env, cwd: projectDir, stdout: (text) => out.push(text), stderr: () => {}, probeTimeoutMs: 10000, open: { appWaitMs: 60000 } })
     return JSON.parse(out.join('\n'))
   }
   const configured = await run(['audience', 'set', 'team'])
@@ -70,6 +74,9 @@ async function projectBeside(app) {
 }
 
 const { vaultRoute } = await import('../src/projection/obsidian/publication/vault-list.mjs')
+const { execFileSync } = await import('node:child_process')
+// The command line of one process, to name the isolated app's main process.
+const childProcessCommand = (pid) => execFileSync('/bin/ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim()
 
 // The app's own list, asked again while it does not answer, for at most `withinMs`: right after a new vault window
 // opens, a command-line call can wait out its timeout once.
@@ -191,6 +198,140 @@ test('real isolated Obsidian: open adds the view\'s vault and publishes, with th
         if (world) { const stopped = (await world.run(['service', 'stop'])).service; t.diagnostic(`service: ${stopped?.reason ?? JSON.stringify(stopped)}`); assert.equal(stopped?.stopped, true, 'the service this suite started is stopped') }
         assert.deepEqual(await app.quit(), [], 'the isolated app is gone')
         if (process.env.ATELIER_OBSIDIAN_FIRST_OPEN_KEEP !== '1') app.remove(); else t.diagnostic(`kept ${app.root}`)
+      }
+    })
+    // The states a first open could not get through before: every write and the restart stay inside this profile.
+    const settingsOf = (app) => JSON.parse(fs.readFileSync(app.settingsFile, 'utf8'))
+    const backupsOf = (app) => fs.readdirSync(app.userDataDir).filter((name) => name.startsWith('obsidian.json.atelier-backup-'))
+    const finish = async (app, world) => {
+      if (world) { const stopped = (await world.run(['service', 'stop'])).service; t.diagnostic(`service: ${stopped?.reason ?? JSON.stringify(stopped)}`); assert.equal(stopped?.stopped, true, 'the service this suite started is stopped') }
+      assert.deepEqual(await app.quit(), [], 'the isolated app is gone')
+      if (process.env.ATELIER_OBSIDIAN_FIRST_OPEN_KEEP !== '1') app.remove(); else t.diagnostic(`kept ${app.root}`)
+    }
+
+    await t.test('never started (no obsidian.json): open creates the settings with the vault flagged open and the command line on, and a plain start opens it', async () => {
+      const app = createIsolatedApp({ settings: null })
+      let world = null
+      try {
+        assert.equal(fs.existsSync(app.settingsFile), false, 'the profile has no settings file')
+        assert.equal(app.running(), false)
+        world = await projectBeside(app)
+        const started = Date.now()
+        const opened = await world.run(['open', '--consent-actor', 'real-app-suite'])
+        t.diagnostic(`open answered ${opened.outcome} (${opened.reason}) in ${Date.now() - started} ms; registration ${JSON.stringify(opened.registration ?? null)}; settings ${JSON.stringify(opened.obsidianSettings ?? null)}`)
+        assert.deepEqual([opened.outcome, opened.ok, opened.launched, opened.registration?.how], ['current', true, true, 'created-settings'], JSON.stringify(opened, null, 2))
+        assert.deepEqual([opened.obsidianSettings?.created, opened.obsidianSettings?.cliTurnedOn, opened.obsidianSettings?.vaultAdded], [true, true, true])
+        const { store, modes } = await journalModes(world.dataRoot)
+        t.diagnostic(`publications: ${JSON.stringify(modes)}`)
+        assert.deepEqual(modes, ['direct'], 'published with no app, before the settings existed')
+        assert.deepEqual(backupsOf(app), [], 'there was nothing to back up')
+        const after = settingsOf(app)
+        const ours = Object.values(after.vaults).filter((entry) => entry.path === store.vaultRoot)
+        assert.deepEqual([after.cli, ours.length, ours[0]?.open], [true, 1, true], JSON.stringify(after))
+        assert.equal(app.running(), true, 'open started the app')
+        assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route: vaultRoute({ vaults: after.vaults, vaultRoot: store.vaultRoot }) }), { answered: true, indexReady: true })
+      } finally {
+        await finish(app, world)
+      }
+    })
+
+    await t.test('running with its command line off: open without --restart-obsidian answers cli-turned-off and touches nothing; with it, SIGTERM quits the app, the vault and the switch are written, and a plain start reopens the other vault beside this one', async () => {
+      const unrelated = 'd1e2f3a4b5c60718'
+      const app = createIsolatedApp({ vaults: {} })
+      const unrelatedVault = path.join(app.root, 'unrelated-vault')
+      fs.mkdirSync(unrelatedVault)
+      fs.writeFileSync(path.join(unrelatedVault, 'Somebody else.md'), '# A vault this suite does not own\n')
+      fs.writeFileSync(app.settingsFile, JSON.stringify({ vaults: { [unrelated]: { path: unrelatedVault, ts: Date.now(), open: true } }, cli: false, updateDisabled: true }))
+      let world = null
+      try {
+        t.diagnostic(`isolated app answered "${await app.launch({ anyAnswer: true })}" with its command line off and an unrelated vault open`)
+        world = await projectBeside(app)
+        const refused = await world.run(['open', '--consent-actor', 'real-app-suite'])
+        t.diagnostic(`open without the flag answered ${refused.outcome} (${refused.reason}); next: ${refused.next}`)
+        assert.deepEqual([refused.outcome, refused.reason, refused.launched, refused.restart, refused.obsidianSettings], ['app-cli-unavailable', 'cli-turned-off', false, undefined, undefined], JSON.stringify(refused, null, 2))
+        assert.match(refused.next, /--restart-obsidian/)
+        assert.deepEqual([app.running(), backupsOf(app), settingsOf(app).cli], [true, [], false], 'the running app was not stopped and its settings not written')
+        const [mainBefore] = app.pids().filter((pid) => { try { return /\/Contents\/MacOS\/Obsidian --user-data-dir=/.test(childProcessCommand(pid)) } catch { return false } })
+        t.diagnostic(`the isolated app's main process: ${mainBefore}`)
+
+        const started = Date.now()
+        const opened = await world.run(['open', '--consent-actor', 'real-app-suite', '--restart-obsidian'])
+        t.diagnostic(`open --restart-obsidian answered ${opened.outcome} (${opened.reason}) in ${Date.now() - started} ms; restart ${JSON.stringify(opened.restart ?? null)}; settings ${JSON.stringify(opened.obsidianSettings ?? null)}`)
+        assert.deepEqual([opened.outcome, opened.ok, opened.launched, opened.registration?.how], ['current', true, true, 'added-to-settings'], JSON.stringify(opened, null, 2))
+        assert.deepEqual([opened.restart?.state, opened.restart?.quit, opened.restart?.signalled, opened.restart?.startedAgain], ['cli-turned-off', true, true, true])
+        if (mainBefore !== undefined) assert.equal(opened.restart.pid, mainBefore, 'the signal went to the isolated app\'s main process')
+        assert.deepEqual([opened.obsidianSettings?.vaultAdded, opened.obsidianSettings?.cliTurnedOn], [true, true])
+        assert.ok([1, 2].includes(opened.restart.signals), `signals delivered: ${opened.restart.signals}`)
+        // Two backups: the copy kept before any signal (the first), and the one the write kept (the latest).
+        const backups = backupsOf(app).sort()
+        assert.deepEqual(backups, [path.basename(opened.restart.settingsCopy), path.basename(opened.obsidianSettings.backupPath)].sort())
+        const copied = JSON.parse(fs.readFileSync(opened.restart.settingsCopy, 'utf8'))
+        assert.deepEqual([copied.cli, copied.vaults[unrelated].open], [false, true], 'the copy is the running app\'s file before any signal')
+        const backedUp = JSON.parse(fs.readFileSync(opened.obsidianSettings.backupPath, 'utf8'))
+        assert.deepEqual([backedUp.cli, backedUp.vaults[unrelated].open], [false, true], 'the write\'s backup is the file as the quit app left it: the switch off, the other vault still flagged open')
+        const { store, modes } = await journalModes(world.dataRoot)
+        t.diagnostic(`publications: ${JSON.stringify(modes)}`)
+        assert.ok(modes.length >= 1, 'the view was published')
+        const listed = await listedWithin(world.registry)
+        assert.equal(listed.answered, true, 'the command line answers now')
+        assert.equal(listed.vaults[unrelated]?.open, true, 'SIGTERM kept the other vault flagged open, and the plain start reopened it')
+        assert.equal(Object.values(listed.vaults).filter((entry) => fs.realpathSync(entry.path) === store.vaultRoot).length, 1)
+        assert.equal(settingsOf(app).cli, true)
+        const route = vaultRoute({ vaults: listed.vaults, vaultRoot: store.vaultRoot })
+        assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route }), { answered: true, indexReady: true })
+      } finally {
+        await finish(app, world)
+      }
+    })
+
+    await t.test('running with no vault open: open without --restart-obsidian answers no-vault-open; with it, the app is quit, the vault added, and the app started again on it', async () => {
+      const app = createIsolatedApp({ vaults: {} })
+      let world = null
+      try {
+        t.diagnostic(`isolated app answered "${await app.launch({ anyAnswer: true })}" with no vault open`)
+        world = await projectBeside(app)
+        const refused = await world.run(['open', '--consent-actor', 'real-app-suite'])
+        t.diagnostic(`open without the flag answered ${refused.outcome} (${refused.reason})`)
+        assert.deepEqual([refused.outcome, refused.reason, refused.launched, refused.restart], ['app-version-unsupported', 'no-vault-open', false, undefined], JSON.stringify(refused, null, 2))
+        assert.match(refused.next, /--restart-obsidian/)
+        assert.deepEqual([app.running(), backupsOf(app)], [true, []])
+        const opened = await world.run(['open', '--consent-actor', 'real-app-suite', '--restart-obsidian'])
+        t.diagnostic(`open --restart-obsidian answered ${opened.outcome} (${opened.reason}); restart ${JSON.stringify(opened.restart ?? null)}`)
+        assert.deepEqual([opened.outcome, opened.ok, opened.registration?.how, opened.restart?.state, opened.restart?.quit, opened.restart?.startedAgain], ['current', true, 'added-to-settings', 'no-vault-open', true, true], JSON.stringify(opened, null, 2))
+        assert.ok(fs.existsSync(opened.restart.settingsCopy), 'a copy of the settings was kept before any signal')
+        const { store } = await journalModes(world.dataRoot)
+        const after = settingsOf(app)
+        assert.equal(Object.values(after.vaults).filter((entry) => entry.path === store.vaultRoot).length, 1)
+        assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route: vaultRoute({ vaults: after.vaults, vaultRoot: store.vaultRoot }) }), { answered: true, indexReady: true })
+      } finally {
+        await finish(app, world)
+      }
+    })
+    await t.test('S6, a fresh profile started to its starter window (no obsidian.json written): without --restart-obsidian open names the flag; with it, nothing to copy, the app is quit, the settings file created, and the app started again on the vault', async () => {
+      const app = createIsolatedApp({ settings: null })
+      let world = null
+      try {
+        const answered = await app.launch({ anyAnswer: true })
+        const written = fs.existsSync(app.settingsFile)
+        t.diagnostic(`isolated app answered "${answered}" at its starter window; settings file written by the app: ${written}`)
+        assert.equal(written, false, 'the starter window writes no settings file (DESIGN S6)')
+        world = await projectBeside(app)
+        const refused = await world.run(['open', '--consent-actor', 'real-app-suite'])
+        t.diagnostic(`open without the flag answered ${refused.outcome} (${refused.reason})`)
+        assert.ok(['cli-turned-off', 'no-vault-open'].includes(refused.reason), JSON.stringify(refused, null, 2))
+        assert.match(refused.next, /--restart-obsidian/)
+        assert.deepEqual([app.running(), fs.existsSync(app.settingsFile), refused.restart], [true, false, undefined])
+        const opened = await world.run(['open', '--consent-actor', 'real-app-suite', '--restart-obsidian'])
+        t.diagnostic(`open --restart-obsidian answered ${opened.outcome} (${opened.reason}); registration ${JSON.stringify(opened.registration ?? null)}; restart ${JSON.stringify(opened.restart ?? null)}; settings ${JSON.stringify(opened.obsidianSettings ?? null)}`)
+        assert.deepEqual([opened.outcome, opened.ok, opened.registration?.how, opened.restart?.quit, opened.restart?.startedAgain, opened.restart?.settingsCopy], ['current', true, 'created-settings', true, true, undefined], JSON.stringify(opened, null, 2))
+        assert.deepEqual(backupsOf(app), [], 'nothing to copy, nothing to back up')
+        const { store } = await journalModes(world.dataRoot)
+        const after = settingsOf(app)
+        assert.equal(after.cli, true)
+        assert.equal(Object.values(after.vaults).filter((entry) => entry.path === store.vaultRoot).length, 1)
+        assert.deepEqual(await world.appProbe.vaultState({ vaultRoot: store.vaultRoot, route: vaultRoute({ vaults: after.vaults, vaultRoot: store.vaultRoot }) }), { answered: true, indexReady: true })
+      } finally {
+        await finish(app, world)
       }
     })
   })
