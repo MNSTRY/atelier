@@ -447,6 +447,7 @@ error, 3 the operation ran and its answer is not success.
 | `settings` | what this machine remembers for the workspace (who may see, where vaults live, start at login, the adapter), who allowed the service, and how each answer is changed | nothing |
 | `scope list`, `scope show ID` | the declared views | nothing |
 | `audience show`, `audience set me\|A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. `me` is only you: every audience but `sensitive`, which is added by name. The answer is remembered as the person's decision. A change invalidates every view at the next tick | private machine settings |
+| `location show`, `location set DIR [--allow-synced-location]` | where this workspace's vaults live; each view not published yet gets `<project> (<view>)` there at its first publication, and a vault published already stays where it is | private machine settings |
 | `mode show`, `mode set manual\|automatic` | `automatic` refuses without an installed, matching, active automatic policy | private machine settings |
 | `policy show`, `policy install FILE`, `policy revoke` | `install` validates against the apply-policy contract and stores the policy owner-only beside the machine settings, never in a project, a repository or a note. `revoke` marks the stored policy revoked, which the engine reads before its very next dispatch, and returns the mode to manual | private machine settings |
 | `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start records who allowed it: `--consent-actor ID`, or for a person at a terminal the account's name. `service start` replaces a proven service of an earlier release (`replaced: 'outdated'`) and never one of a later release (`release: 'later'`); with a login item it starts the service through it | what the lifecycle writes |
@@ -491,7 +492,7 @@ step. Only `current` is success:
 | `updating` | a publication is under way, a tick outlasted the wait, or a note differs from the trusted generation and has not been looked at yet |
 | `held-for-your-edit` | an edited note is preserved and held |
 | `stale-readable` | a last good vault exists and reads back, but is not proven to be the present generation |
-| `not-prepared` | no generation of this view has been published |
+| `not-prepared` | no generation of this view can be read back: none was published yet, or its vault cannot be found or used (the reason says which) |
 | `publisher-conflict` | another publisher or an uncoordinated editor holds the vault |
 | `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability, or the command line turned off in Obsidian (`cli-turned-off`); below the minimum version, or a version that cannot be read (reason `no-vault-open` when the app runs with no vault open and its command line answers nothing else) |
 | `launch-failed` | the vault could not be added to the app's list (a typed reason names why), the operating system refused, or the app never answered for this vault |

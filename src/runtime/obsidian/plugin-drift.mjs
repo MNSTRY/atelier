@@ -61,7 +61,9 @@ export function createPluginDriftObserver({ workspaceRoot, workspaceId }) {
       for (const scopeId of scopeIds) {
         const pinned = pinnedPlugin(workspaceRoot, workspaceId, scopeId)
         if (pinned === null || pinned.files.length === 0) { looked.delete(scopeId); continue }
-        const vaultRoot = viewVaultRoot(workspaceRoot, scopeId)
+        // The view's vault wherever it is; one that cannot be found is refused by the engine, not observed here.
+        let vaultRoot
+        try { vaultRoot = viewVaultRoot(workspaceRoot, scopeId, workspaceId) } catch (error) { if (typeof error?.code !== 'string') throw error; looked.delete(scopeId); continue }
         let root = 'absent'
         try { const stat = fs.lstatSync(vaultRoot); root = stat.isSymbolicLink() ? 'link' : (stat.mode & 0o777).toString(8) } catch { root = 'absent' }
         const disk = pinned.files.map((file) => onDisk(vaultRoot, file.path))

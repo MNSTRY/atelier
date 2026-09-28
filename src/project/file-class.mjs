@@ -188,7 +188,7 @@ export function classifyManagedPath(relativePath) {
 // moves up a level. Any other failure (a directory that cannot be searched,
 // a link loop) is thrown: a lexical path standing in for a real one would
 // weaken the alias check exactly where it matters.
-function realLocation(target, realpath) {
+export function realLocation(target, realpath = fs.realpathSync.native) {
   const missing = []
   let current = path.resolve(target)
   for (;;) {

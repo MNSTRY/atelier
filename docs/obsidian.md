@@ -343,7 +343,7 @@ defaults (`defaults`), or carried over from an earlier release (`v1`).
 | Decision | Holds | Made today by |
 | --- | --- | --- |
 | `audience` | `only-you` or `custom`, and whether notes that carry no classification are `shown` or `withheld`. Only `only-you` may show them; a list of audiences always withholds them. The admitted list stays in `audienceAllow`, the engine's audience input | `audience set me` (only you) or `audience set A,B` / `audience clear`; each withholds unclassified notes for now |
-| `location` | the absolute folder that holds this workspace's vaults | not yet: the first-run flow |
+| `location` | the absolute folder that holds this workspace's vaults | `location set DIR` |
 | `loginItem` | `on` or `off` | `service unit --install` (on); `service unit --remove` and `uninstall` (off) |
 | `adapter` | `obsidian-cli` | `--adapter=obsidian-cli` given to `open`, `service start` or `service unit --install` |
 
@@ -423,7 +423,9 @@ is restarted after a minute.
 
 `uninstall` removes the login item and stops the service. It keeps the vaults,
 the private state, the project file and Obsidian's vault list as they are, and
-prints where each is. It does not start the service again.
+prints where each is: every vault under the data root and every folder
+allocated to a view where the workspace decided its vaults live, a view no
+longer declared included. It does not start the service again.
 
 After an upgrade of Atelier, a maintenance service started earlier still runs
 the earlier release. One the login item started notices it: after each tick
@@ -490,13 +492,79 @@ proposals list` and `proposals show OPERATION` read them, and nothing applies
 one. A body edit to a note whose source uses CRLF line endings is also a
 proposal, never an apply, because the app normalizes line endings on save.
 
-The vault itself lives under the private data root, outside every repository:
-`~/Library/Application Support/Atelier` on macOS, `$XDG_DATA_HOME/atelier`
-(else `~/.local/share/atelier`) on Linux and `%LOCALAPPDATA%\Atelier` on
-Windows, under `obsidian/<workspace-id>/`. `--data-root DIR` names another
-absolute directory. Private state inside an enrolled repository is refused.
-Publication is proven on macOS arm64 only and is refused on Windows; see
-[Known limits](#known-limits).
+Atelier's private state lives under the private data root, outside every
+repository: `~/Library/Application Support/Atelier` on macOS,
+`$XDG_DATA_HOME/atelier` (else `~/.local/share/atelier`) on Linux and
+`%LOCALAPPDATA%\Atelier` on Windows, under `obsidian/<workspace-id>/`.
+`--data-root DIR` names another absolute directory. Private state inside an
+enrolled repository is refused. Publication is proven on macOS arm64 only and
+is refused on Windows; see [Known limits](#known-limits).
+
+Where the vaults are is decided per workspace. Until a person decides it, a
+view's vault is under the data root too, in `vaults/<view>`, as in every
+earlier release. `atelier obsidian location set DIR` decides a visible folder
+instead (`~/Atelier`, say). Each view that has not been published yet is then
+given its own folder there at its first publication, named
+`<project> (<view>)`: `~/Atelier/harbor-notes (everything)`. That name is also
+the vault's name in Obsidian's vault switcher, so it is readable and unique
+across projects and views. The first name that is free is taken, with a number
+inside the parentheses when needed (`harbor-notes (everything 2)`): free means
+nothing on the disk has it, and no vault Obsidian lists has it in any letter
+case. The folder is created private to this user (mode 0700), and so is `DIR`
+when Atelier creates it; a missing folder on the way to `DIR` is made as any
+other folder is. The allocation is recorded in the workspace's private
+state (`state/allocations/<view>.json`) and is never recomputed: renaming the
+project or deciding another folder later moves no vault, and a vault published
+before under the data root stays there. `location show` says where each
+view's vault is, or will be, or why its record cannot be read.
+
+Atelier publishes only into the folder it made. The allocation records the
+folder's real path, device and inode, and the maintenance service checks them
+at every tick, as the publisher does before it writes anything and again
+before each note and before its commit (see Known limits). Another folder
+put where the one made was (moved in, or a link) is not published into
+(`vault-allocation-replaced`), nor is the same folder reached through a link
+put on the way since, into a vault the app lists, say
+(`vault-allocation-moved`). A folder that has gone is made again at the next
+tick, only where its recorded real path leads and only where a location would
+be accepted (not inside a repository, the private state, a vault Atelier
+publishes or one the app lists, and on the data root's volume). A vault
+removed, moved or replaced while it is being published stops that publication
+(`vault-allocation-missing`, `vault-allocation-replaced`, or
+`vault-root-moved` for a vault under the data root). Once the folder is put
+back, or made again, the running service publishes into it again at its next
+tick; no restart is needed. One case waits for the next change at the view's
+sources: a folder made again after a publication that stopped just before its
+commit. That generation is finished by restart recovery, its notes went with
+the folder that went away, and the view reads `vault-note-missing` until then. A
+view that was published and whose vault Atelier cannot find is refused
+(`vault-allocation-lost`) rather than published again into a new, empty vault
+under the data root: its record was lost, or, for a view that never had a
+record (published under the data root), its `vaults/<view>` folder was
+removed. Restore the record from a backup if its vault was allocated
+elsewhere; otherwise make the folder `vaults/<view>` under the data root, and
+the view is published there at the next change at its sources. `status` and
+`open` name that next step for this code, and for `vault-allocation-moved`,
+`vault-allocation-replaced` and `vault-allocation-missing`.
+
+`DIR` is refused inside an enrolled repository or the project, inside a vault
+Atelier publishes, inside a folder Obsidian lists as a vault, and on another
+volume than the data root (a note is published by an atomic exchange, which
+cannot cross volumes). A folder a sync client keeps in step (iCloud Drive, a
+cloud storage provider, Dropbox, OneDrive, Google Drive, or a Desktop or
+Documents folder iCloud syncs) is refused unless `--allow-synced-location` is
+given: another machine's Obsidian could hold a vault there unseen. A folder
+macOS protects (Desktop, Documents, Downloads) is accepted with a warning,
+because macOS asks before Obsidian or the maintenance service may read it.
+`~/` is read against the account's home folder, which a shell does not do
+after `--x=`. Each check compares the folder as written and as its real path,
+in any letter case, so a link into a listed or synced vault is refused as
+that vault is. Obsidian's vault list is read through the app when it runs and
+answers, and otherwise from its settings file, never written. When the list
+cannot be read, `location set` says so and accepts the folder, and the
+maintenance service allocates no vault there until it can read the list
+(the view is `stale`, `app-vault-list-unreadable`, and is tried again at
+the next tick).
 
 ### What `open` does in each state of Obsidian
 
@@ -733,6 +801,35 @@ test reported as a pass.
   own launch `open` waits, bounded, while the app is still opening the vault;
   an app whose vault window is still loading answers a command with `Error:
   Command "…" not found`, which is read as not up yet, never as a version.
+- Vault location: consent to a folder a sync client keeps in step
+  (`--allow-synced-location`) is given when `location set` decides the folder,
+  and is not recorded, so the maintenance service does not check for sync
+  clients again. The decision keeps the folder as it was written, so at a
+  view's first allocation a folder on the way that has since become a link
+  into a synced folder is followed, and its vault is allocated there without
+  being asked; a folder that becomes synced without any link (iCloud's
+  "Desktop & Documents Folders" turned on, say) is not refused either, at the
+  first allocation or when a vault is made again. Every other check runs
+  again at both, and a vault made again, or published into, through a link on
+  the way is refused (`vault-allocation-moved`).
+- Replacing a vault during a publication: the allocated folder is checked
+  before the vault lock is taken and again once its folder is made, after the
+  app is asked about the vault, before each note and before the generation is
+  committed. A program of the same account that puts a link in its place
+  between one check and what follows it can still have that go through the
+  link: one note's writes (the folders on its way and the note), or the vault
+  lock's folder (made there, or made private if it was there already) and, in
+  a folder that already holds one (another Atelier vault), a lock ticket and
+  its release flag. For a note replaced or removed while the app holds the
+  vault, the app is asked about that note between the check and the write, so
+  that window lasts a round trip to the app. The next check refuses the
+  publication, and it is never reported current.
+- Vault identity: an allocated folder is known by its real path, device and
+  inode. On Linux a folder made at the same path after the allocated one was
+  removed can be given the same inode number (ext4 reuses a freed one), and is
+  then taken for the one made; macOS (APFS) did not reuse one in 200 tries.
+  Such a folder is published into only at the recorded real path, and the
+  plugin's bearer only when this account owns it.
 - Obsidian's settings file: `open` adds a view's vault to the app's own list,
   `obsidian.json` in its user-data directory: `~/Library/Application
   Support/obsidian` on macOS and `$XDG_CONFIG_HOME/obsidian` (else

@@ -140,7 +140,7 @@ export async function runMaintenanceService(options = {}) {
   // view without the plugin for this tick; the view itself is prepared as ever.
   const pluginFor = (scopeId) => {
     try {
-      const vaultRoot = viewVaultRoot(workspaceRoot, scopeId)
+      const vaultRoot = viewVaultRoot(workspaceRoot, scopeId, workspaceId)
       const { choice, community } = decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultRoot, clock })
       const off = choice.state === 'off'
       const bearer = ensurePluginBearer({ workspaceRoot, workspaceId, scopeId, randomBytes, clock })

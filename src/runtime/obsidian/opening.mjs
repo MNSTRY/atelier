@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { enclosingVaults, findVaultEntry, vaultRoute } from '../../projection/obsidian/publication/vault-list.mjs'
-import { createRecoveryStore as createStore, readFileBytes, sha256Digest } from '../../projection/obsidian/recovery/store.mjs'
+import { createRecoveryStore as createStore, readFileBytes, sha256Digest, vaultRootFor } from '../../projection/obsidian/recovery/store.mjs'
 import { inspectApp, qualifyApp } from './app-capability.mjs'
 import { settingsWriteOutlook } from './app-registration.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
@@ -56,7 +56,7 @@ export const OPENING_OUTCOMES = Object.freeze({
   updating: { summary: 'maintenance is publishing or has not finished; the vault is not confirmed current', next: 'run `obsidian open` again in a moment' },
   'held-for-your-edit': { summary: 'a note you edited is preserved and held; the view is not republished over it', next: 'apply or withdraw the pending edit, then open again' },
   'stale-readable': { summary: 'a last good vault exists and can be read, but it is not proven to be the present generation', next: 'see `obsidian status` for the reason; `obsidian open --allow-stale` opens it as it is' },
-  'not-prepared': { summary: 'no generation of this view has been published yet', next: 'see `obsidian status` for the reason' },
+  'not-prepared': { summary: 'no generation of this view can be read back: none was published yet, or its vault cannot be found or used (the reason says which)', next: 'see `obsidian status` for the reason' },
   'app-missing': { summary: 'no Obsidian installation was found', next: 'install Obsidian, then open again' },
   'app-version-unsupported': { summary: 'the installed Obsidian is below the minimum supported version, or its version cannot be read', next: 'update Obsidian, then open again' },
   'app-cli-unavailable': { summary: 'the installed Obsidian has no usable command-line capability', next: 'enable the command-line interface in Obsidian, then open again' },
@@ -123,6 +123,12 @@ export const REASON_NEXT = Object.freeze({
   'service-outdated': 'the maintenance service runs an earlier release of Atelier that could not be replaced; run `atelier obsidian service stop`, then open again',
   'service-other-release': 'the maintenance service runs a later release of Atelier than this command, which never replaces a later release by itself; run `atelier obsidian service stop`, then open again, or open with the later release',
   'vault-open-in-several-windows': 'Obsidian\'s vault list marks this view\'s folder open under more than one entry (in another letter case, or through a link), so it may hold the vault in more than one window, and a publication coordinates with one window only; remove the extra entries from Obsidian\'s vault list (Obsidian keeps the last window it closed marked open, so closing windows does not clear this), then open again',
+  'vault-allocation-lost': 'this view was published, but its vault is not where Atelier can find it: no record of a folder allocated for it (state/allocations/<view>.json in Atelier\'s private state), and no folder under the data root (vaults/<view>); restore that record from a backup if its vault was allocated elsewhere, or else make the folder vaults/<view> under the data root: the view is published there at the next change at its sources',
+  'vault-allocation-moved': 'this view\'s vault is now reached through a link, or leads somewhere other than where it was allocated, and Atelier publishes only into the folder at the path it recorded; put that folder back at the path `atelier obsidian location show` names, with no link on the way',
+  'vault-allocation-replaced': 'another folder, or a link, is where this view\'s vault was allocated, and Atelier publishes only into the folder it made; put the vault back there, or move what is there away: a folder that is gone is made again at the next tick, and the view published into it',
+  'vault-note-missing': 'a note of the generation this view last published is missing from its vault; the view is published again, and the note written back, at the next change at its sources',
+  'vault-root-moved': 'this view\'s vault was removed, moved or replaced by a link while it was being published, and nothing more was written into it; a vault allocated for the view is made again at the next tick and published into; a vault under the data root is asked for as lost until its folder is there again',
+  'vault-allocation-missing': 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick, and publishes the view into it',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 
@@ -160,7 +166,7 @@ export const OPENING_PRIMITIVES = Object.freeze({
 })
 
 const segment = (identifier) => identifier.replaceAll(':', '_')
-const STORE_AREAS = (scopeId) => [['vaults', segment(scopeId)], ['state', 'manifests', segment(scopeId)], ['state', 'journals', segment(scopeId)], ['state', 'locks'], ['recovery', 'objects'], ['staging']]
+const STORE_AREAS = (scopeId) => [['state', 'manifests', segment(scopeId)], ['state', 'journals', segment(scopeId)], ['state', 'locks'], ['recovery', 'objects'], ['staging']]
 
 // Reads the trusted pointer of a view and every note of its vault. Read-only:
 // the store is only constructed when everything it would create already exists.
@@ -168,7 +174,13 @@ const STORE_AREAS = (scopeId) => [['vaults', segment(scopeId)], ['state', 'manif
 // store could be constructed, even before a first generation.
 export function readBackTrustedGeneration({ workspaceRoot, workspaceId, scopeId, repositoryRoots, createRecoveryStore = createStore }) {
   const unreadable = (reason) => ({ readable: false, reason, generationId: null, intact: false, noteCount: 0, differing: 0, missing: 0 })
-  if (!STORE_AREAS(scopeId).every((parts) => fs.existsSync(path.join(workspaceRoot, ...parts)))) return unreadable('no-published-vault')
+  // The view's vault wherever it is: allocated for the view, or under the data root.
+  let vault
+  try { vault = vaultRootFor({ workspaceRoot, workspaceId, scopeId }) } catch (error) {
+    if (typeof error?.code === 'string') return unreadable(error.code)
+    throw error
+  }
+  if (!fs.existsSync(vault.path) || !STORE_AREAS(scopeId).every((parts) => fs.existsSync(path.join(workspaceRoot, ...parts)))) return unreadable('no-published-vault')
   let store
   let trusted
   try {
@@ -224,8 +236,14 @@ export function scopeReport({ workspace, scopeId, repositoryRoots, serviceState,
     reason = edited ? 'vault-differs-from-trusted-generation' : verification.readable ? 'trusted-generation-differs' : verification.reason
   } else if (serviceState !== 'healthy') { outcome = 'stale-readable'; reason = serviceState === 'busy' ? 'maintenance-busy-not-rechecked' : 'maintenance-not-running' }
   else { outcome = 'current'; reason = entry.reason }
+  // Where the view's vault is, published or not: allocated for the view, or under the data root.
+  let vault
+  try { const found = vaultRootFor({ ...workspace, scopeId }); vault = { path: found.path, origin: found.origin } } catch (error) {
+    if (typeof error?.code !== 'string') throw error
+    vault = { path: null, origin: 'unreadable', reason: error.code }
+  }
   return {
-    scopeId, ...describeOutcome(outcome), next: nextStep(outcome, reason), reason,
+    scopeId, ...describeOutcome(outcome), next: nextStep(outcome, reason), reason, vault,
     freshness: entry === null ? null : { state: entry.state, reason: entry.reason, verified: entry.verified, generationId: entry.generationId, preparedGenerationId: entry.preparedGenerationId, heldNoteCount: entry.heldNotes.length, retainedEdits: entry.retainedEdits, checkedAt: entry.checkedAt },
     readBack: { readable: verification.readable, reason: verification.reason, generationId: verification.generationId, intact: verification.intact, noteCount: verification.noteCount, differing: verification.differing, missing: verification.missing },
     pendingEdits: pendingSummary(stateStore, scopeId, applyAvailable),

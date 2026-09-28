@@ -49,6 +49,10 @@ const hex = (digest) => digest.slice('sha256:'.length)
 const iso = (clock) => { const value = clock(); return (value instanceof Date ? value : new Date(value)).toISOString() }
 const REFUSED_BY_EDIT = new Set(['editor-edit', 'disk-changed'])
 const unreleased = new Map()
+// A release kept earlier whose lock folder is gone when it is tried again (the vault deleted, replaced, or made again
+// empty at its path) holds nothing there, and is dropped rather than holding every later publication of that vault back.
+// A vault put back holds its ticket again, and the release kept for it then succeeds.
+const lockFolderGone = (error) => error?.code === 'ENOENT' || error?.code === 'ENOTDIR'
 
 // A note another program replaces by rename can change between the check of its leaf and the open
 // (ELEAFCHANGED). Every rename leaves a complete file, so it is read again; one that keeps changing is left to
@@ -280,19 +284,27 @@ export async function publishView(options = {}) {
     // A release that could not be written (a full disk) is finished first.
     for (const lockPath of [store.vaultLockPath, store.lockPath]) {
       if (!unreleased.has(lockPath)) continue
-      try { unreleased.get(lockPath)() } catch (error) { refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) }) }
+      try { unreleased.get(lockPath)() } catch (error) { if (!lockFolderGone(error)) refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) }) }
       unreleased.delete(lockPath)
     }
     // Two locks, the view's and then the vault's: a second view or a second
     // workspace state pointed at the same vault refuses instead of racing.
     const acquire = (lockPath, take, held) => {
       try { releases.push([lockPath, take()]) } catch (error) {
+        if (error instanceof PublicationRefusal) throw error
         if (error.code === 'EEXIST') refuse('publication-in-progress', `another publication ${held} holds the lock`)
         refuse('state-unwritable', 'private publication state cannot be written; nothing in the vault was touched', { cause: error.code ?? String(error.message) })
       }
     }
     acquire(store.lockPath, () => acquirePrivateLock(store.lockPath), 'of this view')
+    // A vault allocated for the view is still the folder it made, before anything is written in it (the vault lock
+    // included) and again once the lock is held: a store kept by a long-running service may outlive its folder. It is
+    // checked again after every wait on the app, before each unit and before the commit, so a folder replaced during a
+    // publication refuses it and is never reported current. (Only this account can replace it; the check and the
+    // write that follows it are still two steps.)
+    store.checkAllocatedVault?.()
     acquire(store.vaultLockPath, () => acquireVaultLock(store), 'into this vault')
+    store.checkAllocatedVault?.()
     const recovered = recoverPublicationsLocked({ store, clock })
     const pointer = store.readCurrent()
     if (pointer?.generationId === manifest.generationId && !pluginFilesDrifted(preparedView, store)) {
@@ -303,6 +315,7 @@ export async function publishView(options = {}) {
     // Path selection. An app with this vault open in several windows is refused as such: publishing through one of
     // them would leave the others uncoordinated.
     const probe = await adapter.probe({ vaultRoot: store.vaultRoot })
+    store.checkAllocatedVault?.()
     if (probe.state !== 'coordinated' && probe.state !== 'absent') refuse(probe.code === 'vault-open-in-several-windows' ? probe.code : 'editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
     const mode = probe.state === 'coordinated' ? 'in-app' : 'direct'
     const channel = mode === 'in-app' ? adapter : createDirectAdapter({ crashSeam: seam })
@@ -386,6 +399,7 @@ export async function publishView(options = {}) {
         const again = await adapter.probe({ vaultRoot: store.vaultRoot })
         if (again.state !== 'absent') context.uncoordinated = again.reason
       }
+      store.checkAllocatedVault?.()
       if (unit.op === 'keep' && unchanged.has(unit.path)) {
         results.push({ path: unit.path, kind: unit.kind, op: unit.op, outcome: context.uncoordinated ? 'editor-uncoordinated' : 'unchanged', blocking: false })
         continue
@@ -416,6 +430,7 @@ export async function publishView(options = {}) {
     }
     journal.append({ step: 'verify', outcome: 'ok', state: 'verifying', detail: { settled: true, retained: retainedEdits } })
     crash('before-manifest-commit')
+    store.checkAllocatedVault?.()
     store.commitManifest({ manifestBytes, generationId: manifest.generationId, journalId, retained: retainedEdits, committedAt: iso(clock) })
     crash('after-manifest-pointer')
     journal.append({ step: 'manifest-commit', outcome: 'ok', state: 'committed', detail: { manifestDigest: sha256Digest(manifestBytes) } })
@@ -429,6 +444,8 @@ export async function publishView(options = {}) {
     }
     return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail }, notes: [], retainedEdits: [], lateWriters: [] }
   } finally {
+    // A release that fails is kept and tried again before the next publication of that lock, even when the lock's folder
+    // is not there now: a vault moved away keeps its ticket and may be put back.
     for (const [lockPath, release] of releases.reverse()) try { release() } catch { unreleased.set(lockPath, release) }
   }
 }

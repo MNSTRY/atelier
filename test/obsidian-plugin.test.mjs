@@ -1728,6 +1728,13 @@ function serviceWorld(t) {
       const exit = await runObsidianCommandForOracleTests({ argv: [...argv, `--project=${configPath}`, `--data-root=${dataRoot}`], seams, env, cwd: projectDir, clock: world.clock, contributions: [], probeTimeoutMs: 1500, stdout: (text) => out.push(text), stderr: () => {} })
       return { exit, json: JSON.parse(out.join('\n')) }
     },
+    // Where the vaults live, decided before the service's first tick: the view's vault is then allocated there, and
+    // `world.vault` names that folder.
+    async decideLocation(parent) {
+      const decided = await world.run(['location', 'set', parent, '--json'], { seams: {} })
+      assert.equal(decided.exit, 0, JSON.stringify(decided.json))
+      world.vault = path.join(parent, `plugin-fixture (${SCOPE})`)
+    },
   }
   return world
 }
@@ -1773,6 +1780,43 @@ test('the service publishes the plugin into the vault it maintains, and the plug
 
   plugin.unload()
   await waitFor(async () => (await world.statusDocument()).plugins.scopes[0].present === false, { label: 'the released lease' })
+})
+
+test('with a location decided, the service keeps the allocated vault current, its plugin holds it open, a drifted plugin file is written again there, and the person\'s choice is read there', needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  await world.decideLocation(path.join(world.dir, 'Atelier'))
+  const published = []
+  const service = await world.service({ seams: { publishView: (input) => { published.push(input.recoveryStore.vaultRoot); return publishView(input) } } })
+  const tick = async (label) => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); assert.deepEqual([world.freshness().state, world.freshness().reason].slice(0, 1), ['current'], `${label}: ${world.freshness().reason}`) }
+  const change = async (line) => { fs.appendFileSync(world.source('harbor/notes/tides.md'), `\n${line}\n`); world.advance(1000); await tick(line) }
+  await tick('first publication')
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot, 'vaults')), false, 'nothing under the data root')
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(world.vault, COMMUNITY_PLUGINS_PATH), 'utf8')), [PLUGIN_ID])
+  // Publication: a change at the source is published into the allocated vault, and the view is current again.
+  await change('Low water at six.')
+  assert.match(fs.readFileSync(path.join(world.vault, 'harbor', 'notes', 'Tide table.md'), 'utf8'), /Low water at six\./)
+  // The plugin: the one published there proves that vault, and holds the view.
+  const { plugin, statusBar } = world.plugin()
+  await plugin.load()
+  await plugin.cycle()
+  assert.equal(statusBar(), 'Atelier: current')
+  assert.equal((await world.statusDocument()).plugins.scopes[0].present, true)
+  plugin.unload()
+  // Drift: a plugin file removed there is written again at the next tick, into that vault.
+  const before = published.length
+  fs.rmSync(path.join(world.vault, PLUGIN_DIRECTORY, 'main.js'))
+  await tick('drift')
+  assert.equal(published.length, before + 1)
+  assert.deepEqual([...new Set(published)], [fs.realpathSync(world.vault)], 'every publication went into the allocated vault')
+  assert.ok(fs.readFileSync(path.join(world.vault, PLUGIN_DIRECTORY, 'main.js')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))))
+  // The person's choice: the plugin turned off in that vault is seen by status, and followed by the next publication.
+  const vault = choiceWorld(world)
+  fs.writeFileSync(vault.list, JSON.stringify(['dataview']))
+  const seen = await world.run(['plugin', 'show', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual(seen.json.plugins[0].choice, { state: 'off', reason: 'entry-removed-by-person', since: null, pending: true })
+  await change('Slack water at three.')
+  assert.deepEqual(vault.choice(), ['off', 'entry-removed-by-person'])
+  assert.deepEqual(vault.listed(), ['dataview'])
 })
 
 test('with two launches of the plugin holding one view, neither version decides: the probe is asked as if no plugin were there', needsExchange, async (t) => {

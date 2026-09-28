@@ -110,6 +110,61 @@
 
 ### Changed
 
+- Where a workspace's vaults live can be decided, and a visible folder can
+  hold them: `atelier obsidian location set DIR` (`~/Atelier`, say) records
+  the `location` decision. Each view not published yet is then given its own
+  folder there at its first publication, `<project> (<view>)`, which is also
+  the vault's name in Obsidian (`harbor-notes (everything)`; a number inside the
+  parentheses when that name is taken on the disk or by a vault the app lists).
+  The folder is created exclusively and private to this user, and its
+  allocation is recorded once in the workspace's private state
+  (`atelier-obsidian-vault-allocation/v1`, `state/allocations/<view>.json`,
+  with the folder's real path, device and inode, which the maintenance service
+  checks at every tick and the publisher before it writes, before each note
+  and before its commit: another folder put
+  where the one made was is not published into, `vault-allocation-replaced`,
+  nor is the same folder reached through a link put on the way since,
+  `vault-allocation-moved`; on Linux a folder made after the original was
+  removed can be given its inode number, see Known limits in
+  `docs/obsidian.md`. A folder that has gone is made again by the next tick,
+  only where its recorded real path leads and only where a location would be
+  accepted: never inside a repository, the project, the private state, a vault
+  Atelier publishes or one the app lists; a vault removed, moved or replaced
+  while it was being published stops that publication (`vault-root-moved` for
+  a vault under the data root), and the running service, without a restart,
+  publishes into it again once it is put back or made again: at once, or, for
+  a folder made again after a publication stopped just before its commit, at
+  the next change at its sources (`vault-note-missing` until then). A published view whose vault cannot
+  be found (its record was lost, or a view published under the data root lost
+  its `vaults/<view>` folder, which was made again before) is refused,
+  `vault-allocation-lost`, never published again into a new, empty vault;
+  `status` and `open` name the way back),
+  which the recovery store reads: the engine, source apply, the proposal
+  adapter, `open` and the plugin's service paths (its hello, the person's
+  choice to turn it off, drift) all find the same vault. So does
+  `viewVaultRoot` of `@mnstry/atelier/obsidian`, which answers the allocated
+  folder now, and may refuse, typed (a record that cannot be read, or was
+  lost); pass the workspace id as its third argument: without it the name of
+  the workspace's private-state folder is taken as the id, as before, and a
+  record that does not match it is refused. A vault published before stays
+  under the data root, and a workspace that decides nothing publishes there as
+  before. A folder inside a repository or the project, inside a vault Atelier
+  publishes or one the app lists, or on another volume than the data root is
+  refused, through links and in any letter case; a synced one needs
+  `--allow-synced-location`; a macOS-protected one is warned about. The app's
+  list is read through the app when it answers, else from its settings file;
+  while it cannot be read, no folder is allocated (`app-vault-list-unreadable`,
+  tried again at the next tick). A view whose folder cannot be allocated is not published
+  and its freshness says why, while the other views go on: a folder that
+  cannot be made (`vault-location-unusable`: a file in the way, no
+  permission), one inside Atelier's private state
+  (`vault-location-inside-private-state`, refused by `location set` too), an
+  allocation record that cannot be read or names a folder inside a
+  repository, each stops its own view only. `location show`
+  and `status` (`scopes[].vault`) say where each view's vault is, or why it
+  cannot be read. Consent to a synced folder is not recorded, so it is not
+  checked again when a folder is allocated or made again; a link on the way is
+  followed only at a view's first allocation (Known limits).
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the
