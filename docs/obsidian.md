@@ -531,8 +531,12 @@ be accepted (not inside a repository, the private state, a vault Atelier
 publishes or one the app lists, and on the data root's volume). A vault
 removed, moved or replaced while it is being published stops that publication
 (`vault-allocation-missing`, `vault-allocation-replaced`, or
-`vault-root-moved` for a vault under the data root), and once the folder is
-back the running service publishes into it again; no restart is needed. A
+`vault-root-moved` for a vault under the data root). Once the folder is put
+back, or made again, the running service publishes into it again at its next
+tick; no restart is needed. One case waits for the next change at the view's
+sources: a folder made again after a publication that stopped just before its
+commit. That generation is finished by restart recovery, its notes went with
+the folder that went away, and the view reads `vault-note-missing` until then. A
 view that was published and whose vault Atelier cannot find is refused
 (`vault-allocation-lost`) rather than published again into a new, empty vault
 under the data root: its record was lost, or, for a view that never had a

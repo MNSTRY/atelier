@@ -49,8 +49,9 @@ const hex = (digest) => digest.slice('sha256:'.length)
 const iso = (clock) => { const value = clock(); return (value instanceof Date ? value : new Date(value)).toISOString() }
 const REFUSED_BY_EDIT = new Set(['editor-edit', 'disk-changed'])
 const unreleased = new Map()
-// A lock whose folder has gone (the vault moved away, deleted or replaced while it was held) holds nothing: its release
-// is not kept to be tried again, where it would fail for ever and hold every later publication of that vault back.
+// A release kept earlier whose lock folder is gone when it is tried again (the vault deleted, replaced, or made again
+// empty at its path) holds nothing there, and is dropped rather than holding every later publication of that vault back.
+// A vault put back holds its ticket again, and the release kept for it then succeeds.
 const lockFolderGone = (error) => error?.code === 'ENOENT' || error?.code === 'ENOTDIR'
 
 // A note another program replaces by rename can change between the check of its leaf and the open
@@ -443,7 +444,9 @@ export async function publishView(options = {}) {
     }
     return { state: 'refused', refusal: { code: error.code, message: error.message, detail: error.detail }, notes: [], retainedEdits: [], lateWriters: [] }
   } finally {
-    for (const [lockPath, release] of releases.reverse()) try { release() } catch (error) { if (!lockFolderGone(error)) unreleased.set(lockPath, release) }
+    // A release that fails is kept and tried again before the next publication of that lock, even when the lock's folder
+    // is not there now: a vault moved away keeps its ticket and may be put back.
+    for (const [lockPath, release] of releases.reverse()) try { release() } catch { unreleased.set(lockPath, release) }
   }
 }
 

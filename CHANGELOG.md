@@ -130,9 +130,11 @@
   only where its recorded real path leads and only where a location would be
   accepted: never inside a repository, the project, the private state, a vault
   Atelier publishes or one the app lists; a vault removed, moved or replaced
-  while it was being published keeps no lock of the running service behind,
-  so it is published into again once it is back, without a restart
-  (`vault-root-moved` for a vault under the data root). A published view whose vault cannot
+  while it was being published stops that publication (`vault-root-moved` for
+  a vault under the data root), and the running service, without a restart,
+  publishes into it again once it is put back or made again: at once, or, for
+  a folder made again after a publication stopped just before its commit, at
+  the next change at its sources (`vault-note-missing` until then). A published view whose vault cannot
   be found (its record was lost, or a view published under the data root lost
   its `vaults/<view>` folder, which was made again before) is refused,
   `vault-allocation-lost`, never published again into a new, empty vault;

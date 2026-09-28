@@ -3148,23 +3148,31 @@ test('the publisher checks an allocated vault again before it writes anything, s
   assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in, not even the vault lock')
 })
 
-test('a folder replaced or removed during a publication (while the app is asked, between units or before the commit) is refused and never reported current, nothing is written into the person\'s vault, and once the folder is back the same service publishes again', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
+test('a folder replaced, removed or moved away during a publication (while the app is asked, between units or before the commit) is refused and never reported current, nothing is written into the person\'s vault, and once it is back, put back or made again, the same service publishes into it again', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
   const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
   const { CRASH_INJECTION_TEST_SEAM } = await import('../src/projection/obsidian/publication/test-seam.mjs')
   // `when`: the nth time the app is asked about the vault (1: path selection, 2: before the first unit), or 'commit'.
-  // `how`: a link into the person's vault put in its place, or the folder removed; `legacy`: the vault is under the data root.
+  // `how`: a link into the person's vault put in its place, the folder removed, or the folder moved away (to the Trash,
+  // say) and later put back; `legacy`: the vault is under the data root.
+  // `untouched`: what the first tick after it is back says with nothing changed at the sources since. A generation
+  // interrupted just before its commit is finished by restart recovery; its notes went with the folder that went away,
+  // so a folder made again reads vault-note-missing until the next change at the sources publishes it again.
   const cases = [
-    { when: 1, how: 'link', refused: 'vault-allocation-replaced' },
-    { when: 2, how: 'link', refused: 'vault-allocation-replaced' },
-    { when: 'commit', how: 'link', refused: 'vault-allocation-replaced' },
-    { when: 2, how: 'remove', refused: 'vault-allocation-missing' },
-    { when: 2, how: 'remove', legacy: true, refused: 'vault-root-moved' },
+    { when: 1, how: 'link', refused: 'vault-allocation-replaced', untouched: ['current', 'published-and-verified'] },
+    { when: 2, how: 'link', refused: 'vault-allocation-replaced', untouched: ['current', 'published-and-verified'] },
+    { when: 'commit', how: 'link', refused: 'vault-allocation-replaced', untouched: ['stale', 'vault-note-missing'] },
+    { when: 2, how: 'remove', refused: 'vault-allocation-missing', untouched: ['current', 'published-and-verified'] },
+    { when: 2, how: 'remove', legacy: true, refused: 'vault-root-moved', untouched: ['current', 'published-and-verified'] },
+    { when: 2, how: 'move', refused: 'vault-allocation-missing', untouched: ['current', 'published-and-verified'] },
+    { when: 'commit', how: 'move', refused: 'vault-allocation-missing', untouched: ['current', 'verified-by-read-back'] },
+    { when: 2, how: 'move', legacy: true, refused: 'vault-root-moved', untouched: ['current', 'published-and-verified'] },
   ]
-  for (const { when, how, legacy = false, refused } of cases) {
+  for (const { when, how, legacy = false, refused, untouched } of cases) {
     const label = `${how} at ${when}${legacy ? ', under the data root' : ''}`
     const world = makeWorld(t)
     if (!legacy) await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
     const vaultOf = () => (legacy ? path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId) : readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }).path)
+    const away = path.join(world.dir, 'moved-away')
     const personal = path.join(world.dir, 'Personal Vault')
     fs.mkdirSync(personal)
     fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
@@ -3175,7 +3183,8 @@ test('a folder replaced or removed during a publication (while the app is asked,
       if (!armed || swapped) return
       swapped = true
       if (how === 'remove') fs.rmSync(vaultOf(), { recursive: true })
-      else { fs.renameSync(vaultOf(), path.join(world.dir, 'moved-away')); fs.symlinkSync(personal, vaultOf()) }
+      else fs.renameSync(vaultOf(), away)
+      if (how === 'link') fs.symlinkSync(personal, vaultOf())
     }
     const adapterFactory = (...args) => {
       const inner = absentAdapter(...args)
@@ -3184,29 +3193,24 @@ test('a folder replaced or removed during a publication (while the app is asked,
     const seams = when === 'commit' ? { publishView: (input) => publishView({ ...input, [CRASH_INJECTION_TEST_SEAM]: { at: 'before-manifest-commit', halt: swap } }) } : {}
     const engine = world.engine({ adapterFactory, seams })
     const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+    const tick = async () => { world.advance(10 * 60 * 1000); return stateOf(await engine.tick()) }
     assert.equal(stateOf(await engine.tick())[0], 'current', label)
     armed = true
     touchCompass(world, 'North is painted blue.')
-    world.advance(10 * 60 * 1000)
-    assert.deepEqual(stateOf(await engine.tick()), ['stale', refused], label)
-    assert.equal(swapped, true, `the folder was replaced or removed (${label})`)
+    assert.deepEqual(await tick(), ['stale', refused], label)
+    assert.equal(swapped, true, `the folder was replaced, removed or moved away (${label})`)
     assert.deepEqual(fs.readdirSync(personal), ['diary.md'], `nothing is written into the person's vault (${label})`)
-    // Back: the link is taken away (the service makes an allocated folder again), or the folder under the data root is
-    // made again. The same service publishes into it at the next change.
     armed = false
+    // Back: put back where it was, or the link taken away (the service makes an allocated folder again), or the folder
+    // under the data root made again.
+    if (how === 'move') fs.renameSync(away, vaultOf())
     if (how === 'link') fs.unlinkSync(vaultOf())
-    if (legacy) fs.mkdirSync(vaultOf(), { mode: 0o700 })
+    if (how === 'remove' && legacy) fs.mkdirSync(vaultOf(), { mode: 0o700 })
+    // Two ticks with nothing changed at the sources: the same answer at both.
+    assert.deepEqual(await tick(), untouched, `with nothing changed since it is back (${label})`)
+    assert.deepEqual(await tick(), untouched, `and again (${label})`)
     touchCompass(world, 'North is painted green.')
-    world.advance(10 * 60 * 1000)
-    let again = stateOf(await engine.tick())
-    // Stopped just before its commit, the publication's journal is finished by restart recovery first: that tick meets
-    // the generation it did not expect, and the view is published at the retry that follows.
-    if (when === 'commit') {
-      assert.deepEqual(again, ['publisher-conflict', 'generation-mismatch'], label)
-      world.advance(10 * 60 * 1000)
-      again = stateOf(await engine.tick())
-    }
-    assert.deepEqual(again, ['current', 'published-and-verified'], `published again (${label})`)
+    assert.deepEqual(await tick(), ['current', 'published-and-verified'], `published again at the next change (${label})`)
     assert.match(fs.readFileSync(path.join(vaultOf(), 'east-wing', 'notes', 'Compass rose.md'), 'utf8'), /painted green/, label)
   }
 })
