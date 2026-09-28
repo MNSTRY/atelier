@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { ephemeralRange, isEphemeral, releaseReservation, reservePort } from './helpers/loopback-port.mjs'
+import { RESERVATIONS, ephemeralRange, isEphemeral, releaseReservation, reservePort } from './helpers/loopback-port.mjs'
 import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { resolveProjectConfig, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
 import { createEditorAdapter, publishView, resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
@@ -2145,6 +2145,48 @@ test('the system hands a port-0 binder only ports of the range reservations keep
   assert.deepEqual(outside, [], `ports outside ${JSON.stringify(ephemeralRange())}`)
   const reserved = await reservePort(t)
   assert.equal(isEphemeral(reserved), false)
+})
+
+test('a port a wildcard listener holds is never reserved: a connection to 127.0.0.1 there would be answered', async (t) => {
+  for (const host of ['0.0.0.0', '::']) {
+    const port = await reservePort(null)
+    releaseReservation(port)
+    const wildcard = http.createServer((request, response) => { response.end('somebody else') })
+    const listening = await new Promise((resolve) => { wildcard.once('error', () => resolve(false)); wildcard.listen({ host, port }, () => resolve(true)) })
+    if (!listening) { t.diagnostic(`no listener on ${host} here`); continue }
+    try {
+      await assert.rejects(reservePort(null, { choose: () => [port] }), /no loopback port could be reserved/, `${host}:${port}`)
+    } finally {
+      await new Promise((resolve) => { wildcard.close(() => resolve()) })
+    }
+  }
+})
+
+// The helper as a separate process loads it: with a temporary folder of the test's own, never the shared one.
+function loadLoopbackPortHelper(scratch) {
+  const loaded = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', `const helper = await import(${JSON.stringify(LOOPBACK_PORT_HELPER)}); process.stdout.write(helper.RESERVATIONS)`], { env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch }, encoding: 'utf8', windowsHide: true })
+  assert.equal(loaded.status, 0, loaded.stderr)
+  return loaded.stdout
+}
+
+test('claims of test processes that are gone, killed by a signal before their exit hook ran, are swept when the helper loads; live claims and other files stay', async (t) => {
+  const scratch = fs.mkdtempSync(path.join(TMP, 'atelier-port-claims-'))
+  t.after(() => fs.rmSync(scratch, { recursive: true, force: true }))
+  const folder = loadLoopbackPortHelper(scratch)
+  fs.mkdirSync(folder, { recursive: true })
+  const killed = childProcess.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
+  await new Promise((resolve) => { killed.once('spawn', resolve) })
+  const gone = await new Promise((resolve) => { killed.once('exit', () => resolve(killed.pid)); killed.kill('SIGKILL') })
+  for (const name of [`24000.${gone}`, `24001.${process.pid}`, 'notes.txt']) fs.writeFileSync(path.join(folder, name), '')
+  loadLoopbackPortHelper(scratch)
+  assert.deepEqual(fs.readdirSync(folder).sort(), [`24001.${process.pid}`, 'notes.txt'].sort())
+})
+
+test('claims are kept per user within a temp folder: the folder is named for this user, and only this user may write in it', async (t) => {
+  if (typeof process.getuid === 'function') assert.equal(path.basename(RESERVATIONS), `mnstry-atelier-test-ports-${process.getuid()}`)
+  assert.equal(path.dirname(RESERVATIONS), os.tmpdir())
+  await reservePort(t)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(RESERVATIONS).mode & 0o777, 0o700)
 })
 
 // ---------------------------------------------------------------------------

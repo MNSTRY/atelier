@@ -12,14 +12,18 @@ import path from 'node:path'
 //
 // `reservePort` leaves no such gap. It chooses a port outside the range the system hands to port-0 binders, so nothing
 // that asks for port 0 is ever given it. It also claims the port in a folder that every process using this helper
-// shares, so no other test, in this suite or another one on this host, reserves the same port while this test holds
-// it. The claim lasts until the test ends, which covers services that are stopped and started again on the same port.
-// Nothing is retried: a service that still finds its reserved port occupied has a real occupant, and the test fails.
+// shares, so no other test reserves the same port while this test holds it. Claims are shared per temp folder
+// (TMPDIR) and per user: suites of one user that run with the same TMPDIR see each other's claims, and suites with
+// another TMPDIR are kept apart only by the random choice among some 29,000 ports. The claim lasts until the test ends,
+// which covers services that are stopped and started again on the same port. Nothing is retried: a service that still
+// finds its reserved port occupied has a real occupant, and the test fails.
 //
 // A test that occupies a port on purpose (a foreign or silent listener) listens on port 0 itself and keeps the socket.
 // It never probes and closes first.
 
-export const RESERVATIONS = path.join(os.tmpdir(), 'mnstry-atelier-test-ports')
+// One folder per user, which only that user may write in; where the system has no user IDs (Windows), the temp folder
+// is the user's own already.
+export const RESERVATIONS = path.join(os.tmpdir(), typeof process.getuid === 'function' ? `mnstry-atelier-test-ports-${process.getuid()}` : 'mnstry-atelier-test-ports')
 const LOWEST = 20000
 const HIGHEST = 65535
 
@@ -60,13 +64,26 @@ function candidates() {
 }
 
 const isAlive = (pid) => { try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' } }
+const CLAIM = /^(\d+)\.(\d+)$/
+
+// A test process killed by a signal never runs its exit hook, and its claims stay. They are swept when the helper
+// loads, in one read of the folder; a claim whose PID is somebody else's by now is left, and costs one port.
+function sweep() {
+  let names
+  try { names = fs.readdirSync(RESERVATIONS) } catch { return }
+  for (const name of names) {
+    const pid = Number(CLAIM.exec(name)?.[2])
+    if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && !isAlive(pid)) fs.rmSync(path.join(RESERVATIONS, name), { force: true })
+  }
+}
+sweep()
 
 // One file per claim, `<port>.<pid>`, so no claim ever removes another. A port is this process's only while no other
 // live process has a claim on it. Two claims made at the same moment both give way, and the port is simply not used.
 const held = new Set()
 function claim(port) {
   if (held.has(port)) return false
-  fs.mkdirSync(RESERVATIONS, { recursive: true })
+  fs.mkdirSync(RESERVATIONS, { recursive: true, mode: 0o700 })
   const mine = path.join(RESERVATIONS, `${port}.${process.pid}`)
   fs.writeFileSync(mine, '')
   const others = fs.readdirSync(RESERVATIONS).filter((name) => name.startsWith(`${port}.`) && name !== `${port}.${process.pid}`)
@@ -87,14 +104,26 @@ export function releaseReservation(port) {
 }
 process.once('exit', () => { for (const port of [...held]) releaseReservation(port) })
 
-// Whether the service could listen on the port now: the same listen it makes, on 127.0.0.1.
-function listenable(port) {
+// Whether the service could listen on the port now (the same listen it makes, on 127.0.0.1) and nothing answers a
+// connection to 127.0.0.1 there. The listen alone is not proof: where the system lets a listener on 0.0.0.0 or :: share
+// the port (macOS), the listen succeeds and that listener still answers.
+function bindable(port) {
   return new Promise((resolve) => {
     const server = net.createServer()
     server.once('error', () => resolve(false))
     server.listen({ host: '127.0.0.1', port, exclusive: true }, () => server.close(() => resolve(true)))
   })
 }
+function refused(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    const settle = (value) => { clearTimeout(timer); socket.destroy(); resolve(value) }
+    const timer = setTimeout(() => settle(false), 2000)
+    socket.once('connect', () => settle(false))
+    socket.once('error', (error) => settle(error.code === 'ECONNREFUSED'))
+  })
+}
+const listenable = async (port) => await bindable(port) && await refused(port)
 
 // A loopback port that nothing listens on now and that nothing but this test takes until the test ends. `t` is the
 // test (its `after` releases the port); without it, the port is held until this process exits. `choose` is a seam for
