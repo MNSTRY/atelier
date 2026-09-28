@@ -779,9 +779,10 @@ at path selection only when all of these hold:
    sides are compared as written and by their real paths, in any letter case.
    A file that cannot be read is read again, up to three times 50 ms apart,
    because the app rewrites it with a plain write. A missing or unreadable
-   file, an entry whose folder is not an absolute path, or a Flatpak or snap
-   build of the app anywhere on the account (its list is elsewhere) gives no
-   evidence.
+   file, an entry whose folder is not an absolute path, an entry with a `..`
+   segment (the folder it names through a link cannot be placed by its text),
+   or a Flatpak or snap build of the app anywhere on the account (its list is
+   elsewhere) gives no evidence.
 4. The platform is macOS or Linux.
 
 Any other case gives the refusal it gave before. The maintenance service reads
@@ -826,7 +827,14 @@ does not apply, or the run stops partway at a unit refused as
 then answers that refusal without adding the vault to the app, unless the
 person asks it to restart Obsidian (`--restart-obsidian`): the vault is then
 added and opened, and may be incomplete until the app has published the rest.
-A run that stops on a file in its way reports that (`create-conflict`).
+One case opens a vault without that flag: with the app running and no vault
+open, a vault the app already lists is opened by its path, as before this
+path existed, and may be incomplete. A run that stops only on a file in its
+way reports that (`create-conflict`). When it stops for more than one reason,
+one is reported: while the app does not qualify, the app's refusal wins over a
+file in the way, and while it qualifies, the first blocking unit's reason is
+reported. A reason not reported comes back at a later run, and nothing is
+written meanwhile.
 
 ### Proven boundary
 
