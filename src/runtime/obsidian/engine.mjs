@@ -3,10 +3,10 @@ import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
-import { PublicationRefusal } from '../../projection/obsidian/recovery/store.mjs'
+import { PublicationRefusal, allocatedFolderState, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
 import { readObsidianEnablement } from './enablement.mjs'
-import { ObsidianMaintenanceRefusal } from './errors.mjs'
+import { ObsidianMaintenanceRefusal, refuse } from './errors.mjs'
 import { createMaintenanceExtensions } from './extension-points.mjs'
 import {
   assertOutsideRepositories, authorizeAutomaticApply, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readLocalPointer,
@@ -14,10 +14,12 @@ import {
 } from './machine-settings.mjs'
 import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
-import { DEFAULT_ELIGIBILITY, createProductionSeams } from './pipeline.mjs'
+import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
+import { PLUGIN_FILES_WAIT_FOR_APP } from './plugin-presence.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import { FRESHNESS_SCHEMA, LATE_WRITERS_SCHEMA, createMaintenanceStateStore } from './state-store.mjs'
+import { ensureVaultAllocation, projectDisplayName } from './vault-location.mjs'
 import { createNullWatcherFactory } from './watchers.mjs'
 
 // The maintenance engine. One explicit `tick()`; no timer, no process, no
@@ -126,6 +128,10 @@ export const ENGINE_PRIMITIVES = Object.freeze({
 })
 
 const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
+// The code a view is refused with when its own vault cannot be placed: a typed refusal's, or `vault-location-unusable`
+// for a file-system error there (a file in the way, no permission, a read-only volume). Null for anything else, which
+// is a fault of the engine and stops the tick.
+const viewRefusalCode = (error) => (isTypedRefusal(error) ? error.code : typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code) ? 'vault-location-unusable' : null)
 const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
 
 // An editor adapter that `build` makes, synchronously or not, the first time the publisher calls it; a refusal of
@@ -141,6 +147,11 @@ function builtOnFirstUse(build) {
     collect: async (payload) => (await built()).collect(payload),
     publish: async (payload) => (await built()).publish(payload),
   }
+}
+// The adapter a publication gets when the factory refused the app: it coordinates with nothing and never calls it.
+function uncoordinatedAdapter(refusal) {
+  const never = async () => { throw refusal }
+  return { probe: async () => ({ state: 'uncoordinated', reason: `${refusal.code}: the installed Obsidian does not qualify, and nothing is published through it` }), inspect: never, collect: never, publish: never }
 }
 // Views a tick may be asked to prepare again, at most, before it runs.
 const MAX_PREPARATION_REQUESTS = 64
@@ -166,9 +177,19 @@ function journalsToRecheck(store, { nowMs, full, windowMs }) {
 export function createMaintenanceEngineForOracleTests(options = {}, primitives = ENGINE_PRIMITIVES) {
   const {
     loadProject, dataRoot, adapterFactory, clock,
-    watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility = DEFAULT_ELIGIBILITY,
+    // Which notes may enter a view: what the machine settings decide at each tick (eligibilityFor), unless a test fixes it.
+    watcherFactory = createNullWatcherFactory(), extensions = createMaintenanceExtensions(), eligibility: fixedEligibility = null,
     fullReconciliationIntervalMs = DEFAULT_FULL_RECONCILIATION_INTERVAL_MS, retryIntervalMs = DEFAULT_RETRY_INTERVAL_MS, lateWriterWindowMs = DEFAULT_LATE_WRITER_WINDOW_MS,
     publicationRetryMs = DEFAULT_PUBLICATION_RETRY_MS, observeApp = null,
+    // Reads the app's own vault list without asking the app (readAppVaultListForAllocation): { ok: true, vaults } with
+    // the map id -> { path }, or { ok: false, code }. A folder for a new vault is never allocated inside a vault it
+    // lists, nor under a name a vault it lists already has, nor while the list cannot be read.
+    readAppVaultList = null,
+    // Reads the app's own vault list from its file, without asking the app (unheld-evidence.mjs): { unlisted: true } only
+    // when no list names a view's vault, a folder above it or one inside it. A view never published into its allocated
+    // folder is then published even while an app runs that cannot be coordinated with, creating files only (the
+    // publisher's `direct-unheld` path). An engine given no reader never takes that path.
+    readUnheldEvidence = null,
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
     // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
     lockOwner = null, lockProbe = probeHealth,
@@ -215,6 +236,14 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   const waitingForApp = new Map()
   const proveAbandoned = createAbandonmentProof({ probe: lockProbe })
 
+  // Whether a view kept from publication by an app that does not qualify may still be published on the publisher's
+  // `direct-unheld` path: never committed, its vault the folder allocated for it, and the app's list naming no folder
+  // on the way. The publisher checks every condition again, under its locks.
+  async function unheldMayApply(store, pointer) {
+    if (typeof readUnheldEvidence !== 'function' || pointer !== null || store.vaultOrigin !== 'allocated') return false
+    try { return (await readUnheldEvidence({ vaultRoot: store.vaultRoot }))?.unlisted === true } catch { return false }
+  }
+
   async function takeLock(workspaceRoot, workspaceId) {
     if (heldLock) return { acquired: true }
     const lock = await rules.acquireEngineLock({
@@ -249,9 +278,18 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   }
 
   function storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) {
-    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots])
+    // A view's vault can be allocated, made again or moved while the engine runs: the store follows its record. A
+    // store is used again only while its allocated folder is still the one the record names; otherwise it is dropped,
+    // and the store made in its place refuses, typed (vault-allocation-replaced, say), so a folder replaced while the
+    // service runs, or a link put where it was, is never published into.
+    const signature = JSON.stringify([workspaceRoot, workspaceId, repositoryRoots, readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })])
     const cached = stores.get(scope.scopeId)
-    if (cached?.signature === signature) return cached.store
+    // A vault root that is gone (a folder under the data root the person removed, say) is looked for again too, so the
+    // store made in its place says why rather than failing on the folder that is not there.
+    if (cached?.signature === signature && fs.lstatSync(cached.store.vaultRoot, { throwIfNoEntry: false }) !== undefined) {
+      try { cached.store.checkAllocatedVault?.(); return cached.store } catch (error) { if (!isTypedRefusal(error)) throw error }
+    }
+    stores.delete(scope.scopeId)
     const store = seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId: scope.scopeId, repositoryRoots })
     stores.set(scope.scopeId, { signature, store })
     return store
@@ -351,9 +389,58 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (!lock.acquired) return { state: 'busy', reason: 'engine-lock-held', lock: { reason: lock.reason, holder: lock.holder ?? null }, changes: [], scopes: [], pendingEdits: [], dispatched: [], lateWriters: [] }
     const machine = readMachineSettings({ workspaceRoot, workspaceId })
       ?? writeMachineSettings({ workspaceRoot, workspaceId, repositoryRoots, settings: defaultMachineSettings({ workspaceId, updatedAt: now }) })
+    const eligibility = fixedEligibility ?? eligibilityFor({ machine, project })
     const stateStore = createMaintenanceStateStore({ workspaceRoot, workspaceId })
     known = { stateStore, maintenanceMode: machine.maintenanceMode }
-    const scopes = enablement.scopes.map((scope) => ({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }))
+    // Each view's vault: allocated now where this workspace decided its vaults live, when it has none and was never
+    // published under the data root (vault-location.mjs). A view whose folder cannot be allocated is not prepared on
+    // this tick, and its freshness says why; the other views go on.
+    const allocationRefusals = new Map()
+    if (machine.decisions.location !== null) {
+      // The app's list, read once per tick and only when a view is about to be allocated. An engine given no reader
+      // coordinates with no app, and knows no list. A list that cannot be read allocates nothing: the view says why,
+      // and its folder is allocated at a later tick, once the list reads.
+      let list = null
+      const appList = async () => {
+        if (typeof readAppVaultList !== 'function') return { ok: true, vaults: null }
+        if (list === null) {
+          let answer
+          try { answer = await readAppVaultList() } catch { answer = null }
+          list = answer?.ok === true ? { ok: true, vaults: answer.vaults ?? {} } : { ok: false, code: typeof answer?.code === 'string' ? answer.code : 'obsidian-settings-unreadable' }
+        }
+        return list
+      }
+      // The folders allocated to the views; a record that cannot be read refuses only its own view, below.
+      const allocatedPaths = enablement.scopes.map((scope) => { try { return readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })?.path } catch { return undefined } }).filter((item) => typeof item === 'string')
+      for (const scope of enablement.scopes) {
+        try {
+          let vaults = null
+          // The list is read where a folder is about to be made: a first allocation, or an allocated folder that has gone.
+          const record = readVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId })
+          if (record === null ? !hasCommittedGeneration({ workspaceRoot, scopeId: scope.scopeId }) : allocatedFolderState(record) === 'missing') {
+            const known = await appList()
+            if (!known.ok) refuse('app-vault-list-unreadable', 'Obsidian\'s vault list could not be read, so no folder is allocated for this view yet; it is tried again at the next tick', { cause: known.code })
+            vaults = known.vaults
+          }
+          ensureVaultAllocation({ workspaceRoot, workspaceId, scopeId: scope.scopeId, location: machine.decisions.location, projectName: projectDisplayName(project), repositoryRoots, vaults, allocatedPaths, now })
+        } catch (error) {
+          const code = viewRefusalCode(error)
+          if (code === null) throw error
+          allocationRefusals.set(scope.scopeId, code)
+        }
+      }
+    }
+    // Each view's store, on its own: one whose vault cannot be placed (a record naming a folder inside a repository,
+    // say) is refused alone, and the other views go on.
+    const scopes = []
+    for (const scope of enablement.scopes) {
+      if (allocationRefusals.has(scope.scopeId)) continue
+      try { scopes.push({ scope, store: storeFor(scope, workspaceRoot, workspaceId, repositoryRoots) }) } catch (error) {
+        const code = viewRefusalCode(error)
+        if (code === null) throw error
+        allocationRefusals.set(scope.scopeId, code)
+      }
+    }
 
     watch([
       ...(project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => ({ id: `repo:${repo.name}`, path: repo.path, recursive: true, keyPrefix: sourceKey(repo.name, ''), keyOf: (relative) => sourceKey(repo.name, relative) })),
@@ -455,7 +542,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (full) { lastFullMs = nowMs; forceFull = false }
 
     // 7. Which views are invalid.
-    declaredScopes = new Set(scopes.map(({ scope }) => scope.scopeId))
+    declaredScopes = new Set(enablement.scopes.map((scope) => scope.scopeId))
     const previous = readPreviousFreshness(stateStore)
     const entries = new Map()
     const unseen = new Set()
@@ -482,6 +569,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // Invalidation is durable before any work: a view is not reported current while it is being rebuilt.
     for (const [scopeId, classes] of attempt) entries.set(scopeId, { ...demote(entries.get(scopeId), 'stale', 'invalidated', now), changeClasses: [...classes].sort() })
+    for (const [scopeId, code] of allocationRefusals) {
+      entries.set(scopeId, demote(previous?.scopes.find((entry) => entry.scopeId === scopeId && entry.state !== 'disabled') ?? blankEntry(scopeId, now), 'stale', code, now))
+    }
     for (const entry of previous?.scopes ?? []) if (!entries.has(entry.scopeId)) entries.set(entry.scopeId, demote(entry, 'disabled', 'scope-not-configured', now))
     const persist = () => stateStore.writeFreshness(freshnessDocument({ workspaceId, enablement: 'enabled', maintenanceMode: machine.maintenanceMode, now, entries }))
     persist()
@@ -543,13 +633,29 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           // that cannot be qualified never makes a current view stale. Any other publication builds the adapter first,
           // and an app that does not qualify keeps the publisher from being reached at all.
           const lazy = trusted()?.generationId === preparedGenerationId ? builtOnFirstUse(() => adapterFactory({ store, scope })) : null
-          const adapter = lazy ?? await adapterFactory({ store, scope })
+          // A view never published into its allocated folder is not kept from its first publication by an app that
+          // does not qualify, while that app's list shows no entry for the folder: the publisher is reached with an
+          // adapter that coordinates with nothing, and may take its `direct-unheld` path. Any other outcome is the
+          // factory's refusal, as before.
+          let heldBackBy = null
+          let adapter = lazy
+          if (adapter === null) {
+            try { adapter = await adapterFactory({ store, scope }) } catch (error) {
+              if (!isTypedRefusal(error) || !(await unheldMayApply(store, trusted()))) throw error
+              heldBackBy = error
+              adapter = uncoordinatedAdapter(error)
+            }
+          }
           let result
           try {
             result = await seams.publishView({
               preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
               ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
+              ...(typeof readUnheldEvidence === 'function' ? { unheldEvidence: readUnheldEvidence, platform } : {}),
             })
+            // Stopped before its commit for want of an app that coordinates: the app's refusal is what the person has to
+            // act on, and `open` answers it before it would add the vault to the app.
+            if (heldBackBy !== null && (result.state === 'refused' || (result.state === 'updating' && result.notes.some((note) => note.blocking && note.outcome === 'editor-uncoordinated')))) throw heldBackBy
           } catch (error) {
             // The publisher asked for the app only to publish the committed generation again (a plugin file drifted),
             // and the app did not qualify: nothing was written, and the committed generation is read back as it is.
@@ -579,7 +685,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             // Somebody wrote during the publication. The next tick preserves and queues it.
             else if (differing.length > 0 || editedUnderPublisher) settle('updating', 'read-back-differs', common)
             else if (common.generationId !== preparedGenerationId) settle('stale', 'committed-generation-differs', common)
-            else settle('current', result.alreadyCommitted ? 'verified-by-read-back' : 'published-and-verified', { ...common, heldNotes: [], verified: true })
+            // Kept current while a plugin file waits for the app: the reason says so, and status shows it on the plugin line.
+            else settle('current', result.waitsForApp === true ? PLUGIN_FILES_WAIT_FOR_APP : result.alreadyCommitted ? 'verified-by-read-back' : 'published-and-verified', { ...common, heldNotes: [], verified: true })
           }
         } catch (error) {
           if (!isTypedRefusal(error)) { settle('stale', 'publisher-error'); persist(); throw error }

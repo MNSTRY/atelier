@@ -122,8 +122,9 @@ export function createIsolatedApp({ parent = process.env.ATELIER_OBSIDIAN_TMP ||
     // private start and its own tool: never the operating system's URL opener.
     launcher: {
       startPlain: async () => { start(null); return true },
-      open({ vaultId = null, vaultPath = null, appRunning }) {
+      open({ vaultId = null, vaultPath = null, appRunning, startedByThisOpen = false }) {
         return runLaunchPlan(launchPlan({ platform: 'darwin', appRunning, vaultId, vaultPath }), {
+          startedEarlier: startedByThisOpen === true,
           start: async () => { start(null); return true },
           answered: async () => { if (!fs.existsSync(socket)) return false; const reply = await cli(['version'], { timeoutMs: 5000 }); return appAnswered({ stdout: reply.stdout, stderr: reply.stderr, exited: !reply.failed }) },
           handLink: async (uri) => urlProcessed((await cli([uri])).stdout),

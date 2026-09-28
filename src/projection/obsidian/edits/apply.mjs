@@ -9,7 +9,7 @@ import { canonicalJson, compareText, isoTime } from '../../../runtime/obsidian/d
 import { readObsidianEnablement } from '../../../runtime/obsidian/enablement.mjs'
 import { ObsidianMaintenanceRefusal } from '../../../runtime/obsidian/errors.mjs'
 import { protectedRoots, readInstalledApplyPolicy, readLocalPointer, readMachineSettings, resolveDataRoot, workspaceStateRoot } from '../../../runtime/obsidian/machine-settings.mjs'
-import { DEFAULT_ELIGIBILITY, createProductionSeams } from '../../../runtime/obsidian/pipeline.mjs'
+import { createProductionSeams, eligibilityFor } from '../../../runtime/obsidian/pipeline.mjs'
 import { OPEN_EDIT_STATES, createMaintenanceStateStore } from '../../../runtime/obsidian/state-store.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../contracts.mjs'
 import { readMarkdownLens } from '../materialize/byte-lens.mjs'
@@ -265,7 +265,7 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
   // ones the workspace has.
   return function createSourceApply(context = {}) {
     const {
-      loadProject, dataRoot, env = process.env, platform = process.platform, clock = () => new Date(), eligibility = DEFAULT_ELIGIBILITY,
+      loadProject, dataRoot, env = process.env, platform = process.platform, clock = () => new Date(), eligibility: fixedEligibility = null,
       quietPeriodMs = DEFAULT_APPLY_QUIET_PERIOD_MS, recheckWindowMs = DEFAULT_APPLY_RECHECK_WINDOW_MS, exchangeOptions = {},
       crash = () => {}, beforeExchange = async () => {}, leasePid, extraManagedRoots = [], manualBatchBound = MAX_MANUAL_BATCH_SIZE, objectStore = openObjectStore,
     } = context
@@ -303,12 +303,13 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       return workspace
     }
 
-    // The canonical graph as it is now, and the corpus profile of this machine. Built once per call.
+    // The canonical graph as it is now, and the corpus profile of this machine. Built once per call, with the notes the
+    // machine settings let into a view, exactly as the engine builds it (eligibilityFor), unless a test fixes them.
     function currentCorpus(workspace) {
       // The graph reads every enrolled source. A file this process may not read is a refusal that names no file.
       try {
         workspace.corpus ??= {
-          graph: seams.buildGraph({ project: workspace.project, eligibility }),
+          graph: seams.buildGraph({ project: workspace.project, eligibility: fixedEligibility ?? eligibilityFor({ machine: workspace.machine, project: workspace.project }) }),
           profile: seams.profileFor({ project: workspace.project, workspaceId: workspace.workspaceId, audienceAllow: workspace.machine.audienceAllow }),
         }
       } catch (error) {
