@@ -42,9 +42,9 @@ import { RELEASE_CHANGED, resolveServiceWorkspace, runMaintenanceService } from 
 // only read here.
 const ADAPTERS = Object.freeze({
   'obsidian-cli': async () => {
-    const [{ createObsidianCliAdapter, defaultObsidianProcessProbe }, { createProductionAppProbe }, { createQualifiedAdapterFactory }, { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings }, { appStateSignature }, { readAppVaultListForAllocation }] = await Promise.all([
+    const [{ createObsidianCliAdapter, defaultObsidianProcessProbe }, { createProductionAppProbe }, { createQualifiedAdapterFactory }, { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings }, { appStateSignature }, { readAppVaultListForAllocation }, { createProductionUnheldEvidence }] = await Promise.all([
       import('../../projection/obsidian/publication/transport.mjs'), import('./app-production-seams.mjs'), import('./app-capability.mjs'),
-      import('../../projection/obsidian/publication/vault-list.mjs'), import('./app-registration.mjs'), import('./vault-location.mjs'),
+      import('../../projection/obsidian/publication/vault-list.mjs'), import('./app-registration.mjs'), import('./vault-location.mjs'), import('./unheld-evidence.mjs'),
     ])
     const adapterFactory = createQualifiedAdapterFactory({ appProbe: createProductionAppProbe(), createAdapter: ({ qualification }) => createObsidianCliAdapter({ qualification }) })
     const userDataDir = obsidianUserDataDir()
@@ -56,11 +56,16 @@ const ADAPTERS = Object.freeze({
       sandboxed: obsidianSandboxedBuild() !== null,
     })
     return {
-      adapterFactory, engineOptions: { observeApp, readAppVaultList },
+      // The same file tells the publisher whether a view's first publication may go into a vault no Obsidian lists yet.
+      adapterFactory, engineOptions: { observeApp, readAppVaultList, readUnheldEvidence: createProductionUnheldEvidence() },
       appStatus: () => { const known = adapterFactory.lastQualification(); return known === null ? null : { outcome: known.outcome, reason: known.reason, version: known.version, floor: known.floor } },
     }
   },
 })
+
+// What the tests read: which reader each adapter hands its engine. Calling one builds the production seams, and
+// reaches no app and no file until the engine uses them.
+export { ADAPTERS as SERVICE_ADAPTERS }
 
 import { createReleaseWatch, packageRootOfEntry } from './release-watch.mjs'
 import { SERVICE_ENTRY_PATH } from './service-entry-path.mjs'

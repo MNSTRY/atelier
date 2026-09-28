@@ -204,6 +204,30 @@
   notes. A note whose labels cannot be known is never shown: front matter
   Atelier cannot read, or a top-level `kg` key that is not a block, may say
   `sensitive`.
+- A view's first publication into its allocated folder no longer waits for an
+  Obsidian that runs and cannot be coordinated with (a vault open, its command
+  line off, no vault open, or a version below the floor). While the app's own
+  settings file names neither the folder, a folder above it nor one inside it
+  (read, not guessed: a missing or unreadable file, an entry with a `..`
+  segment, or a Flatpak or snap build, gives no such evidence), the publisher fills the vault in its own process by
+  creating files only (journal `mode: 'direct-unheld'`). Anything that would
+  replace or remove a file, or write a settings file over one that is there,
+  refuses as `editor-uncoordinated` and writes nothing. The evidence is read
+  again before the first file and every two seconds, and once it is gone
+  nothing more is written or committed. A run that completes is committed
+  before `open` adds the vault to Obsidian and opens it. A run that stops
+  partway commits nothing: the list names the folder meanwhile, a settings
+  file with other bytes is already there, or an interrupted run left a
+  replacement or a removal. The view then falls back to the coordinated path,
+  so `open` may add the vault to Obsidian and open it before it is complete,
+  and the rest, every replacement and removal included, is published through
+  the app with its usual checks. While the app does not qualify, a run stopped
+  that way reports the app's own refusal (`app-cli-unavailable`, say), and
+  `open` answers it without adding the vault unless asked to restart
+  Obsidian; with the app running and no vault open, a vault the app already
+  lists is still opened by its path, as before. The plugin's entry written this way counts as offered until the
+  plugin says hello. A later generation, a vault under the data root, and
+  every other case publish and refuse as before.
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the

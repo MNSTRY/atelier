@@ -765,6 +765,77 @@ Before 0.2.0-alpha.10 no production reading was ever absent, because the probe
 found Atelier's own service; from that release this path, and this window, are
 live.
 
+### First publication into a vault no Obsidian lists
+
+A running or unknowable app that cannot be coordinated with still refuses the
+whole publication, with one exception, the `direct-unheld` path. It is chosen
+at path selection only when all of these hold:
+
+1. The view has no committed generation.
+2. Its vault is the folder allocated for it (`vaultOrigin: 'allocated'`), and
+   that folder's device and inode are the ones its record names.
+3. The app's own settings file (`obsidian.json`) was read, and none of its
+   entries is the vault folder, a folder above it or a folder inside it. Both
+   sides are compared as written and by their real paths, in any letter case.
+   A file that cannot be read is read again, up to three times 50 ms apart,
+   because the app rewrites it with a plain write. A missing or unreadable
+   file, an entry whose folder is not an absolute path, an entry with a `..`
+   segment (the folder it names through a link cannot be placed by its text),
+   or a Flatpak or snap build of the app anywhere on the account (its list is
+   elsewhere) gives no evidence.
+4. The platform is macOS or Linux.
+
+Any other case gives the refusal it gave before. The maintenance service reads
+the evidence from the file and never asks the app.
+
+On this path the publisher writes only creates: a file appears through the
+exclusive link where nothing is, or not at all. A unit that would replace or
+remove a file, or write a settings file over one that is there, refuses as
+`editor-uncoordinated` (blocking) and writes nothing. A settings file that
+already holds exactly what the policy asks is left as it is, which is what an
+interrupted run of this path leaves. A file already at a note path is kept as
+`create-conflict`. The evidence is read again immediately before the first
+unit and whenever two seconds have passed. Once a reading gives none, every
+remaining unit refuses, a kept one included, and nothing is committed. The
+view lock and the vault lock are taken as on every path, and the journal
+records `mode: 'direct-unheld'`. Restart recovery and the late-writer check
+treat it as a `direct` journal.
+
+Why this loses nothing a person wrote, whoever holds the vault: no editor can
+hold an unsaved buffer of a file that does not exist; the link either makes
+the whole file appear or fails because something is there, which is kept; and
+an editor that later saves over a created file wins, and is read as an edit.
+The list evidence is for the experience, and it holds only for a run that
+completes: that run is committed before `open` first tells the app about the
+vault. A run that stops partway commits nothing. That happens when the list
+names the folder meanwhile, a settings file with other bytes is already there,
+or an interrupted run left a replacement or a removal. The view then reports
+`editor-uncoordinated` and falls back to the coordinated path: `open` may add
+the vault to the app and open it before it is complete, and what is left,
+every replacement and removal included, is published through the app with its
+usual base and buffer checks. The person may see an incomplete vault then;
+nothing they write is at risk. Lists this account's app does not keep are
+covered by the argument above alone: another user-data folder, another
+machine through a synced folder.
+
+A maintenance service whose app does not qualify (its command line off, no
+vault open, a version below the floor) no longer keeps such a view from its
+first publication: the publisher is reached with an adapter that coordinates
+with nothing, and takes this path when every condition holds. When the path
+does not apply, or the run stops partway at a unit refused as
+`editor-uncoordinated`, the view reports the app's refusal, as before. `open`
+then answers that refusal without adding the vault to the app, unless the
+person asks it to restart Obsidian (`--restart-obsidian`): the vault is then
+added and opened, and may be incomplete until the app has published the rest.
+One case opens a vault without that flag: with the app running and no vault
+open, a vault the app already lists is opened by its path, as before this
+path existed, and may be incomplete. A run that stops only on a file in its
+way reports that (`create-conflict`). When it stops for more than one reason,
+one is reported: while the app does not qualify, the app's refusal wins over a
+file in the way, and while it qualifies, the first blocking unit's reason is
+reported. A reason not reported comes back at a later run, and nothing is
+written meanwhile.
+
 ### Proven boundary
 
 macOS (Darwin 25, arm64) with Obsidian 1.13.7 (installer 1.12.7), CLI enabled,

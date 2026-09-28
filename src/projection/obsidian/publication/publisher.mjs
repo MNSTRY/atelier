@@ -9,7 +9,7 @@ import { PLUGIN_DATA_MODE, PLUGIN_DATA_PATH, PLUGIN_SOURCE_MODE } from '../plugi
 import { createJournal, newJournalId } from '../recovery/journal.mjs'
 import { recheckDisplacedFiles } from '../recovery/late-writer.mjs'
 import { publishedSinceCommit, reconcileUnit, recordDisplaced, recoverPublicationsLocked, retireStagedFile } from '../recovery/restart.mjs'
-import { PublicationRefusal, acquireVaultLock, readFileBytes, readFileDigest, refuse, sha256Digest } from '../recovery/store.mjs'
+import { PublicationRefusal, acquireVaultLock, allocatedFolderState, readFileBytes, readFileDigest, refuse, sha256Digest } from '../recovery/store.mjs'
 import { PROTOCOL_ID, isAddressableVaultPath } from './bridge-script.mjs'
 import { probeExchange } from './exchange.mjs'
 import { CRASH_INJECTION_TEST_SEAM } from './test-seam.mjs'
@@ -44,6 +44,25 @@ import { createDirectAdapter } from './transport.mjs'
 // displaced to recovery and never lost, and a plugin path that a person has to
 // repair never holds the view back. The plugin's data file names a bearer and
 // is written only into a vault root that is private to this user.
+//
+// First publication into a vault no Obsidian lists (`direct-unheld`). A running
+// or unknowable app that cannot be coordinated with still refuses the whole
+// publication, as ever, except in one case: the view has never been committed,
+// its vault is the folder Atelier allocated for it (the record's device and
+// inode), and the evidence (`unheldEvidence`, read by the caller from the app's
+// own settings file) says no list this account's Obsidian keeps names that
+// folder, a folder above it or one inside it, on macOS or Linux. The vault is
+// then filled in this process, with no editor, by creating files only: every
+// file appears through the exclusive link, where nothing is, or not at all. A
+// unit that would replace or remove a file, or write a settings file over one
+// that is there, refuses as `editor-uncoordinated` (blocking) and writes
+// nothing. No editor can hold an unsaved buffer of a file that does not exist,
+// so nothing a person wrote can be lost, whoever holds the vault. The evidence
+// is read again immediately before the first unit and whenever two seconds
+// have passed since the last reading; once a reading gives no evidence, every
+// remaining unit refuses and nothing is committed. A run that completes is
+// committed before `open` tells the app about the vault; a run that stops
+// partway reports why, and what it left is published through the app.
 
 const hex = (digest) => digest.slice('sha256:'.length)
 const iso = (clock) => { const value = clock(); return (value instanceof Date ? value : new Date(value)).toISOString() }
@@ -298,8 +317,38 @@ export function planUnits({ files, priorManifest, pointer, ledger, pluginDisk = 
   return units
 }
 
-export async function publishView(options = {}) {
+// The rules the oracle tests are sensitive to. Production always uses these; the tests substitute a deliberately
+// broken one through publishViewForOracleTests to prove the oracle can fail.
+export const PUBLICATION_PRIMITIVES = Object.freeze({
+  // The one operation the `direct-unheld` path writes into the vault: a file created where nothing is.
+  unheldWrites: (op) => op === 'create',
+})
+
+// Whether the `direct-unheld` path applies, after the adapter found an app it cannot coordinate with (see the head of
+// this file). Every condition must hold; an evidence reader that is absent, throws or answers anything but
+// `unlisted: true` gives none.
+async function unheldPathApplies({ probe, pointer, store, unheldEvidence, platform }) {
+  if (probe.code !== undefined || pointer !== null) return false
+  if (platform !== 'darwin' && platform !== 'linux') return false
+  const { allocation } = store
+  if (store.vaultOrigin !== 'allocated' || store.managedVaultRoot !== true || !allocation || store.vaultRoot !== allocation.path || allocatedFolderState(allocation) !== 'same') return false
+  return readsUnlisted(unheldEvidence, store)
+}
+
+async function readsUnlisted(unheldEvidence, store) {
+  if (typeof unheldEvidence !== 'function') return false
+  try { return (await unheldEvidence({ vaultRoot: store.vaultRoot }))?.unlisted === true } catch { return false }
+}
+
+export function publishView(options = {}) {
+  return publishViewForOracleTests(options, PUBLICATION_PRIMITIVES)
+}
+
+export async function publishViewForOracleTests(options = {}, primitives = PUBLICATION_PRIMITIVES) {
   const { preparedView, protocolId, expectedGeneration, recoveryStore: store, adapter, clock = () => new Date(), quietPeriodMs = 1500, exchangeOptions = {} } = options
+  // `unheldEvidence({ vaultRoot })` answers whether the app's own list names this vault (see the head of this file).
+  const { unheldEvidence = null, platform = process.platform } = options
+  const rules = { ...PUBLICATION_PRIMITIVES, ...primitives }
   const seam = options[CRASH_INJECTION_TEST_SEAM] ?? null
   const crash = (point) => { if (seam && seam.at === point) seam.halt(point) }
   if (!store || typeof store.commitManifest !== 'function') throw new TypeError('publishView needs a recoveryStore')
@@ -346,8 +395,11 @@ export async function publishView(options = {}) {
     // them would leave the others uncoordinated.
     const probe = await adapter.probe({ vaultRoot: store.vaultRoot })
     store.checkAllocatedVault?.()
-    if (probe.state !== 'coordinated' && probe.state !== 'absent') refuse(probe.code === 'vault-open-in-several-windows' ? probe.code : 'editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
-    const mode = probe.state === 'coordinated' ? 'in-app' : 'direct'
+    const unheld = probe.state !== 'coordinated' && probe.state !== 'absent' && await unheldPathApplies({ probe, pointer, store, unheldEvidence, platform })
+    // The evidence took time to read: the folder is checked again.
+    if (unheld) store.checkAllocatedVault?.()
+    if (probe.state !== 'coordinated' && probe.state !== 'absent' && !unheld) refuse(probe.code === 'vault-open-in-several-windows' ? probe.code : 'editor-uncoordinated', `an Obsidian process may have this vault open and cannot be coordinated with: ${probe.reason}`)
+    const mode = probe.state === 'coordinated' ? 'in-app' : unheld ? 'direct-unheld' : 'direct'
     const channel = mode === 'in-app' ? adapter : createDirectAdapter({ crashSeam: seam })
 
     // Same volume, and an exchange that works on it.
@@ -372,7 +424,8 @@ export async function publishView(options = {}) {
     let stagingDir = null
     try {
       stagingDir = store.stagingDir(journalId)
-      for (const unit of units.filter((item) => item.op === 'replace' || item.op === 'create')) {
+      // On the `direct-unheld` path a replacement is never written, so no candidate is staged for one.
+      for (const unit of units.filter((item) => item.op === 'create' || (item.op === 'replace' && (mode !== 'direct-unheld' || rules.unheldWrites(item.op))))) {
         const existing = fs.lstatSync(path.join(store.vaultRoot, unit.path), { throwIfNoEntry: false })
         unit.preparedPath = store.preparedPath(journalId, unit.unit)
         stageCandidate(unit.preparedPath, unit.bytes, unit.mode ?? (existing?.isFile() ? existing.mode & 0o777 : 0o644), created)
@@ -411,7 +464,7 @@ export async function publishView(options = {}) {
     }
     crash('after-staging')
 
-    const context = { store, journal, journalId, channel, clock, crash, mode }
+    const context = { store, journal, journalId, channel, clock, crash, mode, rules }
     const results = []
     // Kept notes are compared first, several at a time; one that holds exactly its candidate bytes is unchanged.
     const unchanged = await unchangedKeepUnits(units, store)
@@ -422,6 +475,8 @@ export async function publishView(options = {}) {
     // passed since the last reading. An app that starts after a reading and
     // before the next is not seen; that window is at most two seconds plus
     // one note's publication.
+    // The `direct-unheld` path reads its evidence on the same schedule, and once a reading gives none, every remaining
+    // unit refuses, a kept one included, so nothing is committed.
     let lastProbe = null
     for (const unit of units) {
       if (mode === 'direct' && (lastProbe === null || Date.now() - lastProbe > 2000)) {
@@ -429,9 +484,13 @@ export async function publishView(options = {}) {
         const again = await adapter.probe({ vaultRoot: store.vaultRoot })
         if (again.state !== 'absent') context.uncoordinated = again.reason
       }
+      if (mode === 'direct-unheld' && !context.uncoordinated && (lastProbe === null || Date.now() - lastProbe > 2000)) {
+        lastProbe = Date.now()
+        if (!(await readsUnlisted(unheldEvidence, store))) context.uncoordinated = 'the vault list of the app no longer shows, positively, that no Obsidian lists this vault'
+      }
       store.checkAllocatedVault?.()
       if (unit.op === 'keep' && unchanged.has(unit.path)) {
-        results.push({ path: unit.path, kind: unit.kind, op: unit.op, outcome: context.uncoordinated ? 'editor-uncoordinated' : 'unchanged', blocking: false })
+        results.push({ path: unit.path, kind: unit.kind, op: unit.op, outcome: context.uncoordinated ? 'editor-uncoordinated' : 'unchanged', blocking: mode === 'direct-unheld' && Boolean(context.uncoordinated) })
         continue
       }
       try { results.push(await publishUnit(unit, context)) } catch (error) {
@@ -446,7 +505,7 @@ export async function publishView(options = {}) {
     const retainedEdits = results.filter((result) => result.retained).map((result) => result.retained)
     // Notes kept earlier stay surfaced until they leave the vault or come back into a view.
     const base = { journalId, generationId: manifest.generationId, mode, notes: results.map(({ retained, ...rest }) => rest), retainedEdits, recovered }
-    if (blocking.length > 0) {
+    if (blocking.length > 0 || (mode === 'direct-unheld' && context.uncoordinated)) {
       const lateWriters = recheckDisplacedFiles({ store, journalIds: [journalId], clock })
       return { ...base, state: 'updating', lateWriters }
     }
@@ -534,9 +593,15 @@ async function publishOneUnit(unit, context) {
   const { store, journal, journalId, clock } = context
   const note = path.join(store.vaultRoot, unit.path)
   const outcome = (code, extra = {}) => ({ path: unit.path, kind: unit.kind, op: unit.op, outcome: code, blocking: false, ...extra })
-  if (unit.op === 'leave-absent') return outcome('left-absent')
+  // On the `direct-unheld` path a unit after a failed reading refuses, whatever it would have done, so the run says why
+  // it stopped.
+  if (unit.op === 'leave-absent') return context.mode === 'direct-unheld' && context.uncoordinated ? outcome('editor-uncoordinated', { blocking: true }) : outcome('left-absent')
   const observe = (bytes) => store.retainObject(bytes)
-  if (context.uncoordinated) return outcome('editor-uncoordinated', { blocking: unit.op !== 'keep' })
+  if (context.uncoordinated) return outcome('editor-uncoordinated', { blocking: unit.op !== 'keep' || context.mode === 'direct-unheld' })
+  // The `direct-unheld` path creates files and nothing else. A unit planned as a replacement or a removal has no
+  // candidate staged, and is refused before its file is even read. (A kept unit may still become a create; a settings
+  // unit is decided in planSettings.)
+  if (context.mode === 'direct-unheld' && unit.op !== 'keep' && unit.op !== 'settings' && !context.rules.unheldWrites(unit.op)) return outcome('editor-uncoordinated', { blocking: true })
   // A settings path that cannot be written safely (a symlinked `.obsidian`,
   // say) is reported and left alone; it must not keep every note from
   // converging while the person repairs it. Notes and attachments block.
@@ -578,6 +643,11 @@ async function publishOneUnit(unit, context) {
   if (plan.op !== 'remove' && currentDigest !== null && currentDigest === plan.candidateDigest) {
     if (plan.stagedPath) retire(plan, context)
     return outcome('already-current')
+  }
+  // Whatever a unit became on the way here, the `direct-unheld` path writes nothing below this point but a create.
+  if (context.mode === 'direct-unheld' && !context.rules.unheldWrites(plan.op)) {
+    if (plan.stagedPath) retire(plan, context)
+    return outcome('editor-uncoordinated', { blocking: true })
   }
 
   if (unit.path === PLUGIN_DATA_PATH && plan.op !== 'remove') {
@@ -753,6 +823,11 @@ function planSettings(unit, context) {
   if (Object.hasOwn(unit, 'expectedDigest') && (existing === null ? null : sha256Digest(existing)) !== unit.expectedDigest) {
     return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'settings-changed', blocking: true }
   }
+  // On the `direct-unheld` path a settings file that is there is never written over, and no candidate is staged for it.
+  // Only one that already holds exactly what the policy asks (Atelier's own, from an interrupted run) is left as it is.
+  if (context.mode === 'direct-unheld' && existing !== null && !context.rules.unheldWrites('replace') && !holdsPolicy(unit.path, existing)) {
+    return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'editor-uncoordinated', blocking: true }
+  }
   let file
   try { file = preparePolicySettingsFile(unit.path, existing) } catch (error) {
     if (error instanceof ObsidianContractRefusal) return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'settings-invalid', blocking: false }
@@ -765,6 +840,13 @@ function planSettings(unit, context) {
     return { path: unit.path, kind: 'settings', op: 'settings', outcome: 'staging-failed', blocking: true, errorCode: error.code }
   }
   return plan
+}
+
+function holdsPolicy(settingsPath, bytes) {
+  try { return preparePolicySettingsFile(settingsPath, bytes).bytes.equals(bytes) } catch (error) {
+    if (error instanceof ObsidianContractRefusal) return false
+    throw error
+  }
 }
 
 function verify(unit, plan, { store, journal }, result) {
