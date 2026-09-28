@@ -2080,11 +2080,13 @@ test('the service refuses without its adapter, without settings, under a startup
 const PORT_THIEF = `
 import net from 'node:net'
 const [port, helper] = [Number(process.argv[1]), process.argv[2]]
-const { isEphemeral, reservePort } = await import(helper)
+const { isEphemeral, releaseReservation, reservePort } = await import(helper)
 let as = null
 if (isEphemeral(port)) as = 'a port-0 binder'
 else { try { if (await reservePort(null, { choose: () => [port] }) === port) as = 'another test process reserving it' } catch { as = null } }
 if (as !== null) { const server = net.createServer(); await new Promise((resolve, reject) => { server.once('error', reject); server.listen({ host: '127.0.0.1', port }, resolve) }) }
+// The listener holds the port from here. The claim goes now: the thief is killed in teardown and leaves no claim behind.
+releaseReservation(port)
 process.stdout.write(JSON.stringify({ held: as !== null, as }) + '\\n')
 setInterval(() => {}, 1000)
 `
