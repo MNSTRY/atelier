@@ -7,6 +7,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createIngestionStore } from '../src/ingestion/store.mjs';
 import { createIntakeStore, intakeDigest } from '../src/intake/store.mjs';
 import { acquirePrivateLock } from '../src/project/durable-state.mjs';
+import { canonicalize } from '../src/attestation/jcs.mjs';
 
 const scope = { project: 'invented-garden', activity: 'planning' };
 const budget = { maxInputBytes: 1024 * 1024, maxOutputBytes: 1024 * 1024, maxAttempts: 128 };
@@ -256,4 +257,30 @@ test('getEvidence refuses stale, unknown, mismatched and malformed requests with
   assert.throws(() => store.getEvidence({ ...request, scope: 'narrower' }), { code: 'INGESTION_INVALID' });
   fs.writeFileSync(path.join(root, 'notes.md'), 'Garden decisions\nWater the basil at noon.\n');
   assert.throws(() => store.getEvidence(request), (error) => error.code === 'INGESTION_STALE' && /source-digest-changed/.test(error.message) && !error.message.includes(root));
+});
+
+test('status, query and getEvidence all refuse an attempt rewritten against the plan journal', t => {
+  const { store, root } = fixture(t, { 'notes.md': 'Garden decisions\nWater the basil at dawn.\n' });
+  const p = plan(store, ['notes.md']); store.run(reference(p));
+  const hit = store.query({ ...reference(p), query: 'basil' }).hits[0];
+  const dir = path.join(root, '.atelier-local/intake/attempts', hit.attemptId);
+  const extraction = JSON.parse(fs.readFileSync(path.join(dir, 'output.txt'), 'utf8'));
+  extraction.evidence[1].text = 'Water the basil with something else entirely at dawn.';
+  const output = canonicalize(extraction);
+  const completion = JSON.parse(fs.readFileSync(path.join(dir, 'completion.json'), 'utf8'));
+  completion.outputDigest = intakeDigest(output); completion.bytes = Buffer.byteLength(output);
+  for (const name of ['output.txt', 'completion.json']) fs.chmodSync(path.join(dir, name), 0o600);
+  fs.writeFileSync(path.join(dir, 'output.txt'), output);
+  fs.writeFileSync(path.join(dir, 'completion.json'), canonicalize(completion) + '\n');
+  assert.equal(store.status(reference(p)).items[0].integrity, 'refused');
+  assert.equal(store.query({ ...reference(p), query: 'basil' }).hits.length, 0);
+  assert.throws(() => store.getEvidence({ ...reference(p), sourceId: hit.sourceId, sourceDigest: hit.sourceDigest, attemptId: hit.attemptId, locator: hit.locator }), { code: 'INGESTION_INTEGRITY' });
+});
+
+test('getEvidence refuses a source whose evidence never completed', t => {
+  const { store } = fixture(t), p = plan(store, ['notes.md', 'image.png']);
+  const done = store.run(reference(p));
+  const unsupported = done.items.find(item => item.status === 'unsupported');
+  const attemptId = done.items.find(item => item.status === 'complete').attemptId;
+  assert.throws(() => store.getEvidence({ ...reference(p), sourceId: unsupported.id, sourceDigest: unsupported.sourceDigest, attemptId, locator: { kind: 'line', value: '1' } }), { code: 'INGESTION_STALE' });
 });

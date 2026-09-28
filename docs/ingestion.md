@@ -99,9 +99,18 @@ omissions must remain visible in any consuming interface.
 reference, the source, its digest, the completed attempt and the locator, as a
 query hit reports them. It rechecks that source's current bytes and its stored
 attempt, and reads no other source in the plan. It refuses with a typed code:
-`INGESTION_STALE` for a changed source, digest or attempt, `INGESTION_MISSING`
-for an unknown source or locator, and `INGESTION_INVALID` for a malformed
-request.
+
+- `INGESTION_STALE`: the plan digest, source digest or attempt differs from the
+  plan's completed evidence for that source, the source changed, or it never
+  completed.
+- `INGESTION_MISSING`: an unknown source or locator, or missing plan state.
+- `INGESTION_INTEGRITY`: stored evidence fails verification against the plan.
+- `INGESTION_INVALID`: a malformed request.
+
+Workspace-level refusals (`INGESTION_WORKSPACE`, `INGESTION_PRIVATE`) and
+`INGESTION_LIMIT` apply as they do for query. Status, query and `getEvidence`
+verify a completed attempt the same way, so none of them returns evidence that
+the others refuse.
 
 Both query and `getEvidence` report `readScope: "all-plan"`. Query reads every
 source in the plan, and a limit bounds only the hits it returns. Neither call

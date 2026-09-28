@@ -73,6 +73,13 @@ function extractionFor(item, reservation, inspected) {
     inspected.completion.bytes > reservation.limits.maxOutputBytes || extraction.evidence.length > reservation.limits.maxEvidenceItems) refuse('INGESTION_INTEGRITY', 'cached extraction bounds or coverage differ');
   return extraction;
 }
+// Every reader verifies a completed attempt the same way: the stored attempt
+// itself, then its coverage and output bytes against this plan's own journal.
+function completedExtraction(item, reservation, inspected, result) {
+  const extracted = extractionFor(item, reservation, inspected);
+  if (!same(extracted.coverage, result.coverage) || inspected.completion.bytes !== result.outputBytes) refuse('INGESTION_INTEGRITY', 'completed coverage differs');
+  return extracted;
+}
 function usageOf(state) {
   const reservations = [...state.reservations.values()], results = [...state.results.values()];
   return {
@@ -194,8 +201,7 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
       if (result.status === 'complete') {
         try {
           const inspected = intake.readAttempt(result.attemptId);
-          const extracted = extractionFor(item, state.reservations.get(item.id), inspected);
-          if (!same(extracted.coverage, result.coverage) || inspected.completion.bytes !== result.outputBytes) refuse('INGESTION_INTEGRITY', 'completed coverage differs');
+          completedExtraction(item, state.reservations.get(item.id), inspected, result);
           view.integrity = 'verified';
         } catch { view.status = 'failed'; view.reason = 'stored-evidence-integrity-refused'; view.integrity = 'refused'; }
       }
@@ -324,7 +330,7 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
           }
           if (item.status !== 'complete') { omissions.push({ sourceId: item.id, status: item.status, reason: item.reason }); continue; }
           try {
-            const extraction = extractionFor(item, handle.state.reservations.get(item.id), intake.readAttempt(item.attemptId));
+            const extraction = completedExtraction(item, handle.state.reservations.get(item.id), intake.readAttempt(item.attemptId), handle.state.results.get(item.id));
             for (const evidence of extraction.evidence) {
               if (!terms.every(term => evidence.text.toLowerCase().includes(term))) continue;
               matched++;
@@ -344,7 +350,7 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
       const { planId, planDigest, sourceId, sourceDigest, attemptId, locator } = exactRequest(input, ['planId', 'planDigest', 'sourceId', 'sourceDigest', 'attemptId', 'locator']);
       if (typeof sourceId !== 'string' || typeof sourceDigest !== 'string' || typeof attemptId !== 'string' || attemptId.length > 256 ||
         !locator || typeof locator !== 'object' || Array.isArray(locator) || Object.keys(locator).sort().join() !== 'kind,value' ||
-        typeof locator.kind !== 'string' || typeof locator.value !== 'string' || locator.value.length > 16384) refuse('INGESTION_INVALID', 'evidence request requires a source, digests, an attempt and an exact locator');
+        typeof locator.kind !== 'string' || typeof locator.value !== 'string' || [...locator.value].length > 16384) refuse('INGESTION_INVALID', 'evidence request requires a source, digests, an attempt and an exact locator');
       const handle = load({ planId, planDigest });
       const item = handle.plan.items.find(candidate => candidate.id === sourceId);
       if (!item) refuse('INGESTION_MISSING', 'source is not in this plan');
@@ -354,7 +360,7 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
         try { intake.readSource({ ref: item.ref, expectedDigest: item.sourceDigest }); }
         catch (error) { refuse('INGESTION_STALE', `source is no longer current (${sourceReason(error)})`); }
         let extraction;
-        try { extraction = extractionFor(item, handle.state.reservations.get(item.id), intake.readAttempt(attemptId)); }
+        try { extraction = completedExtraction(item, handle.state.reservations.get(item.id), intake.readAttempt(attemptId), result); }
         catch { refuse('INGESTION_INTEGRITY', 'stored evidence integrity refused'); }
         const matches = extraction.evidence.filter(evidence => evidence.locator.kind === locator.kind && evidence.locator.value === locator.value);
         if (matches.length !== 1) refuse(matches.length ? 'INGESTION_INTEGRITY' : 'INGESTION_MISSING', matches.length ? 'locator is ambiguous in stored evidence' : 'locator is not in this evidence');
