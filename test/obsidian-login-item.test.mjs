@@ -1410,7 +1410,7 @@ test('uninstall removes the login item and stops the proven service, keeps vault
   assert.ok(words.stdout.includes(`vault           ${path.join(vaults, FULL_SCOPE.scopeId)}`), words.stdout)
 })
 
-test('uninstall names each vault allocated where the workspace decided its vaults live, a view no longer declared included, beside those under the data root', async (t) => {
+test('uninstall names each vault allocated where the workspace decided its vaults live, a view no longer declared included, beside those under the data root', { timeout: 60000 }, async (t) => {
   const world = await makeWorld(t)
   const { ensureVaultAllocation } = await import('../src/runtime/obsidian/vault-location.mjs')
   const { workspaceRoot, workspaceId } = world.workspace()
@@ -1426,9 +1426,23 @@ test('uninstall names each vault allocated where the workspace decided its vault
   fs.writeFileSync(path.join(workspaceRoot, 'state', 'allocations', 'listed.json'), '[]')
   fs.copyFileSync(path.join(workspaceRoot, 'state', 'allocations', `${FULL_SCOPE.scopeId}.json`), path.join(workspaceRoot, 'state', 'allocations', 'misnamed.json'))
   // Nor what is not a regular file: a FIFO (which a plain read would wait on for ever) and a folder.
-  if (process.platform !== 'win32') childProcess.execFileSync('mkfifo', [path.join(workspaceRoot, 'state', 'allocations', 'pipe.json')])
+  const pipe = path.join(workspaceRoot, 'state', 'allocations', 'pipe.json')
+  if (process.platform !== 'win32') {
+    childProcess.execFileSync('mkfifo', [pipe])
+    // Bounded: a read that waits on the FIFO blocks this whole process, so a thread of its own opens the other end after
+    // 15 seconds (without ever blocking itself), which ends such a wait; the time taken then fails the test below.
+    const { Worker } = await import('node:worker_threads')
+    const opener = new Worker(`
+      const fs = require('node:fs'); const { workerData } = require('node:worker_threads')
+      const start = Date.now()
+      const poll = () => { if (Date.now() - start > 15000) { try { fs.closeSync(fs.openSync(workerData, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)) } catch {} } setTimeout(poll, 200) }
+      poll()`, { eval: true, workerData: pipe })
+    t.after(() => opener.terminate())
+  }
   fs.mkdirSync(path.join(workspaceRoot, 'state', 'allocations', 'folder.json'))
+  const started = Date.now()
   const result = await world.run(['uninstall', '--json'])
+  assert.ok(Date.now() - started < 10000, 'uninstall waited on the FIFO')
   assert.equal(result.exit, EXIT.ok, result.stdout)
   assert.deepEqual(result.json.kept.vaults, [declared, retired, underDataRoot].sort())
   const words = await world.run(['uninstall'])
