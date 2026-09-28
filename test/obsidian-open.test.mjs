@@ -3616,13 +3616,6 @@ test('with Obsidian running and a vault open, a new view is published into its a
   assert.deepEqual(listing(other), {}, 'the vault the app holds is untouched')
 })
 
-test('the maintenance service\'s own adapter hands its engine the reader of the app\'s list for a first publication (checked without calling it: no real settings file is read)', async () => {
-  const { SERVICE_ADAPTERS } = await import('../src/runtime/obsidian/service-main.mjs')
-  const { engineOptions } = await SERVICE_ADAPTERS['obsidian-cli']()
-  assert.equal(typeof engineOptions.readUnheldEvidence, 'function')
-  assert.equal(typeof engineOptions.readAppVaultList, 'function')
-})
-
 for (const [refusal, reason] of [['app-cli-unavailable', 'cli-turned-off'], ['app-version-unsupported', 'no-vault-open'], ['app-version-unsupported', 'below-floor']]) {
   test(`an app that does not qualify (${refusal}, ${reason}) no longer keeps a never-published allocated view from its first publication while its list names no folder on the way; with the list naming one, under the data root, or with nothing to read the list, the view is refused as before`, needsExchange, async (t) => {
     const world = makeWorld(t)

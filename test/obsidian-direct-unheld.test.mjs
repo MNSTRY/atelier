@@ -264,6 +264,19 @@ test('the production evidence reads the settings file of the app under HOME: a t
   }
 })
 
+test('the maintenance service\'s own adapter hands its engine the reader of the app\'s list, checked in a child with a scratch HOME and never called', { skip: POSIX ? false : 'POSIX paths' }, async (t) => {
+  const home = fs.mkdtempSync(path.join(TMP, 'atelier-unheld-wiring-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  // Building the production adapter loads the production seams: only in a child, whose HOME and XDG folders are the
+  // scratch folder, and which calls none of them.
+  const entry = new URL('../src/runtime/obsidian/service-main.mjs', import.meta.url).href
+  const code = `const { SERVICE_ADAPTERS } = await import(${JSON.stringify(entry)}); const { engineOptions } = await SERVICE_ADAPTERS['obsidian-cli'](); process.stdout.write(JSON.stringify({ unheld: typeof engineOptions.readUnheldEvidence, list: typeof engineOptions.readAppVaultList }))`
+  const env = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_RUNTIME_DIR: path.join(home, 'run'), XDG_DATA_HOME: path.join(home, 'data') }
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env, cwd: home, encoding: 'utf8', timeout: 30000 })
+  assert.equal(child.status, 0, child.stderr)
+  assert.deepEqual(JSON.parse(child.stdout), { unheld: 'function', list: 'function' })
+})
+
 // ---------------------------------------------------------------------------
 // The path
 // ---------------------------------------------------------------------------
