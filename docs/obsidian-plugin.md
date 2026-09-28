@@ -112,7 +112,8 @@ writes no vault file (the view is prepared again and takes the vault's lock,
 and for that tick shows as `stale`, then `updating`, before it is `current`
 again), and not again after that. A plugin file
 another writer removes or changes after the publication, even while the same
-tick goes on, unless it holds again what it held before the tick, and a path
+tick goes on, unless it holds again what it held before the tick under the
+same pin and vault root, and a path
 the person repairs before the tick ends (the vault root made private,
 say), is asked about at the next look and written;
 where the plugin is turned off in the vault, a pinned file that is gone is no

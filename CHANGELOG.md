@@ -325,8 +325,9 @@
   about it at most once more writes no vault file. A plugin file another
   writer removes or changes after the publication, even during the same tick
   (brought back to its old bytes after a publication that changed its pin,
-  say), unless it holds again what it held before the tick, and a path the
-  person repairs before the tick ends, are still written at the next tick.
+  say), unless it holds again what it held before the tick under the same
+  pin and vault root, and a path the person repairs before the tick ends,
+  are still written at the next tick.
 - `atelier obsidian open` with Obsidian quit and the view's vault already in
   Obsidian's list but closed: Obsidian started plainly does not reopen such a
   vault, so a link it refused just after starting left `open` to wait and
