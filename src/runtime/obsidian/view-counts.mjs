@@ -4,15 +4,17 @@ import { DEFAULT_ELIGIBILITY, buildGraph, profileFor } from './pipeline.mjs'
 // How many notes a view would show on this machine, and why the other notes
 // its selector names are withheld: the numbers a person sees before a view is
 // declared or first opened. Read-only. The canonical graph is built as the
-// engine builds it, with the same fail-closed eligibility, and the selection
-// is the contract's own selectScope, so the count is the view's.
+// engine builds it, with the eligibility the caller names (the one the machine
+// settings decide, `eligibilityFor`), and the selection is the contract's own
+// selectScope, so the count is the view's.
 
 // { corpus, named, shown, withheld: { unclassified, audience }, truncated }: the notes of the project; those the
 // view's selector names, whatever their classification and audience; those the view shows under `audienceAllow`
-// (with its expansion); and, of the named ones, how many are withheld because they carry no classification, or an
+// and `eligibility` (with its expansion); and, of the named ones, how many are withheld because they are not
+// eligible (they carry no classification, or, in a vault that is only yours, cannot be read as notes), or carry an
 // audience that is not admitted.
-export function viewCounts({ project, audienceAllow, scope, workspaceId = 'ws-unprepared' }) {
-  const graph = buildGraph({ project, eligibility: DEFAULT_ELIGIBILITY })
+export function viewCounts({ project, audienceAllow, scope, eligibility = DEFAULT_ELIGIBILITY, workspaceId = 'ws-unprepared' }) {
+  const graph = buildGraph({ project, eligibility })
   const known = new Set(graph.nodes.map((node) => node.id))
   const edges = graph.edges.filter((edge) => known.has(edge.source) && known.has(edge.target))
   const profile = profileFor({ project, workspaceId, audienceAllow })
