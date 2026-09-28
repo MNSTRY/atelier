@@ -805,6 +805,15 @@ the view stays refused until the list names the folder once.
 While one entry of the folder has a window, `open` reaches only that one and
 never opens another entry of the same folder beside it.
 
+A view's first publication into the folder allocated for it is the one
+exception to the rule below. While no list the app keeps names that folder, a
+folder above it or one inside it, the vault is filled even while Obsidian
+runs, by creating files only, and `open` adds it to Obsidian and opens it once
+it is complete. Anything that would replace or remove a file still waits for
+the app. See "First publication into a vault no Obsidian lists" in
+[obsidian-contract.md](obsidian-contract.md). The plugin's entry written this
+way counts as offered until the plugin says hello from the vault.
+
 The publisher still writes into a vault only when it can coordinate with every
 Obsidian that may hold it, or when the process table shows, positively, that
 none runs. Otherwise it stops, and the view reports `publisher-conflict` with

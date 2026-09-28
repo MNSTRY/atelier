@@ -118,6 +118,8 @@ const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/run
 const { readServiceRecord, readServiceSettings, releaseIdentity, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
 const { allocationFile, createRecoveryStore, readVaultAllocation } = await import('../src/projection/obsidian/recovery/store.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
+const { confirmPluginSeen, readPluginChoice } = await import('../src/runtime/obsidian/plugin-choice.mjs')
+const { readUnheldEvidence } = await import('../src/runtime/obsidian/unheld-evidence.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { maintenanceNoticeFor } = await import('../src/runtime/obsidian/sync-notice.mjs')
 const { enrollRepository, obsidianMaintenanceNotice } = await import('../src/runtime/supervisor.mjs')
@@ -3573,6 +3575,100 @@ test('open adds the view\'s allocated vault to the app and opens it there', need
   await world.run(['service', 'stop', '--json'], { seams })
   await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
 })
+
+// The publisher's `direct-unheld` path, as the engine and `open` use it: a view never published into its allocated
+// folder, while an Obsidian runs whose list (read here from the fake app's own map) names no folder on the way.
+const unheldEvidenceOf = (app) => ({ vaultRoot }) => readUnheldEvidence({ vaultRoot, read: () => ({ ok: true, vaults: structuredClone(app.state.vaults) }), sandboxed: () => false })
+// An app that runs and answers for another vault, as the real one does for a call about a vault it does not list.
+const answersForAnotherVault = (app) => () => createEditorAdapter({ call: async () => ({ status: 'vault-mismatch' }), processProbe: () => (app.state.running ? 'running' : 'absent') })
+const journalModes = (world, scopeId = FULL_SCOPE.scopeId) => {
+  const directory = path.join(world.workspaceRoot(), 'state', 'journals', scopeId)
+  return fs.existsSync(directory) ? fs.readdirSync(directory).sort().map((name) => JSON.parse(fs.readFileSync(path.join(directory, name, 'header.json'), 'utf8')).ext?.[EXT]?.mode) : []
+}
+
+test('with Obsidian running and a vault open, a new view is published into its allocated folder before the app is told about it: open adds and opens the vault only once its generation is committed; the plugin entry is offered, and confirmed at hello', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  const vault = path.join(parent, 'opening-fixture (scope-whole)')
+  const other = path.join(world.dir, 'somebody-else')
+  fs.mkdirSync(other, { recursive: true })
+  const app = fakeApp({ running: true, vaults: { [OTHER_VAULT]: { path: other, ts: 1, open: true } } })
+  // Whether the view's generation was committed when the app was first told about the vault, and when it was launched.
+  const pointer = () => fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json'))
+  const committedAt = { registered: [], launched: [] }
+  const registerThroughApp = app.registry.registerThroughApp
+  app.registry.registerThroughApp = async (input) => { committedAt.registered.push(pointer()); return registerThroughApp(input) }
+  const launch = app.launcher.open
+  app.launcher.open = async (input) => { committedAt.launched.push(pointer()); return launch(input) }
+  await world.service({ adapterFactory: answersForAnotherVault(app), engineOptions: { readUnheldEvidence: unheldEvidenceOf(app) } })
+  assert.equal(pointer(), true, 'the first tick committed the generation with the app running')
+  assert.deepEqual(journalModes(world), ['direct-unheld'])
+  assert.equal(readPluginChoice({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }).state, 'offered', 'published while an app ran: only offered')
+
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.registration?.how], ['current', 'added-through-app'], JSON.stringify(opened.json).slice(0, 500))
+  assert.deepEqual(app.registrations, [{ via: 'app', vaultRoot: vault }])
+  assert.deepEqual(committedAt, { registered: [true], launched: [true] }, 'never told about, nor opened, before the commit')
+  assert.deepEqual(journalModes(world), ['direct-unheld'], 'no second publication was needed')
+  // The plugin said hello from the vault.
+  assert.equal(confirmPluginSeen({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId, clock: world.clock }).state, 'on')
+  assert.deepEqual(listing(other), {}, 'the vault the app holds is untouched')
+})
+
+test('the maintenance service\'s own adapter hands its engine the reader of the app\'s list for a first publication (checked without calling it: no real settings file is read)', async () => {
+  const { SERVICE_ADAPTERS } = await import('../src/runtime/obsidian/service-main.mjs')
+  const { engineOptions } = await SERVICE_ADAPTERS['obsidian-cli']()
+  assert.equal(typeof engineOptions.readUnheldEvidence, 'function')
+  assert.equal(typeof engineOptions.readAppVaultList, 'function')
+})
+
+for (const [refusal, reason] of [['app-cli-unavailable', 'cli-turned-off'], ['app-version-unsupported', 'no-vault-open'], ['app-version-unsupported', 'below-floor']]) {
+  test(`an app that does not qualify (${refusal}, ${reason}) no longer keeps a never-published allocated view from its first publication while its list names no folder on the way; with the list naming one, under the data root, or with nothing to read the list, the view is refused as before`, needsExchange, async (t) => {
+    const world = makeWorld(t)
+    const parent = path.join(world.dir, 'Atelier')
+    await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+    const vault = path.join(parent, 'opening-fixture (scope-whole)')
+    const app = fakeApp({ running: true })
+    let built = 0
+    const refusing = () => { built += 1; throw new ObsidianMaintenanceRefusal(refusal, 'stub', { reason }) }
+    // The list names the vault: refused as before, and nothing is written in it.
+    app.state.vaults = { [OTHER_VAULT]: { path: vault, ts: 1 } }
+    const listed = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+    assert.deepEqual([listed.scopes[0].state, listed.scopes[0].reason], ['stale', refusal])
+    assert.deepEqual(listing(vault), {})
+    // No reader of the list: the same.
+    const unread = await world.engine({ adapterFactory: refusing }).tick()
+    assert.deepEqual([unread.scopes[0].state, unread.scopes[0].reason], ['stale', refusal])
+    assert.deepEqual(listing(vault), {})
+    // Unlisted when the engine looked, listed by the time the publisher looked again: refused as before, for the app's
+    // reason, and no note is written (only the vault lock, which every publication takes first).
+    let looks = 0
+    const flipping = (input) => ((looks += 1) === 1 ? { unlisted: true } : unheldEvidenceOf(app)(input))
+    const raced = await world.engine({ adapterFactory: refusing, readUnheldEvidence: flipping }).tick()
+    assert.deepEqual([raced.scopes[0].state, raced.scopes[0].reason, looks], ['stale', refusal, 2])
+    assert.deepEqual(Object.keys(listing(vault)).filter((relative) => !relative.startsWith('.atelier-publication')), [])
+    // The list names no folder on the way: published, creating every file, and current.
+    app.state.vaults = { [OTHER_VAULT]: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } }
+    const published = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+    assert.deepEqual([published.scopes[0].state, published.scopes[0].reason], ['current', 'published-and-verified'], JSON.stringify(published.scopes[0]))
+    assert.deepEqual(journalModes(world), ['direct-unheld'])
+    assert.ok(built >= 3, 'the factory was asked each time')
+    // Once a generation is committed, a changed source is not published while the app does not qualify: the publisher
+    // is not even reached, and the committed generation stays.
+    const committed = world.manifest().generationId
+    fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nThe lamp was cleaned.\n')
+    const { publishView: realPublishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+    let reached = 0
+    const later = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app), seams: { publishView: (input) => { reached += 1; return realPublishView(input) } } }).tick()
+    assert.deepEqual([later.scopes[0].state, later.scopes[0].reason, reached, world.manifest().generationId], ['stale', refusal, 0, committed])
+    // A view whose vault is under the data root is never published this way.
+    const legacy = makeWorld(t)
+    const refusedLegacy = await legacy.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(fakeApp({ running: true })) }).tick()
+    assert.deepEqual([refusedLegacy.scopes[0].state, refusedLegacy.scopes[0].reason], ['stale', refusal])
+    assert.deepEqual(journalModes(legacy), [])
+  })
+}
 
 test('the service is started in the root directory, whichever directory the command runs in', async (t) => {
   const world = makeWorld(t)

@@ -160,7 +160,9 @@ export function currentPluginChoice({ workspaceRoot, workspaceId, scopeId }) {
 // no app ran, it is confirmed: an app reads the list, entry and all, when it
 // next opens the vault. Published through a running app, it is only offered:
 // that app may not have read it, and the plugin running there confirms it
-// (confirmPluginSeen).
+// (confirmPluginSeen). So is one published into a vault no Obsidian listed
+// while one ran (`direct-unheld`): the evidence covers only the lists Atelier
+// can read, not another profile's or another machine's.
 const IN_PLACE = new Set(['policy-satisfied', 'created', 'published', 'published-external-captured', 'already-current'])
 export function confirmPluginEntry({ workspaceRoot, workspaceId, scopeId, result, clock }) {
   const unit = (result?.notes ?? []).find((entry) => entry.path === COMMUNITY_PLUGINS_PATH)

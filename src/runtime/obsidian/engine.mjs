@@ -148,6 +148,11 @@ function builtOnFirstUse(build) {
     publish: async (payload) => (await built()).publish(payload),
   }
 }
+// The adapter a publication gets when the factory refused the app: it coordinates with nothing and never calls it.
+function uncoordinatedAdapter(refusal) {
+  const never = async () => { throw refusal }
+  return { probe: async () => ({ state: 'uncoordinated', reason: `${refusal.code}: the installed Obsidian does not qualify, and nothing is published through it` }), inspect: never, collect: never, publish: never }
+}
 // Views a tick may be asked to prepare again, at most, before it runs.
 const MAX_PREPARATION_REQUESTS = 64
 
@@ -180,6 +185,11 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // the map id -> { path }, or { ok: false, code }. A folder for a new vault is never allocated inside a vault it
     // lists, nor under a name a vault it lists already has, nor while the list cannot be read.
     readAppVaultList = null,
+    // Reads the app's own vault list from its file, without asking the app (unheld-evidence.mjs): { unlisted: true } only
+    // when no list names a view's vault, a folder above it or one inside it. A view never published into its allocated
+    // folder is then published even while an app runs that cannot be coordinated with, creating files only (the
+    // publisher's `direct-unheld` path). An engine given no reader never takes that path.
+    readUnheldEvidence = null,
     quietPeriodMs, lstat = fs.lstatSync, randomBytes, env = process.env, platform = process.platform,
     // A service names where it answers health, so a lock it leaves behind can be proven abandoned.
     lockOwner = null, lockProbe = probeHealth,
@@ -225,6 +235,14 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
   // that did not qualify: tried again on the same schedule as an unsettled view, and forgotten once one settles.
   const waitingForApp = new Map()
   const proveAbandoned = createAbandonmentProof({ probe: lockProbe })
+
+  // Whether a view kept from publication by an app that does not qualify may still be published on the publisher's
+  // `direct-unheld` path: never committed, its vault the folder allocated for it, and the app's list naming no folder
+  // on the way. The publisher checks every condition again, under its locks.
+  async function unheldMayApply(store, pointer) {
+    if (typeof readUnheldEvidence !== 'function' || pointer !== null || store.vaultOrigin !== 'allocated') return false
+    try { return (await readUnheldEvidence({ vaultRoot: store.vaultRoot }))?.unlisted === true } catch { return false }
+  }
 
   async function takeLock(workspaceRoot, workspaceId) {
     if (heldLock) return { acquired: true }
@@ -615,13 +633,27 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
           // that cannot be qualified never makes a current view stale. Any other publication builds the adapter first,
           // and an app that does not qualify keeps the publisher from being reached at all.
           const lazy = trusted()?.generationId === preparedGenerationId ? builtOnFirstUse(() => adapterFactory({ store, scope })) : null
-          const adapter = lazy ?? await adapterFactory({ store, scope })
+          // A view never published into its allocated folder is not kept from its first publication by an app that
+          // does not qualify, while that app's list shows no entry for the folder: the publisher is reached with an
+          // adapter that coordinates with nothing, and may take its `direct-unheld` path. Any other outcome is the
+          // factory's refusal, as before.
+          let heldBackBy = null
+          let adapter = lazy
+          if (adapter === null) {
+            try { adapter = await adapterFactory({ store, scope }) } catch (error) {
+              if (!isTypedRefusal(error) || !(await unheldMayApply(store, trusted()))) throw error
+              heldBackBy = error
+              adapter = uncoordinatedAdapter(error)
+            }
+          }
           let result
           try {
             result = await seams.publishView({
               preparedView: prepared, protocolId: PROTOCOL_ID, expectedGeneration: trusted()?.generationId ?? null, recoveryStore: store, adapter, clock,
               ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
+              ...(typeof readUnheldEvidence === 'function' ? { unheldEvidence: readUnheldEvidence, platform } : {}),
             })
+            if (heldBackBy !== null && result.state === 'refused') throw heldBackBy
           } catch (error) {
             // The publisher asked for the app only to publish the committed generation again (a plugin file drifted),
             // and the app did not qualify: nothing was written, and the committed generation is read back as it is.
