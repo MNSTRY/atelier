@@ -15,6 +15,7 @@ import {
 import { configKey, listConfigFiles, listSourceFiles, listVaultNotes, readFileFacts, reconcile, sha256Digest, sourceKey, vaultKey } from './observation.mjs'
 import { dispatchAutomaticApply, heldPaths, layoutHeldPaths, observeVaultEdits, preserveInRecoveryStore, trustedNoteBases } from './pending-edits.mjs'
 import { createProductionSeams, eligibilityFor } from './pipeline.mjs'
+import { PLUGIN_FILES_WAIT_FOR_APP } from './plugin-presence.mjs'
 import { ENGINE_LOCK_DIRECTORY, acquirePrivateGenerationLock, createAbandonmentProof } from './private-lock.mjs'
 import { probeHealth } from './service-client.mjs'
 import { FRESHNESS_SCHEMA, LATE_WRITERS_SCHEMA, createMaintenanceStateStore } from './state-store.mjs'
@@ -650,7 +651,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
             // Somebody wrote during the publication. The next tick preserves and queues it.
             else if (differing.length > 0 || editedUnderPublisher) settle('updating', 'read-back-differs', common)
             else if (common.generationId !== preparedGenerationId) settle('stale', 'committed-generation-differs', common)
-            else settle('current', result.alreadyCommitted ? 'verified-by-read-back' : 'published-and-verified', { ...common, heldNotes: [], verified: true })
+            // Kept current while a plugin file waits for the app: the reason says so, and status shows it on the plugin line.
+            else settle('current', result.waitsForApp === true ? PLUGIN_FILES_WAIT_FOR_APP : result.alreadyCommitted ? 'verified-by-read-back' : 'published-and-verified', { ...common, heldNotes: [], verified: true })
           }
         } catch (error) {
           if (!isTypedRefusal(error)) { settle('stale', 'publisher-error'); persist(); throw error }

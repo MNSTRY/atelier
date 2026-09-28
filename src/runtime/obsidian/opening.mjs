@@ -129,6 +129,11 @@ export const REASON_NEXT = Object.freeze({
   'vault-note-missing': 'a note of the generation this view last published is missing from its vault; the view is published again, and the note written back, at the next change at its sources',
   'vault-root-moved': 'this view\'s vault was removed, moved or replaced by a link while it was being published, and nothing more was written into it; a vault allocated for the view is made again at the next tick and published into; a vault under the data root is asked for as lost until its folder is there again',
   'vault-allocation-missing': 'the folder allocated to this view is gone; the maintenance service makes it again at its next tick, and publishes the view into it',
+  // A publisher-conflict whose first blocking cause is a file Atelier writes in the vault's settings folder. One change
+  // is enough to stop a publication, and the reason names only the first file that did: nothing says that no other
+  // publisher or editor is involved.
+  'plugin-file-changed': 'a file of Atelier\'s plugin in this vault (under .obsidian/plugins) changed while the view was published, by another program or by you, so the publication did not finish; it is retried automatically, and if this keeps happening, stop what keeps writing there (a sync tool, say)',
+  'settings-changed': 'a settings file Atelier writes in this vault (the plugin list or a plugin setting under .obsidian) changed while the view was published, by Obsidian, another program or you, and was not written over; it is retried automatically, reading the file as it is then',
   'vault-inside-another-vault': 'Obsidian lists another vault at a folder that contains this view\'s vault; open never adds a vault inside another one, and never sends a call that could reach that vault instead: remove that vault from Obsidian\'s vault list, or keep Atelier\'s data root outside that folder, then open again',
 })
 
@@ -264,6 +269,9 @@ const defaultSleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) 
 const READABLE = new Set(['stale-readable', 'held-for-your-edit', 'updating', 'publisher-conflict'])
 // After a launch: the app is still starting, or still opening the vault it was asked for.
 const NOT_UP_YET = new Set(['version-unknown', 'no-vault-open'])
+// After a launch: how many rounds in a row the command line must be silent, with only the plugin giving the version,
+// before `open` says the command line is what is missing.
+const SILENT_ROUNDS = 2
 const REGISTRY_OPERATIONS = ['listThroughApp', 'registerThroughApp', 'readSettings', 'registerInSettings']
 
 const attempt = async (operation) => { try { return await operation() } catch { return null } }
@@ -288,8 +296,9 @@ const attempt = async (operation) => { try { return await operation() } catch { 
 // (`vault-inside-another-vault`): the app would show its notes in that vault
 // too, and a call run in its folder would reach that vault.
 //
-// { ok: true, path, how, vaults } with the path the app knows the vault by and
-// the list it was found in, or { ok: false, reason }.
+// { ok: true, path, how, open, vaults } with the path the app knows the vault
+// by, whether its list flags it open (an app started plainly reopens it then),
+// and the list it was found in, or { ok: false, reason }.
 //
 // The window the app opens for an added vault takes the next command-line
 // call while it may still be loading, and can then answer that a command
@@ -302,14 +311,14 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
     const settings = await attempt(() => registry.readSettings())
     const vaults = settings?.ok === true ? settings.vaults : null
     const entry = findVaultEntry(vaults, vaultRoot)
-    if (entry) return { ok: true, path: entry.path, how: 'listed', vaults }
+    if (entry) return { ok: true, path: entry.path, how: 'listed', open: entry.open === true, vaults }
     return { ok: false, reason: inside(vaults) ? 'vault-inside-another-vault' : observation.fromPlugin === true ? 'vault-open-cli-silent' : 'no-vault-open' }
   }
   if (observation.answering === true) {
     const listed = await attempt(() => registry.listThroughApp())
     if (listed?.answered !== true) return { ok: false, reason: listed?.reason === 'no-vault-open' ? 'no-vault-open' : 'app-did-not-list-its-vaults' }
     const known = findVaultEntry(listed.vaults, vaultRoot)
-    if (known) return { ok: true, path: known.path, how: 'listed', vaults: listed.vaults }
+    if (known) return { ok: true, path: known.path, how: 'listed', open: known.open === true, vaults: listed.vaults }
     if (inside(listed.vaults)) return { ok: false, reason: 'vault-inside-another-vault' }
     const asked = await attempt(() => registry.registerThroughApp({ vaultRoot }))
     if (asked?.answered !== true && asked?.reason === 'no-vault-open') return { ok: false, reason: 'no-vault-open' }
@@ -318,7 +327,7 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
     for (let attempts = 1; ; attempts += 1) {
       const again = await attempt(() => registry.listThroughApp())
       const added = again?.answered === true ? findVaultEntry(again.vaults, vaultRoot) : null
-      if (added) return { ok: true, path: added.path, how: 'added-through-app', vaults: again.vaults }
+      if (added) return { ok: true, path: added.path, how: 'added-through-app', open: true, vaults: again.vaults }
       if (attempts >= VERIFY_ATTEMPTS) return { ok: false, reason: asked?.answered === true ? 'registration-not-verified' : 'addition-not-answered' }
       await sleep(pollMs)
     }
@@ -329,7 +338,8 @@ async function ensureAppKnowsVault({ registry, observation, vaultRoot, sleep, po
   const settings = settingsWritten(written)
   if (written.confirmed !== true) return { ok: false, reason: written.reason === 'registration-not-read-back' ? 'registration-not-read-back' : 'app-started-during-registration', ...(settings === null ? {} : { settings }) }
   const how = written.registered === 'created' ? 'created-settings' : written.registered === 'already' ? 'listed' : 'added-to-settings'
-  return { ok: true, path: written.entry.path, how, vaults: written.vaults, ...(settings === null ? {} : { settings }) }
+  // A vault already listed keeps its own open flag; one written here is written flagged open.
+  return { ok: true, path: written.entry.path, how, open: written.registered === 'already' ? written.entry.open === true : true, vaults: written.vaults, ...(settings === null ? {} : { settings }) }
 }
 
 // What was written to Obsidian's settings file, for the answer to show: null when nothing was.
@@ -518,7 +528,15 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
   const deadline = monotonic() + appWaitMs
   let after = before
   let vault = { answered: false, indexReady: false }
+  // Rounds in a row in which only Atelier's plugin gave the version and the command line did not answer for the vault.
+  let silentRounds = 0
+  // A quit app started plainly reopens only the vaults its list flags open. A listed vault that is closed opens through
+  // the link alone, so a link the started app did not take (it answered its tool, then refused the link) is handed
+  // once more, to the app that now runs, one round later, before the vault counts as not answering.
+  let linkRetry = launch.reason === 'app-started-link-not-taken' && known.open !== true ? 'due' : 'none'
+  let rounds = 0
   for (;;) {
+    rounds += 1
     after = qualifyApp(await inspectApp(appProbe), { requireVersion: true })
     // A running app below the floor is final; an app that has not come up yet, or not yet opened a vault, is asked again.
     if (!rules.appQualifies(after) && !NOT_UP_YET.has(after.reason)) return finish(after.outcome, { ...common, launched: true, reason: after.reason, app: app(after), registration })
@@ -526,13 +544,23 @@ export async function openScopeForOracleTests(options = {}, rules = OPENING_PRIM
       try { vault = await appProbe.vaultState({ vaultRoot, route }) } catch { vault = { answered: false, indexReady: false } }
       if (vault?.answered === true && vault.indexReady === true) break
       // Only the command line answers for a vault. An app whose version still only Atelier's plugin reports gives no
-      // answer there, and waiting changes nothing: its command line is what is missing, not a launch.
-      if (vault?.answered !== true && after.versionSource === 'plugin') return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
-    }
+      // answer there, and waiting changes nothing: its command line is what is missing, not a launch. One such round
+      // is not enough: a tool call that timed out while the app was busy opening the window looks the same once, so
+      // the answer is given at the second round in a row.
+      silentRounds = vault?.answered !== true && after.versionSource === 'plugin' ? silentRounds + 1 : 0
+      if (silentRounds >= SILENT_ROUNDS) return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
+      if (linkRetry === 'due' && rounds >= 2 && vault?.answered !== true) {
+        linkRetry = 'done'
+        // Through the app's tool only: this `open` started the app, so the link never goes to the operating system.
+        try { await launcher.open({ vaultRoot: known.path, ...target, appRunning: true, startedByThisOpen: true }) } catch { /* the wait decides */ }
+      }
+    } else silentRounds = 0
     if (monotonic() >= deadline) break
     await sleep(appPollMs)
   }
   if (!rules.appQualifies(after)) return finish(after.outcome, { ...common, launched: true, reason: after.reason, app: app(after), registration })
+  // The wait ended on a silent round with only the plugin giving the version: the command line is what did not answer.
+  if (vault?.answered !== true && silentRounds > 0) return finish('app-cli-unavailable', { ...common, launched: true, reason: 'vault-open-cli-silent', app: app(after), registration })
   if (vault?.answered !== true) return finish('launch-failed', { ...common, launched: true, reason: 'app-did-not-answer-for-this-vault', app: app(after), registration })
   if (vault.indexReady !== true) return finish('indexing', { ...common, launched: true, reason: 'metadata-cache-not-ready', app: app(after), registration })
 

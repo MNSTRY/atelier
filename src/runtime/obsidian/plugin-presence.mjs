@@ -9,6 +9,18 @@ export const PLUGIN_PRESENCE_REASONS = Object.freeze(['live-lease', 'no-live-lea
 // The two ways back, for a view whose vault turned the plugin off.
 export const turnPluginOnNext = (scopeId) => `turn Atelier on in Obsidian (Settings, Community plugins), or run \`atelier obsidian plugin on --scope ${scopeId}\`, which restores it at the view's next publication`
 
+// A view kept `current` while a plugin file its committed generation pins waits for an app that qualifies: the notes
+// are verified, the plugin file (often `data.json`) is not written yet (engine.mjs). Its freshness reason says so.
+export const PLUGIN_FILES_WAIT_FOR_APP = 'verified-by-read-back-plugin-waits-for-app'
+export const PLUGIN_FILES_WAIT_NEXT = 'the view\'s notes are current, but a file of Atelier\'s plugin in this vault is not written yet, since Obsidian could not be coordinated with (it runs without its command line answering, say): it is written once Obsidian answers its command line or is quit, and it is retried automatically'
+
+// The presence, with the plugin files that wait for the app when the view's freshness says so (`files`, and the next
+// step unless the presence has its own).
+export function withPluginFilesPending(presence, freshness) {
+  if (freshness?.state !== 'current' || freshness.reason !== PLUGIN_FILES_WAIT_FOR_APP) return presence
+  return { ...presence, files: 'waits-for-app', next: presence.next ?? PLUGIN_FILES_WAIT_NEXT }
+}
+
 export function pluginPresenceOf(statusDocument, scopeId) {
   if (!isPlainObject(statusDocument)) return { present: false, reason: 'service-not-running' }
   const scopes = isPlainObject(statusDocument.plugins) && Array.isArray(statusDocument.plugins.scopes) ? statusDocument.plugins.scopes : null

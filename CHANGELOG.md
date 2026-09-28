@@ -289,7 +289,53 @@
   already running while that service fails every tick on the new machine
   settings. A service of a later release is left running (`release:
   'later'`).
-
+- `atelier obsidian open` no longer answers `app-cli-unavailable` /
+  `vault-open-cli-silent` on the first silent round after it launched the
+  vault. A version only Atelier's plugin gave, with no answer for the vault,
+  now has to be seen in two rounds in a row: one version call that timed out
+  while Obsidian was busy opening its window made `open` report a command
+  line that was only slow as switched off. A wait that ends right after one
+  such round still gives that answer, not `launch-failed`.
+- A view kept `current` while a plugin file it pins waits for Obsidian (a
+  drifted `data.json`, say, while the app cannot be coordinated with) now
+  says so. Its reason is `verified-by-read-back-plugin-waits-for-app`
+  instead of the `verified-by-read-back` of a view whose plugin files are all
+  there, and `status` and `open` add `plugin files wait for the app` to the
+  plugin line, with a next step (`files: "waits-for-app"` and `next` on
+  `plugin` in `--json`). A drift that publishing would only leave for the
+  person again (the data file of a vault root that is a link or not private,
+  a folder where a file goes) is no longer a reason to publish a committed
+  generation again, so it never waits for the app and never gets that
+  reason; the path is left as it is (nothing names it in `status` yet, and
+  the plugin shows as not present).
+- A view held because a plugin file (`plugin-file-changed`) or a settings
+  file (`settings-changed`) changed while it was published, by another
+  program or by the person, is still `publisher-conflict`, but its next step
+  no longer tells the person to close another publisher: it names the file
+  that stopped the publication and says that the view is retried
+  automatically.
+- A plugin-file drift that publishing cannot repair (the data file of a vault
+  root that is a link, say) was published twice whenever the maintenance
+  service started: once by the start's own tick and once more when the
+  service first compared the plugin files with the disk, or when that tick's
+  publication changed the pinned files. What that publication could not
+  change (a file as pinned, or one that holds what it held before the tick
+  under the same pin and vault root) is now taken as seen, and such a drift
+  is no longer a reason to publish a committed generation again, so asking
+  about it at most once more writes no vault file. A plugin file another
+  writer removes or changes after the publication, even during the same tick
+  (brought back to its old bytes after a publication that changed its pin,
+  say), unless it holds again what it held before the tick under the same
+  pin and vault root, and a path the person repairs before the tick ends,
+  are still written at the next tick.
+- `atelier obsidian open` with Obsidian quit and the view's vault already in
+  Obsidian's list but closed: Obsidian started plainly does not reopen such a
+  vault, so a link it refused just after starting left `open` to wait and
+  answer `launch-failed` / `app-did-not-answer-for-this-vault`. `open` now
+  hands the link once more to the Obsidian that now runs, through its
+  command-line tool only (never the operating system, since this `open`
+  started it), before it answers that. A vault the list flags open is not
+  asked twice.
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
   worked, and `atelier obsidian help` showed them). A test now fails when a

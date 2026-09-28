@@ -278,7 +278,7 @@ function fakeApp(overrides = {}) {
       },
     },
     launcher: {
-      open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push(Object.fromEntries(Object.entries({ vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning }).filter(([, value]) => value !== undefined))); if (state.launchResult.launched && state.comesUp && !state.running) startApp(); return state.launchResult },
+      open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push(Object.fromEntries(Object.entries({ vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning, startedByThisOpen: args.startedByThisOpen }).filter(([, value]) => value !== undefined))); if (state.launchResult.launched && state.comesUp && !state.running) startApp(); return state.launchResult },
       startPlain: async () => { startsPlain.push(state.running); if (state.startPlainResult && !state.running) startApp(); return state.startPlainResult },
     },
     quitter: {
@@ -337,7 +337,7 @@ function fakeApp(overrides = {}) {
         const cliTurnedOn = state.cliSetting !== true
         state.cliSetting = true
         const known = Object.keys(state.vaults).find((id) => state.vaults[id].path === vaultRoot)
-        if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: true }, confirmed: true, vaults: structuredClone(state.vaults), file, cliTurnedOn, ...(cliTurnedOn ? { backupPath } : {}) }
+        if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: state.vaults[known].open === true }, confirmed: true, vaults: structuredClone(state.vaults), file, cliTurnedOn, ...(cliTurnedOn ? { backupPath } : {}) }
         if (Object.values(state.vaults).some((entry) => vaultRoot.startsWith(entry.path + path.sep))) { state.cliSetting = !cliTurnedOn; return { ok: false, code: 'vault-inside-another-vault', message: 'fake' } }
         add(vaultRoot, 'settings')
         // `settingsUnconfirmed`: an app started right after the write, and may have read the list before it; or, when it
@@ -1102,6 +1102,39 @@ test('app not running: the view is published on the path with no app, the vault 
   assert.deepEqual([again.json.outcome, again.json.registration?.how, app.registrations.length], ['current', 'listed', 1])
 })
 
+// After the launch, the first `silentRounds` rounds see a version only Atelier's plugin gave (the tool's own version
+// call timed out) and no answer for the vault; the rounds after that see the app as it is.
+async function openThroughSilentRounds(t, silentRounds, { appWaitMs = 5000 } = {}) {
+  const world = makeWorld(t)
+  await world.service()
+  const app = fakeApp()
+  const rounds = []
+  let silent = silentRounds
+  const appProbe = {
+    inspect: async () => { const seen = await app.appProbe.inspect(); return app.launches.length > 0 && silent > 0 ? { ...seen, version: '1.13.7', versionSource: 'plugin' } : seen },
+    vaultState: async (input) => {
+      if (silent > 0) { silent -= 1; rounds.push('silent'); return { answered: false, indexReady: false } }
+      rounds.push('asked')
+      return app.appProbe.vaultState(input)
+    },
+  }
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app, appProbe }, open: { appWaitMs, appPollMs: 5 } })
+  return { opened, rounds, app }
+}
+
+test('one silent round after the launch, with a version only the plugin gave, is waited out; two in a row answer at once that the command line is what is missing', needsExchange, async (t) => {
+  // The tool's version call timed out once while the app opened the window: open waits, and the vault answers.
+  const once = await openThroughSilentRounds(t, 1)
+  assert.deepEqual([once.opened.json.outcome, once.opened.json.launched, once.rounds], ['current', true, ['silent', 'asked']], JSON.stringify(once.opened.json))
+  // Silent every round: answered at the second, not after the whole wait.
+  const always = await openThroughSilentRounds(t, Number.POSITIVE_INFINITY)
+  assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.opened.json.launched, always.rounds], ['app-cli-unavailable', 'vault-open-cli-silent', true, ['silent', 'silent']])
+  assert.equal(always.app.launches.length, 1)
+  // The wait ends after one such round: still the precise answer, not a launch that failed.
+  const cut = await openThroughSilentRounds(t, Number.POSITIVE_INFINITY, { appWaitMs: 0 })
+  assert.deepEqual([cut.opened.json.outcome, cut.opened.json.reason, cut.rounds], ['app-cli-unavailable', 'vault-open-cli-silent', ['silent']])
+})
+
 test('the launch names the vault by its id and says whether the app runs: a quit app is started plainly, so it reopens the vaults its list marks open, and handed the vault by id once it answers', needsExchange, async (t) => {
   const world = makeWorld(t)
   const app = fakeApp({ running: false, vaults: { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })
@@ -1114,6 +1147,41 @@ test('the launch names the vault by its id and says whether the app runs: a quit
   const listedClosed = fakeApp({ running: true, vaults: { [ours]: { path: world.vault(), ts: 1 } } })
   await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...listedClosed }, open: FAST_APP })
   assert.deepEqual(listedClosed.launchArgs, [{ vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault(), appRunning: true }])
+})
+
+// A quit app that the launcher starts plainly and that refuses the link (`refusals` times): it reopens a vault its list
+// flags open by itself, never a closed one. A link it takes opens the vault.
+async function openAfterRefusedLink(t, { flaggedOpen, refusals }) {
+  const world = makeWorld(t)
+  await world.service()
+  const id = '0123456789abcdef'
+  const app = fakeApp({ running: false, vaults: { [id]: { path: world.vault(), ts: 1, ...(flaggedOpen ? { open: true } : {}) } } })
+  const open = app.launcher.open
+  let refused = 0
+  app.launcher.open = async (args) => {
+    if (refused >= refusals) return open(args)
+    refused += 1
+    app.launchArgs.push({ vaultRoot: args.vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning })
+    app.state.running = true
+    if (flaggedOpen) app.launches.push(args.vaultRoot)
+    return { launched: true, reason: 'app-started-link-not-taken' }
+  }
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  return { opened, app, world, id }
+}
+
+test('a link the started app refused is handed once more to the running app when the vault is listed closed, since a plain start does not reopen it; a vault flagged open is not asked twice', needsExchange, async (t) => {
+  const once = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: 1 })
+  assert.deepEqual([once.opened.json.outcome, once.opened.json.registration?.how], ['current', 'listed'], JSON.stringify(once.opened.json))
+  const asked = { vaultRoot: once.world.vault(), vaultId: once.id, vaultPath: once.world.vault() }
+  // Handed once more through the app's tool only: this open started the app, so never through the operating system.
+  assert.deepEqual(once.app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true, startedByThisOpen: true }])
+  // Only once: a link refused again leaves the vault not answering.
+  const always = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: Number.POSITIVE_INFINITY })
+  assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.app.launchArgs.map((item) => item.appRunning)], ['launch-failed', 'app-did-not-answer-for-this-vault', [false, true]])
+  // Flagged open, the plainly started app reopens it: the link is not handed again.
+  const flagged = await openAfterRefusedLink(t, { flaggedOpen: true, refusals: 1 })
+  assert.deepEqual([flagged.opened.json.outcome, flagged.app.launchArgs.map((item) => item.appRunning)], ['current', [false]], JSON.stringify(flagged.opened.json))
 })
 
 test('the launch plan: a vault is named by id; a quit app on macOS is started plainly, waited for, then handed the URL; a running app is handed the URL; Linux starts a quit app with the URL; elsewhere nothing', () => {
@@ -1183,6 +1251,94 @@ test('the launch is carried out without ever handing a URL to the operating syst
   assert.deepEqual(await runLaunchPlan(running, w.io), { launched: true, reason: 'os-open-accepted' })
   assert.deepEqual(w.calls, [`link ${link}`, `os ${link}`])
   assert.deepEqual(await runLaunchPlan({ ok: false, reason: 'vault-id-unknown' }, world({}).io), { launched: false, reason: 'vault-id-unknown' })
+})
+
+test('the production launcher\'s executors: each step runs the program it names, with no shell, in the neutral directory, with the given env and its timeout; a started app never gets the system opener', needsAppIsolation, (t) => {
+  // In a child with a private HOME, since this process never loads the production seams. Every way that child could
+  // start a program is replaced first by one that starts nothing and records the attempt, so only the stand-in
+  // execFile handed to the launcher answers, and a launcher that did not use it fails here instead of running anything.
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-launcher-executors-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const work = path.join(dir, 'neutral')
+  fs.mkdirSync(work)
+  const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
+  const script = `import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+const unguarded = []
+for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
+  childProcess[method] = (file, ...rest) => {
+    unguarded.push([method, String(file)])
+    const callback = rest.find((item) => typeof item === 'function')
+    if (!callback) throw new Error('nothing is started here')
+    setImmediate(() => callback(new Error('nothing is started here'), '', ''))
+    return { on() {}, once() {} }
+  }
+}
+syncBuiltinESMExports()
+const { createProductionLauncher } = await import(${JSON.stringify(seams)})
+const CLI = '/stand-in/bin/tool'
+const UNABLE = 'The CLI is unable to find Obsidian. Please make sure Obsidian is running and try again.'
+const VERSION = '1.13.7 (installer 1.12.7)'
+const isLink = (args) => args.length === 1 && args[0].includes('://')
+// Per run: how the stand-in answers a call, given how many version calls came before it.
+const RUNS = {
+  quitThenTaken: { platform: 'darwin', appRunning: false, answer: (file, args, versions) => (file === CLI && args[0] === 'version' ? { stdout: versions <= 2 ? UNABLE : VERSION } : file === CLI && isLink(args) ? { stdout: 'Processed URI ' + args[0] } : {}) },
+  quitLinkNotTaken: { platform: 'darwin', appRunning: false, answer: (file, args) => (file === CLI && args[0] === 'version' ? { stdout: VERSION } : {}) },
+  quitVersionFailed: { platform: 'darwin', appRunning: false, answer: (file, args) => (file === CLI ? { stdout: VERSION, failed: true } : {}) },
+  quitStartFailed: { platform: 'darwin', appRunning: false, answer: (file) => (file === '/usr/bin/open' ? { failed: true } : { stdout: VERSION }) },
+  runningNotTaken: { platform: 'darwin', appRunning: true, answer: () => ({}) },
+  // The link handed once more to an app this open started (opening.mjs): refused again, it never reaches the system opener.
+  retryNotTaken: { platform: 'darwin', appRunning: true, startedByThisOpen: true, answer: () => ({}) },
+  linuxQuit: { platform: 'linux', appRunning: false, answer: () => ({}) },
+  linuxRunningTaken: { platform: 'linux', appRunning: true, answer: (file, args) => (file === CLI && isLink(args) ? { stdout: 'Processed URI ' + args[0] } : {}) },
+}
+const out = { unguarded, runs: {} }
+for (const [name, { platform, appRunning, startedByThisOpen, answer }] of Object.entries(RUNS)) {
+  const calls = []
+  let versions = 0
+  const execFile = (file, args, options, callback) => {
+    if (file === CLI && args[0] === 'version') versions += 1
+    calls.push({ file, args, cwd: options.cwd, run: options.env.STAND_IN_RUN, home: options.env.HOME, timeout: options.timeout, killSignal: options.killSignal, shell: options.shell ?? null })
+    const reply = answer(file, args, versions)
+    setImmediate(() => callback(reply.failed ? new Error('exit 1') : null, reply.stdout ?? '', reply.stderr ?? ''))
+  }
+  const launcher = createProductionLauncher({ platform, env: { ...process.env, STAND_IN_RUN: name }, cliPath: CLI, workingDirectory: ${JSON.stringify(work)}, execFile, waitMs: 200, pollMs: 20 })
+  const result = await launcher.open({ vaultId: '0123456789abcdef', vaultPath: '/stand-in/vault', appRunning, ...(startedByThisOpen ? { startedByThisOpen } : {}) })
+  out.runs[name] = { result, calls }
+}
+process.stdout.write(JSON.stringify(out))`
+  const env = privateHomeEnv(dir)
+  const child = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 60000, env })
+  assert.equal(child.status, 0, child.stderr)
+  const { unguarded, runs } = JSON.parse(child.stdout)
+  assert.deepEqual(unguarded, [], 'nothing but the stand-in was asked to run a program')
+  const CLI = '/stand-in/bin/tool'
+  const link = 'obsidian://open?vault=0123456789abcdef'
+  const steps = (name) => runs[name].calls.map((call) => [call.file, ...call.args])
+  for (const [name, { calls }] of Object.entries(runs)) {
+    for (const call of calls) {
+      assert.deepEqual([call.cwd, call.run, call.home, call.killSignal, call.shell], [work, name, env.HOME, 'SIGKILL', null], `${name}: ${call.file} ${call.args.join(' ')}`)
+      // The command-line tool is given five seconds a call; the operating system's opener fifteen.
+      assert.equal(call.timeout, call.file === CLI ? 5000 : 15000, `${name}: ${call.file}`)
+    }
+  }
+  // A quit app on macOS: started plainly, asked its version until it answers itself (the tool's own "unable to find"
+  // line is no answer), then handed the link through the tool.
+  assert.deepEqual(runs.quitThenTaken.result, { launched: true, reason: 'plain-start-then-url' })
+  assert.deepEqual(steps('quitThenTaken'), [['/usr/bin/open', '-b', 'md.obsidian'], [CLI, 'version'], [CLI, 'version'], [CLI, 'version'], [CLI, link]])
+  // A link the started app did not take is left to it: never the system opener.
+  assert.deepEqual(runs.quitLinkNotTaken.result, { launched: true, reason: 'app-started-link-not-taken' })
+  assert.deepEqual(steps('quitLinkNotTaken'), [['/usr/bin/open', '-b', 'md.obsidian'], [CLI, 'version'], [CLI, link]])
+  // A version printed by a call that failed is no answer: nothing is handed over.
+  assert.deepEqual(runs.quitVersionFailed.result, { launched: true, reason: 'app-started-not-answering' })
+  assert.ok(steps('quitVersionFailed').length >= 3 && steps('quitVersionFailed').slice(1).every((step) => step.join(' ') === `${CLI} version`), JSON.stringify(steps('quitVersionFailed')))
+  assert.deepEqual([runs.quitStartFailed.result, steps('quitStartFailed')], [{ launched: false, reason: 'os-open-failed' }, [['/usr/bin/open', '-b', 'md.obsidian']]])
+  // A running app: the tool first, the system opener only when the tool did not take the link.
+  assert.deepEqual([runs.runningNotTaken.result, steps('runningNotTaken')], [{ launched: true, reason: 'os-open-accepted' }, [[CLI, link], ['/usr/bin/open', link]]])
+  assert.deepEqual([runs.retryNotTaken.result, steps('retryNotTaken')], [{ launched: true, reason: 'app-started-link-not-taken' }, [[CLI, link]]])
+  // Linux: a quit app is started with the link by the system opener; a running one takes it through the tool.
+  assert.deepEqual([runs.linuxQuit.result, steps('linuxQuit')], [{ launched: true, reason: 'os-open-accepted' }, [['xdg-open', link]]])
+  assert.deepEqual([runs.linuxRunningTaken.result, steps('linuxRunningTaken')], [{ launched: true, reason: 'url-accepted' }, [[CLI, link]]])
 })
 
 test('Obsidian with its command line turned off answers every command with one line: it is no version, it is app-cli-unavailable / cli-turned-off with the setting to turn on, and open adds and launches nothing', async (t) => {
@@ -2289,6 +2445,31 @@ for (const [state, stateOutcome, overrides] of [
     assert.deepEqual([again.json.outcome, again.json.registration?.how, again.json.restart, app.quits.length], ['current', 'listed', undefined, 1])
   })
 }
+
+test('a restart and a refused link together: Obsidian with its command line off, this view\'s vault listed closed; open quits it, turns the switch on, starts it plainly, and hands the refused link once more through its tool only; current', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const ours = '0123456789abcdef'
+  const vaults = { [OTHER_VAULT]: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true }, [ours]: { path: world.vault(), ts: 2 } }
+  const app = fakeApp({ running: true, cliOff: true, vaults })
+  await serviceBehindApp(world, app, { adapterFactory: refusingWhileUnreachable(app) })
+  // The app started plainly refuses the link once: it reopens the other vault, which its list flags open, not this one.
+  const open = app.launcher.open
+  let refused = false
+  app.launcher.open = async (args) => {
+    if (refused) return open(args)
+    refused = true
+    app.launchArgs.push({ vaultRoot: args.vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning })
+    Object.assign(app.state, { running: true, cliOff: app.state.cliSetting !== true })
+    return { launched: true, reason: 'app-started-link-not-taken' }
+  }
+  const opened = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.exit, opened.json.outcome, opened.json.registration?.how], [EXIT.ok, 'current', 'listed'], JSON.stringify(opened.json).slice(0, 600))
+  assert.deepEqual([opened.json.restart?.quit, opened.json.restart?.startedAgain], [true, true])
+  assert.deepEqual([opened.json.obsidianSettings?.vaultAdded, opened.json.obsidianSettings?.cliTurnedOn], [false, true])
+  const asked = { vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault() }
+  assert.deepEqual(app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true, startedByThisOpen: true }], 'started plainly, then the link once more through the tool only')
+  assert.deepEqual([app.startsPlain, app.state.vaults[OTHER_VAULT].open], [[], true], 'no other plain start, and the other vault stays flagged open')
+})
 
 test('what open did to Obsidian is said in words: the restart, the process it signalled, and each write to its settings with the backup', needsExchange, async (t) => {
   const world = makeWorld(t)

@@ -55,9 +55,11 @@ import { runObsidianCommandForOracleTests } from '../src/commands/obsidian.mjs'
 import { MINIMUM_APP_VERSION, createQualifiedAdapterFactory, inspectApp, parseAppVersion, qualifyApp, readVersionAnswer } from '../src/runtime/obsidian/app-capability.mjs'
 import { ensureWorkspaceIdentity, protectedRoots, workspaceStateRoot, writeMachineSettings } from '../src/runtime/obsidian/machine-settings.mjs'
 import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
-import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
+import { createPluginDriftObserver } from '../src/runtime/obsidian/plugin-drift.mjs'
+import { PLUGIN_FILES_WAIT_FOR_APP, PLUGIN_FILES_WAIT_NEXT, pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
 import { readServiceRecord, releaseIdentity, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
 import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
+import { OPENING_OUTCOMES, REASON_NEXT, nextStep } from '../src/runtime/obsidian/opening.mjs'
 import { runMaintenanceService } from '../src/runtime/obsidian/service.mjs'
 import { createMaintenanceStateStore } from '../src/runtime/obsidian/state-store.mjs'
 import {
@@ -1426,6 +1428,21 @@ test('a plugin file another writer changes under a publication is a race: the vi
   assert.ok(world.recovered().some((bytes) => bytes.toString() === '/* written meanwhile */\n'), 'the replaced bytes are kept')
 })
 
+test('a view held by a changed plugin or settings file is told which file held it, by whom it may have been changed, and that it is retried, never to close another publisher', () => {
+  for (const reason of ['plugin-file-changed', 'settings-changed']) {
+    const next = nextStep('publisher-conflict', reason)
+    assert.equal(next, REASON_NEXT[reason], reason)
+    assert.notEqual(next, OPENING_OUTCOMES['publisher-conflict'].next, reason)
+    assert.match(next, /retried automatically/, reason)
+    // One change stops a publication, the person's own included, and the reason names only the first file that did:
+    // the step claims neither a program that kept replacing the file nor that no other publisher is involved.
+    assert.match(next, /changed while the view was published, by .*you\b/, reason)
+    assert.doesNotMatch(next, /kept replacing|no other publisher/, reason)
+  }
+  assert.match(REASON_NEXT['plugin-file-changed'], /\.obsidian\/plugins/)
+  assert.match(REASON_NEXT['settings-changed'], /not written over/)
+})
+
 test('a plugin or settings file another program keeps replacing while the publisher opens it is a race of that file, never a person\'s edit, and the notes go on', needsExchange, async (t) => {
   const world = publicationWorld(t)
   assert.equal((await world.publish(pluginViewOf('gen-0001'))).state, 'committed')
@@ -1701,8 +1718,9 @@ function serviceWorld(t) {
     vault: path.join(workspaceRoot, 'vaults', SCOPE),
     source: (relative) => path.join(projectDir, relative),
     freshness: () => createMaintenanceStateStore({ workspaceRoot, workspaceId: WORKSPACE_ID }).readFreshness().scopes.find((entry) => entry.scopeId === SCOPE),
-    async service({ adapterFactory = () => absentAdapter(), appStatus, seams = {} } = {}) {
-      const port = await freePort()
+    // `port`: the listener of an earlier service, which a restart on this machine keeps (its settings name it).
+    async service({ adapterFactory = () => absentAdapter(), appStatus, seams = {}, port: keptPort } = {}) {
+      const port = keptPort ?? await freePort()
       writeServiceSettings({ workspaceRoot, workspaceId: WORKSPACE_ID, settings: { schema: 'atelier-obsidian-service-settings/v1', workspaceId: WORKSPACE_ID, host: '127.0.0.1', port, consent: { grantedAt: new Date(START).toISOString(), ...CONSENT }, updatedAt: new Date(START).toISOString() } })
       const service = await runMaintenanceService({
         loadProject, dataRoot, env, adapterFactory, entryPath: TEST_SERVICE_ENTRY, intervalMs: 60 * 60 * 1000, clock: world.clock,
@@ -1726,7 +1744,8 @@ function serviceWorld(t) {
     async run(argv, { seams }) {
       const out = []
       const exit = await runObsidianCommandForOracleTests({ argv: [...argv, `--project=${configPath}`, `--data-root=${dataRoot}`], seams, env, cwd: projectDir, clock: world.clock, contributions: [], probeTimeoutMs: 1500, stdout: (text) => out.push(text), stderr: () => {} })
-      return { exit, json: JSON.parse(out.join('\n')) }
+      // Without --json, the lines a person reads.
+      return argv.includes('--json') ? { exit, json: JSON.parse(out.join('\n')) } : { exit, lines: out.join('\n').split('\n') }
     },
     // Where the vaults live, decided before the service's first tick: the view's vault is then allocated there, and
     // `world.vault` names that folder.
@@ -2130,7 +2149,97 @@ test('a plugin file that drifted is written again at the service\'s next tick, w
   assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
 })
 
-test('a drifted plugin file never makes a committed view need the app: while the app does not qualify the view stays current, and the file is written once it does', needsExchange, async (t) => {
+test('a drift publishing cannot repair is published once at a service\'s start, and asking about it again writes nothing; a change the person makes later is still seen', needsExchange, async (t) => {
+  if (process.platform === 'win32') return t.skip('a vault root that is a link')
+  // A vault root that is a link never receives the data file: that drift stays whatever is published.
+  const world = serviceWorld(t)
+  const elsewhere = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-linked-root-'))
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(world.workspaceRoot, 'vaults'), { recursive: true, mode: 0o700 })
+  fs.symlinkSync(elsewhere, world.vault)
+  // Every call of the publisher, and the publications among them that wrote through a journal (not one that found the
+  // committed generation standing and returned).
+  let calls = 0
+  let journaled = 0
+  const seams = { publishView: async (input) => { calls += 1; const result = await publishView(input); if (result.alreadyCommitted !== true) journaled += 1; return result } }
+  // After each tick; the service's start is its first tick.
+  const ticks = async (service, count) => { const seen = []; for (let index = 0; index < count; index += 1) { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); seen.push([calls, journaled]) } return seen }
+  const first = await world.service({ seams })
+  // The first publication; the next look asks about the data file it left once, which writes nothing; then nothing.
+  assert.deepEqual(await ticks(first, 4), [[2, 1], [2, 1], [2, 1], [2, 1]])
+  assert.equal(fs.existsSync(path.join(elsewhere, PLUGIN_DATA_PATH)), false)
+  await first.shutdown('restart')
+  // Restarted on the same listener: the start prepares every view, and the committed generation stands; nothing is written.
+  const kept = await world.service({ seams, port: world.port })
+  assert.deepEqual(await ticks(kept, 3), [[3, 1], [3, 1], [3, 1]])
+  await kept.shutdown('restart')
+  // On another listener, the data file the view pins changes with it: one publication, and one ask that writes nothing.
+  const moved = await world.service({ seams })
+  assert.deepEqual(await ticks(moved, 3), [[5, 2], [5, 2], [5, 2]])
+  // A plugin file the person removes afterwards is still written again, once.
+  fs.rmSync(path.join(elsewhere, PLUGIN_DIRECTORY, 'main.js'))
+  assert.deepEqual(await ticks(moved, 2), [[6, 3], [6, 3]])
+  assert.ok(fs.readFileSync(path.join(elsewhere, PLUGIN_DIRECTORY, 'main.js')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))))
+  assert.equal(world.freshness().state, 'current')
+})
+
+// In a vault under the data root, and in one allocated where the workspace decided its vaults live.
+const VAULT_PLACES = [['under the data root', false], ['allocated where the workspace decided', true]]
+
+for (const [place, allocated] of VAULT_PLACES) test(`a plugin path a publication left for the person and the person repaired before the tick ended is written at the next tick (a vault ${place})`, needsExchange, async (t) => {
+  const world = serviceWorld(t)
+  if (allocated) await world.decideLocation(path.join(world.dir, 'Atelier'))
+  const data = path.join(world.vault, PLUGIN_DATA_PATH)
+  let published = 0
+  let afterPublish = null
+  const seams = { publishView: async (input) => { published += 1; const result = await publishView(input); if (afterPublish) { const act = afterPublish; afterPublish = null; act() } return result } }
+  const service = await world.service({ seams })
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return published }
+  await tick()
+  // A folder where the data file goes: left for the person.
+  fs.rmSync(data)
+  fs.mkdirSync(data)
+  await tick()
+  // A new generation leaves it again, and the person removes the folder right after that publication, within the tick.
+  fs.appendFileSync(world.source('harbor/notes/tides.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  afterPublish = () => fs.rmdirSync(data)
+  await tick()
+  assert.equal(fs.existsSync(data), false)
+  await tick()
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE, 'written at the next tick')
+  assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
+  if (allocated) assert.equal(fs.existsSync(path.join(world.workspaceRoot, 'vaults')), false, 'nothing under the data root')
+})
+
+test('a plugin file another writer removes after its view was published, while the tick goes on, is written again at the next tick', needsExchange, async (t) => {
+  // A sync tool that reacts to Atelier's own writes: it removes a plugin file right after the view's publication returns.
+  const world = serviceWorld(t)
+  const folder = path.join(world.vault, PLUGIN_DIRECTORY)
+  let published = 0
+  let afterPublish = null
+  const seams = { publishView: async (input) => { published += 1; const result = await publishView(input); if (afterPublish) { const act = afterPublish; afterPublish = null; act() } return result } }
+  const service = await world.service({ seams })
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return published }
+  assert.equal(await tick(), 1)
+  // A view the drift asked for: main.js changed, the publication repairs it, and it is removed before the tick ends.
+  fs.writeFileSync(path.join(folder, 'main.js'), '/* changed */\n')
+  afterPublish = () => fs.rmSync(path.join(folder, 'main.js'))
+  assert.equal(await tick(), 2)
+  assert.equal(fs.existsSync(path.join(folder, 'main.js')), false)
+  assert.deepEqual([await tick(), await tick()], [3, 3], 'asked about at the next look, and written again once')
+  assert.ok(fs.readFileSync(path.join(folder, 'main.js')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'main.js'))))
+  // A new generation (a change at the sources): styles.css is removed after its publication, before the tick ends.
+  fs.appendFileSync(world.source('harbor/notes/tides.md'), '\nLow water at six.\n')
+  world.advance(1000)
+  afterPublish = () => fs.rmSync(path.join(folder, 'styles.css'))
+  assert.equal(await tick(), 4)
+  assert.deepEqual([await tick(), await tick()], [5, 5])
+  assert.ok(fs.readFileSync(path.join(folder, 'styles.css')).equals(fs.readFileSync(path.join(PLUGIN_SOURCE, 'styles.css'))))
+  assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
+})
+
+test('a drifted plugin file never makes a committed view need the app: while the app does not qualify the view stays current, says the file waits for the app, and the file is written once it does', needsExchange, async (t) => {
   const world = serviceWorld(t)
   let qualifies = true
   let built = 0
@@ -2153,6 +2262,13 @@ test('a drifted plugin file never makes a committed view need the app: while the
   assert.equal(built, before + 1, 'the drift asked for the app once')
   assert.deepEqual([kept.state, kept.generationId, kept.verified], ['current', generation, true], 'the committed view stays current')
   assert.equal(fs.existsSync(data), false, 'nothing was published without a qualified app')
+  // Current, and said so: the reason is not the one of a view whose plugin files are all there, and the plugin line shows the file waiting.
+  assert.equal(kept.reason, PLUGIN_FILES_WAIT_FOR_APP)
+  const waiting = await world.run(['status', '--json'], { seams: QUIET_SEAMS })
+  assert.deepEqual([waiting.json.scopes[0].outcome, waiting.json.scopes[0].reason, waiting.json.scopes[0].plugin.files, waiting.json.scopes[0].plugin.next], ['current', PLUGIN_FILES_WAIT_FOR_APP, 'waits-for-app', PLUGIN_FILES_WAIT_NEXT])
+  const lines = (await world.run(['status'], { seams: QUIET_SEAMS })).lines
+  assert.ok(lines.some((line) => line.startsWith(`view ${SCOPE}: current (${PLUGIN_FILES_WAIT_FOR_APP})`) && line.endsWith('; plugin files wait for the app')), lines.join('\n'))
+  assert.ok(lines.includes(`  Next for the plugin: ${PLUGIN_FILES_WAIT_NEXT}`), lines.join('\n'))
   const again = await tick()
   assert.deepEqual([again.state, built], ['current', before + 1], 'not asked again before the retry is due')
 
@@ -2161,6 +2277,140 @@ test('a drifted plugin file never makes a committed view need the app: while the
   world.advance(31_000)
   const repaired = await tick()
   assert.deepEqual([repaired.state, repaired.generationId], ['current', generation])
+  assert.notEqual(repaired.reason, PLUGIN_FILES_WAIT_FOR_APP)
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE)
+  assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.files, undefined, 'nothing waits once the file is written')
+})
+
+test('a vault root changed during the tick is a new look: a data file left because of the root is asked about at the next tick', (t) => {
+  if (process.platform === 'win32') return t.skip('permission bits')
+  // The observer alone, with the calls the service makes: observe, the tick (`during`), settle. A committed generation is
+  // written the way the store writes one: the manifest, and the pointer that names it by digest.
+  const world = (label) => {
+    const workspaceRoot = fs.mkdtempSync(path.join(TMP, `atelier-drift-root-${label}-`))
+    t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+    const vault = path.join(workspaceRoot, 'vaults', SCOPE)
+    const manifests = path.join(workspaceRoot, 'state', 'manifests', SCOPE)
+    fs.mkdirSync(path.join(vault, PLUGIN_DIRECTORY), { recursive: true })
+    fs.mkdirSync(manifests, { recursive: true })
+    const main = `${PLUGIN_DIRECTORY}/main.js`
+    // `written`: the pinned files the publication wrote; the data file is left, as under a root that is not private.
+    const commit = (generationId, written = { [main]: 'main-1' }) => {
+      for (const [relative, text] of Object.entries(written)) fs.writeFileSync(path.join(vault, relative), text)
+      const pins = { [main]: 'main-1', [PLUGIN_DATA_PATH]: 'data-1' }
+      const manifest = Buffer.from(JSON.stringify({ generationId, ext: { [OBSIDIAN_EXT_KEY]: { settings: { pluginOwned: { files: Object.entries(pins).map(([relative, text]) => ({ path: relative, digest: digest(Buffer.from(text)) })) } } } } }))
+      fs.writeFileSync(path.join(manifests, `${generationId}.json`), manifest)
+      fs.writeFileSync(path.join(manifests, 'current.json'), JSON.stringify({ workspaceId: WORKSPACE_ID, scopeId: SCOPE, manifestFile: `${generationId}.json`, manifestDigest: digest(manifest) }))
+    }
+    const observer = createPluginDriftObserver({ workspaceRoot, workspaceId: WORKSPACE_ID })
+    const tick = (during) => { const asked = observer.observe([SCOPE]); during?.(); observer.settle([SCOPE]); return asked.length }
+    return { vault, commit, tick }
+  }
+  // A new generation (a note changed; the plugin pins did not), and the person makes the root private after its publication.
+  const one = world('new-generation')
+  one.commit('gen-1')
+  fs.chmodSync(one.vault, 0o755)
+  one.tick()
+  one.tick()
+  assert.deepEqual([one.tick(() => { one.commit('gen-2', {}); fs.chmodSync(one.vault, 0o700) }), one.tick(), one.tick()], [0, 1, 0])
+  // A tick the drift asked for (the root changed, still not private), and the root made private within it.
+  const two = world('asked')
+  two.commit('gen-1')
+  fs.chmodSync(two.vault, 0o755)
+  two.tick()
+  two.tick()
+  fs.chmodSync(two.vault, 0o750)
+  assert.deepEqual([two.tick(() => fs.chmodSync(two.vault, 0o700)), two.tick(), two.tick()], [1, 1, 0])
+  // Control: the same repair between ticks.
+  const three = world('between')
+  three.commit('gen-1')
+  fs.chmodSync(three.vault, 0o755)
+  three.tick()
+  three.tick()
+  fs.chmodSync(three.vault, 0o700)
+  assert.deepEqual([three.tick(), three.tick()], [1, 0])
+})
+
+for (const [place, allocated] of VAULT_PLACES) test(`a plugin file another writer brings back to its old bytes after a publication that changed its pin, while the tick goes on, is written again at the next tick (a vault ${place})`, needsExchange, async (t) => {
+  // A restart on another listener changes the data file's pin; a sync tool whose older copy wins restores the old file
+  // right after the publication returns.
+  const world = serviceWorld(t)
+  if (allocated) await world.decideLocation(path.join(world.dir, 'Atelier'))
+  const data = path.join(world.vault, PLUGIN_DATA_PATH)
+  const first = await world.service()
+  assert.ok((await first.tickNow()).ok)
+  const oldBytes = fs.readFileSync(data)
+  const oldPort = world.port
+  await first.shutdown('restart')
+  let published = 0
+  let afterPublish = () => fs.writeFileSync(data, oldBytes)
+  const seams = { publishView: async (input) => { published += 1; const result = await publishView(input); if (afterPublish) { const act = afterPublish; afterPublish = null; act() } return result } }
+  const again = await world.service({ seams })
+  assert.notEqual(world.port, oldPort)
+  const tick = async () => { const outcome = await again.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return published }
+  assert.deepEqual([await tick(), await tick(), await tick()], [2, 2, 2], 'the start publishes; the next look asks about the old file, which is written again once')
+  assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).channel.port, world.port, 'the data file names the listener of the service now running')
+  assert.deepEqual([world.freshness().state, world.freshness().verified], ['current', true])
+  if (allocated) assert.equal(fs.existsSync(path.join(world.workspaceRoot, 'vaults')), false, 'nothing under the data root')
+})
+
+test('a drift publishing would only leave for the person again never waits for the app: the view stays current with its plain reason, and the app is not asked', needsExchange, async (t) => {
+  if (process.platform === 'win32') return t.skip('a vault root that is a link; permission bits')
+  let qualifies = true
+  let built = 0
+  const adapterFactory = () => {
+    built += 1
+    if (!qualifies) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'the installed Obsidian does not qualify', { reason: 'below-minimum-version' })
+    return absentAdapter()
+  }
+  const tick = async (service) => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return world.freshness() }
+  // A vault root that is a link never receives the data file.
+  const world = serviceWorld(t)
+  const elsewhere = fs.mkdtempSync(path.join(TMP, 'atelier-plugin-linked-root-'))
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(world.workspaceRoot, 'vaults'), { recursive: true, mode: 0o700 })
+  fs.symlinkSync(elsewhere, world.vault)
+  const first = await world.service({ adapterFactory })
+  assert.equal((await tick(first)).state, 'current')
+  assert.equal(fs.existsSync(path.join(elsewhere, PLUGIN_DATA_PATH)), false)
+  await first.shutdown('restart')
+  // Restarted while the app does not qualify: the start prepares the view again, and the committed generation stands.
+  qualifies = false
+  const before = built
+  const again = await world.service({ adapterFactory, port: world.port })
+  const kept = await tick(again)
+  assert.deepEqual([kept.state, kept.reason, built], ['current', 'verified-by-read-back', before], 'no wait for the app for a file it would never write')
+  assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.files, undefined)
+
+})
+
+test('a folder where the plugin\'s data file goes, while the app does not qualify, is left for the person without waiting for the app', needsExchange, async (t) => {
+  let qualifies = true
+  let built = 0
+  const adapterFactory = () => {
+    built += 1
+    if (!qualifies) throw new ObsidianMaintenanceRefusal('app-version-unsupported', 'the installed Obsidian does not qualify', { reason: 'below-minimum-version' })
+    return absentAdapter()
+  }
+  const world = serviceWorld(t)
+  const service = await world.service({ adapterFactory })
+  const tick = async () => { const outcome = await service.tickNow(); assert.ok(outcome.ok, JSON.stringify(outcome)); return world.freshness() }
+  assert.equal((await tick()).state, 'current')
+  const data = path.join(world.vault, PLUGIN_DATA_PATH)
+  qualifies = false
+  fs.rmSync(data)
+  fs.mkdirSync(data)
+  const counted = built
+  const unsafe = await tick()
+  assert.deepEqual([unsafe.state, unsafe.reason, built], ['current', 'verified-by-read-back', counted], 'left for the person: no wait for the app')
+  assert.ok(fs.statSync(data).isDirectory())
+  // Repaired by the person: a drift again, which waits for the app while it does not qualify, and is written once it does.
+  fs.rmdirSync(data)
+  const waiting = await tick()
+  assert.deepEqual([waiting.state, waiting.reason], ['current', PLUGIN_FILES_WAIT_FOR_APP])
+  qualifies = true
+  world.advance(31_000)
+  await tick()
   assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE)
 })
 
@@ -2257,6 +2507,9 @@ test('a change the person makes to the list while a publication runs is never wr
   world.advance(1000)
   assert.ok((await service.tickNow()).ok)
   assert.deepEqual([world.freshness().state, world.freshness().reason], ['publisher-conflict', 'settings-changed'], 'held: the list changed under the publication')
+  // Status names the settings file as the cause, not another publisher or an editor.
+  const held = (await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0]
+  assert.deepEqual([held.outcome, held.reason, held.next], ['publisher-conflict', 'settings-changed', REASON_NEXT['settings-changed']])
   assert.equal(fs.readFileSync(vault.list, 'utf8'), '[]', 'the entry is not written back over the change')
   assert.deepEqual(vault.choice(), ['on', 'entry-confirmed'], 'nothing is decided from a change seen in passing')
 

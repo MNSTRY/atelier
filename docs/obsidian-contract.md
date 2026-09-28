@@ -1048,7 +1048,13 @@ plainly (`open -b md.obsidian`), which reopens every vault the list flags open
 tool once the app itself answers the tool (`appAnswered`: a version or one of
 the app's own lines; the tool's "unable to find Obsidian" while the app starts
 does not count). A link is never handed to the operating system for an app
-this launch started, since that would reach it while it starts. An app started with a link would delete the
+this launch started, since that would reach it while it starts. A link the
+started app did not take is left to it when the list flags the vault open,
+since the plain start reopens it; for a listed vault that is closed, which a
+plain start does not reopen, the link is handed once more, through the tool
+only (this launch started the app), one wait round later, before `open`
+answers `launch-failed` /
+`app-did-not-answer-for-this-vault`. An app started with a link would delete the
 reopen flag of every other vault without a window (1.13.7, checked on an
 isolated instance). On Linux a quit app is started with the link, a known
 limit. With its command line turned off the app answers every other command
