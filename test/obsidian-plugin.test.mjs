@@ -55,6 +55,7 @@ import { runObsidianCommandForOracleTests } from '../src/commands/obsidian.mjs'
 import { MINIMUM_APP_VERSION, createQualifiedAdapterFactory, inspectApp, parseAppVersion, qualifyApp, readVersionAnswer } from '../src/runtime/obsidian/app-capability.mjs'
 import { ensureWorkspaceIdentity, protectedRoots, workspaceStateRoot, writeMachineSettings } from '../src/runtime/obsidian/machine-settings.mjs'
 import { readPluginChoice } from '../src/runtime/obsidian/plugin-choice.mjs'
+import { createPluginDriftObserver } from '../src/runtime/obsidian/plugin-drift.mjs'
 import { PLUGIN_FILES_WAIT_FOR_APP, PLUGIN_FILES_WAIT_NEXT, pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../src/runtime/obsidian/plugin-presence.mjs'
 import { readServiceRecord, releaseIdentity, writeServiceSettings } from '../src/runtime/obsidian/service-record.mjs'
 import { ObsidianMaintenanceRefusal } from '../src/runtime/obsidian/errors.mjs'
@@ -2274,6 +2275,55 @@ test('a drifted plugin file never makes a committed view need the app: while the
   assert.notEqual(repaired.reason, PLUGIN_FILES_WAIT_FOR_APP)
   assert.equal(JSON.parse(fs.readFileSync(data, 'utf8')).scopeId, SCOPE)
   assert.equal((await world.run(['status', '--json'], { seams: QUIET_SEAMS })).json.scopes[0].plugin.files, undefined, 'nothing waits once the file is written')
+})
+
+test('a vault root changed during the tick is a new look: a data file left because of the root is asked about at the next tick', (t) => {
+  if (process.platform === 'win32') return t.skip('permission bits')
+  // The observer alone, with the calls the service makes: observe, the tick (`during`), settle. A committed generation is
+  // written the way the store writes one: the manifest, and the pointer that names it by digest.
+  const world = (label) => {
+    const workspaceRoot = fs.mkdtempSync(path.join(TMP, `atelier-drift-root-${label}-`))
+    t.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }))
+    const vault = path.join(workspaceRoot, 'vaults', SCOPE)
+    const manifests = path.join(workspaceRoot, 'state', 'manifests', SCOPE)
+    fs.mkdirSync(path.join(vault, PLUGIN_DIRECTORY), { recursive: true })
+    fs.mkdirSync(manifests, { recursive: true })
+    const main = `${PLUGIN_DIRECTORY}/main.js`
+    // `written`: the pinned files the publication wrote; the data file is left, as under a root that is not private.
+    const commit = (generationId, written = { [main]: 'main-1' }) => {
+      for (const [relative, text] of Object.entries(written)) fs.writeFileSync(path.join(vault, relative), text)
+      const pins = { [main]: 'main-1', [PLUGIN_DATA_PATH]: 'data-1' }
+      const manifest = Buffer.from(JSON.stringify({ generationId, ext: { [OBSIDIAN_EXT_KEY]: { settings: { pluginOwned: { files: Object.entries(pins).map(([relative, text]) => ({ path: relative, digest: digest(Buffer.from(text)) })) } } } } }))
+      fs.writeFileSync(path.join(manifests, `${generationId}.json`), manifest)
+      fs.writeFileSync(path.join(manifests, 'current.json'), JSON.stringify({ workspaceId: WORKSPACE_ID, scopeId: SCOPE, manifestFile: `${generationId}.json`, manifestDigest: digest(manifest) }))
+    }
+    const observer = createPluginDriftObserver({ workspaceRoot, workspaceId: WORKSPACE_ID })
+    const tick = (during) => { const asked = observer.observe([SCOPE]); during?.(); observer.settle([SCOPE]); return asked.length }
+    return { vault, commit, tick }
+  }
+  // A new generation (a note changed; the plugin pins did not), and the person makes the root private after its publication.
+  const one = world('new-generation')
+  one.commit('gen-1')
+  fs.chmodSync(one.vault, 0o755)
+  one.tick()
+  one.tick()
+  assert.deepEqual([one.tick(() => { one.commit('gen-2', {}); fs.chmodSync(one.vault, 0o700) }), one.tick(), one.tick()], [0, 1, 0])
+  // A tick the drift asked for (the root changed, still not private), and the root made private within it.
+  const two = world('asked')
+  two.commit('gen-1')
+  fs.chmodSync(two.vault, 0o755)
+  two.tick()
+  two.tick()
+  fs.chmodSync(two.vault, 0o750)
+  assert.deepEqual([two.tick(() => fs.chmodSync(two.vault, 0o700)), two.tick(), two.tick()], [1, 1, 0])
+  // Control: the same repair between ticks.
+  const three = world('between')
+  three.commit('gen-1')
+  fs.chmodSync(three.vault, 0o755)
+  three.tick()
+  three.tick()
+  fs.chmodSync(three.vault, 0o700)
+  assert.deepEqual([three.tick(), three.tick()], [1, 0])
 })
 
 test('a plugin file another writer brings back to its old bytes after a publication that changed its pin, while the tick goes on, is written again at the next tick', needsExchange, async (t) => {

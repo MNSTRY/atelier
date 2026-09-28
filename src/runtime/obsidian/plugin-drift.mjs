@@ -96,14 +96,14 @@ export function createPluginDriftObserver({ workspaceRoot, workspaceId }) {
     // After a tick. A view this tick published (one the last observe asked for, one whose committed generation
     // changed since the last look, or one never looked at before) had its plugin files written or left for the person
     // by its publisher. Of what the disk shows now, only what that publication could not change is taken as seen,
-    // without asking: a file as it pins it, or one that holds what it held before the tick under the same pin. So a
-    // drift publishing cannot repair (the data file of a vault root that is a link, say) is not asked about again
-    // once it was asked about under its pin. Anything else is not taken as seen, and the next look asks about it: a
-    // file another writer removed or changed after the publication, while the tick went on, or brought back to what
-    // it held under a pin the tick replaced, and a file the publication left for the person, which the person may
-    // have repaired before the tick ended. Asking about a file that is still left costs a preparation and nothing
-    // more: the publisher does not publish a committed generation again for it (pluginFilesDrifted). Any other view
-    // keeps its last look.
+    // without asking: a file as it pins it, or one that holds what it held before the tick under the same pin and the
+    // same vault root. So a drift publishing cannot repair (the data file of a vault root that is a link, say) is not
+    // asked about again once it was asked about under its pin. Anything else is not taken as seen, and the next look
+    // asks about it: a file another writer removed or changed after the publication, while the tick went on, or
+    // brought back to what it held under a pin the tick replaced; a file the publication left for the person, which
+    // the person may have repaired before the tick ended; and any file, when the vault root changed during the tick.
+    // Asking about a file that is still left writes no vault file: the publisher does not publish a committed
+    // generation again for it (pluginFilesDrifted). Any other view keeps its last look.
     settle(scopeIds) {
       for (const scopeId of scopeIds) {
         const seen = look(scopeId)
@@ -113,7 +113,9 @@ export function createPluginDriftObserver({ workspaceRoot, workspaceId }) {
         // Keyed by path and pin: what a file held under a pin this tick replaced says nothing about the new one.
         const key = (file) => `${file.path}\u0000${file.digest}`
         const before = new Map((last?.files ?? []).map((file) => [key(file), file.state]))
-        const files = seen.files.map((file) => (!seen.drifted(file) || before.get(key(file)) === file.state ? file : { ...file, state: NOT_SEEN }))
+        // And only under the same vault root: a root made private during the tick changes what the publisher leaves.
+        const sameRoot = last !== undefined && last.root === seen.root
+        const files = seen.files.map((file) => (!seen.drifted(file) || (sameRoot && before.get(key(file)) === file.state) ? file : { ...file, state: NOT_SEEN }))
         looked.set(scopeId, { root: seen.root, files, manifest: seen.manifest })
       }
       asked = new Set()
