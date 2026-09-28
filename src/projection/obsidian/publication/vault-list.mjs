@@ -109,13 +109,14 @@ const currentUid = () => (typeof process.getuid === 'function' ? process.getuid(
 // { ok: false, code, message }. The user-data directory and the file must be
 // this user's own, a real directory and a regular file; the file must be a
 // JSON object whose `vaults`, when present, is an object. A missing directory
-// or file means Obsidian has not run on this account.
+// or file means Obsidian has not run on this account, or has shown only its
+// starter window, which writes no list: that refusal names `userDataDir`.
 export function readObsidianSettings({ userDataDir, uid = currentUid() } = {}) {
   if (typeof userDataDir !== 'string' || !path.isAbsolute(userDataDir)) return refused('obsidian-settings-location-unknown', 'where Obsidian keeps its settings on this system is not known')
   const owned = (stat) => uid === null || stat.uid === uid
   let directory
   try { directory = fs.lstatSync(userDataDir) } catch (error) {
-    if (error.code === 'ENOENT') return refused('obsidian-settings-missing', 'Obsidian has no settings directory on this account; it has not run here')
+    if (error.code === 'ENOENT') return { ...refused('obsidian-settings-missing', 'Obsidian has no settings directory on this account; it has not run here'), userDataDir }
     return refused('obsidian-settings-unreadable', 'the Obsidian settings directory cannot be read')
   }
   if (directory.isSymbolicLink() || !directory.isDirectory()) return refused('obsidian-settings-unsafe', 'the Obsidian settings directory is a link or not a directory')
@@ -123,7 +124,7 @@ export function readObsidianSettings({ userDataDir, uid = currentUid() } = {}) {
   const file = path.join(userDataDir, OBSIDIAN_SETTINGS_FILE)
   let leaf
   try { leaf = fs.lstatSync(file) } catch (error) {
-    if (error.code === 'ENOENT') return refused('obsidian-settings-missing', 'Obsidian has no settings file on this account; it has not run here')
+    if (error.code === 'ENOENT') return { ...refused('obsidian-settings-missing', 'Obsidian has no settings file on this account; it has not run here'), userDataDir }
     return refused('obsidian-settings-unreadable', 'the Obsidian settings file cannot be read')
   }
   if (leaf.isSymbolicLink() || !leaf.isFile()) return refused('obsidian-settings-unsafe', 'the Obsidian settings file is a link or not a regular file')

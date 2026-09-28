@@ -80,8 +80,11 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
                                        Install the login item: maintenance starts when you log in. macOS and Linux.
   service unit --remove                Remove the login item; the consent goes back to the service alone, and the
                                        service is started for this session only.
-  open [--scope ID] [--consent-actor ID] [--allow-stale] [--adapter=${PRODUCTION_ADAPTER}]
+  open [--scope ID] [--consent-actor ID] [--allow-stale] [--restart-obsidian] [--wait-ms MS] [--adapter=${PRODUCTION_ADAPTER}]
                                        Start or reconnect maintenance, verify the view, add it to Obsidian and open it.
+                                       --restart-obsidian lets open quit a running Obsidian it cannot reach (its command
+                                       line off, or no vault open), add the vault and start it again; never implied.
+                                       --wait-ms bounds the wait for maintenance's tick.
   uninstall                            Stop maintenance and remove the login item. Vaults, private state, the project
                                        file and Obsidian's vault list are kept, and where each is is printed.
   plugin show [--scope ID]             Whether Atelier's plugin is on in a view's vault, and whether it holds it open.
@@ -91,6 +94,9 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
                                        is replaced first).
 
 Reaching the installed app needs --adapter=${PRODUCTION_ADAPTER} once for a workspace; it is remembered after that.
+Obsidian's own settings file (obsidian.json) is written only while no Obsidian runs: open adds the view's vault to its
+list, turns its command line on (cli: true), and creates the file for an Obsidian that never started; every write is
+shown in open's answer, with the backup of the file as it was.
 The first start of the maintenance service records who allows it: --consent-actor ID, or, for a person at a terminal,
 their account's name; service unit --install records who allows it to start at login the same way (at a terminal, the
 actor already recorded is kept). --no-input, --json, a CI environment or ATELIER_NONINTERACTIVE=1 mean no person is at a terminal.
@@ -111,8 +117,10 @@ Pending edits additionally report ${APPLY_UNAVAILABLE} while no apply operation 
 Minimum Obsidian version: ${MINIMUM_APP_VERSION}.
 Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer is not success.`
 
-const FLAGS = Object.freeze({
-  json: 'flag', 'allow-stale': 'flag', print: 'flag', install: 'flag', remove: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value',
+// Every option of the command. `atelier obsidian --help` names each one but `help` and `project-config` (the older
+// spelling of `project`); a test holds it to that.
+export const FLAGS = Object.freeze({
+  json: 'flag', 'allow-stale': 'flag', 'restart-obsidian': 'flag', print: 'flag', install: 'flag', remove: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value',
   'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value',
 })
 
@@ -195,6 +203,28 @@ function parse(argv) {
     flags[name] = value
   }
   return { positionals, flags }
+}
+
+// What `open` did to the person's Obsidian, in words: a restart they asked for, and every write to its settings file.
+const STATE_WORDS = Object.freeze({ 'cli-turned-off': 'its command line was turned off', 'no-vault-open': 'it had no vault open' })
+function restartLines(restart) {
+  if (restart === undefined || restart === null) return []
+  const why = STATE_WORDS[restart.state] ?? restart.state
+  const copy = restart.settingsCopy && restart.signalled ? [`  A copy of Obsidian's settings, taken just before the first signal, is kept in ${restart.settingsCopy}.`] : []
+  const asked = restart.signals === 2 ? `it was sent SIGTERM twice (process ${restart.pid}), and has not gone` : `it was asked to quit (SIGTERM to process ${restart.pid}) and has not`
+  if (restart.quit !== true) return [`Obsidian: not restarted (${restart.reason}${restart.detail ? `: ${restart.detail}` : ''}); ${restart.signalled ? asked : 'it was not asked to quit'}.`, ...copy]
+  const quit = !restart.signalled ? 'already gone'
+    : restart.signals === 2 ? `quit: SIGTERM to its main process, ${restart.pid}, closed its windows, and a second SIGTERM ended that process, left without a window, at once, without its quit handlers`
+      : `quit (SIGTERM to its main process, ${restart.pid})`
+  return [`Obsidian: restarted as you asked, because ${why}: ${quit}; ${restart.startedAgain === true ? 'then started again plainly, which reopens the vaults it had open' : restart.startedAgain === false ? 'it could not be started again: start it yourself' : 'not started again yet'}.`, ...copy]
+}
+function obsidianSettingsLines(settings) {
+  if (settings === undefined || settings === null) return []
+  const file = settings.file ?? 'obsidian.json'
+  const what = settings.created
+    ? `created ${file}${settings.directoryCreated ? ' (and its folder, private to you)' : ''}, because Obsidian never started on this account: this vault flagged open, and the command line on (cli: true)`
+    : [settings.vaultAdded ? `added this vault to the vault list in ${file}, flagged open` : null, settings.cliTurnedOn ? `turned the command line on (cli: true)${settings.vaultAdded ? '' : ` in ${file}`}` : null].filter(Boolean).join('; ')
+  return [`Obsidian's settings, written while it was quit: ${what}.`, ...(settings.backupPath ? [`  The file as it was is kept in ${settings.backupPath}.`] : [])]
 }
 
 const isTyped = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal
@@ -340,7 +370,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       return { ...entry, entryPath: plan?.program.entry ?? record.program.entry, loginItem: loginItemStarter({ workspace, manager, record, plan, clock }) }
     }
     const appSeams = async () => {
-      if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher, registry: seams.registry }
+      if (seams !== null) return { appProbe: seams.appProbe, launcher: seams.launcher, registry: seams.registry, quitter: seams.quitter ?? null }
       chooseAdapter()
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
@@ -758,7 +788,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const result = await openScopeForOracleTests({
           ...lifecycle, ...app,
           appProbe: typeof appProbe?.inspect === 'function' && typeof appProbe?.vaultState === 'function' ? withPluginReportedVersion(appProbe, async () => { const scopeId = requested(); return scopeId === null ? null : pluginOf(scopeId) }) : appProbe,
-          service: seam, scopeId: flags.scope, consent: consent.consent, allowStale: flags['allow-stale'] === true, extensions: registry.extensions,
+          service: seam, scopeId: flags.scope, consent: consent.consent, allowStale: flags['allow-stale'] === true, restartApp: flags['restart-obsidian'] === true, extensions: registry.extensions,
           ...(flags['wait-ms'] === undefined ? {} : { tickTimeoutMs: Number(flags['wait-ms']) || undefined }), ...(options.open ?? {}),
         }, openingRules, lifecycleRules)
         const recorded = consentRecorded(consent)
@@ -770,7 +800,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
           exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
           human: [
             `${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []),
-            ...loginItemLines(result.service?.loginItem), ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : []),
+            ...loginItemLines(result.service?.loginItem), ...restartLines(result.restart), ...obsidianSettingsLines(result.obsidianSettings),
+            ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : []),
             ...rememberedLines({ adapterRemembered, consent: recorded }),
           ],
         }
@@ -863,6 +894,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // One option table serves every operation. No built-in operation has a use for an actor, and a contributed one takes
     // it only when it declares so (`options: ['actor']`); the apply operation then decides which of its verbs takes it.
     if (flags.actor !== undefined && !(Array.isArray(contributed?.options) && contributed.options.includes('actor'))) refuse('usage', '--actor belongs to `apply run`; this operation does not take it')
+    // Stopping the person's app is asked for one run of `open`, by name, and by nothing else.
+    if (flags['restart-obsidian'] === true && operationName !== 'open') refuse('usage', '--restart-obsidian belongs to `open`; this operation does not take it')
     const result = contributed !== null
       ? await contributed.run({ args: positionals.slice(1), flags: { ...flags }, registry, loadProject, dataRoot, env, platform, clock, readable, writable })
       : await operations[operationName]()

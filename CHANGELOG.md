@@ -144,6 +144,38 @@
   (`real-login-item-under-test`) and when HOME is not the account's own home
   directory (`login-item-home-mismatch`), since launchd and systemd register a
   unit in the account's real session whatever HOME says.
+- `atelier obsidian open` gets through the Obsidian states it used to stop
+  at. For an Obsidian that is installed and never started (no
+  `obsidian.json`), and only while the process table shows that no Obsidian
+  runs, it creates the settings file with the view's vault flagged open and
+  the command line on, exclusively (a file the app wrote first is kept), in a
+  settings folder made private to you when it is missing; Obsidian then opens
+  the vault at a plain start (`registration.how: created-settings`). Whenever
+  it writes Obsidian's vault list with the app quit, it also turns the
+  command line on (`cli: true`) in the same guarded write, with the backup of
+  the file as it was; a listed vault whose switch is off is written for the
+  switch alone. With `--restart-obsidian`, a running Obsidian that cannot be
+  reached (its command line off, or no vault open and the view's vault not in
+  its list) is quit with SIGTERM to its proven main process only, the vault
+  and the switch are written once it has gone, and it is started again
+  plainly, reopening the vaults it had open (macOS only). Without the flag,
+  those states answer `app-cli-unavailable` / `cli-turned-off` and
+  `app-version-unsupported` / `no-vault-open`, naming it. The flag is never
+  implied and every other operation refuses it. Every write and the restart
+  are shown in the answer (`obsidianSettings`, `restart`). Before any signal,
+  `open` checks, reading only, that the write can succeed (otherwise it
+  answers that refusal and leaves Obsidian running; an Obsidian at its
+  starter window with no `obsidian.json` yet is the create case) and, right
+  before the first signal, keeps a copy of `obsidian.json` that the same
+  run's write does not prune. On macOS the main process can stay after the first
+  SIGTERM, with its windows closed; Electron handles only the first SIGTERM as
+  a quit, and a second one ends the process at once, without its quit
+  handlers. `open` sends that second one only when the same process has
+  stayed alone, with no window or helper, at two readings at least 5 seconds
+  apart; never a third, and never another kind. `atelier obsidian --help` names every option of the
+  command, `--wait-ms` included. See "What `open` does in each state of
+  Obsidian" in `docs/obsidian.md` and "Obsidian's vault list" in
+  `docs/obsidian-contract.md`.
 
 ### Changed
 
@@ -220,6 +252,11 @@
 
 ### Fixed
 
+- `atelier obsidian open` with a view the maintenance service did not publish
+  because Obsidian's command line is off now answers `app-cli-unavailable` /
+  `cli-turned-off` with its next step, instead of the view's own
+  `not-prepared` or `stale-readable`: such a view counts as one the app kept
+  from publication, which `open` publishes once the app holds the vault.
 - `atelier obsidian service start` replaces a maintenance service of an
   earlier release still running after an upgrade, as `open` does (stopped
   through its own listener, the installed release started under the consent
