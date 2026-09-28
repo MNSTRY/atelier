@@ -1,0 +1,12 @@
+// Generated from contracts. Run node scripts/generate-evidence-navigation.mjs.
+/** @typedef {{type: (string), version: (string), value: (string), ext?: ({})}} Selector */
+/** @typedef {{owner: (string), objectId: (string), revision: (string), selector: (Selector), contentDigest: (string), ext?: ({})}} EvidenceRef */
+/** @typedef {{id: (string), version: (string), ext?: ({})}} Capability */
+/** @typedef {{schema: ("atelier-evidence-navigation-profile@v1"), id: (string), revision: (string), protocol: ("atelier-evidence-navigation@v1"), operations: (Array<("searchEvidence"|"getEvidence"|"followEvidence"|"readSynthesis"|"compareEvidence")>), requiredCapabilities: (Array<(Capability)>), ext?: ({}), contractVersion?: ("1.0.0")}} Profile */
+/** @typedef {{schema: ("atelier-evidence-navigation-host@v1"), protocols: (Array<(string)>), operations: (Array<("searchEvidence"|"getEvidence"|"followEvidence"|"readSynthesis"|"compareEvidence")>), capabilities: (Array<(Capability)>), ext?: ({}), contractVersion?: ("1.0.0")}} HostCapabilities */
+/** @typedef {{reference: (EvidenceRef), sourceFamily: (string), assessmentRef: ((string)|(null)), ext?: ({})}} EvidenceLink */
+/** @typedef {{from: ((string)|(null)), until: ((string)|(null)), ext?: ({})}} ValidInterval */
+/** @typedef {{kind: ("none"|"rule"|"member"|"reviewer"), reference: ((string)|(null)), ext?: ({})}} AcceptanceAuthority */
+/** @typedef {{schema: ("atelier-evidence-claim@v1"), claimId: (string), revision: (string), ownerRecordRef: (EvidenceRef), kind: ("observation"|"attributed-statement"|"interpretation"|"stated-preference"|"inferred-preference"|"adopted-guidance-reference"|"unclassified-legacy"), subjectRef: (string), recorderRef: (string), content: (string), eventTime: ((string)|(null)), recordedAt: ((string)|(null)), validInterval: (ValidInterval), support: (Array<(EvidenceLink)>), counterevidence: (Array<(EvidenceLink)>), reviewStatus: ("unreviewed"|"proposed"|"reviewed"|"accepted-in-scope"|"disputed"|"rejected"), acceptanceAuthority: (AcceptanceAuthority), currency: ("current"|"superseded"|"stale"|"withdrawn-from-use"|"unknown"), scopeRef: (string), usePolicyRef: (string), ext?: ({}), contractVersion?: ("1.0.0")}} Claim */
+/** @typedef {{schema: ("atelier-evidence-snapshot@v1"), reference: (EvidenceRef), currency: ("current"|"superseded"|"stale"|"withdrawn-from-use"|"unknown"), dependencies: (Array<(EvidenceRef)>), validUntil: ((string)|(null)), ext?: ({}), contractVersion?: ("1.0.0")}} Snapshot */
+export {}
