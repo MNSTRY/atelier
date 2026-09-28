@@ -2,6 +2,7 @@ import { createHash, randomBytes as cryptoRandomBytes, timingSafeEqual } from 'n
 import fs from 'node:fs'
 import path from 'node:path'
 import { atomicReplacePrivateText, ensureContainedPrivateDirectory, readRegularTextNoFollow, realPathAsStored } from '../../project/private-state.mjs'
+import { assertAllocatedFolder, vaultRootFor } from '../../projection/obsidian/recovery/store.mjs'
 import {
   PLUGIN_BEARER, PLUGIN_CHALLENGE_WINDOW_MS, PLUGIN_CHANNEL_PROTOCOL, PLUGIN_HANDSHAKE_TTL_MS, PLUGIN_LEASE_TTL_MS, PLUGIN_MAX_PENDING_HANDSHAKES_PER_SCOPE, PLUGIN_MAX_SESSION_AGE_MS, PLUGIN_MAX_SESSIONS_PER_SCOPE,
   PLUGIN_RENEW_INTERVAL_MS, PLUGIN_STATUS_SCHEMA, pluginClientProof, pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof,
@@ -158,9 +159,16 @@ export function createPluginChannelForOracleTests({
   onSessionOpened = () => {},
 }, primitives = PLUGIN_CHANNEL_PRIMITIVES) {
   const rules = { ...PLUGIN_CHANNEL_PRIMITIVES, ...primitives }
-  // As the file system stores the path, as the store registers the vault in the app (realPathAsStored): a data root given
-  // in another letter case names the same vault.
-  const vaultRootOf = (scopeId) => { try { return realPathAsStored(path.join(workspaceRoot, 'vaults', segment(scopeId))) } catch { return null } }
+  // The view's vault wherever it is (vaultRootFor: allocated for the view, else under the data root), and an allocated one
+  // only while it is the folder recorded; as the file system stores the path, as the store registers the vault in the app
+  // (realPathAsStored): a data root given in another letter case names the same vault.
+  const vaultRootOf = (scopeId) => {
+    try {
+      const found = vaultRootFor({ workspaceRoot, workspaceId, scopeId })
+      if (found.allocation !== null) assertAllocatedFolder(found.allocation)
+      return realPathAsStored(found.path)
+    } catch { return null }
+  }
   const keyDigestOf = (bearer) => createHash('sha256').update(bearer, 'utf8').digest()
   const handshakes = new Map()
   const pruneHandshakes = () => { const at = now(); for (const [handshakeId, handshake] of handshakes) if (handshake.expiresAt <= at) handshakes.delete(handshakeId) }

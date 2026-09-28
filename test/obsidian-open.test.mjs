@@ -110,14 +110,16 @@ const { ENGINE_PRIMITIVES, createMaintenanceEngineForOracleTests } = await impor
 const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createObsidianRegistry } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { LIFECYCLE_PRIMITIVES, releaseStanding, requestServiceTick, serviceStatus, startService, stopService } = await import('../src/runtime/obsidian/lifecycle.mjs')
-const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
+const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, readMachineSettings, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep } = await import('../src/runtime/obsidian/opening.mjs')
 const { createAbandonmentProof, machineDigest } = await import('../src/runtime/obsidian/private-lock.mjs')
 const { commandLineNamesRecord, readProcessCommandLine } = await import('../src/runtime/obsidian/process-identity.mjs')
 const { HEALTH_SCHEMA, probeHealth, requestLoopback } = await import('../src/runtime/obsidian/service-client.mjs')
 const { readServiceRecord, readServiceSettings, releaseIdentity, serviceNameFor, writeServiceRecord, writeServiceSettings } = await import('../src/runtime/obsidian/service-record.mjs')
-const { createRecoveryStore } = await import('../src/projection/obsidian/recovery/store.mjs')
+const { allocationFile, createRecoveryStore, readVaultAllocation } = await import('../src/projection/obsidian/recovery/store.mjs')
 const { runMaintenanceService } = await import('../src/runtime/obsidian/service.mjs')
+const { confirmPluginSeen, readPluginChoice } = await import('../src/runtime/obsidian/plugin-choice.mjs')
+const { readUnheldEvidence } = await import('../src/runtime/obsidian/unheld-evidence.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { maintenanceNoticeFor } = await import('../src/runtime/obsidian/sync-notice.mjs')
 const { enrollRepository, obsidianMaintenanceNotice } = await import('../src/runtime/supervisor.mjs')
@@ -197,7 +199,10 @@ function listing(directory) {
 }
 
 // Seams that must never be reached: a read-only operation that touches one fails its test.
-const unreachable = (name) => () => { throw new Error(`the ${name} was reached`) }
+// Each one reached is also recorded, so an operation that catches the error (reading the app's list, say) still fails
+// its test: world.run asserts that none was reached.
+const reachedSeams = []
+const unreachable = (name) => () => { reachedSeams.push(name); throw new Error(`the ${name} was reached`) }
 const UNREACHABLE_SEAMS = Object.freeze({
   appProbe: { inspect: unreachable('app probe'), inspectSync: unreachable('app probe'), vaultState: unreachable('app probe') },
   launcher: { open: unreachable('launcher'), startPlain: unreachable('launcher') },
@@ -205,6 +210,9 @@ const UNREACHABLE_SEAMS = Object.freeze({
   quitter: { quit: unreachable('quitter') },
   service: { entryPath: TEST_SERVICE_ENTRY, spawn() { throw new Error('a service was started') } },
 })
+// No app at all: an operation that would read the app's vault list (`location set`) reads none, as under the real
+// entry in a test.
+const NO_APP_SEAMS = Object.freeze({ ...UNREACHABLE_SEAMS, appProbe: undefined, registry: undefined })
 
 // An installed app, as the injected probe describes it, its vault list, and a launcher that records what it was asked.
 // The app answers for a vault only once it was asked to open it AND its list knows it, as the real app does.
@@ -272,7 +280,7 @@ function fakeApp(overrides = {}) {
       },
     },
     launcher: {
-      open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push(Object.fromEntries(Object.entries({ vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning }).filter(([, value]) => value !== undefined))); if (state.launchResult.launched && state.comesUp && !state.running) startApp(); return state.launchResult },
+      open: async (args) => { const { vaultRoot } = args; launches.push(vaultRoot); launchArgs.push(Object.fromEntries(Object.entries({ vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning, startedByThisOpen: args.startedByThisOpen }).filter(([, value]) => value !== undefined))); if (state.launchResult.launched && state.comesUp && !state.running) startApp(); return state.launchResult },
       startPlain: async () => { startsPlain.push(state.running); if (state.startPlainResult && !state.running) startApp(); return state.startPlainResult },
     },
     quitter: {
@@ -331,7 +339,7 @@ function fakeApp(overrides = {}) {
         const cliTurnedOn = state.cliSetting !== true
         state.cliSetting = true
         const known = Object.keys(state.vaults).find((id) => state.vaults[id].path === vaultRoot)
-        if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: true }, confirmed: true, vaults: structuredClone(state.vaults), file, cliTurnedOn, ...(cliTurnedOn ? { backupPath } : {}) }
+        if (known !== undefined) return { ok: true, registered: 'already', entry: { id: known, path: vaultRoot, open: state.vaults[known].open === true }, confirmed: true, vaults: structuredClone(state.vaults), file, cliTurnedOn, ...(cliTurnedOn ? { backupPath } : {}) }
         if (Object.values(state.vaults).some((entry) => vaultRoot.startsWith(entry.path + path.sep))) { state.cliSetting = !cliTurnedOn; return { ok: false, code: 'vault-inside-another-vault', message: 'fake' } }
         add(vaultRoot, 'settings')
         // `settingsUnconfirmed`: an app started right after the write, and may have read the list before it; or, when it
@@ -446,7 +454,9 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
       const out = []
       const err = []
       const options = { argv: [...argv, `--project=${configPath}`, `--data-root=${dataRoot}`], seams, env, cwd: projectDir, clock: world.clock, contributions: [], probeTimeoutMs: FAST_PROBE, stdout: (text) => out.push(text), stderr: (text) => err.push(text), ...extra }
+      const reachedBefore = reachedSeams.length
       const exit = rules ? await runObsidianCommandForOracleTests(options, rules) : await runObsidianCommand(options)
+      assert.deepEqual(reachedSeams.slice(reachedBefore), [], `${argv.join(' ')} reached a seam that must never be reached`)
       const stdout = out.join('\n')
       let json = null
       try { json = JSON.parse(stdout) } catch { json = null }
@@ -1094,6 +1104,39 @@ test('app not running: the view is published on the path with no app, the vault 
   assert.deepEqual([again.json.outcome, again.json.registration?.how, app.registrations.length], ['current', 'listed', 1])
 })
 
+// After the launch, the first `silentRounds` rounds see a version only Atelier's plugin gave (the tool's own version
+// call timed out) and no answer for the vault; the rounds after that see the app as it is.
+async function openThroughSilentRounds(t, silentRounds, { appWaitMs = 5000 } = {}) {
+  const world = makeWorld(t)
+  await world.service()
+  const app = fakeApp()
+  const rounds = []
+  let silent = silentRounds
+  const appProbe = {
+    inspect: async () => { const seen = await app.appProbe.inspect(); return app.launches.length > 0 && silent > 0 ? { ...seen, version: '1.13.7', versionSource: 'plugin' } : seen },
+    vaultState: async (input) => {
+      if (silent > 0) { silent -= 1; rounds.push('silent'); return { answered: false, indexReady: false } }
+      rounds.push('asked')
+      return app.appProbe.vaultState(input)
+    },
+  }
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app, appProbe }, open: { appWaitMs, appPollMs: 5 } })
+  return { opened, rounds, app }
+}
+
+test('one silent round after the launch, with a version only the plugin gave, is waited out; two in a row answer at once that the command line is what is missing', needsExchange, async (t) => {
+  // The tool's version call timed out once while the app opened the window: open waits, and the vault answers.
+  const once = await openThroughSilentRounds(t, 1)
+  assert.deepEqual([once.opened.json.outcome, once.opened.json.launched, once.rounds], ['current', true, ['silent', 'asked']], JSON.stringify(once.opened.json))
+  // Silent every round: answered at the second, not after the whole wait.
+  const always = await openThroughSilentRounds(t, Number.POSITIVE_INFINITY)
+  assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.opened.json.launched, always.rounds], ['app-cli-unavailable', 'vault-open-cli-silent', true, ['silent', 'silent']])
+  assert.equal(always.app.launches.length, 1)
+  // The wait ends after one such round: still the precise answer, not a launch that failed.
+  const cut = await openThroughSilentRounds(t, Number.POSITIVE_INFINITY, { appWaitMs: 0 })
+  assert.deepEqual([cut.opened.json.outcome, cut.opened.json.reason, cut.rounds], ['app-cli-unavailable', 'vault-open-cli-silent', ['silent']])
+})
+
 test('the launch names the vault by its id and says whether the app runs: a quit app is started plainly, so it reopens the vaults its list marks open, and handed the vault by id once it answers', needsExchange, async (t) => {
   const world = makeWorld(t)
   const app = fakeApp({ running: false, vaults: { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })
@@ -1106,6 +1149,41 @@ test('the launch names the vault by its id and says whether the app runs: a quit
   const listedClosed = fakeApp({ running: true, vaults: { [ours]: { path: world.vault(), ts: 1 } } })
   await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...listedClosed }, open: FAST_APP })
   assert.deepEqual(listedClosed.launchArgs, [{ vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault(), appRunning: true }])
+})
+
+// A quit app that the launcher starts plainly and that refuses the link (`refusals` times): it reopens a vault its list
+// flags open by itself, never a closed one. A link it takes opens the vault.
+async function openAfterRefusedLink(t, { flaggedOpen, refusals }) {
+  const world = makeWorld(t)
+  await world.service()
+  const id = '0123456789abcdef'
+  const app = fakeApp({ running: false, vaults: { [id]: { path: world.vault(), ts: 1, ...(flaggedOpen ? { open: true } : {}) } } })
+  const open = app.launcher.open
+  let refused = 0
+  app.launcher.open = async (args) => {
+    if (refused >= refusals) return open(args)
+    refused += 1
+    app.launchArgs.push({ vaultRoot: args.vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning })
+    app.state.running = true
+    if (flaggedOpen) app.launches.push(args.vaultRoot)
+    return { launched: true, reason: 'app-started-link-not-taken' }
+  }
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  return { opened, app, world, id }
+}
+
+test('a link the started app refused is handed once more to the running app when the vault is listed closed, since a plain start does not reopen it; a vault flagged open is not asked twice', needsExchange, async (t) => {
+  const once = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: 1 })
+  assert.deepEqual([once.opened.json.outcome, once.opened.json.registration?.how], ['current', 'listed'], JSON.stringify(once.opened.json))
+  const asked = { vaultRoot: once.world.vault(), vaultId: once.id, vaultPath: once.world.vault() }
+  // Handed once more through the app's tool only: this open started the app, so never through the operating system.
+  assert.deepEqual(once.app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true, startedByThisOpen: true }])
+  // Only once: a link refused again leaves the vault not answering.
+  const always = await openAfterRefusedLink(t, { flaggedOpen: false, refusals: Number.POSITIVE_INFINITY })
+  assert.deepEqual([always.opened.json.outcome, always.opened.json.reason, always.app.launchArgs.map((item) => item.appRunning)], ['launch-failed', 'app-did-not-answer-for-this-vault', [false, true]])
+  // Flagged open, the plainly started app reopens it: the link is not handed again.
+  const flagged = await openAfterRefusedLink(t, { flaggedOpen: true, refusals: 1 })
+  assert.deepEqual([flagged.opened.json.outcome, flagged.app.launchArgs.map((item) => item.appRunning)], ['current', [false]], JSON.stringify(flagged.opened.json))
 })
 
 test('the launch plan: a vault is named by id; a quit app on macOS is started plainly, waited for, then handed the URL; a running app is handed the URL; Linux starts a quit app with the URL; elsewhere nothing', () => {
@@ -1175,6 +1253,94 @@ test('the launch is carried out without ever handing a URL to the operating syst
   assert.deepEqual(await runLaunchPlan(running, w.io), { launched: true, reason: 'os-open-accepted' })
   assert.deepEqual(w.calls, [`link ${link}`, `os ${link}`])
   assert.deepEqual(await runLaunchPlan({ ok: false, reason: 'vault-id-unknown' }, world({}).io), { launched: false, reason: 'vault-id-unknown' })
+})
+
+test('the production launcher\'s executors: each step runs the program it names, with no shell, in the neutral directory, with the given env and its timeout; a started app never gets the system opener', needsAppIsolation, (t) => {
+  // In a child with a private HOME, since this process never loads the production seams. Every way that child could
+  // start a program is replaced first by one that starts nothing and records the attempt, so only the stand-in
+  // execFile handed to the launcher answers, and a launcher that did not use it fails here instead of running anything.
+  const dir = fs.mkdtempSync(path.join(TMP, 'atelier-launcher-executors-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const work = path.join(dir, 'neutral')
+  fs.mkdirSync(work)
+  const seams = pathToFileURL(path.join(REPOSITORY_ROOT, 'src/runtime/obsidian/app-production-seams.mjs')).href
+  const script = `import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+const unguarded = []
+for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork']) {
+  childProcess[method] = (file, ...rest) => {
+    unguarded.push([method, String(file)])
+    const callback = rest.find((item) => typeof item === 'function')
+    if (!callback) throw new Error('nothing is started here')
+    setImmediate(() => callback(new Error('nothing is started here'), '', ''))
+    return { on() {}, once() {} }
+  }
+}
+syncBuiltinESMExports()
+const { createProductionLauncher } = await import(${JSON.stringify(seams)})
+const CLI = '/stand-in/bin/tool'
+const UNABLE = 'The CLI is unable to find Obsidian. Please make sure Obsidian is running and try again.'
+const VERSION = '1.13.7 (installer 1.12.7)'
+const isLink = (args) => args.length === 1 && args[0].includes('://')
+// Per run: how the stand-in answers a call, given how many version calls came before it.
+const RUNS = {
+  quitThenTaken: { platform: 'darwin', appRunning: false, answer: (file, args, versions) => (file === CLI && args[0] === 'version' ? { stdout: versions <= 2 ? UNABLE : VERSION } : file === CLI && isLink(args) ? { stdout: 'Processed URI ' + args[0] } : {}) },
+  quitLinkNotTaken: { platform: 'darwin', appRunning: false, answer: (file, args) => (file === CLI && args[0] === 'version' ? { stdout: VERSION } : {}) },
+  quitVersionFailed: { platform: 'darwin', appRunning: false, answer: (file, args) => (file === CLI ? { stdout: VERSION, failed: true } : {}) },
+  quitStartFailed: { platform: 'darwin', appRunning: false, answer: (file) => (file === '/usr/bin/open' ? { failed: true } : { stdout: VERSION }) },
+  runningNotTaken: { platform: 'darwin', appRunning: true, answer: () => ({}) },
+  // The link handed once more to an app this open started (opening.mjs): refused again, it never reaches the system opener.
+  retryNotTaken: { platform: 'darwin', appRunning: true, startedByThisOpen: true, answer: () => ({}) },
+  linuxQuit: { platform: 'linux', appRunning: false, answer: () => ({}) },
+  linuxRunningTaken: { platform: 'linux', appRunning: true, answer: (file, args) => (file === CLI && isLink(args) ? { stdout: 'Processed URI ' + args[0] } : {}) },
+}
+const out = { unguarded, runs: {} }
+for (const [name, { platform, appRunning, startedByThisOpen, answer }] of Object.entries(RUNS)) {
+  const calls = []
+  let versions = 0
+  const execFile = (file, args, options, callback) => {
+    if (file === CLI && args[0] === 'version') versions += 1
+    calls.push({ file, args, cwd: options.cwd, run: options.env.STAND_IN_RUN, home: options.env.HOME, timeout: options.timeout, killSignal: options.killSignal, shell: options.shell ?? null })
+    const reply = answer(file, args, versions)
+    setImmediate(() => callback(reply.failed ? new Error('exit 1') : null, reply.stdout ?? '', reply.stderr ?? ''))
+  }
+  const launcher = createProductionLauncher({ platform, env: { ...process.env, STAND_IN_RUN: name }, cliPath: CLI, workingDirectory: ${JSON.stringify(work)}, execFile, waitMs: 200, pollMs: 20 })
+  const result = await launcher.open({ vaultId: '0123456789abcdef', vaultPath: '/stand-in/vault', appRunning, ...(startedByThisOpen ? { startedByThisOpen } : {}) })
+  out.runs[name] = { result, calls }
+}
+process.stdout.write(JSON.stringify(out))`
+  const env = privateHomeEnv(dir)
+  const child = childProcess.spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true, timeout: 60000, env })
+  assert.equal(child.status, 0, child.stderr)
+  const { unguarded, runs } = JSON.parse(child.stdout)
+  assert.deepEqual(unguarded, [], 'nothing but the stand-in was asked to run a program')
+  const CLI = '/stand-in/bin/tool'
+  const link = 'obsidian://open?vault=0123456789abcdef'
+  const steps = (name) => runs[name].calls.map((call) => [call.file, ...call.args])
+  for (const [name, { calls }] of Object.entries(runs)) {
+    for (const call of calls) {
+      assert.deepEqual([call.cwd, call.run, call.home, call.killSignal, call.shell], [work, name, env.HOME, 'SIGKILL', null], `${name}: ${call.file} ${call.args.join(' ')}`)
+      // The command-line tool is given five seconds a call; the operating system's opener fifteen.
+      assert.equal(call.timeout, call.file === CLI ? 5000 : 15000, `${name}: ${call.file}`)
+    }
+  }
+  // A quit app on macOS: started plainly, asked its version until it answers itself (the tool's own "unable to find"
+  // line is no answer), then handed the link through the tool.
+  assert.deepEqual(runs.quitThenTaken.result, { launched: true, reason: 'plain-start-then-url' })
+  assert.deepEqual(steps('quitThenTaken'), [['/usr/bin/open', '-b', 'md.obsidian'], [CLI, 'version'], [CLI, 'version'], [CLI, 'version'], [CLI, link]])
+  // A link the started app did not take is left to it: never the system opener.
+  assert.deepEqual(runs.quitLinkNotTaken.result, { launched: true, reason: 'app-started-link-not-taken' })
+  assert.deepEqual(steps('quitLinkNotTaken'), [['/usr/bin/open', '-b', 'md.obsidian'], [CLI, 'version'], [CLI, link]])
+  // A version printed by a call that failed is no answer: nothing is handed over.
+  assert.deepEqual(runs.quitVersionFailed.result, { launched: true, reason: 'app-started-not-answering' })
+  assert.ok(steps('quitVersionFailed').length >= 3 && steps('quitVersionFailed').slice(1).every((step) => step.join(' ') === `${CLI} version`), JSON.stringify(steps('quitVersionFailed')))
+  assert.deepEqual([runs.quitStartFailed.result, steps('quitStartFailed')], [{ launched: false, reason: 'os-open-failed' }, [['/usr/bin/open', '-b', 'md.obsidian']]])
+  // A running app: the tool first, the system opener only when the tool did not take the link.
+  assert.deepEqual([runs.runningNotTaken.result, steps('runningNotTaken')], [{ launched: true, reason: 'os-open-accepted' }, [[CLI, link], ['/usr/bin/open', link]]])
+  assert.deepEqual([runs.retryNotTaken.result, steps('retryNotTaken')], [{ launched: true, reason: 'app-started-link-not-taken' }, [[CLI, link]]])
+  // Linux: a quit app is started with the link by the system opener; a running one takes it through the tool.
+  assert.deepEqual([runs.linuxQuit.result, steps('linuxQuit')], [{ launched: true, reason: 'os-open-accepted' }, [['xdg-open', link]]])
+  assert.deepEqual([runs.linuxRunningTaken.result, steps('linuxRunningTaken')], [{ launched: true, reason: 'url-accepted' }, [[CLI, link]]])
 })
 
 test('Obsidian with its command line turned off answers every command with one line: it is no version, it is app-cli-unavailable / cli-turned-off with the setting to turn on, and open adds and launches nothing', async (t) => {
@@ -2282,6 +2448,31 @@ for (const [state, stateOutcome, overrides] of [
   })
 }
 
+test('a restart and a refused link together: Obsidian with its command line off, this view\'s vault listed closed; open quits it, turns the switch on, starts it plainly, and hands the refused link once more through its tool only; current', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const ours = '0123456789abcdef'
+  const vaults = { [OTHER_VAULT]: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true }, [ours]: { path: world.vault(), ts: 2 } }
+  const app = fakeApp({ running: true, cliOff: true, vaults })
+  await serviceBehindApp(world, app, { adapterFactory: refusingWhileUnreachable(app) })
+  // The app started plainly refuses the link once: it reopens the other vault, which its list flags open, not this one.
+  const open = app.launcher.open
+  let refused = false
+  app.launcher.open = async (args) => {
+    if (refused) return open(args)
+    refused = true
+    app.launchArgs.push({ vaultRoot: args.vaultRoot, vaultId: args.vaultId, vaultPath: args.vaultPath, appRunning: args.appRunning })
+    Object.assign(app.state, { running: true, cliOff: app.state.cliSetting !== true })
+    return { launched: true, reason: 'app-started-link-not-taken' }
+  }
+  const opened = await world.run(openArgs(['--restart-obsidian']), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.exit, opened.json.outcome, opened.json.registration?.how], [EXIT.ok, 'current', 'listed'], JSON.stringify(opened.json).slice(0, 600))
+  assert.deepEqual([opened.json.restart?.quit, opened.json.restart?.startedAgain], [true, true])
+  assert.deepEqual([opened.json.obsidianSettings?.vaultAdded, opened.json.obsidianSettings?.cliTurnedOn], [false, true])
+  const asked = { vaultRoot: world.vault(), vaultId: ours, vaultPath: world.vault() }
+  assert.deepEqual(app.launchArgs, [{ ...asked, appRunning: false }, { ...asked, appRunning: true, startedByThisOpen: true }], 'started plainly, then the link once more through the tool only')
+  assert.deepEqual([app.startsPlain, app.state.vaults[OTHER_VAULT].open], [[], true], 'no other plain start, and the other vault stays flagged open')
+})
+
 test('what open did to Obsidian is said in words: the restart, the process it signalled, and each write to its settings with the backup', needsExchange, async (t) => {
   const world = makeWorld(t)
   const app = fakeApp({ running: true, cliOff: true })
@@ -2904,12 +3095,13 @@ test('`audience set me` is only you; any other list is the person\'s own; either
   assert.equal(typeof before.json.change.audience, 'string')
 
   const me = await world.run(['audience', 'set', 'me', '--json'], person)
-  assert.deepEqual([me.json.audienceAllow, me.json.choice, me.json.unclassified, me.json.changed], [[...ONLY_YOU_AUDIENCES], 'only-you', 'withheld', true])
-  assert.deepEqual(readMachineSettings(world.workspace()).decisions.audience, { choice: 'only-you', unclassified: 'withheld', decidedAt: iso(START), decidedBy: 'someone', via: 'command' })
+  assert.deepEqual([me.json.audienceAllow, me.json.choice, me.json.unclassified, me.json.changed], [[...ONLY_YOU_AUDIENCES], 'only-you', 'shown', true])
+  assert.deepEqual(readMachineSettings(world.workspace()).decisions.audience, { choice: 'only-you', unclassified: 'shown', decidedAt: iso(START), decidedBy: 'someone', via: 'command' })
   const shown = await world.run(['audience', 'show', '--json'])
-  assert.deepEqual([shown.json.audienceAllow, shown.json.choice, shown.json.unclassified], [[...ONLY_YOU_AUDIENCES], 'only-you', 'withheld'])
+  assert.deepEqual([shown.json.audienceAllow, shown.json.choice, shown.json.unclassified], [[...ONLY_YOU_AUDIENCES], 'only-you', 'shown'])
   const sensitive = await world.run(['audience', 'set', 'me,sensitive', '--json'], person)
-  assert.deepEqual([sensitive.json.audienceAllow, sensitive.json.choice], [[...ONLY_YOU_AUDIENCES, 'sensitive'], 'custom'])
+  assert.deepEqual([sensitive.json.audienceAllow, sensitive.json.choice, sensitive.json.unclassified], [[...ONLY_YOU_AUDIENCES, 'sensitive'], 'custom', 'withheld'], 'a list, even one that holds "only you", withholds them')
+  assert.match((await world.run(['audience', 'set', 'me,sensitive'], person)).stdout, /^Notes without a classification are shown only in a vault that is only yours: `atelier obsidian audience set me`\.$/m)
   const team = await world.run(['audience', 'set', 'team', '--json'], person)
   assert.deepEqual([team.json.audienceAllow, team.json.choice], [['team'], 'custom'])
   const cleared = await world.run(['audience', 'clear', '--json'], person)
@@ -2922,7 +3114,7 @@ test('`audience set me` is only you; any other list is the person\'s own; either
   assert.deepEqual(settings.json.decisions.audience.choice, 'only-you')
   const words = await world.run(['settings'])
   assert.equal(words.exit, EXIT.ok)
-  assert.match(words.stdout, /^who may see: only you \(operator, private, public, staff, team\); notes without a classification withheld \(given on the command line, 2026-01-05T10:00:00\.000Z, by someone\)$/m)
+  assert.match(words.stdout, /^who may see: only you \(operator, private, public, staff, team\); notes without a classification shown \(given on the command line, 2026-01-05T10:00:00\.000Z, by someone\)$/m)
   assert.match(words.stdout, /^where vaults live: not decided$/m)
   assert.match(words.stdout, /^start at login: not decided$/m)
   assert.match(words.stdout, /^reaching the app: not decided$/m)
@@ -2932,6 +3124,572 @@ test('`audience set me` is only you; any other list is the person\'s own; either
   assert.deepEqual(status.json.machine.decisions.audience.choice, 'only-you')
   assert.match((await world.run(['status'])).stdout, /^remembered: who may see only you$/m)
 })
+
+// ---------------------------------------------------------------------------
+// Where the vaults live
+// ---------------------------------------------------------------------------
+
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+test('`location set` decides where vaults live: an absolute folder, `~/` only against a home folder the test names, never inside a repository, and a synced folder only when asked', async (t) => {
+  const world = makeWorld(t)
+  const home = path.join(world.dir, 'home')
+  const before = await world.run(['location', 'show', '--json'])
+  assert.deepEqual([before.json.location, before.json.views], [null, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId), origin: 'legacy-data-root' }]])
+  const tilde = await world.run(['location', 'set', '~/Atelier', '--json'], { seams: NO_APP_SEAMS })
+  assert.deepEqual([tilde.exit, tilde.json.error.code], [EXIT.refused, 'real-vault-location-under-test'])
+  const named = await world.run(['location', 'set', '~/Atelier', '--json'], { seams: NO_APP_SEAMS, homedir: home, account: () => 'someone' })
+  assert.deepEqual(named.json.location, { parent: path.join(home, 'Atelier'), decidedAt: iso(START), decidedBy: 'someone', via: 'command' })
+  assert.deepEqual(named.json.views, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(home, 'Atelier', 'opening-fixture (scope-whole)'), origin: 'to-be-allocated' }])
+  assert.equal(fs.existsSync(path.join(home, 'Atelier')), false, 'deciding creates nothing: the next tick allocates')
+  // A trailing separator, as tab completion leaves it, is the same folder.
+  const trailing = await world.run(['location', 'set', `~/Atelier${path.sep}`, '--json'], { seams: NO_APP_SEAMS, homedir: home, account: () => 'someone' })
+  assert.deepEqual([trailing.exit, trailing.json.location?.parent], [EXIT.ok, path.join(home, 'Atelier')])
+  const relative = await world.run(['location', 'set', 'vaults-here', '--json'], { seams: NO_APP_SEAMS, cwd: world.dir })
+  assert.equal(relative.json.location.parent, path.join(world.dir, 'vaults-here'))
+  const inside = await world.run(['location', 'set', path.join(world.projectDir, 'east-wing', 'vaults'), '--json'], { seams: NO_APP_SEAMS })
+  assert.deepEqual([inside.exit, inside.json.error.code], [EXIT.refused, 'vault-location-inside-repository'])
+  assert.equal(readMachineSettings(world.workspace()).decisions.location.parent, path.join(world.dir, 'vaults-here'), 'a refusal decides nothing')
+  fs.mkdirSync(path.join(home, 'Dropbox'), { recursive: true })
+  const synced = await world.run(['location', 'set', path.join(home, 'Dropbox', 'Atelier'), '--json'], { seams: NO_APP_SEAMS, homedir: home })
+  assert.deepEqual([synced.exit, synced.json.error.code], [EXIT.refused, 'vault-location-synced'])
+  const allowed = await world.run(['location', 'set', path.join(home, 'Dropbox', 'Atelier'), '--json', '--allow-synced-location'], { seams: NO_APP_SEAMS, homedir: home })
+  assert.deepEqual(allowed.json.warnings, { synced: 'Dropbox', protected: null })
+  const documents = await world.run(['location', 'set', path.join(home, 'Documents', 'Atelier')], { seams: NO_APP_SEAMS, homedir: home, platform: 'darwin' })
+  assert.equal(documents.exit, EXIT.ok, documents.stderr)
+  assert.match(documents.stdout, /^Warning: macOS asks before Obsidian or the maintenance service may read your Documents folder\.$/m)
+  const words = await world.run(['settings'])
+  assert.match(words.stdout, new RegExp(`^where vaults live: ${escaped(path.join(home, 'Documents', 'Atelier'))} \\(given on the command line, `, 'm'))
+  assert.match(words.stdout, /^Change: `atelier obsidian location set DIR`/m)
+  // `status` says where a view not published yet will be, as `location show` does, not the data root.
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual(status.json.scopes[0].vault, { path: path.join(home, 'Documents', 'Atelier', 'opening-fixture (scope-whole)'), origin: 'to-be-allocated' })
+})
+
+test('each view not published yet gets `<project> (<view>)` where the vaults live, at its first publication; a view published before stays under the data root', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  const engine = world.engine()
+  const stateOf = (report, scopeId) => report.scopes.find((entry) => entry.scopeId === scopeId)
+  assert.equal(stateOf(await engine.tick(), FULL_SCOPE.scopeId).state, 'current')
+  const legacyVault = path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)
+  const decided = await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  assert.deepEqual(decided.json.views, [{ scopeId: FULL_SCOPE.scopeId, path: legacyVault, origin: 'legacy-data-root' }])
+
+  world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+  const eastVault = path.join(parent, 'opening-fixture (scope-east)')
+  assert.deepEqual((await world.run(['location', 'show', '--json'])).json.views.find((view) => view.scopeId === EAST_SCOPE.scopeId), { scopeId: EAST_SCOPE.scopeId, path: eastVault, origin: 'to-be-allocated' })
+  const report = await engine.tick()
+  assert.deepEqual([stateOf(report, FULL_SCOPE.scopeId).state, stateOf(report, EAST_SCOPE.scopeId).state], ['current', 'current'])
+  const eastNotes = world.manifest(EAST_SCOPE.scopeId).notes
+  assert.ok(eastNotes.length > 0)
+  for (const { path: notePath } of eastNotes) assert.equal(fs.existsSync(path.join(eastVault, notePath)), true, notePath)
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'vaults', EAST_SCOPE.scopeId)), false, 'nothing under the data root for it')
+  for (const { path: notePath } of world.manifest(FULL_SCOPE.scopeId).notes) assert.equal(fs.existsSync(path.join(legacyVault, notePath)), true, 'the vault published before stays where it was')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(eastVault).mode & 0o777, 0o700)
+
+  const status = await world.run(['status', '--json'])
+  assert.deepEqual(status.json.scopes.map((scope) => [scope.scopeId, scope.vault.origin, scope.vault.path]), [[FULL_SCOPE.scopeId, 'legacy-data-root', legacyVault], [EAST_SCOPE.scopeId, 'allocated', eastVault]])
+  // Another location later moves nothing: the allocation is made once.
+  await world.run(['location', 'set', path.join(world.dir, 'Elsewhere'), '--json'], { seams: NO_APP_SEAMS })
+  world.advance(10 * 60 * 1000)
+  await engine.tick()
+  assert.equal(fs.existsSync(path.join(world.dir, 'Elsewhere')), false)
+  assert.deepEqual((await world.run(['location', 'show', '--json'])).json.views.map((view) => view.origin), ['legacy-data-root', 'allocated'])
+})
+
+test('a vault folder is never allocated under a name a vault the app lists already has, nor inside one; a folder that cannot be allocated keeps its view from publishing and says why', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  const listed = { aaaaaaaaaaaaaaaa: { path: path.join(world.dir, 'elsewhere', 'Opening-Fixture (Scope-Whole)'), ts: 1 } }
+  const engine = world.engine({ readAppVaultList: () => ({ ok: true, vaults: listed }) })
+  assert.equal((await engine.tick()).scopes[0].state, 'current')
+  assert.deepEqual((await world.run(['location', 'show', '--json'])).json.views, [{ scopeId: FULL_SCOPE.scopeId, path: path.join(parent, 'opening-fixture (scope-whole 2)'), origin: 'allocated' }])
+
+  // A decision the command would refuse, left by hand: the view is not published, says why, and nothing is made there.
+  const other = makeWorld(t)
+  const inside = path.join(other.projectDir, 'east-wing', 'vaults')
+  writeMachineSettings({ ...other.workspace(), repositoryRoots: [], settings: withDecision(other.machine(), 'location', { parent: inside }, { decidedAt: iso(START), decidedBy: null, via: 'command' }) })
+  const refused = await other.engine().tick()
+  assert.deepEqual([refused.state, refused.scopes[0].state, refused.scopes[0].reason], ['ticked', 'stale', 'vault-location-inside-repository'])
+  assert.equal(fs.existsSync(inside), false)
+  assert.equal(fs.existsSync(path.join(other.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)), false, 'nor under the data root')
+  // An app that lists a vault above the folder: the same.
+  const third = makeWorld(t)
+  await third.run(['location', 'set', path.join(third.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+  const enclosing = await third.engine({ readAppVaultList: () => ({ ok: true, vaults: { bbbbbbbbbbbbbbbb: { path: third.dir, ts: 1 } } }) }).tick()
+  assert.deepEqual([enclosing.scopes[0].state, enclosing.scopes[0].reason], ['stale', 'vault-location-inside-vault'])
+})
+
+test('a bad location or allocation stops only its own view: the others go on, each refusal is typed, and a better location recovers the view', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const engine = world.engine()
+  const stateOf = (report, scopeId) => { const entry = report.scopes.find((item) => item.scopeId === scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick(), FULL_SCOPE.scopeId)[0], 'current')
+  world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+  // A location the command refuses, left by hand (an earlier release, a copied file).
+  const decide = (parent) => writeMachineSettings({ ...world.workspace(), repositoryRoots: [], settings: withDecision(world.machine(), 'location', { parent }, { decidedAt: iso(START), decidedBy: null, via: 'command' }) })
+  const tick = async () => { world.advance(10 * 60 * 1000); return engine.tick() }
+  const file = path.join(world.dir, 'a-file')
+  fs.writeFileSync(file, 'not a folder')
+  const cases = [
+    [file, 'vault-location-unusable', 'a file where the folder would be'],
+    [path.join(file, 'below'), 'vault-location-unusable', 'a file on the way'],
+    [path.join(world.workspaceRoot(), 'state', 'vaults'), 'vault-location-inside-private-state', 'inside the private state'],
+    [path.join(world.workspaceRoot(), 'staging'), 'vault-location-inside-private-state', 'inside staging'],
+  ]
+  for (const [parent, code, label] of cases) {
+    decide(parent)
+    const report = await tick()
+    assert.equal(report.state, 'ticked', label)
+    assert.deepEqual([stateOf(report, FULL_SCOPE.scopeId)[0], stateOf(report, EAST_SCOPE.scopeId)], ['current', ['stale', code]], label)
+    assert.equal(readVaultAllocation({ ...world.workspace(), scopeId: EAST_SCOPE.scopeId }), null, label)
+  }
+  // The command refuses the same folders.
+  for (const [parent, code] of cases) assert.equal((await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })).json.error.code, code, parent)
+  // A better location recovers the view: nothing was recorded for the bad ones.
+  const good = path.join(world.dir, 'Atelier')
+  assert.equal((await world.run(['location', 'set', good, '--json'], { seams: NO_APP_SEAMS })).exit, EXIT.ok)
+  assert.deepEqual(stateOf(await tick(), EAST_SCOPE.scopeId)[0], 'current')
+  // A record of one view that names a folder inside a repository, or cannot be read, stops that view only.
+  const record = allocationFile(world.workspaceRoot(), EAST_SCOPE.scopeId)
+  const allocation = JSON.parse(fs.readFileSync(record, 'utf8'))
+  const inside = path.join(world.projectDir, 'east-wing', 'vault')
+  fs.writeFileSync(record, JSON.stringify({ ...allocation, path: inside, parent: path.dirname(inside), name: 'vault' }))
+  const intoRepository = await tick()
+  assert.deepEqual([intoRepository.state, stateOf(intoRepository, FULL_SCOPE.scopeId)[0], stateOf(intoRepository, EAST_SCOPE.scopeId)], ['ticked', 'current', ['stale', 'managed-root-inside-repository']])
+  assert.equal(fs.existsSync(inside), false, 'a folder that has gone is never made again inside a repository')
+  // Nor inside the private state, where publication state, recovery and staging live.
+  const privately = path.join(world.workspaceRoot(), 'state', 'east', 'vault')
+  fs.writeFileSync(record, JSON.stringify({ ...allocation, path: privately, parent: path.dirname(privately), name: 'vault' }))
+  const intoPrivateState = await tick()
+  assert.deepEqual([intoPrivateState.state, stateOf(intoPrivateState, FULL_SCOPE.scopeId)[0], stateOf(intoPrivateState, EAST_SCOPE.scopeId)], ['ticked', 'current', ['stale', 'vault-location-inside-private-state']])
+  assert.equal(fs.existsSync(path.dirname(privately)), false, 'a folder that has gone is never made again inside the private state')
+  fs.writeFileSync(record, 'not json')
+  const unreadable = await tick()
+  assert.deepEqual([unreadable.state, stateOf(unreadable, FULL_SCOPE.scopeId)[0], stateOf(unreadable, EAST_SCOPE.scopeId)], ['ticked', 'current', ['stale', 'invalid-vault-allocation']])
+})
+
+// A folder moved in where a view's allocated vault was, made before the vault is removed (Linux gives a new folder
+// the inode number of one just removed), holding a note of somebody else.
+function moveInOver(world, vault) {
+  const movedIn = path.join(world.dir, 'moved-in')
+  fs.mkdirSync(movedIn)
+  fs.writeFileSync(path.join(movedIn, 'theirs.md'), 'theirs')
+  fs.rmSync(vault, { recursive: true })
+  fs.renameSync(movedIn, vault)
+}
+const touchCompass = (world, body) => fs.writeFileSync(world.source('east-wing/notes/compass.md'), note({ id: 'east-wing:compass', title: 'Compass rose', body }))
+
+test('a running service never publishes into a folder that replaced its allocated vault, nor through a link put there into the person\'s own vault: the view says so and nothing is written', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const personal = path.join(world.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
+  const listed = { aaaaaaaaaaaaaaaa: { path: personal, ts: 1 } }
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+  const engine = world.engine({ readAppVaultList: () => ({ ok: true, vaults: listed }) })
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId })
+
+  // The same engine, whose store for the view was made for the folder it allocated.
+  moveInOver(world, vault)
+  touchCompass(world, 'North is painted blue.')
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+  assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in')
+  if (process.platform !== 'win32') {
+    fs.rmSync(vault, { recursive: true })
+    fs.symlinkSync(personal, vault)
+    touchCompass(world, 'North is painted green.')
+    world.advance(10 * 60 * 1000)
+    assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+    // At every later tick too, whose store is made anew: the same reason, and its next step.
+    world.advance(10 * 60 * 1000)
+    assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+    assert.equal((await world.run(['status', '--json'])).json.scopes[0].next, REASON_NEXT['vault-allocation-replaced'])
+    assert.deepEqual(fs.readdirSync(personal), ['diary.md'], 'nothing is written into the person\'s own vault')
+  }
+})
+
+test('the publisher checks an allocated vault again before it writes anything, so a folder replaced during a tick is not published into', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+  const { buildGraph } = await import('../src/runtime/obsidian/pipeline.mjs')
+  let replaceDuringBuild = null
+  // The folder is replaced after the engine chose the view's store, while the graph is built.
+  const engine = world.engine({ seams: { buildGraph: (input) => { const replace = replaceDuringBuild; replaceDuringBuild = null; replace?.(); return buildGraph(input) } } })
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId })
+  replaceDuringBuild = () => moveInOver(world, vault)
+  touchCompass(world, 'North is painted blue.')
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-replaced'])
+  assert.equal(replaceDuringBuild, null, 'the folder was replaced during the tick')
+  assert.deepEqual(fs.readdirSync(vault), ['theirs.md'], 'nothing is written into the folder moved in, not even the vault lock')
+})
+
+test('a folder replaced, removed or moved away during a publication (while the app is asked, between units or before the commit) is refused and never reported current, nothing is written into the person\'s vault, and once it is back, put back or made again, the same service publishes into it again', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
+  const { publishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+  const { CRASH_INJECTION_TEST_SEAM } = await import('../src/projection/obsidian/publication/test-seam.mjs')
+  // `when`: the nth time the app is asked about the vault (1: path selection, 2: before the first unit), or 'commit'.
+  // `how`: a link into the person's vault put in its place, the folder removed, or the folder moved away (to the Trash,
+  // say) and later put back; `legacy`: the vault is under the data root.
+  // `untouched`: what the first tick after it is back says with nothing changed at the sources since. A generation
+  // interrupted just before its commit is finished by restart recovery; its notes went with the folder that went away,
+  // so a folder made again reads vault-note-missing until the next change at the sources publishes it again.
+  const cases = [
+    { when: 1, how: 'link', refused: 'vault-allocation-replaced', untouched: ['current', 'published-and-verified'] },
+    { when: 2, how: 'link', refused: 'vault-allocation-replaced', untouched: ['current', 'published-and-verified'] },
+    { when: 'commit', how: 'link', refused: 'vault-allocation-replaced', untouched: ['stale', 'vault-note-missing'] },
+    { when: 2, how: 'remove', refused: 'vault-allocation-missing', untouched: ['current', 'published-and-verified'] },
+    { when: 2, how: 'remove', legacy: true, refused: 'vault-root-moved', untouched: ['current', 'published-and-verified'] },
+    { when: 2, how: 'move', refused: 'vault-allocation-missing', untouched: ['current', 'published-and-verified'] },
+    { when: 'commit', how: 'move', refused: 'vault-allocation-missing', untouched: ['current', 'verified-by-read-back'] },
+    { when: 2, how: 'move', legacy: true, refused: 'vault-root-moved', untouched: ['current', 'published-and-verified'] },
+  ]
+  for (const { when, how, legacy = false, refused, untouched } of cases) {
+    const label = `${how} at ${when}${legacy ? ', under the data root' : ''}`
+    const world = makeWorld(t)
+    if (!legacy) await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+    const vaultOf = () => (legacy ? path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId) : readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }).path)
+    const away = path.join(world.dir, 'moved-away')
+    const personal = path.join(world.dir, 'Personal Vault')
+    fs.mkdirSync(personal)
+    fs.writeFileSync(path.join(personal, 'diary.md'), 'mine')
+    let armed = false
+    let swapped = false
+    let asked = 0
+    const swap = () => {
+      if (!armed || swapped) return
+      swapped = true
+      if (how === 'remove') fs.rmSync(vaultOf(), { recursive: true })
+      else fs.renameSync(vaultOf(), away)
+      if (how === 'link') fs.symlinkSync(personal, vaultOf())
+    }
+    const adapterFactory = (...args) => {
+      const inner = absentAdapter(...args)
+      return { ...inner, probe: async (input) => { if (armed) { asked += 1; if (asked === when) swap() } return inner.probe(input) } }
+    }
+    const seams = when === 'commit' ? { publishView: (input) => publishView({ ...input, [CRASH_INJECTION_TEST_SEAM]: { at: 'before-manifest-commit', halt: swap } }) } : {}
+    const engine = world.engine({ adapterFactory, seams })
+    const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+    const tick = async () => { world.advance(10 * 60 * 1000); return stateOf(await engine.tick()) }
+    assert.equal(stateOf(await engine.tick())[0], 'current', label)
+    armed = true
+    touchCompass(world, 'North is painted blue.')
+    assert.deepEqual(await tick(), ['stale', refused], label)
+    assert.equal(swapped, true, `the folder was replaced, removed or moved away (${label})`)
+    assert.deepEqual(fs.readdirSync(personal), ['diary.md'], `nothing is written into the person's vault (${label})`)
+    armed = false
+    // Back: put back where it was, or the link taken away (the service makes an allocated folder again), or the folder
+    // under the data root made again.
+    if (how === 'move') fs.renameSync(away, vaultOf())
+    if (how === 'link') fs.unlinkSync(vaultOf())
+    if (how === 'remove' && legacy) fs.mkdirSync(vaultOf(), { mode: 0o700 })
+    // Two ticks with nothing changed at the sources: the same answer at both.
+    assert.deepEqual(await tick(), untouched, `with nothing changed since it is back (${label})`)
+    assert.deepEqual(await tick(), untouched, `and again (${label})`)
+    if (untouched[1] === 'vault-note-missing') assert.equal((await world.run(['status', '--json'])).json.scopes[0].next, REASON_NEXT['vault-note-missing'], `status names when it is published again (${label})`)
+    touchCompass(world, 'North is painted green.')
+    assert.deepEqual(await tick(), ['current', 'published-and-verified'], `published again at the next change (${label})`)
+    assert.match(fs.readFileSync(path.join(vaultOf(), 'east-wing', 'notes', 'Compass rose.md'), 'utf8'), /painted green/, label)
+  }
+})
+
+test('a vault folder that has gone is made again only where its record leads and outside every vault the app lists, and a vault reached through a link is not published into: the view says why, and nothing is written', { ...needsExchange, ...(process.platform === 'win32' ? { skip: 'links need privileges on Windows' } : {}) }, async (t) => {
+  const world = makeWorld(t)
+  const home = path.join(world.dir, 'home')
+  const icloud = path.join(home, 'Library', 'Mobile Documents', 'iCloud~md~obsidian', 'Documents', 'Field Notes')
+  fs.mkdirSync(icloud, { recursive: true })
+  let listed = { aaaaaaaaaaaaaaaa: { path: icloud, ts: 1 } }
+  const parent = path.join(home, 'Atelier')
+  assert.equal((await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS, homedir: home })).exit, EXIT.ok)
+  const engine = world.engine({ readAppVaultList: () => ({ ok: true, vaults: listed }) })
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  const tick = async (body) => { touchCompass(world, body); world.advance(10 * 60 * 1000); return stateOf(await engine.tick()) }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const { path: vault } = readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId })
+
+  // The vault has gone, and the folder that held it is now a link into the listed iCloud vault.
+  fs.rmSync(parent, { recursive: true })
+  fs.symlinkSync(icloud, parent)
+  assert.deepEqual(await tick('North is painted blue.'), ['stale', 'vault-allocation-moved'])
+  assert.deepEqual(fs.readdirSync(icloud), [], 'nothing is made or written inside the listed vault')
+  // A real folder again, which the app now lists as a vault: the list is read before the vault is made again.
+  fs.rmSync(parent)
+  fs.mkdirSync(parent, { mode: 0o700 })
+  listed = { ...listed, bbbbbbbbbbbbbbbb: { path: parent, ts: 1 } }
+  assert.deepEqual(await tick('North is painted green.'), ['stale', 'vault-location-inside-vault'])
+  assert.equal(fs.existsSync(vault), false)
+  // Nothing in the way: made again where it was, and published.
+  listed = { aaaaaaaaaaaaaaaa: listed.aaaaaaaaaaaaaaaa }
+  assert.deepEqual(await tick('North is painted white.'), ['current', 'published-and-verified'])
+  assert.equal(fs.statSync(vault).isDirectory(), true)
+
+  // The folder that holds it is moved into a vault the app lists and linked back: the same folder, which keeps its
+  // device and inode, reached through the link, is not published into by the running engine.
+  const personal = path.join(world.dir, 'Personal Vault')
+  fs.mkdirSync(personal)
+  fs.renameSync(parent, path.join(personal, 'Atelier'))
+  fs.symlinkSync(path.join(personal, 'Atelier'), parent)
+  const before = listing(personal)
+  assert.deepEqual(await tick('North is painted black.'), ['stale', 'vault-allocation-moved'])
+  assert.deepEqual(listing(personal), before, 'nothing is written in it')
+})
+
+test('a published view whose allocation record was lost is refused and says how to recover, never published again into a new vault under the data root', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await world.engine().tick())[0], 'current')
+  const record = allocationFile(world.workspaceRoot(), FULL_SCOPE.scopeId)
+  const kept = fs.readFileSync(record)
+  fs.rmSync(record)
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await world.engine().tick()), ['stale', 'vault-allocation-lost'])
+  const underDataRoot = path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)
+  assert.equal(fs.existsSync(underDataRoot), false, 'no new vault under the data root')
+  assert.deepEqual((await world.run(['status', '--json'])).json.scopes[0].vault, { path: null, origin: 'unreadable', reason: 'vault-allocation-lost' })
+  // The record restored from a backup: the view is found where it was.
+  fs.writeFileSync(record, kept, { mode: 0o600 })
+  world.advance(10 * 60 * 1000)
+  assert.equal(stateOf(await world.engine().tick())[0], 'current')
+  assert.equal(fs.existsSync(underDataRoot), false)
+})
+
+test('a view published under the data root whose folder was removed is refused as lost by a running service too, status names the way back, and a folder made there brings it back', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const engine = world.engine()
+  const stateOf = (report) => { const entry = report.scopes.find((item) => item.scopeId === FULL_SCOPE.scopeId); return [entry.state, entry.reason] }
+  assert.equal(stateOf(await engine.tick())[0], 'current')
+  const underDataRoot = path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)
+  fs.rmSync(underDataRoot, { recursive: true })
+  touchCompass(world, 'North is painted blue.')
+  world.advance(10 * 60 * 1000)
+  // The same engine, whose store was made for the folder that is gone, says why, as a fresh one does.
+  assert.deepEqual(stateOf(await engine.tick()), ['stale', 'vault-allocation-lost'])
+  assert.deepEqual(stateOf(await world.engine().tick()), ['stale', 'vault-allocation-lost'])
+  assert.equal(fs.existsSync(underDataRoot), false, 'no new, empty vault')
+  const status = (await world.run(['status', '--json'])).json.scopes[0]
+  assert.deepEqual([status.outcome, status.reason, status.next], ['not-prepared', 'vault-allocation-lost', REASON_NEXT['vault-allocation-lost']])
+  assert.doesNotMatch(OPENING_OUTCOMES['not-prepared'].summary, /has been published yet/, 'open does not say a published view was never published')
+  // The way back the answer names: the folder, made again; the view is published there at the next change.
+  fs.mkdirSync(underDataRoot, { mode: 0o700 })
+  touchCompass(world, 'North is painted green.')
+  world.advance(10 * 60 * 1000)
+  assert.deepEqual(stateOf(await engine.tick()), ['current', 'published-and-verified'])
+  for (const code of ['vault-allocation-lost', 'vault-allocation-moved', 'vault-allocation-replaced', 'vault-allocation-missing']) assert.equal(typeof REASON_NEXT[code], 'string', code)
+})
+
+test('location show and location set say which view\'s record cannot be read, typed, and still show and decide for the others', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  world.writeExt(settingsOf([FULL_SCOPE, EAST_SCOPE]))
+  await world.run(['location', 'set', path.join(world.dir, 'Atelier'), '--json'], { seams: NO_APP_SEAMS })
+  const report = await world.engine().tick()
+  assert.deepEqual(report.scopes.map((entry) => entry.state), ['current', 'current'])
+  fs.writeFileSync(allocationFile(world.workspaceRoot(), EAST_SCOPE.scopeId), 'not json')
+  const unreadable = { scopeId: EAST_SCOPE.scopeId, path: null, origin: 'unreadable', reason: 'invalid-vault-allocation' }
+  const whole = { scopeId: FULL_SCOPE.scopeId, path: path.join(world.dir, 'Atelier', 'opening-fixture (scope-whole)'), origin: 'allocated' }
+  const show = await world.run(['location', 'show', '--json'])
+  assert.equal(show.exit, EXIT.ok, JSON.stringify(show.json))
+  assert.deepEqual(show.json.views, [whole, unreadable])
+  assert.match((await world.run(['location', 'show'])).stdout, /^view scope-east: no vault yet \(unreadable: invalid-vault-allocation\)$/m)
+  const set = await world.run(['location', 'set', path.join(world.dir, 'Other'), '--json'], { seams: NO_APP_SEAMS })
+  assert.equal(set.exit, EXIT.ok, JSON.stringify(set.json))
+  assert.deepEqual(set.json.views, [whole, unreadable])
+})
+
+test('no vault folder is allocated while the app\'s list cannot be read: the view says why and is allocated at a later tick, once the list reads', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  let answer = { ok: false, code: 'obsidian-settings-unreadable' }
+  let reads = 0
+  const engine = world.engine({ readAppVaultList: async () => { reads += 1; if (answer instanceof Error) throw answer; return answer } })
+  for (const unreadable of [{ ok: false, code: 'obsidian-settings-unreadable' }, { ok: false, code: 'obsidian-sandboxed' }, new Error('a reader that failed'), null]) {
+    answer = unreadable
+    const report = await engine.tick()
+    assert.deepEqual([report.state, report.scopes[0].state, report.scopes[0].reason], ['ticked', 'stale', 'app-vault-list-unreadable'], String(unreadable?.code ?? unreadable))
+    assert.equal(fs.existsSync(parent), false, 'nothing is made')
+    assert.equal(readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }), null, 'nothing is recorded')
+    assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'vaults', FULL_SCOPE.scopeId)), false, 'nor published under the data root')
+    world.advance(10 * 60 * 1000)
+  }
+  answer = { ok: true, vaults: {} }
+  const report = await engine.tick()
+  assert.equal(report.scopes[0].state, 'current')
+  assert.equal(readVaultAllocation({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }).path, path.join(parent, 'opening-fixture (scope-whole)'))
+  // Once allocated, the list is not read again.
+  const before = reads
+  world.advance(10 * 60 * 1000)
+  answer = { ok: false, code: 'obsidian-settings-unreadable' }
+  assert.equal((await engine.tick()).scopes[0].state, 'current')
+  assert.equal(reads, before)
+})
+
+test('location set checks the folder against the app\'s vault list: through the app when it answers, else its settings file; a list it cannot read is said', async (t) => {
+  const world = makeWorld(t)
+  const listedAbove = { aaaaaaaaaaaaaaaa: { path: world.dir, ts: 1, open: true } }
+  const parent = path.join(world.dir, 'Atelier')
+  // The app runs and answers: its own list decides.
+  const running = fakeApp({ running: true, vaults: listedAbove })
+  const refused = await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...running } })
+  assert.deepEqual([refused.exit, refused.json.error.code], [EXIT.refused, 'vault-location-inside-vault'])
+  assert.equal(world.machine().decisions.location, null, 'nothing is remembered')
+  // Quit: its settings file decides.
+  const quit = fakeApp({ vaults: listedAbove })
+  const fromFile = await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...quit } })
+  assert.deepEqual([fromFile.exit, fromFile.json.error.code], [EXIT.refused, 'vault-location-inside-vault'])
+  // A vault elsewhere: accepted, and the document says which list was read.
+  const elsewhere = { bbbbbbbbbbbbbbbb: { path: path.join(TMP, 'elsewhere-vault'), ts: 1, open: true } }
+  const accepted = await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ running: true, vaults: elsewhere }) } })
+  assert.deepEqual([accepted.exit, accepted.json.appVaultList], [EXIT.ok, { source: 'app' }])
+  assert.deepEqual((await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ vaults: elsewhere }) } })).json.appVaultList, { source: 'file' })
+  assert.deepEqual((await world.run(['location', 'set', parent, '--json'], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ settingsRefusal: { ok: false, code: 'obsidian-settings-missing', message: 'fake' } }) } })).json.appVaultList, { source: 'none' })
+  // A list that cannot be read: accepted, said, and checked again before any allocation.
+  const unread = await world.run(['location', 'set', parent], { seams: { ...UNREACHABLE_SEAMS, ...fakeApp({ settingsRefusal: { ok: false, code: 'obsidian-settings-unsafe', message: 'fake' } }) } })
+  assert.equal(unread.exit, EXIT.ok, unread.stderr)
+  assert.match(unread.stdout, /vault list could not be read \(obsidian-settings-unsafe\); no vault is allocated there until it can be/)
+  // The real entry under the test runner never reads the developer's own settings file.
+  const real = await world.run(['location', 'set', parent, '--json'], { seams: null, production: true, env: privateHomeEnv(world.dir, world.env) })
+  assert.deepEqual([real.exit, real.json.appVaultList], [EXIT.ok, { source: 'unread', reason: 'app-vault-list-under-test' }])
+})
+
+test('open adds the view\'s allocated vault to the app and opens it there', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  const app = fakeApp()
+  const seams = { ...UNREACHABLE_SEAMS, ...app, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const opened = await world.run(openArgs(), { seams })
+  assert.equal(opened.json.outcome, 'current', JSON.stringify(opened.json).slice(0, 400))
+  const vault = path.join(parent, 'opening-fixture (scope-whole)')
+  assert.deepEqual(app.registrations.map((entry) => entry.vaultRoot), [vault])
+  assert.deepEqual(app.launches, [vault])
+  assert.equal(opened.json.readBack.intact, true)
+  const record = readServiceRecord(world.workspace())
+  await world.run(['service', 'stop', '--json'], { seams })
+  await waitFor(() => !isAlive(record.pid), { label: 'the stopped service to exit' })
+})
+
+// The publisher's `direct-unheld` path, as the engine and `open` use it: a view never published into its allocated
+// folder, while an Obsidian runs whose list (read here from the fake app's own map) names no folder on the way.
+const unheldEvidenceOf = (app) => ({ vaultRoot }) => readUnheldEvidence({ vaultRoot, read: () => ({ ok: true, vaults: structuredClone(app.state.vaults) }), sandboxed: () => false })
+// An app that runs and answers for another vault, as the real one does for a call about a vault it does not list.
+const answersForAnotherVault = (app) => () => createEditorAdapter({ call: async () => ({ status: 'vault-mismatch' }), processProbe: () => (app.state.running ? 'running' : 'absent') })
+const journalModes = (world, scopeId = FULL_SCOPE.scopeId) => {
+  const directory = path.join(world.workspaceRoot(), 'state', 'journals', scopeId)
+  return fs.existsSync(directory) ? fs.readdirSync(directory).sort().map((name) => JSON.parse(fs.readFileSync(path.join(directory, name, 'header.json'), 'utf8')).ext?.[EXT]?.mode) : []
+}
+
+test('with Obsidian running and a vault open, a new view is published into its allocated folder before the app is told about it: open adds and opens the vault only once its generation is committed; the plugin entry is offered, and confirmed at hello', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  const vault = path.join(parent, 'opening-fixture (scope-whole)')
+  const other = path.join(world.dir, 'somebody-else')
+  fs.mkdirSync(other, { recursive: true })
+  const app = fakeApp({ running: true, vaults: { [OTHER_VAULT]: { path: other, ts: 1, open: true } } })
+  // Whether the view's generation was committed when the app was first told about the vault, and when it was launched.
+  const pointer = () => fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json'))
+  const committedAt = { registered: [], launched: [] }
+  const registerThroughApp = app.registry.registerThroughApp
+  app.registry.registerThroughApp = async (input) => { committedAt.registered.push(pointer()); return registerThroughApp(input) }
+  const launch = app.launcher.open
+  app.launcher.open = async (input) => { committedAt.launched.push(pointer()); return launch(input) }
+  await world.service({ adapterFactory: answersForAnotherVault(app), engineOptions: { readUnheldEvidence: unheldEvidenceOf(app) } })
+  assert.equal(pointer(), true, 'the first tick committed the generation with the app running')
+  assert.deepEqual(journalModes(world), ['direct-unheld'])
+  assert.equal(readPluginChoice({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId }).state, 'offered', 'published while an app ran: only offered')
+
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.registration?.how], ['current', 'added-through-app'], JSON.stringify(opened.json).slice(0, 500))
+  assert.deepEqual(app.registrations, [{ via: 'app', vaultRoot: vault }])
+  assert.deepEqual(committedAt, { registered: [true], launched: [true] }, 'never told about, nor opened, before the commit')
+  assert.deepEqual(journalModes(world), ['direct-unheld'], 'no second publication was needed')
+  // The plugin said hello from the vault.
+  assert.equal(confirmPluginSeen({ ...world.workspace(), scopeId: FULL_SCOPE.scopeId, clock: world.clock }).state, 'on')
+  assert.deepEqual(listing(other), {}, 'the vault the app holds is untouched')
+})
+
+test('a first publication the engine went ahead with despite the app\'s refusal, and that stops partway, reports the app\'s refusal, so open neither adds nor launches the vault before it is complete', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  const vault = path.join(parent, 'opening-fixture (scope-whole)')
+  const app = fakeApp({ running: true, cliOff: true, vaults: { [OTHER_VAULT]: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })
+  const refusing = () => { throw new ObsidianMaintenanceRefusal('app-cli-unavailable', 'stub', { reason: 'cli-turned-off' }) }
+  // The folder is allocated at a first tick, while the list names it, and a settings file with other bytes is put there.
+  const vaults = app.state.vaults
+  app.state.vaults = { ...vaults, cccccccccccccccc: { path: vault, ts: 1 } }
+  await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+  app.state.vaults = vaults
+  const theirs = '{"file-explorer":true}\n'
+  fs.mkdirSync(path.join(vault, '.obsidian'), { recursive: true })
+  fs.writeFileSync(path.join(vault, '.obsidian', 'core-plugins.json'), theirs)
+  // The run takes the path, creates what it can, and stops at the settings file: the app's refusal, not the unit's.
+  const report = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+  assert.deepEqual([report.scopes[0].state, report.scopes[0].reason], ['stale', 'app-cli-unavailable'], JSON.stringify(report.scopes[0]))
+  assert.deepEqual(journalModes(world), ['direct-unheld'])
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
+  assert.equal(fs.readFileSync(path.join(vault, '.obsidian', 'core-plugins.json'), 'utf8'), theirs)
+  // So open, asked without --restart-obsidian, names the command line, and adds and launches nothing.
+  await world.service({ adapterFactory: refusing, engineOptions: { readUnheldEvidence: unheldEvidenceOf(app) } })
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.reason], ['app-cli-unavailable', 'cli-turned-off'], JSON.stringify(opened.json).slice(0, 400))
+  assert.deepEqual([app.registrations, app.launches], [[], []])
+})
+
+for (const [refusal, reason] of [['app-cli-unavailable', 'cli-turned-off'], ['app-version-unsupported', 'no-vault-open'], ['app-version-unsupported', 'below-floor']]) {
+  test(`an app that does not qualify (${refusal}, ${reason}) no longer keeps a never-published allocated view from its first publication while its list names no folder on the way; with the list naming one, under the data root, or with nothing to read the list, the view is refused as before`, needsExchange, async (t) => {
+    const world = makeWorld(t)
+    const parent = path.join(world.dir, 'Atelier')
+    await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+    const vault = path.join(parent, 'opening-fixture (scope-whole)')
+    const app = fakeApp({ running: true })
+    let built = 0
+    const refusing = () => { built += 1; throw new ObsidianMaintenanceRefusal(refusal, 'stub', { reason }) }
+    // The list names the vault: refused as before, and nothing is written in it.
+    app.state.vaults = { [OTHER_VAULT]: { path: vault, ts: 1 } }
+    const listed = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+    assert.deepEqual([listed.scopes[0].state, listed.scopes[0].reason], ['stale', refusal])
+    assert.deepEqual(listing(vault), {})
+    // No reader of the list: the same.
+    const unread = await world.engine({ adapterFactory: refusing }).tick()
+    assert.deepEqual([unread.scopes[0].state, unread.scopes[0].reason], ['stale', refusal])
+    assert.deepEqual(listing(vault), {})
+    // Unlisted when the engine looked, listed by the time the publisher looked again: refused as before, for the app's
+    // reason, and no note is written (only the vault lock, which every publication takes first).
+    let looks = 0
+    const flipping = (input) => ((looks += 1) === 1 ? { unlisted: true } : unheldEvidenceOf(app)(input))
+    const raced = await world.engine({ adapterFactory: refusing, readUnheldEvidence: flipping }).tick()
+    assert.deepEqual([raced.scopes[0].state, raced.scopes[0].reason, looks], ['stale', refusal, 2])
+    assert.deepEqual(Object.keys(listing(vault)).filter((relative) => !relative.startsWith('.atelier-publication')), [])
+    // The list names no folder on the way: published, creating every file, and current.
+    app.state.vaults = { [OTHER_VAULT]: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } }
+    const published = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+    assert.deepEqual([published.scopes[0].state, published.scopes[0].reason], ['current', 'published-and-verified'], JSON.stringify(published.scopes[0]))
+    assert.deepEqual(journalModes(world), ['direct-unheld'])
+    assert.ok(built >= 3, 'the factory was asked each time')
+    // Once a generation is committed, a changed source is not published while the app does not qualify: the publisher
+    // is not even reached, and the committed generation stays.
+    const committed = world.manifest().generationId
+    fs.appendFileSync(world.source('east-wing/notes/lantern.md'), '\nThe lamp was cleaned.\n')
+    const { publishView: realPublishView } = await import('../src/projection/obsidian/publication/publisher.mjs')
+    let reached = 0
+    const later = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app), seams: { publishView: (input) => { reached += 1; return realPublishView(input) } } }).tick()
+    assert.deepEqual([later.scopes[0].state, later.scopes[0].reason, reached, world.manifest().generationId], ['stale', refusal, 0, committed])
+    // A view whose vault is under the data root is never published this way.
+    const legacy = makeWorld(t)
+    const refusedLegacy = await legacy.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(fakeApp({ running: true })) }).tick()
+    assert.deepEqual([refusedLegacy.scopes[0].state, refusedLegacy.scopes[0].reason], ['stale', refusal])
+    assert.deepEqual(journalModes(legacy), [])
+  })
+}
 
 test('the service is started in the root directory, whichever directory the command runs in', async (t) => {
   const world = makeWorld(t)

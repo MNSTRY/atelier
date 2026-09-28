@@ -55,11 +55,14 @@ export const urlProcessed = (stdout) => typeof stdout === 'string' && /^processe
 //
 // A URL is never handed to the operating system for an app this launch
 // started: that would start or reach it while it starts, which is what drops
-// the other vaults' reopen flags. The vault was added flagged open, so a plainly
-// started app opens it anyway, and `open` waits for it.
-export async function runLaunchPlan(plan, { start, answered, handLink, osOpen, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), waitMs = 30_000, pollMs = 500, now = () => Date.now() }) {
+// the other vaults' reopen flags. A vault added flagged open is opened anyway by
+// a plainly started app, and `open` waits for it; one already listed but closed
+// is handed the link once more instead (opening.mjs). `startedEarlier` says
+// that an earlier launch of the same `open` started the app (a link handed to
+// it once more): the link then goes through the app's tool only, as well.
+export async function runLaunchPlan(plan, { start, answered, handLink, osOpen, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), waitMs = 30_000, pollMs = 500, now = () => Date.now(), startedEarlier = false }) {
   if (!plan?.ok) return { launched: false, reason: plan?.reason ?? 'launcher-refused' }
-  let started = false
+  let started = startedEarlier === true
   let reason = 'url-accepted'
   for (const { step, uri } of plan.steps) {
     if (step === 'plain-start') {

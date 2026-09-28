@@ -5,9 +5,10 @@ import path from 'node:path'
 import tty from 'node:tty'
 import { fileURLToPath } from 'node:url'
 import { AtelierDiagnosticError, resolveProjectConfig } from '../project/config.mjs'
+import { readRegularTextNoFollow } from '../project/private-state.mjs'
 import { ObsidianContractRefusal } from '../projection/obsidian/contracts.mjs'
 import { applyPolicyDigest } from '../projection/obsidian/edits/policy.mjs'
-import { MINIMUM_APP_VERSION } from '../runtime/obsidian/app-capability.mjs'
+import { MINIMUM_APP_VERSION, inspectApp } from '../runtime/obsidian/app-capability.mjs'
 import { loadContributions } from '../runtime/obsidian/contributions.mjs'
 import { isoTime } from '../runtime/obsidian/documents.mjs'
 import { readObsidianEnablement } from '../runtime/obsidian/enablement.mjs'
@@ -24,17 +25,24 @@ import {
 } from '../runtime/obsidian/login-item.mjs'
 import { APPLY_UNAVAILABLE, OPENING_OUTCOMES, OPENING_PRIMITIVES, REASON_NEXT, nextStep, openScopeForOracleTests, resolveScope, scopeReport } from '../runtime/obsidian/opening.mjs'
 import { currentPluginChoice, writePluginChoice } from '../runtime/obsidian/plugin-choice.mjs'
-import { pluginPresenceOf, turnPluginOnNext, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
+import { pluginPresenceOf, turnPluginOnNext, withPluginFilesPending, withPluginReportedVersion } from '../runtime/obsidian/plugin-presence.mjs'
+import { planViewAdd, viewFromRequest, writeViewPlan } from '../runtime/obsidian/project-views.mjs'
+import { askGoAhead, createQuestioner } from '../runtime/obsidian/questions.mjs'
 import { readServiceSettings } from '../runtime/obsidian/service-record.mjs'
 import { resolveServiceWorkspace } from '../runtime/obsidian/service.mjs'
 import { STARTUP_PLATFORMS, buildStartupAdapter, startupSearchPath } from '../runtime/obsidian/startup-adapters.mjs'
-import { OBSIDIAN_SETTINGS_FILE, obsidianUserDataDir } from '../projection/obsidian/publication/vault-list.mjs'
+import { OBSIDIAN_SETTINGS_FILE, obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../projection/obsidian/publication/vault-list.mjs'
+import { checkVaultParent, projectDisplayName, vaultFolderName } from '../runtime/obsidian/vault-location.mjs'
+import { PublicationRefusal, allocationFile, hasCommittedGeneration, readVaultAllocation, vaultRootFor } from '../projection/obsidian/recovery/store.mjs'
 
 // `atelier obsidian <operation>`: status, views, audiences, apply policy, the
 // owned maintenance service, and opening a view.
 //
-// Noninteractive: every input is an argument, nothing is ever asked. With
-// `--json` exactly one JSON document is printed on stdout, for a refusal too.
+// Every input is an argument. A person at a terminal (`isInteractive`) is
+// asked before a change to a file they commit, and can answer with --yes
+// beforehand; anyone else is never asked, and their command is their consent.
+// With `--json` exactly one JSON document is printed on stdout, for a refusal
+// too.
 //
 // Exit codes: 0 done (for `open`: the view is current and open); 1 an error
 // nobody typed; 2 a typed refusal or a usage error; 3 the operation ran and
@@ -65,9 +73,19 @@ export const USAGE = `Usage: atelier obsidian <operation> [--project atelier.pro
 
   status                               Enablement, machine settings, service and per-view freshness. Read-only.
   settings                             What this machine remembers for this workspace, and how to change it. Read-only.
-  scope list | scope show ID           The views this project declares. Read-only.
+  scope list | scope show ID           The views this project declares. Read-only. (\`view list | show ID\` too.)
+  view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default]
+      [--allow-empty] [--yes]
+                                       Add a view to the project's configuration, which you commit: every note, the
+                                       notes under folders of one repository, or those with a tag, optionally with the
+                                       notes they link to (DEPTH steps, MAX notes in all). Shows the change and how many
+                                       notes the view would show, and asks at a terminal.
   audience show | set me|A,B | clear   The audiences this machine lets into a view (private; none by default).
-                                       \`me\` is only you: every audience but sensitive, which is added by name.
+                                       \`me\` is only you: every audience but sensitive, which is added by name, and
+                                       the notes without a classification, which no other list shows.
+  location show | set DIR [--allow-synced-location]
+                                       Where this workspace's vaults live, as "<project> (<view>)"; each is allocated
+                                       there at its first publication. A vault published already stays where it is.
   mode show | set manual|automatic     Whether queued edits wait for a person or are applied under the policy.
   policy show | install FILE | revoke  The private apply policy. Automatic mode needs an installed, active one.
   policy digest FILE                   The digest FILE has to carry to be installed. Reads FILE; writes nothing.
@@ -120,8 +138,9 @@ Exit codes: 0 done; 1 internal error; 2 refusal or usage; 3 ran, and the answer 
 // Every option of the command. `atelier obsidian --help` names each one but `help` and `project-config` (the older
 // spelling of `project`); a test holds it to that.
 export const FLAGS = Object.freeze({
-  json: 'flag', 'allow-stale': 'flag', 'restart-obsidian': 'flag', print: 'flag', install: 'flag', remove: 'flag', help: 'flag', 'no-input': 'flag', project: 'value', 'project-config': 'value',
-  'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value',
+  json: 'flag', 'allow-stale': 'flag', 'restart-obsidian': 'flag', print: 'flag', install: 'flag', remove: 'flag', help: 'flag', 'no-input': 'flag', 'allow-synced-location': 'flag', all: 'flag', default: 'flag', 'allow-empty': 'flag', yes: 'flag',
+  project: 'value', 'project-config': 'value', 'data-root': 'value', scope: 'value', 'consent-actor': 'value', actor: 'value', adapter: 'value', 'wait-ms': 'value', repo: 'value', tag: 'value',
+  expand: 'value', folder: 'values',
 })
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -157,7 +176,7 @@ export const accountActor = (username) => (typeof username === 'string' && IDENT
 // How each remembered answer is changed; null where no command changes it.
 const DECISION_CHANGES = Object.freeze({
   audience: '`atelier obsidian audience set me|A,B` decides who may see the vaults again',
-  location: null,
+  location: '`atelier obsidian location set DIR` decides where the vaults of views not published yet live',
   loginItem: '`atelier obsidian service unit --install` starts maintenance at login; `service unit --remove` stops that',
   adapter: null,
   consent: '`atelier obsidian service stop`, then `service start --consent-actor ID`, records another actor',
@@ -200,7 +219,8 @@ function parse(argv) {
     if (FLAGS[name] === 'flag') { if (inline !== undefined) refuse('usage', `--${name} takes no value`); flags[name] = true; continue }
     const value = inline ?? argv[index += 1]
     if (value === undefined || value === '' || (inline === undefined && value.startsWith('--'))) refuse('usage', `--${name} needs a value`)
-    flags[name] = value
+    // An option that takes several values is given once for each.
+    flags[name] = FLAGS[name] === 'values' ? [...(flags[name] ?? []), value] : value
   }
   return { positionals, flags }
 }
@@ -227,7 +247,7 @@ function obsidianSettingsLines(settings) {
   return [`Obsidian's settings, written while it was quit: ${what}.`, ...(settings.backupPath ? [`  The file as it was is kept in ${settings.backupPath}.`] : [])]
 }
 
-const isTyped = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal
+const isTyped = (error) => error instanceof ObsidianMaintenanceRefusal || error instanceof AtelierDiagnosticError || error instanceof ObsidianContractRefusal || error instanceof PublicationRefusal
 const plainMessage = (error) => String(error.message ?? '').replace(new RegExp(`^${error.code}: `), '')
 const NEXT = Object.freeze({
   usage: 'run `atelier obsidian --help`',
@@ -238,7 +258,14 @@ const NEXT = Object.freeze({
   'automatic-mode-refused': 'install an active automatic policy with `obsidian policy install FILE`',
   [APPLY_UNAVAILABLE]: 'no apply operation is registered on this command; edits stay preserved and queued',
   'policy-digest-mismatch': 'set the "digest" member of the file to the expected digest (`obsidian policy digest FILE` prints it), then install again',
-  disabled: 'declare the Obsidian settings in the project configuration',
+  disabled: 'declare the Obsidian settings in the project configuration: `atelier obsidian view add everything --all` does it',
+  'view-would-be-empty': 'check the folders or the tag, and who may see them (`atelier obsidian audience show`; `audience set me` admits every note that is only yours, those without a classification included, and leaves out `sensitive`; a list such as `me,sensitive` shows no note without a classification); --allow-empty declares the view anyway',
+  'view-exists': 'choose another name; `atelier obsidian view list` shows the views declared',
+  'view-repository-ambiguous': 'name the repository the folders are in with --repo',
+  'project-config-format-unknown': 'add the member shown under "detail" to the project configuration by hand, under "ext"',
+  'project-config-changed': 'run the command again',
+  'canonical-graph-invalid': '`atelier graph --check` names the errors in the project\'s notes; fix them, then run the command again',
+  unanswered: 'run the command again at a terminal, or pass --yes',
   'startup-platform-unqualified': 'a login item is offered on macOS and Linux; `atelier obsidian open` starts maintenance when you open a view',
   'startup-platform-unsupported': 'a login item is offered on macOS and Linux; `atelier obsidian open` starts maintenance when you open a view',
   'login-item-needs-installed-package': 'install @mnstry/atelier in the project (`npm i -D @mnstry/atelier`), then run the command there',
@@ -293,6 +320,18 @@ const LOGIN_ITEM_NEXT = Object.freeze({
   'service-settings-absent': 'install it again with `atelier obsidian service unit --install --consent-actor ID`',
 })
 
+// What a view would show, in words: `counts` of viewCounts, and who they were counted for.
+function viewCountWords(scopeId, counts, audience) {
+  const who = audience.decided ? (audience.allow.length === 0 ? 'no audience' : audience.allow.join(', ')) : 'only you, until you decide'
+  const reasons = [
+    ...(counts.withheld.unclassified > 0 ? [`${counts.withheld.unclassified} carry no classification`] : []),
+    ...(counts.withheld.audience > 0 ? [`${counts.withheld.audience} an audience not admitted`] : []),
+  ]
+  const shown = `view ${scopeId} would show ${counts.shown === 0 ? 'no note' : `${counts.shown} note(s)`} (who may see: ${who})`
+  if (counts.named === 0) return `${shown}: it names no note`
+  return reasons.length === 0 ? shown : `${shown}; of the ${counts.named} note(s) it names, ${reasons.join(' and ')}`
+}
+
 // The decisions the command's oracles are sensitive to are those of opening and of the lifecycle; tests substitute
 // broken ones here to prove the oracles can fail. `runObsidianCommand` always uses the production ones.
 export async function runObsidianCommandForOracleTests(options = {}, rules = {}) {
@@ -305,9 +344,18 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     // under the test runner the process's own terminal is never looked at.
     terminal = env.NODE_TEST_CONTEXT === undefined ? { stdin: tty.isatty(0), stdout: tty.isatty(1) } : { stdin: false, stdout: false },
     account = accountName,
+    // The home folder a location is read against (`~/`) and checked for sync clients; a test names its own.
+    homedir = env.NODE_TEST_CONTEXT === undefined ? os.homedir() : null,
+    // Where a person at a terminal is asked, and answers; a test types into its own.
+    input = env.NODE_TEST_CONTEXT === undefined ? process.stdin : null, output = env.NODE_TEST_CONTEXT === undefined ? process.stdout : null,
   } = options
   let json = argv.includes('--json')
   let operationName = null
+  let questions = null
+  const questioner = () => {
+    if (input === null || output === null) throw new Error('a question needs an input and an output')
+    return (questions ??= createQuestioner({ input, output }))
+  }
   const emit = ({ exit, document, human }) => {
     const complete = { schema: COMMAND_SCHEMA, ok: exit === EXIT.ok, operation: operationName, ...document }
     if (json) stdout(JSON.stringify(complete, null, 2))
@@ -375,6 +423,29 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       const { createProductionAppSeams } = await import('../runtime/obsidian/app-production-seams.mjs')
       return createProductionAppSeams({ env, platform })
     }
+    // The app's vault list, read only, for a check of where vaults may live: through the app when it runs and answers,
+    // else from its settings file. { source: 'app' | 'file' | 'none', vaults } ('none': the app never ran here), or
+    // { source: 'unread', vaults: null, reason }. The app is reached only with the adapter (given or remembered, or the
+    // caller's seams); without it, only the file is read, and never under the test runner.
+    const appVaultList = async () => {
+      const quietly = async (read) => { try { return await read() } catch { return null } }
+      const reach = seams !== null ? seams : adapterSelected() ? await appSeams() : null
+      const registry = reach?.registry ?? null
+      if (registry !== null && reach.appProbe !== undefined) {
+        const seen = await inspectApp(reach.appProbe)
+        if (seen.running === true && typeof seen.version === 'string') {
+          const listed = await quietly(() => registry.listThroughApp())
+          if (listed?.answered === true) return { source: 'app', vaults: listed.vaults }
+        }
+      }
+      const settings = registry !== null ? await quietly(() => registry.readSettings())
+        : env.NODE_TEST_CONTEXT !== undefined ? { ok: false, code: 'app-vault-list-under-test' }
+          : obsidianSandboxedBuild({ platform, env }) !== null ? { ok: false, code: 'obsidian-sandboxed' }
+            : readObsidianSettings({ userDataDir: obsidianUserDataDir({ platform, env }) })
+      if (settings?.ok === true) return { source: 'file', vaults: settings.vaults ?? {} }
+      if (settings?.code === 'obsidian-settings-missing') return { source: 'none', vaults: {} }
+      return { source: 'unread', vaults: null, reason: typeof settings?.code === 'string' ? settings.code : 'obsidian-settings-unreadable' }
+    }
     // Whether this run may reach the installed app: --adapter given, or remembered by the workspace for the real entry.
     const adapterSelected = () => { try { chooseAdapter(); return true } catch (error) { if (isTyped(error)) return false; throw error } }
     // Atelier's plugin as the running service sees it, for one view. A vault that turned it off says so from its own list
@@ -385,7 +456,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       return { present: false, reason: 'turned-off-in-this-vault', next: turnPluginOnNext(scopeId) }
     }
     const pluginOf = async (scopeId) => pluginPresenceOf((await readServiceStatusDocument(lifecycle, lifecycleRules)).document, scopeId)
-    const pluginLine = (plugin) => (plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : plugin.reason === 'turned-off-in-this-vault' ? '; plugin turned off in this vault' : `; plugin not present (${plugin.reason})`)
+    const pluginLine = (plugin) => `${plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : plugin.reason === 'turned-off-in-this-vault' ? '; plugin turned off in this vault' : `; plugin not present (${plugin.reason})`}${plugin.files === 'waits-for-app' ? '; plugin files wait for the app' : ''}`
 
     const configured = () => {
       const project = loadProject()
@@ -581,13 +652,49 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
       return true
     }
-    // Where what `uninstall` keeps is: the vaults, the private state, the project file and Obsidian's vault list.
+    // Where what `uninstall` keeps is: the vaults, the private state, the project file and Obsidian's vault list. The
+    // vaults are those under the data root and every folder allocated to a view where the workspace decided its vaults
+    // live, a view no longer declared included; a record that cannot be read names none.
     const keptLocations = (project, workspace) => {
       const vaultsDirectory = workspace === null ? null : path.join(workspace.workspaceRoot, 'vaults')
-      let vaults = []
-      try { vaults = vaultsDirectory === null ? [] : fs.readdirSync(vaultsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(vaultsDirectory, entry.name)).sort() } catch { vaults = [] }
+      let underDataRoot = []
+      try { underDataRoot = vaultsDirectory === null ? [] : fs.readdirSync(vaultsDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(vaultsDirectory, entry.name)) } catch { underDataRoot = [] }
+      const allocated = []
+      if (workspace !== null) {
+        const records = path.join(workspace.workspaceRoot, 'state', 'allocations')
+        let names = []
+        try { names = fs.readdirSync(records).filter((name) => name.endsWith('.json')) } catch { names = [] }
+        for (const name of names) {
+          // Whatever the file is or holds (a link, a FIFO, not JSON, `null`, another view's record), it names a folder only
+          // when it is a valid record of its own view, which the store would read too; nothing here can stop `uninstall`.
+          try {
+            // Read as the store reads a record: a regular file only, never through a link, never a FIFO that would block.
+            const scopeId = JSON.parse(readRegularTextNoFollow(path.join(records, name)))?.scopeId
+            if (typeof scopeId !== 'string' || path.basename(allocationFile(workspace.workspaceRoot, scopeId)) !== name) continue
+            const allocation = readVaultAllocation({ ...workspace, scopeId })
+            if (allocation !== null) allocated.push(allocation.path)
+          } catch { /* a record that cannot be read names no folder */ }
+        }
+      }
+      const vaults = [...new Set([...underDataRoot, ...allocated])].sort()
       const userDataDir = obsidianUserDataDir({ platform, env })
       return { vaults, privateState: workspace?.workspaceRoot ?? null, projectFile: project.configPath ?? null, pointer: project.configPath ? localPointerPath(project) : null, obsidianList: userDataDir === null ? null : path.join(userDataDir, OBSIDIAN_SETTINGS_FILE) }
+    }
+
+    // Where a view's vault is, or will be: { path, origin }. A view the next tick will place is shown where it would go,
+    // if that name is still free then (`to-be-allocated`).
+    // A view whose record cannot be read, or was lost, says why, as `status` does, and the other views are still shown.
+    const vaultWhere = (workspace, scopeId, decided, projectName) => {
+      if (workspace === null) return { path: null, origin: 'workspace-not-prepared' }
+      let found
+      try { found = vaultRootFor({ ...workspace, scopeId }) } catch (error) {
+        if (!isTyped(error)) throw error
+        return { path: null, origin: 'unreadable', reason: error.code }
+      }
+      if (found.origin === 'legacy-data-root' && decided !== null && !hasCommittedGeneration({ ...workspace, scopeId })) {
+        return { path: path.join(decided.parent, vaultFolderName({ projectName, scopeId })), origin: 'to-be-allocated' }
+      }
+      return { path: found.path, origin: found.origin }
     }
 
     const operations = {
@@ -604,8 +711,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const scopes = workspace === null
           ? enablement.scopes.map(({ scopeId }) => ({ scopeId, outcome: enablement.state === 'disabled' ? 'disabled' : 'not-prepared', reason: enablement.state === 'disabled' ? enablement.reason : 'workspace-not-prepared' }))
           : enablement.scopes.map(({ scopeId }) => {
-            const { vaultRoot: _vault, summary: _summary, ...report } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
-            const plugin = pluginView(running, workspace, scopeId)
+            const { vaultRoot: _vault, summary: _summary, ...found } = scopeReport({ workspace, scopeId, repositoryRoots: protectedRoots(project), serviceState: service.state, applyAvailable }, openingRules)
+            // A view whose vault the next tick allocates elsewhere says where, not the data root it will not use.
+            const report = found.vault?.origin === 'legacy-data-root' ? { ...found, vault: vaultWhere(workspace, scopeId, machineOf(workspace)?.decisions.location ?? null, projectDisplayName(project)) } : found
+            const plugin = withPluginFilesPending(pluginView(running, workspace, scopeId), report.freshness)
             return enablement.state === 'disabled' ? { ...report, outcome: 'disabled', reason: enablement.reason, next: OPENING_OUTCOMES.disabled.next, plugin } : { ...report, plugin }
           })
         const document = {
@@ -653,6 +762,103 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         }
       },
 
+      // Where this workspace's vaults live. Deciding it places the vaults of views not published yet; a vault published
+      // already, under the data root or where an earlier decision placed it, stays where it is.
+      async location() {
+        const where = vaultWhere
+        const views = (project, enablement, workspace, decided) => enablement.scopes.map(({ scopeId }) => ({ scopeId, ...where(workspace, scopeId, decided, projectDisplayName(project)) }))
+        const lines = (list) => list.map((view) => `view ${view.scopeId}: ${view.path ?? 'no vault yet'} (${view.origin}${view.reason === undefined ? '' : `: ${view.reason}`})`)
+        if (sub === 'show' || sub === undefined) {
+          const { project, enablement, workspace } = readable()
+          const { decisions } = shownMachine(machineOf(workspace), workspace)
+          const shown = views(project, enablement, workspace, decisions.location)
+          return { exit: EXIT.ok, document: { location: decisions.location, views: shown }, human: [`where vaults live: ${decisionWords('location', decisions.location)}`, ...lines(shown)] }
+        }
+        if (sub !== 'set' || value === undefined) refuse('usage', 'location show | location set DIR [--allow-synced-location]')
+        // `~/` is read against the home folder, which a shell does not do after `--x=`; under the test runner a home
+        // folder is only ever one the test named.
+        const tilde = value === '~' || value.startsWith('~/')
+        if (tilde && typeof homedir !== 'string') refuse('real-vault-location-under-test', 'a location under the home folder is never used under the test runner; name an absolute folder')
+        // Resolved, so a trailing separator (as tab completion leaves it) is no refusal.
+        const parent = tilde ? path.resolve(path.join(homedir, value.slice(1))) : path.resolve(cwd, value)
+        const { project, enablement, workspace, repositoryRoots, now } = writable()
+        // A record that cannot be read names no folder here; the engine refuses its view on its own.
+        const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultWhere(workspace, scopeId, null, null)).filter((found) => found.origin === 'allocated').map((found) => found.path)
+        // A folder inside, or holding, a vault the app lists is refused now; when the list cannot be read, it is checked
+        // again, and has to be read, before any vault is allocated there.
+        const list = await appVaultList()
+        const warnings = checkVaultParent({ parent, workspaceRoot: workspace.workspaceRoot, repositoryRoots, vaults: list.vaults, allocatedPaths, allowSynced: flags['allow-synced-location'] === true, homedir: homedir ?? undefined, platform })
+        const appVaultListShown = { source: list.source, ...(list.reason === undefined ? {} : { reason: list.reason }) }
+        const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
+        const decided = withDecision(current, 'location', { parent }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
+        writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
+        const placed = views(project, enablement, workspace, decided.decisions.location)
+        return {
+          exit: EXIT.ok, document: { location: decided.decisions.location, warnings, appVaultList: appVaultListShown, views: placed, takesEffect: 'next-tick' },
+          human: [
+            `where vaults live: ${parent}; a view's vault is allocated there at its first publication, as "${projectDisplayName(project)} (<view>)"`,
+            ...(warnings.synced === null ? [] : [`Warning: ${warnings.synced} keeps this folder in step with other machines.`]),
+            ...(warnings.protected === null ? [] : [`Warning: macOS asks before Obsidian or the maintenance service may read your ${warnings.protected} folder.`]),
+            ...(list.source === 'unread' ? [`Obsidian's vault list could not be read (${list.reason}); no vault is allocated there until it can be, and it is checked again then.`] : []),
+            ...lines(placed),
+          ],
+        }
+      },
+
+      // One more view in the project's configuration. A person at a terminal sees the change and how many notes the view
+      // would show, and is asked; --yes answers beforehand. Anyone else gets the change made, and shown.
+      async view() {
+        if (sub === 'list' || sub === 'show' || sub === undefined) return operations.scope()
+        if (sub !== 'add' || value === undefined) refuse('usage', 'view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default] [--allow-empty] [--yes]')
+        const { project, workspace, workspaceId } = readable()
+        const repositories = project.repos.filter((repo) => !repo.external && typeof repo.name === 'string').map((repo) => repo.name)
+        const scope = viewFromRequest({ scopeId: value, all: flags.all === true, folders: flags.folder ?? [], repo: flags.repo, tag: flags.tag, expand: flags.expand, repositories })
+        const plan = planViewAdd(project, { scope, makeDefault: flags.default === true })
+        // Counted as this machine decided who may see; while nobody decided, for "only you", the answer offered first,
+        // which shows the notes without a classification too.
+        const machine = machineOf(workspace)
+        const decided = machine?.decisions.audience ?? null
+        const audience = { allow: decided === null ? ONLY_YOU_AUDIENCES : machine.audienceAllow, decided: decided !== null }
+        const { eligibilityFor, onlyYouEligibility } = await import('../runtime/obsidian/pipeline.mjs')
+        const { viewCounts } = await import('../runtime/obsidian/view-counts.mjs')
+        const eligibility = decided === null ? onlyYouEligibility({ project }) : eligibilityFor({ machine, project })
+        const counts = viewCounts({ project, audienceAllow: audience.allow, scope, eligibility, ...(workspaceId === null ? {} : { workspaceId }) })
+        const countLine = viewCountWords(scope.scopeId, counts, audience)
+        // No audience admitted on this machine (`audience clear`): the view is empty whatever it selects, and the way out is
+        // deciding who may see, not classifying notes.
+        const nobody = audience.decided && audience.allow.length === 0 ? '; no audience is admitted on this machine: `atelier obsidian audience set me` admits yours' : ''
+        if (counts.shown === 0 && flags['allow-empty'] !== true) refuse('view-would-be-empty', `${countLine}${nobody}; nothing was written`, { scopeId: scope.scopeId, counts, audience })
+        const file = path.basename(project.configPath)
+        const shownPlan = [
+          `Atelier will add the view "${scope.scopeId}" to ${file}${plan.ignore.needed ? ', and .atelier-local/ to .gitignore' : ''} (you commit it):`,
+          ...plan.diff.trimEnd().split('\n').map((line) => `  ${line}`),
+          countLine,
+        ]
+        const asked = interactive && flags.yes !== true
+        if (asked) {
+          for (const line of shownPlan) stdout(line)
+          const yes = await askGoAhead(questioner(), 'Write this change? [Y/n] ')
+          if (yes === null) refuse('unanswered', 'no answer came; nothing was written')
+          if (!yes) return { exit: EXIT.notSuccess, document: { scope, declined: true, written: [], diff: plan.diff, counts, audience }, human: ['Nothing was written.'] }
+        }
+        const { written } = writeViewPlan(plan)
+        const committed = written.map((item) => path.relative(project.configDir, item).split(path.sep).join('/'))
+        // The counts are for "only you" while nobody decided, but the maintenance service publishes nothing until someone
+        // does: deciding comes first.
+        const openStep = `\`atelier obsidian open${plan.settings.defaultScopeId === scope.scopeId ? '' : ` --scope ${scope.scopeId}`}\` shows it in Obsidian`
+        const next = audience.decided ? [openStep] : ['`atelier obsidian audience set me` lets only you see its notes; until someone decides, the view publishes none', openStep]
+        return {
+          exit: EXIT.ok,
+          document: { scope, defaultScopeId: plan.settings.defaultScopeId ?? null, declined: false, written: committed, diff: plan.diff, counts, audience, next },
+          human: [
+            ...(asked ? [] : shownPlan),
+            `Added the view ${scope.scopeId}${plan.settings.defaultScopeId === scope.scopeId ? ', the default' : ''}. Commit ${committed.join(' and ')} when you are ready; Atelier commits nothing.`,
+            ...(plan.settings.enabled === true ? [] : ['The projection is turned off in this project ("enabled": false), so nothing is published until it is turned on.']),
+            `Next: ${next[0]}`, ...next.slice(1).map((step) => `Then: ${step}`),
+          ],
+        }
+      },
+
       async scope() {
         const { enablement } = readable()
         if (sub === 'list' || sub === undefined) return { exit: EXIT.ok, document: { defaultScopeId: enablement.defaultScopeId, scopes: enablement.scopes }, human: enablement.scopes.map((scope) => `${scope.scopeId}\t${scope.mode}${scope.scopeId === enablement.defaultScopeId ? '\tdefault' : ''}`) }
@@ -676,14 +882,18 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         const choice = named.length === 1 && named[0] === 'me' ? 'only-you' : 'custom'
         const { workspace, repositoryRoots, now } = writable()
         const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
-        const changed = JSON.stringify(current.audienceAllow) !== JSON.stringify(audienceAllow)
-        // Notes without a classification stay withheld: no release shows them yet.
-        const decided = withDecision({ ...current, audienceAllow }, 'audience', { choice, unclassified: 'withheld' }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
+        // A vault that is only yours shows the notes that carry no classification too; any other list withholds them.
+        const unclassified = choice === 'only-you' ? 'shown' : 'withheld'
+        const changed = JSON.stringify(current.audienceAllow) !== JSON.stringify(audienceAllow) || (current.decisions.audience?.unclassified ?? 'withheld') !== unclassified
+        const decided = withDecision({ ...current, audienceAllow }, 'audience', { choice, unclassified }, { decidedAt: now, decidedBy: accountActor(account()), via: 'command' })
         writeMachineSettings({ ...workspace, repositoryRoots, settings: { ...decided, updatedAt: now } })
         // The engine compares a digest of these on every tick: a change invalidates every view at the next one.
         return {
-          exit: EXIT.ok, document: { audienceAllow, choice, unclassified: 'withheld', changed, takesEffect: 'next-tick' },
-          human: [`audiences: ${choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.join(', ') || 'none'}; notes without a classification withheld; views are rebuilt at the next tick`],
+          exit: EXIT.ok, document: { audienceAllow, choice, unclassified, changed, takesEffect: 'next-tick' },
+          human: [
+            `audiences: ${choice === 'only-you' ? `only you (${audienceAllow.join(', ')})` : audienceAllow.join(', ') || 'none'}; notes without a classification ${unclassified}; views are rebuilt at the next tick`,
+            ...(choice === 'only-you' ? [] : ['Notes without a classification are shown only in a vault that is only yours: `atelier obsidian audience set me`.']),
+          ],
         }
       },
 
@@ -793,13 +1003,13 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         }, openingRules, lifecycleRules)
         const recorded = consentRecorded(consent)
         const { ok: _ok, ...opened } = result
-        const plugin = typeof result.scopeId === 'string' ? await pluginOf(result.scopeId) : null
+        const plugin = typeof result.scopeId === 'string' ? withPluginFilesPending(await pluginOf(result.scopeId), result.freshness) : null
         const rememberedNow = { adapter: adapterRemembered, consentActor: recorded.source === 'account' ? recorded.consent.actor : null }
         const document = plugin === null ? { ...opened, rememberedNow } : { ...opened, plugin, rememberedNow }
         return {
           exit: result.ok ? EXIT.ok : EXIT.notSuccess, document,
           human: [
-            `${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []),
+            `${result.outcome}: ${result.summary}${result.reason ? ` (${result.reason})` : ''}${plugin ? pluginLine(plugin) : ''}`, `Next: ${result.next}`, ...(plugin?.files === 'waits-for-app' ? [`Next for the plugin: ${plugin.next}`] : []), ...(result.service?.restarted ? [`service: restarted (${result.service.restarted})`] : []),
             ...loginItemLines(result.service?.loginItem), ...restartLines(result.restart), ...obsidianSettingsLines(result.obsidianSettings),
             ...(result.duplicates ? [`open in Obsidian as: ${result.duplicates.map((entry) => entry.path).join(', ')}`] : []), ...(result.pendingEdits?.open ? [`${result.pendingEdits.open} pending edit(s); apply ${result.pendingEdits.apply}`] : []),
             ...rememberedLines({ adapterRemembered, consent: recorded }),
@@ -861,9 +1071,10 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         let workspace = null
         try { const found = resolveServiceWorkspace({ project, dataRoot, env, platform }); workspace = found?.workspaceRoot ? found : null } catch (error) { if (!isTyped(error)) throw error }
         const record = workspace === null ? null : readLoginItemRecord(workspace)
+        // What is kept is read before anything is stopped or removed, so nothing it finds can stop the answer after that.
+        const kept = keptLocations(project, workspace)
         const item = record === null ? { removed: false, reason: 'not-installed' } : await removeLoginItem({ loadProject, dataRoot, env, platform, manager: await managerSeam(), clock })
         const service = workspace === null ? { state: 'stopped', stopped: false, refused: false, reason: 'workspace-not-prepared' } : await stopService(lifecycle, lifecycleRules)
-        const kept = keptLocations(project, workspace)
         const itemGone = item.removed === true || item.reason === 'not-installed' || item.reason === 'workspace-not-prepared'
         const serviceGone = service.stopped === true || service.state === 'stopped'
         const remembered = workspace !== null && itemGone ? rememberLoginItem('off') : false
@@ -908,6 +1119,8 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     }
     const next = NEXT[error.code] ?? error.hint ?? 'see `atelier obsidian status`'
     return emit({ exit: EXIT.refused, document: { error: { code: error.code, message: plainMessage(error), next, detail: error.detail ?? {} } }, human: [`[${error.code}] ${plainMessage(error)}`, `Next: ${next}`] })
+  } finally {
+    questions?.close()
   }
 }
 

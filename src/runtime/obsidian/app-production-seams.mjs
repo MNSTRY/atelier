@@ -18,10 +18,11 @@ import { launchPlan, runLaunchPlan, urlProcessed } from './launch-plan.mjs'
 // entries and both behind an explicit `--adapter=obsidian-cli`: the service
 // entry (service-main.mjs) and the command entry (src/commands/obsidian.mjs,
 // `production: true`). No test of the default suite imports it in-process, and
-// importing it leaves a trace below that the test suite asserts is absent. One
-// test imports it in a child process, with a stand-in for the command-line
-// tool, to read the version answers it parses; the opt-in real-app suite
-// imports it to reach an isolated app through that app's private HOME.
+// importing it leaves a trace below that the test suite asserts is absent.
+// Tests import it in child processes only, with a private HOME: with a
+// stand-in for the command-line tool, to read the answers it parses, and with
+// a stand-in execFile, to check the launcher's executors; the opt-in real-app
+// suite imports it to reach an isolated app through that app's private HOME.
 //
 // Status: exercised against an isolated Obsidian 1.13.7 (installer 1.12.7) on
 // macOS by the opt-in real-app suite in test/obsidian-first-open-real-app.test.mjs;
@@ -174,21 +175,25 @@ export function createProductionAppRegistry({
 // the app itself answers the tool; a running app is handed the URL through its
 // tool, which takes a URL even with its command line turned off, and through the
 // operating system when the tool did not take it. A URL is never handed to the
-// operating system for an app this launch started. No shell.
+// operating system for an app this launch started. No shell. `execFile` is
+// node's, and a stand-in in the test of these executors, which runs in a child
+// process (the default suite never imports this module in-process).
 export function createProductionLauncher({
-  platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), workingDirectory = NEUTRAL_DIRECTORY, waitMs, pollMs, sleep,
+  platform = process.platform, env = process.env, cliPath = defaultCliPath(platform), workingDirectory = NEUTRAL_DIRECTORY, waitMs, pollMs, sleep, execFile: runFile = execFile,
 } = {}) {
   const osCommand = platform === 'darwin' ? '/usr/bin/open' : platform === 'linux' ? 'xdg-open' : null
   const run = (file, args, timeout = 15_000) => new Promise((resolve) => {
-    execFile(file, args, { env, cwd: workingDirectory, timeout, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => resolve({ failed: Boolean(error), stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }))
+    runFile(file, args, { env, cwd: workingDirectory, timeout, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => resolve({ failed: Boolean(error), stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }))
   })
   return {
     // Starts a quit app with no URL, so it reopens the vaults its list flags open: for giving back an app `open`
     // quit to restart it, when the vault could not be added after all. macOS only, as the restart is.
     startPlain: async () => platform === 'darwin' && !(await run(osCommand, ['-b', 'md.obsidian'])).failed,
-    open({ vaultId = null, vaultPath = null, appRunning }) {
+    // `startedByThisOpen`: this `open` started the app with an earlier launch; the link goes through its tool only.
+    open({ vaultId = null, vaultPath = null, appRunning, startedByThisOpen = false }) {
       const plan = launchPlan({ platform, appRunning, vaultId, vaultPath })
       return runLaunchPlan(plan, {
+        startedEarlier: startedByThisOpen === true,
         start: async () => !(await run(osCommand, ['-b', 'md.obsidian'])).failed,
         answered: async () => { const reply = await run(cliPath, ['version'], CLI_TIMEOUT_MS); return appAnswered({ stdout: reply.stdout, stderr: reply.stderr, exited: !reply.failed }) },
         handLink: async (uri) => urlProcessed((await run(cliPath, [uri], CLI_TIMEOUT_MS)).stdout),

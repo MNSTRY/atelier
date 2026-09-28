@@ -104,18 +104,48 @@ at the maintenance service's next tick, with nothing changed at the view's
 sources: the service compares the plugin files each committed generation pins
 with the disk, has a view whose files differ prepared again, and a generation
 that is already committed is published again, as it is, with its notes kept.
-A drift left for the person is asked about once, and again once it changes;
+A drift left for the person is asked about once, and again once it changes.
+What a publication could not change is not asked about again: a drift that
+publishing cannot repair (the data file of a vault root that is a link, say)
+is asked about at most once more after a publication that left it, which
+writes no vault file (the view is prepared again and takes the vault's lock,
+and for that tick shows as `stale`, then `updating`, before it is `current`
+again), and not again after that. A plugin file
+another writer removes or changes after the publication, even while the same
+tick goes on, unless it holds again what it held before the tick under the
+same pin and vault root, and a path
+the person repairs before the tick ends (the vault root made private,
+say), is asked about at the next look and written;
 where the plugin is turned off in the vault, a pinned file that is gone is no
 drift. Publishing a committed generation again needs the app when one runs;
 if that app does not qualify, nothing is written, the view stays `current`
 (a committed generation needs no app, so an app that cannot be qualified
 never makes a current view stale), and the file is written at a later
 attempt, on the retry schedule of an unsettled view, once the app
-qualifies. (The settings files are held to the same rule for a file nobody
+qualifies. A drift that publishing would only leave for the person again
+(the data file of a vault root that is a link or not private, a folder where
+a file goes) is no reason to publish again and needs no app: the path is
+left as it is, and the view keeps its plain reason. Nothing in `status` or
+`open` names such a path yet; without its data file the plugin cannot reach
+the service, so it shows as not present (`no-live-lease`). A few paths the
+publisher leaves for the person still count as a drift here, and wait for the
+app as one: a file nobody may read, a parent folder that cannot be looked
+into, and a vault root Atelier keeps whose mode cannot be changed. Until the app qualifies, a
+view waiting for it has the reason
+`verified-by-read-back-plugin-waits-for-app` rather than
+`verified-by-read-back`, and `status` and `open` add `plugin files wait for
+the app` to the plugin line (`files: "waits-for-app"` in `--json`), with a
+next step for the plugin. (The settings files are held to the same rule for a file nobody
 may read.) A plugin file that another program changes while a publication runs
 is a race and is handled like one on a note: that publication does not
 commit, the view is tried again, and the file is planned from the disk anew
 (`plugin-file-changed`); nothing reads a plugin file as an edit of a note.
+The view is then `publisher-conflict`, and its next step in `status` and
+`open` names that file as what stopped the publication (changed by another
+program or by the person; one change is enough), rather than asking the
+person to close another publisher; the same holds for a settings file
+(`settings-changed`). The reason is the first unit that stopped the
+publication, so other causes are not ruled out.
 Upgrades replace the plugin files the same way. The plugin's version in
 `manifest.json` changes whenever its code does, and the test suite holds the
 two together: the app keeps running the `main.js` it loaded until it reloads
@@ -423,10 +453,14 @@ answer decides wherever it gives one:
   and opens by path the vault the app lists. Where the settings file does
   not show it (a sandboxed build, say), or where it lists it and, once the
   vault is opened, the command line still does not answer for it while only
-  the plugin reports the version, `open` answers at once
+  the plugin reports the version, `open` answers
   `app-cli-unavailable` / `vault-open-cli-silent`: the plugin shows the vault
   open, so the command line is what did not answer, and waiting for the app
-  would change nothing.
+  would change nothing. After a launch that answer is given at the second
+  such round in a row, not the first: one tool call that timed out while the
+  app was busy opening its window looks the same once, and `open` then goes
+  on waiting for the vault. A wait that ends right after one such round gives
+  the same answer.
 - Whether an app runs is the process table's answer, which says no only when
   it finds no Obsidian process at all. A lease outlives its app by up to the
   lease time (six seconds after a crash), and any process that holds the

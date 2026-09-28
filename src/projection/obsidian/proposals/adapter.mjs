@@ -6,7 +6,7 @@ import { AtelierDiagnosticError } from '../../../project/config.mjs'
 import { compareText, isoTime } from '../../../runtime/obsidian/documents.mjs'
 import { ObsidianMaintenanceRefusal } from '../../../runtime/obsidian/errors.mjs'
 import { readMachineSettings } from '../../../runtime/obsidian/machine-settings.mjs'
-import { DEFAULT_ELIGIBILITY, createProductionSeams } from '../../../runtime/obsidian/pipeline.mjs'
+import { createProductionSeams, eligibilityFor } from '../../../runtime/obsidian/pipeline.mjs'
 import { acquirePrivateGenerationLock, createAbandonmentProof } from '../../../runtime/obsidian/private-lock.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, assertObsidianContract } from '../contracts.mjs'
 import { SOURCE_APPLY_PRIMITIVES } from '../edits/apply.mjs'
@@ -168,7 +168,7 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
   // two questions asked of the machine; `proveAbandoned` is the proof a held lock is passed over with.
   return function createProposalAdapter(options = {}) {
     const {
-      crash = () => {}, bounds: boundsInput = {}, limits = PROPOSAL_LEDGER_LIMITS, eligibility = DEFAULT_ELIGIBILITY,
+      crash = () => {}, bounds: boundsInput = {}, limits = PROPOSAL_LEDGER_LIMITS, eligibility: fixedEligibility = null,
       openStore = createProposalStore, objectStore = openObjectStore, isGitIgnored = SOURCE_APPLY_PRIMITIVES.isGitIgnored, proveAbandoned = createAbandonmentProof(), queueCrash = () => {},
     } = options
     const bounds = { ...PROPOSAL_BACKPRESSURE, ...boundsInput }
@@ -198,12 +198,18 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         if (!stores.has(scopeId)) stores.set(scopeId, seams.createRecoveryStore({ workspaceRoot, workspaceId, scopeId, repositoryRoots }))
         return stores.get(scopeId)
       }
-      // The canonical graph as it is now and the corpus profile of this machine, built once per call. Throws typed.
+      // The canonical graph as it is now and the corpus profile of this machine, built once per call with the notes the
+      // machine settings let into a view, as the engine builds it (eligibilityFor). Throws typed.
       let corpus = null
-      const currentCorpus = () => (corpus ??= {
-        graph: seams.buildGraph({ project, eligibility }),
-        profile: seams.profileFor({ project, workspaceId, audienceAllow: readMachineSettings({ workspaceRoot, workspaceId })?.audienceAllow ?? [] }),
-      })
+      const currentCorpus = () => {
+        if (corpus !== null) return corpus
+        const machine = readMachineSettings({ workspaceRoot, workspaceId })
+        corpus = {
+          graph: seams.buildGraph({ project, eligibility: fixedEligibility ?? eligibilityFor({ machine, project }) }),
+          profile: seams.profileFor({ project, workspaceId, audienceAllow: machine?.audienceAllow ?? [] }),
+        }
+        return corpus
+      }
       // true, false, or null when the canonical graph cannot be read now. The rule is the one source apply asks.
       const visible = options.isVisible ? (identity) => options.isVisible(identity, context) : ({ repoId, nodeId }) => {
         let built
