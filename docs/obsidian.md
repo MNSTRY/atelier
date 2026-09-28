@@ -818,7 +818,9 @@ test reported as a pass.
   committed. A program of the same account that puts a link in its place
   between one check and what follows it can still have that go through the
   link: one note's writes (the folders on its way and the note), or the vault
-  lock's empty folder. For a note replaced or removed while the app holds the
+  lock's folder (made there, or made private if it was there already) and, in
+  a folder that already holds one (another Atelier vault), a lock ticket and
+  its release flag. For a note replaced or removed while the app holds the
   vault, the app is asked about that note between the check and the write, so
   that window lasts a round trip to the app. The next check refuses the
   publication, and it is never reported current.
