@@ -765,6 +765,56 @@ Before 0.2.0-alpha.10 no production reading was ever absent, because the probe
 found Atelier's own service; from that release this path, and this window, are
 live.
 
+### First publication into a vault no Obsidian lists
+
+A running or unknowable app that cannot be coordinated with still refuses the
+whole publication, with one exception, the `direct-unheld` path. It is chosen
+at path selection only when all of these hold:
+
+1. The view has no committed generation.
+2. Its vault is the folder allocated for it (`vaultOrigin: 'allocated'`), and
+   that folder's device and inode are the ones its record names.
+3. The app's own settings file (`obsidian.json`) was read, and none of its
+   entries is the vault folder, a folder above it or a folder inside it. Both
+   sides are compared as written and by their real paths, in any letter case.
+   A file that cannot be read is read again, up to three times 50 ms apart,
+   because the app rewrites it with a plain write. A missing or unreadable
+   file, an entry whose folder is not an absolute path, or a Flatpak or snap
+   build of the app anywhere on the account (its list is elsewhere) gives no
+   evidence.
+4. The platform is macOS or Linux.
+
+Any other case gives the refusal it gave before. The maintenance service reads
+the evidence from the file and never asks the app.
+
+On this path the publisher writes only creates: a file appears through the
+exclusive link where nothing is, or not at all. A unit that would replace or
+remove a file, or write a settings file over one that is there, refuses as
+`editor-uncoordinated` (blocking) and writes nothing. A settings file that
+already holds exactly what the policy asks is left as it is, which is what an
+interrupted run of this path leaves. A file already at a note path is kept as
+`create-conflict`. The evidence is read again immediately before the first
+unit and whenever two seconds have passed. Once a reading gives none, every
+remaining unit refuses, a kept one included, and nothing is committed. The
+view lock and the vault lock are taken as on every path, and the journal
+records `mode: 'direct-unheld'`. Restart recovery and the late-writer check
+treat it as a `direct` journal.
+
+Why this loses nothing a person wrote, whoever holds the vault: no editor can
+hold an unsaved buffer of a file that does not exist; the link either makes
+the whole file appear or fails because something is there, which is kept; and
+an editor that later saves over a created file wins, and is read as an edit.
+The list evidence is for the experience: the app is first told about the vault
+(`open`) only after the generation is committed. Lists this account's app
+does not keep are covered by that argument alone: another user-data folder,
+another machine through a synced folder.
+
+A maintenance service whose app does not qualify (its command line off, no
+vault open, a version below the floor) no longer keeps such a view from its
+first publication: the publisher is reached with an adapter that coordinates
+with nothing, and takes this path when every condition holds. Otherwise the
+view reports the app's refusal, as before.
+
 ### Proven boundary
 
 macOS (Darwin 25, arm64) with Obsidian 1.13.7 (installer 1.12.7), CLI enabled,
