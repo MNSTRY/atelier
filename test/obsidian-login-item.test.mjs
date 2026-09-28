@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { reservePort } from './helpers/loopback-port.mjs'
+import { firstStartPort, isEphemeral, reservePort, withFirstStartPort } from './helpers/loopback-port.mjs'
 
 // ---------------------------------------------------------------------------
 // 0. The guards, installed before anything else is imported.
@@ -337,6 +337,10 @@ async function makeWorld(t, { name = 'Harbor Notes', entryArgs = [`--interval-ms
   const workspaceRoot = workspaceStateRoot(dataRoot, WORKSPACE_ID)
   writeMachineSettings({ workspaceRoot, workspaceId: WORKSPACE_ID, repositoryRoots: protectedRoots(project), settings: { ...defaultMachineSettings({ workspaceId: WORKSPACE_ID, updatedAt: iso(START) }), audienceAllow: ['team'] } })
   if (withLaunchd) launchd = await fakeLaunchd(t, { home, env })
+  // A first start names a reserved port instead of leaving the choice to the product (see the helper). Installing a
+  // login item records a port of the product's choice all the same: it has no port to be given.
+  const firstPort = await reservePort(t)
+  const recorded = () => { try { return world.settings() !== null } catch (error) { return error.code !== 'ENOENT' } }
   const world = {
     dir, projectDir, dataRoot, home, configPath, env, loadProject, launchd,
     workspace: () => ({ workspaceRoot: fs.realpathSync(workspaceRoot), workspaceId: WORKSPACE_ID }),
@@ -349,7 +353,7 @@ async function makeWorld(t, { name = 'Harbor Notes', entryArgs = [`--interval-ms
       const out = []
       const err = []
       const exit = await runObsidianCommand({
-        argv: [...argv, `--project=${configPath}`, `--data-root=${dataRoot}`], seams: seams ?? world.seams(), env, cwd: projectDir, platform, contributions: [], probeTimeoutMs: FAST_PROBE,
+        argv: [...argv, `--project=${configPath}`, `--data-root=${dataRoot}`], seams: withFirstStartPort(seams ?? world.seams(), firstPort, recorded), env, cwd: projectDir, platform, contributions: [], probeTimeoutMs: FAST_PROBE,
         stdout: (text) => out.push(text), stderr: (text) => err.push(text), ...extra,
       })
       const stdout = out.join('\n')
@@ -357,7 +361,10 @@ async function makeWorld(t, { name = 'Harbor Notes', entryArgs = [`--interval-ms
       try { json = JSON.parse(stdout) } catch { json = null }
       return { exit, stdout, stderr: err.join('\n'), json }
     },
-    lifecycle: (extra = {}) => ({ loadProject, dataRoot, env, probeTimeoutMs: FAST_PROBE, ...extra }),
+    lifecycle: (extra = {}) => ({ loadProject, dataRoot, env, probeTimeoutMs: FAST_PROBE, ...firstStartPort(firstPort, recorded), ...extra }),
+    // For a test whose subject comes after the install: the reserved port recorded first, under a consent for the service
+    // alone, which the install raises to cover startup. The port stays what was recorded.
+    recordReservedPort: () => serviceSettings(world, firstPort, 'service'),
     // The service the record names, once it answers health as itself.
     async healthy(label = 'the service to prove itself') {
       return waitFor(async () => { const status = await serviceStatus(world.lifecycle()); return status.state === 'healthy' ? status : null }, { label })
@@ -1136,7 +1143,9 @@ test('without a consent that covers startup nothing is installed; on Windows a l
 
 test('once installed, a stopped service is started through the login item, and a unit that differs from what would be written now is refreshed on the way', await commandTest(), async (t) => {
   const world = await makeWorld(t)
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
+  assert.equal(isEphemeral(world.settings().port), false, 'the install kept the reserved port, not one of the product\'s choice (#102)')
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
   assert.equal((await stopAskingAgain(world)).stopped, true)
@@ -1172,6 +1181,13 @@ function atTerminal(world) {
   const { CI: _ci, ATELIER_NONINTERACTIVE: _nonInteractive, ...personEnv } = world.env
   return { terminal: { stdin: true, stdout: true }, account: () => 'harbor-person', env: personEnv }
 }
+
+test('a first start through this file\'s lifecycle listens on a reserved port, never one the product found by listening on port 0 (#102)', needsPosix, async (t) => {
+  const world = await makeWorld(t, { withLaunchd: false })
+  const started = await startService(world.lifecycle({ entryPath: TEST_SERVICE_ENTRY, consent: { actor: CONSENT_ACTOR }, detached: true, spawn: followingSpawn(t), intervalMs: IDLE_INTERVAL }))
+  assert.deepEqual([started.state, isEphemeral(started.record.port), world.settings().port], ['healthy', false, started.record.port], String(started.record?.port))
+  assert.equal((await stopService(world.lifecycle({ stopTimeoutMs: 10000 }))).stopped, true)
+})
 
 // An earlier release: the same service entry with other bytes, as a child `start` made before an upgrade runs it.
 function earlierReleaseEntry(world) {
@@ -1213,6 +1229,7 @@ test('an outdated service is replaced through the login item: at --install befor
 
 test('a login item whose package is gone says so in status, and the next start writes it again for the entry of now', await commandTest(), async (t) => {
   const world = await makeWorld(t)
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
@@ -1234,6 +1251,7 @@ test('a login item whose package is gone says so in status, and the next start w
 
 test('a refusal under the login item is answered at once with its code, is not retried in a loop, and status says why', await commandTest(), async (t) => {
   const world = await makeWorld(t)
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
@@ -1257,6 +1275,7 @@ test('a refusal under the login item is answered at once with its code, is not r
 test('a package upgraded under a service the login item started: it exits 75 after a tick and its manager starts the new release', await commandTest(), async (t) => {
   const root = await syntheticPackage(t)
   const world = await makeWorld(t, { entryArgs: ['--interval-ms=100', `--release-root=${root}`] })
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const job = world.launchd.job(`ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`)
   const first = world.record()
@@ -1268,6 +1287,7 @@ test('a package upgraded under a service the login item started: it exits 75 aft
 
 test('a login item its manager does not have loaded, or that the person switched off, is not forced: the service is started for this command only, and the answer says why', await commandTest(), async (t) => {
   const world = await makeWorld(t)
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const childSeams = () => world.seams({ service: { entryPath: TEST_SERVICE_ENTRY, entryArgs: [`--interval-ms=${IDLE_INTERVAL}`], spawn: followingSpawn(t) } })
@@ -1291,6 +1311,7 @@ test('a login item its manager does not have loaded, or that the person switched
 
 test('service unit --remove lowers the consent first, unloads and deletes the unit, and starts the service again for this session as a process of its own', await commandTest(), async (t) => {
   const world = await makeWorld(t)
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const label = `ai.mnstry.atelier.harbor-notes.${WORKSPACE_ID}`
   const job = world.launchd.job(label)
@@ -1315,6 +1336,7 @@ test('service unit --remove lowers the consent first, unloads and deletes the un
 
 test('when no entry may be started, --remove removes the item and leaves the service to the next open', await commandTest(), async (t) => {
   const world = await makeWorld(t)
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   await world.healthy()
   // No entry this command may start (for the real entry: no --adapter given or remembered): the start is refused, typed.
@@ -1387,6 +1409,7 @@ test('service start replaces a proven service of an earlier release, as open doe
 
 test('uninstall removes the login item and stops the proven service, keeps vaults, private state, the project file and Obsidian\'s list, and names each', await commandTest(), async (t) => {
   const world = await makeWorld(t)
+  world.recordReservedPort()
   assert.equal((await world.run(['service', 'unit', '--install', '--json', '--consent-actor', CONSENT_ACTOR])).exit, EXIT.ok)
   const { workspaceRoot } = world.workspace()
   const vaults = path.join(workspaceRoot, 'vaults')

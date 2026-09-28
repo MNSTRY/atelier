@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { RESERVATIONS, ephemeralRange, isEphemeral, releaseReservation, reservePort } from './helpers/loopback-port.mjs'
+import { RESERVATIONS, ephemeralRange, firstStartPort, isEphemeral, releaseReservation, reservePort } from './helpers/loopback-port.mjs'
 import { acquirePrivateLock } from '../src/project/durable-state.mjs'
 import { resolveProjectConfig, validateProjectConfigDoc, writeJson } from '../src/project/config.mjs'
 import { createEditorAdapter, publishView, resolveExchange } from '../src/projection/obsidian/publication/index.mjs'
@@ -2213,10 +2213,13 @@ function serviceWorld(t, options) {
   const spawn = (...args) => { const child = childProcess.spawn(...args); mine.push(registerProcess(t, child, `spawned by startService: ${path.basename(String(args[1]?.[0]))}${args[2]?.detached ? ', detached' : ''}`)); spawned.push(child.pid); return child }
   const base = { loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn }
   const kills = []
+  // A first start names a reserved port instead of leaving the choice to the product (see the helper).
+  let firstPort = null
+  const recorded = () => { try { return readServiceSettings({ workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID }) !== null } catch (error) { return error.code !== 'ENOENT' } }
   return Object.assign(world, {
     spawned, kills,
     track(target, how) { const entry = registerProcess(t, target, how, typeof target === 'number' ? namedByRecord(target) : undefined); mine.push(entry); return entry },
-    start: (extra = {}, rules) => startService({ ...base, consent: CONSENT, ...extra }, rules),
+    async start(extra = {}, rules) { firstPort ??= await reservePort(t); return startService({ ...base, consent: CONSENT, ...firstStartPort(firstPort, recorded), ...extra }, rules) },
     status: (extra = {}, rules) => serviceStatus({ ...base, ...extra }, rules),
     stop: (extra = {}, rules) => stopService({ ...base, stopTimeoutMs: 20000, kill: (...args) => { kills.push(args) }, ...extra }, rules),
     areas: () => ({ staging: listing(path.join(world.workspaceRoot(), 'staging')), recovery: listing(path.join(world.workspaceRoot(), 'recovery')) }),
@@ -2235,6 +2238,14 @@ function serviceWorld(t, options) {
     },
   })
 }
+
+test('a first start in these tests listens on a reserved port, never one the product found by listening on port 0 (#102)', async (t) => {
+  const world = serviceWorld(t)
+  const started = await world.start()
+  assert.deepEqual([started.state, isEphemeral(started.record.port)], ['healthy', false], String(started.record?.port))
+  assert.equal(readServiceSettings({ workspaceRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID }).port, started.record.port)
+  assert.equal((await world.stop()).stopped, true)
+})
 
 const healthFor = (record, overrides = {}) => ({ schema: HEALTH_SCHEMA, serviceName: record.serviceName, workspaceId: record.workspaceId, runtimeId: record.runtimeId, pid: record.pid, host: record.host, port: record.port, executableDigest: record.executable.digest, startedAt: iso(START), status: 'healthy', ...overrides })
 
@@ -2302,6 +2313,8 @@ test('start needs consent and a literal loopback address, the record is owner-on
 
 async function assertServiceOutlivesItsLauncher(t, launcherArgs = []) {
   const world = serviceWorld(t)
+  // The launcher starts the service with no port to give: the reserved one is recorded first (see the helper).
+  writeSettings(world, await reservePort(t))
   const launcher = childProcess.spawn(process.execPath, [TEST_LAUNCHER, `--project=${world.configPath}`, `--data-root=${world.dataRoot}`, ...launcherArgs], { env: world.env, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true })
   world.track(launcher, 'the launching command')
   let output = ''
@@ -2315,6 +2328,7 @@ async function assertServiceOutlivesItsLauncher(t, launcherArgs = []) {
   const status = await world.status()
   assert.equal(status.state, 'healthy', 'the service outlived the command that started it')
   assert.deepEqual([status.health.pid, status.health.runtimeId, isAlive(reported.pid)], [reported.pid, reported.runtimeId, true])
+  assert.equal(isEphemeral(status.record.port), false, 'the service listens on the reserved port recorded before the launch (#102)')
   assert.equal((await world.start()).alreadyRunning, true, 'and another command finds it, idempotently')
   assert.equal((await world.stop()).stopped, true)
   await waitFor(() => !isAlive(reported.pid), { label: 'the detached service to be gone' })

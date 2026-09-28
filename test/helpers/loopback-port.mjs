@@ -139,3 +139,17 @@ export async function reservePort(t, { choose = null } = {}) {
   }
   throw new Error('no loopback port could be reserved')
 }
+
+// A workspace's first start picks its port the way the tests used to: it listens on port 0, closes the socket and
+// records the port, and the service listens there later (#102). A test's start therefore names its reserved port while
+// the workspace records none. A recorded port is left alone: naming another would replace it. `recorded()` says
+// whether the workspace records a port now; it is asked each time the start reads its options.
+export const firstStartPort = (port, recorded) => (recorded() ? {} : { port })
+
+// The command's seams with the reserved port added to `service`, the options the command passes to its start, while
+// the workspace records no port. Read when the command reads them, which is just before it starts the service.
+export function withFirstStartPort(seams, port, recorded) {
+  if (seams === null || typeof seams !== 'object' || seams.service === undefined) return seams
+  const { service, ...rest } = seams
+  return Object.defineProperty(rest, 'service', { enumerable: true, get: () => ({ ...service, ...firstStartPort(port, recorded) }) })
+}

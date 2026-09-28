@@ -10,7 +10,7 @@ import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
-import { reservePort } from './helpers/loopback-port.mjs'
+import { isEphemeral, reservePort, withFirstStartPort } from './helpers/loopback-port.mjs'
 
 // ---------------------------------------------------------------------------
 // 0. The spawn guard. Installed before anything else is imported, for every
@@ -401,6 +401,7 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
   const { MNSTRY_ATELIER_PROJECT_CONFIG: _config, MNSTRY_ATELIER_LOCAL_CONFIG: _overlay, ...env } = process.env
   const loadProject = () => resolveProjectConfig({ argv: [`--project=${configPath}`], cwd: projectDir, env, writeLocalState: false })
   let nowMs = START
+  let firstPort = null
   const world = {
     dir, projectDir, dataRoot, configPath, loadProject, env,
     clock: () => new Date(nowMs),
@@ -442,7 +443,11 @@ function makeWorld(t, { ext = settingsOf(), machine = { maintenanceMode: 'manual
       return engine
     },
     // The command, in this process. Seams default to ones that fail the test when reached.
-    async run(argv, { seams = UNREACHABLE_SEAMS, rules, ...extra } = {}) {
+    async run(argv, { seams: given = UNREACHABLE_SEAMS, rules, ...extra } = {}) {
+      // A first start names a reserved port instead of leaving the choice to the product (see the helper).
+      firstPort ??= await reservePort(t)
+      const recorded = () => { try { return readServiceSettings(world.workspace()) !== null } catch (error) { return error.code !== 'ENOENT' } }
+      const seams = withFirstStartPort(given, firstPort, recorded)
       const out = []
       const err = []
       const options = { argv: [...argv, `--project=${configPath}`, `--data-root=${dataRoot}`], seams, env, cwd: projectDir, clock: world.clock, contributions: [], probeTimeoutMs: FAST_PROBE, stdout: (text) => out.push(text), stderr: (text) => err.push(text), ...extra }
@@ -3008,6 +3013,16 @@ test('a person at a terminal allows the first start by their account\'s name; a 
   await waitFor(() => !isAlive(second.pid), { label: 'the second service to exit' })
 })
 
+test('a first `service start` through this file\'s command listens on a reserved port, never one the product found by listening on port 0 (#102)', async (t) => {
+  const world = makeWorld(t)
+  const seams = { ...UNREACHABLE_SEAMS, service: { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) } }
+  const started = await world.run(['service', 'start', '--json', '--consent-actor', 'agent-synthetic'], { seams })
+  const { port, pid } = readServiceRecord(world.workspace())
+  assert.deepEqual([started.json.service.state, isEphemeral(port), readServiceSettings(world.workspace()).port], ['healthy', false, port], String(port))
+  await stopService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env })
+  await waitFor(() => !isAlive(pid), { label: 'the service to exit' })
+})
+
 test('a consent derived at a terminal never replaces one recorded meanwhile: the start decides under its lock, and still records one for a workspace that has none', async (t) => {
   const world = makeWorld(t)
   const service = { entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, spawn: trackingSpawn(t) }
@@ -3025,7 +3040,7 @@ test('a consent derived at a terminal never replaces one recorded meanwhile: the
   // A workspace with no consent recorded takes the derived one, and records it without the member that marks it derived.
   const fresh = makeWorld(t)
   const freshLifecycle = { ...lifecycle, loadProject: fresh.loadProject, dataRoot: fresh.dataRoot, env: fresh.env }
-  const first = await startService({ ...freshLifecycle, ...service, consent: derived })
+  const first = await startService({ ...freshLifecycle, ...service, port: await reservePort(t), consent: derived })
   assert.equal(first.state, 'healthy')
   const { grantedAt: _at, ...consent } = readServiceSettings(fresh.workspace()).consent
   assert.deepEqual(consent, { actor: 'someone', coverage: 'service' })
