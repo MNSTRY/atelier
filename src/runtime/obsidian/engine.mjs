@@ -653,7 +653,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
               ...(quietPeriodMs === undefined ? {} : { quietPeriodMs }),
               ...(typeof readUnheldEvidence === 'function' ? { unheldEvidence: readUnheldEvidence, platform } : {}),
             })
-            if (heldBackBy !== null && result.state === 'refused') throw heldBackBy
+            // Stopped before its commit for want of an app that coordinates: the app's refusal is what the person has to
+            // act on, and `open` answers it before it would add the vault to the app.
+            if (heldBackBy !== null && (result.state === 'refused' || (result.state === 'updating' && result.notes.some((note) => note.blocking && note.outcome === 'editor-uncoordinated')))) throw heldBackBy
           } catch (error) {
             // The publisher asked for the app only to publish the committed generation again (a plugin file drifted),
             // and the app did not qualify: nothing was written, and the committed generation is read back as it is.

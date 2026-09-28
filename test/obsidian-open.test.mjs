@@ -3616,6 +3616,34 @@ test('with Obsidian running and a vault open, a new view is published into its a
   assert.deepEqual(listing(other), {}, 'the vault the app holds is untouched')
 })
 
+test('a first publication the engine went ahead with despite the app\'s refusal, and that stops partway, reports the app\'s refusal, so open neither adds nor launches the vault before it is complete', needsExchange, async (t) => {
+  const world = makeWorld(t)
+  const parent = path.join(world.dir, 'Atelier')
+  await world.run(['location', 'set', parent, '--json'], { seams: NO_APP_SEAMS })
+  const vault = path.join(parent, 'opening-fixture (scope-whole)')
+  const app = fakeApp({ running: true, cliOff: true, vaults: { [OTHER_VAULT]: { path: path.join(world.dir, 'somebody-else'), ts: 1, open: true } } })
+  const refusing = () => { throw new ObsidianMaintenanceRefusal('app-cli-unavailable', 'stub', { reason: 'cli-turned-off' }) }
+  // The folder is allocated at a first tick, while the list names it, and a settings file with other bytes is put there.
+  const vaults = app.state.vaults
+  app.state.vaults = { ...vaults, cccccccccccccccc: { path: vault, ts: 1 } }
+  await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+  app.state.vaults = vaults
+  const theirs = '{"file-explorer":true}\n'
+  fs.mkdirSync(path.join(vault, '.obsidian'), { recursive: true })
+  fs.writeFileSync(path.join(vault, '.obsidian', 'core-plugins.json'), theirs)
+  // The run takes the path, creates what it can, and stops at the settings file: the app's refusal, not the unit's.
+  const report = await world.engine({ adapterFactory: refusing, readUnheldEvidence: unheldEvidenceOf(app) }).tick()
+  assert.deepEqual([report.scopes[0].state, report.scopes[0].reason], ['stale', 'app-cli-unavailable'], JSON.stringify(report.scopes[0]))
+  assert.deepEqual(journalModes(world), ['direct-unheld'])
+  assert.equal(fs.existsSync(path.join(world.workspaceRoot(), 'state', 'manifests', FULL_SCOPE.scopeId, 'current.json')), false)
+  assert.equal(fs.readFileSync(path.join(vault, '.obsidian', 'core-plugins.json'), 'utf8'), theirs)
+  // So open, asked without --restart-obsidian, names the command line, and adds and launches nothing.
+  await world.service({ adapterFactory: refusing, engineOptions: { readUnheldEvidence: unheldEvidenceOf(app) } })
+  const opened = await world.run(openArgs(), { seams: { ...UNREACHABLE_SEAMS, ...app }, open: FAST_APP })
+  assert.deepEqual([opened.json.outcome, opened.json.reason], ['app-cli-unavailable', 'cli-turned-off'], JSON.stringify(opened.json).slice(0, 400))
+  assert.deepEqual([app.registrations, app.launches], [[], []])
+})
+
 for (const [refusal, reason] of [['app-cli-unavailable', 'cli-turned-off'], ['app-version-unsupported', 'no-vault-open'], ['app-version-unsupported', 'below-floor']]) {
   test(`an app that does not qualify (${refusal}, ${reason}) no longer keeps a never-published allocated view from its first publication while its list names no folder on the way; with the list naming one, under the data root, or with nothing to read the list, the view is refused as before`, needsExchange, async (t) => {
     const world = makeWorld(t)

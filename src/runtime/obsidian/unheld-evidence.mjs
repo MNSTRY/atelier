@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { obsidianSandboxedBuild, obsidianUserDataDir, readObsidianSettings } from '../../projection/obsidian/publication/vault-list.mjs'
@@ -16,7 +17,8 @@ import { realPathOfLocation } from './vault-location.mjs'
 // only its starter window writes none), that cannot be read after `attempts`
 // reads `delayMs` apart (the app rewrites it with a plain write, so a reader
 // can find it empty or cut short while it writes), that is not a JSON object,
-// or that has an entry whose folder is not an absolute path; and a Flatpak or
+// or that has an entry whose folder is not an absolute path or has a `..`
+// segment (after a link, `..` leads where the text does not); and a Flatpak or
 // snap build of the app anywhere on this account, whose list lives in its
 // sandbox and not in this file. The root and every listed folder are compared
 // as written and as their real paths, in any letter case, so a link on the way
@@ -60,7 +62,7 @@ export async function readUnheldEvidence({ vaultRoot, read, sandboxed, attempts 
   if (!isPlainObject(vaults)) return noEvidence('obsidian-settings-not-object')
   const root = spellings(vaultRoot)
   for (const [id, entry] of Object.entries(vaults)) {
-    if (!isPlainObject(entry) || typeof entry.path !== 'string' || !path.isAbsolute(entry.path)) return noEvidence('obsidian-settings-entry-unreadable', { id })
+    if (!isPlainObject(entry) || typeof entry.path !== 'string' || !path.isAbsolute(entry.path) || entry.path.split(/[\\/]/).includes('..')) return noEvidence('obsidian-settings-entry-unreadable', { id })
     const relation = relationOf(entry.path, root)
     if (relation !== null) return noEvidence(relation, { id, path: entry.path })
   }
@@ -69,12 +71,14 @@ export async function readUnheldEvidence({ vaultRoot, read, sandboxed, attempts 
 
 // The reader the maintenance service gives its engine: the settings file of the app for this account (HOME, and on
 // Linux XDG_CONFIG_HOME), and any Flatpak or snap build, installed or having left its list, whichever wrote last.
-export function createProductionUnheldEvidence({ platform = process.platform, env = process.env } = {}) {
+// `exists` answers whether a path exists: the build's system-wide places (/var/lib/flatpak, /snap) are looked up through
+// it too.
+export function createProductionUnheldEvidence({ platform = process.platform, env = process.env, exists = fs.existsSync } = {}) {
   const userDataDir = obsidianUserDataDir({ platform, env })
   return ({ vaultRoot }) => readUnheldEvidence({
     vaultRoot,
     read: () => (userDataDir === null ? { ok: false, code: 'obsidian-settings-location-unknown' } : readObsidianSettings({ userDataDir })),
     // Present at all, not only when its list was written last: with no list time given, any installation or list counts.
-    sandboxed: () => obsidianSandboxedBuild({ platform, env, modified: () => null }) !== null,
+    sandboxed: () => obsidianSandboxedBuild({ platform, env, exists, modified: () => null }) !== null,
   })
 }

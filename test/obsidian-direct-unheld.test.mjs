@@ -40,6 +40,7 @@ const clock = () => new Date()
 const NOTE = 'notes/Quay notes--0123456789ab.md'
 const OTHER = 'notes/Harbour log--ba9876543210.md'
 const THIRD = 'notes/Tide table--00112233aabb.md'
+const FOURTH = 'notes/Buoy list--aabbccddeeff.md'
 const PICTURE = 'attachments/quay.png'
 const POLICY = '.obsidian/core-plugins.json'
 const PLUGIN_MAIN = '.obsidian/plugins/atelier-projection/main.js'
@@ -48,7 +49,7 @@ const TEXT = (label) => `# ${label}\n\nGenerated body for ${label}.\n`
 const POLICY_BYTES = '{\n  "publish": false,\n  "sync": false\n}\n'
 
 // A prepared view, built by hand so each case states its bytes.
-function viewOf(generationId, { notes = {}, attachments = {}, settings = false, plugin = false } = {}) {
+function viewOf(generationId, { notes = {}, attachments = {}, settings = false, plugin = false, onlyIfPresent = false } = {}) {
   const files = []
   const manifest = {
     schema: 'atelier-obsidian-generation-manifest/v1', generationId, scopeId: SCOPE, snapshotId: 'snap-synthetic',
@@ -72,7 +73,8 @@ function viewOf(generationId, { notes = {}, attachments = {}, settings = false, 
   if (plugin) {
     const main = Buffer.from(typeof plugin === 'string' ? plugin : 'module.exports = class AtelierProjection {}\n')
     const data = Buffer.from('{"bearer":"synthetic-bearer"}\n')
-    files.push({ path: PLUGIN_MAIN, kind: 'plugin', bytes: main, digest: digest(main), mode: 0o644 }, { path: PLUGIN_DATA, kind: 'plugin', bytes: data, digest: digest(data), mode: 0o600 })
+    const present = onlyIfPresent ? { onlyIfPresent: true } : {}
+    files.push({ path: PLUGIN_MAIN, kind: 'plugin', bytes: main, digest: digest(main), mode: 0o644, ...present }, { path: PLUGIN_DATA, kind: 'plugin', bytes: data, digest: digest(data), mode: 0o600, ...present })
     manifest.ext = { [EXT]: { settings: { pluginOwned: { files: [{ path: PLUGIN_MAIN, digest: digest(main) }, { path: PLUGIN_DATA, digest: digest(data) }] } } } }
   }
   return { manifest, files }
@@ -211,6 +213,13 @@ test('the evidence: only a list that was read and names no folder on the way to 
     [[], 'obsidian-settings-not-object', 'a list that is not an object'],
   ]
   for (const [vaults, reason, label] of cases) assert.equal((await ask(vaults)).reason, reason, label)
+  // A `..` after a link names, physically, a folder the text does not show: `<dir>/lnk/../../Atelier` is the vault's
+  // parent when `lnk` leads to `<dir>/x/y`. An entry with a `..` segment is not understood, and gives no evidence.
+  fs.mkdirSync(path.join(dir, 'x', 'y'), { recursive: true })
+  fs.symlinkSync(path.join(dir, 'x', 'y'), path.join(dir, 'lnk'))
+  assert.deepEqual(fs.readdirSync(`${path.join(dir, 'lnk')}/../../Atelier`), ['harbor-notes (everything)'], 'the entry leads to the vault\'s parent')
+  assert.equal((await ask(entry(`${path.join(dir, 'lnk')}/../../Atelier`))).reason, 'obsidian-settings-entry-unreadable', 'a `..` after a link')
+  assert.equal((await ask(entry(`${path.join(dir, 'Other vault')}/../Elsewhere`))).reason, 'obsidian-settings-entry-unreadable', 'any `..` segment')
   // Letter case is folded even where no file system can resolve it: a folder that is not there yet.
   const notYet = await readUnheldEvidence({ vaultRoot: path.join(dir, 'Absent', 'harbor (x)'), read: read(entry(path.join(dir, 'ABSENT', 'HARBOR (X)'))), sandboxed: () => false })
   assert.equal(notYet.reason, 'vault-listed', 'another letter case of a folder that does not exist yet')
@@ -234,10 +243,14 @@ test('the production evidence reads the settings file of the app under HOME: a t
   t.after(() => fs.rmSync(home, { recursive: true, force: true }))
   const vault = path.join(home, 'Atelier', 'harbor-notes (everything)')
   fs.mkdirSync(vault, { recursive: true })
+  // The system-wide places a Flatpak or snap build is installed (/var/lib/flatpak, /snap, ...) are looked up under a
+  // scratch folder, so this host's own installation decides nothing here.
+  const system = path.join(home, 'system')
+  const scratchSystem = (candidate) => fs.existsSync(candidate.startsWith(`${home}${path.sep}`) ? candidate : path.join(system, candidate))
   for (const platform of ['darwin', 'linux']) {
     const env = { HOME: home }
     const userData = platform === 'darwin' ? path.join(home, 'Library', 'Application Support', 'obsidian') : path.join(home, '.config', 'obsidian')
-    const evidence = createProductionUnheldEvidence({ platform, env })
+    const evidence = createProductionUnheldEvidence({ platform, env, exists: scratchSystem })
     fs.rmSync(userData, { recursive: true, force: true })
     assert.equal((await evidence({ vaultRoot: vault })).reason, 'obsidian-settings-missing', `${platform}: no settings file`)
     fs.mkdirSync(userData, { recursive: true, mode: 0o700 })
@@ -258,23 +271,43 @@ test('the production evidence reads the settings file of the app under HOME: a t
   // Linux: a Flatpak or a snap anywhere on this account, whichever list was written last.
   for (const sandbox of [['.var', 'app', 'md.obsidian.Obsidian'], ['snap', 'obsidian']]) {
     fs.mkdirSync(path.join(home, ...sandbox), { recursive: true })
-    const answer = await createProductionUnheldEvidence({ platform: 'linux', env: { HOME: home } })({ vaultRoot: vault })
+    const answer = await createProductionUnheldEvidence({ platform: 'linux', env: { HOME: home }, exists: scratchSystem })({ vaultRoot: vault })
     assert.equal(answer.reason, 'obsidian-sandboxed', sandbox.join('/'))
     fs.rmSync(path.join(home, sandbox[0]), { recursive: true, force: true })
   }
+  // A system-wide installation counts too.
+  for (const installed of ['var/lib/flatpak/app/md.obsidian.Obsidian', 'snap/obsidian', 'var/lib/snapd/snap/obsidian']) {
+    fs.mkdirSync(path.join(system, installed), { recursive: true })
+    const answer = await createProductionUnheldEvidence({ platform: 'linux', env: { HOME: home }, exists: scratchSystem })({ vaultRoot: vault })
+    assert.equal(answer.reason, 'obsidian-sandboxed', installed)
+    fs.rmSync(system, { recursive: true, force: true })
+  }
+  assert.deepEqual(await createProductionUnheldEvidence({ platform: 'linux', env: { HOME: home }, exists: scratchSystem })({ vaultRoot: vault }), { unlisted: true }, 'control: none installed')
 })
 
-test('the maintenance service\'s own adapter hands its engine the reader of the app\'s list, checked in a child with a scratch HOME and never called', { skip: POSIX ? false : 'POSIX paths' }, async (t) => {
+const SYSTEM_SANDBOXES = ['/var/lib/flatpak/app/md.obsidian.Obsidian', '/snap/obsidian', '/var/lib/snapd/snap/obsidian']
+const systemSandbox = process.platform === 'linux' && SYSTEM_SANDBOXES.some((candidate) => fs.existsSync(candidate))
+
+test('the maintenance service\'s own adapter hands its engine the reader of the app\'s settings file under HOME, called in a child whose HOME is a scratch folder', { skip: !POSIX ? 'POSIX paths' : systemSandbox ? 'a system-wide Flatpak or snap Obsidian on this host is, rightly, no evidence' : false }, async (t) => {
   const home = fs.mkdtempSync(path.join(TMP, 'atelier-unheld-wiring-'))
   t.after(() => fs.rmSync(home, { recursive: true, force: true }))
-  // Building the production adapter loads the production seams: only in a child, whose HOME and XDG folders are the
-  // scratch folder, and which calls none of them.
+  const config = path.join(home, '.config')
+  const userData = process.platform === 'darwin' ? path.join(home, 'Library', 'Application Support', 'obsidian') : path.join(config, 'obsidian')
+  const listed = path.join(home, 'Atelier', 'harbor-notes (everything)')
+  const unlisted = path.join(home, 'Atelier', 'harbor-notes (discovery)')
+  fs.mkdirSync(userData, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(userData, 'obsidian.json'), JSON.stringify({ vaults: { bbbbbbbbbbbbbbbb: { path: listed, ts: 1, open: true } } }))
+  // Building the production adapter loads the production seams: only in this child, whose HOME and XDG folders are the
+  // scratch folder. The only one it calls is the reader, which reads the scratch settings file.
   const entry = new URL('../src/runtime/obsidian/service-main.mjs', import.meta.url).href
-  const code = `const { SERVICE_ADAPTERS } = await import(${JSON.stringify(entry)}); const { engineOptions } = await SERVICE_ADAPTERS['obsidian-cli'](); process.stdout.write(JSON.stringify({ unheld: typeof engineOptions.readUnheldEvidence, list: typeof engineOptions.readAppVaultList }))`
-  const env = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_RUNTIME_DIR: path.join(home, 'run'), XDG_DATA_HOME: path.join(home, 'data') }
+  const code = `const { SERVICE_ADAPTERS } = await import(${JSON.stringify(entry)}); const { engineOptions } = await SERVICE_ADAPTERS['obsidian-cli'](); const read = engineOptions.readUnheldEvidence; process.stdout.write(JSON.stringify({ listed: await read({ vaultRoot: ${JSON.stringify(listed)} }), unlisted: await read({ vaultRoot: ${JSON.stringify(unlisted)} }), list: typeof engineOptions.readAppVaultList }))`
+  const env = { PATH: process.env.PATH ?? '', HOME: home, XDG_CONFIG_HOME: config, XDG_RUNTIME_DIR: path.join(home, 'run'), XDG_DATA_HOME: path.join(home, 'data') }
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env, cwd: home, encoding: 'utf8', timeout: 30000 })
   assert.equal(child.status, 0, child.stderr)
-  assert.deepEqual(JSON.parse(child.stdout), { unheld: 'function', list: 'function' })
+  const answer = JSON.parse(child.stdout)
+  assert.deepEqual([answer.listed.unlisted, answer.listed.reason, answer.listed.path], [false, 'vault-listed', listed])
+  assert.deepEqual(answer.unlisted, { unlisted: true })
+  assert.equal(answer.list, 'function')
 })
 
 // ---------------------------------------------------------------------------
@@ -394,23 +427,26 @@ async function assertCreatesOnly(t, publisher) {
   // nothing was committed, and the journal trusts what it published.
   fs.mkdirSync(path.dirname(world.full(THIRD)), { recursive: true })
   fs.writeFileSync(world.full(THIRD), 'In the way\n')
-  const first = await publish(viewOf('gen-0001', { notes: { [NOTE]: TEXT('quay'), [OTHER]: TEXT('harbour'), [THIRD]: TEXT('tide') }, plugin: true }))
+  const first = await publish(viewOf('gen-0001', { notes: { [NOTE]: TEXT('quay'), [OTHER]: TEXT('harbour'), [THIRD]: TEXT('tide'), [FOURTH]: TEXT('buoys') }, plugin: true }))
   assert.equal(first.state, 'updating')
   fs.rmSync(world.full(THIRD))
+  // A note the earlier run published, removed since: the next view changes it, so it is planned as a replacement of a
+  // file that is gone. No candidate is staged for a replacement, and it is never turned into a create.
+  fs.rmSync(world.full(FOURTH))
   // The settings file somebody else made, and a plugin file changed since.
   fs.mkdirSync(path.dirname(world.full(POLICY)), { recursive: true })
   fs.writeFileSync(world.full(POLICY), '{"publish":true}\n')
   fs.writeFileSync(world.full(PLUGIN_MAIN), '// somebody changed this\n')
   const before = vaultFiles(world)
   // The next view replaces NOTE, removes OTHER, writes the settings file and the plugin's main file.
-  const next = viewOf('gen-0002', { notes: { [NOTE]: TEXT('quay, rewritten'), [THIRD]: TEXT('tide') }, settings: true, plugin: 'module.exports = class Newer {}\n' })
+  const next = viewOf('gen-0002', { notes: { [NOTE]: TEXT('quay, rewritten'), [THIRD]: TEXT('tide'), [FOURTH]: TEXT('buoys, rewritten') }, settings: true, plugin: 'module.exports = class Newer {}\n' })
   const result = await publish(next)
   assert.equal(result.mode, 'direct-unheld')
   const after = vaultFiles(world)
   delete after[THIRD]
   assert.deepEqual(after, before, 'no file that was there is replaced or removed')
   assert.equal(result.state, 'updating')
-  for (const [notePath, op] of [[NOTE, 'replace'], [OTHER, 'remove'], [POLICY, 'settings'], [PLUGIN_MAIN, 'replace']]) {
+  for (const [notePath, op] of [[NOTE, 'replace'], [OTHER, 'remove'], [POLICY, 'settings'], [PLUGIN_MAIN, 'replace'], [FOURTH, 'replace']]) {
     assert.deepEqual([noteResult(result, notePath).op, noteResult(result, notePath).outcome, noteResult(result, notePath).blocking], [op, 'editor-uncoordinated', true], notePath)
   }
   assert.deepEqual([noteResult(result, THIRD).outcome, world.read(THIRD)], ['created', TEXT('tide')], 'a note where nothing is is still created')
@@ -455,6 +491,22 @@ test('the evidence is read again before the first unit and every two seconds: on
   assert.deepEqual(result.notes.map((item) => [item.path, item.outcome, item.blocking]), [[NOTE, 'created', false], [OTHER, 'editor-uncoordinated', true], [THIRD, 'editor-uncoordinated', true]])
   assert.deepEqual([world.read(NOTE), world.read(OTHER), world.read(THIRD)], [TEXT('quay'), null, null])
   assert.equal(world.store.readCurrent(), null)
+
+  // A unit that would leave a file absent refuses too once a reading fails: the run says why it stopped, and commits
+  // nothing, although no unit after the failed reading would have written.
+  const absent = allocatedWorld(t)
+  let absentReadings = 0
+  const listedAtLeaveAbsent = async (input) => {
+    absentReadings += 1
+    if (absentReadings === 2) await sleep(2100)
+    return absentReadings <= 2 ? absent.evidence(input) : { unlisted: false, reason: 'vault-listed' }
+  }
+  const leaving = await absent.publish(viewOf('gen-0001', { notes: { [NOTE]: TEXT('quay') }, plugin: true, onlyIfPresent: true }), runningApp(), { unheldEvidence: listedAtLeaveAbsent })
+  assert.equal(absentReadings, 3)
+  assert.deepEqual(leaving.notes.map((item) => [item.path, item.op, item.outcome, item.blocking]), [
+    [NOTE, 'create', 'created', false], [PLUGIN_MAIN, 'leave-absent', 'editor-uncoordinated', true], [PLUGIN_DATA, 'leave-absent', 'editor-uncoordinated', true],
+  ])
+  assert.deepEqual([leaving.state, absent.store.readCurrent()], ['updating', null])
 
   // A kept unit refuses too once a reading fails, so a run whose remaining units write nothing still commits nothing.
   let again = 0

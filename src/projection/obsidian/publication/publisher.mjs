@@ -60,8 +60,9 @@ import { createDirectAdapter } from './transport.mjs'
 // so nothing a person wrote can be lost, whoever holds the vault. The evidence
 // is read again immediately before the first unit and whenever two seconds
 // have passed since the last reading; once a reading gives no evidence, every
-// remaining unit refuses and nothing is committed. The app is told about the
-// vault (`open`) only once the generation is committed.
+// remaining unit refuses and nothing is committed. A run that completes is
+// committed before `open` tells the app about the vault; a run that stops
+// partway reports why, and what it left is published through the app.
 
 const hex = (digest) => digest.slice('sha256:'.length)
 const iso = (clock) => { const value = clock(); return (value instanceof Date ? value : new Date(value)).toISOString() }
@@ -592,7 +593,9 @@ async function publishOneUnit(unit, context) {
   const { store, journal, journalId, clock } = context
   const note = path.join(store.vaultRoot, unit.path)
   const outcome = (code, extra = {}) => ({ path: unit.path, kind: unit.kind, op: unit.op, outcome: code, blocking: false, ...extra })
-  if (unit.op === 'leave-absent') return outcome('left-absent')
+  // On the `direct-unheld` path a unit after a failed reading refuses, whatever it would have done, so the run says why
+  // it stopped.
+  if (unit.op === 'leave-absent') return context.mode === 'direct-unheld' && context.uncoordinated ? outcome('editor-uncoordinated', { blocking: true }) : outcome('left-absent')
   const observe = (bytes) => store.retainObject(bytes)
   if (context.uncoordinated) return outcome('editor-uncoordinated', { blocking: unit.op !== 'keep' || context.mode === 'direct-unheld' })
   // The `direct-unheld` path creates files and nothing else. A unit planned as a replacement or a removal has no
