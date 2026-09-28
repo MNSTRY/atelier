@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The ingestion store adds `getEvidence`, which returns one exact evidence span
+  after rechecking only that source and its stored attempt. Query and
+  `getEvidence` both report `readScope: "all-plan"`: they read at the scope of
+  the whole plan and grant or narrow no permission.
 - Preserve workspace template lineage during profile adoption and updates.
   Keep profile identity in its typed adoption manifest, and refuse saved plans
   that replace the workspace lineage before installing any managed content.

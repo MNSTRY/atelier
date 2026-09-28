@@ -95,6 +95,19 @@ sources remain visible. Query is lexical retrieval, not an answer generator;
 absence of a hit is not proof that a claim is false. Search limits and structural
 omissions must remain visible in any consuming interface.
 
+`getEvidence` on the store API returns one exact span. It takes the plan
+reference, the source, its digest, the completed attempt and the locator, as a
+query hit reports them. It rechecks that source's current bytes and its stored
+attempt, and reads no other source in the plan. It refuses with a typed code:
+`INGESTION_STALE` for a changed source, digest or attempt, `INGESTION_MISSING`
+for an unknown source or locator, and `INGESTION_INVALID` for a malformed
+request.
+
+Both query and `getEvidence` report `readScope: "all-plan"`. Query reads every
+source in the plan, and a limit bounds only the hits it returns. Neither call
+narrows or grants permission. A host that may read only some of a plan's
+sources must not pass that plan to either call.
+
 ## Connect a useful result to learning
 
 A correction made while using a retrieved passage can be captured through

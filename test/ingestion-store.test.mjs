@@ -225,3 +225,35 @@ test('reads neither bind a workspace identity nor create private state', t => {
   const p = plan(createIngestionStore(options));
   assert.equal(p.workspaceId, options.workspaceId);
 });
+
+test('getEvidence returns one exact verified span and reads only the named source', t => {
+  const { store, root } = fixture(t), p = plan(store, ['notes.md', 'table.csv']);
+  store.run(reference(p));
+  const hit = store.query({ ...reference(p), query: 'basil' }).hits.find(candidate => candidate.locator.kind === 'line');
+  const request = { ...reference(p), sourceId: hit.sourceId, sourceDigest: hit.sourceDigest, attemptId: hit.attemptId, locator: hit.locator };
+  const evidence = store.getEvidence(request);
+  assert.equal(evidence.text, hit.text);
+  assert.deepEqual(evidence.locator, hit.locator);
+  assert.equal(evidence.readScope, 'all-plan'); assert.equal(evidence.freshness, 'current'); assert.equal(evidence.synthesized, false);
+  // Another source in the plan going stale does not affect a get that never reads it.
+  fs.writeFileSync(path.join(root, 'table.csv'), 'plant,action\nbasil,prune\n');
+  assert.equal(store.getEvidence(request).text, hit.text);
+  assert.equal(store.query({ ...reference(p), query: 'basil' }).readScope, 'all-plan');
+});
+
+test('getEvidence refuses stale, unknown, mismatched and malformed requests with typed codes', t => {
+  const { store, root } = fixture(t), p = plan(store, ['notes.md']);
+  store.run(reference(p));
+  const hit = store.query({ ...reference(p), query: 'basil' }).hits[0];
+  const request = { ...reference(p), sourceId: hit.sourceId, sourceDigest: hit.sourceDigest, attemptId: hit.attemptId, locator: hit.locator };
+  assert.throws(() => store.getEvidence({ ...request, planDigest: `sha256:${'0'.repeat(64)}` }), { code: 'INGESTION_STALE' });
+  assert.throws(() => store.getEvidence({ ...request, sourceId: 'source-9' }), { code: 'INGESTION_MISSING' });
+  assert.throws(() => store.getEvidence({ ...request, sourceDigest: `sha256:${'1'.repeat(64)}` }), { code: 'INGESTION_STALE' });
+  assert.throws(() => store.getEvidence({ ...request, attemptId: 'attempt-other' }), { code: 'INGESTION_STALE' });
+  assert.throws(() => store.getEvidence({ ...request, locator: { kind: 'line', value: '99' } }), { code: 'INGESTION_MISSING' });
+  assert.throws(() => store.getEvidence({ ...request, locator: { kind: 'line' } }), { code: 'INGESTION_INVALID' });
+  assert.throws(() => store.getEvidence({ ...request, locator: { ...hit.locator, extra: 1 } }), { code: 'INGESTION_INVALID' });
+  assert.throws(() => store.getEvidence({ ...request, scope: 'narrower' }), { code: 'INGESTION_INVALID' });
+  fs.writeFileSync(path.join(root, 'notes.md'), 'Garden decisions\nWater the basil at noon.\n');
+  assert.throws(() => store.getEvidence(request), (error) => error.code === 'INGESTION_STALE' && /source-digest-changed/.test(error.message) && !error.message.includes(root));
+});
