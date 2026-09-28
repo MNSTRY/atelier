@@ -388,13 +388,21 @@ test('the vault lock\'s own folder is checked once it is made: a link put there 
   assert.deepEqual(fs.existsSync(lockFolder) ? fs.readdirSync(lockFolder, { recursive: true }) : [], [], 'no ticket is written in the folder the link leads to')
 })
 
-test('the plugin\'s services find a view\'s vault through its record, and only with the workspace id named', async (t) => {
+test('the plugin\'s services find a view\'s vault through its record; the two-argument form of earlier releases still answers, and refuses a record it cannot match', async (t) => {
   const { viewVaultRoot } = await import('../src/runtime/obsidian/plugin-choice.mjs')
   const w = world(t)
   const allocation = ensureVaultAllocation({ workspaceRoot: w.workspaceRoot, workspaceId: WORKSPACE_ID, scopeId: 'everything', location: { parent: w.parent }, projectName: 'harbor-notes', repositoryRoots: w.repositoryRoots, now: NOW })
   assert.equal(viewVaultRoot(w.workspaceRoot, 'everything', WORKSPACE_ID), allocation.path)
   assert.equal(viewVaultRoot(w.workspaceRoot, 'older', WORKSPACE_ID), path.join(w.workspaceRoot, 'vaults', 'older'))
-  assert.throws(() => viewVaultRoot(w.workspaceRoot, 'everything'), TypeError, 'no workspace id is guessed')
+  // As alpha.12 called it: the private state's folder is named by the workspace id.
+  assert.equal(viewVaultRoot(w.workspaceRoot, 'everything'), allocation.path)
+  assert.equal(viewVaultRoot(w.workspaceRoot, 'older'), path.join(w.workspaceRoot, 'vaults', 'older'))
+  if (POSIX) {
+    // Reached through a link of another name, the record does not match, and nothing is guessed.
+    const linked = path.join(w.dir, 'linked-state')
+    fs.symlinkSync(w.workspaceRoot, linked)
+    assert.throws(() => viewVaultRoot(linked, 'everything'), (error) => error.code === 'invalid-vault-allocation')
+  }
 })
 
 test('the app\'s list for an allocation is read from its file: read again while it is being written, empty when the app never ran here, and otherwise not known', async () => {

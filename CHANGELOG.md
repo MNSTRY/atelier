@@ -141,7 +141,12 @@
   `status` and `open` name the way back),
   which the recovery store reads: the engine, source apply, the proposal
   adapter, `open` and the plugin's service paths (its hello, the person's
-  choice to turn it off, drift) all find the same vault. A vault published before stays
+  choice to turn it off, drift) all find the same vault. So does
+  `viewVaultRoot` of `@mnstry/atelier/obsidian`, which answers the allocated
+  folder now, and may refuse, typed (a record that cannot be read, or was
+  lost); pass the workspace id as its third argument: without it the name of
+  the workspace's private-state folder is taken as the id, as before, and a
+  record that does not match it is refused. A vault published before stays
   under the data root, and a workspace that decides nothing publishes there as
   before. A folder inside a repository or the project, inside a vault Atelier
   publishes or one the app lists, or on another volume than the data root is

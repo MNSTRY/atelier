@@ -45,10 +45,10 @@ const segment = (identifier) => identifier.replaceAll(':', '_')
 export const pluginChoiceDirectory = (workspaceRoot) => path.join(workspaceRoot, 'state', 'plugin', 'choices')
 // Where a view's vault is, as the recovery store finds it (vaultRootFor): the folder allocated to the view where the
 // workspace decided its vaults live, else its folder under the data root. A record that cannot be read, or was lost,
-// refuses, typed. `workspaceId` is required: the record names its workspace, and the folder of the private state is
-// not a safe stand-in for it (a workspace id with `:` is written otherwise there, and the folder may be reached through a link).
-export function viewVaultRoot(workspaceRoot, scopeId, workspaceId) {
-  if (typeof workspaceId !== 'string' || workspaceId === '') throw new TypeError('viewVaultRoot needs the workspace id')
+// refuses, typed. Pass `workspaceId`; every caller here does. The two-argument form of earlier releases still works:
+// it takes the name of the workspace's private-state folder as the id, which a record of another workspace (or a
+// folder reached through a link) does not match, and such a record refuses, typed, rather than answering another vault.
+export function viewVaultRoot(workspaceRoot, scopeId, workspaceId = path.basename(String(workspaceRoot))) {
   return vaultRootFor({ workspaceRoot, workspaceId, scopeId }).path
 }
 const choiceFile = (workspaceRoot, scopeId) => path.join(pluginChoiceDirectory(workspaceRoot), `${segment(scopeId)}.json`)
