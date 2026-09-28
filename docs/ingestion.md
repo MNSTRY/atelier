@@ -103,14 +103,20 @@ attempt, and reads no other source in the plan. It refuses with a typed code:
 - `INGESTION_STALE`: the plan digest, source digest or attempt differs from the
   plan's completed evidence for that source, the source changed, or it never
   completed.
-- `INGESTION_MISSING`: an unknown source or locator, or missing plan state.
-- `INGESTION_INTEGRITY`: stored evidence fails verification against the plan.
-- `INGESTION_INVALID`: a malformed request.
+- `INGESTION_MISSING`: an unknown source or locator, or a plan directory that
+  does not exist.
+- `INGESTION_INTEGRITY`: stored evidence fails verification against the plan,
+  or a locator is not unique in it.
+- `INGESTION_INVALID`: a malformed request, or a stored plan or journal record
+  that fails its schema.
 
 Workspace-level refusals (`INGESTION_WORKSPACE`, `INGESTION_PRIVATE`) and
 `INGESTION_LIMIT` apply as they do for query. Status, query and `getEvidence`
-verify a completed attempt the same way, so none of them returns evidence that
-the others refuse.
+check a completed attempt's coverage and output size against the plan's own
+record. The journal does not yet record a digest of the output, so a stored
+attempt rewritten without changing its size or coverage is not detected. Its
+query hits can then fail to resolve through `getEvidence`. Treat a query hit as
+a pointer, and cite only what `getEvidence` returns.
 
 Both query and `getEvidence` report `readScope: "all-plan"`. Query reads every
 source in the plan, and a limit bounds only the hits it returns. Neither call
