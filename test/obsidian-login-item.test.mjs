@@ -759,6 +759,9 @@ test('under --startup beside a service that runs: service-already-running, exit 
   const absent = () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' })
   const running = await runMaintenanceService({ loadProject: world.loadProject, dataRoot: world.dataRoot, env: world.env, adapterFactory: absent, entryPath: TEST_SERVICE_ENTRY, intervalMs: IDLE_INTERVAL, engineOptions: { quietPeriodMs: 0, watcherFactory: () => ({ close() {} }) } })
   t.after(() => running.shutdown('test-teardown'))
+  // Its first tick publishes, and the publication holds this process for a second or more; under load, longer than
+  // the child's health probe waits. The child starts once that tick is done, beside a runtime that answers at once.
+  await running.tickNow()
   // Run asynchronously: this process answers the health the child asks for.
   const second = await runChild(t, entryWords(world, ['--startup']), world.env)
   assert.equal(second.status, 0)
