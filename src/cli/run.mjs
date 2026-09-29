@@ -14,6 +14,7 @@ export const commandMap = new Map([
   ['export:dry-run', ['src/validate-atelier-export-dry-run.mjs']],
   ['dry-run', ['src/validate-atelier-export-dry-run.mjs']],
   ['graph', ['src/commands/graph.mjs']],
+  ['knowledge', ['src/commands/knowledge.mjs']],
   ['enroll', ['src/commands/enroll.mjs']],
   ['project', ['src/commands/project.mjs']],
   ['build', ['src/commands/project.mjs']],
@@ -106,6 +107,7 @@ Core commands:
   adopt                           Add Atelier to an existing repo/workspace.
   setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
+  knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
   enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
@@ -183,7 +185,14 @@ Observations are local metadata, never automatic telemetry.`,
     coauthor: `Usage: ${c} coauthor start|read|event|recover
 
 Read one JSON request from stdin (maximum 1 MiB). Start takes {"config":{"id":"SESSION","fields":[{"id":"FIELD","source":{"ref":"packet.md","digest":"SHA256"}}]}}. Read/recover take {"sessionId":"SESSION"}. Event takes {"sessionId":"SESSION","event":{"id":"UNIQUE","expectedRevision":0,"type":"answer","text":"ANSWER"}}. Run from the intended Git workspace with ignored .atelier-local/. Saves are private drafts, never canonical source edits.`,
-    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project] [--target DIR] [--actor ID]
+    knowledge: `Usage: ${c} knowledge check|context|evaluate [--project FILE] [--plan FILE]
+
+Start with ${c} init --template knowledge-workspace --target DIR.
+check reports ontology-to-question coverage against the current canonical graph.
+context --question TEXT [--mode graph|lexical] [--max-bytes N] prints a bounded JSON packet of complete active Markdown sources.
+evaluate compares lexical and graph selection on the plan's pinned evidence cases; exit 1 means missing or stale expected evidence.
+The packet is local operator context, may contain private material, and grants no sharing or execution authority. Payload bytes are exact; token estimates are not measured usage. See docs/knowledge-setup.md.`,
+    init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project|knowledge-workspace] [--target DIR] [--actor ID]
 
 Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,
     adopt: `Usage: ${c} adopt [--profile single-repo|private-domain|shared-project|multi-repo|monorepo|control-workspace] [--target DIR] [--include PATTERN] [--exclude PATTERN] [--enroll-documents [--audience private]] [--yes]

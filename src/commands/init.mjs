@@ -101,6 +101,9 @@ if (template === 'external-project') {
   if (fs.existsSync(target)) throw new Error('external-project target must not exist; refusing overwrite or redirected destination')
   copyDir(path.join(packageRoot, 'templates/external-project-workspace'), target)
   console.log(`created external-project adapter at ${target}`)
+} else if (template === 'knowledge-workspace') {
+  copyDir(path.join(packageRoot, 'templates/knowledge-workspace'), target)
+  console.log(`created knowledge workspace at ${target}`)
 } else if (template === 'sample-workspace') {
   copyDir(path.join(packageRoot, 'fixtures/projects/sample-workspace'), target)
   console.log(`created sample Atelier workspace at ${target}`)
@@ -131,7 +134,7 @@ if (template === 'external-project') {
 } else if (template) {
   // Unknown template names fail closed: a typo must not silently produce a
   // blank scaffold that lacks the boundary policy the caller asked for.
-  console.error(`Unknown template: ${template}. Valid templates: private-domain, shared-project, sample-workspace, distribution, external-project.`)
+  console.error(`Unknown template: ${template}. Valid templates: private-domain, shared-project, sample-workspace, distribution, external-project, knowledge-workspace.`)
   process.exit(1)
 } else {
   fs.mkdirSync(target, { recursive: true })
