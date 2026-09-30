@@ -43,34 +43,60 @@ the local operator's source access. It is not a multi-user access-control layer.
 
 ## Supported interfaces
 
-The workspace is supported through two interfaces:
+The workspace is experimental. Two of its outputs are versioned contracts that
+hosts, desktop adapters and agents can bind to:
 
-- **The `atelier knowledge` CLI.** `check`, `context`, `evaluate`, `dashboard` and
-  `session start|read|event|recover|list` print JSON. The context packet and the
-  evaluation report carry their versions in `schema`
-  (`atelier-knowledge-context@v1`, `atelier-knowledge-evaluation@v1`). Hosts,
-  desktop adapters and agents bind to these commands and their JSON.
-- **The local browser.** `atelier dev --knowledge` serves the loopback routes
-  described above.
+- the context packet from `atelier knowledge context`
+  (`schema: atelier-knowledge-context@v1`);
+- the evaluation report from `atelier knowledge evaluate`
+  (`schema: atelier-knowledge-evaluation@v1`).
 
-This release has no library API for workspaces, sessions, context selection or
-plans. `@mnstry/atelier/knowledge` exports the knowledge ledger, intake,
-projection and ingestion functions only. Importing `src/knowledge/*` modules
-directly is unsupported, and those modules may change without notice. A library
-export will be added when a host needs one, reviewed together with that host's
-use of it.
+Everything else is experimental and may change without a version bump:
+
+- `atelier knowledge check` and `session list` print unversioned JSON;
+- the dashboard and session records carry `experimental-v1` schemas;
+- the browser surfaces and their `/api/knowledge/*` routes, served by
+  `atelier dev --knowledge` and `atelier server --knowledge`, are experimental;
+- the `knowledgeProject` option of `createAtelierSidecarServer` in
+  `@mnstry/atelier/server` is experimental too, not a supported binding.
+
+This release has no library API for the workspace. The workspace modules
+`src/knowledge/plan.mjs`, `context.mjs`, `workspace.mjs` and `sessions.mjs` are
+not exported, and importing them directly is unsupported.
+`@mnstry/atelier/knowledge` exports these functions, which are separate from the
+workspace:
+
+- `inspectKnowledge`
+- `prepareIntakeContribution` and `prepareKnowledgeImport`
+- `knowledgeGraphProposal`
+- `reconcileKnowledge`
+- `prepareIngestionContribution`, `localKnowledgeContext` and
+  `localKnowledgeGraphProposal`
+
+A workspace library export will be added when a host needs one, reviewed together
+with that host's use of it.
 
 Maintainers check a packed candidate with `npm run knowledge:consumer-proof`, with
-`ATELIER_CANDIDATE_TARBALL` set to the tarball. The script installs the tarball
-into a clean temporary consumer and uses only the CLI. Every npm step runs
-offline, from the locked dependency closure already in the npm cache. With a
-cold cache the script refuses before installing anything. Fill the cache with
-`npm ci`, or set `ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1` to allow one declared
-registry fetch; the receipt records which one happened. It runs the
-starter's supported answer and abstention, evaluation, a saved session read
-back, retry and recovery, and an owner correction. It then writes a receipt
-bound to the tarball's SHA-256. A passing receipt shows that the software
-behaves as documented. It does not measure answer quality or cost.
+`ATELIER_CANDIDATE_TARBALL` set to the tarball.
+
+- **Install.** The script installs the tarball into a clean temporary consumer
+  and runs the installed CLI with the current Node. Every npm step runs offline,
+  from the locked dependency closure already in the npm cache. With a cold cache
+  it refuses before installing anything. Fill the cache with `npm ci`, or set
+  `ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1` to allow one declared registry fetch.
+  The receipt records which one happened.
+- **What it checks:**
+  - a supported answer that includes the decisive caveat;
+  - an abstention with no sources, candidates or omissions;
+  - evaluation;
+  - a saved session read back from a new process, and a retried start;
+  - an owner correction: the edited source is reported stale, and earlier
+    sessions report changed sources.
+- **The receipt** is bound to the tarball's SHA-256. It is written with
+  `passed: false` if a step fails or the run stops unexpectedly.
+
+A passing receipt shows that these documented CLI paths work for that tarball.
+It does not measure answer quality or cost.
 
 ## Five connected views
 

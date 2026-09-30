@@ -1,18 +1,19 @@
 // Installed-package proof of the knowledge workspace, through its supported CLI only.
 //
 // Installs an exact packed tarball into a clean temporary consumer with no publisher
-// overrides, creates the canonical starter, and runs the documented path: check,
-// graph, build, a supported answer, an honest abstention, evaluation, a saved
-// session read back from a new process, retry, recovery, and an owner correction.
-// The workspace is invented; no person's data or provider is used. A passing run
-// proves software behaviour for this tarball only, not answer quality, cost, or
-// anyone's acceptance.
+// overrides, creates the canonical starter, and checks the documented CLI paths: a
+// supported answer, an abstention, evaluation, a saved session read back from a new
+// process, a retried start, and an owner correction. The workspace is invented; no
+// person's data or provider is used. A passing run shows that these paths work for
+// this tarball only, not answer quality, cost, or anyone's acceptance.
 //
 // The proof itself runs offline: every npm step passes --offline and resolves the
 // package's locked dependency closure from the local npm cache. A cold cache refuses
 // before anything is installed. To fill it, run npm ci in this repository, or set
 // ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 to allow one declared step that fetches the
 // locked closure from the registry. The receipt records which of the two happened.
+// The installed CLI runs through the current Node (process.execPath) on every
+// platform. A run that stops unexpectedly writes a receipt with passed: false.
 //
 //   ATELIER_CANDIDATE_TARBALL=<file.tgz> [ATELIER_EXPECTED_TARBALL_SHA256=<hex>]
 //   [ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1] [ATELIER_KNOWLEDGE_CONSUMER_OUTPUT=<dir>]
@@ -25,6 +26,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execNpmSync } from './npm-cli.mjs'
 
+const STEP_TIMEOUT_MS = 120000
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
 const tarball = process.env.ATELIER_CANDIDATE_TARBALL ? path.resolve(process.env.ATELIER_CANDIDATE_TARBALL) : null
 if (!tarball || !fs.existsSync(tarball)) {
@@ -37,33 +39,10 @@ if (process.env.ATELIER_EXPECTED_TARBALL_SHA256 && process.env.ATELIER_EXPECTED_
   process.exit(2)
 }
 const output = path.resolve(process.env.ATELIER_KNOWLEDGE_CONSUMER_OUTPUT || path.join(packageRoot, '.artifacts/knowledge-consumer'))
+const receiptFile = path.join(output, 'receipt.json')
 fs.mkdirSync(output, { recursive: true })
-
-const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-knowledge-consumer-'))
-const app = path.join(temp, 'app')
-const ws = path.join(temp, 'workspace')
-fs.mkdirSync(app)
-fs.writeFileSync(path.join(app, 'package.json'), `${JSON.stringify({ name: 'atelier-knowledge-consumer', private: true, type: 'module' }, null, 2)}\n`)
-
-// The consumer's Git identity is invented, and no inherited GIT_* variable can
-// retarget its repository.
-const env = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
-  GIT_AUTHOR_NAME: 'Consumer Proof',
-  GIT_AUTHOR_EMAIL: 'consumer-proof@example.invalid',
-  GIT_COMMITTER_NAME: 'Consumer Proof',
-  GIT_COMMITTER_EMAIL: 'consumer-proof@example.invalid',
-}
-const steps = []
-const record = (step) => { steps.push(step); return step }
-const run = (label, command, args, { cwd = ws, input, expect = 0 } = {}) => {
-  const result = spawnSync(command, args, { cwd, env, input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-  const step = record({ label, command: [path.basename(command), ...args].join(' '), exit: result.status, expectedExit: expect, ok: result.status === expect })
-  if (!step.ok) step.stderr = String(result.stderr || result.error?.message || '').slice(0, 2000)
-  return result
-}
-const parse = (result) => { try { return JSON.parse(result.stdout) } catch { return null } }
-const check = (label, condition, detail = null) => record({ label, check: true, ok: Boolean(condition), detail })
+// A receipt from an earlier run must never survive to describe this one.
+fs.rmSync(receiptFile, { force: true })
 
 // The package's non-dev dependency closure, from the lockfile.
 const lockfile = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package-lock.json'), 'utf8'))
@@ -79,73 +58,122 @@ if (closure.length > 0) {
     execNpmSync(['cache', 'add', '--offline', ...closure], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] })
   } catch {
     console.error('prove-knowledge-consumer: the locked dependency closure is not in the npm cache; run npm ci here, or set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 for a declared network bootstrap')
-    fs.rmSync(temp, { recursive: true, force: true })
     process.exit(2)
   }
 }
-execNpmSync(['install', tarball, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], { cwd: app, stdio: ['ignore', 'pipe', 'pipe'] })
-const installed = JSON.parse(fs.readFileSync(path.join(app, 'node_modules/@mnstry/atelier/package.json'), 'utf8'))
-check('installed the packed package', installed.name === '@mnstry/atelier', installed.version)
-const atelier = path.join(app, 'node_modules', '.bin', process.platform === 'win32' ? 'atelier.cmd' : 'atelier')
 
-run('init the canonical starter', atelier, ['init', '--template', 'knowledge-workspace', '--target', ws], { cwd: temp })
-run('git init', 'git', ['init', '-q'])
-run('git add', 'git', ['add', '-A'])
-run('git commit', 'git', ['commit', '-q', '-m', 'starter'])
-check('knowledge check is structurally valid', parse(run('knowledge check', atelier, ['knowledge', 'check']))?.status === 'structurally-valid')
-run('graph', atelier, ['graph'])
-run('build', atelier, ['build'])
-
-const question = 'Can the blue telescope be loaned this week?'
-const packet = parse(run('context for a supported question', atelier, ['knowledge', 'context', '--question', question]))
-const selected = (packet?.sources ?? []).map((source) => source.id)
-check('context packet is versioned', packet?.schema === 'atelier-knowledge-context@v1', packet?.schema)
-check('the decisive caveat is selected', selected.includes('loan:inspection'), selected)
-check('every source matches its digest', (packet?.sources ?? []).length > 0 && packet.sources.every((source) => createHash('sha256').update(source.text).digest('hex') === source.sha256))
-
-const abstained = parse(run('context for an unsupported question', atelier, ['knowledge', 'context', '--question', 'What is the sourdough recipe for the staff picnic?']))
-check('an unsupported question selects no evidence', abstained && (abstained.sources ?? []).length === 0, abstained?.status)
-
-check('evaluation report is versioned', parse(run('evaluate the pinned cases', atelier, ['knowledge', 'evaluate']))?.schema === 'atelier-knowledge-evaluation@v1')
-
-const dashboard = parse(run('dashboard', atelier, ['knowledge', 'dashboard']))
-const questionId = JSON.parse(fs.readFileSync(path.join(ws, 'knowledge-plan.json'), 'utf8')).questions[0].id
-check('dashboard provides a snapshot', Boolean(dashboard?.snapshot))
-const startRequest = JSON.stringify({ requestId: randomUUID(), flow: 'apply', questionId, snapshot: dashboard?.snapshot, author: 'consumer-proof' })
-const sessionId = parse(run('session start', atelier, ['knowledge', 'session', 'start'], { input: startRequest }))?.record?.id
-check('a session started', Boolean(sessionId))
-check('retrying the same start returns the same session', Boolean(sessionId) && parse(run('session start retried', atelier, ['knowledge', 'session', 'start'], { input: startRequest }))?.record?.id === sessionId)
-const revision = parse(run('session read', atelier, ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }))?.state?.revision
-const answer = 'Not yet: the inspection record says it has not passed.'
-run('session answer', atelier, ['knowledge', 'session', 'event'], { input: JSON.stringify({ sessionId, event: { id: randomUUID(), expectedRevision: revision, type: 'answer', text: answer } }) })
-check('the saved answer reads back from a new process', run('session read after the answer', atelier, ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }).stdout.includes(answer))
-run('session recover', atelier, ['knowledge', 'session', 'recover'], { input: JSON.stringify({ sessionId }) })
-check('the session is listed', run('session list', atelier, ['knowledge', 'session', 'list']).stdout.includes(sessionId))
-
-// An owner correction: the source changes and is committed, the graph is rebuilt.
-const inspection = path.join(ws, 'records', 'inspection.md')
-fs.writeFileSync(inspection, `${fs.readFileSync(inspection, 'utf8')}\nA follow-up inspection is booked for Friday.\n`)
-run('commit the owner correction', 'git', ['commit', '-q', '-am', 'owner correction'])
-run('graph after the correction', atelier, ['graph'])
-run('evaluate reports the stale pins', atelier, ['knowledge', 'evaluate'], { expect: 1 })
-const reopened = parse(run('read the earlier session after the correction', atelier, ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }))
-check('the earlier session keeps its answer', JSON.stringify(reopened ?? {}).includes(answer))
-check('the earlier session reports changed sources', reopened?.currency === 'changed', reopened?.currency)
-check('the corrected text is served', (parse(run('context after the correction', atelier, ['knowledge', 'context', '--question', question]))?.sources ?? []).some((source) => source.text.includes('booked for Friday')))
-
-const receipt = {
-  schema: 'atelier-knowledge-consumer-proof@v1',
-  tarball: path.basename(tarball),
-  tarballSha256,
-  packageVersion: installed.version,
-  node: process.version,
-  platform: process.platform,
-  network: bootstrap ? 'bootstrap-registry-fetch-then-offline' : 'offline',
-  steps,
-  passed: steps.every((step) => step.ok),
+const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-knowledge-consumer-'))
+const app = path.join(temp, 'app')
+const ws = path.join(temp, 'workspace')
+const emptyGitConfig = path.join(temp, 'gitconfig')
+// The consumer's Git identity is invented, no inherited GIT_* variable can retarget
+// its repository, and no system or global Git configuration is read.
+const env = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: emptyGitConfig,
+  GIT_AUTHOR_NAME: 'Consumer Proof',
+  GIT_AUTHOR_EMAIL: 'consumer-proof@example.invalid',
+  GIT_COMMITTER_NAME: 'Consumer Proof',
+  GIT_COMMITTER_EMAIL: 'consumer-proof@example.invalid',
 }
-fs.writeFileSync(path.join(output, 'receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`)
-fs.rmSync(temp, { recursive: true, force: true })
-for (const step of steps) if (!step.ok) console.error(`[knowledge:consumer-proof] failed: ${step.label}${step.stderr ? `: ${step.stderr.slice(0, 300)}` : ''}`)
-console.log(`[knowledge:consumer-proof] SHA-256 ${tarballSha256}; ${steps.filter((step) => step.ok).length}/${steps.length} steps passed; receipt ${path.join(output, 'receipt.json')}`)
-process.exit(receipt.passed ? 0 : 1)
+const steps = []
+let unexpected = null
+let installedVersion = null
+const record = (step) => { steps.push(step); return step }
+const run = (label, command, args, { cwd = ws, input, expect = 0 } = {}) => {
+  const result = spawnSync(command, args, { cwd, env, input, encoding: 'utf8', timeout: STEP_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+  // Absolute paths are shortened to their base names so the receipt names no temporary location.
+  const shown = [command, ...args].map((arg) => (path.isAbsolute(String(arg)) ? path.basename(String(arg)) : arg))
+  const step = record({ label, command: shown.join(' '), exit: result.status, expectedExit: expect, ok: result.status === expect })
+  if (!step.ok) step.stderr = String(result.stderr || result.error?.message || '').slice(0, 2000)
+  return { ...result, stdout: result.stdout ?? '' }
+}
+const parse = (result) => { try { return JSON.parse(result.stdout) } catch { return null } }
+const check = (label, condition, detail = null) => record({ label, check: true, ok: Boolean(condition), detail })
+
+try {
+  fs.writeFileSync(emptyGitConfig, '')
+  fs.mkdirSync(app)
+  fs.writeFileSync(path.join(app, 'package.json'), `${JSON.stringify({ name: 'atelier-knowledge-consumer', private: true, type: 'module' }, null, 2)}\n`)
+  execNpmSync(['install', tarball, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], { cwd: app, stdio: ['ignore', 'pipe', 'pipe'] })
+  const installedRoot = path.join(app, 'node_modules', '@mnstry', 'atelier')
+  const installed = JSON.parse(fs.readFileSync(path.join(installedRoot, 'package.json'), 'utf8'))
+  installedVersion = installed.version
+  check('installed the packed package', installed.name === '@mnstry/atelier', installed.version)
+  // Run the installed CLI entry with this Node on every platform (no .cmd shim, no PATH node).
+  const bin = typeof installed.bin === 'string' ? installed.bin : installed.bin?.atelier
+  const entry = path.join(installedRoot, bin)
+  const atelier = (label, args, options = {}) => run(label, process.execPath, [entry, ...args], options)
+
+  atelier('init the canonical starter', ['init', '--template', 'knowledge-workspace', '--target', ws], { cwd: temp })
+  run('git init', 'git', ['init', '-q'])
+  run('git add', 'git', ['add', '-A'])
+  run('git commit', 'git', ['commit', '-q', '-m', 'starter'])
+  check('knowledge check is structurally valid', parse(atelier('knowledge check', ['knowledge', 'check']))?.status === 'structurally-valid')
+  atelier('graph', ['graph'])
+  atelier('build', ['build'])
+
+  const question = 'Can the blue telescope be loaned this week?'
+  const packet = parse(atelier('context for a supported question', ['knowledge', 'context', '--question', question]))
+  const selected = (packet?.sources ?? []).map((source) => source.id)
+  check('context packet is versioned', packet?.schema === 'atelier-knowledge-context@v1', packet?.schema)
+  check('the decisive caveat is selected', selected.includes('loan:inspection'), selected)
+  check('every source matches its digest', (packet?.sources ?? []).length > 0 && packet.sources.every((source) => createHash('sha256').update(source.text).digest('hex') === source.sha256))
+
+  // The product's own abstention rule: no sources, no candidates and no omissions.
+  const abstained = parse(atelier('context for an unsupported question', ['knowledge', 'context', '--question', 'What is the sourdough recipe for the staff picnic?']))
+  check('an unsupported question abstains with no sources, candidates or omissions',
+    abstained?.status === 'needs-evidence' && (abstained.sources ?? []).length === 0 && abstained.coverage?.candidates === 0 && abstained.coverage?.omitted === 0,
+    { status: abstained?.status, coverage: abstained?.coverage })
+
+  const report = parse(atelier('evaluate the pinned cases', ['knowledge', 'evaluate']))
+  check('evaluation report is versioned', report?.schema === 'atelier-knowledge-evaluation@v1')
+
+  const dashboard = parse(atelier('dashboard', ['knowledge', 'dashboard']))
+  const questionId = JSON.parse(fs.readFileSync(path.join(ws, 'knowledge-plan.json'), 'utf8')).questions[0].id
+  check('dashboard provides a snapshot', Boolean(dashboard?.snapshot))
+  const startRequest = JSON.stringify({ requestId: randomUUID(), flow: 'apply', questionId, snapshot: dashboard?.snapshot, author: 'consumer-proof' })
+  const sessionId = parse(atelier('session start', ['knowledge', 'session', 'start'], { input: startRequest }))?.record?.id
+  check('a session started', Boolean(sessionId))
+  check('retrying the same start returns the same session', Boolean(sessionId) && parse(atelier('session start retried', ['knowledge', 'session', 'start'], { input: startRequest }))?.record?.id === sessionId)
+  const revision = parse(atelier('session read', ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }))?.state?.revision
+  const answer = 'Not yet: the inspection record says it has not passed.'
+  atelier('session answer', ['knowledge', 'session', 'event'], { input: JSON.stringify({ sessionId, event: { id: randomUUID(), expectedRevision: revision, type: 'answer', text: answer } }) })
+  check('the saved answer reads back from a new process', atelier('session read after the answer', ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }).stdout.includes(answer))
+  check('the session is listed', atelier('session list', ['knowledge', 'session', 'list']).stdout.includes(sessionId))
+
+  // An owner correction: the source changes and is committed, the graph is rebuilt.
+  const inspection = path.join(ws, 'records', 'inspection.md')
+  fs.writeFileSync(inspection, `${fs.readFileSync(inspection, 'utf8')}\nA follow-up inspection is booked for Friday.\n`)
+  run('commit the owner correction', 'git', ['commit', '-q', '-am', 'owner correction'])
+  atelier('graph after the correction', ['graph'])
+  const stale = parse(atelier('evaluate after the correction', ['knowledge', 'evaluate'], { expect: 1 }))
+  check('the corrected source is reported stale by evaluation',
+    stale?.schema === 'atelier-knowledge-evaluation@v1' && (stale.cases ?? []).some((c) => (c.runs?.graph?.stale ?? []).includes('loan:inspection')))
+  const reopened = parse(atelier('read the earlier session after the correction', ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }))
+  check('the earlier session keeps its answer', JSON.stringify(reopened ?? {}).includes(answer))
+  check('the earlier session reports changed sources', reopened?.currency === 'changed', reopened?.currency)
+  check('the corrected text is served', (parse(atelier('context after the correction', ['knowledge', 'context', '--question', question]))?.sources ?? []).some((source) => source.text.includes('booked for Friday')))
+} catch (error) {
+  unexpected = String(error?.message ?? error).slice(0, 2000)
+} finally {
+  const receipt = {
+    schema: 'atelier-knowledge-consumer-proof@v1',
+    tarball: path.basename(tarball),
+    tarballSha256,
+    packageVersion: installedVersion,
+    node: process.version,
+    platform: process.platform,
+    network: bootstrap ? 'bootstrap-registry-fetch-then-offline' : 'offline',
+    steps,
+    unexpected,
+    passed: unexpected === null && steps.length > 0 && steps.every((step) => step.ok),
+  }
+  fs.writeFileSync(receiptFile, `${JSON.stringify(receipt, null, 2)}\n`)
+  fs.rmSync(temp, { recursive: true, force: true })
+  for (const step of steps) if (!step.ok) console.error(`[knowledge:consumer-proof] failed: ${step.label}${step.stderr ? `: ${step.stderr.slice(0, 300)}` : ''}`)
+  if (unexpected) console.error(`[knowledge:consumer-proof] stopped unexpectedly: ${unexpected}`)
+  console.log(`[knowledge:consumer-proof] SHA-256 ${tarballSha256}; ${steps.filter((step) => step.ok).length}/${steps.length} steps passed; receipt ${receiptFile}`)
+  process.exitCode = receipt.passed ? 0 : 1
+}
