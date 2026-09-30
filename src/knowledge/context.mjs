@@ -83,15 +83,34 @@ export function createKnowledgeContext({ project, plan, sha256: planSha256, grap
         else candidates.set(neighbor, { node: eligibleById.get(neighbor), score: 0.5, reasons: ['declared-neighbor'] })
       }
     }
-    // Keep each ranked seed beside its evidence before considering the next
-    // lexical match. Only original seeds expand; this remains a bounded one hop.
+    // Each seed gets at most one neighbor before the next seed. Remaining
+    // neighbors take turns only after every original seed has been considered.
+    const adjacent = new Map([...seeds].map(seed => [seed, {
+      entries: [...neighbors.get(seed)].map(id => candidates.get(id))
+        .sort((a, b) => b.score - a.score || compare(a.node.id, b.node.id)),
+      cursor: 0,
+    }]))
     const prioritized = new Map()
+    const nextNeighbor = seed => {
+      const queue = adjacent.get(seed)
+      while (queue.cursor < queue.entries.length) {
+        const candidate = queue.entries[queue.cursor++]
+        if (prioritized.has(candidate.node.id)) continue
+        prioritized.set(candidate.node.id, candidate)
+        return true
+      }
+      return false
+    }
     for (const seed of seeds) {
       prioritized.set(seed, candidates.get(seed))
-      const adjacent = [...neighbors.get(seed)].map(id => candidates.get(id))
-        .sort((a, b) => b.score - a.score || compare(a.node.id, b.node.id))
-      for (const candidate of adjacent) prioritized.set(candidate.node.id, candidate)
+      // Two slots cannot hold both lexical seeds and a neighbor. Keep the seeds.
+      if (plan.budget.maxDocuments > 2 || seeds.size === 1) nextNeighbor(seed)
     }
+    let added
+    do {
+      added = false
+      for (const seed of seeds) added = nextNeighbor(seed) || added
+    } while (added)
     for (const candidate of ranked) prioritized.set(candidate.node.id, candidate)
     ordered = [...prioritized.values()]
   }
