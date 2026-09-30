@@ -7,6 +7,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createIngestionStore } from '../src/ingestion/store.mjs';
 import { createIntakeStore, intakeDigest } from '../src/intake/store.mjs';
 import { acquirePrivateLock } from '../src/project/durable-state.mjs';
+import { canonicalize } from '../src/attestation/jcs.mjs';
 
 const scope = { project: 'invented-garden', activity: 'planning' };
 const budget = { maxInputBytes: 1024 * 1024, maxOutputBytes: 1024 * 1024, maxAttempts: 128 };
@@ -224,4 +225,62 @@ test('reads neither bind a workspace identity nor create private state', t => {
   assert.equal(fs.existsSync(path.join(root, '.atelier-local/ingestion/workspace.json')), false);
   const p = plan(createIngestionStore(options));
   assert.equal(p.workspaceId, options.workspaceId);
+});
+
+test('getEvidence returns one exact verified span and reads only the named source', t => {
+  const { store, root } = fixture(t), p = plan(store, ['notes.md', 'table.csv']);
+  store.run(reference(p));
+  const hit = store.query({ ...reference(p), query: 'basil' }).hits.find(candidate => candidate.locator.kind === 'line');
+  const request = { ...reference(p), sourceId: hit.sourceId, sourceDigest: hit.sourceDigest, attemptId: hit.attemptId, locator: hit.locator };
+  const evidence = store.getEvidence(request);
+  assert.equal(evidence.text, hit.text);
+  assert.deepEqual(evidence.locator, hit.locator);
+  assert.equal(evidence.readScope, 'all-plan'); assert.equal(evidence.freshness, 'current'); assert.equal(evidence.synthesized, false);
+  // Another source in the plan going stale does not affect a get that never reads it.
+  fs.writeFileSync(path.join(root, 'table.csv'), 'plant,action\nbasil,prune\n');
+  assert.equal(store.getEvidence(request).text, hit.text);
+  assert.equal(store.query({ ...reference(p), query: 'basil' }).readScope, 'all-plan');
+});
+
+test('getEvidence refuses stale, unknown, mismatched and malformed requests with typed codes', t => {
+  const { store, root } = fixture(t), p = plan(store, ['notes.md']);
+  store.run(reference(p));
+  const hit = store.query({ ...reference(p), query: 'basil' }).hits[0];
+  const request = { ...reference(p), sourceId: hit.sourceId, sourceDigest: hit.sourceDigest, attemptId: hit.attemptId, locator: hit.locator };
+  assert.throws(() => store.getEvidence({ ...request, planDigest: `sha256:${'0'.repeat(64)}` }), { code: 'INGESTION_STALE' });
+  assert.throws(() => store.getEvidence({ ...request, sourceId: 'source-9' }), { code: 'INGESTION_MISSING' });
+  assert.throws(() => store.getEvidence({ ...request, sourceDigest: `sha256:${'1'.repeat(64)}` }), { code: 'INGESTION_STALE' });
+  assert.throws(() => store.getEvidence({ ...request, attemptId: 'attempt-other' }), { code: 'INGESTION_STALE' });
+  assert.throws(() => store.getEvidence({ ...request, locator: { kind: 'line', value: '99' } }), { code: 'INGESTION_MISSING' });
+  assert.throws(() => store.getEvidence({ ...request, locator: { kind: 'line' } }), { code: 'INGESTION_INVALID' });
+  assert.throws(() => store.getEvidence({ ...request, locator: { ...hit.locator, extra: 1 } }), { code: 'INGESTION_INVALID' });
+  assert.throws(() => store.getEvidence({ ...request, scope: 'narrower' }), { code: 'INGESTION_INVALID' });
+  fs.writeFileSync(path.join(root, 'notes.md'), 'Garden decisions\nWater the basil at noon.\n');
+  assert.throws(() => store.getEvidence(request), (error) => error.code === 'INGESTION_STALE' && /source-digest-changed/.test(error.message) && !error.message.includes(root));
+});
+
+test('status, query and getEvidence all refuse an attempt rewritten against the plan journal', t => {
+  const { store, root } = fixture(t, { 'notes.md': 'Garden decisions\nWater the basil at dawn.\n' });
+  const p = plan(store, ['notes.md']); store.run(reference(p));
+  const hit = store.query({ ...reference(p), query: 'basil' }).hits[0];
+  const dir = path.join(root, '.atelier-local/intake/attempts', hit.attemptId);
+  const extraction = JSON.parse(fs.readFileSync(path.join(dir, 'output.txt'), 'utf8'));
+  extraction.evidence[1].text = 'Water the basil with something else entirely at dawn.';
+  const output = canonicalize(extraction);
+  const completion = JSON.parse(fs.readFileSync(path.join(dir, 'completion.json'), 'utf8'));
+  completion.outputDigest = intakeDigest(output); completion.bytes = Buffer.byteLength(output);
+  for (const name of ['output.txt', 'completion.json']) fs.chmodSync(path.join(dir, name), 0o600);
+  fs.writeFileSync(path.join(dir, 'output.txt'), output);
+  fs.writeFileSync(path.join(dir, 'completion.json'), canonicalize(completion) + '\n');
+  assert.equal(store.status(reference(p)).items[0].integrity, 'refused');
+  assert.equal(store.query({ ...reference(p), query: 'basil' }).hits.length, 0);
+  assert.throws(() => store.getEvidence({ ...reference(p), sourceId: hit.sourceId, sourceDigest: hit.sourceDigest, attemptId: hit.attemptId, locator: hit.locator }), { code: 'INGESTION_INTEGRITY' });
+});
+
+test('getEvidence refuses a source whose evidence never completed', t => {
+  const { store } = fixture(t), p = plan(store, ['notes.md', 'image.png']);
+  const done = store.run(reference(p));
+  const unsupported = done.items.find(item => item.status === 'unsupported');
+  const attemptId = done.items.find(item => item.status === 'complete').attemptId;
+  assert.throws(() => store.getEvidence({ ...reference(p), sourceId: unsupported.id, sourceDigest: unsupported.sourceDigest, attemptId, locator: { kind: 'line', value: '1' } }), { code: 'INGESTION_STALE' });
 });
