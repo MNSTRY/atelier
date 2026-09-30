@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Personal workspaces are published as `@mnstry/atelier/personal-workspace`,
+- Personal workspaces are exported as `@mnstry/atelier/personal-workspace`,
   with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
   public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,
   `PersonalWorkspaceRefusal`, `loadPersonalManifest`, `loadPersonalOverlay`,
