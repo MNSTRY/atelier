@@ -5,6 +5,11 @@ source material. It is not a taxonomy and it is not runtime retrieval. It is a
 durable model of source nodes, evidence, relationships, diagnostics, and
 projection readiness.
 
+For setting up useful domain concepts and testing whether the graph helps answer
+work questions, follow [knowledge setup](knowledge-setup.md). It builds on this
+canonical source graph and keeps domain concepts, source types, semantic
+acceptance, and runtime authority distinct.
+
 ## Source Rules
 
 - Markdown documents may use front matter. A document with no `kg` block is

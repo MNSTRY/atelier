@@ -57,8 +57,7 @@ export function createCoauthorStore({ workspaceRoot = process.cwd() } = {}) {
     const lockPath = path.join(directory(), 'operation.lock');
     return withPrivateLock(lockPath, operation);
   }
-  function load(id) {
-    const result = ledger().eventsFor(aggregate(id));
+  function load(id, result = ledger().eventsFor(aggregate(id))) {
     if (!result.ok) throw new Error(result.error);
     if (!result.events.length) throw new Error('coauthor session not found');
     let state;
@@ -151,6 +150,25 @@ export function createCoauthorStore({ workspaceRoot = process.cwd() } = {}) {
       });
     },
     read(id) { return load(id).state; },
+    // One verified ledger snapshot for a bounded history listing. Keep failures
+    // per aggregate, and do not cache across calls or trust a caller's events.
+    readMany(ids) {
+      if (!Array.isArray(ids) || ids.length > 200 || ids.some(id => typeof id !== 'string' || !id))
+        throw new Error('session ids required and bounded');
+      if (!ids.length) return new Map();
+      const all = ledger().readAll();
+      const groups = new Map();
+      if (all.ok) for (const record of all.events) {
+        if (!groups.has(record.aggregateId)) groups.set(record.aggregateId, []);
+        groups.get(record.aggregateId).push(record);
+      }
+      return new Map(ids.map(id => {
+        try {
+          const state = load(id, all.ok ? { ok: true, events: groups.get(aggregate(id)) || [] } : all).state;
+          return [id, { ok: true, state }];
+        } catch (error) { return [id, { ok: false, error: error.message }]; }
+      }));
+    },
     dispatch(id, event) {
       return locked(() => {
         if (['receipt', 'failed'].includes(event?.type)) throw new Error('receipt and failure events are store-owned');

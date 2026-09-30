@@ -103,6 +103,9 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
       'src/decisions/contracts.d.mts': 'export type SyntheticDecision = string\n',
       'src/decisions/unapproved.d.mts': 'export type UnapprovedDeclaration = string\n',
       'src/other/contracts.d.mts': 'export type UnapprovedLocation = string\n',
+      'templates/knowledge-workspace/.gitattributes': 'records/*.md text eol=lf\n',
+      'templates/other-workspace/.gitattributes': '* text eol=lf\n',
+      'templates/knowledge-workspace/.gitconfig': '[core]\n',
     }
     for (const [rel, text] of Object.entries(files)) {
       const target = path.join(root, rel)
@@ -116,7 +119,7 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
       type: 'module',
       license: 'Apache-2.0',
       bin: { atelier: 'bin/atelier.mjs', 'mnstry-atelier': 'bin/mnstry-atelier.mjs' },
-      files: ['README.md', 'CHANGELOG.md', 'LICENSE', 'NOTICE', 'TRADEMARKS.md', 'SECURITY.md', 'bin/', 'docs/', 'skills/', 'announcements/', 'src/'],
+      files: ['README.md', 'CHANGELOG.md', 'LICENSE', 'NOTICE', 'TRADEMARKS.md', 'SECURITY.md', 'bin/', 'docs/', 'skills/', 'announcements/', 'src/', 'templates/'],
     }, null, 2)}\n`)
     const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'check-release-tarball.mjs')], {
       cwd: root,
@@ -129,6 +132,9 @@ test('assurance mutation: a packed test-shaped egress fixture fails release audi
     assert.doesNotMatch(result.stderr, /unexpected tarball file: src\/decisions\/contracts\.d\.mts/)
     assert.match(result.stderr, /unexpected tarball file: src\/decisions\/unapproved\.d\.mts/)
     assert.match(result.stderr, /unexpected tarball file: src\/other\/contracts\.d\.mts/)
+    assert.doesNotMatch(result.stderr, /unexpected tarball file: templates\/knowledge-workspace\/\.gitattributes/)
+    assert.match(result.stderr, /unexpected tarball file: templates\/other-workspace\/\.gitattributes/)
+    assert.match(result.stderr, /unexpected tarball file: templates\/knowledge-workspace\/\.gitconfig/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
