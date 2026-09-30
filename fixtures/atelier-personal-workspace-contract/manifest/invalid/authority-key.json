@@ -1,0 +1,17 @@
+{
+  "schema": "atelier-personal-workspace-manifest@v1",
+  "workspaceId": "sample-reading",
+  "revision": 1,
+  "bindings": [
+    "/srv/sample/sources/overview"
+  ],
+  "repos": [
+    {
+      "repoId": "sample-source",
+      "root": "/srv/sample/sources/overview",
+      "remote": null,
+      "enrolled": true,
+      "permission": true
+    }
+  ]
+}

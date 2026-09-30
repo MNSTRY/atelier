@@ -18,6 +18,7 @@ const INVALID_EXPECTATIONS = new Map([
   ['atelier-vault-publication', new Map([['publication.json', /expectedRevision.*must be >= 0/]])],
   ['atelier-guide', new Map([['authority.v1.json', /must NOT have additional properties/]])],
   ['atelier-intake', new Map([['authority.v1.json', /semanticAcceptance.*must be equal to constant/]])],
+  ['atelier-personal-workspace-manifest', new Map([['authority-key.json', /must NOT have additional properties/], ['nonempty-ext.json', /must NOT have more than 0 properties/], ['wrong-schema.json', /must be equal to constant/]])],
   ['atelier-skill-audit', new Map([['source-mutation.v1.json', /sourceMutation.*must be equal to constant/]])],
   ['atelier-skill-candidates', new Map([['workflow-key.v1.json', /workflowKey.*must match pattern/]])],
   ['atelier-skill-plan', new Map([['delete-action.v1.json', /type.*must be equal to one of the allowed values/]])],

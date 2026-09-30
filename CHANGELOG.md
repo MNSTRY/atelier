@@ -8,8 +8,10 @@
   `PersonalWorkspaceRefusal`, `loadPersonalManifest`, `loadPersonalOverlay`,
   `resolvePersonalWorkspace`, `planPersonalGeneration`,
   `materializePersonalGeneration` and `composePersonalWorkspace`. The composition
-  is manifest-only: it is not filesystem isolation, and it does not claim consent
-  or effect enforcement. The overlay fixture joins the contract corpus.
+  is manifest-only, with enforcement `none`: filesystem access, disclosure,
+  effects and the host sandbox are reported as uncovered, and no consent or
+  effect enforcement is claimed. The manifest and overlay schemas join the
+  contract corpus.
 
 - The ingestion store adds `getEvidence`, which returns one exact evidence span
   after rechecking only that source and its stored attempt. Query and
