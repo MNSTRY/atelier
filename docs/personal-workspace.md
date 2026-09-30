@@ -1,0 +1,122 @@
+# Personal workspace composition
+
+This module composes enrolled local repositories and private interpretation in
+one Atelier graph. The person supplies a private home outside every enrolled
+repository. Shared source files and private authored inputs stay unchanged.
+This is a local reference implementation; the public loader export, host
+integration, and release require separate integration acceptance.
+
+A manifest records enrollment, repository identity, and folder bindings. An
+overlay contains annotations, connections, collections, saved repository
+selections, and preferences. These closed documents grant no consent,
+permission, policy exception, disclosure, or effect authority. Valid graph
+metadata does not constrain a tool that can directly read the filesystem.
+
+## Files and API
+
+The caller passes `personalHome` explicitly; the module does not discover it
+from the environment or the current directory. The caller owns these files:
+
+- `atelier.personal.json`: `atelier-personal-workspace-manifest@v1`.
+- `atelier.overlay.json`: `atelier-personal-workspace-overlay@v1`.
+
+Both contracts live in `contracts/`. Paths in the private manifest are absolute
+canonical paths. Bindings must not overlap; enrolled roots must not nest.
+Each repo has a `repoId`, `root`, recorded `remote` (or `null`), and `enrolled`.
+Overlay references are closed `{ repoId, nodeId }` pairs. Repository IDs are
+stable local enrollment keys; matching a recorded remote is an offline change
+check, not proof of upstream membership or provider identity.
+
+The candidate entrypoint is `src/personal-workspace/index.mjs`. Its public
+package export is deliberately left to integration:
+
+```js
+const resolved = resolvePersonalWorkspace({ folder, personalHome })
+if (resolved.status === 'resolved') {
+  const plan = planPersonalGeneration(resolved)
+  const written = materializePersonalGeneration(plan, { personalHome })
+  const result = composePersonalWorkspace({
+    personalHome,
+    generationId: written.generationId,
+  })
+}
+```
+
+`loadPersonalManifest` and `loadPersonalOverlay` read and validate private
+files. `resolvePersonalWorkspace` returns `resolved` or `none`; conflicting
+bindings refuse. `planPersonalGeneration` is pure and accepts only a resolved
+input from this module. These operations write nothing. Failures throw
+`PersonalWorkspaceRefusal`, with a stable `code` and a sanitized message.
+No paths, source excerpts, or graph diagnostic text are included in refusals.
+
+Only `materializePersonalGeneration` writes. It creates
+`generations/<generationId>/` under the explicit private home. The id is a
+digest of canonical schema-tagged manifest and overlay inputs and declared
+stable references. Planning does not pretend to discover source nodes.
+Materialization writes exclusive files to a private staging directory, fsyncs
+them, verifies references through the canonical graph, and atomically renames
+the generation. A failed reference check discards only that attempt's staging.
+An interruption can leave a reported `stale-staging` directory; the module
+never prunes it or historical generations automatically.
+
+A committed generation contains `inputs.json`, `atelier.project.json`, private
+Markdown under `overlay/`, and `generation.json` written last. The latter lists
+every other file and its digest. The whole inventory is checked; additional,
+missing, edited, or symlinked files refuse. Identical existing generations are
+reused; conflicting ones refuse `generation-overwrite-refused`. There is no
+mutable current pointer and no in-place schema migration.
+
+Compose revalidates current authored inputs, roots, identity, the generation,
+and every `(repoId, nodeId)` before returning a graph. Removing enrollment
+while retaining references refuses `retained-removed-reference` before
+planning. Missing or misowned nodes refuse `stale-reference`. A source file
+rename preserves references when its stable node ID stays the same. Changed
+inputs refuse use of an old generation; old bytes remain untouched. Authored
+note retention and recipient export are outside this module.
+
+## Canonical graph and offline checks
+
+Composition uses the existing supported project loader, project validation,
+and canonical graph builder. Generated project paths are explicit and
+relative to the generation, with a conservative private read boundary; this
+never upgrades source authority. The graph includes shared source nodes and
+private interpretation nodes, with declared `related` edges. Private aliases
+and preferences do not rewrite source titles, facts, or classifications.
+Saved views are stored selections, not executable queries or policy rules.
+
+Bounded local Git reads are required for identity and the canonical ignore
+census. No network, provider lookup, `gh`, Git fetch, hook execution, service,
+database, credential operation, or shell is requested. The module refuses
+ambient `GIT_*` variables, configured fsmonitor helpers, and failed independent
+ignore listings. It checks that ignored sources never enter the graph even
+when the shared builder's ignore call fails open. Project inputs have pinned
+arguments and environment, no ambient overlays, and no path discovery.
+
+Private generation roots must be outside every worktree, verified by ancestor
+`.git` checks and a local Git probe. The overlay census must equal exactly the
+materialized overlay documents. Private roots must be owned by the current
+POSIX user and not writable by others. All roots, ancestors, and authored files
+must be free of symlinks. Windows private-root qualification is not implemented
+and refuses `private-root-unverifiable`.
+
+## Evidence and limits
+
+The tests use invented temporary repositories and private homes. They verify
+canonical nodes and edges, unchanged source trees and authored inputs,
+determinism, removal, identity replacement, closed schemas, ignore failure,
+unsafe roots, corrupted generations, and interrupted writes. This proves the
+bounded module behavior, not installed host enforcement or human acceptance.
+
+`sourceRevisions` reports digests observed from the current canonical census
+after the build. Shared repositories remain live, mutable files: this is not a
+transactional snapshot or an upstream Git revision. Concurrent writers can
+change source bytes between graph reads. Consumers requiring an immutable
+source snapshot must supply one through a separately governed host boundary.
+Similarly, checks in this module are not an OS sandbox, defense against a
+hostile filesystem owner, or protection from concurrent root replacement.
+
+The returned coverage is `manifest-only`, with `enforcement: none` for direct
+filesystem access, disclosure, effects, and host sandboxing. A harness with
+repository access still needs the applicable host and runtime boundaries.
+Integration, independent review, hosted CI, publication, installation,
+consent/effect enforcement, and acceptance are separate gates.

@@ -1,0 +1,24 @@
+{
+  "schema": "atelier-personal-workspace-overlay@v1",
+  "workspaceId": "sample-workspace",
+  "annotations": [
+    {
+      "id": "first-note",
+      "target": {
+        "repoId": "sample-source",
+        "nodeId": "sample-source:overview"
+      },
+      "note": "My private interpretation.",
+      "displayAlias": "Starting point",
+      "tags": [
+        "reading"
+      ]
+    }
+  ],
+  "connections": [],
+  "collections": [],
+  "views": [],
+  "preferences": {
+    "theme": "system"
+  }
+}
