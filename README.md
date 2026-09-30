@@ -41,6 +41,14 @@ separate host and release validation.
 
 ## From files to a working system
 
+Start with a question that changes useful work. The
+[knowledge setup workflow](docs/knowledge-setup.md) supplies an editable ontology
+plan, a fictional starter, and CLI checks that connect concepts to questions.
+`atelier knowledge context` selects complete, source-linked evidence within a
+byte budget; `atelier knowledge evaluate` compares lexical and graph retrieval
+without provider calls. A passing check is structural evidence; useful answers
+and efficient token usage still need measurement in real work.
+
 For local-harness authoring, see [durable coauthor sessions](docs/coauthor-session.md)
 and [skill stewardship and managed installation](docs/skill-steward.md).
 The next-release [capability stewardship foundation](docs/capability-stewardship.md)
@@ -553,3 +561,7 @@ The [research quickstart](docs/research-starter-quickstart.md) explains how to u
 a supplied candidate packet with existing tools and skills. See
 [Trackables](docs/trackables.md), [Interaction and Reflection](docs/interaction-and-reflection.md)
 and [Coordination](docs/coordination.md) for portable runtime profiles and host obligations.
+
+The optional [knowledge workspace](docs/knowledge-workspace.md) connects
+onboarding, ontology modeling, evidence deepening, application, and outcome
+learning with shared private coauthor sessions for people and agents.
