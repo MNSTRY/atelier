@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Evidence navigation is published as `@mnstry/atelier/evidence-navigation`
+  (the pure contract checks and currency assessments) and
+  `@mnstry/atelier/evidence-navigation/local` (the Node local reader, kept
+  separate), with its schema at
+  `@mnstry/atelier/contracts/atelier-evidence-navigation.v1.schema.json`. The
+  schema and its fixtures join the contract corpus. There is no CLI command:
+  search and get need a host to construct the reader with its exact plan,
+  workspace and current whole-plan admission, and Atelier ships no issuer of that
+  authority.
+
 - The ingestion store adds `getEvidence`, which returns one exact evidence span
   after rechecking only that source and its stored attempt. Query and
   `getEvidence` both report `readScope: "all-plan"`: they read at the scope of
