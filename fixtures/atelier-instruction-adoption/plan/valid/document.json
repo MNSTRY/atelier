@@ -1,0 +1,62 @@
+{
+  "schema": "atelier-instruction-plan@v1",
+  "workspace": "sha256:2e2ff87336e5b47594cfab87f9ef035e2026ea8349d22b088de009e009c07616",
+  "input": {
+    "workspaceId": "sample",
+    "scope": {
+      "project": "sample",
+      "activity": "summary"
+    },
+    "harnessId": "local-summary",
+    "lessonId": "lesson",
+    "target": "AGENTS.md",
+    "slot": "uncertainty",
+    "mode": "adopt"
+  },
+  "previousState": "sha256:ae75ef3e6625fceeada4a9457cb6984129059cca22939ba21459aeb693cf74c3",
+  "nextState": {
+    "schema": "atelier-instruction-state@v1",
+    "workspace": "sha256:2e2ff87336e5b47594cfab87f9ef035e2026ea8349d22b088de009e009c07616",
+    "revision": 1,
+    "bindings": [
+      {
+        "workspaceId": "sample",
+        "scope": {
+          "project": "sample",
+          "activity": "summary"
+        },
+        "harnessId": "local-summary",
+        "lessonId": "lesson",
+        "target": "AGENTS.md",
+        "slot": "uncertainty",
+        "mode": "adopt",
+        "pin": {
+          "lessonId": "lesson",
+          "lessonDigest": "sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19",
+          "artifactDigest": "sha256:61d589707df7ad1cb3e803ccf93d914cfd29fa304be05a236d68159e8fce36af",
+          "activationId": "activation",
+          "decisionId": "decision:d573fdba1a00eba338d358da26a45e30"
+        },
+        "block": "<!-- atelier:practice:uncertainty:start -->\nScope: project sample; activity summary; harness local-summary.\nPractice: lesson (sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19). Apply only in this scope; host instructions and tool permissions retain their precedence.\n\nRetain material uncertainty beside the affected claim.\n\nExceptions:\n- Do not invent a missing gap.\n<!-- atelier:practice:uncertainty:end -->",
+        "blockDigest": "sha256:e8a0a2183c0cea691ce2bf10c0bec2ef7f7c7bd7ae433ffb2ba190bf541e94fa"
+      }
+    ],
+    "digest": "sha256:b1b25079f91c4e1ceb3e5d854582ed48531f3d80da8545fdca2d6838f1b55cea"
+  },
+  "learningRevision": 4,
+  "pin": {
+    "lessonId": "lesson",
+    "lessonDigest": "sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19",
+    "artifactDigest": "sha256:61d589707df7ad1cb3e803ccf93d914cfd29fa304be05a236d68159e8fce36af",
+    "activationId": "activation",
+    "decisionId": "decision:d573fdba1a00eba338d358da26a45e30"
+  },
+  "before": null,
+  "beforeDigest": null,
+  "after": "<!-- atelier:practice:uncertainty:start -->\nScope: project sample; activity summary; harness local-summary.\nPractice: lesson (sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19). Apply only in this scope; host instructions and tool permissions retain their precedence.\n\nRetain material uncertainty beside the affected claim.\n\nExceptions:\n- Do not invent a missing gap.\n<!-- atelier:practice:uncertainty:end -->\n",
+  "afterDigest": "sha256:0ebe4b23e1dd8b33ae9a6e4856939afeede5d4287e4f2e07363e06b7c24b4d74",
+  "effect": "write-scoped-instruction-guidance",
+  "precedence": "host-owned",
+  "authenticated": false,
+  "digest": "sha256:c1e1249bdef5c39d933425bb26d58c2b54c16155b4bd9d2abb70d709ef30b087"
+}

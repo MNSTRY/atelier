@@ -1,0 +1,61 @@
+{
+  "schema": "mnstry.atelier-capability-package@v1",
+  "id": "mnstry.atelier/research-harness",
+  "version": "1.0.1",
+  "title": "Research Harness",
+  "summary": "Portable governed research harness.",
+  "license": "Apache-2.0",
+  "source": {
+    "repository": "https://github.com/MNSTRY/atelier",
+    "revision": "unreleased-inquiry-source-v1"
+  },
+  "hosts": [
+    "codex-repo-v1",
+    "claude-repo-v1"
+  ],
+  "dependencies": [],
+  "evaluations": [
+    {
+      "id": "acceptance",
+      "kind": "integration",
+      "path": "evaluation.md",
+      "outcome": "unknown"
+    }
+  ],
+  "migrations": [],
+  "limitations": [
+    "Unreleased source package. Digest integrity does not authenticate publisher identity.",
+    "Local synthetic workflow checks do not establish agent research quality or recipient acceptance."
+  ],
+  "capabilities": [
+    {
+      "id": "research-harness",
+      "description": "Run the research harness with explicit evidence and governance.",
+      "inputs": [
+        "Question or versioned inquiry request, local authority and tooling"
+      ],
+      "outputs": [
+        "Versioned inquiry records and reviewable proposals"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "harness",
+      "name": "atelier-research-harness",
+      "path": "skills/atelier-research-harness",
+      "capabilities": [
+        "research-harness"
+      ]
+    }
+  ],
+  "requirements": {
+    "tools": [
+      "atelier-inquiry-v1"
+    ],
+    "effects": [
+      "read-workspace",
+      "write-workspace"
+    ]
+  }
+}

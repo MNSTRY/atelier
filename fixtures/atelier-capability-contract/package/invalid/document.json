@@ -1,0 +1,59 @@
+{
+  "schema": "mnstry.atelier-capability-package@v1",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "source": {
+    "repository": "https://example.org/capability-source",
+    "revision": "synthetic-example-v1"
+  },
+  "hosts": [
+    "codex-repo-v1",
+    "claude-repo-v1"
+  ],
+  "dependencies": [],
+  "evaluations": [
+    {
+      "id": "acceptance-plan",
+      "kind": "integration",
+      "path": "evaluation.md",
+      "outcome": "unknown"
+    }
+  ],
+  "migrations": [],
+  "limitations": [
+    "Example package; publisher identity is illustrative and unauthenticated.",
+    "Host discovery and research quality require actual session-specific evaluation."
+  ],
+  "id": "atelier.examples/evidence-review",
+  "title": "Evidence review",
+  "summary": "Check a claim against the sources available to the reviewer.",
+  "capabilities": [
+    {
+      "id": "evidence-review",
+      "description": "Produce a traceable claim review.",
+      "inputs": [
+        "Claims and source material"
+      ],
+      "outputs": [
+        "Claim ledger and unresolved questions"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "review",
+      "name": "evidence-review",
+      "path": "skills/evidence-review",
+      "capabilities": [
+        "evidence-review"
+      ]
+    }
+  ],
+  "requirements": {
+    "tools": [],
+    "effects": [
+      "read-workspace"
+    ]
+  },
+  "unexpectedAuthority": true
+}

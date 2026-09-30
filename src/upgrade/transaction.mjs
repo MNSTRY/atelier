@@ -11,14 +11,17 @@ import { buildGraph } from '../graph/graph.mjs'
 import { buildProjectProjection, buildProjectManifest } from '../projection/project.mjs'
 import { buildReadiness } from '../readiness/readiness.mjs'
 import { hashBytes, hashObject, same, jsonText, contained, readBytes, fileState, inventory, syncDirectory, publish, privateDirectory, replaceExpected, MAX_BYTES } from './transaction-files.mjs'
+import { TEMPLATE_PARTICIPANT, inspectTemplateAdoption, templateManagedPaths, prepareTemplateParticipant, validateTemplatePlan, verifyTemplatePreparation, verifyTemplateInstallation } from './template-participant.mjs'
 
 const packageRoot = fileURLToPath(new URL('../../', import.meta.url))
 const PRIVATE = '.atelier-local/upgrades'
 const POLICY = 'atelier.adoption-policy.json'
 const SCHEMAS = { policy: 'atelier-adoption-policy.v1', plan: 'atelier-upgrade-plan.v2', migration: 'atelier-migration.v2', event: 'atelier-upgrade-receipt.v1', lock: 'atelier-lock.v1' }
 const schemaDocs = Object.fromEntries(Object.entries(SCHEMAS).map(([key, name]) => [key, JSON.parse(fs.readFileSync(path.join(packageRoot, 'contracts', `${name}.schema.json`)))]))
+const templateSchemas = Object.fromEntries([['policy', 'atelier-adoption-policy.v2'], ['plan', 'atelier-upgrade-plan.v3'], ['migration', 'atelier-migration.v3']].map(([kind, name]) => [kind, JSON.parse(fs.readFileSync(path.join(packageRoot, 'contracts', name + '.schema.json')))]))
 export function validateUpgradeDocument(kind, doc) {
-  const errors = validateJsonSchema(schemaDocs[kind], doc)
+  const schema = templateSchemas[kind]?.properties.schema.const === doc?.schema ? templateSchemas[kind] : schemaDocs[kind]
+  const errors = validateJsonSchema(schema, doc)
   if (errors.length) throw new Error(`invalid upgrade ${kind}: ${errors.join('; ')}`)
   return doc
 }
@@ -32,8 +35,9 @@ function privateRoot(root) {
   if (text(root, ['ls-files', '--', '.atelier-local']).length || !git(root, ['check-ignore', '-q', '.atelier-local/upgrades/probe'], { allowFailure: true }).ok) throw new Error('private upgrade state must be ignored and untracked')
   return privateDirectory(root, PRIVATE)
 }
-function policy(root) {
+function policy(root, template = false) {
   const result = validateUpgradeDocument('policy', readJson(contained(root, POLICY)))
+  if (result.schema !== (template ? 'mnstry.atelier-adoption-policy@v2' : 'mnstry.atelier-adoption-policy@v1')) throw new Error('wrong adoption policy for participant')
   if (!result.enabled) throw new Error('upgrade policy is disabled')
   return result
 }
@@ -142,11 +146,13 @@ function lease(root, body) {
   syncDirectory(state)
   try { return body() } finally { fs.rmSync(lock, { recursive: true }); syncDirectory(state) }
 }
-function allowedPaths(project) {
+function allowedPaths(project, participant = null) {
   const paths = ['atelier.lock.json', project.graphPath, path.join(project.outputRoot, 'index.html'), path.join(project.outputRoot, 'atelier.manifest.json'), project.readinessPath].map((p) => path.isAbsolute(p) ? path.relative(project.configDir, p) : p)
   if (new Set(paths).size !== 5 || paths.slice(1).some((p) => !p.startsWith('atelier-output/'))) throw new Error('slice 1 generated writes must be distinct files inside atelier-output')
   paths.forEach((p) => contained(project.configDir, p))
-  return paths
+  const extra = participant ? templateManagedPaths(participant.previousAdoptionDigest) : []
+  if (extra.some(p => paths.includes(p))) throw new Error('template output conflicts with normal managed paths')
+  return [...paths, ...extra]
 }
 function boundaryCheck(project, staged = false) {
   const loaded = loadBoundaryPolicy(project)
@@ -154,21 +160,23 @@ function boundaryCheck(project, staged = false) {
   const report = checkBoundaryPolicy({ project, policy: loaded.policy, staged, gitExecutable: resolveGitExecutable(), allowNetworkActorResolution: false, forceActorErrors: true })
   if (!report.ok) throw new Error(`boundary postcheck refused: ${report.errors.map((e) => e.code).join(', ')}`)
 }
-function preservedLock(project, generatedAt) {
+function preservedLock(project, generatedAt, preserveUnrelated = false) {
   const file = path.join(project.configDir, 'atelier.lock.json')
   const previous = fs.existsSync(file) ? validateUpgradeDocument('lock', readJson(file)) : null
-  // Pack adoption and template changes are separate participants.
-  const next = buildAtelierLock({ project })
-  if (previous && !same(previous.boundaryPolicy, next.boundaryPolicy)) throw new Error('boundary policy adoption requires a separate participant')
-  if (previous && !same(previous.extensionPacks, next.extensionPacks)) throw new Error('pack adoption requires a separate participant')
+  // Pack adoption and workspace lineage are separate from profile adoption.
+  const built = buildAtelierLock({ project })
+  const next = preserveUnrelated && previous ? { ...previous, package: built.package } : built
+  if (previous && !same(previous.boundaryPolicy, built.boundaryPolicy)) throw new Error('boundary policy adoption requires a separate participant')
+  if (previous && !same(previous.extensionPacks, built.extensionPacks)) throw new Error('pack adoption requires a separate participant')
   next.generatedAt = generatedAt
   if (previous) { next.appliedMigrations = previous.appliedMigrations; next.template = previous.template; next.lastSuccessfulUpgrade = previous.lastSuccessfulUpgrade }
   return validateUpgradeDocument('lock', next)
 }
-function render(project, readSet, createdAt) {
+function render(project, readSet, createdAt, templateInput = null) {
   const root = project.configDir
+  const previous = templateInput ? inspectTemplateAdoption(root) : null
+  const allowed = allowedPaths(project, templateInput ? { previousAdoptionDigest: previous.digest } : null)
   const scratch = fs.mkdtempSync(path.join(privateRoot(root), 'prepare-'))
-  const allowed = allowedPaths(project)
   try {
     for (const entry of readSet) {
       if (entry.path.split('/').includes('.gitattributes')) throw new Error('Git attribute transformations unsupported in slice 1')
@@ -196,7 +204,9 @@ function render(project, readSet, createdAt) {
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(file, bytes)
     }
-    const lock = preservedLock(project, createdAt)
+    const template = templateInput ? prepareTemplateParticipant(clone, templateInput) : null
+    if (template) for (const [name, bytes] of template.outputs) write(name, bytes)
+    const lock = preservedLock(project, createdAt, Boolean(template))
     write('atelier.lock.json', jsonText(lock))
     const graph = buildGraph(clone)
     graph.project = path.basename(root)
@@ -214,10 +224,11 @@ function render(project, readSet, createdAt) {
     const writes = after.filter((entry) => !same(entry.state, before.find((p) => p.path === entry.path)?.state ?? null)).map((entry) => {
       if (!allowed.includes(entry.path)) throw new Error('unaccounted preparation write')
       const previous = before.find((p) => p.path === entry.path)?.state ?? null
-      return { path: entry.path, owner: entry.path === 'atelier.lock.json' ? 'lock' : 'generated', action: previous ? 'update' : 'create', before: previous, after: entry.state, content: readBytes(contained(scratch, entry.path)).toString('base64') }
+      const owner = entry.path === 'atelier.lock.json' ? 'lock' : template && entry.path.startsWith('atelier-template/history/') ? 'template-history' : template && (entry.path.startsWith('atelier-template/') || ['atelier-output/template.html', 'atelier-output/template-binding.json'].includes(entry.path)) ? 'template' : 'generated'
+      return { path: entry.path, owner, action: previous ? 'update' : 'create', before: previous, after: entry.state, content: readBytes(contained(scratch, entry.path)).toString('base64') }
     })
     if (before.some((entry) => !after.some((p) => p.path === entry.path))) throw new Error('unaccounted preparation deletion')
-    return { writes, allowed }
+    return { writes, allowed, participant: template?.participant ?? null }
   } finally { fs.rmSync(scratch, { recursive: true }); syncDirectory(privateRoot(root)) }
 }
 
@@ -226,12 +237,18 @@ function requireDurableHost() {
   if (!['linux', 'darwin'].includes(process.platform)) throw new Error('exact upgrade transactions require a qualified Linux or macOS filesystem; this host is unsupported')
 }
 export function prepareUpgrade({ project, now = new Date() }) {
+  return prepareLocalUpgrade({ project, now })
+}
+export function prepareTemplateUpgrade({ project, profileFile, selectionFile, now = new Date() }) {
+  return prepareLocalUpgrade({ project, now, templateInput: { profileFile, selectionFile } })
+}
+function prepareLocalUpgrade({ project, now, templateInput = null }) {
   requireDurableHost()
   project = canonicalProject(project)
   const root = checkProject(project)
   return lease(root, () => {
     clean(root)
-    const adopted = policy(root)
+    const adopted = policy(root, !!templateInput)
     const readSet = snapshot(root)
     boundaryCheck(project)
     const createdAt = now.toISOString()
@@ -239,7 +256,7 @@ export function prepareUpgrade({ project, now = new Date() }) {
     const head = text(root, ['rev-parse', 'HEAD'])
     const branch = text(root, ['symbolic-ref', 'HEAD'])
     const executor = executorDigest()
-    const { writes, allowed } = render(project, readSet, createdAt)
+    const { writes, allowed, participant } = render(project, readSet, createdAt, templateInput)
     if (!same(snapshot(root), readSet) || text(root, ['rev-parse', 'HEAD']) !== head || !same(gitEvidence(root), evidence)) throw new Error('inputs changed during preparation')
     clean(root)
     const plan = {
@@ -249,6 +266,14 @@ export function prepareUpgrade({ project, now = new Date() }) {
       policy: adopted, policyDigest: hashObject(adopted), executorDigest: executor, ...evidence, readSet,
       migration: { schema: 'mnstry.atelier-migration@v2', id: 'local-lock-projections@1', executorDigest: executor, readScope: 'whole-enrolled-repository', allowedWrites: allowed, sideEffects: ['git-index', 'git-commit'], postChecks: ['exact-inventory', 'lock-schema', 'exact-index', 'commit-parent-tree-message'] },
       writes, releaseEvidence: null, dependencyInstallation: 'excluded', mode: 'manual-exact-plan', recoveryCoverage: 'local-only', message: 'Prepare Atelier local lock and projections',
+    }
+    if (participant) {
+      plan.schema = 'mnstry.atelier-upgrade-plan@v3'
+      plan.participant = participant
+      plan.migration.schema = 'mnstry.atelier-migration@v3'
+      plan.migration.id = TEMPLATE_PARTICIPANT
+      plan.migration.postChecks.push('template-adoption', 'template-current-source')
+      plan.message = 'Prepare Atelier local template adoption and projections'
     }
     plan.digest = planDigest(plan)
     validateUpgradeDocument('plan', plan)
@@ -267,15 +292,24 @@ function loadPlan(root, file) {
   const plan = validateUpgradeDocument('plan', readJson(contained(root, relative)))
   if (planDigest(plan) !== plan.digest || path.basename(file) !== `${plan.digest.slice(7)}.json`) throw new Error('plan digest mismatch')
   if (plan.workspace !== root || plan.repositoryId !== identity(root)) throw new Error('plan belongs to another workspace')
+  if (plan.participant) {
+    const config = contained(root, plan.configPath)
+    const project = canonicalProject(resolveProjectConfig({ cwd: root, argv: ['--project', config], env: {}, writeLocalState: false }))
+    if (!same(allowedPaths(project, plan.participant), plan.migration.allowedWrites)) throw new Error('unregistered template managed path set')
+  }
   const allowed = plan.migration.allowedWrites
   if (new Set(plan.writes.map((w) => w.path)).size !== plan.writes.length || new Set(plan.readSet.map((r) => r.path)).size !== plan.readSet.length) throw new Error('duplicate plan paths')
   for (const entry of plan.readSet) contained(root, entry.path)
   for (const entry of plan.writes) {
     contained(root, entry.path)
-    if (!allowed.includes(entry.path) || (entry.owner === 'lock' ? entry.path !== 'atelier.lock.json' : !entry.path.startsWith('atelier-output/'))) throw new Error('unregistered write path')
+    const templatePaths = plan.participant ? templateManagedPaths(plan.participant.previousAdoptionDigest) : []
+    const expectedOwner = entry.path === 'atelier.lock.json' ? 'lock' : templatePaths.includes(entry.path) ? entry.path.startsWith('atelier-template/history/') ? 'template-history' : 'template' : 'generated'
+    if (!allowed.includes(entry.path) || entry.owner !== expectedOwner || (entry.owner === 'generated' && !entry.path.startsWith('atelier-output/'))) throw new Error('unregistered write path')
+    if (plan.participant && (entry.after?.mode !== '100644' || entry.before && entry.before.mode !== entry.after.mode)) throw new Error('template transaction mode change refused')
     const content = Buffer.from(entry.content, 'base64')
     if (content.toString('base64') !== entry.content || !entry.after || hashBytes(content) !== entry.after.digest || !same(entry.before, plan.readSet.find((r) => r.path === entry.path)?.state ?? null) || entry.action !== (entry.before ? 'update' : 'create')) throw new Error('invalid write evidence')
   }
+  if (plan.participant) validateTemplatePlan(plan)
   return plan
 }
 function expectedSnapshot(plan, count) {
@@ -295,7 +329,8 @@ export function explainSavedUpgrade({ project, planFile, now = new Date() }) {
   try {
     clean(root)
     liveBindings(root, plan, 0, now)
-    if (!same(allowedPaths(project), plan.migration.allowedWrites) || path.basename(project.configPath) !== plan.configPath) throw new Error('project binding changed')
+    if (!same(allowedPaths(project, plan.participant), plan.migration.allowedWrites) || path.basename(project.configPath) !== plan.configPath) throw new Error('project binding changed')
+    if (plan.participant) inspectTemplateAdoption(root)
     if (fs.existsSync(operationDirectory(root, plan.digest.slice(7)))) throw new Error('plan already consumed; inspect its operation status')
     const state = contained(root, PRIVATE)
     if (fs.existsSync(path.join(state, 'writer'))) throw new Error('writer lease exists; inspect its owner')
@@ -308,7 +343,7 @@ export function explainSavedUpgrade({ project, planFile, now = new Date() }) {
     writes: plan.writes.map(({ path, owner, action, before, after }) => ({ path, owner, action, before, after })),
     provenance: { executorDigest: plan.executorDigest, gitDigest: plan.gitDigest, gitConfigDigest: plan.gitConfigDigest, gitAuxDigest: plan.gitAuxDigest, hooksDigest: plan.hooksDigest, sourceFiles: plan.readSet.length, releaseEvidence: plan.releaseEvidence },
     consent: { mode: plan.mode, requiredEffects: plan.policy.allowedEffects, humanApprovalAuthenticated: false, applicationAuthorized: false },
-    outcome: 'local candidate commit', dependencyInstallation: plan.dependencyInstallation,
+    outcome: 'local candidate commit', participant: plan.participant?.id ?? null, dependencyInstallation: plan.dependencyInstallation,
     activation: 'excluded', recovery: 'local backups and inspection only; no automatic rollback',
     caveats: ['Saved writes are generated from repository content; inspect them before sharing.','Local receipts prove consistency, not publisher identity or an authenticated human decision.', 'Application rechecks current state; this report neither reserves the workspace nor grants permission.'],
   }
@@ -317,7 +352,7 @@ export function explainSavedUpgrade({ project, planFile, now = new Date() }) {
 function liveBindings(root, plan, count, now = new Date()) {
   for (const rel of ['.atelier-local/readiness', '.atelier-local/atelier.local.json', 'atelier.local.json', 'atelier.workspace.local.json']) if (fs.existsSync(contained(root, rel))) throw new Error('unsupported local context appeared')
   if (now < new Date(plan.createdAt) || now >= new Date(plan.expiresAt) || new Date(plan.expiresAt) - new Date(plan.createdAt) > plan.policy.maxAgeSeconds * 1000) throw new Error('plan expired or clock moved backward')
-  if (!same(policy(root), plan.policy) || hashObject(plan.policy) !== plan.policyDigest) throw new Error('policy changed or revoked')
+  if (!same(policy(root, !!plan.participant), plan.policy) || hashObject(plan.policy) !== plan.policyDigest) throw new Error('policy changed or revoked')
   if (executorDigest() !== plan.executorDigest || plan.migration.executorDigest !== plan.executorDigest) throw new Error('executor changed')
   if (!same(gitEvidence(root), Object.fromEntries(['gitDigest', 'gitConfigDigest', 'gitAuxDigest', 'hooksPath', 'hooksDigest'].map((k) => [k, plan[k]])))) throw new Error('Git or hook identity changed')
   if (text(root, ['rev-parse', 'HEAD']) !== plan.baseHead || text(root, ['symbolic-ref', 'HEAD']) !== plan.branch || !same(snapshot(root), expectedSnapshot(plan, count))) throw new Error('repository changed from saved plan')
@@ -381,7 +416,15 @@ export function applySavedUpgrade({ project, planFile, confirm }) {
     if (confirm !== plan.digest) throw new Error('exact plan confirmation required')
     clean(root)
     liveBindings(root, plan, 0)
-    if (!same(allowedPaths(project), plan.migration.allowedWrites) || path.basename(project.configPath) !== plan.configPath) throw new Error('project binding changed')
+    if (!same(allowedPaths(project, plan.participant), plan.migration.allowedWrites) || path.basename(project.configPath) !== plan.configPath) throw new Error('project binding changed')
+    let workspaceTemplate = null
+    if (plan.participant) {
+      verifyTemplatePreparation(project, plan)
+      workspaceTemplate = preservedLock(project, plan.createdAt, true).template
+      const lockWrite = plan.writes.find(entry => entry.path === 'atelier.lock.json')
+      const plannedLock = lockWrite ? JSON.parse(Buffer.from(lockWrite.content, 'base64')) : readJson(path.join(root, 'atelier.lock.json'))
+      if (!same(plannedLock.template, workspaceTemplate)) throw new Error('workspace template lineage mismatch')
+    }
     const id = plan.digest.slice(7)
     privateDirectory(root, `${PRIVATE}/operations`)
     const operation = operationDirectory(root, id)
@@ -402,6 +445,11 @@ export function applySavedUpgrade({ project, planFile, confirm }) {
       }
       liveBindings(root, plan, plan.writes.length)
       validateUpgradeDocument('lock', readJson(path.join(root, 'atelier.lock.json')))
+      if (plan.participant) {
+        verifyTemplateInstallation(project, plan.participant)
+        const installedLock = readJson(path.join(root, 'atelier.lock.json'))
+        if (!same(installedLock.template, workspaceTemplate)) throw new Error('workspace template lineage mismatch')
+      }
       boundaryCheck(project)
       const expectedIndex = plannedIndex(root, plan)
       if (!same(indexManifest(root), baseIndex)) throw new Error('index changed before staging')

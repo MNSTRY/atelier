@@ -19,7 +19,7 @@ export function renderUpgradeExplanation(report) {
     ...report.writes.map((write) => `- ${quote(write.action)} ${quote(write.path)} (${quote(write.owner)}): ${quote(write.before?.digest ?? 'absent')} → ${quote(write.after.digest)}; mode ${quote(write.after.mode)}.`),
     '',
     '## Consent and outcome',
-    'Approval covers these prepared lock/projection bytes and a local Git commit through existing hooks. The source branch remains unchanged.',
+    report.participant === 'local-template-profile@1' ? 'Selection covers the exact installed template/profile/projection bytes and a local Git commit through existing hooks. It does not authenticate human approval.' : 'Approval covers these prepared lock/projection bytes and a local Git commit through existing hooks. The source branch remains unchanged.',
     'Package installation, merge, publication and service activation require their own named authority. This report does not authorize any action.',
     'The digest identifies content; the agent must obtain and retain the owner decision. The CLI does not authenticate human approval.',
     '',

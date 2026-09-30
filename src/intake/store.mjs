@@ -1,4 +1,4 @@
-import { withPrivateLock, publishPrivateFile } from '../project/durable-state.mjs';
+import { withPrivateLock, publishPrivateFile, isPendingPrivateWrite } from '../project/durable-state.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { canonicalize } from '../attestation/jcs.mjs';
 import { validateJsonSchema } from '../export/atelier-export-contract.mjs';
 import { ensureContainedPrivateDirectory, openRegularFileNoFollow } from '../project/private-state.mjs';
+import { registerIntakeReadScope } from './read-scope.mjs';
 
 export const INTAKE_MAX_BYTES = 16 * 1024 * 1024;
 const schema = JSON.parse(fs.readFileSync(new URL('../../contracts/atelier-intake.v1.schema.json', import.meta.url), 'utf8'));
@@ -34,21 +35,44 @@ function immutable(file, bytes) {
 // authority. Callers retain their source trees and choose their existing extractor.
 export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
   const root = fs.realpathSync(workspaceRoot);
-  function placement() {
+  let readScopeActive = false, placementChecked = false;
+  function placement(force = false) {
+    if (readScopeActive && placementChecked && !force) return;
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
     try {
       if (execFileSync('git', ['-C', root, 'ls-files', '-z', '--', '.atelier-local'], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) throw new Error('tracked state');
       execFileSync('git', ['-C', root, 'check-ignore', '--quiet', '.atelier-local/'], { env, stdio: 'ignore' });
     } catch { throw new Error('intake requires ignored, untracked .atelier-local/ in a Git workspace'); }
+    placementChecked = readScopeActive;
   }
   placement();
+  function readScope(read) {
+    const active = readScopeActive;
+    readScopeActive = true; placementChecked = false;
+    try {
+      placement();
+      const result = read();
+      // Result inspection must not pass admission to a thenable's accessor,
+      // and asynchronous work must obtain fresh admission after it resumes.
+      readScopeActive = false; placementChecked = false;
+      if (typeof result?.then === 'function') throw new Error('intake read scope requires a synchronous result');
+      // No result escapes if placement changed during the read-only operation.
+      placement(true);
+      return result;
+    } finally { readScopeActive = active; placementChecked = false; }
+  }
   function directory(...parts) {
     return ensureContainedPrivateDirectory({ workspaceRoot: root, directory: path.join(root, '.atelier-local', 'intake', ...parts), label: 'intake state' });
   }
   function locked(fn) {
-    placement();
-    const file = path.join(directory(), 'operation.lock');
-    return withPrivateLock(file, fn);
+    // A mutation cannot inherit or leave behind read-scope admission.
+    const active = readScopeActive;
+    readScopeActive = false; placementChecked = false;
+    try {
+      placement();
+      const file = path.join(directory(), 'operation.lock');
+      return withPrivateLock(file, fn);
+    } finally { readScopeActive = active; placementChecked = false; }
   }
   function sourceFile(ref) {
     if (typeof ref !== 'string' || !ref || path.isAbsolute(ref) || ref.includes('\\') ||
@@ -66,7 +90,44 @@ export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
     return bytes;
   }
   function record(dir, name, value) { valid(value); immutable(path.join(dir, name), canonicalize(value) + '\n'); return value; }
-  return Object.freeze({
+  const store = Object.freeze({
+    // Explicit current-source reads stay behind intake's containment and byte
+    // checks. They do not enroll a source or interpret its contents.
+    readSource({ ref, expectedDigest } = {}) {
+      placement();
+      if (expectedDigest !== undefined) digest(expectedDigest);
+      const bytes = read(sourceFile(ref)), actual = intakeDigest(bytes);
+      if (expectedDigest !== undefined && actual !== expectedDigest) throw Object.assign(new Error('current source digest differs'), { code: 'INTAKE_SOURCE_CHANGED' });
+      return { ref, digest: actual, bytes };
+    },
+    // A missing directory is a cache miss. A broken committed attempt is an
+    // integrity failure, never permission to overwrite or retry it silently.
+    readAttempt(attemptId) {
+      placement(); id(attemptId);
+      const dir = path.join(directory('attempts'), attemptId);
+      try { fs.lstatSync(dir); }
+      catch (error) { if (error.code === 'ENOENT') return { status: 'absent', attempt: null, completion: null, output: null }; throw error; }
+      directory('attempts', attemptId);
+      try {
+        const names = fs.readdirSync(dir).filter(name => !isPendingPrivateWrite(name));
+        if (names.some(name => !['attempt.json', 'completion.json', 'output.txt'].includes(name))) throw new Error('unknown attempt file');
+        if (!names.includes('attempt.json')) {
+          if (names.length) throw new Error('orphaned attempt bytes');
+          return { status: 'absent', attempt: null, completion: null, output: null };
+        }
+        const attemptBytes = read(path.join(dir, 'attempt.json')), attempt = valid(JSON.parse(attemptBytes));
+        if (attempt.schema !== 'mnstry.atelier-intake-attempt@v1' || attempt.attemptId !== attemptId) throw new Error('attempt identity differs');
+        blob(attempt.blobId);
+        const outputBytes = names.includes('output.txt') ? read(path.join(dir, 'output.txt')) : null;
+        const output = outputBytes === null ? null : new TextDecoder('utf-8', { fatal: true }).decode(outputBytes);
+        if (!names.includes('completion.json')) return { status: output === null ? 'begun' : 'partial', attempt, completion: null, output };
+        const completion = valid(JSON.parse(read(path.join(dir, 'completion.json'))));
+        if (completion.schema !== 'mnstry.atelier-intake-completion@v1' || completion.attemptId !== attemptId ||
+          completion.integrity !== 'verified' || completion.semanticAcceptance !== 'pending' || outputBytes === null ||
+          completion.attemptDigest !== intakeDigest(attemptBytes) || completion.outputDigest !== intakeDigest(outputBytes) || completion.bytes !== outputBytes.length) throw new Error('completion integrity differs');
+        return { status: 'complete', attempt, completion, output };
+      } catch { throw Object.assign(new Error('intake attempt integrity refused'), { code: 'INTAKE_INTEGRITY' }); }
+    },
     ingest({ ref, expectedDigest }) {
       return locked(() => {
         digest(expectedDigest);
@@ -116,4 +177,6 @@ export function createIntakeStore({ workspaceRoot = process.cwd() } = {}) {
       return receipt;
     },
   });
+  registerIntakeReadScope(store, readScope);
+  return store;
 }

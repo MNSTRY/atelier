@@ -1,0 +1,15 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "withdrawal",
+  "id": "withdraw-study",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "target": {
+      "id": "study",
+      "digest": "sha256:d4eee69e5278fb782e008cd56b9dd71e21f7436f222ade2865b518c834eafba9"
+    },
+    "reason": "Synthetic correction scenario: the underlying positive contribution is withdrawn."
+  }
+}

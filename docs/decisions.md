@@ -165,3 +165,32 @@ prototype are accepted. No input is mutated.
 
 This module does not change the existing analysis adapter's default-disabled
 execution policy or accept a model proposal as an authored fact.
+
+## Capability stewardship and harnesses
+
+An optional decision provider, including Jev, belongs behind this host boundary.
+The core package has no Jev dependency or credential requirement. Its ingestion,
+inquiry, knowledge and learning workflows remain available without a provider.
+The public decision contract alone does not install or qualify an adapter.
+
+Use [Capability Stewardship](capability-stewardship.md) to inventory a provider
+capability's procedures, required tools, effects, exact release and repository
+adoption. A skill bundle can describe how to use an adapter; installing that
+bundle neither configures credentials nor enables provider execution. Record
+installation, actual host discovery, task qualification and deliberate enablement
+separately. The executing host owns the adapter, configuration, current permission,
+timeouts, budgets and revocation. No repository's adoption enables another's.
+
+Harnesses consume validated advice through their existing owners. Ingestion may
+use a qualified prioritization while retaining every selected source and coverage
+gap. Research preserves citations and contradictory evidence. Knowledge admission
+and [practical judgment](practical-judgment.md) retain their review and adoption
+steps; a provider result cannot write graph facts, accept a lesson, or install
+instructions. The [learning lifecycle](learning.md) can retain permitted outcome
+evidence for reconsideration without creating a second knowledge store.
+
+With no binding, use the existing local or manual workflow. A requested provider
+that is unavailable, unauthorized, over budget, timed out or returns malformed
+answers produces the corresponding explicit abstention. A host must not silently
+substitute a paid provider or promote an incomplete answer. Prove the ordinary
+no-provider journey and each enabled task independently before claiming adoption.

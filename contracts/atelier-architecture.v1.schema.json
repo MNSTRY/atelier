@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-architecture.v1.schema.json",
+  "$defs": {
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-architecture-catalog@v1"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,95}$"
+              },
+              "kind": {
+                "enum": [
+                  "responsibility",
+                  "harness",
+                  "role",
+                  "capability",
+                  "resource",
+                  "method",
+                  "record",
+                  "host"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "maxItems": 12
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "implementation": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "maxItems": 16
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "label",
+              "aliases",
+              "purpose",
+              "implementation"
+            ]
+          },
+          "maxItems": 128
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,95}$"
+              },
+              "type": {
+                "enum": [
+                  "composes",
+                  "participates",
+                  "realizes",
+                  "supports",
+                  "applies",
+                  "handles",
+                  "executes"
+                ]
+              },
+              "to": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9.-]{0,95}$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "from",
+              "type",
+              "to"
+            ]
+          },
+          "maxItems": 256
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "entries",
+        "relations"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-behavior-binding@v1"
+        },
+        "definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "ref",
+            "digest"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pointer": {
+                "type": "string",
+                "pattern": "^(/([^~/]|~[01])*)+$",
+                "maxLength": 1024
+              },
+              "classification": {
+                "enum": [
+                  "enforced",
+                  "guidance",
+                  "presentation",
+                  "rationale"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "consumer": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9.-]{0,95}$"
+                      },
+                      "profile": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9.-]{0,95}$"
+                      },
+                      "revision": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "ext": {
+                        "type": "object",
+                        "maxProperties": 0
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "profile",
+                      "revision"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "pointer",
+              "classification",
+              "required",
+              "consumer"
+            ]
+          },
+          "maxItems": 128
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "definition",
+        "fields"
+      ]
+    }
+  },
+  "title": "Atelier architecture catalog and behavior bindings",
+  "$comment": "contract revision 1.0.0",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/catalog"
+    },
+    {
+      "$ref": "#/$defs/binding"
+    }
+  ]
+}

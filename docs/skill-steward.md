@@ -1,5 +1,11 @@
 # Skill stewardship
 
+For publishing and governing multiple capability packages across repositories,
+use the [capability stewardship foundation](capability-stewardship.md). It adds
+explicit publisher identity, release pins, local ownership modes, host profiles
+and version-bound evidence. The catalog commands below retain their original
+contracts; use the new layer when a catalog has multiple independent sources.
+
 Atelier skill stewardship is a local, evidence-gated loop for keeping agent
 skills useful without turning every repeated request into permanent
 instructions. It separates four concerns that are easy to blur together:

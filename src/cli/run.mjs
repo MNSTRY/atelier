@@ -62,7 +62,15 @@ export const commandMap = new Map([
   ['sync', ['src/commands/sync.mjs']],
   ['review', ['src/commands/review.mjs']],
   ['coauthor', ['src/commands/coauthor.mjs']],
+  ['architecture', ['src/commands/architecture.mjs']],
+  ['trackable', ['src/commands/trackable.mjs']],
+  ['practice', ['src/commands/practice.mjs']],
   ['skills', ['src/commands/skills.mjs']],
+  ['capability', ['src/commands/capability.mjs']],
+  ['inquiry', ['src/commands/inquiry.mjs']],
+  ['harness', ['src/commands/harness.mjs']],
+  ['learn', ['src/commands/learn.mjs']],
+  ['ingest', ['src/commands/ingest.mjs']],
   ['obsidian', ['src/commands/obsidian.mjs']],
 ])
 
@@ -145,7 +153,15 @@ Core commands:
   review run|history|handoff       Evidence-bound local human review.
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
+  architecture catalog|entry|resolve Inspect responsibility names and consumer bindings.
+  trackable preview|execute|view     Follow adopted definitions and occurrence evidence.
+  practice plan|apply|status|context Adopt scoped instruction guidance and inspect use.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
+  capability seal|plan|apply|status Publish local capability bundles and govern adoption.
+  harness                         Govern knowledge and build workflows.
+  inquiry append|handoff|status|graph Run the local Discovery and Research Harness workflow.
+  learn capture|propose|decide|activate|withdraw Manage scoped lessons and their evidence.
+  ingest plan|run|status|query     Preserve selected sources and search bounded evidence.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -174,6 +190,16 @@ export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
 
 Serves the project's built projection on 127.0.0.1 in the foreground until stopped. It builds nothing: run ${c} graph, then ${c} build, with the same --project path first. The port is --port=PORT, else the PORT environment variable, else 8137; 0 picks a free port, and the address printed on start names it. --review also serves the local review workspace at /review (docs/local-review.md).`
   const help = {
+    capability: `Usage: ${c} capability seal|verify|inventory|plan|apply|status|observe|candidates|recover|fleet|graph|profiles
+Run ${c} capability help for options. Releases stay local; adoption is per repository
+and requires an exact plan digest. Installed bytes, host loading and successful
+exercise are separate evidence. No model execution or tool permission grants.`,
+    ingest: `Usage: ${c} ingest plan|run|status|query
+
+Read one bounded UTF-8 JSON object {workspaceId,input} from stdin inside the intended Git workspace. Plans bind explicit sources, scope and budgets. Run performs bounded local text, CSV and JSON extraction. Query returns source-bound lexical evidence with partial coverage; it does not synthesize or accept claims. Private state stays in ignored .atelier-local/. See docs/ingestion.md.`,
+    learn: `Usage: ${c} learn capture|propose|decide|activate|withdraw|list|context|render|graph|export|plan
+
+Read a bounded JSON object from stdin in the intended Git workspace. Every request includes workspaceId. Writes include actor, requestId, expectedRevision and input. Context and render include query. Local actor identity is asserted, not authenticated. State stays in ignored .atelier-local/. Accepted content becomes context only after explicit activation for a named harness; no permission grant, file installation or sending occurs. See docs/learning.md.`,
     dev: serverHelp('dev'),
     server: serverHelp('server'),
     skills: `Usage: ${c} skills audit|observe|candidates|sync

@@ -1,0 +1,41 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "assessment",
+  "id": "revised-assessment",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "hypothesis": {
+      "id": "reminder",
+      "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+    },
+    "evidence": [
+      {
+        "bundle": {
+          "id": "counter-report",
+          "digest": "sha256:97568506c341fb4729095a662bcd937baf45b52e8d13b9b30e83f7074fd93357"
+        },
+        "assertion": "finding"
+      }
+    ],
+    "model": {
+      "kind": "elicited-odds",
+      "prior": 0.4,
+      "sensitivityPriors": [
+        0.2,
+        0.6
+      ],
+      "priorFamilies": [],
+      "assumptions": "Invented elicitation values. Independent families assumed conditional on H and not H; repeated family is one contribution.",
+      "likelihoods": [
+        {
+          "key": "counter-report/finding",
+          "ratio": 0.5
+        }
+      ]
+    },
+    "rationale": "Arithmetic illustration only; neither likelihoods nor prior are empirically calibrated."
+  },
+  "unexpectedAuthority": true
+}

@@ -1,0 +1,37 @@
+{
+  "schema": "atelier-coordination-record@v1",
+  "kind": "dependency",
+  "repository": "beta",
+  "id": "needs-artifact",
+  "revision": 1,
+  "scope": [
+    "workshop"
+  ],
+  "observedAt": "2026-01-01T00:00:00Z",
+  "expiresAt": "2026-01-03T00:00:00Z",
+  "source": {
+    "ref": "native:receipt",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "body": {
+    "producer": {
+      "repository": "alpha",
+      "id": "producer",
+      "digest": "sha256:c931e409b46d035b08706ce579987c42564c2e5ef43ac97ce3839c6ab0f8a7ae"
+    },
+    "consumer": {
+      "repository": "beta",
+      "id": "consumer"
+    },
+    "artifactDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "need": "Receive the exact source artifact.",
+    "receiving": {
+      "status": "accepted",
+      "receipt": {
+        "ref": "native:receipt",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    }
+  },
+  "unexpected": true
+}

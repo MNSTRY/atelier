@@ -70,7 +70,15 @@ Core commands:
   review run|history|handoff       Evidence-bound local human review.
   review export|inspect|packs      Preview inspection bundles and pack lifecycle.
   coauthor start|read|event|recover Save and resume private authoring drafts.
+  architecture catalog|entry|resolve Inspect responsibility names and consumer bindings.
+  trackable preview|execute|view     Follow adopted definitions and occurrence evidence.
+  practice plan|apply|status|context Adopt scoped instruction guidance and inspect use.
   skills audit|observe|candidates|sync Audit and manage local skill projections.
+  capability seal|plan|apply|status Publish local capability bundles and govern adoption.
+  harness                         Govern knowledge and build workflows.
+  inquiry append|handoff|status|graph Run the local Discovery and Research Harness workflow.
+  learn capture|propose|decide|activate|withdraw Manage scoped lessons and their evidence.
+  ingest plan|run|status|query     Preserve selected sources and search bounded evidence.
   config check                    Validate project config.
   extension-pack validate         Validate declared extension packs.
   extension-pack list             List declared extension packs.
@@ -107,8 +115,11 @@ test('command map exposes the dispatch table for introspection', () => {
   assert.deepEqual(commandMap.get('init'), ['src/commands/init.mjs'])
   assert.deepEqual(commandMap.get('sync'), ['src/commands/sync.mjs'])
   assert.deepEqual(commandMap.get('coauthor'), ['src/commands/coauthor.mjs'])
+  assert.deepEqual(commandMap.get('capability'), ['src/commands/capability.mjs'])
+  assert.deepEqual(commandMap.get('learn'), ['src/commands/learn.mjs'])
+  assert.deepEqual(commandMap.get('ingest'), ['src/commands/ingest.mjs'])
   assert.deepEqual(commandMap.get('enroll'), ['src/commands/enroll.mjs'])
-  assert.equal(commandMap.size, 58)
+  assert.equal(commandMap.size, 66)
 })
 
 test('command map dispatches the white-label commands to their own modules', () => {
@@ -423,4 +434,71 @@ test('runCli default-brand help and version match the pinned defaults', async ()
   const versionCode = await runCli({ argv: ['--version'], stdout: (line) => versionOut.push(line) })
   assert.equal(versionCode, 0)
   assert.deepEqual(versionOut, [VERSION])
+})
+
+// Regression: the responsibility commands caught their own errors and printed
+// Node's messages verbatim, bypassing the typed-code rule above.
+test('responsibility commands never print absolute paths, git commands or stdin excerpts', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-leak-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const { ATELIER_DEBUG, GIT_EDITOR, ...env } = process.env
+  const spellings = [dir, dir.replace(/^\/private/, ''), os.tmpdir()]
+  for (const [stdin, args] of [
+    ['', ['capability', 'plan', '--adoption', path.join(dir, 'nope', 'secret-name.json')]],
+    ['', ['inquiry', 'validate', '--record', path.join(dir, 'secret-name.json')]],
+    ['', ['harness', 'validate', '--record', path.join(dir, 'secret-name.json'), '--profile', 'inquiry']],
+    ['{}', ['practice', 'status']],
+    ['PRIVATE CLIENT NOTE: merger', ['trackable', 'preview']],
+    ['PRIVATE-SECRET', ['architecture', 'resolve']],
+    ['PRIVATE CLIENT NOTE', ['learn', 'list']],
+    ['PRIVATE CLIENT NOTE', ['ingest', 'status']],
+  ]) {
+    const result = spawnSync(process.execPath, [BIN, ...args], { cwd: dir, env, input: stdin, encoding: 'utf8' })
+    const output = result.stdout + result.stderr
+    assert.notEqual(result.status, 0, args.join(' '))
+    for (const spelling of spellings) assert.ok(!output.includes(spelling), `${args.join(' ')} printed a path: ${output}`)
+    assert.ok(!/PRIVATE|secret-name|Command failed|git -C/.test(output), `${args.join(' ')} leaked: ${output}`)
+  }
+})
+
+test('responsibility commands still print their own refusals, including schema paths and held locks', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-refusal-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const { ATELIER_DEBUG, GIT_EDITOR, ...env } = process.env
+  const run = (args, input) => spawnSync(process.execPath, [BIN, ...args], { cwd: dir, env, input, encoding: 'utf8' })
+  const invalid = run(['architecture', 'resolve'], JSON.stringify({ binding: { schema: 'not-a-binding' }, consumers: [] }))
+  assert.equal(invalid.status, 1)
+  assert.match(invalid.stderr, /^\{"ok":false,"error":"[^"]+"\}\n$/)
+  assert.doesNotMatch(invalid.stderr, /internal-error/)
+  const release = run(['trackable', 'release'], JSON.stringify({ definition: { schema: 'not-a-definition' } }))
+  assert.equal(release.status, 1)
+  assert.doesNotMatch(release.stderr, /internal-error/)
+  assert.match(release.stderr, /"ok":false/)
+})
+
+test('the failure classifier keeps refusals, schema paths and lock reasons, and hides quoted host paths from any root', async () => {
+  const { safeCommandMessage } = await import('../src/cli/command-failure.mjs')
+  for (const message of ['invalid inquiry record: /data/0: must have required property', '/data: must NOT have additional properties'])
+    assert.equal(safeCommandMessage(new Error(message)), message)
+  const locked = Object.assign(new Error('EEXIST: private state is locked (release without owner: operation.lock); inspectPrivateLock and preserve ownership records before offline recovery'), { code: 'EEXIST' })
+  assert.equal(safeCommandMessage(locked), locked.message)
+  for (const message of [
+    "adoption failed: EACCES: permission denied, rename '/workspaces/client-acme/.atelier-local/a' -> '/workspaces/client-acme/.claude/skills/a'",
+    'could not read "/builds/project/notes.md"',
+    "open 'D:\\shared\\notes.json'",
+    'read /Volumes/shared/notes.json',
+  ]) assert.equal(safeCommandMessage(new Error(message)), null, message)
+  const system = Object.assign(new Error("ENOENT: no such file, lstat '/x/y'"), { code: 'ENOENT', errno: -2, syscall: 'lstat' })
+  assert.equal(safeCommandMessage(system), null)
+})
+
+test('stdout commands keep their refusals on stdout', (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-cli-stdout-')))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(dir, 'history.json'), JSON.stringify([{ schema: 'not-an-inquiry-record' }]))
+  const { ATELIER_DEBUG, GIT_EDITOR, ...env } = process.env
+  const result = spawnSync(process.execPath, [BIN, 'inquiry', 'inspect', '--history', 'history.json'], { cwd: dir, env, encoding: 'utf8' })
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stdout, /^\{"ok":false,"error":"[^"]+"\}\n$/)
+  assert.equal(result.stderr, '')
 })

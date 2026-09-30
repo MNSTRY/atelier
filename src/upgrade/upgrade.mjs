@@ -27,6 +27,7 @@ import { inspectPackageProvenance, legacyPackageSource } from './provenance.mjs'
 import { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, explainSavedUpgrade } from './transaction.mjs'
 import { renderUpgradeExplanation } from './explanation.mjs'
 export { prepareUpgrade, applySavedUpgrade, upgradeOperationStatus, recoverUpgradeDryRun, explainSavedUpgrade }
+export { prepareTemplateUpgrade } from './transaction.mjs'
 
 export const ATELIER_LOCK_SCHEMA = 'mnstry.atelier-lock@v1'
 export const ATELIER_MIGRATION_SCHEMA = 'mnstry.atelier-migration@v1'

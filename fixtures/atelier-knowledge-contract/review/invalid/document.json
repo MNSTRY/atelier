@@ -1,0 +1,18 @@
+{
+  "schema": "atelier-knowledge-record@v1",
+  "id": "relation-review",
+  "run": "workshop-knowledge",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "review",
+  "data": {
+    "target": {
+      "id": "justification",
+      "digest": "sha256:b2d1576ac3fa4d44241692f5ae032d3d8f6fa9ffce5b9c68ceadf0a9075789bf"
+    },
+    "disposition": "accepted",
+    "basis": "Simulated owner acceptance for a disposable example.",
+    "evaluations": []
+  },
+  "authorityGranted": true
+}

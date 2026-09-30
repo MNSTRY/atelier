@@ -9,6 +9,30 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Unreleased
+
+The bundled readiness pack retains its original v1 content and digest. Existing
+locks, including the prior alpha.10 release fixture, can prepare and apply both
+ordinary v2 and template v3 exact plans without first rewriting the lock.
+Discovery Harness is the architecture name; the persisted readiness entry still
+uses Discovery Engine. Actual external pack changes still require their own
+adoption procedure and are not accepted by either participant.
+
+The next release adds the responsibility workflows, source-current ingestion,
+Trackables, governed instruction adoption and local template profiles. Template
+adoption uses the existing exact-plan transaction engine with explicit v2 policy
+and v3 plans; existing policies are never converted automatically. See
+[template profiles](template-profile.md) and [template adoption](template-upgrades.md).
+Optional advisory decisions require no provider installation or activation.
+
+New Trackable journals retain resolved calendar occurrences and byte-bound state.
+Legacy v1 journals remain available as chain-verified exports when state replay
+cannot be established. Preserve historical records and use the documented
+[Trackables](trackables.md) host limits before adopting a new profile.
+Regenerate local graph/projection artifacts through the ordinary upgrade process
+and qualify each consuming host independently. A package update supplies no
+publication permission or runtime activation.
+
 ## Upgrading to 0.2.0-alpha.12
 
 This release makes the first open of an Obsidian view automatic and ships

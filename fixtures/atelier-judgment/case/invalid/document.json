@@ -1,0 +1,76 @@
+{
+  "schema": "atelier-judgment-case@v1",
+  "id": "workshop-opening",
+  "audience": "public",
+  "purpose": "Make a shared workshop welcoming without losing useful quiet time.",
+  "context": "An invented small workshop has mixed arrival times.",
+  "values": [
+    "Welcome",
+    "Attention"
+  ],
+  "attendTo": [
+    "New participants may need orientation."
+  ],
+  "constraints": [
+    "One shared room."
+  ],
+  "evidence": [],
+  "alternatives": [
+    {
+      "id": "brief-opening",
+      "action": "Offer a short opening, then quiet work.",
+      "benefits": [
+        "A common orientation."
+      ],
+      "costs": [
+        "Interrupts early arrivals."
+      ],
+      "exceptions": [
+        "Skip when everyone already has shared context."
+      ]
+    },
+    {
+      "id": "open-door",
+      "action": "Offer individual orientation at the door.",
+      "benefits": [
+        "Preserves quiet work."
+      ],
+      "costs": [
+        "Host attention is divided."
+      ],
+      "exceptions": []
+    }
+  ],
+  "voices": [
+    {
+      "author": "synthetic-participant",
+      "position": "dissent",
+      "contribution": "I need a visible welcome before starting.",
+      "source": {
+        "ref": "synthetic-discussion",
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  ],
+  "disposition": {
+    "status": "open",
+    "choice": null,
+    "reason": "Hear from late arrivals before choosing.",
+    "responsible": "synthetic-host"
+  },
+  "questions": [
+    "What would be fitting for a newcomer?"
+  ],
+  "cultivation": [
+    {
+      "exercise": "Compare a familiar group with first-time visitors.",
+      "contrast": "A routine can help one group and confuse another.",
+      "reflectionQuestion": "Which particulars change the decision?"
+    }
+  ],
+  "consequences": [],
+  "reconsiderWhen": [
+    "The pattern of attendance changes."
+  ],
+  "authority": "all"
+}

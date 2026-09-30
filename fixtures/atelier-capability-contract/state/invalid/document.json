@@ -1,0 +1,316 @@
+{
+  "schema": "mnstry.atelier-capability-state@v1",
+  "workspace": "sha256:dd04b5069104872d3067129a6b013b655711712c4b8126021585a7e06e0a8548",
+  "enrollment": "example-research-workspace",
+  "generation": "sha256:e8c2ce0b0d23db47456c38a8fca2ebb1acb38d37abf54a0f0eaaebdc92ae1869",
+  "policyDigest": "sha256:e008a4b547aea1c663d603779740560b7aa7167b2ecdd61dde716deb8b06b2b2",
+  "packages": [
+    {
+      "id": "atelier.examples/evidence-review",
+      "release": {
+        "schema": "mnstry.atelier-capability-release@v1",
+        "package": {
+          "schema": "mnstry.atelier-capability-package@v1",
+          "version": "1.0.0",
+          "license": "Apache-2.0",
+          "source": {
+            "repository": "https://example.org/capability-source",
+            "revision": "synthetic-example-v1"
+          },
+          "hosts": [
+            "codex-repo-v1",
+            "claude-repo-v1"
+          ],
+          "dependencies": [],
+          "evaluations": [
+            {
+              "id": "acceptance-plan",
+              "kind": "integration",
+              "path": "evaluation.md",
+              "outcome": "unknown"
+            }
+          ],
+          "migrations": [],
+          "limitations": [
+            "Example package; publisher identity is illustrative and unauthenticated.",
+            "Host discovery and research quality require actual session-specific evaluation."
+          ],
+          "id": "atelier.examples/evidence-review",
+          "title": "Evidence review",
+          "summary": "Check a claim against the sources available to the reviewer.",
+          "capabilities": [
+            {
+              "id": "evidence-review",
+              "description": "Produce a traceable claim review.",
+              "inputs": [
+                "Claims and source material"
+              ],
+              "outputs": [
+                "Claim ledger and unresolved questions"
+              ]
+            }
+          ],
+          "skills": [
+            {
+              "id": "review",
+              "name": "evidence-review",
+              "path": "skills/evidence-review",
+              "capabilities": [
+                "evidence-review"
+              ]
+            }
+          ],
+          "requirements": {
+            "tools": [],
+            "effects": [
+              "read-workspace"
+            ]
+          }
+        },
+        "files": [
+          {
+            "path": "capability-package.json",
+            "digest": "sha256:45cf71be043715d42a800998e41228261e1a53afc2058a3adac5b8dce9e614cb",
+            "bytes": 1355
+          },
+          {
+            "path": "evaluation.md",
+            "digest": "sha256:f449b05d2911df367c7724c6402b1573cafe84855c732888e77baec2baaddc20",
+            "bytes": 841
+          },
+          {
+            "path": "skills/evidence-review/SKILL.md",
+            "digest": "sha256:6012b729e0801c0f7c3fc56a7ec453af02cc7a0faa8dc840ecf3724a090c7756",
+            "bytes": 1063
+          },
+          {
+            "path": "skills/evidence-review/references/ledger.md",
+            "digest": "sha256:2d0c7c77d7d0f867451f2bc50395f79604947c2da7acf907674c41b00636b9cf",
+            "bytes": 334
+          }
+        ],
+        "digest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913"
+      },
+      "mode": "managed",
+      "bindings": [
+        {
+          "skill": "review",
+          "host": "codex-repo-v1",
+          "alias": "evidence-review",
+          "target": ".agents/skills/evidence-review",
+          "digest": "sha256:c3d023d9b8cd8f7ed519b653ac0a65326fe750623e5bff4cae2770ff548f75ad",
+          "parentDigest": "sha256:c3d023d9b8cd8f7ed519b653ac0a65326fe750623e5bff4cae2770ff548f75ad"
+        },
+        {
+          "skill": "review",
+          "host": "claude-repo-v1",
+          "alias": "evidence-review",
+          "target": ".claude/skills/evidence-review",
+          "digest": "sha256:c3d023d9b8cd8f7ed519b653ac0a65326fe750623e5bff4cae2770ff548f75ad",
+          "parentDigest": "sha256:c3d023d9b8cd8f7ed519b653ac0a65326fe750623e5bff4cae2770ff548f75ad"
+        }
+      ]
+    },
+    {
+      "id": "atelier.examples/research",
+      "release": {
+        "schema": "mnstry.atelier-capability-release@v1",
+        "package": {
+          "schema": "mnstry.atelier-capability-package@v1",
+          "version": "1.0.0",
+          "license": "Apache-2.0",
+          "source": {
+            "repository": "https://example.org/capability-source",
+            "revision": "synthetic-example-v1"
+          },
+          "hosts": [
+            "codex-repo-v1",
+            "claude-repo-v1"
+          ],
+          "dependencies": [
+            {
+              "id": "atelier.examples/evidence-review",
+              "version": "1.0.0",
+              "digest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913",
+              "optional": false,
+              "capabilities": [
+                "evidence-review"
+              ]
+            }
+          ],
+          "evaluations": [
+            {
+              "id": "acceptance-plan",
+              "kind": "integration",
+              "path": "evaluation.md",
+              "outcome": "unknown"
+            }
+          ],
+          "migrations": [],
+          "limitations": [
+            "Example package; publisher identity is illustrative and unauthenticated.",
+            "Host discovery and research quality require actual session-specific evaluation."
+          ],
+          "id": "atelier.examples/research",
+          "title": "Portable research campaign",
+          "summary": "Plan independent inquiries, reconcile evidence, and prepare knowledge graph integration.",
+          "capabilities": [
+            {
+              "id": "research-campaign",
+              "description": "Carry a bounded question through evidence review and a reviewable integration proposal.",
+              "inputs": [
+                "Question, intended use, scope and available tools"
+              ],
+              "outputs": [
+                "Inquiry packet",
+                "Preserved reports and source ledger",
+                "Synthesis and integration proposal"
+              ]
+            }
+          ],
+          "skills": [
+            {
+              "id": "plan",
+              "name": "research-plan",
+              "path": "skills/research-plan",
+              "capabilities": [
+                "research-campaign"
+              ]
+            },
+            {
+              "id": "synthesize",
+              "name": "research-synthesize",
+              "path": "skills/research-synthesize",
+              "capabilities": [
+                "research-campaign"
+              ]
+            },
+            {
+              "id": "integrate",
+              "name": "research-integrate",
+              "path": "skills/research-integrate",
+              "capabilities": [
+                "research-campaign"
+              ]
+            }
+          ],
+          "requirements": {
+            "tools": [],
+            "effects": [
+              "read-workspace",
+              "write-workspace",
+              "network"
+            ]
+          }
+        },
+        "files": [
+          {
+            "path": "capability-package.json",
+            "digest": "sha256:fea2c061391ca29e1b3c20a5569aa6cdff96416b36de2d925f12e62313bf0184",
+            "bytes": 2194
+          },
+          {
+            "path": "evaluation.md",
+            "digest": "sha256:f449b05d2911df367c7724c6402b1573cafe84855c732888e77baec2baaddc20",
+            "bytes": 841
+          },
+          {
+            "path": "skills/research-integrate/SKILL.md",
+            "digest": "sha256:60534f084af411968afa29ffc9e3fadd6bf69514568d00bb060d2364d11926fc",
+            "bytes": 1586
+          },
+          {
+            "path": "skills/research-integrate/references/integration.md",
+            "digest": "sha256:2c459a3c3dd23f9e2c1ae2c065d0460161edaf7e4ed4ff51991aa997eb3275be",
+            "bytes": 636
+          },
+          {
+            "path": "skills/research-plan/SKILL.md",
+            "digest": "sha256:c78024cffa9031263fe68d8a43fe2170ddac088d8fc76fa815fd92e94b7e6527",
+            "bytes": 1439
+          },
+          {
+            "path": "skills/research-plan/references/inquiries.md",
+            "digest": "sha256:5cf21956f3a7f761a94fbbd71e4e4a8b06ffb6d7b354d0e23a0fb1ad8b20f808",
+            "bytes": 1571
+          },
+          {
+            "path": "skills/research-synthesize/SKILL.md",
+            "digest": "sha256:cd6fae51292121088f58fb2310f792e3f7aae2c0aeaf2ba36bdb01148fefe60c",
+            "bytes": 1181
+          },
+          {
+            "path": "skills/research-synthesize/references/synthesis.md",
+            "digest": "sha256:d82530bb53386eb5c62d2fb369c8f9651134fbb5f8846d13f36a17577a1caff9",
+            "bytes": 587
+          }
+        ],
+        "digest": "sha256:f4ecc6d8d0ea9640ec5a45c92c8872a425d479df0a71867cde09ada99af8c63d"
+      },
+      "mode": "managed",
+      "bindings": [
+        {
+          "skill": "plan",
+          "host": "codex-repo-v1",
+          "alias": "research-plan",
+          "target": ".agents/skills/research-plan",
+          "digest": "sha256:fc2719f33230925d21076ba00e69977d4eef3143c21d2956648020022a6d361e",
+          "parentDigest": "sha256:fc2719f33230925d21076ba00e69977d4eef3143c21d2956648020022a6d361e"
+        },
+        {
+          "skill": "plan",
+          "host": "claude-repo-v1",
+          "alias": "research-plan",
+          "target": ".claude/skills/research-plan",
+          "digest": "sha256:fc2719f33230925d21076ba00e69977d4eef3143c21d2956648020022a6d361e",
+          "parentDigest": "sha256:fc2719f33230925d21076ba00e69977d4eef3143c21d2956648020022a6d361e"
+        },
+        {
+          "skill": "synthesize",
+          "host": "codex-repo-v1",
+          "alias": "research-synthesize",
+          "target": ".agents/skills/research-synthesize",
+          "digest": "sha256:7a20d216f8b7c66ed73d7008b7094905b5c1675beb7a488c14c77ed7b2ec8983",
+          "parentDigest": "sha256:7a20d216f8b7c66ed73d7008b7094905b5c1675beb7a488c14c77ed7b2ec8983"
+        },
+        {
+          "skill": "synthesize",
+          "host": "claude-repo-v1",
+          "alias": "research-synthesize",
+          "target": ".claude/skills/research-synthesize",
+          "digest": "sha256:7a20d216f8b7c66ed73d7008b7094905b5c1675beb7a488c14c77ed7b2ec8983",
+          "parentDigest": "sha256:7a20d216f8b7c66ed73d7008b7094905b5c1675beb7a488c14c77ed7b2ec8983"
+        },
+        {
+          "skill": "integrate",
+          "host": "codex-repo-v1",
+          "alias": "research-integrate",
+          "target": ".agents/skills/research-integrate",
+          "digest": "sha256:793d92e0147dcae720419c2f5446424456d23abe50dcf4caf33dc6b24cf62903",
+          "parentDigest": "sha256:793d92e0147dcae720419c2f5446424456d23abe50dcf4caf33dc6b24cf62903"
+        },
+        {
+          "skill": "integrate",
+          "host": "claude-repo-v1",
+          "alias": "research-integrate",
+          "target": ".claude/skills/research-integrate",
+          "digest": "sha256:793d92e0147dcae720419c2f5446424456d23abe50dcf4caf33dc6b24cf62903",
+          "parentDigest": "sha256:793d92e0147dcae720419c2f5446424456d23abe50dcf4caf33dc6b24cf62903"
+        }
+      ]
+    }
+  ],
+  "versions": [
+    {
+      "id": "atelier.examples/evidence-review",
+      "version": "1.0.0",
+      "digest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913"
+    },
+    {
+      "id": "atelier.examples/research",
+      "version": "1.0.0",
+      "digest": "sha256:f4ecc6d8d0ea9640ec5a45c92c8872a425d479df0a71867cde09ada99af8c63d"
+    }
+  ],
+  "unexpectedAuthority": true
+}

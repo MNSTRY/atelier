@@ -24,8 +24,11 @@ const blockNames = fs
 test('the canonical block set exists', () => {
   assert.deepEqual(blockNames, [
     'audience-visibility',
+    'capability-stewardship',
     'claims',
     'conformance-admission',
+    'inquiry-harnesses',
+    'learning-harnesses',
     'will-not-do',
   ])
 })

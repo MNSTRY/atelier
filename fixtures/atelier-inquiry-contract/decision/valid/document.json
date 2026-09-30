@@ -1,0 +1,21 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "decision",
+  "id": "decision-after",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "assessment": {
+      "id": "revised-assessment",
+      "digest": "sha256:f6a876aba4dc3637c23c7549a6ce60b032304aee59c6006f46adf7698f31aecd"
+    },
+    "disposition": "accepted",
+    "conclusion": "Use this invented case to explain conditional reasoning; it establishes no real-world effect.",
+    "reason": "Synthetic acceptance fixture only.",
+    "reviewBasis": "Simulated owner review for software testing, not actual recipient acceptance.",
+    "nextQuestions": [
+      "Collect appropriate real evidence before any substantive decision."
+    ]
+  }
+}
