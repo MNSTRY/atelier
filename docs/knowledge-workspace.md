@@ -62,7 +62,11 @@ use of it.
 
 Maintainers check a packed candidate with `npm run knowledge:consumer-proof`, with
 `ATELIER_CANDIDATE_TARBALL` set to the tarball. The script installs the tarball
-offline into a clean temporary consumer and uses only the CLI. It runs the
+into a clean temporary consumer and uses only the CLI. Every npm step runs
+offline, from the locked dependency closure already in the npm cache. With a
+cold cache the script refuses before installing anything. Fill the cache with
+`npm ci`, or set `ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1` to allow one declared
+registry fetch; the receipt records which one happened. It runs the
 starter's supported answer and abstention, evaluation, a saved session read
 back, retry and recovery, and an owner correction. It then writes a receipt
 bound to the tarball's SHA-256. A passing receipt shows that the software

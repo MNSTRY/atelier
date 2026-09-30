@@ -1,15 +1,22 @@
 // Installed-package proof of the knowledge workspace, through its supported CLI only.
 //
-// Installs an exact packed tarball into a clean temporary consumer (offline, from a
-// warm cache, with no publisher overrides), creates the canonical starter, and runs
-// the documented path: check, graph, build, a supported answer, an honest
-// abstention, evaluation, a saved session read back from a new process, retry,
-// recovery, and an owner correction. The workspace is invented; no person's data,
-// provider or network is used. A passing run proves software behaviour for this
-// tarball only, not answer quality, cost, or anyone's acceptance.
+// Installs an exact packed tarball into a clean temporary consumer with no publisher
+// overrides, creates the canonical starter, and runs the documented path: check,
+// graph, build, a supported answer, an honest abstention, evaluation, a saved
+// session read back from a new process, retry, recovery, and an owner correction.
+// The workspace is invented; no person's data or provider is used. A passing run
+// proves software behaviour for this tarball only, not answer quality, cost, or
+// anyone's acceptance.
+//
+// The proof itself runs offline: every npm step passes --offline and resolves the
+// package's locked dependency closure from the local npm cache. A cold cache refuses
+// before anything is installed. To fill it, run npm ci in this repository, or set
+// ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 to allow one declared step that fetches the
+// locked closure from the registry. The receipt records which of the two happened.
 //
 //   ATELIER_CANDIDATE_TARBALL=<file.tgz> [ATELIER_EXPECTED_TARBALL_SHA256=<hex>]
-//   [ATELIER_KNOWLEDGE_CONSUMER_OUTPUT=<dir>] node scripts/prove-knowledge-consumer.mjs
+//   [ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1] [ATELIER_KNOWLEDGE_CONSUMER_OUTPUT=<dir>]
+//   node scripts/prove-knowledge-consumer.mjs
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -58,12 +65,24 @@ const run = (label, command, args, { cwd = ws, input, expect = 0 } = {}) => {
 const parse = (result) => { try { return JSON.parse(result.stdout) } catch { return null } }
 const check = (label, condition, detail = null) => record({ label, check: true, ok: Boolean(condition), detail })
 
-// Warm the package's non-dev dependency closure from the lockfile, then install offline.
+// The package's non-dev dependency closure, from the lockfile.
 const lockfile = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package-lock.json'), 'utf8'))
 const closure = Object.entries(lockfile.packages ?? {})
   .filter(([key, entry]) => key.startsWith('node_modules/') && !entry.dev && entry.version)
   .map(([key, entry]) => `${key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length)}@${entry.version}`)
-if (closure.length > 0) execNpmSync(['cache', 'add', ...closure], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+// Optional, declared network step: fetch the locked closure into the cache.
+const bootstrap = process.env.ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP === '1'
+if (bootstrap && closure.length > 0) execNpmSync(['cache', 'add', ...closure], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+// From here on nothing reaches the network: the closure must already be cached.
+if (closure.length > 0) {
+  try {
+    execNpmSync(['cache', 'add', '--offline', ...closure], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch {
+    console.error('prove-knowledge-consumer: the locked dependency closure is not in the npm cache; run npm ci here, or set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 for a declared network bootstrap')
+    fs.rmSync(temp, { recursive: true, force: true })
+    process.exit(2)
+  }
+}
 execNpmSync(['install', tarball, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], { cwd: app, stdio: ['ignore', 'pipe', 'pipe'] })
 const installed = JSON.parse(fs.readFileSync(path.join(app, 'node_modules/@mnstry/atelier/package.json'), 'utf8'))
 check('installed the packed package', installed.name === '@mnstry/atelier', installed.version)
@@ -121,6 +140,7 @@ const receipt = {
   packageVersion: installed.version,
   node: process.version,
   platform: process.platform,
+  network: bootstrap ? 'bootstrap-registry-fetch-then-offline' : 'offline',
   steps,
   passed: steps.every((step) => step.ok),
 }
