@@ -1,0 +1,25 @@
+{
+  "schema": "atelier-personal-workspace-manifest@v1",
+  "workspaceId": "sample-reading",
+  "revision": 1,
+  "bindings": [
+    "/srv/sample/sources/overview"
+  ],
+  "repos": [
+    {
+      "repoId": "sample-source",
+      "root": "/srv/sample/sources/overview",
+      "remote": null,
+      "enrolled": true
+    },
+    {
+      "repoId": "sample-private",
+      "root": "/srv/sample/private/notes",
+      "remote": "https://example.invalid/sample/notes.git",
+      "enrolled": true
+    }
+  ],
+  "ext": {
+    "grant": "all"
+  }
+}
