@@ -93,9 +93,14 @@ reused. Later reuse should help an actual new task; retention alone is not use.
 ## Bounded context and honest accounting
 
 `context --mode lexical` ranks active, classified Markdown by matches in titles,
-summaries, and tags. `--mode graph` visits each ranked seed followed by its
-declared neighbors before the next lexical match, using one hop from a bounded
-seed set. Document and byte limits can still omit part of a neighborhood; check
+summaries, and tags, breaking equal scores by record ID. `--mode graph` takes
+one hop from the top `maxDocuments` lexical seeds. It visits each seed followed
+by at most one unseen declared neighbor before the next seed. Further neighbors
+take turns across the original seeds only after every seed has been considered.
+With two document slots and multiple seeds, the lexical seeds go first because
+two seeds and a neighbor cannot all fit. Each seed's neighbors are ordered by
+their own lexical score, then record ID. Only the original seed set expands.
+Document and byte limits can still omit seeds or part of a neighborhood; check
 the reported omissions. It does not infer edges, search every body,
 perform semantic extraction, or rank by expected answers. Word forms and
 synonyms can be missed; improve descriptions or evaluate another retrieval
@@ -112,15 +117,17 @@ changed, redirected, oversized, or unreadable sources are omitted visibly.
 unsupported source kinds also have distinct refusal reasons. Exception text
 and absolute paths are not included. `coverage.omissionsUnlisted` counts any
 additional details that could not fit; `unreadable` counts read and decode
-failures only. Inspect these details in the Apply card or evaluation output.
+failures only. Inspect these details in Deepen, Apply, Learn, or evaluation output.
 Non-Markdown and unclassified records stay in graph diagnostics but are not
 context text. No parser is silently invented for a PDF or binary.
 
 `planSha256` hashes the exact raw bytes read from the plan file, including
 formatting; the CLI, dashboard, and session use the same binding.
 `censusSha256` hashes compact JSON containing the canonical nodes, edges, and
-the sorted census inventory of file keys and raw-byte digests. A body-only
-change to an unselected record changes this digest after a new census.
+the sorted Markdown census inventory of file keys and raw-byte digests. A
+body-only change to an unselected Markdown source changes this digest after a
+new census. Non-Markdown records contribute their node metadata, not a digest
+of their PDF, HTML, or DOCX body bytes.
 Each source's `sha256` hashes its raw file bytes. Line locations count actual
 LF or CRLF lines; a final newline does not create an extra line.
 
