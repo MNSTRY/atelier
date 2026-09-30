@@ -26,6 +26,8 @@ import { fileURLToPath } from 'node:url'
 // document, not a schema, and is deliberately absent.
 
 export const CONTRACT_CORPUS = [
+  { name: 'atelier-personal-workspace-manifest', contractFile: 'contracts/atelier-personal-workspace-manifest.v1.schema.json', fixtureRoot: 'fixtures/atelier-personal-workspace-contract/manifest', registry: true },
+  { name: 'atelier-personal-workspace-overlay', contractFile: 'contracts/atelier-personal-workspace-overlay.v1.schema.json', validFiles: ['fixtures/personal-workspace/overlay.json'], registry: false },
   { name: 'atelier-template-profile', contractFile: 'contracts/atelier-template-profile.v1.schema.json', validFiles: ['fixtures/templates/local-library.v1.json'], registry: false },
   ...['adoption-policy.v2', 'migration.v3', 'template-adoption.v1', 'upgrade-plan.v3'].map(shape => ({
     name: `atelier-template-${shape}`, contractFile: `contracts/atelier-${shape}.schema.json`,
