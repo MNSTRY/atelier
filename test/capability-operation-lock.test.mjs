@@ -190,6 +190,25 @@ test('a stale lock removed by a competing recoverer during inspection refuses as
   assert.equal(removed, true)
 })
 
+test('a stale lock replaced by a competing recoverer during inspection refuses as locked and keeps the replacement', t => {
+  const root = workspace(t)
+  const dead = spawnSync(process.execPath, ['-e', '']).pid
+  const file = seedLock(root, { owner: 'capability-steward', pid: dead, operationId: randomUUID() })
+  const replacement = JSON.stringify({ owner: 'capability-steward', pid: process.pid, operationId: randomUUID() })
+  const open = fs.openSync
+  let replaced = false
+  try {
+    fs.openSync = (target, ...rest) => {
+      if (!replaced && target === file) { replaced = true; fs.renameSync(file, `${file}.crashed`); fs.writeFileSync(file, replacement) }
+      return open(target, ...rest)
+    }
+    assert.throws(() => withOperationLock(root, () => assert.fail('must not enter')),
+      error => error.code === 'EEXIST' && /changed during inspection/.test(error.message))
+  } finally { fs.openSync = open }
+  assert.equal(replaced, true)
+  assert.equal(fs.readFileSync(file, 'utf8'), replacement)
+})
+
 test('competing recoverers admit one writer after a journal-free process crash', async t => {
   const root = workspace(t)
   const crashed = spawnSync(process.execPath, ['--input-type=module', '-e', `

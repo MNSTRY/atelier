@@ -184,11 +184,11 @@ function sameLockFile(left, right) {
 function readOperationLock(root) {
   const identity = stat(within(root, OPERATION_LOCK))
   if (!identity) return null
-  // A competing recoverer may remove the lock between the stat and the read;
-  // that is a change during inspection, not an unrelated I/O failure.
+  // A competing recoverer may remove or replace the lock between the stat and
+  // the read; that is a change during inspection, not an unrelated I/O failure.
   let bytes
   try { bytes = bytesAt(root, OPERATION_LOCK) } catch (error) {
-    if (error.code === 'ENOENT') throw operationLocked('changed during inspection')
+    if (error.code === 'ENOENT' || error.code === 'ELEAFCHANGED') throw operationLocked('changed during inspection')
     throw error
   }
   const current = stat(within(root, OPERATION_LOCK))
