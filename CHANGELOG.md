@@ -7,7 +7,9 @@
   has no library API yet: `@mnstry/atelier/knowledge` does not export workspace,
   session, context or plan functions, and direct imports of `src/knowledge/*` are
   unsupported. `atelier architecture entry knowledge-stewardship` now lists the
-  workspace modules and the `knowledge` command.
+  workspace modules and the `knowledge` command. `npm run knowledge:consumer-proof`
+  installs a packed tarball into a clean consumer and runs the documented CLI
+  path, writing a receipt bound to the tarball SHA-256.
 - The ingestion store adds `getEvidence`, which returns one exact evidence span
   after rechecking only that source and its stored attempt. Query and
   `getEvidence` both report `readScope: "all-plan"`: they read at the scope of

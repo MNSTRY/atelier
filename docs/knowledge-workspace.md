@@ -60,6 +60,14 @@ directly is unsupported, and those modules may change without notice. A library
 export will be added when a host needs one, reviewed together with that host's
 use of it.
 
+Maintainers check a packed candidate with `npm run knowledge:consumer-proof`, with
+`ATELIER_CANDIDATE_TARBALL` set to the tarball. The script installs the tarball
+offline into a clean temporary consumer and uses only the CLI. It runs the
+starter's supported answer and abstention, evaluation, a saved session read
+back, retry and recovery, and an owner correction. It then writes a receipt
+bound to the tarball's SHA-256. A passing receipt shows that the software
+behaves as documented. It does not measure answer quality or cost.
+
 ## Five connected views
 
 | Workspace | What is visible | Coauthored result | Next proof |
