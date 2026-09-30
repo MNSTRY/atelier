@@ -73,6 +73,13 @@ function extractionFor(item, reservation, inspected) {
     inspected.completion.bytes > reservation.limits.maxOutputBytes || extraction.evidence.length > reservation.limits.maxEvidenceItems) refuse('INGESTION_INTEGRITY', 'cached extraction bounds or coverage differ');
   return extraction;
 }
+// Every reader verifies a completed attempt the same way: the stored attempt
+// itself, then its coverage and output bytes against this plan's own journal.
+function completedExtraction(item, reservation, inspected, result) {
+  const extracted = extractionFor(item, reservation, inspected);
+  if (!same(extracted.coverage, result.coverage) || inspected.completion.bytes !== result.outputBytes) refuse('INGESTION_INTEGRITY', 'completed coverage differs');
+  return extracted;
+}
 function usageOf(state) {
   const reservations = [...state.reservations.values()], results = [...state.results.values()];
   return {
@@ -194,8 +201,7 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
       if (result.status === 'complete') {
         try {
           const inspected = intake.readAttempt(result.attemptId);
-          const extracted = extractionFor(item, state.reservations.get(item.id), inspected);
-          if (!same(extracted.coverage, result.coverage) || inspected.completion.bytes !== result.outputBytes) refuse('INGESTION_INTEGRITY', 'completed coverage differs');
+          completedExtraction(item, state.reservations.get(item.id), inspected, result);
           view.integrity = 'verified';
         } catch { view.status = 'failed'; view.reason = 'stored-evidence-integrity-refused'; view.integrity = 'refused'; }
       }
@@ -324,7 +330,7 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
           }
           if (item.status !== 'complete') { omissions.push({ sourceId: item.id, status: item.status, reason: item.reason }); continue; }
           try {
-            const extraction = extractionFor(item, handle.state.reservations.get(item.id), intake.readAttempt(item.attemptId));
+            const extraction = completedExtraction(item, handle.state.reservations.get(item.id), intake.readAttempt(item.attemptId), handle.state.results.get(item.id));
             for (const evidence of extraction.evidence) {
               if (!terms.every(term => evidence.text.toLowerCase().includes(term))) continue;
               matched++;
@@ -333,7 +339,33 @@ export function createIngestionStore({ workspaceRoot = process.cwd(), workspaceI
           } catch { item.status = 'failed'; item.reason = 'stored-evidence-integrity-refused'; omissions.push({ sourceId: item.id, status: item.status, reason: item.reason }); }
         }
         status.progress = progressOf(status.items); status.complete = status.progress.byStatus.complete === status.items.length; status.settled = status.progress.remaining === 0;
-        return { schema: schema('query'), planId, planDigest, query, hits, matched, truncated: matched > hits.length, omissions, status, semanticAcceptance: 'pending', synthesized: false };
+        return { schema: schema('query'), planId, planDigest, query, hits, matched, truncated: matched > hits.length, omissions, status, readScope: 'all-plan', semanticAcceptance: 'pending', synthesized: false };
+      });
+    },
+    // One exact evidence span, verified through this store's own plan, source
+    // and attempt checks; only the named source is read. The read scope is the
+    // whole plan: nothing here narrows or grants permission, so a caller that
+    // may read only some of the plan's sources must not call it.
+    getEvidence(input = {}) {
+      const { planId, planDigest, sourceId, sourceDigest, attemptId, locator } = exactRequest(input, ['planId', 'planDigest', 'sourceId', 'sourceDigest', 'attemptId', 'locator']);
+      if (typeof sourceId !== 'string' || typeof sourceDigest !== 'string' || typeof attemptId !== 'string' || attemptId.length > 256 ||
+        !locator || typeof locator !== 'object' || Array.isArray(locator) || Object.keys(locator).sort().join() !== 'kind,value' ||
+        typeof locator.kind !== 'string' || typeof locator.value !== 'string' || [...locator.value].length > 16384) refuse('INGESTION_INVALID', 'evidence request requires a source, digests, an attempt and an exact locator');
+      const handle = load({ planId, planDigest });
+      const item = handle.plan.items.find(candidate => candidate.id === sourceId);
+      if (!item) refuse('INGESTION_MISSING', 'source is not in this plan');
+      const result = handle.state.results.get(item.id);
+      if (item.sourceDigest !== sourceDigest || result?.status !== 'complete' || result.attemptId !== attemptId) refuse('INGESTION_STALE', 'source, digest or attempt is not the completed evidence of this plan');
+      return withIntakeReadScope(intake, () => {
+        try { intake.readSource({ ref: item.ref, expectedDigest: item.sourceDigest }); }
+        catch (error) { refuse('INGESTION_STALE', `source is no longer current (${sourceReason(error)})`); }
+        let extraction;
+        try { extraction = completedExtraction(item, handle.state.reservations.get(item.id), intake.readAttempt(attemptId), result); }
+        catch { refuse('INGESTION_INTEGRITY', 'stored evidence integrity refused'); }
+        const matches = extraction.evidence.filter(evidence => evidence.locator.kind === locator.kind && evidence.locator.value === locator.value);
+        if (matches.length !== 1) refuse(matches.length ? 'INGESTION_INTEGRITY' : 'INGESTION_MISSING', matches.length ? 'locator is ambiguous in stored evidence' : 'locator is not in this evidence');
+        return { schema: schema('evidence'), planId, planDigest, sourceId, ref: item.ref, sourceDigest, attemptId, locator: { kind: locator.kind, value: locator.value },
+          text: matches[0].text, freshness: 'current', integrity: 'verified', readScope: 'all-plan', semanticAcceptance: 'pending', synthesized: false };
       });
     },
   });
