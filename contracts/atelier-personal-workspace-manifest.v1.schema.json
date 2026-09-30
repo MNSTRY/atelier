@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-personal-workspace-manifest.v1.schema.json",
+  "title": "atelier-personal-workspace-manifest@v1",
+  "description": "Private enrollment and interpretation only. This document grants no read, write, disclosure, consent, or effect authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "atelier-personal-workspace-manifest@v1"
+    },
+    "workspaceId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bindings": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      }
+    },
+    "repos": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repoId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "remote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 4096
+          },
+          "enrolled": {
+            "type": "boolean"
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0,
+            "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+          }
+        },
+        "required": [
+          "repoId",
+          "root",
+          "remote",
+          "enrolled"
+        ]
+      }
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "ext": {
+      "type": "object",
+      "maxProperties": 0,
+      "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+    }
+  },
+  "required": [
+    "schema",
+    "workspaceId",
+    "revision",
+    "bindings",
+    "repos"
+  ],
+  "$comment": "contract revision 1.0.0 (candidate personal workspace contract)"
+}
