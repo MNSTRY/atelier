@@ -388,6 +388,7 @@ export function renderKnowledgePage() {
             <div id="session" hidden>
               <p id="session-meta" class="muted"></p>
               <p id="source-state" class="notice"></p>
+              <div id="recorded-wording"></div>
               <fieldset id="editor">
                 <label for="answer" id="prompt"></label>
                 <p id="hint" class="muted"></p>
@@ -891,6 +892,49 @@ export function renderKnowledgePage() {
           prompt?.[2] ||
           'Review the retained wording and export it for the source owner.'
         if (!preserve && !dirty) el('answer').value = state.proposal?.text || ''
+        const recorded = el('recorded-wording')
+        recorded.replaceChildren()
+        const field = state.fields[state.index]?.id
+        const answers = state.answers.filter((a) => a.fieldId === field)
+        if (
+          dirty &&
+          state.proposal &&
+          el('answer').value !== state.proposal.text
+        ) {
+          node(
+            'p',
+            'Recorded wording differs from your tab text. Compare it before recording another answer.',
+            recorded,
+            'notice'
+          )
+          node('h3', 'Current recorded wording', recorded)
+          node('p', state.proposal.text, recorded, 'saved')
+          node(
+            'small',
+            'Session revision ' +
+              state.revision +
+              '. Recording a new answer keeps both versions in history and makes your wording the current proposal.',
+            recorded
+          )
+        }
+        if (answers.length) {
+          const history = details(
+            recorded,
+            'Retained answers for this step',
+            answers.map((a) => ({
+              text: a.text,
+              eventId: a.eventId,
+              revision:
+                (state.events.find((e) => e.id === a.eventId)?.event
+                  .expectedRevision ?? -1) + 1,
+            }))
+          )
+          history.open = Boolean(
+            dirty &&
+              state.proposal &&
+              el('answer').value !== state.proposal.text
+          )
+        }
         el('answer').hidden = !prompt && !dirty
         el('answer').readOnly =
           !['input', 'draft'].includes(state.phase) && !dirty
@@ -972,8 +1016,10 @@ export function renderKnowledgePage() {
                 : 'Saved drafts and retained intents were read from local history.')
           )
           await sessions()
+          return true
         } catch (error) {
           note('session-status', 'Session unavailable: ' + error.message, true)
+          return false
         }
       }
       async function send(route, input) {
@@ -996,7 +1042,7 @@ export function renderKnowledgePage() {
             'session-status',
             'Not confirmed saved: ' +
               error.message +
-              '. Your wording remains here. Restore atelier dev --knowledge, then retry the exact request or reload to inspect the saved state.',
+              '. Your wording remains here. If the service is unavailable, restore atelier dev --knowledge and retry. For a revision, source, or event refusal, end retry and inspect history before another intent.',
             true
           )
         } finally {
@@ -1107,8 +1153,9 @@ export function renderKnowledgePage() {
         endedRequests.push(ended)
         pending = null
         setBusy(false)
-        if (active) await readSession(active.record.id)
-        else await sessions()
+        if (active) {
+          if (!(await readSession(active.record.id))) return
+        } else await sessions()
         note(
           'session-status',
           'Retry ended; no server history was deleted or cancelled. Inspect the session before another intent. Your text and the ended request remain in this tab and its exported snapshot. Session: ' +

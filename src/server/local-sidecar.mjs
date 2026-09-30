@@ -223,6 +223,10 @@ function knowledgeError(error) {
   const message = error instanceof Error ? error.message : ''
   if (message === 'coauthor requires a Git workspace with untracked, ignored .atelier-local/ state')
     return 'coauthor requires a Git workspace with untracked, ignored local state. Initialize Git and ignore the .atelier-local directory.'
+  if (/^collaboration (ledger|event).*ceiling/.test(message))
+    return 'knowledge history capacity reached. Preserve the ledger and saved values for operator inspection; do not compact active session chains.'
+  if (message.startsWith('EEXIST: private state is locked'))
+    return 'knowledge writer is busy. Preserve the request and retry after the active writer finishes.'
   const safe = [
     'workspace changed', 'stale revision', 'event id conflict', 'source changed',
     'coauthor session not found', 'coauthor requires', 'unknown knowledge',
@@ -231,6 +235,7 @@ function knowledgeError(error) {
     'coauthor plan must', 'knowledge session configuration mismatch',
     'knowledge session identity mismatch', 'knowledge session exceeds',
     'knowledge session list exceeds',
+    'knowledge history unavailable', 'knowledge start marker mismatch',
   ]
   return safe.some(prefix => message.startsWith(prefix)) && !message.includes('/')
     ? message : 'Knowledge operation unavailable. Preserve your draft and inspect the local workspace or active writer.'

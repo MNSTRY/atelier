@@ -83,8 +83,10 @@ consumer owns its domain vocabulary and source decisions.
    what was actually recorded. Retry controls survive reload and export.
    **End retry and inspect history** stops the tab's retry attempt and preserves
    its request in exported snapshots; it does not cancel or delete server
-   history. Inspect that history before recording another intent. Reload does
-   not silently erase unsaved text. Discarding tab text is explicit.
+   history. If recorded wording differs from the text in your tab, the current
+   recorded wording and retained answers appear beside it before another intent.
+   A failed history inspection remains visible. Reload does not silently erase
+   unsaved text. Discarding tab text is explicit.
 5. Export a private snapshot for owner review. It includes saved wording,
    receipts, bound source evidence, unsaved text, and a pending request when
    present. Review its audience before sharing. Browser download behavior is
@@ -109,9 +111,14 @@ existing coauthor ledger under `.atelier-local/coauthor/`. These are private
 proposal artifacts, not a second canonical ontology database. Sessions require
 a Git workspace with ignored, untracked local state. Descriptor and draft files
 are owner-only. Same-account filesystem control is not an authentication boundary.
-An interrupted start is listed separately and can be resumed while its bound
-sources still match. A damaged descriptor does not hide other sessions. Preserve
-damaged files for inspection; the surface never deletes them to make history pass.
+An interrupted start is resumable only when its bound sources still match and
+the retained start protocol, ledger, completion marker, and value files support
+that interpretation. A completed start publishes an immutable marker before any
+guided answer. Missing history with a completion marker or retained values is
+never recreated as an empty session. A missing ledger or an incomplete legacy
+descriptor requires inspection. A damaged descriptor does not hide other
+sessions. Preserve damaged files for inspection; the surface never deletes them
+to make history pass.
 
 Each operation checks the current workspace and reports whether its bound
 sources still match. External source editors do not share an atomic transaction
@@ -146,8 +153,8 @@ agent-written revisions, send `propose`, show original and proposed wording,
 and wait for explicit confirmation before `confirm`. The API records intents;
 it cannot authenticate that a human supplied one. Do not infer confirmation,
 source-owner acceptance, or action authority from a saved draft.
-UUID letters are normalized to lowercase. Reusing a start request ID with a
-different author, flow, question, or snapshot is refused. UTF-8 BOM plans are
+UUID letters, including exact session IDs, are normalized to lowercase. Reusing
+a start request ID with a different author, flow, question, or snapshot is refused. UTF-8 BOM plans are
 supported: the workspace binds raw plan bytes, while the coauthor receipt binds
 decoded text using the same definition as its source reader.
 
@@ -155,6 +162,8 @@ Keep requests in ignored local files rather than interpolating authored text
 into shell commands. The CLI supports `--project` and `--plan` for an explicit
 consumer location; browser sessions use that project's `knowledge-plan.json`.
 A coauthor plan must be a visible, unredirected file inside its workspace.
+The workspace directory itself may be reached through an alias or symbolic link;
+plan segments inside it must not be symbolic links.
 Resumed sessions check their own recorded plan, including sessions started with
 `--plan`. Unavailable source checks are reported separately from changed sources.
 
@@ -170,9 +179,11 @@ Descriptors are bounded to 1 MiB, session listings to the 200 newest local
 descriptor files, and coauthor history to its existing ledger ceilings. Listings
 include a total and truncation flag; invalid or unfinished entries are individual
 unavailable rows. Use **Open an exact session ID** or the CLI to inspect an older
-session beyond the listing limit. No history is silently deleted or compacted. This first
-reference is for bounded local workspaces, with text-based observations. It
-provides no numeric outcome aggregation, automatic source ingestion, semantic
+session beyond the listing limit; use CLI `recover` for an older incomplete start.
+Each listing verifies one shared ledger snapshot and replays the selected session
+chains. It does not cache state across requests. No history is silently deleted
+or compacted. This first reference is for bounded local workspaces, with
+text-based observations. It provides no numeric outcome aggregation, automatic source ingestion, semantic
 inference, collaborative presence, or canonical editing UI.
 
 Qualification should include an unfamiliar person and agent completing an

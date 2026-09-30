@@ -322,6 +322,20 @@ try {
     .getByRole('button', { name: 'End retry and inspect history', exact: true })
     .click()
   await expectText('#session-status', 'Retry ended')
+  await expectText(
+    '#recorded-wording',
+    'Agent retained a separate observation.'
+  )
+  assert.equal(
+    await page
+      .getByRole('heading', { name: 'Current recorded wording', exact: true })
+      .isVisible(),
+    true
+  )
+  assert.match(
+    await page.locator('#recorded-wording').innerText(),
+    /Agent retained a separate observation/
+  )
   assert.equal(
     await page.locator('#answer').inputValue(),
     'My wording after the agent observation.'
@@ -343,7 +357,47 @@ try {
   await page.getByRole('button', { name: 'Open session', exact: true }).click()
   await expectText('#session-status', 'Session loaded')
   checks.push(
-    'stale revision recovery preserves wording, new intent uses current revision, and exact-ID navigation works'
+    'stale revision recovery displays intervening wording before a new intent, preserves tab text, and supports exact-ID navigation'
+  )
+  await page
+    .locator('#answer')
+    .fill('Text kept during a failed history inspection.')
+  await server.close()
+  await page
+    .getByRole('button', { name: 'Record my answer', exact: true })
+    .click()
+  await expectText('#session-status', 'Not confirmed saved')
+  await page
+    .getByRole('button', { name: 'End retry and inspect history', exact: true })
+    .click()
+  await expectText('#session-status', 'Session unavailable')
+  assert.doesNotMatch(
+    await page.locator('#session-status').textContent(),
+    /Retry ended/
+  )
+  assert.equal(
+    await page.locator('#answer').inputValue(),
+    'Text kept during a failed history inspection.'
+  )
+  server = createAtelierSidecarServer({
+    workspaceRoot: project.outputRoot,
+    knowledgeProject: project,
+  })
+  await server.listen(address.port)
+  await page
+    .getByRole('button', { name: 'Reload session', exact: true })
+    .click()
+  await expectText('#session-status', 'Session loaded')
+  await expectText(
+    '#recorded-wording',
+    'My wording after the agent observation.'
+  )
+  await page
+    .getByRole('button', { name: 'Record my answer', exact: true })
+    .click()
+  await expectText('#session-status', 'Answer retained')
+  checks.push(
+    'failed history inspection remains visible after ending retry; restored service displays recorded wording and preserves tab text'
   )
   for (const width of [320, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 1000 })
@@ -387,6 +441,7 @@ try {
   const sources = [
     'src/knowledge/workspace.mjs',
     'src/knowledge/sessions.mjs',
+    'src/coauthor/store.mjs',
     'src/ui/knowledge-page.mjs',
     'src/server/local-sidecar.mjs',
     'src/server/server.mjs',

@@ -67,10 +67,99 @@ export function createKnowledgeSessions(
       label: 'knowledge sessions',
     })
   function descriptor(id) {
+    if (typeof id === 'string') id = id.toLowerCase()
     if (!identifier.test(id)) throw new Error('invalid knowledge session id')
     const record = readDescriptor(path.join(directory(), `${id}.json`))
     if (record.id !== id) throw new Error('knowledge session identity mismatch')
     return record
+  }
+  const exists = (file) => {
+    try {
+      fs.lstatSync(file)
+      return true
+    } catch (error) {
+      if (error.code === 'ENOENT') return false
+      throw error
+    }
+  }
+  const completionFile = (record) =>
+    path.join(directory(), `${record.id}.started.json`)
+  function canResumeStart(record) {
+    if (
+      record.startProtocol !== 'completion-marker-v1' ||
+      exists(completionFile(record)) ||
+      exists(
+        path.join(root, '.atelier-local/coauthor/values', digest(record.id))
+      )
+    )
+      return false
+    // A missing ledger is not evidence that this is a never-completed start.
+    // Legacy descriptors without a completion protocol require inspection too.
+    try {
+      const fd = openRegularFileNoFollow(
+        path.join(root, '.atelier-local/coauthor/events.ndjson')
+      )
+      fs.closeSync(fd)
+      return true
+    } catch {
+      return false
+    }
+  }
+  function assertState(record, state) {
+    if (
+      state.id !== record.id ||
+      canonicalize(state.fields) !== canonicalize(record.config.fields)
+    )
+      throw new Error('knowledge session configuration mismatch')
+  }
+  function markStarted(record, state) {
+    assertState(record, state)
+    const file = completionFile(record)
+    const bytes = canonicalize({
+      schema: 'atelier-knowledge-start-completed/experimental-v1',
+      sessionId: record.id,
+      descriptorSha256: digest(canonicalize(record)),
+    })
+    let fd
+    try {
+      fd = openRegularFileNoFollow(file)
+      if (
+        fs.fstatSync(fd).size > 1024 ||
+        !fs.readFileSync(fd).equals(Buffer.from(bytes))
+      )
+        throw new Error(
+          'knowledge start marker mismatch; preserve history for inspection'
+        )
+      return
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd)
+    }
+    publishPrivateFile(file, bytes)
+  }
+  function resumeStart(record, adapter, newIntent = false) {
+    let state
+    try {
+      state = adapter.read(record.id)
+      assertState(record, state)
+    } catch (error) {
+      if (error.message !== 'coauthor session not found') throw error
+      if (
+        exists(completionFile(record)) ||
+        exists(
+          path.join(root, '.atelier-local/coauthor/values', digest(record.id))
+        ) ||
+        (!newIntent && !canResumeStart(record))
+      )
+        throw new Error(
+          'knowledge history unavailable; preserve the ledger, markers, and values for inspection'
+        )
+    }
+    // An existing history is only read; never call start again to reconstruct it.
+    if (!state) state = adapter.start(record.config)
+    markStarted(record, state)
+    return result(record, state)
   }
   function currency(record, cache = new Map()) {
     try {
@@ -93,11 +182,7 @@ export function createKnowledgeSessions(
     }
   }
   function result(record, state) {
-    if (
-      state.id !== record.id ||
-      canonicalize(state.fields) !== canonicalize(record.config.fields)
-    )
-      throw new Error('knowledge session configuration mismatch')
+    assertState(record, state)
     const sourceState = currency(record)
     return {
       ok: true,
@@ -177,7 +262,7 @@ export function createKnowledgeSessions(
             throw new Error(
               'invalid knowledge request: session id already bound'
             )
-          return result(record, adapter.start(record.config))
+          return resumeStart(record, adapter)
         }
         const config = {
           id,
@@ -190,6 +275,7 @@ export function createKnowledgeSessions(
           schema: 'atelier-knowledge-session/experimental-v1',
           id,
           createdAt: new Date().toISOString(),
+          startProtocol: 'completion-marker-v1',
           snapshot: workspace.snapshot,
           flow: flow.id,
           title: flow.title,
@@ -210,12 +296,12 @@ export function createKnowledgeSessions(
           throw new Error('knowledge session exceeds byte limit')
         // Non-overwriting publication makes a retry of the same request exact.
         publishPrivateFile(file, bytes)
-        return result(record, adapter.start(config))
+        return resumeStart(record, adapter, true)
       })
     },
     read(id) {
       const record = descriptor(id)
-      return result(record, store().read(id))
+      return result(record, store().read(record.id))
     },
     list() {
       const limit = 200
@@ -237,12 +323,17 @@ export function createKnowledgeSessions(
         .sort((a, b) => b.time - a.time || a.name.localeCompare(b.name))
       const adapter = store()
       const cache = new Map()
+      const states = adapter.readMany(
+        names.slice(0, limit).map(({ name }) => name.slice(0, -5))
+      )
       const sessions = names.slice(0, limit).map(({ name }) => {
         const id = name.slice(0, -5)
         let record
         try {
           record = descriptor(id)
-          const state = adapter.read(id)
+          const loaded = states.get(id)
+          if (!loaded.ok) throw new Error(loaded.error)
+          const state = loaded.state
           if (canonicalize(state.fields) !== canonicalize(record.config.fields))
             throw new Error('knowledge session configuration mismatch')
           const sourceState = currency(record, cache)
@@ -262,15 +353,18 @@ export function createKnowledgeSessions(
           }
         } catch (error) {
           const incomplete =
-            record && error.message === 'coauthor session not found'
+            record &&
+            error.message === 'coauthor session not found' &&
+            canResumeStart(record)
+          const recoverable = Boolean(
+            incomplete && currency(record, cache) === 'current'
+          )
           return {
             id,
             available: false,
-            recoverable: Boolean(
-              incomplete && currency(record, cache) === 'current'
-            ),
-            reason: incomplete
-              ? 'Start incomplete. Resume it while its bound sources still match.'
+            recoverable,
+            reason: recoverable
+              ? 'Start incomplete. Its bound sources match; it can be resumed.'
               : 'Session unavailable. Preserve its local files for inspection.',
           }
         }
@@ -290,7 +384,11 @@ export function createKnowledgeSessions(
         throw new Error(
           'workspace changed; retained history is readable; start a newly bound session'
         )
-      const state = store().dispatch(record.id, input.event)
+      const adapter = store()
+      // Complete the durable start marker before any guided answer can be kept.
+      // A later missing aggregate must never be mistaken for a new empty start.
+      markStarted(record, adapter.read(record.id))
+      const state = adapter.dispatch(record.id, input.event)
       return result(record, state)
     },
     recover(input) {
@@ -306,8 +404,9 @@ export function createKnowledgeSessions(
         state = adapter.read(record.id)
       } catch (error) {
         if (error.message !== 'coauthor session not found') throw error
-        state = adapter.start(record.config)
+        return resumeStart(record, adapter)
       }
+      markStarted(record, state)
       return result(
         record,
         state.phase === 'saving' ? adapter.recover(record.id) : state

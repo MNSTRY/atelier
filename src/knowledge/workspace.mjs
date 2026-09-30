@@ -188,9 +188,16 @@ export function loadKnowledgeWorkspace(
   const overrides = initial.repos
     .filter((r) => r.pathSource === 'cli')
     .flatMap((r) => ['--repo-path', `${r.name}=${r.path}`])
+  // Normalize the selected workspace directory, not internal plan/source links.
+  // /tmp, /var, and user-created workspace aliases resolve to the same binding.
+  const configDir = fs.realpathSync(initial.configDir)
   const project = commandProject({
-    cwd: initial.configDir,
-    argv: ['--project', initial.configPath, ...overrides],
+    cwd: configDir,
+    argv: [
+      '--project',
+      path.join(configDir, path.basename(initial.configPath)),
+      ...overrides,
+    ],
     writeLocalState: false,
   })
   const source = readKnowledgePlan(project, planName)

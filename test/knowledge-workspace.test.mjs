@@ -12,6 +12,7 @@ import {
   loadKnowledgeWorkspace,
 } from '../src/knowledge/workspace.mjs'
 import { createKnowledgeSessions } from '../src/knowledge/sessions.mjs'
+import { digest } from '../src/knowledge/plan.mjs'
 import { createAtelierSidecarServer } from '../src/server/local-sidecar.mjs'
 import { withPrivateLock } from '../src/project/durable-state.mjs'
 
@@ -303,6 +304,161 @@ test('the actual dev command accepts knowledge mode and completes its loopback s
     if (args[0] === 'dev')
       assert.match(r.stdout, /local projection and health endpoint passed/)
   }
+})
+
+test('lost or rolled-back ledger history never becomes a resumable empty start', (t) => {
+  const w = setup(t)
+  const first = w.sessions.start(w.input)
+  w.sessions.event(
+    event(first.record.id, 'answer', 0, {
+      text: 'Retained without a value file yet.',
+    })
+  )
+  const ledger = path.join(w.dir, '.atelier-local/coauthor/events.ndjson')
+  const olderLedger = fs.readFileSync(ledger)
+  const next = { ...w.input, requestId: randomUUID() }
+  let saved = w.sessions.start(next)
+  saved = w.sessions.event(
+    event(saved.record.id, 'answer', 0, {
+      text: 'A saved answer must remain discoverable.',
+    })
+  )
+  saved = w.sessions.event(event(saved.record.id, 'save', saved.state.revision))
+  const values = path.join(
+    w.dir,
+    '.atelier-local/coauthor/values',
+    digest(saved.record.id)
+  )
+  const filesBefore = fs
+    .readdirSync(values)
+    .map((name) => [name, fs.readFileSync(path.join(values, name), 'utf8')])
+  fs.unlinkSync(ledger) // Deliberate loss in this disposable fixture only.
+  for (const id of [first.record.id, saved.record.id]) {
+    const row = w.sessions.list().sessions.find((s) => s.id === id)
+    assert.equal(row.available, false)
+    assert.equal(row.recoverable, false)
+    assert.throws(
+      () => w.sessions.recover({ sessionId: id }),
+      /history unavailable/
+    )
+  }
+  assert.throws(() => w.sessions.start(w.input), /history unavailable/)
+  assert.throws(() => w.sessions.start(next), /history unavailable/)
+  assert.equal(fs.existsSync(ledger), false)
+  fs.writeFileSync(ledger, olderLedger)
+  assert.equal(
+    w.sessions.list().sessions.find((s) => s.id === first.record.id).available,
+    true
+  )
+  assert.throws(
+    () => w.sessions.recover({ sessionId: saved.record.id }),
+    /history unavailable/
+  )
+  // Value evidence independently refuses a reset even if its completion marker is lost.
+  fs.unlinkSync(
+    path.join(
+      w.dir,
+      '.atelier-local/knowledge/sessions',
+      saved.record.id + '.started.json'
+    )
+  )
+  assert.throws(
+    () => w.sessions.recover({ sessionId: saved.record.id }),
+    /history unavailable/
+  )
+  assert.deepEqual(
+    fs
+      .readdirSync(values)
+      .map((name) => [name, fs.readFileSync(path.join(values, name), 'utf8')]),
+    filesBefore
+  )
+  assert.deepEqual(fs.readFileSync(ledger), olderLedger)
+})
+
+test('workspace directory aliases work while internal plan symlinks still refuse', (t) => {
+  const w = setup(t)
+  const alias = path.join(w.temp, 'workspace-alias')
+  fs.symlinkSync(w.dir, alias, 'dir')
+  const viaAlias = commandProject({
+    cwd: w.temp,
+    argv: ['--project', path.join(alias, 'atelier.project.json')],
+  })
+  const workspace = loadKnowledgeWorkspace(viaAlias)
+  assert.equal(workspace.snapshot, w.workspace.snapshot)
+  const r = createKnowledgeSessions(viaAlias).start({
+    ...w.input,
+    snapshot: workspace.snapshot,
+  })
+  assert.equal(w.sessions.read(r.record.id).current, true)
+  assert.equal(
+    w.sessions.read(r.record.id.toUpperCase()).record.id,
+    r.record.id
+  )
+  const result = cli(
+    w.temp,
+    [
+      'knowledge',
+      'session',
+      'start',
+      '--project',
+      path.join(alias, 'atelier.project.json'),
+    ],
+    { ...w.input, requestId: randomUUID() }
+  )
+  assert.equal(result.status, 0, result.stderr)
+  fs.mkdirSync(path.join(w.dir, 'plans'))
+  fs.copyFileSync(
+    path.join(w.dir, 'knowledge-plan.json'),
+    path.join(w.dir, 'plans/plan.json')
+  )
+  fs.symlinkSync(
+    path.join(w.dir, 'plans'),
+    path.join(w.dir, 'linked-plans'),
+    'dir'
+  )
+  assert.throws(
+    () =>
+      createKnowledgeSessions(viaAlias, 'linked-plans/plan.json').start({
+        ...w.input,
+        requestId: randomUUID(),
+        snapshot: loadKnowledgeWorkspace(viaAlias, 'linked-plans/plan.json')
+          .snapshot,
+      }),
+    /must not be redirected/
+  )
+})
+
+test('listing many real sessions verifies the shared ledger once and observes the next write', (t) => {
+  const w = setup(t)
+  const ids = []
+  for (let i = 0; i < 32; i++) {
+    let r = w.sessions.start({ ...w.input, requestId: randomUUID() })
+    r = w.sessions.event(
+      event(r.record.id, 'answer', 0, {
+        text: `Answer ${i}: ` + 'Qualified evidence. '.repeat(300),
+      })
+    )
+    r = w.sessions.event(event(r.record.id, 'save', r.state.revision))
+    ids.push(r.record.id)
+  }
+  const ledger = path.join(w.dir, '.atelier-local/coauthor/events.ndjson')
+  let reads = 0
+  const original = fs.openSync
+  const spy = t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (file === ledger) reads++
+    return original(file, ...args)
+  })
+  const listed = w.sessions.list()
+  assert.equal(reads, 1, 'one ledger snapshot, independent of row count')
+  assert.equal(listed.sessions.length, 32)
+  assert.ok(listed.sessions.every((s) => s.available && s.saved === 1))
+  spy.mock.restore()
+  const state = w.sessions.read(ids[0]).state
+  w.sessions.event(event(ids[0], 'advance', state.revision))
+  assert.equal(
+    w.sessions.list().sessions.find((s) => s.id === ids[0]).phase,
+    'input'
+  )
 })
 
 test('stale versions, invalid private placement, and forged persistence events refuse', (t) => {
