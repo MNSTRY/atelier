@@ -54,6 +54,17 @@ test('bounds encoded bytes, depth, and members before validation', () => {
   assert.equal(validateEvidenceDocument('profile', depth).valid, false)
   assert.equal(validateEvidenceDocument('profile', Array.from({ length: 9000 }, () => null)).valid, false)
 })
+test('shape selection requires a primitive string and cannot reach inherited functions', () => {
+  for (const file of ['invalid/instruction-kind.json', 'invalid/reserved-extension.json']) {
+    let conversions = 0
+    const stateful = { toString() { return ++conversions === 1 ? 'profile' : 'toString' } }
+    const symbolic = { [Symbol.toPrimitive]() { return ++conversions === 1 ? 'claim' : 'constructor' } }
+    for (const selector of [stateful, symbolic, ['profile'], 'constructor', 'toString', '__proto__']) {
+      assert.deepEqual(validateEvidenceDocument(selector, read(file)), { valid: false, reason: 'unsupported-shape' })
+    }
+    assert.equal(conversions, 0)
+  }
+})
 
 test('compatible declarations do not qualify a host or grant execution', () => {
   const value = assessEvidenceCompatibility(read('valid/profile.json'), read('valid/host.json'))
@@ -133,6 +144,21 @@ test('requires a valid explicit assessment time and bounded verification setting
   for (const options of [{ at: 'tomorrow' }, { at: null }, { maxNodes: 0 }, { maxNodes: 257 }, { maxDepth: 13 }]) {
     assert.equal(checkCurrency(base(), undefined, options).status, 'unknown')
   }
+})
+test('currency refuses malformed options without invoking getters or throwing', () => {
+  const snapshot = base(); let gets = 0
+  const getter = Object.defineProperty({}, 'at', { enumerable: true, get() { gets++; throw new Error('invented options getter') } })
+  for (const options of [null, [], false, getter]) {
+    const result = assessEvidenceCurrency(snapshot.reference, [snapshot], options)
+    assert.deepEqual(result.reasons, ['invalid-document']); assert.equal(result.status, 'unknown'); noAuthority(result)
+  }
+  assert.equal(gets, 0)
+})
+test('currency evaluates the options descriptor snapshot instead of Proxy values', () => {
+  const snapshot = base(); let gets = 0
+  const options = new Proxy({ at }, { get() { gets++; return 'tomorrow' } })
+  const result = assessEvidenceCurrency(snapshot.reference, [snapshot], options)
+  assert.equal(result.status, 'current'); assert.equal(gets, 0); noAuthority(result)
 })
 test('checks dependencies transitively and refuses changed, missing, and cyclic input', () => {
   const first = base(), second = base(); second.reference.objectId = 'plot-eight'

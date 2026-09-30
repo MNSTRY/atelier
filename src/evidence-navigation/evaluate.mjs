@@ -22,9 +22,11 @@ export function assessEvidenceCompatibility(profile, host) {
 }
 
 /** Check exact supplied snapshots. Their authenticity and read permission stay with the host. */
-export function assessEvidenceCurrency(reference, snapshots, { at, maxDepth = EVIDENCE_LIMITS.dependencyDepth, maxNodes = EVIDENCE_LIMITS.snapshots } = {}) {
+export function assessEvidenceCurrency(reference, snapshots, options = {}) {
   let input
-  try { input = evidenceJson({ reference, snapshots, at, maxDepth, maxNodes }) } catch { return result('unknown', ['invalid-document']) }
+  try { input = evidenceJson({ reference, snapshots, options }) } catch { return result('unknown', ['invalid-document']) }
+  if (!input.options || typeof input.options !== 'object' || Array.isArray(input.options)) return result('unknown', ['invalid-document'])
+  const { at, maxDepth = EVIDENCE_LIMITS.dependencyDepth, maxNodes = EVIDENCE_LIMITS.snapshots } = input.options
   if (!valid('evidenceRef', input.reference) || !Array.isArray(input.snapshots) || input.snapshots.length > EVIDENCE_LIMITS.snapshots ||
       !input.snapshots.every(snapshot => valid('snapshot', snapshot)) || typeof at !== 'string' ||
       !valid('validInterval', { from: at, until: null }) || !Number.isFinite(Date.parse(at)) ||
