@@ -477,3 +477,62 @@ nodeTest('review S2: macOS NFC ignore evidence excludes NFD census paths', { ski
     assert.ok(fs.readdirSync(root).includes(rel)); refuses(f.materialize, 'ignored-source-in-census')
   } finally { fs.unlinkSync(file); fs.unlinkSync(ignore) }
 })
+
+for (const separator of ['\u2028', '\u2029']) {
+  test(`review S3: Unicode line separator ${separator.codePointAt(0).toString(16)} preserves private node semantics`, (t) => {
+    const f = fixture(t)
+    f.overlay.annotations[0].displayAlias = `Start${separator}here`
+    f.overlay.annotations[0].tags = [`read${separator}later`]
+    f.overlay.connections[0].label = `My${separator}connection`
+    f.overlay.collections[0].name = `Reading${separator}list`
+    f.overlay.views[0].name = `My${separator}selection`
+    f.save(); f.materialize(); const graph = f.compose().graph
+    const note = graph.nodes.find((n) => n.id === 'personal-reading:annotation-note')
+    assert.ok(note); assert.equal(note.title, f.overlay.annotations[0].displayAlias)
+    assert.equal(note.classification, 'classified'); assert.equal(note.markdownHasKgId, true)
+    assert.deepEqual(note.tags, f.overlay.annotations[0].tags)
+    assert.deepEqual(note.relations, { related: ['source-a:overview'] })
+    assert.equal(graph.nodes.filter((n) => n.repo === 'personal-reading' && n.markdownHasKgId).length, 5)
+  })
+}
+
+test('review S3: canonical normalization cannot silently change private node semantics', (t) => {
+  const f = fixture(t); f.overlay.annotations[0].displayAlias = ' padded title '; f.save()
+  refuses(f.materialize, 'overlay-semantics-mismatch')
+})
+
+test('review S3: an ignored nested directory cannot be enrolled as a Git repository', (t) => {
+  const f = fixture(t), nested = path.join(f.sources[0], 'ignored'), ignore = path.join(f.sources[0], '.gitignore')
+  fs.mkdirSync(nested); fs.writeFileSync(ignore, 'ignored/\n')
+  fs.writeFileSync(path.join(nested, 'overview.md'), '---\nkg:\n  id: source-a:overview\n  type: document\n  status: active\n  audience: private\n---\nIgnored source\n')
+  try {
+    f.manifest.repos[0].root = nested; f.manifest.bindings = [nested]; f.save()
+    const output = spawnSync(realGit, ['-C', nested, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], { encoding: 'utf8' })
+    assert.equal(output.status, 0); assert.ok(output.stdout.split('\0').some((p) => p === './' || p === '.'))
+    refuses(() => resolvePersonalWorkspace({ folder: nested, personalHome: f.personalHome }), 'repo-root-mismatch')
+    assert.equal(fs.existsSync(path.join(f.personalHome, 'generations')), false)
+  } finally { fs.rmSync(nested, { recursive: true }); fs.unlinkSync(ignore) }
+})
+
+test('review S3: source evidence hashes assets using bounded chunks, never whole-file reads', (t) => {
+  const f = fixture(t), asset = path.join(f.sources[0], 'reference.pdf'), sidecar = `${asset}.kg.json`
+  fs.writeFileSync(asset, Buffer.alloc(3 * 1024 * 1024 + 7, 42))
+  writeJSON(sidecar, { schema: 'mnstry.source-sidecar@v1', asset: 'reference.pdf', title: 'Reference', summary: '', tags: ['sample'], kg: { id: 'source-a:reference', type: 'pdf', domain: 'sample', lifecycle: 'source', status: 'active', audience: 'private', relations: {} } })
+  const readFile = fs.readFileSync, read = fs.readSync; let chunks = 0
+  try {
+    fs.readFileSync = function (file, ...rest) { if (file === asset) throw new Error('Whole asset read refused by defensive test'); return readFile.call(this, file, ...rest) }
+    fs.readSync = function (fd, buffer, ...rest) { assert.ok(buffer.length <= 64 * 1024); chunks++; return read.call(this, fd, buffer, ...rest) }
+    f.materialize(); assert.equal(f.compose().generation.sourceRevisions.length, 2); assert.ok(chunks > 48)
+  } finally { fs.readFileSync = readFile; fs.readSync = read; fs.unlinkSync(asset); fs.unlinkSync(sidecar) }
+})
+
+test('review S3: asset evidence read failures return a typed refusal without private paths', (t) => {
+  const f = fixture(t), asset = path.join(f.sources[0], 'reference.pdf'), sidecar = `${asset}.kg.json`
+  fs.writeFileSync(asset, 'synthetic PDF')
+  writeJSON(sidecar, { schema: 'mnstry.source-sidecar@v1', asset: 'reference.pdf', title: 'Reference', summary: '', tags: ['sample'], kg: { id: 'source-a:reference', type: 'pdf', domain: 'sample', lifecycle: 'source', status: 'active', audience: 'private', relations: {} } })
+  const open = fs.openSync
+  try {
+    fs.openSync = function (file, ...rest) { if (file === asset) throw new Error(`Synthetic unavailable source: ${asset}`); return open.call(this, file, ...rest) }
+    refuses(f.materialize, 'source-read-failed')
+  } finally { fs.openSync = open; fs.unlinkSync(asset); fs.unlinkSync(sidecar) }
+})

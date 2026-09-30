@@ -95,6 +95,9 @@ round-trip through block-list frontmatter. Blank, padded, and duplicate tags
 refuse `malformed-input` instead of being silently normalized. Untagged private
 nodes receive the
 fixed `personal-interpretation` tag instead of inferred shared-domain tags.
+Generated scalars escape Unicode line separators. Composition verifies every private
+node’s planned identity, title, classification, explicit ID, type, status, audience,
+tags, relations, and declared edges; a mismatch refuses `overlay-semantics-mismatch`.
 Saved views are stored selections, not executable queries or policy rules.
 
 Bounded local Git reads are required for identity and the canonical ignore
@@ -104,6 +107,8 @@ ambient `GIT_*` variables, fsmonitor helpers in local, global, XDG, or system
 configuration, and failed independent
 ignore listings. It checks that ignored sources never enter the graph even
 when the shared builder's ignore call fails open, including ignored sidecars.
+An enrolled root must equal its Git worktree top level; a nested directory
+refuses `repo-root-mismatch` before planning or writes.
 Every module-owned Git probe disables fsmonitor. Its configuration probe uses
 Git boolean-or-string typing so a valueless enabled setting is refused too.
 On macOS, ignored-path comparisons normalize both Git and census spellings to
@@ -120,6 +125,10 @@ materialized overlay documents. Private roots must be owned by the current
 POSIX user and not writable by others. All roots, ancestors, and authored files
 must be free of symlinks. Windows private-root qualification is not implemented
 and refuses `private-root-unverifiable`.
+
+Current source evidence hashes regular files with 64 KiB reads rather than whole
+asset allocations. Unavailable or changing file evidence refuses `source-read-failed`
+without returning local paths. This observation is not a transactional source snapshot.
 
 ## Evidence and limits
 

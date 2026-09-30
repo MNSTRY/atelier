@@ -109,6 +109,7 @@ function checkRepo(repo) {
   if (helpers.some((helper) => helper && helper !== 'false')) refuse('git-helper-configured')
   // A failed remote lookup is not proof of an absent remote: require a valid worktree first.
   if (git(repo.root, ['rev-parse', '--is-inside-work-tree']).trim() !== 'true') refuse('git-unavailable')
+  if (fs.realpathSync(git(repo.root, ['rev-parse', '--show-toplevel']).trim()) !== repo.root) refuse('repo-root-mismatch')
   const observed = git(repo.root, ['remote', 'get-url', 'origin'], { allowAbsent: true }).trim()
   const remote = observed ? sanitizeRemoteUrl(observed) : null
   if (remote !== repo.remote) refuse('repo-identity-replaced')
@@ -160,9 +161,11 @@ export function resolvePersonalWorkspace({ folder, personalHome } = {}) {
     return freeze(resolved)
   })
 }
+// The canonical YAML subset treats raw Unicode line separators as line syntax.
+const scalar = (value) => JSON.stringify(value).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 function markdown(id, title, body, targets = [], tags = []) {
   const privateTags = tags.length ? tags : ['personal-interpretation']
-  return `---\ntitle: ${JSON.stringify(title)}\ntags:\n${privateTags.map((tag) => `  - ${JSON.stringify(tag)}\n`).join('')}kg:\n  id: ${JSON.stringify(id)}\n  type: document\n  status: active\n  audience: private\n${targets.length ? `  relations:\n    related:\n${[...new Set(targets)].sort().map((t) => `      - ${JSON.stringify(t)}\n`).join('')}` : ''}---\n\n${body}\n`
+  return `---\ntitle: ${scalar(title)}\ntags:\n${privateTags.map((tag) => `  - ${scalar(tag)}\n`).join('')}kg:\n  id: ${JSON.stringify(id)}\n  type: document\n  status: active\n  audience: private\n${targets.length ? `  relations:\n    related:\n${[...new Set(targets)].sort().map((t) => `      - ${JSON.stringify(t)}\n`).join('')}` : ''}---\n\n${body}\n`
 }
 export function planPersonalGeneration(resolved) {
   if (!resolvedInputs.has(resolved) || resolved.status !== 'resolved') refuse('malformed-input')
@@ -181,15 +184,23 @@ export function planPersonalGeneration(resolved) {
     'shared/atelier.project.json': canonical({ schema: 'mnstry.atelier-project-config@v1', roots: { workspace: '..' },
       repos: enrolled.map((r) => ({ name: r.repoId, path: path.relative(path.join(final, 'shared'), r.root), readBoundary: 'private' })) }),
   }
-  for (const a of overlay.annotations) files[`overlay/annotations/${a.id}.md`] = markdown(`${overlayRepoId}:annotation-${a.id}`, a.displayAlias || a.id, a.note, [a.target.nodeId], a.tags)
-  for (const a of overlay.connections) files[`overlay/connections/${a.id}.md`] = markdown(`${overlayRepoId}:connection-${a.id}`, a.label, a.label, [a.from.nodeId, a.to.nodeId])
-  for (const a of overlay.collections) files[`overlay/collections/${a.id}.md`] = markdown(`${overlayRepoId}:collection-${a.id}`, a.name, a.name, a.members.map((r) => r.nodeId))
-  for (const a of overlay.views) files[`overlay/views/${a.id}.md`] = markdown(`${overlayRepoId}:view-${a.id}`, a.name, `Saved repository selection: ${JSON.stringify(a.repoIds)}`)
+  const overlayNodes = []
+  function addOverlay(rel, id, title, body, targets = [], tags = []) {
+    files[`overlay/${rel}`] = markdown(id, title, body, targets, tags)
+    const related = [...new Set(targets)].sort()
+    overlayNodes.push({ path: rel, id, title, classification: 'classified', markdownHasKgId: true,
+      kgType: 'document', status: 'active', audience: 'private', tags: tags.length ? tags : ['personal-interpretation'],
+      relations: related.length ? { related } : {} })
+  }
+  for (const a of overlay.annotations) addOverlay(`annotations/${a.id}.md`, `${overlayRepoId}:annotation-${a.id}`, a.displayAlias || a.id, a.note, [a.target.nodeId], a.tags)
+  for (const a of overlay.connections) addOverlay(`connections/${a.id}.md`, `${overlayRepoId}:connection-${a.id}`, a.label, a.label, [a.from.nodeId, a.to.nodeId])
+  for (const a of overlay.collections) addOverlay(`collections/${a.id}.md`, `${overlayRepoId}:collection-${a.id}`, a.name, a.name, a.members.map((r) => r.nodeId))
+  for (const a of overlay.views) addOverlay(`views/${a.id}.md`, `${overlayRepoId}:view-${a.id}`, a.name, `Saved repository selection: ${JSON.stringify(a.repoIds)}`)
   // A private graph anchor makes an empty overlay a real, observable canonical input.
-  files['overlay/workspace.md'] = markdown(`${overlayRepoId}:workspace`, manifest.workspaceId, 'Private workspace interpretation. Enrollment grants no authority.')
+  addOverlay('workspace.md', `${overlayRepoId}:workspace`, manifest.workspaceId, 'Private workspace interpretation. Enrollment grants no authority.')
   const generation = { schema: GENERATION_SCHEMA, generationId, inputsDigest, personalHome, manifestSchema: MANIFEST_SCHEMA, overlaySchema: OVERLAY_SCHEMA,
     files: Object.keys(files).sort().map((p) => ({ path: p, sha256: hash(files[p]) })) }
-  const plan = freeze({ personalHome, generationId, generation, files })
+  const plan = freeze({ personalHome, generationId, generation, files, overlayNodes })
   plans.add(plan)
   return plan
 }
@@ -298,6 +309,27 @@ export function composePersonalWorkspace({ personalHome, generationId } = {}) {
   })
 }
 
+// Asset evidence must not allocate the entire source file, including large binaries.
+function sourceHash(file) {
+  return safe(() => {
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+    try {
+      const before = fs.fstatSync(fd)
+      if (!before.isFile() || fs.realpathSync(file) !== file) refuse('source-read-failed')
+      const digest = createHash('sha256'), chunk = Buffer.alloc(64 * 1024)
+      let position = 0
+      while (position < before.size) {
+        const count = fs.readSync(fd, chunk, 0, Math.min(chunk.length, before.size - position), position)
+        if (!count) refuse('source-read-failed')
+        digest.update(chunk.subarray(0, count)); position += count
+      }
+      const after = fs.fstatSync(fd)
+      if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) refuse('source-read-failed')
+      return digest.digest('hex')
+    } finally { fs.closeSync(fd) }
+  }, 'source-read-failed')
+}
+
 function composeAt(plan, final) {
   const { personalHome } = plan
     // Distinguish ambient project overrides from other unmanifested generation bytes.
@@ -336,12 +368,22 @@ function composeAt(plan, final) {
     for (const rel of Object.keys(plan.files).filter((p) => p.startsWith('overlay/'))) {
       if (!graph.nodes.some((n) => n.repo === input.overlayRepoId && n.path === rel.slice('overlay/'.length))) refuse('overlay-census-mismatch')
     }
+    // Parser acceptance alone is insufficient: generated interpretations must
+    // retain every planned identity, classification, tag, and declared relation.
+    for (const expected of plan.overlayNodes) {
+      const node = graph.nodes.find((n) => n.repo === input.overlayRepoId && n.path === expected.path)
+      const semantics = node && Object.fromEntries(Object.keys(expected).map((key) => [key, node[key]]))
+      if (canonical(expected) !== canonical(semantics)) refuse('overlay-semantics-mismatch')
+      const expectedEdges = (expected.relations.related || []).map((target) => ({ source: expected.id, target, type: 'related', declared: true, origin: 'declared' }))
+      const actualEdges = graph.edges.filter((e) => e.source === expected.id).map(({ source, target, type, declared, origin }) => ({ source, target, type, declared, origin })).sort((a, b) => a.target < b.target ? -1 : a.target > b.target ? 1 : 0)
+      if (canonical(expectedEdges) !== canonical(actualEdges)) refuse('overlay-semantics-mismatch')
+    }
     const expectedOverlay = Object.keys(plan.files).filter((p) => p.startsWith('overlay/')).map((p) => p.slice(8)).sort()
     const actualOverlay = graph.nodes.filter((n) => n.repo === input.overlayRepoId).map((n) => n.path).sort()
     if (canonical(expectedOverlay) !== canonical(actualOverlay)) refuse('overlay-census-mismatch')
     // Report current source evidence, never claim that an immutable private generation freezes live source bytes.
     const sourceRevisions = input.enrolled.map((repo) => ({ repoId: repo.repoId, remote: repo.remote,
-      observedCensusDigest: hash(canonical(graph.nodes.filter((n) => n.repo === repo.repoId).map((n) => ({ id: n.id, path: n.path, sha256: hash(fs.readFileSync(path.join(repo.root, n.path))) })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)))) }))
+      observedCensusDigest: hash(canonical(graph.nodes.filter((n) => n.repo === repo.repoId).map((n) => ({ id: n.id, path: n.path, sha256: sourceHash(path.join(repo.root, n.path)) })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)))) }))
     if (currentPlan(personalHome).generationId !== plan.generationId) refuse('stale-generation')
     verifyFiles(plan, final)
   return { graph, sourceRevisions, input }
