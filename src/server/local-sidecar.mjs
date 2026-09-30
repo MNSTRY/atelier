@@ -34,6 +34,9 @@ import {
 import { createReviewStore } from '../collaboration/review-store.mjs'
 import { loadBoundRun, currentRunEligibility } from '../readiness-protocols/evidence.mjs'
 import { renderReviewPage } from '../ui/review-page.mjs'
+import { renderKnowledgePage } from '../ui/knowledge-page.mjs'
+import { knowledgeDashboard, knowledgeQuestionContext, loadKnowledgeWorkspace } from '../knowledge/workspace.mjs'
+import { createKnowledgeSessions } from '../knowledge/sessions.mjs'
 
 export const ATELIER_CONTEXT_SCHEMA = 'atelier-context@v1'
 export const ATELIER_PRESENCE_SCHEMA = 'atelier-presence@v1'
@@ -216,6 +219,28 @@ function listenFailure(error, port) {
   return error
 }
 
+function knowledgeError(error) {
+  const message = error instanceof Error ? error.message : ''
+  if (message === 'coauthor requires a Git workspace with untracked, ignored .atelier-local/ state')
+    return 'coauthor requires a Git workspace with untracked, ignored local state. Initialize Git and ignore the .atelier-local directory.'
+  if (/^collaboration (ledger|event).*ceiling/.test(message))
+    return 'knowledge history capacity reached. Preserve the ledger and saved values for operator inspection; do not compact active session chains.'
+  if (message.startsWith('EEXIST: private state is locked'))
+    return 'knowledge writer is busy. Preserve the request and retry after the active writer finishes.'
+  const safe = [
+    'workspace changed', 'stale revision', 'event id conflict', 'source changed',
+    'coauthor session not found', 'coauthor requires', 'unknown knowledge',
+    'invalid knowledge', 'request UUID', 'retry budget exhausted',
+    'receipt and failure events are store-owned', 'event refused in',
+    'coauthor plan must', 'knowledge session configuration mismatch',
+    'knowledge session identity mismatch', 'knowledge session exceeds',
+    'knowledge session list exceeds',
+    'knowledge history unavailable', 'knowledge start marker mismatch',
+  ]
+  return safe.some(prefix => message.startsWith(prefix)) && !message.includes('/')
+    ? message : 'Knowledge operation unavailable. Preserve your draft and inspect the local workspace or active writer.'
+}
+
 function doctorEnvelope() {
   return {
     ok: true,
@@ -231,6 +256,7 @@ export function createAtelierSidecarServer({
   workspaceRoot = process.cwd(),
   stateDir = workspaceRoot,
   reviewProject = null,
+  knowledgeProject = null,
   port = 0,
   presenceTtlMs = Number(process.env.ATELIER_PRESENCE_TTL_MS || 5 * 60 * 1000),
 } = {}) {
@@ -243,6 +269,7 @@ export function createAtelierSidecarServer({
   })
   const publication = loadPublishedWorkspaceManifest(root)
   const review = reviewProject ? createReviewStore(reviewProject) : null
+  const knowledge = knowledgeProject ? createKnowledgeSessions(knowledgeProject) : null
   const workspaceId = workspaceIdForRoot(root)
   const noncePath = path.join(stateDirReal, '.atelier-nonce')
   const presencePath = path.join(stateDirReal, '.atelier-presence.json')
@@ -395,8 +422,8 @@ export function createAtelierSidecarServer({
     // Browsers send Origin on POST; same-origin GET normally omits it. Keep
     // the strict origin gate for nonce disclosure instead of relaxing the
     // existing session-auth GET contract or accepting unclassified reads.
-    if (review && url.pathname === '/api/review/session') {
-      if (!trustedMutationRequest(req.headers) || !body || Array.isArray(body) || Object.keys(body).length) {
+    if ((review && url.pathname === '/api/review/session') || (knowledge && url.pathname === '/api/knowledge/session')) {
+      if (!trustedMutationRequest(req.headers) || !body || Array.isArray(body) || Object.keys(body).length || (url.pathname === '/api/knowledge/session' && url.search)) {
         json(res, 403, { ok: false, error: 'review session requires a same-origin empty request' })
         return
       }
@@ -408,6 +435,16 @@ export function createAtelierSidecarServer({
     const auth = requireMutationAuth(req, body, mutationNonce)
     if (!auth.ok) {
       json(res, auth.status, { ok: false, error: auth.error })
+      return
+    }
+
+    if (knowledge && url.pathname.startsWith('/api/knowledge/')) {
+      const operation = url.pathname.slice('/api/knowledge/'.length)
+      if (!['start', 'event', 'recover'].includes(operation) || url.search) {
+        json(res, 404, { ok: false, error: 'unknown knowledge action' }); return
+      }
+      try { json(res, 200, knowledge[operation](body)) }
+      catch (error) { json(res, 409, { ok: false, error: knowledgeError(error) }) }
       return
     }
 
@@ -525,6 +562,28 @@ export function createAtelierSidecarServer({
 
     if (req.method === 'POST') {
       await handlePost(req, res, url)
+      return
+    }
+
+    if (knowledge && url.pathname === '/knowledge' && !url.search) {
+      const body = renderKnowledgePage()
+      res.writeHead(200, htmlDocumentHeaders(Buffer.byteLength(body)))
+      res.end(body)
+      return
+    }
+    if (knowledge && url.pathname.startsWith('/api/knowledge/')) {
+      try {
+        let result
+        const operation = url.pathname.slice('/api/knowledge/'.length)
+        const parameters = operation === 'context' ? ['id', 'mode'] : operation === 'read' ? ['id'] : []
+        if ([...url.searchParams.keys()].some(k => !parameters.includes(k)) || [...url.searchParams.keys()].length !== new Set(url.searchParams.keys()).size) throw new Error('invalid knowledge query')
+        if (operation === 'dashboard') result = { dashboard: knowledgeDashboard(loadKnowledgeWorkspace(knowledgeProject)) }
+        else if (operation === 'context') result = { context: knowledgeQuestionContext(loadKnowledgeWorkspace(knowledgeProject), url.searchParams.get('id'), url.searchParams.get('mode') || 'graph') }
+        else if (operation === 'sessions') result = knowledge.list()
+        else if (operation === 'read') result = knowledge.read(url.searchParams.get('id'))
+        else { json(res, 404, { ok: false, error: 'unknown knowledge action' }); return }
+        json(res, 200, { ok: true, ...result })
+      } catch (error) { json(res, 409, { ok: false, error: knowledgeError(error) }) }
       return
     }
 
