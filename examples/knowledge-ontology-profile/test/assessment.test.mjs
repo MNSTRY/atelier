@@ -29,7 +29,7 @@ test('a structurally valid fixture retains unknown meaning, economics, and permi
   for (const code of ['SEMANTIC_QUALITY', 'TASK_COST', 'HOST_PERMISSIONS'])
     assert.equal(r.findings.find(f => f.code === `LOCAL.${code}`).status, 'unknown');
   assert.match(r.summary.meaning, /No overall/);
-  assert.equal(r.actualAssessmentProviderCalls, 0);
+  assert.equal(r.declaredDirectAssessmentProviderCalls, 0);
   for (const f of r.findings) for (const ref of f.evidenceRefs) {
     if (ref.startsWith('capture.json#')) {
       const value = ref.split('#')[1].slice(1).split('/').reduce((v, k) => v?.[k.replaceAll('~1', '/').replaceAll('~0', '~')], capture);
@@ -45,6 +45,15 @@ test('changed evidence pins fail even when the expected source IDs are present',
   assert.equal(r.findings.find(f => f.code === 'LOCAL.EVIDENCE.loan').status, 'fail');
   assert.equal(r.retrieval[0].checksPass, false);
   assert.match(r.findings.find(f => f.code === 'LOCAL.EVIDENCE.loan').nextAction.label, /before revising/);
+});
+
+test('reported provider calls stay distinct from the example declaration and unknown usage', () => {
+  const c = clone(capture); c.dashboard.providerCalls = 3;
+  let r = assessCapture(c);
+  assert.equal(r.declaredDirectAssessmentProviderCalls, 0);
+  assert.equal(r.reportedDashboardProviderCalls, 3);
+  delete c.dashboard.providerCalls; r = assessCapture(c);
+  assert.equal(r.reportedDashboardProviderCalls, null);
 });
 
 test('a directed relation gap fails a question even with its source documents selected', () => {
@@ -71,6 +80,42 @@ test('missing evaluation, uninspected sessions, and empty draft saves are never 
   assert.equal(r.findings.find(f => f.code === 'LOCAL.SESSION_COVERAGE').status, 'unknown');
   assert(r.findings.some(f => f.code.startsWith('LOCAL.DRAFT.') && f.status === 'unknown'));
   assert.throws(() => assessCapture({ ...c, dashboard: {} }), /Invalid or unsupported/);
+});
+
+test('evaluation gaps and duplicates use planned denominators and changed expectations fail', () => {
+  for (const change of [
+    c => c.dashboard.evaluation.cases.pop(),
+    c => c.dashboard.evaluation.cases.push(clone(c.dashboard.evaluation.cases[0])),
+    c => { c.dashboard.evaluation.cases[0].id = 'unplanned-question'; },
+  ]) {
+    const c = clone(capture); change(c);
+    const r = assessCapture(c);
+    assert.equal(r.findings.find(f => f.code === 'LOCAL.EVALUATION_COVERAGE').status, 'unknown');
+    assert.equal(r.evaluation.plannedQuestions, c.dashboard.questions.length);
+    assert.equal(new Set(r.findings.map(f => f.code)).size, r.findings.length);
+    assert(renderAssessment(r).includes(`/${c.dashboard.questions.length}</span><span class="label">Planned graph retrieval checks`));
+  }
+  const c = clone(capture); c.dashboard.evaluation.cases[0].expect = 'abstain';
+  const r = assessCapture(c);
+  assert.equal(r.findings.find(f => f.code === 'LOCAL.EVALUATION_EXPECTATION').status, 'fail');
+  assert.equal(r.retrieval.some(item => item.id === c.dashboard.evaluation.cases[0].id), false);
+});
+
+test('a contradictory complete flag cannot hide an unread session', () => {
+  const c = clone(capture); c.sessions.listed = c.sessions.items.length + 1; c.sessions.complete = true;
+  assert.equal(assessCapture(c).findings.find(f => f.code === 'LOCAL.SESSION_COVERAGE').status, 'unknown');
+});
+
+test('receipt projection drops saved wording and unknown fields', () => {
+  const text = 'Invented private wording absent from the assessment.';
+  const read = { ok: true, record: { flow: 'apply' }, current: true,
+    state: { id: 'kg-example', revision: 1, phase: 'saved', pending: null, fields: [{}], saved: [{ fieldId: 'answer', text,
+      receipt: { sessionId: 'kg-example', fieldId: 'answer', valueDigest: digest(text), text, preview: text, nested: { text } } }] },
+    savedMeaning: 'private-draft-only', sourceEditsApplied: false };
+  const s = summarizeSession(read);
+  assert.equal(s.receiptMatches, true);
+  assert.deepEqual(Object.keys(s.receipts[0]).sort(), ['fieldId', 'readbackValueSha256', 'sessionId', 'valueDigest']);
+  assert.equal(JSON.stringify(s).includes(text), false);
 });
 
 test('receipt mismatches and unresolved saves do not imply successful authoring', () => {

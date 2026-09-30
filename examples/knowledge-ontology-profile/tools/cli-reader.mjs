@@ -5,9 +5,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { summarizeSession } from './assessment-core.mjs';
+import { localCliEnvironment } from './local-process.mjs';
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const sessionId = value => typeof value === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(value);
 export function createCliReader({ entry, binding }) {
   const repository = binding?.schema === 'atelier-profile-repository-binding/local-v1';
   const installed = binding?.schema === 'atelier-profile-install-binding/local-v1';
@@ -24,16 +26,18 @@ export function createCliReader({ entry, binding }) {
       throw new Error(`CLI file differs from receiving binding: ${rel}`);
   }
   function read(workspace, words, input) {
+    if (!Array.isArray(words)) throw new Error('Only the declared read operations are supported.');
     const key = JSON.stringify(words);
     const fixed = ['check', 'dashboard', 'evaluate'].some(op => key === JSON.stringify(['knowledge', op]));
     const list = key === JSON.stringify(['knowledge', 'session', 'list']);
     const session = key === JSON.stringify(['knowledge', 'session', 'read']);
     const context = words.length === 6 && words[0] === 'knowledge' && words[1] === 'context' && words[2] === '--question' &&
-      typeof words[3] === 'string' && words[3].length > 0 && words[3].length <= 2000 && words[4] === '--mode' && ['graph', 'lexical'].includes(words[5]);
+      typeof words[3] === 'string' && words[3].length > 0 && words[3].length <= 2000 && !words[3].startsWith('-') &&
+      words[4] === '--mode' && ['graph', 'lexical'].includes(words[5]);
     if (!(fixed || list || session || context) || (!session && input !== undefined) ||
-        (session && (!input || Object.keys(input).length !== 1 || !/^[A-Za-z0-9._-]{1,128}$/.test(input.sessionId ?? ''))))
+        (session && (!input || Array.isArray(input) || Object.keys(input).length !== 1 || !sessionId(input.sessionId))))
       throw new Error('Only the declared read operations and bounded session identity are supported.');
-    const result = spawnSync(process.execPath, [entry, ...words], { cwd: workspace, input: input === undefined ? undefined : JSON.stringify(input),
+    const result = spawnSync(process.execPath, [entry, ...words], { cwd: workspace, env: localCliEnvironment(), input: input === undefined ? undefined : JSON.stringify(input),
       encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Atelier read unavailable: ${(result.stderr || result.stdout).trim().slice(0, 1000)}`);
@@ -41,19 +45,31 @@ export function createCliReader({ entry, binding }) {
   }
   function collect(workspace) {
     const dashboard = read(workspace, ['knowledge', 'dashboard']);
-    const sessions = { listed: 0, descriptorCount: 0, complete: false, items: [], error: null, truncated: null };
+    const sessions = { listed: 0, reportedTotal: null, descriptorCount: 0, complete: false, items: [], error: null, truncated: null };
     try {
       const list = read(workspace, ['knowledge', 'session', 'list']);
       if (list?.ok !== true || !Array.isArray(list.sessions)) throw new Error('Invalid session list.');
       sessions.descriptorCount = list.sessions.length;
-      sessions.listed = Number.isSafeInteger(list.total) && list.total >= list.sessions.length ? list.total : list.sessions.length;
+      sessions.reportedTotal = Number.isSafeInteger(list.total) && list.total >= 0 ? list.total : null;
+      sessions.listed = Math.max(sessions.reportedTotal ?? 0, list.sessions.length);
       sessions.truncated = typeof list.truncated === 'boolean' ? list.truncated : null;
+      const ids = list.sessions.map(s => s?.id);
+      const identitiesValid = ids.every(sessionId) && new Set(ids).size === ids.length;
+      if (!identitiesValid || sessions.reportedTotal === null || sessions.reportedTotal < list.sessions.length ||
+          (sessions.truncated === false && sessions.reportedTotal !== list.sessions.length))
+        sessions.error = 'Session list totals or identities are inconsistent; coverage remains incomplete.';
+      const seen = new Set();
       for (const s of list.sessions.slice(0, 20)) {
-        try { sessions.items.push(summarizeSession(read(workspace, ['knowledge', 'session', 'read'], { sessionId: s.id }))); }
-        catch { sessions.error = 'An exact session was unavailable; inspect through its owner.'; }
+        if (!sessionId(s?.id) || seen.has(s.id)) continue;
+        seen.add(s.id);
+        try {
+          const value = read(workspace, ['knowledge', 'session', 'read'], { sessionId: s.id });
+          if (value?.state?.id !== s.id) throw new Error('Session readback identity differs.');
+          sessions.items.push(summarizeSession(value));
+        } catch { sessions.error = 'An exact session identity or readback was unavailable; inspect through its owner.'; }
       }
-      sessions.complete = sessions.truncated === false && Number.isSafeInteger(list.total) &&
-        list.total === sessions.items.length && !sessions.error;
+      sessions.complete = sessions.truncated === false && identitiesValid && sessions.reportedTotal === list.sessions.length &&
+        sessions.reportedTotal === sessions.items.length && !sessions.error;
       if (sessions.truncated === null) sessions.error = 'This package does not declare list truncation; coverage remains unknown.';
     } catch { sessions.error = 'Session history could not be inspected; it is not an empty success.'; }
     const final = read(workspace, ['knowledge', 'dashboard']);

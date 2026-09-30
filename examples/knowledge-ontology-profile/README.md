@@ -37,7 +37,7 @@ through its normal workflow. The flat root driver makes these cases part of
 node --test test/knowledge-ontology-profile-example.test.mjs
 ```
 
-It includes the 22 case and assessment checks plus a generated-consumer check.
+It includes the case and assessment checks plus a generated-consumer check.
 That consumer uses the actual CLI to initialize the starter, retrieve ordinary
 and missing evidence, save and reread an explicitly invented private draft,
 and assess it without changing source or session bytes. Tests cover polarity,
@@ -60,6 +60,13 @@ source dependency. Ask "Who signed the lunar station maintenance order?" to
 observe a bounded `needs-evidence` result. These are newly authored questions
 against known invented sources, not held-out semantic evaluation or proof of
 global absence.
+
+Shared sessions require a Git workspace with untracked, ignored `.atelier-local/`
+state. Initialize Git in the generated temporary workspace before using sessions.
+The root consumer checks all workspace bytes, including `.git` and the private
+session store, and compares exact session list/readback before and after assessment.
+Child processes drop inherited `GIT_` overrides so an enclosing Git hook cannot
+redirect the fixture or selected workspace to its parent repository.
 
 ## Compare extracted observations
 
@@ -87,8 +94,8 @@ The binding contains `sourceCommit`, `sourceTree`, `tarballSha256`, and `files`
 `atelier-profile-install-binding/local-v1` with a verified archive digest for
 an installed package, or `atelier-profile-repository-binding/local-v1` with
 `tarballSha256: null` for a repository CLI. The root test driver constructs the
-latter from its selected repository and verifies the CLI closure before and
-after reads. Declared hashes do not authenticate the receiving author, prove
+latter from its selected repository and verifies that the declared tracked CLI
+files are unchanged across the reads. Declared hashes do not authenticate the receiving author, prove
 that mutable files equal a commit, verify dependencies, or grant host permission.
 Keep bindings and operational captures outside this source example.
 
@@ -106,8 +113,12 @@ check failed. Exit 0 gives no overall semantic, economic, host, or human pass.
 The reader permits only check, dashboard, context, evaluate, and session
 list/read operations. It imports no unpublished core modules and creates no
 engine or session store. It reads at most 20 exact sessions, retains total and
-truncation data, and keeps omitted or unavailable history incomplete. Saved
-wording is omitted from captures while receipt digests remain. Dashboard output
+truncation data, and keeps omitted or unavailable history incomplete. Planned
+questions remain in the evaluation denominator when a case is missing, duplicated,
+or unplanned; changed expectations fail assessment. Saved draft value fields and
+unknown receipt fields are omitted; allowlisted identifiers and value digests
+remain. Dashboard source excerpts, planned questions, and asserted authors may
+contain other workspace wording. Dashboard output
 is experimental; validate its shape and retain the exact selected candidate.
 
 Use Atelier's existing shared sessions to coauthor, propose, confirm or reject,
@@ -115,3 +126,9 @@ and save a private draft. Source-owner review and canonical application remain
 separate. This kit grants no consent, disclosure, admission, merge, or execution
 authority. Meaning quality, full cost, host permission, and actual acceptance
 remain unknown until separately observed.
+
+Measurement method names are reported labels. `structured-extractor-plus-jev`
+identifies an optional adjunct to structured extraction; this example contains
+no Jev implementation, dispatch, or qualification. Declared direct provider calls
+describe the example code. Dashboard provider counts come from the selected CLI
+and remain unknown when absent; neither count establishes complete task usage.

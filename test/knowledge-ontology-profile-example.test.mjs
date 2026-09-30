@@ -13,31 +13,32 @@ import { createFixtureWorkspace } from '../examples/knowledge-ontology-profile/t
 import { createCliReader } from '../examples/knowledge-ontology-profile/tools/cli-reader.mjs';
 import { assessCapture } from '../examples/knowledge-ontology-profile/tools/assessment-core.mjs';
 import { summarizeMeasurements } from '../examples/knowledge-ontology-profile/tools/measurements.mjs';
+import { localCliEnvironment } from '../examples/knowledge-ontology-profile/tools/local-process.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const entry = path.join(root, 'bin/atelier.mjs');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function cli(workspace, words, input) {
-  const run = spawnSync(process.execPath, [entry, ...words], { cwd: workspace,
+  const run = spawnSync(process.execPath, [entry, ...words], { cwd: workspace, env: localCliEnvironment(),
     input: input === undefined ? undefined : JSON.stringify(input), encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
   assert.equal(run.error, undefined);
   assert.equal(run.status, 0, run.stderr);
   return JSON.parse(run.stdout);
 }
-function fileDigests(workspace) {
+function fileDigests(workspace, { includeGit = true } = {}) {
   const files = {};
   function visit(rel) {
     const file = path.join(workspace, rel), stat = fs.lstatSync(file);
     if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) visit(path.join(rel, name));
     else { assert.equal(stat.isFile(), true); files[rel] = digest(fs.readFileSync(file)); }
   }
-  for (const name of fs.readdirSync(workspace).sort()) if (name !== '.git') visit(name);
+  for (const name of fs.readdirSync(workspace).sort()) if (includeGit || name !== '.git') visit(name);
   return files;
 }
 function repositoryBinding() {
-  const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const git = args => execFileSync('git', args, { cwd: root, env: localCliEnvironment(), encoding: 'utf8' }).trim();
   const paths = execFileSync('git', ['ls-files', '-z', '--', 'bin', 'src', 'package.json', 'contracts', 'templates'],
-    { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+    { cwd: root, env: localCliEnvironment(), encoding: 'utf8' }).split('\0').filter(Boolean);
   return { schema: 'atelier-profile-repository-binding/local-v1', sourceCommit: git(['rev-parse', 'HEAD']),
     sourceTree: git(['rev-parse', 'HEAD^{tree}']), tarballSha256: null,
     files: Object.fromEntries(paths.map(rel => [rel, digest(fs.readFileSync(path.join(root, rel)))])) };
@@ -47,15 +48,16 @@ test('the generated canonical consumer preserves evidence, draft readback, and r
   const fixture = createFixtureWorkspace(entry);
   t.after(fixture.cleanup);
   const workspace = fixture.workspace;
-  const initialized = spawnSync('git', ['init', '--quiet'], { cwd: workspace, encoding: 'utf8' });
+  const initialized = spawnSync('git', ['init', '--quiet'], { cwd: workspace, env: localCliEnvironment(), encoding: 'utf8' });
   assert.equal(initialized.status, 0, initialized.stderr);
-  const canonicalBefore = fileDigests(workspace);
+  const canonicalBefore = fileDigests(workspace, { includeGit: false });
   const dashboard = cli(workspace, ['knowledge', 'dashboard']);
   let session = cli(workspace, ['knowledge', 'session', 'start'], { requestId: randomUUID(), flow: 'apply',
     questionId: 'loan', snapshot: dashboard.snapshot, author: 'Invented example test; no human acceptance' });
   const id = session.record.id;
-  for (const [type, extra] of [['answer', { text: 'The inspection has not passed. Obtain the cap and record a new check.' }],
-    ['propose', { text: 'This telescope has not passed its inspection. Obtain the cap and record a new inspection before deciding on a loan.' }],
+  const answer = 'The inspection has not passed. Obtain the cap and record a new check.';
+  const proposal = 'This telescope has not passed its inspection. Obtain the cap and record a new inspection before deciding on a loan.';
+  for (const [type, extra] of [['answer', { text: answer }], ['propose', { text: proposal }],
     ['confirm', {}], ['save', {}]]) {
     session = cli(workspace, ['knowledge', 'session', 'event'], { sessionId: id,
       event: { id: randomUUID(), expectedRevision: session.state.revision, type, ...extra } });
@@ -65,6 +67,9 @@ test('the generated canonical consumer preserves evidence, draft readback, and r
   for (const [file, sha] of Object.entries(canonicalBefore)) assert.equal(beforeAssessment[file], sha, file);
   const binding = repositoryBinding();
   const reader = createCliReader({ entry, binding });
+  const sessionListBefore = reader.read(workspace, ['knowledge', 'session', 'list']);
+  const sessionBefore = reader.read(workspace, ['knowledge', 'session', 'read'], { sessionId: id });
+  assert.deepEqual(fileDigests(workspace), beforeAssessment);
   const capture = reader.collect(workspace);
   const report = assessCapture(capture, summarizeMeasurements([]));
   assert.equal(report.summary.fail, 0);
@@ -81,12 +86,16 @@ test('the generated canonical consumer preserves evidence, draft readback, and r
   fs.writeFileSync(bindingPath, JSON.stringify(binding));
   const assessed = spawnSync(process.execPath, [path.join(root, 'examples/knowledge-ontology-profile/tools/assess.mjs'),
     '--atelier-entry', entry, '--binding', bindingPath, '--workspace', workspace],
-    { cwd: workspace, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+    { cwd: workspace, env: localCliEnvironment(), encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
   assert.equal(assessed.status, 0, assessed.stderr);
   const toolOutput = JSON.parse(assessed.stdout);
   assert.equal(toolOutput.report.summary.fail, 0);
   assert.equal(toolOutput.capture.packageBinding.kind, 'repository');
   assert.equal(toolOutput.capture.sessions.items[0].receiptMatches, true);
+  for (const wording of [answer, proposal]) {
+    assert.equal(assessed.stdout.includes(wording), false);
+    assert.equal(JSON.stringify(capture).includes(wording), false);
+  }
   const profile = JSON.parse(fs.readFileSync(path.join(root, 'examples/knowledge-ontology-profile/profiles/equipment-loans-reference/profile.json')));
   const pins = JSON.parse(fs.readFileSync(path.join(root, 'examples/knowledge-ontology-profile/profiles/equipment-loans-reference/sources.json'))).sourceDigests;
   const ordinary = reader.read(workspace, ['knowledge', 'context', '--question', profile.questions[0].question, '--mode', 'graph']);
@@ -103,7 +112,11 @@ test('the generated canonical consumer preserves evidence, draft readback, and r
   assert.deepEqual(missing.sources, []);
   assert.deepEqual(missing.relations, []);
   assert.equal(missing.budget.providerCalls, 0);
+  assert.deepEqual(reader.read(workspace, ['knowledge', 'session', 'list']), sessionListBefore);
+  assert.deepEqual(reader.read(workspace, ['knowledge', 'session', 'read'], { sessionId: id }), sessionBefore);
+  assert(Object.keys(beforeAssessment).some(file => file.startsWith(`.atelier-local${path.sep}`)));
+  assert(Object.keys(beforeAssessment).some(file => file.startsWith(`.git${path.sep}`)));
   assert.deepEqual(fileDigests(workspace), beforeAssessment);
-  createCliReader({ entry, binding }); // Reverify the selected CLI closure after reads.
+  createCliReader({ entry, binding }); // Declared tracked CLI files remain unchanged after reads.
   assert.equal(fs.existsSync(path.join(root, 'examples/knowledge-ontology-profile/workspace')), false);
 });

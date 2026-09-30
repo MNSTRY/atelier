@@ -5,20 +5,24 @@ import { createHash } from 'node:crypto';
 export const digest = value => createHash('sha256').update(value).digest('hex');
 const array = value => Array.isArray(value);
 const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-const count = value => Number.isInteger(value) && value >= 0;
+const count = value => Number.isSafeInteger(value) && value >= 0;
+const identifier = value => typeof value === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(value);
 const retrievalPassed = (c, run) => run.expectedEvidencePresent && !run.missing.length && !run.stale.length && !run.missingRelations.length &&
   (c.expect === 'abstain' ? run.sourceIds.length === 0 : run.sourceIds.length > 0);
 
 export function summarizeSession(read) {
   if (read?.ok !== true || !read.record || !read.state || !array(read.state.saved) || !array(read.state.fields) ||
-      typeof read.current !== 'boolean' || !count(read.state.revision)) throw new Error('Invalid session readback.');
+      typeof read.current !== 'boolean' || !identifier(read.state.id) || !count(read.state.revision)) throw new Error('Invalid session readback.');
   const { record, state } = read;
-  const receiptMatches = state.saved.every(s => s.receipt?.sessionId === state.id &&
+  const receiptMatches = state.saved.every(s => s && s.receipt?.sessionId === state.id && identifier(s.fieldId) &&
     s.receipt?.fieldId === s.fieldId && typeof s.text === 'string' && s.receipt?.valueDigest === digest(s.text));
   return { id: state.id, flow: record.flow, question: record.question?.question ?? '', author: record.author,
     revision: state.revision, phase: state.phase, current: read.current,
     savedFields: state.saved.length, totalFields: state.fields.length,
-    receipts: state.saved.map(s => ({ ...s.receipt, readbackValueSha256: typeof s.text === 'string' ? digest(s.text) : null })),
+    receipts: state.saved.map(s => ({ sessionId: identifier(s?.receipt?.sessionId) ? s.receipt.sessionId : null,
+      fieldId: identifier(s?.receipt?.fieldId) ? s.receipt.fieldId : null,
+      valueDigest: sha(s?.receipt?.valueDigest) ? s.receipt.valueDigest : null,
+      readbackValueSha256: typeof s?.text === 'string' ? digest(s.text) : null })),
     receiptMatches, receiptCheckScope: 'Value digest and session/field association in a fresh CLI read; not authenticated acceptance.',
     pending: state.pending !== null, savedMeaning: read.savedMeaning, sourceEditsApplied: read.sourceEditsApplied };
 }
@@ -44,7 +48,7 @@ export function assessCapture(capture, metrics = null) {
     capture.consistent ? d.snapshot : `Initial snapshot ${d.snapshot}; final snapshot ${capture.finalSnapshot}.`,
     capture.consistent ? 'apply' : 'deepen', capture.consistent ? 'Use the observed snapshot; rerun when sources change.' : 'Rerun the assessment on current sources; preserve this historical report.', [ref('/snapshot')]);
   const brief = [d.purpose, d.steward, d.reviewer].every(v => typeof v === 'string' && v.trim());
-  add('PURPOSE', brief && d.questions.length > 0 ? 'pass' : 'fail', 'setup', 'Purpose, accountable roles, and useful questions are recorded',
+  add('PURPOSE', brief && d.questions.length > 0 ? 'pass' : 'fail', 'setup', 'Purpose, asserted roles, and planned questions are present',
     `${d.questions.length} planned questions. Role names are local assertions.`, 'onboard',
     'Choose a consequential question, its source owner, and its reviewer.', [ref('/purpose'), ref('/questions')]);
   add('STRUCTURE', inspection.ok ? 'pass' : 'fail', 'model', 'Model structure is valid',
@@ -63,7 +67,25 @@ export function assessCapture(capture, metrics = null) {
 
   const cases = d.evaluation?.cases ?? [];
   if (d.evaluation && !array(d.evaluation.cases)) throw new Error('Invalid evaluation cases.');
-  const retrieval = cases.map((c, index) => {
+  if (d.questions.some(q => !identifier(q?.id) || !['evidence', 'abstain'].includes(q.expect)) ||
+      cases.some(c => !identifier(c?.id))) throw new Error('Invalid planned or evaluated question identity.');
+  const plannedIds = d.questions.map(q => q.id), evaluatedIds = cases.map(c => c.id);
+  const duplicates = ids => [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+  const missingIds = [...new Set(plannedIds.filter(id => !evaluatedIds.includes(id)))];
+  const unplannedIds = [...new Set(evaluatedIds.filter(id => !plannedIds.includes(id)))];
+  const duplicatePlannedIds = duplicates(plannedIds), duplicateCaseIds = duplicates(evaluatedIds);
+  const expectationMismatches = cases.filter(c => d.questions.some(q => q.id === c.id && q.expect !== c.expect)).map(c => c.id);
+  const evaluation = { plannedQuestions: d.questions.length, observedCases: cases.length,
+    missingIds, unplannedIds, duplicatePlannedIds, duplicateCaseIds, expectationMismatches,
+    complete: ![missingIds, unplannedIds, duplicatePlannedIds, duplicateCaseIds, expectationMismatches].some(ids => ids.length) };
+  if ([missingIds, unplannedIds, duplicatePlannedIds, duplicateCaseIds].some(ids => ids.length))
+    add('EVALUATION_COVERAGE', 'unknown', 'evidence', 'Evaluation does not cover the unique planned questions',
+      `Planned ${plannedIds.length}; evaluated ${cases.length}; missing ${missingIds.join(', ') || 'none'}; unplanned ${unplannedIds.join(', ') || 'none'}; duplicates ${[...duplicatePlannedIds, ...duplicateCaseIds].join(', ') || 'none'}.`,
+      'deepen', 'Reconcile the planned question identities and evaluate every planned question once.', [ref('/questions'), ref('/evaluation')]);
+  if (expectationMismatches.length) add('EVALUATION_EXPECTATION', 'fail', 'evidence', 'Evaluated expectations differ from the plan',
+    expectationMismatches.join(', '), 'deepen', 'Evaluate the recorded expectation; do not replace an evidence requirement with abstention.', [ref('/questions'), ref('/evaluation')]);
+  const retrieval = cases.map((c, index) => ({ c, index })).filter(({ c }) =>
+    plannedIds.includes(c.id) && !duplicatePlannedIds.includes(c.id) && !duplicateCaseIds.includes(c.id) && !expectationMismatches.includes(c.id)).map(({ c, index }) => {
     for (const mode of ['lexical', 'graph']) {
       const run = c.runs?.[mode];
       if (!run || !['sourceIds', 'missing', 'stale', 'missingRelations'].every(k => array(run[k])) ||
@@ -90,7 +112,8 @@ export function assessCapture(capture, metrics = null) {
       'learn', 'Compare complete tasks against actual direct source search on unseen questions.', [ref('/evaluation/cases')], 'warning');
 
   const sessions = capture.sessions;
-  if (!sessions.complete) add('SESSION_COVERAGE', 'unknown', 'recovery', 'Session inspection is incomplete',
+  if (!sessions.complete || sessions.items.length !== sessions.listed || new Set(sessions.items.map(s => s.id)).size !== sessions.items.length)
+    add('SESSION_COVERAGE', 'unknown', 'recovery', 'Session inspection is incomplete',
     `${sessions.items.length} readbacks from ${sessions.listed} listed sessions. ${sessions.error ?? ''}`.trim(),
     'apply', 'Read omitted sessions explicitly; do not treat this report as a complete recovery check.', ['capture.json#/sessions']);
   if (!sessions.items.length) add('NO_SESSIONS', 'unknown', 'recovery', 'No shared authoring readback was observed',
@@ -119,7 +142,7 @@ export function assessCapture(capture, metrics = null) {
     'learn', 'Record cold and warm runs separately, including retries, review, correction, retrieval, and reuse.', ['assessment.json#/metrics'], completeCost ? 'warning' : 'info');
   add('HOST_PERMISSIONS', 'unknown', 'governance', 'Host permissions have not been verified by this assessment',
     'This CLI uses the local filesystem principal. Recorded governance and role names do not enforce source use, canonical writes, provider disclosure, or effects.',
-    'onboard', 'Use the desktop capability broker and the owning service to verify current workspace and operation permission.', [ref('/governance')]);
+    'onboard', 'Ask the selected host and owning service to verify current workspace and operation permission.', [ref('/governance')]);
 
   const counts = Object.fromEntries(['pass', 'fail', 'warning', 'unknown'].map(s => [s, findings.filter(f => f.status === s).length]));
   return { schema: 'atelier-enablement-assessment/local-v1', observedAt: capture.observedAt,
@@ -128,8 +151,10 @@ export function assessCapture(capture, metrics = null) {
       meaning: 'No overall semantic, economic, governance, or acceptance pass is issued.' },
     workspace: { name: d.name, purpose: d.purpose, flows: d.flows.map(f => ({ id: f.id, title: f.title, description: f.description })), next: d.next },
     model: { concepts: inspection.concepts, relations: inspection.relations, unclassifiedRecords: inspection.unclassifiedRecords },
-    retrieval, sessions: capture.sessions, metrics,
-    actualAssessmentProviderCalls: 0, findings,
+    retrieval, evaluation, sessions: capture.sessions, metrics,
+    declaredDirectAssessmentProviderCalls: 0,
+    reportedDashboardProviderCalls: count(d.providerCalls) ? d.providerCalls : null,
+    providerCallScope: 'The example declares no direct provider invocation; dashboard counts are reported by the selected CLI, not authenticated total task usage.', findings,
     scope: 'Consumer-local assessment of source coverage, planned evidence retrieval, and private draft readback. No automatic fixes, semantic admission, policy installation, disclosure, or action execution.' };
 }
 
@@ -149,7 +174,7 @@ export function renderAssessment(report, { studioUrl = null, command = 'node exa
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Atelier · Knowledge assessment</title><style>
   :root{color-scheme:light;--ink:#18352e;--muted:#596b65;--line:#d8e1dc;--green:#dcece2;--amber:#fbebcc;--red:#f9ddd6;--paper:#f6f5ef}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.55 system-ui,sans-serif}main{max-width:1180px;margin:auto;padding:48px 30px 80px}a{color:#255b46;text-underline-offset:3px}header{border-top:5px solid var(--ink);padding:24px 0 26px}.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}h1{font:normal 44px/1.15 Georgia,serif;margin:10px 0 16px}h2{font:normal 28px/1.2 Georgia,serif;margin-top:40px}h3{font-size:18px;line-height:1.35;margin:14px 0 8px}p{margin:8px 0 14px}.muted{color:var(--muted)}.intro{max-width:790px}.cta{display:inline-block;background:var(--ink);color:white;border-radius:4px;padding:10px 18px;text-decoration:none;margin:12px 0}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{border:1px solid var(--line);padding:18px;background:white}.value{display:block;font-size:30px;font-weight:600}.label{font-size:14px;color:var(--muted)}.notice{background:var(--amber);padding:14px 18px;margin:20px 0}.flows{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.flow{border-bottom:2px solid #648473;padding:14px 0}.flow p{font-size:14px}.table{overflow:auto}table{border-collapse:collapse;width:100%;font-size:14px;background:#fff}th,td{text-align:left;padding:14px;vertical-align:top;border-bottom:1px solid var(--line)}th{background:#e8ede8}.findings{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.finding{padding:20px;background:white;border:1px solid var(--line);border-left:4px solid #cad9d2}.finding.fail{border-left-color:#ab4b37}.finding.warning{border-left-color:#b78322}.finding.unknown{border-left-color:#7d8ca2}.badge{display:inline-block;border-radius:3px;padding:2px 8px;font-size:12px;background:var(--green)}.fail .badge{background:var(--red)}.warning .badge{background:var(--amber)}.unknown .badge{background:#e5e9ef}.line{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.code{font:11px/1.4 ui-monospace,monospace;color:var(--muted);overflow-wrap:anywhere}.next{font-size:14px}details{font-size:12px;color:var(--muted)}summary{cursor:pointer}code{overflow-wrap:anywhere;font-size:12px}pre{padding:18px;border:1px solid var(--line);background:white;white-space:pre-wrap;word-break:break-word}.footer{font-size:13px;color:var(--muted);margin-top:36px;border-top:1px solid var(--line);padding-top:20px}@media(max-width:780px){main{padding:25px 18px}h1{font-size:35px}.cards,.findings{grid-template-columns:repeat(2,1fr)}.flows{grid-template-columns:1fr}.flow{padding:8px 0}}@media(max-width:480px){.cards,.findings{grid-template-columns:1fr}}
   </style></head><body><main><header><div class="eyebrow">Atelier · Local assessment · ${esc(report.observedAt)}</div><h1>Build knowledge you can use.</h1><p class="intro">${esc(report.workspace.purpose)}</p><p class="muted">Assessment of <strong>${esc(report.workspace.name)}</strong>. Use the shared workspace to coauthor; use this report to see what needs evidence, review, or measurement.</p>${url ? `<a class="cta" href="${esc(url.href)}">Open shared knowledge workspace</a>` : '<p>Use the selected Atelier knowledge workspace to coauthor and review these findings.</p>'}</header>
-  <div class="cards"><div class="card"><span class="value">${report.retrieval.filter(c => c.checksPass).length}/${report.retrieval.length}</span><span class="label">Planned graph retrieval checks</span></div><div class="card"><span class="value">${report.summary.fail}</span><span class="label">Findings needing correction</span></div><div class="card"><span class="value">${report.summary.unknown}</span><span class="label">Checks still unknown</span></div><div class="card"><span class="value">${report.sessions.items.reduce((n, s) => n + s.savedFields, 0)}</span><span class="label">Private draft fields read back</span></div></div>
+  <div class="cards"><div class="card"><span class="value">${report.retrieval.filter(c => c.checksPass).length}/${report.evaluation.plannedQuestions}</span><span class="label">Planned graph retrieval checks</span></div><div class="card"><span class="value">${report.summary.fail}</span><span class="label">Findings needing correction</span></div><div class="card"><span class="value">${report.summary.unknown}</span><span class="label">Checks still unknown</span></div><div class="card"><span class="value">${report.sessions.items.reduce((n, s) => n + s.savedFields, 0)}</span><span class="label">Private draft fields read back</span></div></div>
   <p class="notice"><strong>${report.consistent ? 'This is a read-only snapshot.' : 'Inputs changed during assessment; rerun before relying on this snapshot.'}</strong> Retrieval and draft checks do not establish semantic correctness, economic benefit, permission enforcement, or owner acceptance. Rerun after sources, model, or session state change.</p>
   <h2>The same five workspaces</h2><div class="flows">${report.workspace.flows.map(f => `<div class="flow"><strong>${esc(f.title)}</strong><p>${esc(f.description)}</p></div>`).join('')}</div>
   <h2>Evidence before efficiency</h2><p class="muted">The current metadata baseline is narrower than direct source search. Context byte counts are measured; token estimates are not billing.</p><div class="table"><table><thead><tr><th>Useful question</th><th>Metadata search</th><th>Declared graph</th><th>Expected behavior</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No retrieval observations available.</td></tr>'}</tbody></table></div>
