@@ -1,19 +1,21 @@
 // Installed-package proof of the knowledge workspace, through its supported CLI only.
 //
 // Installs an exact packed tarball into a clean temporary consumer with no publisher
-// overrides, creates the canonical starter, and checks the documented CLI paths: a
-// supported answer, an abstention, evaluation, a saved session read back from a new
-// process, a retried start, and an owner correction. The workspace is invented; no
-// person's data or provider is used. A passing run shows that these paths work for
-// this tarball only, not answer quality, cost, or anyone's acceptance.
+// overrides, creates the canonical starter, and checks the documented CLI paths:
+// context for an answerable question selects its caveat source, an unsupported
+// question abstains, evaluation runs, a recorded answer is saved as a private draft
+// and read back from a new process, a retried start returns the same session, and
+// an owner correction is reported. The workspace is invented; no person's data or
+// provider is used. A passing run shows that these paths work for this tarball
+// only, not answer quality, cost, or anyone's acceptance.
 //
-// The proof itself runs offline: every npm step passes --offline and resolves the
-// package's locked dependency closure from the local npm cache. A cold cache refuses
-// before anything is installed. To fill it, run npm ci in this repository, or set
-// ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 to allow one declared step that fetches the
-// locked closure from the registry. The receipt records which of the two happened.
-// The installed CLI runs through the current Node (process.execPath) on every
-// platform. A run that stops unexpectedly writes a receipt with passed: false.
+// The install and every CLI step run offline: npm resolves the package's locked
+// dependency closure from the local npm cache with --offline. A cold cache refuses
+// before anything is installed. Set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 to allow
+// one declared step that first fetches the locked closure from the registry; the
+// receipt records whether it ran. The installed CLI runs through the current Node
+// (process.execPath) on every platform. Any earlier receipt is removed before the
+// inputs are checked, and a run that stops unexpectedly writes passed: false.
 //
 //   ATELIER_CANDIDATE_TARBALL=<file.tgz> [ATELIER_EXPECTED_TARBALL_SHA256=<hex>]
 //   [ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1] [ATELIER_KNOWLEDGE_CONSUMER_OUTPUT=<dir>]
@@ -28,6 +30,12 @@ import { execNpmSync } from './npm-cli.mjs'
 
 const STEP_TIMEOUT_MS = 120000
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
+const output = path.resolve(process.env.ATELIER_KNOWLEDGE_CONSUMER_OUTPUT || path.join(packageRoot, '.artifacts/knowledge-consumer'))
+const receiptFile = path.join(output, 'receipt.json')
+fs.mkdirSync(output, { recursive: true })
+// A receipt from an earlier run must never survive to describe this one, including
+// a run refused below for a missing tarball, a digest mismatch or a cold cache.
+fs.rmSync(receiptFile, { force: true })
 const tarball = process.env.ATELIER_CANDIDATE_TARBALL ? path.resolve(process.env.ATELIER_CANDIDATE_TARBALL) : null
 if (!tarball || !fs.existsSync(tarball)) {
   console.error('prove-knowledge-consumer: set ATELIER_CANDIDATE_TARBALL to an existing packed tarball')
@@ -38,12 +46,6 @@ if (process.env.ATELIER_EXPECTED_TARBALL_SHA256 && process.env.ATELIER_EXPECTED_
   console.error(`prove-knowledge-consumer: tarball SHA-256 mismatch: expected ${process.env.ATELIER_EXPECTED_TARBALL_SHA256}, got ${tarballSha256}`)
   process.exit(2)
 }
-const output = path.resolve(process.env.ATELIER_KNOWLEDGE_CONSUMER_OUTPUT || path.join(packageRoot, '.artifacts/knowledge-consumer'))
-const receiptFile = path.join(output, 'receipt.json')
-fs.mkdirSync(output, { recursive: true })
-// A receipt from an earlier run must never survive to describe this one.
-fs.rmSync(receiptFile, { force: true })
-
 // The package's non-dev dependency closure, from the lockfile.
 const lockfile = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package-lock.json'), 'utf8'))
 const closure = Object.entries(lockfile.packages ?? {})
@@ -51,13 +53,14 @@ const closure = Object.entries(lockfile.packages ?? {})
   .map(([key, entry]) => `${key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length)}@${entry.version}`)
 // Optional, declared network step: fetch the locked closure into the cache.
 const bootstrap = process.env.ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP === '1'
-if (bootstrap && closure.length > 0) execNpmSync(['cache', 'add', ...closure], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+const npmOptions = { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'], timeout: STEP_TIMEOUT_MS }
+if (bootstrap && closure.length > 0) execNpmSync(['cache', 'add', ...closure], npmOptions)
 // From here on nothing reaches the network: the closure must already be cached.
 if (closure.length > 0) {
   try {
-    execNpmSync(['cache', 'add', '--offline', ...closure], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] })
+    execNpmSync(['cache', 'add', '--offline', ...closure], npmOptions)
   } catch {
-    console.error('prove-knowledge-consumer: the locked dependency closure is not in the npm cache; run npm ci here, or set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 for a declared network bootstrap')
+    console.error('prove-knowledge-consumer: the locked dependency closure is not in the npm cache; set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 for one declared registry fetch')
     process.exit(2)
   }
 }
@@ -77,6 +80,11 @@ const env = {
   GIT_COMMITTER_NAME: 'Consumer Proof',
   GIT_COMMITTER_EMAIL: 'consumer-proof@example.invalid',
 }
+// Failure text can name local locations; the receipt names placeholders instead.
+const locations = [[temp, '<temp>'], [path.dirname(tarball), '<tarball-dir>'], [packageRoot.replace(/[\\/]$/, ''), '<package-root>'], [fs.realpathSync(os.tmpdir()), '<tmp>'], [os.tmpdir(), '<tmp>'], [os.homedir(), '<home>']]
+  .filter(([location]) => location && location.length > 1)
+  .sort(([a], [b]) => b.length - a.length)
+const redact = (text) => locations.reduce((value, [location, label]) => value.split(location).join(label), String(text))
 const steps = []
 let unexpected = null
 let installedVersion = null
@@ -86,7 +94,7 @@ const run = (label, command, args, { cwd = ws, input, expect = 0 } = {}) => {
   // Absolute paths are shortened to their base names so the receipt names no temporary location.
   const shown = [command, ...args].map((arg) => (path.isAbsolute(String(arg)) ? path.basename(String(arg)) : arg))
   const step = record({ label, command: shown.join(' '), exit: result.status, expectedExit: expect, ok: result.status === expect })
-  if (!step.ok) step.stderr = String(result.stderr || result.error?.message || '').slice(0, 2000)
+  if (!step.ok) step.stderr = redact(result.stderr || result.error?.message || '').slice(0, 2000)
   return { ...result, stdout: result.stdout ?? '' }
 }
 const parse = (result) => { try { return JSON.parse(result.stdout) } catch { return null } }
@@ -96,7 +104,7 @@ try {
   fs.writeFileSync(emptyGitConfig, '')
   fs.mkdirSync(app)
   fs.writeFileSync(path.join(app, 'package.json'), `${JSON.stringify({ name: 'atelier-knowledge-consumer', private: true, type: 'module' }, null, 2)}\n`)
-  execNpmSync(['install', tarball, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], { cwd: app, stdio: ['ignore', 'pipe', 'pipe'] })
+  execNpmSync(['install', tarball, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], { ...npmOptions, cwd: app })
   const installedRoot = path.join(app, 'node_modules', '@mnstry', 'atelier')
   const installed = JSON.parse(fs.readFileSync(path.join(installedRoot, 'package.json'), 'utf8'))
   installedVersion = installed.version
@@ -118,7 +126,7 @@ try {
   const packet = parse(atelier('context for a supported question', ['knowledge', 'context', '--question', question]))
   const selected = (packet?.sources ?? []).map((source) => source.id)
   check('context packet is versioned', packet?.schema === 'atelier-knowledge-context@v1', packet?.schema)
-  check('the decisive caveat is selected', selected.includes('loan:inspection'), selected)
+  check('context for an answerable question selects its caveat source', selected.includes('loan:inspection'), selected)
   check('every source matches its digest', (packet?.sources ?? []).length > 0 && packet.sources.every((source) => createHash('sha256').update(source.text).digest('hex') === source.sha256))
 
   // The product's own abstention rule: no sources, no candidates and no omissions.
@@ -139,8 +147,14 @@ try {
   check('retrying the same start returns the same session', Boolean(sessionId) && parse(atelier('session start retried', ['knowledge', 'session', 'start'], { input: startRequest }))?.record?.id === sessionId)
   const revision = parse(atelier('session read', ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }))?.state?.revision
   const answer = 'Not yet: the inspection record says it has not passed.'
-  atelier('session answer', ['knowledge', 'session', 'event'], { input: JSON.stringify({ sessionId, event: { id: randomUUID(), expectedRevision: revision, type: 'answer', text: answer } }) })
-  check('the saved answer reads back from a new process', atelier('session read after the answer', ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }).stdout.includes(answer))
+  const recorded = parse(atelier('record an answer', ['knowledge', 'session', 'event'], { input: JSON.stringify({ sessionId, event: { id: randomUUID(), expectedRevision: revision, type: 'answer', text: answer } }) }))
+  check('a recorded answer is an unsaved draft', recorded?.state?.phase === 'draft' && recorded.state.saved?.length === 0, recorded?.state?.phase)
+  atelier('save the private draft', ['knowledge', 'session', 'event'], { input: JSON.stringify({ sessionId, event: { id: randomUUID(), expectedRevision: recorded?.state?.revision, type: 'save' } }) })
+  const saved = parse(atelier('session read after saving', ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }))?.state
+  check('the saved draft and its receipt read back from a new process',
+    saved?.phase === 'saved' && saved.saved?.length === 1 && saved.saved[0].text === answer &&
+      saved.saved[0].receipt?.sessionId === sessionId && /^[0-9a-f]{64}$/.test(saved.saved[0].receipt?.valueDigest ?? ''),
+    { phase: saved?.phase, saved: saved?.saved?.length })
   check('the session is listed', atelier('session list', ['knowledge', 'session', 'list']).stdout.includes(sessionId))
 
   // An owner correction: the source changes and is committed, the graph is rebuilt.
@@ -152,11 +166,11 @@ try {
   check('the corrected source is reported stale by evaluation',
     stale?.schema === 'atelier-knowledge-evaluation@v1' && (stale.cases ?? []).some((c) => (c.runs?.graph?.stale ?? []).includes('loan:inspection')))
   const reopened = parse(atelier('read the earlier session after the correction', ['knowledge', 'session', 'read'], { input: JSON.stringify({ sessionId }) }))
-  check('the earlier session keeps its answer', JSON.stringify(reopened ?? {}).includes(answer))
+  check('the earlier session keeps its saved draft', reopened?.state?.saved?.[0]?.text === answer)
   check('the earlier session reports changed sources', reopened?.currency === 'changed', reopened?.currency)
   check('the corrected text is served', (parse(atelier('context after the correction', ['knowledge', 'context', '--question', question]))?.sources ?? []).some((source) => source.text.includes('booked for Friday')))
 } catch (error) {
-  unexpected = String(error?.message ?? error).slice(0, 2000)
+  unexpected = redact(error?.message ?? error).slice(0, 2000)
 } finally {
   const receipt = {
     schema: 'atelier-knowledge-consumer-proof@v1',
