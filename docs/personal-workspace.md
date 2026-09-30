@@ -3,8 +3,8 @@
 This module composes enrolled local repositories and private interpretation in
 one Atelier graph. The person supplies a private home outside every enrolled
 repository. Shared source files and private authored inputs stay unchanged.
-This is a local reference implementation; the public loader export, host
-integration, and release require separate integration acceptance.
+This is a local composition module. Host integration and release require
+separate acceptance.
 
 A manifest records enrollment, repository identity, and folder bindings. An
 overlay contains annotations, connections, collections, saved repository
@@ -27,10 +27,27 @@ Overlay references are closed `{ repoId, nodeId }` pairs. Repository IDs are
 stable local enrollment keys; matching a recorded remote is an offline change
 check, not proof of upstream membership or provider identity.
 
-The candidate entrypoint is `src/personal-workspace/index.mjs`. Its public
-package export is deliberately left to integration:
+The module entrypoint is `src/personal-workspace/index.mjs`; its public package
+subpath is `@mnstry/atelier/personal-workspace`. The API consists of nine exports:
+
+- `MANIFEST_SCHEMA` and `OVERLAY_SCHEMA`.
+- `PersonalWorkspaceRefusal`.
+- `loadPersonalManifest` and `loadPersonalOverlay`.
+- `resolvePersonalWorkspace`.
+- `planPersonalGeneration`, `materializePersonalGeneration`, and
+  `composePersonalWorkspace`.
+
+Package registration and installed-consumer qualification are separate from
+module source qualification. A registered package can be used as follows:
 
 ```js
+import {
+  resolvePersonalWorkspace,
+  planPersonalGeneration,
+  materializePersonalGeneration,
+  composePersonalWorkspace,
+} from '@mnstry/atelier/personal-workspace'
+
 const resolved = resolvePersonalWorkspace({ folder, personalHome })
 if (resolved.status === 'resolved') {
   const plan = planPersonalGeneration(resolved)
