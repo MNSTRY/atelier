@@ -1,0 +1,2 @@
+# The plan pins these exact source bytes. Keep them stable in source and consumer checkouts.
+records/*.md text eol=lf

@@ -1,0 +1,111 @@
+{
+  "schema": "atelier-knowledge-plan@v1",
+  "$schema": "./knowledge-plan.schema.json",
+  "purpose": "Make supported equipment loan decisions and spend less context on irrelevant material.",
+  "steward": "Workspace owner (replace with a real accountable role).",
+  "reviewer": "Loan reviewer (replace before operational use).",
+  "governance": {
+    "admission": "Use only sources the operator has permission to process; retain originals, identity, revision, and evidence location.",
+    "review": "Treat extracted meaning as proposed. A named reviewer checks evidence, negation, possibility, identity, and scope before acceptance.",
+    "correction": "Keep corrections and withdrawals explicit; rebuild derived context from current sources, and retain historical evidence only where permitted.",
+    "expression": "This private repository and its context are for its operator. A separate recipient and purpose decision is required before sharing."
+  },
+  "budget": {
+    "maxContextBytes": 16384,
+    "maxSourceBytes": 65536,
+    "maxDocuments": 6
+  },
+  "concepts": [
+    {
+      "id": "equipment",
+      "definition": "A particular physical item that may be loaned.",
+      "identityRule": "Use its stable asset label; similar names are not identity.",
+      "tag": "concept:equipment"
+    },
+    {
+      "id": "inspection",
+      "definition": "A dated observation of one item's condition, with limitations.",
+      "identityRule": "One observation event per item; corrections preserve the earlier event.",
+      "tag": "concept:inspection"
+    },
+    {
+      "id": "forecast",
+      "definition": "A qualified expectation about a possible future event.",
+      "identityRule": "Retain the speaker, passage, revision, possibility, and unresolved timing.",
+      "tag": "concept:forecast"
+    }
+  ],
+  "relations": [
+    {
+      "id": "loan-check",
+      "predicate": "depends_on",
+      "from": "equipment",
+      "to": "inspection",
+      "meaning": "A loan decision needs the inspection evidence. The edge does not claim the item passed."
+    },
+    {
+      "id": "repair-context",
+      "predicate": "related",
+      "from": "inspection",
+      "to": "forecast",
+      "meaning": "The forecast informs the inspection's unresolved context; it is not an observed repair."
+    }
+  ],
+  "questions": [
+    {
+      "id": "loan",
+      "question": "Can the blue telescope be loaned this week?",
+      "work": "Decide whether to approve a loan or request a completed inspection.",
+      "concepts": [
+        "equipment",
+        "inspection"
+      ],
+      "relations": [
+        "loan-check"
+      ],
+      "expect": "evidence",
+      "expectedEvidence": [
+        {
+          "id": "loan:blue-telescope",
+          "sha256": "60fc57b0914792934bfbef7f0933668f7d9aad0af69e09428b713d41d7a8c3bf"
+        },
+        {
+          "id": "loan:inspection",
+          "sha256": "367f6d81a7c4d2216b064d65ba08f6070fd6e19fed8e1900a628d2a6bf0e0a9e"
+        }
+      ]
+    },
+    {
+      "id": "arrival",
+      "question": "Has the replacement cap arrived?",
+      "work": "Choose whether to schedule an inspection or obtain receipt evidence.",
+      "concepts": [
+        "inspection",
+        "forecast"
+      ],
+      "relations": [
+        "repair-context"
+      ],
+      "expect": "evidence",
+      "expectedEvidence": [
+        {
+          "id": "loan:repair-forecast",
+          "sha256": "e6c0764a0cd5c9544d8da5a94732883ae03645b4e3504c50f30886519bf82f40"
+        },
+        {
+          "id": "loan:inspection",
+          "sha256": "367f6d81a7c4d2216b064d65ba08f6070fd6e19fed8e1900a628d2a6bf0e0a9e"
+        }
+      ]
+    },
+    {
+      "id": "unknown",
+      "question": "What is next month's lunar eclipse schedule?",
+      "work": "Recognize that the admitted sources cannot answer this question.",
+      "concepts": [],
+      "relations": [],
+      "expect": "abstain",
+      "expectedEvidence": []
+    }
+  ]
+}

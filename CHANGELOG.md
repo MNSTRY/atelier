@@ -11,6 +11,16 @@
   search and get need a host to construct the reader with its exact plan,
   workspace and current whole-plan admission, and Atelier ships no issuer of that
   authority.
+- Personal workspaces are published as `@mnstry/atelier/personal-workspace`,
+  with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
+  public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,
+  `PersonalWorkspaceRefusal`, `loadPersonalManifest`, `loadPersonalOverlay`,
+  `resolvePersonalWorkspace`, `planPersonalGeneration`,
+  `materializePersonalGeneration` and `composePersonalWorkspace`. The composition
+  is manifest-only, with enforcement `none`: filesystem access, disclosure,
+  effects and the host sandbox are reported as uncovered, and no consent or
+  effect enforcement is claimed. The manifest and overlay schemas join the
+  contract corpus.
 
 - The ingestion store adds `getEvidence`, which returns one exact evidence span
   after rechecking only that source and its stored attempt. Query and
@@ -86,6 +96,15 @@
 - Recompile cached JSON Schema validators when caller-owned schemas change; preserve unchanged-schema reuse and fresh compilation for non-JSON schemas.
 
 ### Added
+
+- Add opt-in knowledge dashboards and source-bound coauthor flows, sharing private drafts between the local browser and CLI, with evidence comparison and restart recovery.
+
+- A `knowledge-workspace` starter, mirrored `atelier-knowledge-setup` agent
+  skills, and `atelier knowledge check|context|evaluate`: question-led ontology
+  coverage, complete source context within an exact byte budget, and a lexical
+  versus graph comparison with source-digest and directed-relation checks.
+  Local operator output carries no expression or execution permission. Token
+  estimates remain distinct from measured usage and accepted work.
 
 - `atelier enroll documents [--audience private] [--dry-run] [--json]` writes
   a minimal `<file>.kg.json` sidecar next to every `.html`, `.pdf` and

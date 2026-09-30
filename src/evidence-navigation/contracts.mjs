@@ -6,7 +6,7 @@ const ajv = new Ajv({ strict: true, allErrors: true, ownProperties: true,
   coerceTypes: false, useDefaults: false, removeAdditional: false, validateFormats: true })
 addFormats(ajv, { mode: 'full' })
 ajv.addSchema(evidenceSchema)
-const validators = Object.fromEntries(Object.keys(evidenceSchema.$defs).map(name =>
+const validators = new Map(Object.keys(evidenceSchema.$defs).map(name =>
   [name, ajv.getSchema(`${evidenceSchema.$id}#/$defs/${name}`)]))
 
 export const EVIDENCE_PROTOCOL = 'atelier-evidence-navigation@v1'
@@ -49,9 +49,11 @@ export function evidenceJson(value) {
 }
 
 export function validateEvidenceDocument(shape, value) {
-  if (!Object.hasOwn(validators, shape) || typeof validators[shape] !== 'function') return { valid: false, reason: 'unsupported-shape' }
+  if (typeof shape !== 'string') return { valid: false, reason: 'unsupported-shape' }
+  const validate = validators.get(shape)
+  if (typeof validate !== 'function') return { valid: false, reason: 'unsupported-shape' }
   try {
-    return validators[shape](evidenceJson(value))
+    return validate(evidenceJson(value))
       ? { valid: true, reason: null }
       : { valid: false, reason: 'invalid-document' }
   } catch { return { valid: false, reason: 'invalid-document' } }

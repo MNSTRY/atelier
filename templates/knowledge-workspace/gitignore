@@ -1,0 +1,6 @@
+.atelier-local/
+atelier.local.json
+atelier.workspace.local.json
+atelier-output/
+node_modules/
+.DS_Store

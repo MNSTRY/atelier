@@ -6,8 +6,9 @@ Knowledge Stewardship and can be composed by inquiry harnesses. The initial
 implementation provides pure assessments; package and CLI integration are
 separate receiving changes.
 
-`validateEvidenceDocument(shape, value)` validates bounded JSON against the
-closed versioned schema. Supported shapes include `profile`, `hostCapabilities`,
+`validateEvidenceDocument(shape, value)` requires a primitive string shape and
+validates bounded JSON against the closed versioned schema. Supported shapes
+include `profile`, `hostCapabilities`,
 `evidenceRef`, `claim`, and `snapshot`. Unknown fields, unsupported kinds, missing
 attribution, invalid dates, and malformed references fail. Reserved `ext` fields
 cannot carry behavior. Unknown event time and source attribution remain explicit.
@@ -79,8 +80,9 @@ The host must admit the whole plan for this reader and intended recipient.
 A test callback that always permits establishes no actual consent.
 
 `search({ query, limit })` accepts up to five items and a nonblank query of at
-most 512 UTF-16 code units, 2,048 UTF-8 bytes, and 32 terms after lowercase,
-trim, and whitespace splitting. Invalid queries refuse before admission or
+most 512 UTF-16 code units and 32 terms after lowercase, trim, and whitespace
+splitting. A secondary 2,048-byte UTF-8 ceiling is retained; the code-unit limit
+is already stricter. Invalid queries refuse before admission or
 store reservation and do not consume the read budget.
 `get({ handle })` accepts only a handle issued by this reader. Optional `readScope`
 must be `all-plan`; narrower scopes refuse before store construction. Model
@@ -110,7 +112,11 @@ Defaults are 32 reserved store calls, 32 handles, 16,384 text bytes per item,
 vary within hard ceilings of 128 calls/handles, 65,536 bytes per item, 262,144
 total bytes, and ten minutes. Search reserves one query plus its requested maximum
 exact fetches. Failed and unused reservations are not refunded. UTF-8 truncation
-preserves whole code points. The ingestion owner's plan/processor ceilings bound
+preserves whole code points. A search releases its result as a whole; if no text
+budget remains while fetching its hits, prepared items and handles are dropped
+and the whole search refuses. Issued handles retain their session charge even
+after an admission revision changes; start a new session for the new admission.
+The ingestion owner's plan/processor ceilings bound
 traversal; a hit limit does not limit inspected sources. Synchronous store reads
 cannot be preempted by the lifetime check. A host requiring a hard execution-time
 limit must qualify an isolated worker.
