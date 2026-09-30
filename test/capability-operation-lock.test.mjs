@@ -173,6 +173,23 @@ test('missing lock cleanup preserves the callback error and permits a later acqu
   assert.equal(withOperationLock(root, () => 'continued'), 'continued')
 })
 
+test('a stale lock removed by a competing recoverer during inspection refuses as locked', t => {
+  const root = workspace(t)
+  const dead = spawnSync(process.execPath, ['-e', '']).pid
+  const file = seedLock(root, { owner: 'capability-steward', pid: dead, operationId: randomUUID() })
+  const open = fs.openSync
+  let removed = false
+  try {
+    fs.openSync = (target, ...rest) => {
+      if (!removed && target === file) { removed = true; fs.unlinkSync(file) }
+      return open(target, ...rest)
+    }
+    assert.throws(() => withOperationLock(root, () => assert.fail('must not enter')),
+      error => error.code === 'EEXIST' && /changed during inspection/.test(error.message))
+  } finally { fs.openSync = open }
+  assert.equal(removed, true)
+})
+
 test('competing recoverers admit one writer after a journal-free process crash', async t => {
   const root = workspace(t)
   const crashed = spawnSync(process.execPath, ['--input-type=module', '-e', `

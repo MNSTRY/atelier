@@ -184,7 +184,14 @@ function sameLockFile(left, right) {
 function readOperationLock(root) {
   const identity = stat(within(root, OPERATION_LOCK))
   if (!identity) return null
-  const bytes = bytesAt(root, OPERATION_LOCK), current = stat(within(root, OPERATION_LOCK))
+  // A competing recoverer may remove the lock between the stat and the read;
+  // that is a change during inspection, not an unrelated I/O failure.
+  let bytes
+  try { bytes = bytesAt(root, OPERATION_LOCK) } catch (error) {
+    if (error.code === 'ENOENT') throw operationLocked('changed during inspection')
+    throw error
+  }
+  const current = stat(within(root, OPERATION_LOCK))
   if (!current || identity.dev !== current.dev || identity.ino !== current.ino || identity.mtimeMs !== current.mtimeMs || identity.ctimeMs !== current.ctimeMs) throw operationLocked('changed during inspection')
   return { identity, bytes }
 }
