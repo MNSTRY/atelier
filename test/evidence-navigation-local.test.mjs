@@ -41,6 +41,45 @@ for (const disposition of ['deny', 'filter', 'defer', 'quarantine', undefined]) 
   assert.equal(reader.search({ query: 'basil' }).status, 'refused')
   assert.equal(calls.opens, 0)
 })
+for (const [name, admit] of [
+  ['Promise', () => Promise.resolve(permit())],
+  ['callback error', () => { throw new Error('invented admission failure') }],
+  ['empty revision', () => ({ ...permit(), revision: '' })],
+  ['oversized revision', () => ({ ...permit(), revision: 'x'.repeat(257) })],
+  ['narrow decision scope', () => ({ ...permit(), readScope: 'source-subset' })],
+  ['extra decision key', () => ({ ...permit(), extra: true })],
+]) test(`admission refuses ${name} before opening or reading`, () => {
+  const f = fake(), reader = createLocalEvidenceReader({ ...f.options, admit })
+  assert.equal(reader.search({ query: 'basil' }).status, 'refused')
+  assert.deepEqual(f.calls, { opens: 0, query: 0, exact: 0 })
+})
+test('a rejected asynchronous admission refuses without an unhandled rejection', async () => {
+  const f = fake(), reader = createLocalEvidenceReader({ ...f.options, admit: async () => { throw new Error('invented admission failure') } })
+  assert.equal(reader.search({ query: 'basil' }).status, 'refused')
+  assert.deepEqual(f.calls, { opens: 0, query: 0, exact: 0 })
+  await new Promise(resolve => setImmediate(resolve))
+})
+test('refusing an asynchronous-looking decision does not invoke a then getter', () => {
+  const f = fake(); let gets = 0
+  const decision = Object.defineProperty(permit(), 'then', { enumerable: true, get() { gets++; throw new Error() } })
+  const reader = createLocalEvidenceReader({ ...f.options, admit: () => decision })
+  assert.equal(reader.search({ query: 'basil' }).status, 'refused')
+  assert.equal(gets, 0); assert.equal(f.calls.opens, 0)
+})
+test('query limits agree with the ingestion owner before admission or budget reservation', () => {
+  for (const query of ['a'.repeat(512), Array.from({ length: 32 }, () => 'basil').join('\t\n')]) {
+    const f = fake({ limits: { maxReads: 2 } })
+    assert.equal(f.reader.search({ query, limit: 1 }).status, 'ok')
+    assert.deepEqual(f.calls, { opens: 1, query: 1, exact: 1 })
+  }
+  for (const query of ['a'.repeat(513), '🌱'.repeat(257), Array.from({ length: 33 }, () => 'basil').join(' ')]) {
+    const f = fake({ limits: { maxReads: 2 } }); let admissions = 0
+    const reader = createLocalEvidenceReader({ ...f.options, admit: () => { admissions++; return permit() } })
+    assert.equal(reader.search({ query, limit: 1 }).reason, 'invalid-request')
+    assert.equal(admissions, 0); assert.deepEqual(f.calls, { opens: 0, query: 0, exact: 0 })
+    assert.equal(reader.search({ query: 'basil', limit: 1 }).status, 'ok')
+  }
+})
 test('narrow scope and caller paths refuse before store construction', () => {
   const { reader, calls } = fake()
   assert.equal(reader.search({ query: 'basil', readScope: 'source-subset' }).reason, 'unsupported-scope')
@@ -61,6 +100,16 @@ test('withdrawal after query prevents exact fetch; revision change after exact f
   assert.equal(a.reader.search({ query: 'basil' }).status, 'refused'); assert.equal(a.calls.exact, 0)
   const b = fake(); b.state.onGet = () => { b.state.decision = { ...permit(), revision: 'admission-2' } }
   assert.equal(b.reader.search({ query: 'basil' }).status, 'refused')
+})
+test('a pre-release revision change leaves no released item or usable earlier handle', () => {
+  const f = fake(), handle = f.reader.search({ query: 'basil', limit: 1 }).items[0].handle
+  f.state.onGet = () => { f.state.decision = { ...permit(), revision: 'admission-2' } }
+  const before = f.calls.exact, result = f.reader.search({ query: 'basil', limit: 1 })
+  assert.equal(result.status, 'refused'); assert.equal(Object.hasOwn(result, 'items'), false)
+  assert.equal(f.calls.exact, before + 1)
+  f.state.onGet = undefined
+  const after = { ...f.calls }
+  assert.equal(f.reader.get({ handle }).status, 'refused'); assert.deepEqual(f.calls, after)
 })
 test('get checks authority again after reading and refuses handles under a new admission revision', () => {
   const a = fake(); const handle = a.reader.search({ query: 'basil' }).items[0].handle

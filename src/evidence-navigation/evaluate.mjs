@@ -11,11 +11,13 @@ const canonical = value => JSON.stringify(value, function (_key, item) {
 
 /** Compare declared support. This assesses compatibility, never host qualification. */
 export function assessEvidenceCompatibility(profile, host) {
-  if (!valid('profile', profile) || !valid('hostCapabilities', host)) return result('unsupported', ['invalid-document'])
+  let input
+  try { input = evidenceJson({ profile, host }) } catch { return result('unsupported', ['invalid-document']) }
+  if (!valid('profile', input.profile) || !valid('hostCapabilities', input.host)) return result('unsupported', ['invalid-document'])
   const reasons = []
-  if (!host.protocols.includes(profile.protocol)) reasons.push('unsupported-protocol')
-  if (profile.operations.some(operation => !host.operations.includes(operation))) reasons.push('unsupported-operation')
-  if (profile.requiredCapabilities.some(required => !host.capabilities.some(capability => capability.id === required.id && capability.version === required.version))) reasons.push('unsupported-capability')
+  if (!input.host.protocols.includes(input.profile.protocol)) reasons.push('unsupported-protocol')
+  if (input.profile.operations.some(operation => !input.host.operations.includes(operation))) reasons.push('unsupported-operation')
+  if (input.profile.requiredCapabilities.some(required => !input.host.capabilities.some(capability => capability.id === required.id && capability.version === required.version))) reasons.push('unsupported-capability')
   return result(reasons.length ? 'unsupported' : 'compatible', reasons)
 }
 
@@ -55,9 +57,11 @@ export function assessEvidenceCurrency(reference, snapshots, { at, maxDepth = EV
 
 /** A later acceptance cannot change what kind of claim was recorded. */
 export function assessClaimContinuity(previous, next) {
-  if (!valid('claim', previous) || !valid('claim', next)) return result('unsupported', ['invalid-document'])
-  if (previous.claimId !== next.claimId || previous.ownerRecordRef.owner !== next.ownerRecordRef.owner || previous.ownerRecordRef.objectId !== next.ownerRecordRef.objectId) return result('unsupported', ['different-claim-identity'])
-  if (previous.kind !== next.kind) return result('unsupported', ['immutable-claim-kind'])
-  if (previous.revision === next.revision && canonical(evidenceJson(previous)) !== canonical(evidenceJson(next))) return result('unsupported', ['unchanged-claim-revision'])
+  let input
+  try { input = evidenceJson({ previous, next }) } catch { return result('unsupported', ['invalid-document']) }
+  if (!valid('claim', input.previous) || !valid('claim', input.next)) return result('unsupported', ['invalid-document'])
+  if (input.previous.claimId !== input.next.claimId || input.previous.ownerRecordRef.owner !== input.next.ownerRecordRef.owner || input.previous.ownerRecordRef.objectId !== input.next.ownerRecordRef.objectId) return result('unsupported', ['different-claim-identity'])
+  if (input.previous.kind !== input.next.kind) return result('unsupported', ['immutable-claim-kind'])
+  if (input.previous.revision === input.next.revision && canonical(input.previous) !== canonical(input.next)) return result('unsupported', ['unchanged-claim-revision'])
   return result('compatible')
 }

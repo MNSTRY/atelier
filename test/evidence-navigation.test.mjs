@@ -60,6 +60,29 @@ test('compatible declarations do not qualify a host or grant execution', () => {
   assert.equal(value.status, 'compatible'); noAuthority(value)
 })
 
+for (const altered of ['subclass', 'prototype']) test(`custom array ${altered} cannot establish declared support`, () => {
+  class CustomArray extends Array { includes() { return true } some() { return true } }
+  const host = read('valid/host.json')
+  host.protocols = altered === 'subclass' ? new CustomArray() : Object.setPrototypeOf([], CustomArray.prototype)
+  host.operations = new CustomArray(); host.capabilities = new CustomArray()
+  assert.deepEqual(validateEvidenceDocument('hostCapabilities', host), { valid: false, reason: 'invalid-document' })
+  const result = assessEvidenceCompatibility(read('valid/profile.json'), host)
+  assert.deepEqual(result.reasons, ['invalid-document']); noAuthority(result)
+})
+test('compatibility uses descriptor values even when a Proxy reports different declarations', () => {
+  const declared = read('valid/host.json'), target = copy(declared); target.protocols = []
+  let gets = 0
+  const host = new Proxy(target, { get(object, key) { gets++; return key === 'protocols' ? declared.protocols : Reflect.get(object, key) } })
+  const result = assessEvidenceCompatibility(read('valid/profile.json'), host)
+  assert.deepEqual(result.reasons, ['unsupported-protocol']); assert.equal(gets, 0); noAuthority(result)
+})
+test('array descriptor snapshots never use a Proxy length or support method', () => {
+  const host = read('valid/host.json'); let gets = 0
+  host.protocols = new Proxy([], { get(object, key) { gets++; return key === 'includes' ? () => true : Reflect.get(object, key) } })
+  const result = assessEvidenceCompatibility(read('valid/profile.json'), host)
+  assert.deepEqual(result.reasons, ['unsupported-protocol']); assert.equal(gets, 0)
+})
+
 for (const [field, expected] of [['protocols', 'unsupported-protocol'], ['operations', 'unsupported-operation'], ['capabilities', 'unsupported-capability']]) {
   test(`requires exact declared ${field}`, () => {
     const host = read('valid/host.json'); host[field] = []
@@ -132,6 +155,13 @@ test('claim acceptance preserves its recorded kind and does not prove truth', ()
   assert.equal(value.status, 'compatible'); noAuthority(value)
   next.kind = 'stated-preference'
   assert.deepEqual(assessClaimContinuity(previous, next).reasons, ['immutable-claim-kind'])
+})
+test('claim continuity compares the validated descriptor snapshot instead of Proxy values', () => {
+  const previous = read('valid/claim.json'), target = copy(previous)
+  target.revision = 'two'; target.kind = 'stated-preference'; let gets = 0
+  const next = new Proxy(target, { get(object, key) { gets++; return key === 'kind' ? previous.kind : Reflect.get(object, key) } })
+  const result = assessClaimContinuity(previous, next)
+  assert.deepEqual(result.reasons, ['immutable-claim-kind']); assert.equal(gets, 0); noAuthority(result)
 })
 test('refuses altered bytes at an unchanged claim revision and unrelated identities', () => {
   const previous = read('valid/claim.json'), next = copy(previous)

@@ -11,6 +11,8 @@ closed versioned schema. Supported shapes include `profile`, `hostCapabilities`,
 `evidenceRef`, `claim`, and `snapshot`. Unknown fields, unsupported kinds, missing
 attribution, invalid dates, and malformed references fail. Reserved `ext` fields
 cannot carry behavior. Unknown event time and source attribution remain explicit.
+Arrays require the ordinary array prototype. Assessments validate and evaluate
+the same copied descriptor values, without using the caller's getters or methods.
 
 `assessEvidenceCompatibility(profile, host)` compares exact declared protocols,
 operations, and capability versions. The result says whether those declarations
@@ -27,8 +29,11 @@ provenance. This function does not establish coverage, absence, or completeness.
 `assessClaimContinuity(previous, next)` checks one logical claim's immutable kind
 and requires a new revision for changed content or status. Acceptance cannot
 turn an observation into a stated preference. A separately attributed new claim
-has a separate identity and lifecycle. Matching references do not prove semantic
-support or truth.
+has a separate identity and lifecycle assigned by its owning host. This bounded
+check binds `claimId`, owner record owner/objectId, and kind. It allows subject or
+recorder attribution to change with a new revision; it does not classify a new
+claim or establish semantic continuity. Matching references do not prove support
+or truth.
 
 Every assessment explicitly returns `executionAuthorized: false`,
 `authorityTransferred: false`, and `semanticTruthVerified: false`. No assessment
@@ -63,15 +68,20 @@ require the receiving owner's integration. The pure entry point does not import 
 
 Trusted host construction supplies `workspaceRoot`, `workspaceId`, exact
 `plan: { planId, planDigest }`, and synchronous `admit`. The callback receives the
-operation and exact plan binding. Only precisely
+operation (`search` or `get`) and exact plan binding. Hosts map these callback
+strings to the profile operations `searchEvidence` and `getEvidence`. Only precisely
 `{ disposition: 'permit', revision, readScope: 'all-plan' }` proceeds. The revision
 is a nonempty, bounded identifier from current host authority. It changes whenever
 relevant scope, audience, destination, or permission changes, including withdrawal
 and regrant. Unknown scope, promises, callback errors, and other dispositions
-refuse. The host must admit the whole plan for this reader and intended recipient.
+refuse. Native Promise rejections are contained without awaiting the decision.
+The host must admit the whole plan for this reader and intended recipient.
 A test callback that always permits establishes no actual consent.
 
-`search({ query, limit })` accepts up to five items and a 2,048-byte UTF-8 query.
+`search({ query, limit })` accepts up to five items and a nonblank query of at
+most 512 UTF-16 code units, 2,048 UTF-8 bytes, and 32 terms after lowercase,
+trim, and whitespace splitting. Invalid queries refuse before admission or
+store reservation and do not consume the read budget.
 `get({ handle })` accepts only a handle issued by this reader. Optional `readScope`
 must be `all-plan`; narrower scopes refuse before store construction. Model
 arguments cannot choose paths, plans, backends, or permissions. Construction-only

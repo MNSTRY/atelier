@@ -60,7 +60,14 @@ export function createLocalEvidenceReader({ workspaceRoot, workspaceId, plan,
   function permission(operation, expected) {
     live()
     let decision
-    try { decision = record(admit(Object.freeze({ operation, ...binding, readScope: 'all-plan' })), ['disposition', 'revision', 'readScope']) }
+    try {
+      const response = admit(Object.freeze({ operation, ...binding, readScope: 'all-plan' }))
+      let asynchronous = false
+      // Contain native Promise rejection without invoking an untrusted then getter.
+      try { Promise.prototype.then.call(response, undefined, () => {}); asynchronous = true } catch {}
+      if (asynchronous) fail()
+      decision = record(response, ['disposition', 'revision', 'readScope'])
+    }
     catch { fail() }
     if (decision.disposition !== 'permit' || decision.readScope !== 'all-plan' ||
       typeof decision.revision !== 'string' || !decision.revision || decision.revision.length > 256 ||
@@ -104,7 +111,8 @@ export function createLocalEvidenceReader({ workspaceRoot, workspaceId, plan,
     search(input) {
       return execute(input, 'search', request => {
         const limit = request.limit ?? 5
-        if (typeof request.query !== 'string' || !request.query.trim() || bytes(request.query) > 2048 || !positive(limit, 5)) fail('invalid-request')
+        if (typeof request.query !== 'string' || !request.query.trim() || request.query.length > 512 ||
+          bytes(request.query) > 2048 || request.query.toLowerCase().trim().split(/\s+/u).length > 32 || !positive(limit, 5)) fail('invalid-request')
         const revision = permission('search')
         if (handles.size + limit > bounds.maxHandles) fail('budget-exhausted')
         reserve(1 + limit)

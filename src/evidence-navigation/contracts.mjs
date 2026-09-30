@@ -22,18 +22,22 @@ export function evidenceJson(value) {
     if (item === null || typeof item === 'boolean') return item
     if (typeof item === 'string' && item.length <= EVIDENCE_LIMITS.bytes && !item.includes('\u0000')) return item
     if (typeof item === 'number' && Number.isFinite(item)) return item
-    if (typeof item !== 'object' || active.has(item) || (!Array.isArray(item) && ![Object.prototype, null].includes(Object.getPrototypeOf(item)))) throw new Error('evidence value must be JSON')
+    if (typeof item !== 'object' || active.has(item)) throw new Error('evidence value must be JSON')
+    const array = Array.isArray(item)
+    const prototype = Object.getPrototypeOf(item)
+    if (array ? prototype !== Array.prototype : ![Object.prototype, null].includes(prototype)) throw new Error('evidence value must be JSON')
     active.add(item)
     const entries = []
     for (const key of Reflect.ownKeys(item)) {
-      if (Array.isArray(item) && key === 'length') continue
+      if (array && key === 'length') continue
       const descriptor = Object.getOwnPropertyDescriptor(item, key)
       if (typeof key !== 'string' || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('evidence value must be JSON')
       entries.push([key, copy(descriptor.value, depth + 1)])
     }
     let result
-    if (Array.isArray(item)) {
-      if (entries.length !== item.length || entries.some(([key], index) => key !== String(index))) throw new Error('evidence array must be dense')
+    if (array) {
+      const length = Object.getOwnPropertyDescriptor(item, 'length')?.value
+      if (entries.length !== length || entries.some(([key], index) => key !== String(index))) throw new Error('evidence array must be dense')
       result = entries.map(([, value]) => value)
     } else result = Object.fromEntries(entries)
     active.delete(item)
