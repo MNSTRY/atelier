@@ -1,0 +1,51 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "bundle",
+  "id": "outside-report",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "request": {
+      "id": "research",
+      "digest": "sha256:308ed6d35eebb2f8815204853f4038c164e012523a4e94a33df607c23e5d8ff0"
+    },
+    "attempt": "outside-report",
+    "provider": {
+      "tool": "manual-fixture",
+      "model": "unknown",
+      "runId": "unknown"
+    },
+    "prompt": "Synthetic standalone research prompt; no provider was executed.",
+    "reports": [
+      {
+        "id": "different-population",
+        "digest": "sha256:9e0846b30b86e5121e49b9d6f8262d890642712030195603c79435e426c714e8"
+      }
+    ],
+    "assertions": [
+      {
+        "id": "finding",
+        "statement": "Invented finding in a different population.",
+        "source": {
+          "id": "different-population",
+          "digest": "sha256:9e0846b30b86e5121e49b9d6f8262d890642712030195603c79435e426c714e8"
+        },
+        "quote": "Invented finding in a different population.",
+        "verification": "verified",
+        "stance": "neutral"
+      }
+    ],
+    "synthesis": "Fictional evidence for a worked example.",
+    "conflicts": [
+      "Different mechanisms remain plausible."
+    ],
+    "gaps": [
+      "No real research has been performed."
+    ],
+    "newQuestions": [
+      "Which contextual factors would change this result?"
+    ]
+  },
+  "unexpectedAuthority": true
+}

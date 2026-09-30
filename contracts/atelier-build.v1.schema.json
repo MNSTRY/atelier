@@ -1,0 +1,1076 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-build.v1.schema.json",
+  "title": "Atelier build contract",
+  "$comment": "contract revision 1.0.0 (initial local harness contract)",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/objective"
+    },
+    {
+      "$ref": "#/$defs/candidate"
+    },
+    {
+      "$ref": "#/$defs/attempt"
+    },
+    {
+      "$ref": "#/$defs/progress"
+    },
+    {
+      "$ref": "#/$defs/gate"
+    },
+    {
+      "$ref": "#/$defs/decision"
+    },
+    {
+      "$ref": "#/$defs/delivery"
+    }
+  ],
+  "$defs": {
+    "pointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "package": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "releaseDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "generation": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "binding": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "bindingDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "host": {
+          "enum": [
+            "codex-repo-v1",
+            "claude-repo-v1"
+          ]
+        },
+        "session": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "package",
+        "releaseDigest",
+        "generation",
+        "binding",
+        "bindingDigest",
+        "host",
+        "session"
+      ]
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-harness-handoff@v1"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "repositoryBinding": {
+              "enum": [
+                "establishment-record",
+                "caller-declared"
+              ]
+            },
+            "profile": {
+              "enum": [
+                "inquiry",
+                "knowledge",
+                "build"
+              ]
+            },
+            "run": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "historyDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "subject": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "id",
+                "digest"
+              ]
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "repository",
+            "repositoryBinding",
+            "profile",
+            "run",
+            "historyDigest",
+            "subject"
+          ]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "profile": {
+              "enum": [
+                "inquiry",
+                "knowledge",
+                "build"
+              ]
+            },
+            "purpose": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "repository",
+            "profile",
+            "purpose"
+          ]
+        },
+        "audience": {
+          "enum": [
+            "public",
+            "team",
+            "operator",
+            "staff",
+            "private",
+            "sensitive"
+          ]
+        },
+        "payload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "payloadDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "assurance": {
+          "const": "caller-reported"
+        },
+        "authority": {
+          "const": "none"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "source",
+        "target",
+        "audience",
+        "payload",
+        "payloadDigest",
+        "assurance",
+        "authority"
+      ]
+    },
+    "objective": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-build-record@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "kind": {
+          "const": "objective"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "owner": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "purpose": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "scope": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "audience": {
+              "enum": [
+                "public",
+                "team",
+                "operator",
+                "staff",
+                "private",
+                "sensitive"
+              ]
+            },
+            "acceptance": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "gates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                  },
+                  "kind": {
+                    "enum": [
+                      "source",
+                      "review",
+                      "ci",
+                      "runtime",
+                      "integration",
+                      "delivery"
+                    ]
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "required"
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "dependencies": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                  },
+                  "need": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "handoff": {
+                    "$ref": "#/$defs/handoff"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0
+                  }
+                },
+                "required": [
+                  "id",
+                  "need",
+                  "handoff"
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "allowedEffects": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "read-workspace",
+                  "write-workspace",
+                  "execute-local",
+                  "network",
+                  "publish",
+                  "deploy"
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "stoppingRule": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "binding": {
+              "$ref": "#/$defs/binding"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "repository",
+            "owner",
+            "purpose",
+            "scope",
+            "audience",
+            "acceptance",
+            "gates",
+            "dependencies",
+            "allowedEffects",
+            "maxAttempts",
+            "stoppingRule"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "run",
+        "at",
+        "by",
+        "kind",
+        "data"
+      ]
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-build-record@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "kind": {
+          "const": "candidate"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "objective": {
+              "$ref": "#/$defs/pointer"
+            },
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "tree": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "artifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "writer": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "owner": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "reservation": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "evidenceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "owner",
+                "reservation",
+                "evidenceDigest"
+              ]
+            },
+            "supersedes": {
+              "$ref": "#/$defs/pointer"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "objective",
+            "repository",
+            "commit",
+            "tree",
+            "artifactDigest",
+            "writer"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "run",
+        "at",
+        "by",
+        "kind",
+        "data"
+      ]
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-build-record@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "kind": {
+          "const": "attempt"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "$ref": "#/$defs/pointer"
+            },
+            "operation": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "requestDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "effects": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "read-workspace",
+                  "write-workspace",
+                  "execute-local",
+                  "network",
+                  "publish",
+                  "deploy"
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "candidate",
+            "operation",
+            "requestDigest",
+            "effects"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "run",
+        "at",
+        "by",
+        "kind",
+        "data"
+      ]
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-build-record@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "kind": {
+          "const": "progress"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "attempt": {
+              "$ref": "#/$defs/pointer"
+            },
+            "state": {
+              "enum": [
+                "running",
+                "uncertain",
+                "completed",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "evidenceDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "attempt",
+            "state",
+            "evidenceDigest",
+            "reason"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "run",
+        "at",
+        "by",
+        "kind",
+        "data"
+      ]
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-build-record@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "kind": {
+          "const": "gate"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "$ref": "#/$defs/pointer"
+            },
+            "gate": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "status": {
+              "enum": [
+                "passed",
+                "failed",
+                "unavailable"
+              ]
+            },
+            "evidence": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "locator": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "verifier": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0
+                }
+              },
+              "required": [
+                "digest",
+                "locator",
+                "verifier"
+              ]
+            },
+            "attempt": {
+              "$ref": "#/$defs/pointer"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "candidate",
+            "gate",
+            "status",
+            "evidence"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "run",
+        "at",
+        "by",
+        "kind",
+        "data"
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-build-record@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "kind": {
+          "const": "decision"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "$ref": "#/$defs/pointer"
+            },
+            "disposition": {
+              "enum": [
+                "accepted",
+                "changes-requested"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "gates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pointer"
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "candidate",
+            "disposition",
+            "reason",
+            "gates"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "run",
+        "at",
+        "by",
+        "kind",
+        "data"
+      ]
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-build-record@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "kind": {
+          "const": "delivery"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/pointer"
+            },
+            "recipient": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "evidenceDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "acceptance": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "decision",
+            "recipient",
+            "evidenceDigest",
+            "acceptance"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "run",
+        "at",
+        "by",
+        "kind",
+        "data"
+      ]
+    },
+    "record": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/objective"
+        },
+        {
+          "$ref": "#/$defs/candidate"
+        },
+        {
+          "$ref": "#/$defs/attempt"
+        },
+        {
+          "$ref": "#/$defs/progress"
+        },
+        {
+          "$ref": "#/$defs/gate"
+        },
+        {
+          "$ref": "#/$defs/decision"
+        },
+        {
+          "$ref": "#/$defs/delivery"
+        }
+      ]
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-harness-ledger@v1"
+        },
+        "profile": {
+          "const": "build"
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "profile",
+        "records",
+        "head"
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "campaign",
+  "id": "workshop",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "title": "Fictional workshop inquiry",
+    "purpose": "Learn whether a reminder helps return visits.",
+    "scope": "Invented workshop; no real participants or study results.",
+    "owner": "synthetic-operator",
+    "audience": "private",
+    "stoppingRule": "Stop after checking the agreed evidence and naming remaining uncertainty."
+  },
+  "unexpectedAuthority": true
+}

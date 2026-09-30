@@ -1,0 +1,31 @@
+{
+  "schema": "atelier-build-record@v1",
+  "id": "candidate-review",
+  "run": "reminder-build",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "decision",
+  "data": {
+    "candidate": {
+      "id": "prototype",
+      "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+    },
+    "disposition": "accepted",
+    "reason": "Simulated acceptance for contract testing only.",
+    "gates": [
+      {
+        "id": "tests-gate",
+        "digest": "sha256:a593d49d82d3df0d7dd17345df9f2f0de8054c4e369ce4cb53d62d267cae0ca6"
+      },
+      {
+        "id": "review-gate",
+        "digest": "sha256:cc5c0fd1cefe4e8a6140e5f4f8c48771d5a3fbd5d49973f8e194c9ba325020f8"
+      },
+      {
+        "id": "ci-gate",
+        "digest": "sha256:2b9b5926cf18441430ef76798644d3d45e86a599c0e30a30440aae4ff2618f22"
+      }
+    ]
+  },
+  "authorityGranted": true
+}

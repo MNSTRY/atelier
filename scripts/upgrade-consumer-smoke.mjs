@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { upgradeTestGit } from './upgrade-test-git.mjs'
+import { verifyInstalledTemplateUpgrade } from './template-upgrade-consumer-smoke.mjs'
 
 const git = (root, args) => {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })
@@ -79,4 +80,5 @@ function verifyUpgrade({ installedRoot, consumerRoot }) {
   assert.equal(status.status, 0, status.stderr)
   assert.equal(JSON.parse(status.stdout).activated, false)
   console.log('[upgrade:consumer] installed exact plan, protected commit, source preservation and receipt passed')
+  verifyInstalledTemplateUpgrade({ installedRoot, consumerRoot, source, root, env })
 }

@@ -1,0 +1,18 @@
+{
+  "schema": "atelier-inquiry-record@v1",
+  "kind": "legacy-assessment",
+  "id": "old-score",
+  "campaign": "workshop",
+  "at": "2026-01-01T00:00:00.000Z",
+  "by": "synthetic-operator",
+  "data": {
+    "hypothesis": {
+      "id": "reminder",
+      "digest": "sha256:f8acf402755db2818b98df27d6ef57b72f2e8f926b7cedb1321d8033964af672"
+    },
+    "value": 0.8,
+    "sourceDigest": "sha256:b48d0f19782c75d9d0c98a781182a008ba843195ee9a518c3355977c8a6e201c",
+    "method": "Historical weighted heuristic",
+    "limitations": "Not a calibrated probability and never used as an automatic prior."
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "schema": "atelier-knowledge-record@v1",
+  "id": "domain-next",
+  "run": "workshop-knowledge",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "domain-revision",
+  "data": {
+    "repository": "workshop-notes",
+    "purpose": "Synthetic learning-cycle demonstration.",
+    "scope": "Invented workshop visitors",
+    "owner": "synthetic-owner",
+    "audience": "private",
+    "questions": [
+      {
+        "id": "return",
+        "question": "What justifies a reversible reminder trial?",
+        "acceptance": "A reviewed rationale traces to a source and its limitations."
+      }
+    ],
+    "vocabulary": {
+      "types": [
+        {
+          "id": "material",
+          "meaning": "A source or interpreted contribution."
+        }
+      ],
+      "relations": [
+        {
+          "id": "justifies",
+          "meaning": "A limited evidential relationship.",
+          "graphPredicate": "supports"
+        }
+      ]
+    },
+    "identityRules": "Keep distinct observations distinct; propose matches for review.",
+    "sourcePolicy": "Invented material only; retain original bytes and provenance.",
+    "acceptancePolicy": "A simulated owner reviews each contribution after evaluation.",
+    "supersedes": {
+      "id": "workshop-knowledge",
+      "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+    },
+    "migration": "Synthetic vocabulary revision requires reevaluation of dependent knowledge."
+  },
+  "authorityGranted": true
+}

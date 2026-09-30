@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-adoption-policy.v2.schema.json",
+  "$comment": "contract revision 2.0.0",
+  "title": "mnstry.atelier-adoption-policy@v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "enabled",
+    "mode",
+    "maxAgeSeconds",
+    "recoveryCoverage",
+    "allowedEffects",
+    "participant"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-adoption-policy@v2"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "mode": {
+      "const": "manual-exact-plan"
+    },
+    "maxAgeSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "recoveryCoverage": {
+      "const": "local-only"
+    },
+    "allowedEffects": {
+      "const": [
+        "template-adoption",
+        "lock-and-projections",
+        "git-commit"
+      ]
+    },
+    "participant": {
+      "const": "local-template-profile@1"
+    },
+    "ext": {
+      "type": "object",
+      "maxProperties": 0,
+      "description": "Reserved extension container; no extension behavior is supported by this contract."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^2\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

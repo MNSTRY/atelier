@@ -1,0 +1,21 @@
+{
+  "schema": "atelier-build-record@v1",
+  "id": "ci-gate",
+  "run": "reminder-build",
+  "at": "2026-01-01T00:00:00Z",
+  "by": "synthetic-owner",
+  "kind": "gate",
+  "data": {
+    "candidate": {
+      "id": "prototype",
+      "digest": "sha256:ffc34b03a9a24338e690ddf3834e663467906d55496425f27fa8d0d965636395"
+    },
+    "gate": "ci",
+    "status": "passed",
+    "evidence": {
+      "digest": "sha256:b08431c7ef924beae08c9b090aacfc974ffe8d9286390320640572808779b81a",
+      "locator": "synthetic:ci",
+      "verifier": "synthetic-fixture"
+    }
+  }
+}

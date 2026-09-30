@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
   MNSTRY_READINESS_PACK_SCHEMA,
@@ -35,6 +36,13 @@ const allowedClaimPredicates = new Set([
   'contradicts',
   'belongs_to',
 ])
+
+test('bundled v1 identity retains the digest recorded by existing release locks', () => {
+  assert.equal(bundledMnstryReadinessPackV1.id, 'mnstry-readiness-pack')
+  assert.equal(bundledMnstryReadinessPackV1.version, 'v1')
+  assert.equal(createHash('sha256').update(JSON.stringify(bundledMnstryReadinessPackV1)).digest('hex'),
+    '134a618e6854e2d30bd2e1439a28671cdb0df3e5ed0ac1e8689fcd989f0f8d5a')
+})
 
 test('bundled readiness pack exposes all v1 protocols for import', () => {
   assert.equal(MNSTRY_READINESS_PACK_SCHEMA, 'mnstry-readiness-pack@v1')

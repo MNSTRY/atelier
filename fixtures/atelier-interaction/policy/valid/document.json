@@ -1,0 +1,19 @@
+{
+  "schema": "atelier-interaction-policy@v1",
+  "id": "work-policy",
+  "revision": 1,
+  "scope": "workshop",
+  "purpose": "work-quality",
+  "reflectionEnabled": true,
+  "coachingEnabled": false,
+  "challengeEnabled": true,
+  "initiative": "responsive",
+  "pacing": "one-at-a-time",
+  "qualities": [
+    "clarity",
+    "candor",
+    "attribution",
+    "uncertainty",
+    "repair"
+  ]
+}

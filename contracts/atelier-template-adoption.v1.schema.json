@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-template-adoption.v1.schema.json",
+  "$comment": "contract revision 1.0.0",
+  "title": "mnstry.atelier-template-adoption@v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "participant",
+    "templateRef",
+    "bindingRef",
+    "inputs",
+    "previousAdoptionDigest",
+    "managed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-template-adoption@v1"
+    },
+    "participant": {
+      "const": "local-template-profile@1"
+    },
+    "templateRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "TemplateRef"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[.:-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$",
+          "maxLength": 64
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved extension container; no extension behavior is supported by this contract."
+        }
+      }
+    },
+    "bindingRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "kind": {
+          "const": "BindingRef"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[.:-][a-z0-9]+)*$",
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$",
+          "maxLength": 64
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved extension container; no extension behavior is supported by this contract."
+        }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "selection"
+      ],
+      "properties": {
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "digest"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved extension container; no extension behavior is supported by this contract."
+            }
+          }
+        },
+        "selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "digest"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved extension container; no extension behavior is supported by this contract."
+            }
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved extension container; no extension behavior is supported by this contract."
+        }
+      }
+    },
+    "previousAdoptionDigest": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      ]
+    },
+    "managed": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "state"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "digest",
+              "mode"
+            ],
+            "properties": {
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "mode": {
+                "const": "100644"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0,
+                "description": "Reserved extension container; no extension behavior is supported by this contract."
+              }
+            }
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0,
+            "description": "Reserved extension container; no extension behavior is supported by this contract."
+          }
+        }
+      }
+    },
+    "ext": {
+      "type": "object",
+      "maxProperties": 0,
+      "description": "Reserved extension container; no extension behavior is supported by this contract."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

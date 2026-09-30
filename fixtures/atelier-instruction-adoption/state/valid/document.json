@@ -1,0 +1,29 @@
+{
+  "schema": "atelier-instruction-state@v1",
+  "workspace": "sha256:2e2ff87336e5b47594cfab87f9ef035e2026ea8349d22b088de009e009c07616",
+  "revision": 1,
+  "bindings": [
+    {
+      "workspaceId": "sample",
+      "scope": {
+        "project": "sample",
+        "activity": "summary"
+      },
+      "harnessId": "local-summary",
+      "lessonId": "lesson",
+      "target": "AGENTS.md",
+      "slot": "uncertainty",
+      "mode": "adopt",
+      "pin": {
+        "lessonId": "lesson",
+        "lessonDigest": "sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19",
+        "artifactDigest": "sha256:61d589707df7ad1cb3e803ccf93d914cfd29fa304be05a236d68159e8fce36af",
+        "activationId": "activation",
+        "decisionId": "decision:d573fdba1a00eba338d358da26a45e30"
+      },
+      "block": "<!-- atelier:practice:uncertainty:start -->\nScope: project sample; activity summary; harness local-summary.\nPractice: lesson (sha256:846182be6cd11c823b9298100268c3a2ab0ddf407fe75184ae60ef3c72d17f19). Apply only in this scope; host instructions and tool permissions retain their precedence.\n\nRetain material uncertainty beside the affected claim.\n\nExceptions:\n- Do not invent a missing gap.\n<!-- atelier:practice:uncertainty:end -->",
+      "blockDigest": "sha256:e8a0a2183c0cea691ce2bf10c0bec2ef7f7c7bd7ae433ffb2ba190bf541e94fa"
+    }
+  ],
+  "digest": "sha256:b1b25079f91c4e1ceb3e5d854582ed48531f3d80da8545fdca2d6838f1b55cea"
+}

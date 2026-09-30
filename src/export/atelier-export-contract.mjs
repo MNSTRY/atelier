@@ -191,18 +191,45 @@ function formatAjvError(error) {
   return `${location} ${error.message ?? 'failed schema validation'}`
 }
 
-// One compiled validator per schema object, for as long as the schema lives:
-// compilation is a pure function of the schema, and a registered contract is
-// validated many times per run (a large manifest, every journal entry).
+// Retain one compiled version per schema object. Callers may edit their schema
+// between validations, so identity alone is not a valid cache key.
 const compiledValidators = new WeakMap()
+
+// Only cache ordinary JSON data. Read descriptors instead of invoking getters
+// or toJSON hooks; unusual JavaScript schemas keep the fresh-compilation path.
+function schemaCacheKey(value, ancestors = new Set()) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))) return JSON.stringify(value)
+  if (typeof value !== 'object' || ancestors.has(value)) return undefined
+  const array = Array.isArray(value)
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== (array ? Array.prototype : Object.prototype) && !(prototype === null && !array)) return undefined
+  ancestors.add(value)
+  try {
+    const parts = []
+    for (const key of Reflect.ownKeys(value)) {
+      if (array && key === 'length') continue
+      if (typeof key !== 'string' || (array && key !== String(parts.length))) return undefined
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return undefined
+      const part = schemaCacheKey(descriptor.value, ancestors)
+      if (part === undefined) return undefined
+      parts.push(array ? part : `${JSON.stringify(key)}:${part}`)
+    }
+    if (array && parts.length !== value.length) return undefined
+    return array ? `[${parts.join(',')}]` : `{${parts.join(',')}}`
+  } finally { ancestors.delete(value) }
+}
 
 function validatorFor(schema) {
   if (schema === null || typeof schema !== 'object') return ajvForSchema().compile(schema)
-  let validate = compiledValidators.get(schema)
-  if (!validate) {
-    validate = ajvForSchema().compile(schema)
-    compiledValidators.set(schema, validate)
-  }
+  let key
+  try { key = schemaCacheKey(schema) } catch { /* Let Ajv report invalid schemas. */ }
+  if (key === undefined) return ajvForSchema().compile(schema)
+  const cached = compiledValidators.get(schema)
+  if (cached?.key === key) return cached.validate
+  const validate = ajvForSchema().compile(schema)
+  compiledValidators.set(schema, { key, validate })
   return validate
 }
 

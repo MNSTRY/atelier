@@ -1,0 +1,21 @@
+{
+  "schema": "atelier-reflection-observation@v1",
+  "id": "tool-delay",
+  "revision": 1,
+  "scope": "workshop",
+  "purpose": "work-quality",
+  "subject": {
+    "kind": "system",
+    "id": "editor"
+  },
+  "author": "participant",
+  "occurredAt": "2026-01-02T10:00:00Z",
+  "recordedAt": "2026-01-02T10:00:00Z",
+  "report": "The editor discarded a draft after a delay.",
+  "assistance": "assisted",
+  "status": "active",
+  "source": {
+    "ref": "local-report",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  }
+}

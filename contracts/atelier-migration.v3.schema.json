@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-migration.v3.schema.json",
+  "$comment": "contract revision 3.0.0",
+  "title": "mnstry.atelier-migration@v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "executorDigest",
+    "readScope",
+    "allowedWrites",
+    "sideEffects",
+    "postChecks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mnstry.atelier-migration@v3"
+    },
+    "id": {
+      "const": "local-template-profile@1"
+    },
+    "executorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "readScope": {
+      "const": "whole-enrolled-repository"
+    },
+    "allowedWrites": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "sideEffects": {
+      "const": [
+        "git-index",
+        "git-commit"
+      ]
+    },
+    "postChecks": {
+      "const": [
+        "exact-inventory",
+        "lock-schema",
+        "exact-index",
+        "commit-parent-tree-message",
+        "template-adoption",
+        "template-current-source"
+      ]
+    },
+    "ext": {
+      "type": "object",
+      "maxProperties": 0,
+      "description": "Reserved extension container; no extension behavior is supported by this contract."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^3\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "schema": "mnstry.atelier-capability-release@v1",
+  "package": {
+    "schema": "mnstry.atelier-capability-package@v1",
+    "version": "1.0.0",
+    "license": "Apache-2.0",
+    "source": {
+      "repository": "https://example.org/capability-source",
+      "revision": "synthetic-example-v1"
+    },
+    "hosts": [
+      "codex-repo-v1",
+      "claude-repo-v1"
+    ],
+    "dependencies": [],
+    "evaluations": [
+      {
+        "id": "acceptance-plan",
+        "kind": "integration",
+        "path": "evaluation.md",
+        "outcome": "unknown"
+      }
+    ],
+    "migrations": [],
+    "limitations": [
+      "Example package; publisher identity is illustrative and unauthenticated.",
+      "Host discovery and research quality require actual session-specific evaluation."
+    ],
+    "id": "atelier.examples/evidence-review",
+    "title": "Evidence review",
+    "summary": "Check a claim against the sources available to the reviewer.",
+    "capabilities": [
+      {
+        "id": "evidence-review",
+        "description": "Produce a traceable claim review.",
+        "inputs": [
+          "Claims and source material"
+        ],
+        "outputs": [
+          "Claim ledger and unresolved questions"
+        ]
+      }
+    ],
+    "skills": [
+      {
+        "id": "review",
+        "name": "evidence-review",
+        "path": "skills/evidence-review",
+        "capabilities": [
+          "evidence-review"
+        ]
+      }
+    ],
+    "requirements": {
+      "tools": [],
+      "effects": [
+        "read-workspace"
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": "capability-package.json",
+      "digest": "sha256:45cf71be043715d42a800998e41228261e1a53afc2058a3adac5b8dce9e614cb",
+      "bytes": 1355
+    },
+    {
+      "path": "evaluation.md",
+      "digest": "sha256:f449b05d2911df367c7724c6402b1573cafe84855c732888e77baec2baaddc20",
+      "bytes": 841
+    },
+    {
+      "path": "skills/evidence-review/SKILL.md",
+      "digest": "sha256:6012b729e0801c0f7c3fc56a7ec453af02cc7a0faa8dc840ecf3724a090c7756",
+      "bytes": 1063
+    },
+    {
+      "path": "skills/evidence-review/references/ledger.md",
+      "digest": "sha256:2d0c7c77d7d0f867451f2bc50395f79604947c2da7acf907674c41b00636b9cf",
+      "bytes": 334
+    }
+  ],
+  "digest": "sha256:07b469accc0d81eb787fcac90443bdb054235d546b7283c0c5dc4bd2b3951913",
+  "unexpectedAuthority": true
+}

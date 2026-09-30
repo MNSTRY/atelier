@@ -1,0 +1,23 @@
+{
+  "schema": "atelier-trackable-command@v1",
+  "requestId": "release-one",
+  "expectedRevision": 0,
+  "operation": "release",
+  "input": {
+    "definition": {
+      "schema": "atelier-trackable-definition@v1",
+      "id": "workshop-practice",
+      "revision": 1,
+      "purpose": "Record an invented practice.",
+      "profile": "recurring-practice",
+      "schedule": {
+        "cadence": "daily",
+        "timezone": "UTC"
+      },
+      "interpretationLimits": [
+        "Participation does not establish independent ability."
+      ]
+    }
+  },
+  "unexpected": true
+}

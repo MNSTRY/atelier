@@ -1,0 +1,39 @@
+{
+  "schema": "atelier-coordination-record@v1",
+  "kind": "outcome",
+  "repository": "alpha",
+  "id": "producer",
+  "revision": 1,
+  "scope": [
+    "workshop"
+  ],
+  "observedAt": "2026-01-01T00:00:00Z",
+  "expiresAt": "2026-01-03T00:00:00Z",
+  "source": {
+    "ref": "native:receipt",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "body": {
+    "owner": "owner",
+    "purpose": "Deliver a synthetic artifact.",
+    "priority": null,
+    "candidate": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "artifactDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "gates": [
+      {
+        "id": "source",
+        "status": "passed",
+        "candidateDigest": "sha256:a369334dba4dcfe4cfc581ee8572c5ce9ccf1f3d8a3ee74a6e4d4e024bd321ef",
+        "evidence": {
+          "ref": "native:receipt",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      }
+    ],
+    "lifecycle": "active"
+  },
+  "unexpected": true
+}

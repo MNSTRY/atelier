@@ -1,0 +1,1095 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-learning.v1.schema.json",
+  "title": "Portable local learning history v1",
+  "description": "Locally asserted evidence and authority. Integrity digests are not identity authentication; source digests are external assertions. Check artifacts are inert. No import or executable installation authority.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/record"
+    },
+    {
+      "$ref": "#/$defs/event"
+    },
+    {
+      "$ref": "#/$defs/workspace"
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$",
+      "maxLength": 128
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "activity"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "#/$defs/id"
+        },
+        "activity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "const": "*"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "tool"
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "digest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "content"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "instruction",
+            "skill",
+            "principle",
+            "check"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/id"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "captureInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "signal",
+        "text",
+        "interpretation",
+        "scope",
+        "source"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "signal": {
+          "enum": [
+            "user-correction",
+            "successful-run",
+            "tool-failure",
+            "exception"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "interpretation": {
+          "enum": [
+            "explicit",
+            "inferred",
+            "tool"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "lessonId": {
+          "$ref": "#/$defs/id"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "proposeInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "principle",
+        "rationale",
+        "exceptions",
+        "evidenceIds",
+        "scope",
+        "artifact"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "principle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "exceptions": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "evidenceIds": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/id"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "decideInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lessonId",
+        "lessonDigest",
+        "verdict",
+        "reason"
+      ],
+      "properties": {
+        "lessonId": {
+          "$ref": "#/$defs/id"
+        },
+        "lessonDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "verdict": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "deferred"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "activateInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "lessonId",
+        "lessonDigest",
+        "decisionId",
+        "harnessId"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "lessonId": {
+          "$ref": "#/$defs/id"
+        },
+        "lessonDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "decisionId": {
+          "$ref": "#/$defs/id"
+        },
+        "harnessId": {
+          "$ref": "#/$defs/id"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "withdrawInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activationId",
+        "reason"
+      ],
+      "properties": {
+        "activationId": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        }
+      }
+    },
+    "request": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestId",
+            "expectedRevision",
+            "operation",
+            "input"
+          ],
+          "properties": {
+            "requestId": {
+              "$ref": "#/$defs/id"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000
+            },
+            "operation": {
+              "const": "capture"
+            },
+            "input": {
+              "$ref": "#/$defs/captureInput"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved inert extension container; no extension members are interpreted in v1."
+            },
+            "contractVersion": {
+              "type": "string",
+              "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestId",
+            "expectedRevision",
+            "operation",
+            "input"
+          ],
+          "properties": {
+            "requestId": {
+              "$ref": "#/$defs/id"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000
+            },
+            "operation": {
+              "const": "propose"
+            },
+            "input": {
+              "$ref": "#/$defs/proposeInput"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved inert extension container; no extension members are interpreted in v1."
+            },
+            "contractVersion": {
+              "type": "string",
+              "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestId",
+            "expectedRevision",
+            "operation",
+            "input"
+          ],
+          "properties": {
+            "requestId": {
+              "$ref": "#/$defs/id"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000
+            },
+            "operation": {
+              "const": "decide"
+            },
+            "input": {
+              "$ref": "#/$defs/decideInput"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved inert extension container; no extension members are interpreted in v1."
+            },
+            "contractVersion": {
+              "type": "string",
+              "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestId",
+            "expectedRevision",
+            "operation",
+            "input"
+          ],
+          "properties": {
+            "requestId": {
+              "$ref": "#/$defs/id"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000
+            },
+            "operation": {
+              "const": "activate"
+            },
+            "input": {
+              "$ref": "#/$defs/activateInput"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved inert extension container; no extension members are interpreted in v1."
+            },
+            "contractVersion": {
+              "type": "string",
+              "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requestId",
+            "expectedRevision",
+            "operation",
+            "input"
+          ],
+          "properties": {
+            "requestId": {
+              "$ref": "#/$defs/id"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000
+            },
+            "operation": {
+              "const": "withdraw"
+            },
+            "input": {
+              "$ref": "#/$defs/withdrawInput"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved inert extension container; no extension members are interpreted in v1."
+            },
+            "contractVersion": {
+              "type": "string",
+              "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+            }
+          }
+        }
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "workspaceId",
+        "revision",
+        "actor",
+        "createdAt",
+        "digest",
+        "signal",
+        "text",
+        "interpretation",
+        "scope",
+        "source"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-learning-observation@v1"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "signal": {
+          "enum": [
+            "user-correction",
+            "successful-run",
+            "tool-failure",
+            "exception"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "interpretation": {
+          "enum": [
+            "explicit",
+            "inferred",
+            "tool"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "lessonId": {
+          "$ref": "#/$defs/id"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "lesson": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "workspaceId",
+        "revision",
+        "actor",
+        "createdAt",
+        "digest",
+        "title",
+        "principle",
+        "rationale",
+        "exceptions",
+        "evidenceIds",
+        "scope",
+        "artifact",
+        "evidence"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-learning-lesson@v1"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "principle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "exceptions": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "evidenceIds": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "content",
+            "digest"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "instruction",
+                "skill",
+                "principle",
+                "check"
+              ]
+            },
+            "name": {
+              "$ref": "#/$defs/id"
+            },
+            "content": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved inert extension container; no extension members are interpreted in v1."
+            }
+          }
+        },
+        "supersedes": {
+          "$ref": "#/$defs/id"
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "digest"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "digest": {
+                "$ref": "#/$defs/digest"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0,
+                "description": "Reserved inert extension container; no extension members are interpreted in v1."
+              }
+            }
+          }
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "workspaceId",
+        "revision",
+        "actor",
+        "createdAt",
+        "digest",
+        "lessonId",
+        "lessonDigest",
+        "verdict",
+        "reason"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-learning-decision@v1"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "lessonId": {
+          "$ref": "#/$defs/id"
+        },
+        "lessonDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "verdict": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "deferred"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "workspaceId",
+        "revision",
+        "actor",
+        "createdAt",
+        "digest",
+        "lessonId",
+        "lessonDigest",
+        "decisionId",
+        "harnessId",
+        "artifactDigest"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-learning-activation@v1"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "lessonId": {
+          "$ref": "#/$defs/id"
+        },
+        "lessonDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "decisionId": {
+          "$ref": "#/$defs/id"
+        },
+        "harnessId": {
+          "$ref": "#/$defs/id"
+        },
+        "artifactDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "withdrawal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "workspaceId",
+        "revision",
+        "actor",
+        "createdAt",
+        "digest",
+        "activationId",
+        "reason"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-learning-withdrawal@v1"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "activationId": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "record": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/observation"
+        },
+        {
+          "$ref": "#/$defs/lesson"
+        },
+        {
+          "$ref": "#/$defs/decision"
+        },
+        {
+          "$ref": "#/$defs/activation"
+        },
+        {
+          "$ref": "#/$defs/withdrawal"
+        }
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "workspaceId",
+        "id",
+        "revision",
+        "previousDigest",
+        "requestDigest",
+        "request",
+        "actor",
+        "createdAt",
+        "record",
+        "digest"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-learning-event@v1"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "previousDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "record": {
+          "$ref": "#/$defs/record"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "workspaceId"
+      ],
+      "properties": {
+        "schema": {
+          "const": "mnstry.atelier-learning-workspace@v1"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/id"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved inert extension container; no extension members are interpreted in v1."
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    }
+  },
+  "$comment": "contract revision 1.0.0; local asserted authority, inert artifacts, and private integrity history only."
+}

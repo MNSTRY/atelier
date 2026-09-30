@@ -1,0 +1,553 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-interaction.v1.schema.json",
+  "title": "Interaction and reflective contribution contracts",
+  "$comment": "contract revision 1.0.0; host-owned evidence and delivery",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/observation"
+    },
+    {
+      "$ref": "#/$defs/assessment"
+    },
+    {
+      "$ref": "#/$defs/act"
+    },
+    {
+      "$ref": "#/$defs/policy"
+    }
+  ],
+  "$defs": {
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "observation",
+            "assessment",
+            "intention",
+            "preference"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "digest"
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-reflection-observation@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "purpose": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "person",
+                "work",
+                "system",
+                "interface"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        "author": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "recordedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "report": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "assistance": {
+          "enum": [
+            "independent",
+            "assisted",
+            "unknown"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "withdrawn"
+          ]
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "ref",
+            "digest"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "revision",
+        "scope",
+        "purpose",
+        "subject",
+        "author",
+        "occurredAt",
+        "recordedAt",
+        "report",
+        "assistance",
+        "status",
+        "source"
+      ]
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-reflection-assessment@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "purpose": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "person",
+                "work",
+                "system",
+                "interface"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        "author": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "criterion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "observation",
+                  "assessment",
+                  "intention",
+                  "preference"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "digest"
+            ]
+          },
+          "maxItems": 32
+        },
+        "method": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ]
+        },
+        "uncertainty": {
+          "enum": [
+            "low",
+            "material",
+            "unknown"
+          ]
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "maxItems": 32
+        },
+        "claimKind": {
+          "enum": [
+            "task-quality",
+            "participation",
+            "system-friction",
+            "independent-capacity"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "withdrawn"
+          ]
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "revision",
+        "scope",
+        "purpose",
+        "subject",
+        "author",
+        "criterion",
+        "claim",
+        "evidence",
+        "method",
+        "uncertainty",
+        "limits",
+        "claimKind",
+        "status"
+      ]
+    },
+    "act": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-interaction-act@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "scope": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "purpose": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "origin": {
+          "enum": [
+            "work",
+            "companion",
+            "witness"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "ask",
+            "explain",
+            "reflect",
+            "propose",
+            "challenge",
+            "acknowledge",
+            "repair"
+          ]
+        },
+        "meaning": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "mode": {
+          "enum": [
+            "ordinary",
+            "reflective",
+            "coaching"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "observation",
+                  "assessment",
+                  "intention",
+                  "preference"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "digest"
+            ]
+          },
+          "maxItems": 32
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "scope",
+        "purpose",
+        "origin",
+        "kind",
+        "meaning",
+        "text",
+        "mode",
+        "dependencies",
+        "expiresAt"
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-interaction-policy@v1"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "purpose": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+        },
+        "reflectionEnabled": {
+          "type": "boolean"
+        },
+        "coachingEnabled": {
+          "type": "boolean"
+        },
+        "challengeEnabled": {
+          "type": "boolean"
+        },
+        "initiative": {
+          "enum": [
+            "responsive",
+            "proactive"
+          ]
+        },
+        "pacing": {
+          "enum": [
+            "one-at-a-time"
+          ]
+        },
+        "qualities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "clarity",
+              "warmth",
+              "candor",
+              "attribution",
+              "uncertainty",
+              "repair"
+            ]
+          },
+          "maxItems": 32
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "revision",
+        "scope",
+        "purpose",
+        "reflectionEnabled",
+        "coachingEnabled",
+        "challengeEnabled",
+        "initiative",
+        "pacing",
+        "qualities"
+      ]
+    }
+  }
+}

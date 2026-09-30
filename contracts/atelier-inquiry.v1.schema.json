@@ -1,0 +1,1772 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-inquiry.v1.schema.json",
+  "title": "Atelier inquiry records",
+  "description": "Local caller-reported inquiry history. Format validity grants no execution, disclosure or publication authority.",
+  "$defs": {
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "campaign"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "purpose",
+            "scope",
+            "owner",
+            "audience",
+            "stoppingRule"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "purpose": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "scope": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "owner": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "audience": {
+              "enum": [
+                "public",
+                "team",
+                "operator",
+                "staff",
+                "private",
+                "sensitive"
+              ]
+            },
+            "stoppingRule": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "hypothesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "hypothesis"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "question",
+            "scope",
+            "context",
+            "alternatives",
+            "testPlan"
+          ],
+          "properties": {
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "scope": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "alternatives": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "testPlan": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "supersedes": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "request"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hypothesis",
+            "question",
+            "context",
+            "lenses",
+            "sourceStandards",
+            "maxReports",
+            "budget",
+            "allowedEffects"
+          ],
+          "properties": {
+            "hypothesis": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "lenses": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "question",
+                  "method",
+                  "exclusions"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                  },
+                  "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "method": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "exclusions": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "description": "Reserved; no extensions admitted in this version."
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "sourceStandards": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "maxReports": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "budget": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "allowedEffects": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "read-workspace",
+                  "write-workspace",
+                  "network"
+                ]
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "binding": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "package",
+                "releaseDigest",
+                "generation",
+                "binding",
+                "bindingDigest",
+                "host",
+                "session"
+              ],
+              "properties": {
+                "package": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "releaseDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "generation": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "binding": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "bindingDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "host": {
+                  "enum": [
+                    "codex-repo-v1",
+                    "claude-repo-v1"
+                  ]
+                },
+                "session": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "source"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "locator",
+            "content",
+            "digest",
+            "family",
+            "scope",
+            "method",
+            "audience"
+          ],
+          "properties": {
+            "locator": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "content": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 262144
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "family": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "scope": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "audience": {
+              "enum": [
+                "public",
+                "team",
+                "operator",
+                "staff",
+                "private",
+                "sensitive"
+              ]
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "bundle"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request",
+            "attempt",
+            "provider",
+            "prompt",
+            "reports",
+            "assertions",
+            "synthesis",
+            "conflicts",
+            "gaps",
+            "newQuestions"
+          ],
+          "properties": {
+            "request": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "attempt": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            "provider": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "tool",
+                "model",
+                "runId"
+              ],
+              "properties": {
+                "tool": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "runId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "prompt": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1048576
+            },
+            "reports": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "digest"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                  },
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "description": "Reserved; no extensions admitted in this version."
+                  }
+                }
+              },
+              "minItems": 1,
+              "maxItems": 64
+            },
+            "assertions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "statement",
+                  "source",
+                  "quote",
+                  "verification",
+                  "stance"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                  },
+                  "statement": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "source": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "digest"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[a-f0-9]{64}$"
+                      },
+                      "ext": {
+                        "type": "object",
+                        "maxProperties": 0,
+                        "description": "Reserved; no extensions admitted in this version."
+                      }
+                    }
+                  },
+                  "quote": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "verification": {
+                    "enum": [
+                      "verified",
+                      "unverified",
+                      "unsupported"
+                    ]
+                  },
+                  "stance": {
+                    "enum": [
+                      "supports",
+                      "contradicts",
+                      "neutral"
+                    ]
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "description": "Reserved; no extensions admitted in this version."
+                  }
+                }
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "synthesis": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "gaps": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "newQuestions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "clarifications": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "question",
+                  "answer"
+                ],
+                "properties": {
+                  "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "answer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "description": "Reserved; no extensions admitted in this version."
+                  }
+                }
+              }
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "assessment"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hypothesis",
+            "evidence",
+            "model",
+            "rationale"
+          ],
+          "properties": {
+            "hypothesis": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bundle",
+                  "assertion"
+                ],
+                "properties": {
+                  "bundle": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "digest"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[a-f0-9]{64}$"
+                      },
+                      "ext": {
+                        "type": "object",
+                        "maxProperties": 0,
+                        "description": "Reserved; no extensions admitted in this version."
+                      }
+                    }
+                  },
+                  "assertion": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                  },
+                  "ext": {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "description": "Reserved; no extensions admitted in this version."
+                  }
+                }
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "model": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "judgment"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "qualitative"
+                    },
+                    "judgment": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    },
+                    "ext": {
+                      "type": "object",
+                      "maxProperties": 0,
+                      "description": "Reserved; no extensions admitted in this version."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "priorFamilies",
+                    "assumptions",
+                    "prior",
+                    "sensitivityPriors",
+                    "likelihoods"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "elicited-odds"
+                    },
+                    "priorFamilies": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                      },
+                      "minItems": 0,
+                      "maxItems": 64
+                    },
+                    "assumptions": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    },
+                    "prior": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "exclusiveMaximum": 1
+                    },
+                    "sensitivityPriors": {
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "exclusiveMaximum": 1
+                      },
+                      "minItems": 0,
+                      "maxItems": 64
+                    },
+                    "likelihoods": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "key",
+                          "ratio"
+                        ],
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096
+                          },
+                          "ratio": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000
+                          },
+                          "ext": {
+                            "type": "object",
+                            "maxProperties": 0,
+                            "description": "Reserved; no extensions admitted in this version."
+                          }
+                        }
+                      },
+                      "minItems": 1,
+                      "maxItems": 64
+                    },
+                    "ext": {
+                      "type": "object",
+                      "maxProperties": 0,
+                      "description": "Reserved; no extensions admitted in this version."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "priorFamilies",
+                    "assumptions",
+                    "alpha",
+                    "beta",
+                    "observations"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "beta-binomial"
+                    },
+                    "priorFamilies": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                      },
+                      "minItems": 0,
+                      "maxItems": 64
+                    },
+                    "assumptions": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    },
+                    "alpha": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000
+                    },
+                    "beta": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000
+                    },
+                    "observations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "key",
+                          "successes",
+                          "failures"
+                        ],
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096
+                          },
+                          "successes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000000
+                          },
+                          "failures": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000000
+                          },
+                          "ext": {
+                            "type": "object",
+                            "maxProperties": 0,
+                            "description": "Reserved; no extensions admitted in this version."
+                          }
+                        }
+                      },
+                      "minItems": 1,
+                      "maxItems": 64
+                    },
+                    "ext": {
+                      "type": "object",
+                      "maxProperties": 0,
+                      "description": "Reserved; no extensions admitted in this version."
+                    }
+                  }
+                }
+              ]
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "decision"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "assessment",
+            "disposition",
+            "conclusion",
+            "reason",
+            "reviewBasis",
+            "nextQuestions"
+          ],
+          "properties": {
+            "assessment": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "disposition": {
+              "enum": [
+                "accepted",
+                "needs-research",
+                "declined"
+              ]
+            },
+            "conclusion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "reviewBasis": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "nextQuestions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "withdrawal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "withdrawal"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target",
+            "reason"
+          ],
+          "properties": {
+            "target": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "feedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "feedback"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request",
+            "outcome",
+            "cause",
+            "evidenceDigest",
+            "rationale"
+          ],
+          "properties": {
+            "request": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "outcome": {
+              "enum": [
+                "passed",
+                "failed",
+                "unknown"
+              ]
+            },
+            "cause": {
+              "enum": [
+                "skill",
+                "host",
+                "tool",
+                "configuration",
+                "context",
+                "provider",
+                "unknown"
+              ]
+            },
+            "evidenceDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "legacy-assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "campaign",
+        "at",
+        "by",
+        "data"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-record@v1"
+        },
+        "kind": {
+          "const": "legacy-assessment"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "campaign": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hypothesis",
+            "value",
+            "sourceDigest",
+            "method",
+            "limitations"
+          ],
+          "properties": {
+            "hypothesis": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved; no extensions admitted in this version."
+                }
+              }
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "sourceDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "limitations": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "ext": {
+              "type": "object",
+              "maxProperties": 0,
+              "description": "Reserved; no extensions admitted in this version."
+            }
+          }
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "record": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/campaign"
+        },
+        {
+          "$ref": "#/$defs/hypothesis"
+        },
+        {
+          "$ref": "#/$defs/request"
+        },
+        {
+          "$ref": "#/$defs/source"
+        },
+        {
+          "$ref": "#/$defs/bundle"
+        },
+        {
+          "$ref": "#/$defs/assessment"
+        },
+        {
+          "$ref": "#/$defs/decision"
+        },
+        {
+          "$ref": "#/$defs/withdrawal"
+        },
+        {
+          "$ref": "#/$defs/feedback"
+        },
+        {
+          "$ref": "#/$defs/legacy-assessment"
+        }
+      ]
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "records",
+        "head"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-inquiry-ledger@v1"
+        },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-research-handoff@v1"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "requestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "campaign": {
+          "$ref": "#/$defs/campaign"
+        },
+        "hypothesis": {
+          "$ref": "#/$defs/hypothesis"
+        },
+        "execution": {
+          "const": "manual-or-separately-authorized-adapter"
+        },
+        "authority": {
+          "const": "none"
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved; no extensions admitted in this version."
+        }
+      },
+      "required": [
+        "schema",
+        "request",
+        "requestDigest",
+        "campaign",
+        "hypothesis",
+        "execution",
+        "authority",
+        "prompt"
+      ]
+    }
+  },
+  "$comment": "contract revision 1.0.0 (initial inquiry contract)",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/campaign"
+    },
+    {
+      "$ref": "#/$defs/hypothesis"
+    },
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/source"
+    },
+    {
+      "$ref": "#/$defs/bundle"
+    },
+    {
+      "$ref": "#/$defs/assessment"
+    },
+    {
+      "$ref": "#/$defs/decision"
+    },
+    {
+      "$ref": "#/$defs/withdrawal"
+    },
+    {
+      "$ref": "#/$defs/feedback"
+    },
+    {
+      "$ref": "#/$defs/legacy-assessment"
+    }
+  ]
+}
