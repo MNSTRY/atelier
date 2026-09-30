@@ -436,10 +436,28 @@ try {
   assert.equal(await page.locator('#answer').isDisabled(), true)
   assert.equal(store.read(id).current, false)
   checks.push('changed-source refusal retains original evidence and history')
+  const planFile = path.join(workspace, 'knowledge-plan.json')
+  const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'))
+  plan.questions.push({ ...plan.questions[2], id: 'omitted', question: 'Amber sundial' })
+  fs.writeFileSync(planFile, JSON.stringify(plan))
+  fs.writeFileSync(path.join(workspace, 'records/sundial.md'), `---\ntitle: "Amber sundial"\nsummary: "An amber sundial observation"\nkg:\n  id: "sample:sundial"\n  type: "document"\n  status: "active"\n  audience: "private"\n---\n\n${'x'.repeat(plan.budget.maxSourceBytes)}\n`)
+  await page.reload()
+  await expectText('#status', 'Current plan and graph loaded')
+  await page.getByRole('button', { name: '05 Learn' }).click()
+  await expectText('#dashboard', 'Abstention unverified: matching evidence omitted')
+  await page.getByRole('button', { name: '04 Apply' }).click()
+  await page.locator('#question').selectOption('omitted')
+  await page.getByRole('button', { name: 'Inspect graph context' }).click()
+  await expectText('#evidence', 'sample:sundial: source-over-budget')
+  await expectText('#evidence', '0 unreadable')
+  await capture('omitted-evidence')
+  checks.push('omitted matching evidence shows a named reason and an unverified abstention in the browser')
   assert.deepEqual(errors, [])
   assert.deepEqual(external, [])
   const sources = [
     'src/knowledge/workspace.mjs',
+    'src/knowledge/context.mjs',
+    'src/knowledge/plan.mjs',
     'src/knowledge/sessions.mjs',
     'src/coauthor/store.mjs',
     'src/ui/knowledge-page.mjs',

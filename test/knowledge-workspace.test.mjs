@@ -133,12 +133,15 @@ test('people and agents share revision-bound private drafts, explicit revisions,
       .saved,
     1
   )
-  assert.equal(
-    fs.statSync(
-      path.join(w.dir, '.atelier-local/knowledge/sessions', id + '.json')
-    ).mode & 0o777,
-    0o600
-  )
+  // Windows reports writable mode bits, not a POSIX owner/group access policy.
+  // The same draft/receipt readback above is exercised on every supported host.
+  if (process.platform !== 'win32')
+    assert.equal(
+      fs.statSync(
+        path.join(w.dir, '.atelier-local/knowledge/sessions', id + '.json')
+      ).mode & 0o777,
+      0o600
+    )
 })
 
 test('source body drift and changed enrollment stop writes while exact old evidence stays readable', (t) => {

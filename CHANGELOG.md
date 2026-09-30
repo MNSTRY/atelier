@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add opt-in knowledge dashboards and source-bound coauthor flows, sharing private drafts between the local browser and CLI, with evidence comparison and restart recovery.
+
 - A `knowledge-workspace` starter, mirrored `atelier-knowledge-setup` agent
   skills, and `atelier knowledge check|context|evaluate`: question-led ontology
   coverage, complete source context within an exact byte budget, and a lexical
@@ -402,8 +404,6 @@
   prints the full error.
 
 ## 0.2.0-alpha.12
-
-- Add opt-in knowledge dashboards and source-bound coauthor flows, sharing private drafts between the local browser and CLI, with evidence comparison and restart recovery.
 
 ### Added
 

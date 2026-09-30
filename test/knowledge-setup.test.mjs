@@ -23,7 +23,7 @@ function workspace(t) {
   const cache = createGraphFileCache()
   const graph = buildCanonicalGraph(project, { fileCache: cache })
   assert.deepEqual(graph.errors, [])
-  return { dir, project, plan, cache, graph }
+  return { dir, project, plan, sha256: digest(fs.readFileSync(path.join(dir, 'knowledge-plan.json'))), cache, graph }
 }
 
 test('a fresh workspace runs the complete CLI path and preserves the decisive caveat', t => {
@@ -54,6 +54,41 @@ test('a fresh workspace runs the complete CLI path and preserves the decisive ca
   assert.equal(report.cases[2].runs.graph.sourceIds.length, 0)
   assert.match(report.scope, /no answer correctness/)
   assert.equal(fs.existsSync(path.join(w.dir, 'atelier-output')), false)
+})
+
+test('starter evidence pins survive CRLF-default source and consumer checkouts', t => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-knowledge-checkout-'))
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }))
+  for (const kind of ['source', 'consumer']) {
+    const dir = path.join(temporary, kind)
+    fs.mkdirSync(dir)
+    const recordsRoot = kind === 'source' ? path.join(dir, 'templates/knowledge-workspace') : dir
+    if (kind === 'source') {
+      fs.copyFileSync(path.join(root, '.gitattributes'), path.join(dir, '.gitattributes'))
+      fs.cpSync(path.join(root, 'templates/knowledge-workspace'), recordsRoot, { recursive: true })
+    } else {
+      const initialized = cli(root, ['init', '--template', 'knowledge-workspace', '--target', dir])
+      assert.equal(initialized.status, 0, initialized.stderr)
+    }
+    fs.writeFileSync(path.join(dir, 'checkout-control.txt'), 'checkout control\n')
+    // Exercise Git's real checkout conversion even on a host whose default is LF.
+    for (const args of [['init', '--quiet'], ['config', 'core.autocrlf', 'true'], ['config', 'core.attributesFile', os.devNull], ['add', '.']]) {
+      const checked = spawnSync('git', args, { cwd: dir, encoding: 'utf8' })
+      assert.equal(checked.status, 0, checked.stderr)
+    }
+    fs.rmSync(path.join(recordsRoot, 'records'), { recursive: true })
+    fs.unlinkSync(path.join(dir, 'checkout-control.txt'))
+    const checked = spawnSync('git', ['checkout-index', '--force', '--all'], { cwd: dir, encoding: 'utf8' })
+    assert.equal(checked.status, 0, checked.stderr)
+    assert.equal(fs.readFileSync(path.join(dir, 'checkout-control.txt'), 'utf8'), 'checkout control\r\n')
+    const project = resolveProjectConfig({ cwd: recordsRoot, argv: ['--project', path.join(recordsRoot, 'atelier.project.json')] })
+    const plan = JSON.parse(fs.readFileSync(path.join(recordsRoot, 'knowledge-plan.json'), 'utf8'))
+    const cache = createGraphFileCache()
+    const graph = buildCanonicalGraph(project, { fileCache: cache })
+    const evaluated = evaluateKnowledgeQuestions({ project, plan, sha256: digest(fs.readFileSync(path.join(recordsRoot, 'knowledge-plan.json'))), graph, cache })
+    assert.deepEqual(evaluated.cases.flatMap(c => c.runs.graph.stale), [], kind)
+    assert.ok(evaluated.cases.every(c => c.runs.graph.expectedEvidencePresent), kind)
+  }
 })
 
 test('ontology check detects unused concepts, unknown tags, and reversed domain edges', t => {
@@ -94,7 +129,8 @@ test('source changes after census are omitted, never paired with old graph metad
   fs.appendFileSync(path.join(w.dir, 'records/inspection.md'), '\nChanged.\n')
   const context = createKnowledgeContext({ ...w, question: w.plan.questions[0].question })
   assert.equal(context.sources.some(s => s.id === 'loan:inspection'), false)
-  assert.equal(context.coverage.unreadable, 1)
+  assert.equal(context.coverage.unreadable, 0)
+  assert.deepEqual(context.omissions, [{ id: 'loan:inspection', reason: 'changed-since-census' }])
   assert.equal(context.coverage.omitted, 1)
 })
 
@@ -184,4 +220,28 @@ test('unrelated corpus growth does not consume answer context or displace decisi
   assert.ok(after.budget.payloadBytes <= before.budget.payloadBytes + 10)
   assert.ok(after.budget.payloadBytes < unrelatedBytes / 20)
   assert.equal(evaluateKnowledgeQuestions(w).cases[0].runs.graph.evidenceRecall, 1)
+})
+
+test('graph context keeps a leading seed with its declared caveat ahead of overlapping lexical distractors', t => {
+  const w = workspace(t)
+  for (let i = 0; i < 6; i++) {
+    const text = `---\ntitle: "Blue week note ${i}"\nsummary: "Other blue observations this week"\nkg:\n  id: "other:blue-week-${i}"\n  type: "document"\n  status: "active"\n  audience: "private"\n---\n\nAn invented unrelated observation with overlapping search terms.\n`
+    fs.writeFileSync(path.join(w.dir, 'records', `overlap-${i}.md`), text)
+  }
+  w.graph = buildCanonicalGraph(w.project, { fileCache: w.cache })
+  assert.deepEqual(w.graph.errors, [])
+  const question = w.plan.questions[0].question
+  const lexical = createKnowledgeContext({ ...w, question, mode: 'lexical' })
+  assert.equal(lexical.sources[0].id, 'loan:blue-telescope')
+  assert.equal(lexical.sources.some(s => s.id === 'loan:inspection'), false)
+  const graph = createKnowledgeContext({ ...w, question, mode: 'graph' })
+  assert.deepEqual(graph.sources.slice(0, 2).map(s => s.id), ['loan:blue-telescope', 'loan:inspection'])
+  assert.match(graph.sources[1].text, /\*\*not\*\* passed/)
+  assert.deepEqual(graph.relations, [{ source: 'loan:blue-telescope', predicate: 'depends_on', target: 'loan:inspection' }])
+  assert.ok(graph.sources.length <= w.plan.budget.maxDocuments)
+  assert.ok(graph.budget.payloadBytes <= w.plan.budget.maxContextBytes)
+  assert.ok(graph.coverage.omitted > 0)
+  assert.equal(evaluateKnowledgeQuestions(w).cases[0].runs.graph.expectedEvidencePresent, true)
+  w.plan.questions[0].expectedEvidence = [{ id: 'unrelated:expected', sha256: 'a'.repeat(64) }]
+  assert.deepEqual(createKnowledgeContext({ ...w, question }).sources, graph.sources)
 })

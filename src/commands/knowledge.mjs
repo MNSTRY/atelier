@@ -70,7 +70,7 @@ try {
       )
     )
   } else {
-    const { plan } = readKnowledgePlan(project, args.plan)
+    const { plan, sha256 } = readKnowledgePlan(project, args.plan)
     const cache = createGraphFileCache()
     const graph = buildCanonicalGraph(project, { fileCache: cache })
     if (command === 'check') {
@@ -84,10 +84,11 @@ try {
         )
       const result =
         command === 'evaluate'
-          ? evaluateKnowledgeQuestions({ project, plan, graph, cache })
+          ? evaluateKnowledgeQuestions({ project, plan, sha256, graph, cache })
           : createKnowledgeContext({
               project,
               plan,
+              sha256,
               graph,
               cache,
               question: args.question,

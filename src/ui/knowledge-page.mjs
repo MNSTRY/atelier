@@ -603,8 +603,9 @@ export function renderKnowledgePage() {
             node('p', c.identityRule, box)
             node(
               'small',
-              (c.coverage?.records ?? 0) +
-                ' records · questions: ' +
+              (c.coverage?.eligibleRecords ?? 0) +
+                ' eligible / ' + (c.coverage?.records ?? 0) +
+                ' total records · questions: ' +
                 (c.coverage?.questions.join(', ') || 'none'),
               box
             )
@@ -616,7 +617,8 @@ export function renderKnowledgePage() {
             node('p', r.meaning, c)
             node(
               'small',
-              (r.coverage?.matchingEdges ?? 0) + ' declared matching edges',
+              (r.coverage?.eligibleMatchingEdges ?? 0) + ' eligible / ' +
+                (r.coverage?.matchingEdges ?? 0) + ' total declared matching edges',
               c
             )
           }
@@ -711,12 +713,21 @@ export function renderKnowledgePage() {
                     ? q.expect === 'abstain'
                       ? 'No evidence retrieved; abstention expected'
                       : 'Expected evidence retained'
-                    : 'Needs attention') +
+                    : run.status === 'abstain-unverified'
+                      ? 'Abstention unverified: matching evidence omitted'
+                      : 'Needs attention') +
                     ' · ' +
                     run.payloadBytes.toLocaleString() +
                     ' bytes',
                   row
                 )
+                if (run.omitted) details(row.lastElementChild, 'Omitted evidence', {
+                  candidates: run.candidates,
+                  omitted: run.omitted,
+                  unreadable: run.unreadable,
+                  omissions: run.omissions,
+                  omissionsUnlisted: run.omissionsUnlisted,
+                })
               }
             }
           }
@@ -768,6 +779,13 @@ export function renderKnowledgePage() {
             c
           )
           node('p', context.use, c)
+          if (context.coverage.omitted) {
+            const list = node('ul', undefined, c)
+            for (const omission of context.omissions)
+              node('li', omission.id + ': ' + omission.reason, list)
+            if (context.coverage.omissionsUnlisted)
+              node('p', context.coverage.omissionsUnlisted + ' further omission details exceed the packet allowance. Narrow the source scope or increase the budget, then inspect again.', c, 'notice')
+          }
           for (const source of context.sources) {
             const b = card(out, source.id)
             node(

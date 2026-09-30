@@ -44,7 +44,10 @@ boundary. These commands do not implement recipient authorization or sharing.
 4. Declare the useful relationships, their direction, and what they mean.
    Attach them to source records using the existing native predicates.
    Run `knowledge check` to find unused concepts, unknown tags, empty concept
-   populations, and absent directed edges.
+   populations, and absent directed edges. Coverage reports both total records
+   and context-eligible records; archived, unclassified, and non-Markdown
+   records cannot satisfy retrieval coverage. Duplicate mappings of a predicate
+   and concept pair are refused; use assertion records for distinct meanings.
 5. Keep a small permitted slice of originals. Use Markdown front matter or
    adjacent sidecars as described in [the source graph](knowledge-graph.md).
    Use `atelier adopt` for an existing workspace; do not initialize over it.
@@ -90,8 +93,10 @@ reused. Later reuse should help an actual new task; retention alone is not use.
 ## Bounded context and honest accounting
 
 `context --mode lexical` ranks active, classified Markdown by matches in titles,
-summaries, and tags. `--mode graph` additionally includes one hop of declared
-relations from a bounded seed set. It does not infer edges, search every body,
+summaries, and tags. `--mode graph` visits each ranked seed followed by its
+declared neighbors before the next lexical match, using one hop from a bounded
+seed set. Document and byte limits can still omit part of a neighborhood; check
+the reported omissions. It does not infer edges, search every body,
 perform semantic extraction, or rank by expected answers. Word forms and
 synonyms can be missed; improve descriptions or evaluate another retrieval
 method against the same cases before widening the pipeline.
@@ -101,8 +106,23 @@ locations, selection reasons, and the declared edges between selected records.
 It retains direction and multiple predicates. Text is explicitly data, never
 an instruction channel. Current census digests must match the read source;
 changed, redirected, oversized, or unreadable sources are omitted visibly.
+`omissions` names up to 20 record IDs and reasons within the packet byte cap:
+`document-limit`, `packet-budget`, `source-over-budget`, `changed-since-census`,
+`redirected`, `decode`, or `unreadable`. Invalid paths, repository escapes, and
+unsupported source kinds also have distinct refusal reasons. Exception text
+and absolute paths are not included. `coverage.omissionsUnlisted` counts any
+additional details that could not fit; `unreadable` counts read and decode
+failures only. Inspect these details in the Apply card or evaluation output.
 Non-Markdown and unclassified records stay in graph diagnostics but are not
 context text. No parser is silently invented for a PDF or binary.
+
+`planSha256` hashes the exact raw bytes read from the plan file, including
+formatting; the CLI, dashboard, and session use the same binding.
+`censusSha256` hashes compact JSON containing the canonical nodes, edges, and
+the sorted census inventory of file keys and raw-byte digests. A body-only
+change to an unselected record changes this digest after a new census.
+Each source's `sha256` hashes its raw file bytes. Line locations count actual
+LF or CRLF lines; a final newline does not create an extra line.
 
 `budget.maxContextBytes` caps the **whole compact JSON response**, including its
 metadata. `--max-bytes` may lower it. `maxDocuments` bounds the selected source
@@ -128,8 +148,11 @@ cached input to a provider's inclusive input count twice.
 Expected ids and digests are used only **after** retrieval. It reports evidence
 recall, missing sources, stale expected revisions, missing directed relations,
 payload bytes, and omissions. It exits 1 when graph mode misses an expected
-case or the case pins are stale. An abstention case expects no selected sources;
-this checks retrieval behavior, not a model's ability to abstain.
+case or the case pins are stale. An abstention case requires no matching
+candidates and no omissions. Matching evidence that was omitted yields
+`abstain-unverified`, fails the case, and keeps the dashboard in Deepen.
+Evaluation includes candidate counts and the bounded omission details; it
+checks retrieval behavior, not a model's ability to abstain.
 
 The example deliberately shows that adding necessary evidence can **increase**
 context size. A smaller packet with a missing decisive qualification is not

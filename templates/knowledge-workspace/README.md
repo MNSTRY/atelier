@@ -26,6 +26,10 @@ lexical selection with one hop of declared relations and checks expected source
 digests. After editing evidence, update a test pin only after reviewing the
 changed meaning.
 
+The starter's `.gitattributes` keeps record line endings as LF so ordinary Git
+checkouts preserve those exact source pins, including on Windows. Intentional
+record edits still require review and renewed pins.
+
 Context is local operator material. It grants no sharing or action permission.
 Its byte budget includes the JSON envelope; token estimates are approximate.
 The tool makes no model calls. Measure actual tokens and resulting work with

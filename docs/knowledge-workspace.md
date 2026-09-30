@@ -110,7 +110,9 @@ Descriptors are immutable, digest-checked files under ignored
 existing coauthor ledger under `.atelier-local/coauthor/`. These are private
 proposal artifacts, not a second canonical ontology database. Sessions require
 a Git workspace with ignored, untracked local state. Descriptor and draft files
-are owner-only. Same-account filesystem control is not an authentication boundary.
+use owner-only modes on POSIX hosts. On Windows, access follows the host's
+filesystem permissions; this surface does not install an access-control list.
+Same-account filesystem control is not an authentication boundary.
 An interrupted start is resumable only when its bound sources still match and
 the retained start protocol, ledger, completion marker, and value files support
 that interpretation. A completed start publishes an immutable marker before any
