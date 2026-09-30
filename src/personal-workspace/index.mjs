@@ -105,7 +105,7 @@ function checkEnvironment() {
 }
 function checkRepo(repo) {
   rootCheck(repo.root)
-  const helpers = git(repo.root, ['config', '--get-all', 'core.fsmonitor'], { allowAbsent: true }).trim().split('\n')
+  const helpers = git(repo.root, ['config', '--type=bool-or-str', '--get-all', 'core.fsmonitor'], { allowAbsent: true }).trim().split('\n')
   if (helpers.some((helper) => helper && helper !== 'false')) refuse('git-helper-configured')
   // A failed remote lookup is not proof of an absent remote: require a valid worktree first.
   if (git(repo.root, ['rev-parse', '--is-inside-work-tree']).trim() !== 'true') refuse('git-unavailable')
@@ -306,14 +306,17 @@ function composeAt(plan, final) {
     }
     verifyFiles(plan, final)
     const input = readInputs(personalHome)
+    // Git can report NFC while macOS readdir preserves an NFD spelling. Match
+    // canonical equivalents conservatively before any ignored census returns.
+    const ignorePath = (rel) => process.platform === 'darwin' ? rel.normalize('NFC') : rel
     const ignored = new Map(input.enrolled.map((repo) => [repo.repoId, git(repo.root,
-      ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']).split('\0').filter(Boolean).map((p) => p.replace(/\/+$/, ''))]))
+      ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']).split('\0').filter(Boolean).map((p) => ignorePath(p.replace(/\/+$/, '')))]))
     const project = resolveProjectConfig({ argv: [`--project-config=${path.join(final, 'atelier.project.json')}`], cwd: final, env: { PATH: process.env.PATH }, writeLocalState: false })
     if (validateProjectConfigDoc(project.config).length) refuse('generation-corrupt')
     if (project.localOverlay.paths.length || project.repos.some((r) => r.pathSource !== 'tracked-config')) refuse('ambient-overlay-present')
     const graph = buildCanonicalGraph(project, { isLinkTargetEligible: (node) => node.repo !== input.overlayRepoId })
     for (const n of [...graph.nodes, ...graph.assets]) {
-      if ((ignored.get(n.repo) || []).some((p) => [n.path, n.sidecar].filter(Boolean).some((rel) => rel === p || rel.startsWith(`${p}/`)))) refuse('ignored-source-in-census')
+      if ((ignored.get(n.repo) || []).some((p) => [n.path, n.sidecar].filter(Boolean).map(ignorePath).some((rel) => rel === p || rel.startsWith(`${p}/`)))) refuse('ignored-source-in-census')
     }
     for (const ref of refs(input.overlay)) {
       const node = graph.nodes.find((n) => n.id === ref.nodeId && n.repo === ref.repoId)

@@ -91,7 +91,9 @@ only their explicitly declared stable references create edges. A second build
 through the same canonical API uses a generated config containing only shared
 roots, in the private generation. Shared nodes, edges, and link diagnostics must
 match the composed result, or `shared-facts-changed` refuses publication/output. Complex tags
-round-trip through block-list frontmatter. Untagged private nodes receive the
+round-trip through block-list frontmatter. Blank, padded, and duplicate tags
+refuse `malformed-input` instead of being silently normalized. Untagged private
+nodes receive the
 fixed `personal-interpretation` tag instead of inferred shared-domain tags.
 Saved views are stored selections, not executable queries or policy rules.
 
@@ -102,7 +104,10 @@ ambient `GIT_*` variables, fsmonitor helpers in local, global, XDG, or system
 configuration, and failed independent
 ignore listings. It checks that ignored sources never enter the graph even
 when the shared builder's ignore call fails open, including ignored sidecars.
-Every module-owned Git probe disables fsmonitor. Observed remote URLs are
+Every module-owned Git probe disables fsmonitor. Its configuration probe uses
+Git boolean-or-string typing so a valueless enabled setting is refused too.
+On macOS, ignored-path comparisons normalize both Git and census spellings to
+NFC, including sidecar paths and parent directories. Observed remote URLs are
 sanitized before comparison; the authored identity must already be sanitized,
 without user information, query parameters, or fragments. Credential-bearing
 authored remote values refuse `remote-credentials-refused` and are never copied

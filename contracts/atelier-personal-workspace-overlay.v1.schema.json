@@ -62,8 +62,11 @@
             "maxItems": 512,
             "items": {
               "type": "string",
-              "maxLength": 64
-            }
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^(\\S|\\S[\\s\\S]*\\S)$"
+            },
+            "uniqueItems": true
           },
           "ext": {
             "type": "object",

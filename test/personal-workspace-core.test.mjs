@@ -450,3 +450,30 @@ test('Foundation C2: shared source drift between canonical builds refuses public
   finally { fs.readFileSync = original; fs.writeFileSync(file, bytes) }
   assert.equal(fs.existsSync(path.join(f.personalHome, 'generations', f.plan().generationId)), false)
 })
+
+
+for (const [name, tags] of [['blank', ['']], ['whitespace', ['  ']], ['padded', [' a ']], ['duplicate', ['a', 'a']]]) {
+  test(`review S2: ${name} tags refuse without silent inference or normalisation`, (t) => {
+    const f = fixture(t); f.overlay.annotations[0].tags = tags; f.save()
+    refuses(f.resolve, 'malformed-input'); assert.equal(fs.existsSync(path.join(f.personalHome, 'generations')), false)
+  })
+}
+
+test('review S2: a valueless global fsmonitor setting refuses before canonical reads', (t) => {
+  const f = fixture(t), home = path.join(f.base, 'bare-global-home'); fs.mkdirSync(home)
+  changeEnv(t, 'HOME', home); changeEnv(t, 'XDG_CONFIG_HOME', path.join(home, 'xdg'))
+  fs.writeFileSync(path.join(home, '.gitconfig'), '[core]\n fsmonitor\n')
+  refuses(f.resolve, 'git-helper-configured'); assert.equal(fs.existsSync(path.join(f.personalHome, 'generations')), false)
+})
+
+nodeTest('review S2: macOS NFC ignore evidence excludes NFD census paths', { skip: process.platform !== 'darwin' }, (t) => {
+  const f = fixture(t), root = f.sources[0], rel = 'cafe\u0301.md', file = path.join(root, rel), ignore = path.join(root, '.gitignore')
+  fs.writeFileSync(file, '---\ntitle: Excluded\nkg:\n  id: source-a:excluded\n  type: document\n  status: active\n  audience: private\n---\nExcluded\n')
+  fs.writeFileSync(ignore, `${rel}\n`)
+  // Existing defensive shim models Git's precomposed path reporting while the
+  // canonical fail-open reader still obtains the real filesystem spelling.
+  shim(t, f, "if(rest[0]==='ls-files') process.exit(1); if(cmd==='ls-files') {process.stdout.write('caf\\u00e9.md\\0');process.exit(0);}")
+  try {
+    assert.ok(fs.readdirSync(root).includes(rel)); refuses(f.materialize, 'ignored-source-in-census')
+  } finally { fs.unlinkSync(file); fs.unlinkSync(ignore) }
+})
