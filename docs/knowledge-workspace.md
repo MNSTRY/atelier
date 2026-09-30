@@ -78,9 +78,13 @@ consumer owns its domain vocabulary and source decisions.
    exposes the existing store's one explicit retry. Exhausted retries need
    operator inspection; the UI does not remove another writer's lock.
 4. A failed request retains the exact request ID for retry and keeps the text
-   in the tab. Restore `atelier dev --knowledge`, retry, or reload the session
-   to inspect what was actually recorded. Reload does not silently erase
-   unsaved text. Discarding tab text is explicit.
+   in the tab. Editing pauses so the retry cannot silently change its wording.
+   Restore `atelier dev --knowledge`, retry, or reload the session to inspect
+   what was actually recorded. Retry controls survive reload and export.
+   **End retry and inspect history** stops the tab's retry attempt and preserves
+   its request in exported snapshots; it does not cancel or delete server
+   history. Inspect that history before recording another intent. Reload does
+   not silently erase unsaved text. Discarding tab text is explicit.
 5. Export a private snapshot for owner review. It includes saved wording,
    receipts, bound source evidence, unsaved text, and a pending request when
    present. Review its audience before sharing. Browser download behavior is
@@ -105,6 +109,15 @@ existing coauthor ledger under `.atelier-local/coauthor/`. These are private
 proposal artifacts, not a second canonical ontology database. Sessions require
 a Git workspace with ignored, untracked local state. Descriptor and draft files
 are owner-only. Same-account filesystem control is not an authentication boundary.
+An interrupted start is listed separately and can be resumed while its bound
+sources still match. A damaged descriptor does not hide other sessions. Preserve
+damaged files for inspection; the surface never deletes them to make history pass.
+
+Each operation checks the current workspace and reports whether its bound
+sources still match. External source editors do not share an atomic transaction
+with the draft ledger: a change during an operation may leave a retained draft
+whose response reports changed sources. These drafts never authorize canonical
+writes or effects. Review and rebind before using them after source changes.
 
 ## People and agents share the same flow
 
@@ -133,11 +146,17 @@ agent-written revisions, send `propose`, show original and proposed wording,
 and wait for explicit confirmation before `confirm`. The API records intents;
 it cannot authenticate that a human supplied one. Do not infer confirmation,
 source-owner acceptance, or action authority from a saved draft.
+UUID letters are normalized to lowercase. Reusing a start request ID with a
+different author, flow, question, or snapshot is refused. UTF-8 BOM plans are
+supported: the workspace binds raw plan bytes, while the coauthor receipt binds
+decoded text using the same definition as its source reader.
 
 Keep requests in ignored local files rather than interpolating authored text
 into shell commands. The CLI supports `--project` and `--plan` for an explicit
 consumer location; browser sessions use that project's `knowledge-plan.json`.
 A coauthor plan must be a visible, unredirected file inside its workspace.
+Resumed sessions check their own recorded plan, including sessions started with
+`--plan`. Unavailable source checks are reported separately from changed sources.
 
 ## Evaluation and scale
 
@@ -147,9 +166,11 @@ The exact byte budget covers the context JSON, while estimated tokens are only
 calls. Workspace scans and evaluation across every planned question still have
 local computation cost; context limits are not a whole-corpus scan deadline.
 
-Descriptors are bounded to 1 MiB, session listings to 200 entries, and coauthor
-history to its existing ledger ceilings. Inspect a session by ID beyond the
-listing ceiling; no history is silently deleted or compacted. This first
+Descriptors are bounded to 1 MiB, session listings to the 200 newest local
+descriptor files, and coauthor history to its existing ledger ceilings. Listings
+include a total and truncation flag; invalid or unfinished entries are individual
+unavailable rows. Use **Open an exact session ID** or the CLI to inspect an older
+session beyond the listing limit. No history is silently deleted or compacted. This first
 reference is for bounded local workspaces, with text-based observations. It
 provides no numeric outcome aggregation, automatic source ingestion, semantic
 inference, collaborative presence, or canonical editing UI.

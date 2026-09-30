@@ -221,6 +221,8 @@ function listenFailure(error, port) {
 
 function knowledgeError(error) {
   const message = error instanceof Error ? error.message : ''
+  if (message === 'coauthor requires a Git workspace with untracked, ignored .atelier-local/ state')
+    return 'coauthor requires a Git workspace with untracked, ignored local state. Initialize Git and ignore the .atelier-local directory.'
   const safe = [
     'workspace changed', 'stale revision', 'event id conflict', 'source changed',
     'coauthor session not found', 'coauthor requires', 'unknown knowledge',
@@ -572,7 +574,7 @@ export function createAtelierSidecarServer({
         if ([...url.searchParams.keys()].some(k => !parameters.includes(k)) || [...url.searchParams.keys()].length !== new Set(url.searchParams.keys()).size) throw new Error('invalid knowledge query')
         if (operation === 'dashboard') result = { dashboard: knowledgeDashboard(loadKnowledgeWorkspace(knowledgeProject)) }
         else if (operation === 'context') result = { context: knowledgeQuestionContext(loadKnowledgeWorkspace(knowledgeProject), url.searchParams.get('id'), url.searchParams.get('mode') || 'graph') }
-        else if (operation === 'sessions') result = { sessions: knowledge.list() }
+        else if (operation === 'sessions') result = knowledge.list()
         else if (operation === 'read') result = knowledge.read(url.searchParams.get('id'))
         else { json(res, 404, { ok: false, error: 'unknown knowledge action' }); return }
         json(res, 200, { ok: true, ...result })

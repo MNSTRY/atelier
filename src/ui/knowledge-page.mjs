@@ -374,6 +374,17 @@ export function renderKnowledgePage() {
             >
               Start here, or resume a session below.
             </p>
+            <div id="pending-controls" class="notice" hidden>
+              <p>
+                The request is unconfirmed. Editing is paused so retry sends the
+                exact same wording. Reload and export remain available.
+              </p>
+              <div class="actions">
+                <button id="retry-request">Retry exact request</button>
+                <button id="end-retry">End retry and inspect history</button>
+                <button id="export-request">Export pending request</button>
+              </div>
+            </div>
             <div id="session" hidden>
               <p id="session-meta" class="muted"></p>
               <p id="source-state" class="notice"></p>
@@ -411,6 +422,16 @@ export function renderKnowledgePage() {
           </div>
           <div class="card session-list">
             <h3>Continue earlier work</h3>
+            <form id="open-session-form">
+              <label for="session-id">Open an exact session ID</label>
+              <input
+                id="session-id"
+                required
+                placeholder="kg-…"
+                autocomplete="off"
+              />
+              <button id="open-session">Open session</button>
+            </form>
             <div id="sessions"></div>
           </div>
         </aside>
@@ -423,6 +444,7 @@ export function renderKnowledgePage() {
         active = null,
         busy = false,
         pending = null,
+        endedRequests = [],
         dirty = false,
         contextRequest = 0
       const note = (id, text, error = false) => {
@@ -685,7 +707,9 @@ export function renderKnowledgePage() {
                 node(
                   'td',
                   (run.expectedEvidencePresent && !run.stale.length
-                    ? 'Expected evidence retained'
+                    ? q.expect === 'abstain'
+                      ? 'No evidence retrieved; abstention expected'
+                      : 'Expected evidence retained'
                     : 'Needs attention') +
                     ' · ' +
                     run.payloadBytes.toLocaleString() +
@@ -769,11 +793,33 @@ export function renderKnowledgePage() {
       }
       async function sessions() {
         try {
-          const list = (await request('sessions')).sessions
+          const report = await request('sessions')
+          const list = report.sessions
           el('sessions').replaceChildren()
+          if (report.truncated)
+            node(
+              'p',
+              'Showing the newest ' +
+                report.limit +
+                ' of ' +
+                report.total +
+                ' local session files. Open any older session by its exact ID.',
+              el('sessions'),
+              'muted'
+            )
           if (!list.length)
             node('p', 'No sessions yet.', el('sessions'), 'muted')
           for (const s of list) {
+            if (!s.available) {
+              const box = node('div', undefined, el('sessions'), 'saved')
+              node('p', s.id, box)
+              node('p', s.reason, box)
+              if (s.recoverable) {
+                const resume = node('button', 'Resume incomplete start', box)
+                resume.onclick = () => send('recover', { sessionId: s.id })
+              }
+              continue
+            }
             const b = node('button', s.title + ' · ' + s.phase, el('sessions'))
             node(
               'small',
@@ -783,12 +829,18 @@ export function renderKnowledgePage() {
                 '/' +
                 s.fields +
                 ' saved' +
-                (s.current ? '' : ' · earlier source revision'),
+                (s.current
+                  ? ''
+                  : s.currency === 'unavailable'
+                  ? ' · source check unavailable'
+                  : ' · earlier source revision'),
               b
             )
+            node('small', s.id + (s.createdAt ? ' · ' + s.createdAt : ''), b)
             b.disabled = dirty || busy || Boolean(pending)
             b.onclick = () => readSession(s.id)
           }
+          setBusy(busy)
         } catch (error) {
           el('sessions').textContent = 'History unavailable: ' + error.message
         }
@@ -798,8 +850,13 @@ export function renderKnowledgePage() {
         el('discard').hidden = !dirty
         el('discard').disabled = value || Boolean(pending)
         el('start').disabled = value || dirty || Boolean(pending)
+        el('open-session').disabled = value || dirty || Boolean(pending)
         el('reload-session').disabled = value
-        el('editor').disabled = value || !active?.current
+        el('editor').disabled = value || !active?.current || Boolean(pending)
+        el('pending-controls').hidden = !pending
+        el('retry-request').disabled = value
+        el('end-retry').disabled = value
+        el('export-request').disabled = value
         for (const b of el('sessions').querySelectorAll('button'))
           b.disabled = value || dirty || Boolean(pending)
       }
@@ -822,6 +879,8 @@ export function renderKnowledgePage() {
           'source-state',
           current
             ? 'Bound sources still match this session.'
+            : active.currency === 'unavailable'
+            ? 'Bound sources could not be checked. History is retained; repair the workspace before continuing.'
             : 'Earlier source revision. History is retained; refresh evidence and start a new session to continue.',
           !current
         )
@@ -928,13 +987,7 @@ export function renderKnowledgePage() {
           note(
             'session-status',
             active.current
-              ? active.state.saved.length
-                ? 'Saved draft receipts read back. Current step: ' +
-                  active.state.phase +
-                  '.'
-                : active.state.answers.length
-                ? 'Answer retained in session history; save the private draft when ready.'
-                : 'Session started. Write the first answer when ready.'
+              ? operationMessage(route, input, active.state)
               : 'Sources changed during the operation. Retained history is available; start a newly bound session.'
           )
           await sessions()
@@ -946,25 +999,49 @@ export function renderKnowledgePage() {
               '. Your wording remains here. Restore atelier dev --knowledge, then retry the exact request or reload to inspect the saved state.',
             true
           )
-          const b = node('button', 'Retry exact request', el('session-status'))
-          b.onclick = () => send(pending.route, pending.input)
-          const cancel = node(
-            'button',
-            'Keep text and inspect session',
-            el('session-status')
-          )
-          cancel.onclick = () => {
-            pending = null
-            setBusy(false)
-            if (active) readSession(active.record.id)
-            else sessions()
-          }
         } finally {
           setBusy(false)
         }
       }
+      function operationMessage(route, input, state) {
+        const step = ' Current step: ' + state.phase + '.'
+        if (['saving', 'recovery'].includes(state.phase))
+          return (
+            'Save not confirmed. Preserve your wording and inspect the recovery controls.' +
+            step
+          )
+        if (route === 'start')
+          return 'Session started. Its retained state was read back.' + step
+        const type = input.event?.type
+        if (type === 'answer')
+          return (
+            'Answer retained in session history; this request did not save a draft.' +
+            step
+          )
+        if (
+          type === 'save' &&
+          state.saved.some((s) => s.receipt.requestId === input.event.id)
+        )
+          return 'Saved draft receipt read back.' + step
+        if (
+          (type === 'retry' || route === 'recover') &&
+          state.phase === 'saved'
+        )
+          return 'Saved draft receipt read back.' + step
+        if (type === 'reject' || type === 'confirm')
+          return (
+            'Wording choice recorded; save the private draft when ready.' + step
+          )
+        return 'Session state read back.' + step
+      }
       async function intent(type) {
-        if (!active || busy || pending) return
+        if (pending)
+          return note(
+            'session-status',
+            'Resolve the pending request with Retry or End retry before recording another intent.',
+            true
+          )
+        if (!active || busy) return
         if (dirty && type !== 'answer')
           return note(
             'session-status',
@@ -987,7 +1064,13 @@ export function renderKnowledgePage() {
       }
       el('start-form').onsubmit = (event) => {
         event.preventDefault()
-        if (!dashboard || busy || dirty || pending) return
+        if (pending)
+          return note(
+            'session-status',
+            'Resolve the pending request before starting another session.',
+            true
+          )
+        if (!dashboard || busy || dirty) return
         send('start', {
           requestId: crypto.randomUUID(),
           flow: el('flow').value,
@@ -1016,14 +1099,41 @@ export function renderKnowledgePage() {
       el('refresh').onclick = refresh
       el('reload-session').onclick = () =>
         active && readSession(active.record.id)
-      el('snapshot').onclick = () => {
-        if (!active) return
+      el('retry-request').onclick = () =>
+        pending && !busy && send(pending.route, pending.input)
+      el('end-retry').onclick = async () => {
+        if (!pending || busy) return
+        const ended = pending
+        endedRequests.push(ended)
+        pending = null
+        setBusy(false)
+        if (active) await readSession(active.record.id)
+        else await sessions()
+        note(
+          'session-status',
+          'Retry ended; no server history was deleted or cancelled. Inspect the session before another intent. Your text and the ended request remain in this tab and its exported snapshot. Session: ' +
+            (ended.input.sessionId || 'kg-' + ended.input.requestId)
+        )
+      }
+      el('open-session-form').onsubmit = (event) => {
+        event.preventDefault()
+        if (busy || dirty || pending)
+          return note(
+            'session-status',
+            'Resolve your current wording and pending request before opening another session.',
+            true
+          )
+        readSession(el('session-id').value.trim())
+      }
+      function exportSnapshot() {
+        if (!active && !pending && !endedRequests.length) return
         const value = {
           status: 'private-draft-for-owner-review',
           sourceEditsApplied: false,
           session: active,
           unsavedText: dirty ? el('answer').value : null,
           pendingRequest: pending,
+          endedRequests,
         }
         const url = URL.createObjectURL(
           new Blob([JSON.stringify(value, null, 2)], {
@@ -1032,7 +1142,10 @@ export function renderKnowledgePage() {
         )
         const a = document.createElement('a')
         a.href = url
-        a.download = 'knowledge-draft-' + active.record.id + '.json'
+        a.download =
+          'knowledge-draft-' +
+          (active?.record.id || pending?.input.requestId || 'request') +
+          '.json'
         a.click()
         setTimeout(() => URL.revokeObjectURL(url), 1000)
         note(
@@ -1040,6 +1153,8 @@ export function renderKnowledgePage() {
           'Private draft snapshot exported. Review its audience before sharing.'
         )
       }
+      el('snapshot').onclick = exportSnapshot
+      el('export-request').onclick = exportSnapshot
       window.addEventListener('beforeunload', (event) => {
         if (dirty || pending) {
           event.preventDefault()

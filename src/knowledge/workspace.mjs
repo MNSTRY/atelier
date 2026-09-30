@@ -24,13 +24,14 @@ export function readKnowledgePlan(project, name = 'knowledge-plan.json') {
     }
     if (count > 65536) throw new Error('knowledge plan exceeds 65536 bytes')
     const bytes = buffer.subarray(0, count)
-    const plan = JSON.parse(
-      new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-    )
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    const plan = JSON.parse(text)
     const errors = validateKnowledgePlan(plan)
     if (errors.length)
       throw new Error(`invalid knowledge plan: ${errors.join('; ')}`)
-    return { file, plan, sha256: digest(bytes) }
+    // Raw bytes bind the workspace snapshot. Coauthor's text reader strips a
+    // UTF-8 BOM, so its source binding must use the same decoded text digest.
+    return { file, plan, sha256: digest(bytes), sourceDigest: digest(text) }
   } finally {
     fs.closeSync(fd)
   }

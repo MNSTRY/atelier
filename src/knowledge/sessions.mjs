@@ -72,13 +72,24 @@ export function createKnowledgeSessions(
     if (record.id !== id) throw new Error('knowledge session identity mismatch')
     return record
   }
-  function current(record) {
+  function currency(record, cache = new Map()) {
     try {
-      return (
-        loadKnowledgeWorkspace(initial, planName).snapshot === record.snapshot
-      )
+      const ref = record.config.fields[0].source.ref
+      if (!cache.has(ref)) {
+        try {
+          cache.set(ref, loadKnowledgeWorkspace(initial, ref).snapshot)
+        } catch {
+          cache.set(ref, null)
+        }
+      }
+      const snapshot = cache.get(ref)
+      return snapshot === null
+        ? 'unavailable'
+        : snapshot === record.snapshot
+        ? 'current'
+        : 'changed'
     } catch {
-      return false
+      return 'unavailable'
     }
   }
   function result(record, state) {
@@ -87,11 +98,13 @@ export function createKnowledgeSessions(
       canonicalize(state.fields) !== canonicalize(record.config.fields)
     )
       throw new Error('knowledge session configuration mismatch')
+    const sourceState = currency(record)
     return {
       ok: true,
       record,
       state,
-      current: current(record),
+      current: sourceState === 'current',
+      currency: sourceState,
       savedMeaning: 'private-draft-only',
       sourceEditsApplied: false,
     }
@@ -99,6 +112,13 @@ export function createKnowledgeSessions(
   return {
     start(input) {
       shape(input, ['requestId', 'flow', 'questionId', 'snapshot', 'author'])
+      input = {
+        ...input,
+        requestId:
+          typeof input.requestId === 'string'
+            ? input.requestId.toLowerCase()
+            : input.requestId,
+      }
       if (
         !uuid.test(input.requestId) ||
         typeof input.author !== 'string' ||
@@ -138,16 +158,38 @@ export function createKnowledgeSessions(
             throw new Error('coauthor plan must not be redirected')
         }
         const id = `kg-${input.requestId}`
+        const file = path.join(directory(), `${id}.json`)
+        // A descriptor is a recoverable start intent. Keep its original prompts,
+        // evidence, timestamp, and identity on an exact retry after interruption.
+        if (fs.existsSync(file)) {
+          const record = descriptor(id)
+          if (
+            record.snapshot !== input.snapshot ||
+            record.flow !== input.flow ||
+            record.question.id !== input.questionId ||
+            record.author !== input.author.trim() ||
+            record.config.fields.some(
+              (field) =>
+                field.source.ref !== ref ||
+                field.source.digest !== workspace.sourceDigest
+            )
+          )
+            throw new Error(
+              'invalid knowledge request: session id already bound'
+            )
+          return result(record, adapter.start(record.config))
+        }
         const config = {
           id,
           fields: flow.prompts.map(([field]) => ({
             id: field,
-            source: { ref, digest: workspace.sha256 },
+            source: { ref, digest: workspace.sourceDigest },
           })),
         }
         const record = {
           schema: 'atelier-knowledge-session/experimental-v1',
           id,
+          createdAt: new Date().toISOString(),
           snapshot: workspace.snapshot,
           flow: flow.id,
           title: flow.title,
@@ -160,7 +202,6 @@ export function createKnowledgeSessions(
             : null,
           config,
         }
-        const file = path.join(directory(), `${id}.json`)
         const bytes = canonicalize({
           record,
           sha256: digest(canonicalize(record)),
@@ -177,42 +218,75 @@ export function createKnowledgeSessions(
       return result(record, store().read(id))
     },
     list() {
-      if (!fs.existsSync(location)) return []
+      const limit = 200
+      if (!fs.existsSync(location))
+        return { sessions: [], total: 0, limit, truncated: false }
       const names = fs
         .readdirSync(directory())
         .filter((n) => identifier.test(n.slice(0, -5)) && n.endsWith('.json'))
-        .sort()
-      if (names.length > 200)
-        throw new Error(
-          'knowledge session list exceeds 200; use an exact session id'
-        )
+        .map((name) => {
+          try {
+            return {
+              name,
+              time: fs.lstatSync(path.join(location, name)).mtimeMs,
+            }
+          } catch {
+            return { name, time: 0 }
+          }
+        })
+        .sort((a, b) => b.time - a.time || a.name.localeCompare(b.name))
       const adapter = store()
-      let snapshot = null
-      try {
-        snapshot = loadKnowledgeWorkspace(initial, planName).snapshot
-      } catch {
-        /* History still has value after a source failure. */
-      }
-      return names.map((name) => {
-        const record = descriptor(name.slice(0, -5))
-        const state = adapter.read(record.id)
-        return {
-          id: record.id,
-          flow: record.flow,
-          title: record.title,
-          question: record.question.question,
-          author: record.author,
-          phase: state.phase,
-          saved: state.saved.length,
-          fields: state.fields.length,
-          current: snapshot === record.snapshot,
+      const cache = new Map()
+      const sessions = names.slice(0, limit).map(({ name }) => {
+        const id = name.slice(0, -5)
+        let record
+        try {
+          record = descriptor(id)
+          const state = adapter.read(id)
+          if (canonicalize(state.fields) !== canonicalize(record.config.fields))
+            throw new Error('knowledge session configuration mismatch')
+          const sourceState = currency(record, cache)
+          return {
+            id,
+            available: true,
+            createdAt: record.createdAt || null,
+            flow: record.flow,
+            title: record.title,
+            question: record.question.question,
+            author: record.author,
+            phase: state.phase,
+            saved: state.saved.length,
+            fields: state.fields.length,
+            current: sourceState === 'current',
+            currency: sourceState,
+          }
+        } catch (error) {
+          const incomplete =
+            record && error.message === 'coauthor session not found'
+          return {
+            id,
+            available: false,
+            recoverable: Boolean(
+              incomplete && currency(record, cache) === 'current'
+            ),
+            reason: incomplete
+              ? 'Start incomplete. Resume it while its bound sources still match.'
+              : 'Session unavailable. Preserve its local files for inspection.',
+          }
         }
       })
+      return {
+        sessions,
+        total: names.length,
+        limit,
+        truncated: names.length > limit,
+        order: 'newest-local-descriptor-first',
+      }
     },
     event(input) {
       shape(input, ['sessionId', 'event'])
       const record = descriptor(input.sessionId)
-      if (!current(record))
+      if (currency(record) !== 'current')
         throw new Error(
           'workspace changed; retained history is readable; start a newly bound session'
         )
@@ -222,11 +296,22 @@ export function createKnowledgeSessions(
     recover(input) {
       shape(input, ['sessionId'])
       const record = descriptor(input.sessionId)
-      if (!current(record))
+      if (currency(record) !== 'current')
         throw new Error(
           'workspace changed; retained history is readable; start a newly bound session'
         )
-      return result(record, store().recover(record.id))
+      const adapter = store()
+      let state
+      try {
+        state = adapter.read(record.id)
+      } catch (error) {
+        if (error.message !== 'coauthor session not found') throw error
+        state = adapter.start(record.config)
+      }
+      return result(
+        record,
+        state.phase === 'saving' ? adapter.recover(record.id) : state
+      )
     },
   }
 }

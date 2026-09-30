@@ -64,11 +64,34 @@ const errors = [],
   external = [],
   checks = [],
   screenshots = []
+let failNextSave = false,
+  failedValue = null
 page.on('pageerror', (error) => errors.push(error.message))
 await page.route('**/*', (route) => {
   if (new URL(route.request().url()).origin !== base) {
     external.push(route.request().url())
     return route.abort('blockedbyclient')
+  }
+  if (
+    failNextSave &&
+    route.request().method() === 'POST' &&
+    new URL(route.request().url()).pathname === '/api/knowledge/event'
+  ) {
+    const input = route.request().postDataJSON()
+    if (input.event.type === 'save') {
+      failNextSave = false
+      const values = path.join(
+        workspace,
+        '.atelier-local/coauthor/values',
+        digest(input.sessionId)
+      )
+      fs.mkdirSync(values, { recursive: true })
+      failedValue = path.join(values, digest(input.event.id) + '.json')
+      fs.writeFileSync(
+        failedValue,
+        'Synthetic conflicting value; preserve instead of overwriting.'
+      )
+    }
   }
   return route.continue()
 })
@@ -110,7 +133,7 @@ try {
     .click()
   await expectText('#session-status', 'Session started')
   const store = createKnowledgeSessions(project),
-    id = store.list()[0].id
+    id = store.list().sessions[0].id
   await page
     .locator('#answer')
     .fill('The inspection has not passed. Do not approve a loan yet.')
@@ -143,22 +166,67 @@ try {
     .click()
   await expectText('#session-status', 'Not confirmed saved')
   assert.equal(await page.locator('#answer').inputValue(), draft)
+  assert.equal(await page.locator('#answer').isDisabled(), true)
+  // Failure recovery remains visible after both reading and exporting, and
+  // editing cannot silently change the payload kept for exact retry.
+  await page
+    .getByRole('button', { name: 'Reload session', exact: true })
+    .click()
+  await expectText('#session-status', 'Session unavailable')
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Retry exact request', exact: true })
+      .isVisible(),
+    true
+  )
+  const pendingDownload = page.waitForEvent('download')
+  await page
+    .getByRole('button', { name: 'Export pending request', exact: true })
+    .click()
+  const pendingSnapshot = JSON.parse(
+    fs.readFileSync(await (await pendingDownload).path(), 'utf8')
+  )
+  assert.equal(pendingSnapshot.pendingRequest.input.event.text, draft)
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Retry exact request', exact: true })
+      .isVisible(),
+    true
+  )
   server = createAtelierSidecarServer({
     workspaceRoot: project.outputRoot,
     knowledgeProject: project,
   })
   await server.listen(address.port)
   await page
+    .getByRole('button', { name: 'Reload session', exact: true })
+    .click()
+  await expectText('#session-status', 'Session loaded')
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Retry exact request', exact: true })
+      .isVisible(),
+    true
+  )
+  await page
     .getByRole('button', { name: 'Retry exact request', exact: true })
     .click()
   await expectText('#session-status', 'Current step: draft')
+  assert.match(
+    await page.locator('#session-status').textContent(),
+    /Answer retained/
+  )
+  assert.doesNotMatch(
+    await page.locator('#session-status').textContent(),
+    /Saved draft receipt/
+  )
   assert.equal(store.read(id).state.proposal.text, draft)
   assert.equal(
     store.read(id).state.answers.filter((a) => a.text === draft).length,
     1
   )
   checks.push(
-    'service loss preserves exact draft, restart and same-request retry record once'
+    'service loss, blocked editing, failed and successful reload, export, and exact retry preserve text and record once without a false save claim'
   )
   const s = store.read(id).state
   store.event({
@@ -185,12 +253,27 @@ try {
     .click()
   await expectText('#session-status', 'Current step: draft')
   assert.equal(await page.locator('#answer').inputValue(), draft)
+  failNextSave = true
   await page
     .getByRole('button', { name: 'Save private draft', exact: true })
     .click()
+  await expectText('#session-status', 'Not confirmed saved')
+  await page
+    .getByRole('button', { name: 'Retry exact request', exact: true })
+    .click()
+  await expectText('#session-status', 'Save not confirmed')
+  assert.doesNotMatch(
+    await page.locator('#session-status').textContent(),
+    /Saved draft receipt/
+  )
+  assert.equal(store.read(id).state.phase, 'recovery')
+  fs.unlinkSync(failedValue) // Remove only this proof's deliberately introduced fault.
+  await page
+    .getByRole('button', { name: 'Retry private save', exact: true })
+    .click()
   await expectText('#session-status', 'Current step: saved')
   checks.push(
-    'agent proposal, browser confirmation boundary, and original-answer recovery'
+    'agent confirmation, original wording, failed-save reporting, exact retry, and explicit save recovery'
   )
   await page.getByRole('button', { name: 'Continue', exact: true }).click()
   await expectText('#session-status', 'Current step: input')
@@ -216,6 +299,51 @@ try {
     .click()
   checks.push(
     'pause refuses unsaved loss, reload preserves draft, explicit snapshot export'
+  )
+  // A concurrent agent advances the revision while the browser retains its own
+  // wording. Ending an unconfirmed retry must preserve that wording and permit
+  // a newly bound intent after the intervening state is inspected.
+  const concurrent = store.read(id).state
+  store.event({
+    sessionId: id,
+    event: {
+      id: 'agent-answer',
+      expectedRevision: concurrent.revision,
+      type: 'answer',
+      text: 'Agent retained a separate observation.',
+    },
+  })
+  await page.locator('#answer').fill('My wording after the agent observation.')
+  await page
+    .getByRole('button', { name: 'Record my answer', exact: true })
+    .click()
+  await expectText('#session-status', 'stale revision')
+  await page
+    .getByRole('button', { name: 'End retry and inspect history', exact: true })
+    .click()
+  await expectText('#session-status', 'Retry ended')
+  assert.equal(
+    await page.locator('#answer').inputValue(),
+    'My wording after the agent observation.'
+  )
+  await page
+    .getByRole('button', { name: 'Record my answer', exact: true })
+    .click()
+  await expectText('#session-status', 'Answer retained')
+  assert.equal(
+    store
+      .read(id)
+      .state.answers.filter(
+        (a) => a.text === 'My wording after the agent observation.'
+      ).length,
+    1
+  )
+  // Open by ID without relying on a particular session's position in the list.
+  await page.getByLabel('Open an exact session ID').fill(id)
+  await page.getByRole('button', { name: 'Open session', exact: true }).click()
+  await expectText('#session-status', 'Session loaded')
+  checks.push(
+    'stale revision recovery preserves wording, new intent uses current revision, and exact-ID navigation works'
   )
   for (const width of [320, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 1000 })

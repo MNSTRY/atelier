@@ -13,6 +13,7 @@ import {
 } from '../src/knowledge/workspace.mjs'
 import { createKnowledgeSessions } from '../src/knowledge/sessions.mjs'
 import { createAtelierSidecarServer } from '../src/server/local-sidecar.mjs'
+import { withPrivateLock } from '../src/project/durable-state.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const cli = (cwd, args, input) =>
@@ -164,7 +165,144 @@ test('source body drift and changed enrollment stop writes while exact old evide
   )
   fs.writeFileSync(path.join(w.dir, 'knowledge-plan.json'), '{}')
   assert.equal(w.sessions.read(id).current, false)
-  assert.equal(w.sessions.list()[0].current, false)
+  assert.equal(w.sessions.list().sessions[0].current, false)
+})
+
+test('unfinished starts are isolated, recoverable, and bound to the exact original intent', (t) => {
+  const w = setup(t)
+  const good = w.sessions.start(w.input)
+  const next = { ...w.input, requestId: randomUUID() }
+  const incompleteId = `kg-${next.requestId}`
+  // Simulate a concurrent writer holding the existing coauthor operation lock.
+  // Descriptor publication succeeds; the ledger start is refused.
+  withPrivateLock(
+    path.join(w.dir, '.atelier-local/coauthor/operation.lock'),
+    () => {
+      assert.throws(() => w.sessions.start(next), /locked/)
+      const rows = w.sessions.list().sessions
+      assert.equal(rows.find((s) => s.id === good.record.id).available, true)
+      assert.equal(rows.find((s) => s.id === incompleteId).recoverable, true)
+    }
+  )
+  const recovered = w.sessions.recover({ sessionId: incompleteId })
+  assert.equal(recovered.state.phase, 'input')
+  assert.deepEqual(w.sessions.start(next), recovered)
+  assert.throws(
+    () => w.sessions.start({ ...next, author: 'Another writer' }),
+    /already bound/
+  )
+  assert.throws(
+    () => w.sessions.start({ ...next, flow: 'model' }),
+    /already bound/
+  )
+  assert.deepEqual(w.sessions.read(incompleteId), recovered)
+  fs.copyFileSync(
+    path.join(w.dir, 'knowledge-plan.json'),
+    path.join(w.dir, 'alias-plan.json')
+  )
+  assert.throws(
+    () => createKnowledgeSessions(w.project, 'alias-plan.json').start(next),
+    /already bound/
+  )
+  const file = path.join(
+    w.dir,
+    '.atelier-local/knowledge/sessions',
+    incompleteId + '.json'
+  )
+  fs.writeFileSync(file, '{unreadable')
+  const rows = w.sessions.list().sessions
+  assert.equal(rows.find((s) => s.id === incompleteId).available, false)
+  assert.equal(rows.find((s) => s.id === incompleteId).recoverable, false)
+  assert.equal(rows.find((s) => s.id === good.record.id).available, true)
+  assert.equal(cli(w.dir, ['knowledge', 'session', 'list']).status, 0)
+})
+
+test('BOM plans use a matching text binding while raw byte drift still invalidates the session', (t) => {
+  const w = setup(t)
+  const plan = path.join(w.dir, 'knowledge-plan.json')
+  const original = fs.readFileSync(plan)
+  fs.writeFileSync(
+    plan,
+    Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), original])
+  )
+  const workspace = loadKnowledgeWorkspace(w.project)
+  assert.notEqual(workspace.sha256, workspace.sourceDigest)
+  assert.equal(cli(w.dir, ['knowledge', 'check']).status, 0)
+  let r = w.sessions.start({
+    ...w.input,
+    requestId: w.input.requestId.toUpperCase(),
+    snapshot: workspace.snapshot,
+  })
+  assert.equal(r.record.id, 'kg-' + w.input.requestId)
+  r = w.sessions.event(
+    event(r.record.id, 'answer', 0, { text: 'BOM-safe retained wording' })
+  )
+  r = w.sessions.event(event(r.record.id, 'save', r.state.revision))
+  assert.equal(r.state.phase, 'saved')
+  assert.equal(r.state.saved[0].receipt.sourceDigest, workspace.sourceDigest)
+  fs.writeFileSync(plan, original)
+  assert.equal(w.sessions.read(r.record.id).currency, 'changed')
+  assert.throws(
+    () => w.sessions.event(event(r.record.id, 'advance', r.state.revision)),
+    /workspace changed/
+  )
+})
+
+test('listing is bounded without hiding all history, and exact old session reads remain available', (t) => {
+  const w = setup(t)
+  const oldest = w.sessions.start(w.input)
+  const dir = path.join(w.dir, '.atelier-local/knowledge/sessions')
+  fs.utimesSync(path.join(dir, oldest.record.id + '.json'), 100, 100)
+  for (let i = 0; i < 201; i++) {
+    const file = path.join(dir, 'kg-' + randomUUID() + '.json')
+    fs.writeFileSync(file, '{}')
+    fs.utimesSync(file, 200 + i, 200 + i)
+  }
+  const newest = w.sessions.start({ ...w.input, requestId: randomUUID() })
+  const listing = w.sessions.list()
+  assert.equal(listing.sessions.length, 200)
+  assert.equal(listing.total, 203)
+  assert.equal(listing.truncated, true)
+  assert.equal(listing.sessions[0].id, newest.record.id)
+  assert.equal(
+    listing.sessions.some((s) => s.id === oldest.record.id),
+    false
+  )
+  assert.equal(w.sessions.read(oldest.record.id).current, true)
+})
+
+test('sessions check the recorded plan even when another plan is selected or the default is invalid', (t) => {
+  const w = setup(t)
+  const file = path.join(w.dir, 'other-plan.json')
+  fs.copyFileSync(path.join(w.dir, 'knowledge-plan.json'), file)
+  const workspace = loadKnowledgeWorkspace(w.project, 'other-plan.json')
+  const other = createKnowledgeSessions(w.project, 'other-plan.json')
+  const r = other.start({ ...w.input, snapshot: workspace.snapshot })
+  fs.writeFileSync(path.join(w.dir, 'knowledge-plan.json'), '{}')
+  assert.equal(w.sessions.read(r.record.id).currency, 'current')
+  assert.equal(w.sessions.list().sessions[0].current, true)
+  assert.equal(
+    w.sessions.event(
+      event(r.record.id, 'answer', 0, { text: 'Correct plan binding' })
+    ).state.phase,
+    'draft'
+  )
+  fs.writeFileSync(file, '{}')
+  assert.equal(w.sessions.read(r.record.id).currency, 'unavailable')
+})
+
+test('the actual dev command accepts knowledge mode and completes its loopback smoke', (t) => {
+  const w = setup(t)
+  for (const args of [
+    ['graph'],
+    ['build'],
+    ['dev', '--knowledge', '--smoke'],
+  ]) {
+    const r = cli(w.dir, args)
+    assert.equal(r.status, 0, r.stderr)
+    if (args[0] === 'dev')
+      assert.match(r.stdout, /local projection and health endpoint passed/)
+  }
 })
 
 test('stale versions, invalid private placement, and forged persistence events refuse', (t) => {

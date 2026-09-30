@@ -44,7 +44,7 @@ try {
       throw new Error('unknown knowledge session operation')
     const sessions = createKnowledgeSessions(project, args.plan)
     let result
-    if (operation === 'list') result = { ok: true, sessions: sessions.list() }
+    if (operation === 'list') result = { ok: true, ...sessions.list() }
     else {
       const chunks = []
       let count = 0
