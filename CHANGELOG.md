@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The knowledge workspace is supported through the `atelier knowledge` CLI and
+  its JSON output, and through the local browser (`atelier dev --knowledge`). It
+  has no library API yet: `@mnstry/atelier/knowledge` does not export workspace,
+  session, context or plan functions, and direct imports of `src/knowledge/*` are
+  unsupported. `atelier architecture entry knowledge-stewardship` now lists the
+  workspace modules and the `knowledge` command.
 - The ingestion store adds `getEvidence`, which returns one exact evidence span
   after rechecking only that source and its stored attempt. Query and
   `getEvidence` both report `readScope: "all-plan"`: they read at the scope of

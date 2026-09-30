@@ -41,6 +41,25 @@ its nonce. There is no remote collaboration, account, canonical apply, model
 provider, or outbound network path. All people who use this local process have
 the local operator's source access. It is not a multi-user access-control layer.
 
+## Supported interfaces
+
+The workspace is supported through two interfaces:
+
+- **The `atelier knowledge` CLI.** `check`, `context`, `evaluate`, `dashboard` and
+  `session start|read|event|recover|list` print JSON. The context packet and the
+  evaluation report carry their versions in `schema`
+  (`atelier-knowledge-context@v1`, `atelier-knowledge-evaluation@v1`). Hosts,
+  desktop adapters and agents bind to these commands and their JSON.
+- **The local browser.** `atelier dev --knowledge` serves the loopback routes
+  described above.
+
+This release has no library API for workspaces, sessions, context selection or
+plans. `@mnstry/atelier/knowledge` exports the knowledge ledger, intake,
+projection and ingestion functions only. Importing `src/knowledge/*` modules
+directly is unsupported, and those modules may change without notice. A library
+export will be added when a host needs one, reviewed together with that host's
+use of it.
+
 ## Five connected views
 
 | Workspace | What is visible | Coauthored result | Next proof |
