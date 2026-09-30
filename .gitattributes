@@ -4,6 +4,15 @@ templates/external-project-workspace/packs/** text eol=lf
 # Generated schema bytes must match the canonical LF generator on every host.
 src/ui/presentation/schema.generated.mjs text eol=lf
 
+# The evidence-navigation contract and the schema, types and generation record generated from it are hash-bound.
+contracts/atelier-evidence-navigation.v1.schema.json text eol=lf
+src/evidence-navigation/schema.generated.mjs text eol=lf
+src/evidence-navigation/types.mjs text eol=lf
+src/evidence-navigation/generation.mjs text eol=lf
+
+# The ontology-profile example pins source and capture digests.
+examples/knowledge-ontology-profile/** text eol=lf
+
 # Sealed capability bundles and imported ADRs retain their pinned source bytes.
 fixtures/capability-packages/** text eol=lf
 fixtures/inquiry-packages/** text eol=lf
