@@ -19,3 +19,9 @@ does not establish real source rights, reviewers, or approvals.
 Keep private source and output within permitted custody. Processing permission
 does not grant permission to share. Ask about genuinely missing rights or
 decisions while completing independent authorized work.
+
+Use `atelier knowledge dashboard` to inspect the current questions and next
+step. Share the browser coauthor session through `knowledge session` commands.
+Ask one question at a time, preserve exact answers, use `propose` for machine
+wording, and wait for explicit human confirmation. A saved private draft is
+a proposal for source-owner review; it is not a canonical edit or acceptance.

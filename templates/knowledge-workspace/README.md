@@ -9,6 +9,9 @@ git init
 atelier knowledge check
 atelier knowledge context --question "Can the blue telescope be loaned this week?"
 atelier knowledge evaluate
+atelier graph
+atelier build
+atelier dev --knowledge
 ```
 
 Adapt `knowledge-plan.json` before using your own material. Name the work,
@@ -30,3 +33,8 @@ your own agent or host before claiming savings.
 
 The package guide `docs/knowledge-setup.md` explains adoption, limitations, and
 how to measure unseen questions, human correction, and appropriate later reuse.
+
+Open `/knowledge` at the printed address for Onboard, Model, Deepen, Apply,
+and Learn dashboards. Coauthor answers stay in private local history and can
+resume through `atelier knowledge session`. Review exported drafts before
+applying any source change. See the package guide `docs/knowledge-workspace.md`.

@@ -108,6 +108,7 @@ Core commands:
   setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
   knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
+  knowledge dashboard|session     Inspect guided work and retain private drafts.
   enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
@@ -172,9 +173,9 @@ Machine-local repo paths belong in
 
 export function buildCommandHelpText(command, brand = DEFAULT_BRAND) {
   const c = brand.command
-  const serverHelp = (name) => `Usage: ${c} ${name} [--project ./atelier.project.json] [--port=PORT] [--review]
+  const serverHelp = (name) => `Usage: ${c} ${name} [--project ./atelier.project.json] [--port=PORT] [--review] [--knowledge]
 
-Serves the project's built projection on 127.0.0.1 in the foreground until stopped. It builds nothing: run ${c} graph, then ${c} build, with the same --project path first. The port is --port=PORT, else the PORT environment variable, else 8137; 0 picks a free port, and the address printed on start names it. --review also serves the local review workspace at /review (docs/local-review.md).`
+Serves the project's built projection on 127.0.0.1 in the foreground until stopped. It builds nothing: run ${c} graph, then ${c} build, with the same --project path first. The port is --port=PORT, else the PORT environment variable, else 8137; 0 picks a free port, and the address printed on start names it. --review also serves the local review workspace at /review (docs/local-review.md). --knowledge adds guided knowledge dashboards and private coauthoring at /knowledge (docs/knowledge-workspace.md).`
   const help = {
     dev: serverHelp('dev'),
     server: serverHelp('server'),
@@ -185,13 +186,14 @@ Observations are local metadata, never automatic telemetry.`,
     coauthor: `Usage: ${c} coauthor start|read|event|recover
 
 Read one JSON request from stdin (maximum 1 MiB). Start takes {"config":{"id":"SESSION","fields":[{"id":"FIELD","source":{"ref":"packet.md","digest":"SHA256"}}]}}. Read/recover take {"sessionId":"SESSION"}. Event takes {"sessionId":"SESSION","event":{"id":"UNIQUE","expectedRevision":0,"type":"answer","text":"ANSWER"}}. Run from the intended Git workspace with ignored .atelier-local/. Saves are private drafts, never canonical source edits.`,
-    knowledge: `Usage: ${c} knowledge check|context|evaluate [--project FILE] [--plan FILE]
+    knowledge: `Usage: ${c} knowledge check|context|evaluate|dashboard [--project FILE] [--plan FILE]
+       ${c} knowledge session start|read|event|recover|list [--project FILE] [--plan FILE]
 
 Start with ${c} init --template knowledge-workspace --target DIR.
 check reports ontology-to-question coverage against the current canonical graph.
 context --question TEXT [--mode graph|lexical] [--max-bytes N] prints a bounded JSON packet of complete active Markdown sources.
 evaluate compares lexical and graph selection on the plan's pinned evidence cases; exit 1 means missing or stale expected evidence.
-The packet is local operator context, may contain private material, and grants no sharing or execution authority. Payload bytes are exact; token estimates are not measured usage. See docs/knowledge-setup.md.`,
+The packet is local operator context, may contain private material, and grants no sharing or execution authority. Payload bytes are exact; token estimates are not measured usage. Session operations read JSON on stdin (except list); saved answers are private drafts. See docs/knowledge-setup.md and docs/knowledge-workspace.md.`,
     init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project|knowledge-workspace] [--target DIR] [--actor ID]
 
 Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,

@@ -469,3 +469,7 @@ the [contract](docs/obsidian-contract.md) and the
 [maintenance service](docs/local-services.md) before relying on it. The
 package subpaths are `@mnstry/atelier/obsidian` and
 `@mnstry/atelier/obsidian/*`.
+
+The optional [knowledge workspace](docs/knowledge-workspace.md) connects
+onboarding, ontology modeling, evidence deepening, application, and outcome
+learning with shared private coauthor sessions for people and agents.

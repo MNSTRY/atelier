@@ -32,6 +32,7 @@ Core commands:
   setup --yes                     Repair ignored local machine state.
   graph [--check]                 Build or check the knowledge graph.
   knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
+  knowledge dashboard|session     Inspect guided work and retain private drafts.
   enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
@@ -405,13 +406,14 @@ test('init command help lists the distribution template and the rejection rule',
   assert.match(result.stdout, /An unrecognized --template exits 1 and writes nothing/)
 })
 
-test('dev and server help name the port flag, the PORT variable, and --review', () => {
+test('dev and server help name the port flag, the PORT variable, --review, and --knowledge', () => {
   for (const command of ['dev', 'server']) {
     const result = runBin([command, '--help'])
     assert.equal(result.status, 0, result.stderr)
-    assert.match(result.stdout, new RegExp(`^Usage: atelier ${command} \\[--project \\./atelier\\.project\\.json\\] \\[--port=PORT\\] \\[--review\\]$`, 'm'))
+    assert.match(result.stdout, new RegExp(`^Usage: atelier ${command} \\[--project \\./atelier\\.project\\.json\\] \\[--port=PORT\\] \\[--review\\] \\[--knowledge\\]$`, 'm'))
     assert.match(result.stdout, /--port=PORT, else the PORT environment variable, else 8137/)
     assert.match(result.stdout, /--review also serves the local review workspace/)
+    assert.match(result.stdout, /--knowledge adds guided knowledge dashboards/)
     assert.match(result.stdout, /run atelier graph, then atelier build/)
   }
 })

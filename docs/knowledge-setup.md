@@ -153,3 +153,10 @@ For sustained value, link the reviewed decision to the actual action, observed
 consequence, and a later appropriate use or non-use. Evaluate usefulness and
 care alongside costs; no count of nodes, edges, or retrieved tokens substitutes
 for that evidence.
+
+## Guided dashboards and coauthoring
+
+Use `atelier dev --knowledge` after graph/build to work through Onboard, Model,
+Deepen, Apply, and Learn. The browser and `knowledge session` CLI share
+source-bound private drafts, confirmation, and recovery. See
+[knowledge workspaces](knowledge-workspace.md) for the complete flow and limits.

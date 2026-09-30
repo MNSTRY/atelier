@@ -403,6 +403,8 @@
 
 ## 0.2.0-alpha.12
 
+- Add opt-in knowledge dashboards and source-bound coauthor flows, sharing private drafts between the local browser and CLI, with evidence comparison and restart recovery.
+
 ### Added
 
 - Atelier's own Obsidian plugin (phase 1: presence and status). Every vault

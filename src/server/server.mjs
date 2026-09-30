@@ -59,6 +59,7 @@ export async function runServerCommand(argv = process.argv.slice(2)) {
     workspaceRoot: project.outputRoot,
     stateDir: project.outputRoot,
     reviewProject: argv.includes('--review') ? project : null,
+    knowledgeProject: argv.includes('--knowledge') ? project : null,
     port,
   })
 
@@ -78,5 +79,5 @@ export async function runServerCommand(argv = process.argv.slice(2)) {
   }
 
   const address = await sidecar.listen()
-  console.log(`MNSTRY Atelier listening on http://127.0.0.1:${address.port}/`)
+  console.log(`MNSTRY Atelier listening on http://127.0.0.1:${address.port}/${argv.includes('--knowledge') ? 'knowledge' : ''}`)
 }

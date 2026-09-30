@@ -60,3 +60,13 @@ comparison. Preserve original evidence and resumability; invalidate derived
 work when sources, rights, or the ontology change. Require a reviewed decision
 before activation. Later reuse should show why a lesson applies or why it does
 not; retention counts are not practical benefit.
+
+## Guided workspace
+
+After graph/build, `atelier dev --knowledge` offers five dashboards. Agents can
+read `atelier knowledge dashboard` and continue the same private session using
+`knowledge session start|read|event|recover|list`. Follow
+`docs/knowledge-workspace.md`: ask one useful question, preserve exact answers,
+use `propose` for machine revisions, and wait for explicit human confirmation.
+Source changes require a separately reviewed owner edit. Record real outcomes
+and measured usage in the Learn flow; never infer savings from source counts.
