@@ -4,7 +4,7 @@ import { isoTime } from '../../../runtime/obsidian/documents.mjs'
 import { refuse } from '../../../runtime/obsidian/errors.mjs'
 import { protectedRoots, readMachineSettings } from '../../../runtime/obsidian/machine-settings.mjs'
 import { resolveScope } from '../../../runtime/obsidian/opening.mjs'
-import { DEFAULT_ELIGIBILITY, createProductionSeams } from '../../../runtime/obsidian/pipeline.mjs'
+import { createProductionSeams, eligibilityFor } from '../../../runtime/obsidian/pipeline.mjs'
 import { createMaintenanceStateStore } from '../../../runtime/obsidian/state-store.mjs'
 import { readConflictView } from './conflict-view.mjs'
 import { runPolicySetup } from './policy-setup.mjs'
@@ -28,8 +28,9 @@ const EXIT = Object.freeze({ ok: 0, notSuccess: 3 })
 const MAX_REQUEST_BYTES = 64 * 1024
 
 // The canonical snapshot selectScope reads, built exactly as the engine
-// builds it: the canonical graph with fail-closed eligibility, and the
-// declared relations whose both endpoints the census knows.
+// builds it: the canonical graph with the eligibility the machine settings
+// decide (fail closed), and the declared relations whose both endpoints the
+// census knows.
 function snapshotNow({ project, seams, eligibility }) {
   const graph = seams.buildGraph({ project, eligibility })
   const known = new Set(graph.nodes.map((node) => node.id))
@@ -49,7 +50,7 @@ function readRequest(value) {
   }
 }
 
-export function createSelectionOperation({ seams = createProductionSeams(), eligibility = DEFAULT_ELIGIBILITY } = {}) {
+export function createSelectionOperation({ seams = createProductionSeams(), eligibility: fixedEligibility = null } = {}) {
   return {
     name: 'selection',
     summary: 'resolve ID | persist ID [allow-empty] | show ID | list  The exact selected set of a declared view, its note paths and, for a focus, the graph query; persisted in Atelier state.',
@@ -74,7 +75,7 @@ export function createSelectionOperation({ seams = createProductionSeams(), elig
       const usable = workspace !== null && workspace.workspaceRoot !== null
       const machine = usable ? readMachineSettings(workspace) : null
       const profile = seams.profileFor({ project, workspaceId: workspace?.workspaceId ?? 'ws-unprepared', audienceAllow: machine?.audienceAllow ?? [] })
-      const canonicalSnapshot = snapshotNow({ project, seams, eligibility })
+      const canonicalSnapshot = snapshotNow({ project, seams, eligibility: fixedEligibility ?? eligibilityFor({ machine, project }) })
       const pathRegistry = usable ? createMaintenanceStateStore(workspace).readPathRegistry() : null
       // Explicit empty is an honest answer of `resolve`; `persist` of an empty selection is refused and asks for it by name.
       const selection = resolveSelection({ canonicalSnapshot, profile, scope, pathRegistry, allowEmpty: sub === 'resolve' || option === 'allow-empty' })

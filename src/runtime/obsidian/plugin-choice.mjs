@@ -4,6 +4,7 @@ import { atomicReplacePrivateText, ensureContainedPrivateDirectory, openRegularF
 import { PLUGIN_ID } from '../../projection/obsidian/plugin-bridge/channel.mjs'
 import { COMMUNITY_PLUGINS_PATH } from '../../projection/obsidian/materialize/settings.mjs'
 import { sha256Digest } from '../../projection/obsidian/materialize/byte-lens.mjs'
+import { vaultRootFor } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, isPlainObject, isoTime } from './documents.mjs'
 
 // Whether the person wants Atelier's plugin in one vault, as the vault itself
@@ -42,8 +43,14 @@ const MAX_SETTINGS_BYTES = 256 * 1024
 const segment = (identifier) => identifier.replaceAll(':', '_')
 
 export const pluginChoiceDirectory = (workspaceRoot) => path.join(workspaceRoot, 'state', 'plugin', 'choices')
-// Where the recovery store places a view's vault.
-export const viewVaultRoot = (workspaceRoot, scopeId) => path.join(workspaceRoot, 'vaults', segment(scopeId))
+// Where a view's vault is, as the recovery store finds it (vaultRootFor): the folder allocated to the view where the
+// workspace decided its vaults live, else its folder under the data root. A record that cannot be read, or was lost,
+// refuses, typed. Pass `workspaceId`; every caller here does. The two-argument form of earlier releases still works:
+// it takes the name of the workspace's private-state folder as the id, which a record of another workspace (or a
+// folder reached through a link) does not match, and such a record refuses, typed, rather than answering another vault.
+export function viewVaultRoot(workspaceRoot, scopeId, workspaceId = path.basename(String(workspaceRoot))) {
+  return vaultRootFor({ workspaceRoot, workspaceId, scopeId }).path
+}
 const choiceFile = (workspaceRoot, scopeId) => path.join(pluginChoiceDirectory(workspaceRoot), `${segment(scopeId)}.json`)
 
 function validChoice(document, { workspaceId, scopeId }) {
@@ -142,7 +149,10 @@ export function decidePluginChoice({ workspaceRoot, workspaceId, scopeId, vaultR
 // `pending` (the view's next preparation records it).
 export function currentPluginChoice({ workspaceRoot, workspaceId, scopeId }) {
   const recorded = readPluginChoice({ workspaceRoot, workspaceId, scopeId })
-  const change = changeShown(recorded, readCommunityEntry(viewVaultRoot(workspaceRoot, scopeId)).entry)
+  // A view whose vault cannot be found (its record cannot be read) shows what was recorded; its view says why.
+  let vaultRoot
+  try { vaultRoot = viewVaultRoot(workspaceRoot, scopeId, workspaceId) } catch (error) { if (typeof error?.code !== 'string') throw error; return recorded }
+  const change = changeShown(recorded, readCommunityEntry(vaultRoot).entry)
   return change === null ? recorded : { ...change, since: null, pending: true }
 }
 
@@ -150,7 +160,9 @@ export function currentPluginChoice({ workspaceRoot, workspaceId, scopeId }) {
 // no app ran, it is confirmed: an app reads the list, entry and all, when it
 // next opens the vault. Published through a running app, it is only offered:
 // that app may not have read it, and the plugin running there confirms it
-// (confirmPluginSeen).
+// (confirmPluginSeen). So is one published into a vault no Obsidian listed
+// while one ran (`direct-unheld`): the evidence covers only the lists Atelier
+// can read, not another profile's or another machine's.
 const IN_PLACE = new Set(['policy-satisfied', 'created', 'published', 'published-external-captured', 'already-current'])
 export function confirmPluginEntry({ workspaceRoot, workspaceId, scopeId, result, clock }) {
   const unit = (result?.notes ?? []).find((entry) => entry.path === COMMUNITY_PLUGINS_PATH)

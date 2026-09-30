@@ -436,8 +436,9 @@ that no app runs, in temporary directories, on ephemeral loopback ports.
 
 ### The `obsidian` command
 
-`atelier obsidian <operation>` is the noninteractive surface over all of the
-above. With `--json` it prints exactly one JSON document, for a refusal too.
+`atelier obsidian <operation>` is the command-line surface over all of the
+above. Every input is an argument. With `--json` it prints exactly one JSON
+document, for a refusal too.
 Exit codes: 0 done, 1 an error nobody typed, 2 a typed refusal or a usage
 error, 3 the operation ran and its answer is not success.
 
@@ -445,8 +446,10 @@ error, 3 the operation ran and its answer is not success.
 | --- | --- | --- |
 | `status` | enablement, machine settings, what was decided, proven service state, per-view freshness with its diagnostics (a code, the rule and the in-view note concerned, never a value; see [the Obsidian contract](obsidian-contract.md#notes-that-were-laid-out-anyway)), whether an apply operation exists | nothing |
 | `settings` | what this machine remembers for the workspace (who may see, where vaults live, start at login, the adapter), who allowed the service, and how each answer is changed | nothing |
-| `scope list`, `scope show ID` | the declared views | nothing |
+| `scope list`, `scope show ID` (also `view list`, `view show ID`) | the declared views | nothing |
+| `view add ID (--all \| --folder PATH [--folder PATH ...] [--repo R] \| --tag T) [--expand DEPTH:MAX] [--default] [--allow-empty] [--yes]` | adds a view to the project configuration, after showing the change and how many notes the view would show; refuses a view that would show no note unless `--allow-empty` (see [Adding a view](obsidian.md#adding-a-view)) | `atelier.project.json`, and `.gitignore` when `.atelier-local/` is not ignored. Never committed |
 | `audience show`, `audience set me\|A,B`, `audience clear` | the audiences this machine lets into a view; none by default, which publishes an empty view. `me` is only you: every audience but `sensitive`, which is added by name. The answer is remembered as the person's decision. A change invalidates every view at the next tick | private machine settings |
+| `location show`, `location set DIR [--allow-synced-location]` | where this workspace's vaults live; each view not published yet gets `<project> (<view>)` there at its first publication, and a vault published already stays where it is | private machine settings |
 | `mode show`, `mode set manual\|automatic` | `automatic` refuses without an installed, matching, active automatic policy | private machine settings |
 | `policy show`, `policy install FILE`, `policy revoke` | `install` validates against the apply-policy contract and stores the policy owner-only beside the machine settings, never in a project, a repository or a note. `revoke` marks the stored policy revoked, which the engine reads before its very next dispatch, and returns the mode to manual | private machine settings |
 | `service start`, `service status`, `service stop` | `startService`, `serviceStatus`, `stopService`. The first start records who allowed it: `--consent-actor ID`, or for a person at a terminal the account's name. `service start` replaces a proven service of an earlier release (`replaced: 'outdated'`) and never one of a later release (`release: 'later'`); with a login item it starts the service through it | what the lifecycle writes |
@@ -473,7 +476,9 @@ LaunchAgents or systemd folder, or starts the `obsidian` command's `open` or
 `service` outside the test runner's context with an environment that leads to
 the developer's app.
 
-A person at a terminal is never asked anything by these operations, but the
+A person at a terminal is asked one thing, by `view add` only: whether to
+write the change it shows to a file they commit. `--yes` answers beforehand,
+and a question gets no answer after 10 minutes, which writes nothing. The
 first start of the maintenance service records the account's name as the
 actor that allowed it when no `--consent-actor` is given. A person is at a
 terminal when standard input and output are both terminals and neither
@@ -491,7 +496,7 @@ step. Only `current` is success:
 | `updating` | a publication is under way, a tick outlasted the wait, or a note differs from the trusted generation and has not been looked at yet |
 | `held-for-your-edit` | an edited note is preserved and held |
 | `stale-readable` | a last good vault exists and reads back, but is not proven to be the present generation |
-| `not-prepared` | no generation of this view has been published |
+| `not-prepared` | no generation of this view can be read back: none was published yet, or its vault cannot be found or used (the reason says which) |
 | `publisher-conflict` | another publisher or an uncoordinated editor holds the vault |
 | `app-missing`, `app-cli-unavailable`, `app-version-unsupported` | no installation; no command-line capability, or the command line turned off in Obsidian (`cli-turned-off`); below the minimum version, or a version that cannot be read (reason `no-vault-open` when the app runs with no vault open and its command line answers nothing else) |
 | `launch-failed` | the vault could not be added to the app's list (a typed reason names why), the operating system refused, or the app never answered for this vault |

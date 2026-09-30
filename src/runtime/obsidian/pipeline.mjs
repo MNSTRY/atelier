@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
-import { EMITTER_VERSION, createPreparationCache, prepareView, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
+import { markdownMetadata } from '../../graph/knowledge-graph.mjs'
+import { EMITTER_VERSION, createPreparationCache, prepareView, readMarkdownLens, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
 import { createRecoveryStore, readFileBytes } from '../../projection/obsidian/recovery/store.mjs'
@@ -30,6 +31,68 @@ export const DEFAULT_ELIGIBILITY = Object.freeze({
   revision: () => 'classified-documents/v2+assets-embedded-by-eligible-documents/v1',
   isEligible: (node) => node.classification === 'classified',
 })
+
+// A vault that is the person's own also shows the notes that carry no classification, when they decided so: the
+// audience decision `only-you` with `unclassified: 'shown'`, which no other audience decision may carry. Those notes
+// are the person's own files, in a vault only they see. One is admitted only when its bytes read as a note (the byte
+// lens the emitter reads it with), so a file the emitter would refuse never stops the vault: it stays withheld, as does
+// one that cannot be read. A note whose labels are unknown is never admitted: front matter Atelier could not read
+// (`malformed-frontmatter`: a block scalar, a wrapped value), or any top-level `kg` key that is not a
+// block, may carry an audience such as `sensitive` that "only you" leaves out. Only a note with no front matter, or
+// front matter of plain top-level keys at column 0 none of which is `kg` (plainTopLevelKeys) and in which the graph
+// reads no `kg` either, is the person's plain note. Assets follow the documents that
+// embed them, as always.
+export function onlyYouEligibility({ project }) {
+  const roots = new Map((project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => [repo.name, repo.path]))
+  const readsAsNote = (node) => {
+    const root = roots.get(node.repo)
+    if (root === undefined || node.extension !== 'md' || typeof node.path !== 'string') return false
+    let bytes
+    let lens
+    try { bytes = readFileBytes(path.join(root, ...node.path.split('/'))); lens = readMarkdownLens(bytes) } catch { return false }
+    // Read now, not as the graph saw it: a file that gained front matter since is judged by what it holds now.
+    if (lens.frontmatter === null) return node.classificationReason === 'absent-frontmatter'
+    if (node.classificationReason !== 'missing-kg-block') return false
+    const text = bytes.toString('utf8')
+    const block = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+    if (block === null || !plainTopLevelKeys(block[1])) return false
+    // A second layer: the graph's own reading of the front matter has no kg key either.
+    try { return !('kg' in markdownMetadata(text)) } catch { return false }
+  }
+  return Object.freeze({
+    revision: () => 'classified-documents/v2+unclassified-notes-read-as-notes-for-only-you/v4+assets-embedded-by-eligible-documents/v1',
+    isEligible: (node) => node.classification === 'classified' || (node.classification === 'unclassified' && readsAsNote(node)),
+  })
+}
+
+// Whether front matter is plain `key: value` lines at its top level, none of them `kg`: every line that is not blank,
+// a comment, or indented (a nested value or a continuation) starts with a bare key. A quoted key, a flow or JSON
+// mapping, a complex key (`? `), a top-level list or anything else unusual is not plain, so a label it may hold (a
+// `kg.audience: sensitive` Atelier did not read) keeps the note withheld. An allow-list, never a pattern to find.
+const PLAIN_KEY = /^([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]|$)/
+function plainTopLevelKeys(frontmatter) {
+  // Line breaks YAML 1.1 readers honour and this reading does not (NEL, LS, PS) could hide a kg from it.
+  if (/[\u0085\u2028\u2029]/.test(frontmatter)) return false
+  let rooted = false
+  for (const line of frontmatter.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed === '' || trimmed.startsWith('#')) continue
+    // An indented line is a nested value or a continuation only below a key at column 0; YAML also lets a whole root
+    // mapping be indented, and then its keys (kg among them) are indented too.
+    if (/^[ \t]/.test(line)) { if (!rooted) return false; continue }
+    const key = PLAIN_KEY.exec(line)
+    if (key === null || key[1] === 'kg') return false
+    rooted = true
+  }
+  return true
+}
+
+// The eligibility a workspace's machine settings decide: the one above only for "only you" with unclassified notes
+// shown, and the default, which withholds them, for every other decision and for none.
+export function eligibilityFor({ machine, project }) {
+  const audience = machine?.decisions?.audience
+  return audience?.choice === 'only-you' && audience.unclassified === 'shown' ? onlyYouEligibility({ project }) : DEFAULT_ELIGIBILITY
+}
 
 export function assetEligibilityFor({ graph, eligibility }) {
   const eligibleSources = new Set(graph.nodes.filter((node) => eligibility.isEligible(node) === true).map((node) => node.id))

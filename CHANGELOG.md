@@ -180,9 +180,127 @@
   command, `--wait-ms` included. See "What `open` does in each state of
   Obsidian" in `docs/obsidian.md` and "Obsidian's vault list" in
   `docs/obsidian-contract.md`.
+- Views can be declared without editing JSON:
+  `atelier obsidian view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default]`
+  adds a view to `atelier.project.json` (and `.atelier-local/` to
+  `.gitignore` when that folder is not ignored), and never commits. It shows
+  the change as a diff and how many notes the view would show on this machine,
+  with how many of the notes it selects are withheld for carrying no
+  classification or an audience that is not admitted. A view that would show
+  no note is refused with `view-would-be-empty` unless `--allow-empty`. A
+  person at a terminal is asked before anything is written (`--yes` answers
+  beforehand; no answer within 10 minutes writes nothing); for anyone else the
+  command is the consent. The file is rewritten only when it is in the form
+  Atelier writes JSON in, so the change is the view and nothing else
+  (`project-config-format-unknown` names the member to add by hand
+  otherwise), atomically, keeping its mode, and only over the bytes it read
+  (`project-config-changed`). A file that is not UTF-8 is never rewritten
+  (`gitignore-not-utf8`, or `project-config-format-unknown`). Every new text
+  is written and synced to disk before any file is replaced; a failure after
+  that says which files changed (`project-files-partly-written`), and no
+  temporary file is left beside them. The first view is the default. `view list` and
+  `view show ID` are `scope list` and `scope show ID`.
 
 ### Changed
 
+- Where a workspace's vaults live can be decided, and a visible folder can
+  hold them: `atelier obsidian location set DIR` (`~/Atelier`, say) records
+  the `location` decision. Each view not published yet is then given its own
+  folder there at its first publication, `<project> (<view>)`, which is also
+  the vault's name in Obsidian (`harbor-notes (everything)`; a number inside the
+  parentheses when that name is taken on the disk or by a vault the app lists).
+  The folder is created exclusively and private to this user, and its
+  allocation is recorded once in the workspace's private state
+  (`atelier-obsidian-vault-allocation/v1`, `state/allocations/<view>.json`,
+  with the folder's real path, device and inode, which the maintenance service
+  checks at every tick and the publisher before it writes, before each note
+  and before its commit: another folder put
+  where the one made was is not published into, `vault-allocation-replaced`,
+  nor is the same folder reached through a link put on the way since,
+  `vault-allocation-moved`; on Linux a folder made after the original was
+  removed can be given its inode number, see Known limits in
+  `docs/obsidian.md`. A folder that has gone is made again by the next tick,
+  only where its recorded real path leads and only where a location would be
+  accepted: never inside a repository, the project, the private state, a vault
+  Atelier publishes or one the app lists; a vault removed, moved or replaced
+  while it was being published stops that publication (`vault-root-moved` for
+  a vault under the data root), and the running service, without a restart,
+  publishes into it again once it is put back or made again: at once, or, for
+  a folder made again after a publication stopped just before its commit, at
+  the next change at its sources (`vault-note-missing` until then). A published view whose vault cannot
+  be found (its record was lost, or a view published under the data root lost
+  its `vaults/<view>` folder, which was made again before) is refused,
+  `vault-allocation-lost`, never published again into a new, empty vault;
+  `status` and `open` name the way back),
+  which the recovery store reads: the engine, source apply, the proposal
+  adapter, `open` and the plugin's service paths (its hello, the person's
+  choice to turn it off, drift) all find the same vault. So does
+  `viewVaultRoot` of `@mnstry/atelier/obsidian`, which answers the allocated
+  folder now, and may refuse, typed (a record that cannot be read, or was
+  lost); pass the workspace id as its third argument: without it the name of
+  the workspace's private-state folder is taken as the id, as before, and a
+  record that does not match it is refused. A vault published before stays
+  under the data root, and a workspace that decides nothing publishes there as
+  before. A folder inside a repository or the project, inside a vault Atelier
+  publishes or one the app lists, or on another volume than the data root is
+  refused, through links and in any letter case; a synced one needs
+  `--allow-synced-location`; a macOS-protected one is warned about. The app's
+  list is read through the app when it answers, else from its settings file;
+  while it cannot be read, no folder is allocated (`app-vault-list-unreadable`,
+  tried again at the next tick). A view whose folder cannot be allocated is not published
+  and its freshness says why, while the other views go on: a folder that
+  cannot be made (`vault-location-unusable`: a file in the way, no
+  permission), one inside Atelier's private state
+  (`vault-location-inside-private-state`, refused by `location set` too), an
+  allocation record that cannot be read or names a folder inside a
+  repository, each stops its own view only. `location show`
+  and `status` (`scopes[].vault`) say where each view's vault is, or why it
+  cannot be read. Consent to a synced folder is not recorded, so it is not
+  checked again when a folder is allocated or made again; a link on the way is
+  followed only at a view's first allocation (Known limits).
+- A vault that is only yours shows the notes that carry no classification:
+  `atelier obsidian audience set me` now records `unclassified: shown` with
+  "only you", and every path that builds a view (the engine, source apply,
+  the proposal adapter, `selection`) admits them through one rule,
+  `eligibilityFor`. A list of audiences never shows them, even one that names
+  every audience "only you" stands for. Such a note is shown only when its
+  bytes read as a note the way the emitter reads every note, so a file that
+  cannot be published stays withheld instead of stopping the vault. Deciding
+  it changes the eligibility revision, so every view is rebuilt at the next
+  tick. A decision recorded as "only you" with them withheld keeps them
+  withheld until `audience set me` is run again. `view add` counts what a
+  view would show the same way, as "only you" while nobody decided. Since
+  the maintenance service publishes no note until someone decides who may
+  see, `view add` then names `atelier obsidian audience set me` as the next
+  step, before `open`; and a view refused as empty because no audience is
+  admitted (`audience clear`) is told to decide who may see, not to classify
+  notes. A note whose labels cannot be known is never shown: front matter
+  Atelier cannot read, or a top-level `kg` key that is not a block, may say
+  `sensitive`.
+- A view's first publication into its allocated folder no longer waits for an
+  Obsidian that runs and cannot be coordinated with (a vault open, its command
+  line off, no vault open, or a version below the floor). While the app's own
+  settings file names neither the folder, a folder above it nor one inside it
+  (read, not guessed: a missing or unreadable file, an entry with a `..`
+  segment, or a Flatpak or snap build, gives no such evidence), the publisher fills the vault in its own process by
+  creating files only (journal `mode: 'direct-unheld'`). Anything that would
+  replace or remove a file, or write a settings file over one that is there,
+  refuses as `editor-uncoordinated` and writes nothing. The evidence is read
+  again before the first file and every two seconds, and once it is gone
+  nothing more is written or committed. A run that completes is committed
+  before `open` adds the vault to Obsidian and opens it. A run that stops
+  partway commits nothing: the list names the folder meanwhile, a settings
+  file with other bytes is already there, or an interrupted run left a
+  replacement or a removal. The view then falls back to the coordinated path,
+  so `open` may add the vault to Obsidian and open it before it is complete,
+  and the rest, every replacement and removal included, is published through
+  the app with its usual checks. While the app does not qualify, a run stopped
+  that way reports the app's own refusal (`app-cli-unavailable`, say), and
+  `open` answers it without adding the vault unless asked to restart
+  Obsidian; with the app running and no vault open, a vault the app already
+  lists is still opened by its path, as before. The plugin's entry written this way counts as offered until the
+  plugin says hello. A later generation, a vault under the data root, and
+  every other case publish and refuse as before.
 - The Obsidian machine settings of a workspace remember what a person decided
   once, so no later run has to ask again or be told again: who may see the
   vaults, where they live, whether maintenance starts at login, and that the
@@ -268,7 +386,53 @@
   already running while that service fails every tick on the new machine
   settings. A service of a later release is left running (`release:
   'later'`).
-
+- `atelier obsidian open` no longer answers `app-cli-unavailable` /
+  `vault-open-cli-silent` on the first silent round after it launched the
+  vault. A version only Atelier's plugin gave, with no answer for the vault,
+  now has to be seen in two rounds in a row: one version call that timed out
+  while Obsidian was busy opening its window made `open` report a command
+  line that was only slow as switched off. A wait that ends right after one
+  such round still gives that answer, not `launch-failed`.
+- A view kept `current` while a plugin file it pins waits for Obsidian (a
+  drifted `data.json`, say, while the app cannot be coordinated with) now
+  says so. Its reason is `verified-by-read-back-plugin-waits-for-app`
+  instead of the `verified-by-read-back` of a view whose plugin files are all
+  there, and `status` and `open` add `plugin files wait for the app` to the
+  plugin line, with a next step (`files: "waits-for-app"` and `next` on
+  `plugin` in `--json`). A drift that publishing would only leave for the
+  person again (the data file of a vault root that is a link or not private,
+  a folder where a file goes) is no longer a reason to publish a committed
+  generation again, so it never waits for the app and never gets that
+  reason; the path is left as it is (nothing names it in `status` yet, and
+  the plugin shows as not present).
+- A view held because a plugin file (`plugin-file-changed`) or a settings
+  file (`settings-changed`) changed while it was published, by another
+  program or by the person, is still `publisher-conflict`, but its next step
+  no longer tells the person to close another publisher: it names the file
+  that stopped the publication and says that the view is retried
+  automatically.
+- A plugin-file drift that publishing cannot repair (the data file of a vault
+  root that is a link, say) was published twice whenever the maintenance
+  service started: once by the start's own tick and once more when the
+  service first compared the plugin files with the disk, or when that tick's
+  publication changed the pinned files. What that publication could not
+  change (a file as pinned, or one that holds what it held before the tick
+  under the same pin and vault root) is now taken as seen, and such a drift
+  is no longer a reason to publish a committed generation again, so asking
+  about it at most once more writes no vault file. A plugin file another
+  writer removes or changes after the publication, even during the same tick
+  (brought back to its old bytes after a publication that changed its pin,
+  say), unless it holds again what it held before the tick under the same
+  pin and vault root, and a path the person repairs before the tick ends,
+  are still written at the next tick.
+- `atelier obsidian open` with Obsidian quit and the view's vault already in
+  Obsidian's list but closed: Obsidian started plainly does not reopen such a
+  vault, so a link it refused just after starting left `open` to wait and
+  answer `launch-failed` / `app-did-not-answer-for-this-vault`. `open` now
+  hands the link once more to the Obsidian that now runs, through its
+  command-line tool only (never the operating system, since this `open`
+  started it), before it answers that. A vault the list flags open is not
+  asked twice.
 - `atelier obsidian --help` lists `plugin show | on` and `policy digest`, which
   0.2.0-alpha.12 ships but left out of that help (the operations themselves
   worked, and `atelier obsidian help` showed them). A test now fails when a
