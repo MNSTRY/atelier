@@ -88,6 +88,15 @@
 
 ### Added
 
+- Add opt-in knowledge dashboards and source-bound coauthor flows, sharing private drafts between the local browser and CLI, with evidence comparison and restart recovery.
+
+- A `knowledge-workspace` starter, mirrored `atelier-knowledge-setup` agent
+  skills, and `atelier knowledge check|context|evaluate`: question-led ontology
+  coverage, complete source context within an exact byte budget, and a lexical
+  versus graph comparison with source-digest and directed-relation checks.
+  Local operator output carries no expression or execution permission. Token
+  estimates remain distinct from measured usage and accepted work.
+
 - `atelier enroll documents [--audience private] [--dry-run] [--json]` writes
   a minimal `<file>.kg.json` sidecar next to every `.html`, `.pdf` and
   `.docx` document the knowledge graph reads that has none, so an adopted
