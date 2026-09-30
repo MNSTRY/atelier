@@ -638,7 +638,7 @@ export function renderKnowledgePage() {
           if (!issues.length)
             node(
               'p',
-              'No structural gap flagged. Check meaning, contradictions, and an unseen question before calling the model useful.',
+              'No graph structure warnings. Review the retrieval checks below, then check meaning, contradictions, and an unseen question.',
               c
             )
           else {
@@ -651,15 +651,41 @@ export function renderKnowledgePage() {
               const b = card(out, q.question)
               node(
                 'p',
-                'Missing evidence: ' +
-                  (g.missing.join(', ') || 'none') +
-                  '. Changed pins: ' +
-                  (g.stale.join(', ') || 'none') +
-                  '. Missing relationships: ' +
-                  (g.missingRelations.join(', ') || 'none') +
-                  '.',
+                g.status === 'abstain-unverified'
+                  ? 'Abstention unverified: matching evidence omitted'
+                  : q.expect === 'abstain'
+                    ? 'Abstention needs review: matching evidence retrieved'
+                    : 'Evidence needs attention',
+                b,
+                'notice'
+              )
+              node(
+                'p',
+                'Candidates: ' + g.candidates + '. Selected: ' + g.sourceIds.length +
+                  '. Omitted: ' + g.omitted + '. Omission details not listed: ' +
+                  g.omissionsUnlisted + '.',
                 b
               )
+              if (q.expect === 'abstain') {
+                if (g.sourceIds.length) node('p', 'Selected evidence: ' + g.sourceIds.join(', '), b)
+              } else {
+                node(
+                  'p',
+                  'Missing evidence: ' +
+                    (g.missing.join(', ') || 'none') +
+                    '. Changed pins: ' +
+                    (g.stale.join(', ') || 'none') +
+                    '. Missing relationships: ' +
+                    (g.missingRelations.join(', ') || 'none') +
+                    '.',
+                  b
+                )
+              }
+              if (g.omitted) {
+                const list = node('ul', undefined, b)
+                for (const omission of g.omissions) node('li', omission.id + ': ' + omission.reason, list)
+                node('p', 'Inspect omitted sources and their limits before relying on the result.', b)
+              }
             }
           }
           node(

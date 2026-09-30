@@ -251,6 +251,18 @@ export function knowledgeDashboard(workspace) {
         }
       : inspection.warnings.length
       ? { stage: 'deepen', reason: inspection.warnings[0] }
+      : evaluation?.cases.some((c) => c.runs.graph.status === 'abstain-unverified')
+      ? {
+          stage: 'deepen',
+          reason:
+            'Matching evidence was omitted; the abstention cannot be verified. Inspect the listed omissions.',
+        }
+      : evaluation?.cases.some((c) => c.expect === 'abstain' && c.runs.graph.sourceIds.length)
+      ? {
+          stage: 'deepen',
+          reason:
+            'Matching evidence was retrieved for an expected abstention. Inspect the evidence and review the question.',
+        }
       : evaluation?.cases.some(
           (c) =>
             !c.runs.graph.expectedEvidencePresent || c.runs.graph.stale.length
