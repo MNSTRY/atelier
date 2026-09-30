@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import Ajv from 'ajv/dist/2020.js'
 import { resolveProjectConfig, validateProjectConfigDoc } from '@mnstry/atelier/project'
 import { buildCanonicalGraph } from '@mnstry/atelier/graph'
-import { sanitizedGitEnvironment } from '@mnstry/atelier/runtime/git'
+import { sanitizedGitEnvironment, sanitizeRemoteUrl } from '@mnstry/atelier/runtime/git'
 
 export const MANIFEST_SCHEMA = 'atelier-personal-workspace-manifest@v1'
 export const OVERLAY_SCHEMA = 'atelier-personal-workspace-overlay@v1'
@@ -53,6 +53,9 @@ function validate(value, kind) {
     : ['annotations', 'connections', 'collections', 'views'].flatMap((k) => value[k].map((r) => r.id))
   if (new Set(ids).size !== ids.length) refuse('malformed-input')
   if (kind === 'manifest') {
+    for (const repo of value.repos) {
+      if (repo.remote !== null && sanitizeRemoteUrl(repo.remote) !== repo.remote) refuse('remote-credentials-refused')
+    }
     for (const binding of value.bindings) if (!path.isAbsolute(binding) || binding.includes('\0')) refuse('path-not-absolute')
     for (let i = 0; i < value.bindings.length; i++) for (const b of value.bindings.slice(i + 1)) {
       if (overlap(path.resolve(value.bindings[i]), path.resolve(b))) refuse('ambiguous-binding')
@@ -90,7 +93,10 @@ export function loadPersonalOverlay(file, { personalHome = path.dirname(file) } 
   return safe(() => validate(JSON.parse(readPrivate(file, personalHome)), 'overlay'))
 }
 function git(root, args, { allowAbsent = false } = {}) {
-  const r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', env: sanitizedGitEnvironment({ PATH: process.env.PATH }), timeout: 8000, maxBuffer: 16 * 1024 * 1024 })
+  // Preserve the config environment used by the shared reader, while disabling
+  // helpers on every module-owned probe. The config probe checks all values,
+  // including those before this command-line override.
+  const r = spawnSync('git', ['-C', root, '-c', 'core.fsmonitor=false', ...args], { encoding: 'utf8', env: sanitizedGitEnvironment(process.env), timeout: 8000, maxBuffer: 16 * 1024 * 1024 })
   if (r.error || r.signal || (r.status !== 0 && !(allowAbsent && (r.status === 1 || (args[0] === 'remote' && r.status === 2))))) refuse('git-unavailable')
   return r.stdout || ''
 }
@@ -99,11 +105,12 @@ function checkEnvironment() {
 }
 function checkRepo(repo) {
   rootCheck(repo.root)
-  const helper = git(repo.root, ['config', '--get', 'core.fsmonitor'], { allowAbsent: true }).trim()
-  if (helper && helper !== 'false') refuse('git-helper-configured')
+  const helpers = git(repo.root, ['config', '--get-all', 'core.fsmonitor'], { allowAbsent: true }).trim().split('\n')
+  if (helpers.some((helper) => helper && !['false', 'no', 'off', '0'].includes(helper.toLowerCase()))) refuse('git-helper-configured')
   // A failed remote lookup is not proof of an absent remote: require a valid worktree first.
   if (git(repo.root, ['rev-parse', '--is-inside-work-tree']).trim() !== 'true') refuse('git-unavailable')
-  const remote = git(repo.root, ['remote', 'get-url', 'origin'], { allowAbsent: true }).trim() || null
+  const observed = git(repo.root, ['remote', 'get-url', 'origin'], { allowAbsent: true }).trim()
+  const remote = observed ? sanitizeRemoteUrl(observed) : null
   if (remote !== repo.remote) refuse('repo-identity-replaced')
 }
 function refs(overlay) {
@@ -154,14 +161,17 @@ export function resolvePersonalWorkspace({ folder, personalHome } = {}) {
   })
 }
 function markdown(id, title, body, targets = [], tags = []) {
-  return `---\ntitle: ${JSON.stringify(title)}\ntags: ${JSON.stringify(tags)}\nkg:\n  id: ${JSON.stringify(id)}\n  type: document\n  status: active\n  audience: private\n${targets.length ? `  relations:\n    related:\n${[...new Set(targets)].sort().map((t) => `      - ${JSON.stringify(t)}\n`).join('')}` : ''}---\n\n${body}\n`
+  const privateTags = tags.length ? tags : ['personal-interpretation']
+  return `---\ntitle: ${JSON.stringify(title)}\ntags:\n${privateTags.map((tag) => `  - ${JSON.stringify(tag)}\n`).join('')}kg:\n  id: ${JSON.stringify(id)}\n  type: document\n  status: active\n  audience: private\n${targets.length ? `  relations:\n    related:\n${[...new Set(targets)].sort().map((t) => `      - ${JSON.stringify(t)}\n`).join('')}` : ''}---\n\n${body}\n`
 }
 export function planPersonalGeneration(resolved) {
   if (!resolvedInputs.has(resolved) || resolved.status !== 'resolved') refuse('malformed-input')
   const { manifest, overlay, personalHome, enrolled, overlayRepoId } = resolved
-  const referenceMap = Object.fromEntries(refs(overlay).map((r) => [refKey(r), r.nodeId]).sort(([a], [b]) => a.localeCompare(b)))
+  const referenceMap = Object.fromEntries(refs(overlay).map((r) => [refKey(r), r.nodeId]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
   const inputsDigest = hash(canonical({ manifest, overlay, referenceMap }))
-  const generationId = inputsDigest
+  // Relative project paths depend on this location. Moving the private home
+  // produces a fresh generation without modifying or overwriting its history.
+  const generationId = hash(canonical({ inputsDigest, personalHome }))
   const final = path.join(personalHome, 'generations', generationId)
   const files = {
     'inputs.json': canonical({ manifest, overlay, referenceMap }),
@@ -206,7 +216,7 @@ function requireOutsideGit(root) {
     catch (error) { if (error instanceof PersonalWorkspaceRefusal || error.code !== 'ENOENT') throw error }
     if (ancestor === path.dirname(ancestor)) break
   }
-  const r = spawnSync('git', ['-C', root, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8', env: sanitizedGitEnvironment({ PATH: process.env.PATH }), timeout: 8000 })
+  const r = spawnSync('git', ['-C', root, '-c', 'core.fsmonitor=false', 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8', env: sanitizedGitEnvironment(process.env), timeout: 8000 })
   if (r.error || r.signal) refuse('git-unavailable')
   if (r.status === 0) refuse('generation-inside-work-tree')
 }
@@ -218,6 +228,7 @@ function currentPlan(personalHome) {
 }
 function generationsRoot(personalHome, create = false) {
   rootCheck(personalHome, true)
+  requireOutsideGit(personalHome)
   const root = path.join(personalHome, 'generations')
   if (create && !fs.existsSync(root)) fs.mkdirSync(root, { mode: 0o700 })
   rootCheck(root, true)
@@ -285,16 +296,16 @@ function composeAt(plan, final) {
     verifyFiles(plan, final)
     const input = readInputs(personalHome)
     const ignored = new Map(input.enrolled.map((repo) => [repo.repoId, git(repo.root,
-      ['-c', 'core.fsmonitor=false', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']).split('\0').filter(Boolean).map((p) => p.replace(/\/+$/, ''))]))
+      ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']).split('\0').filter(Boolean).map((p) => p.replace(/\/+$/, ''))]))
     const project = resolveProjectConfig({ argv: [`--project-config=${path.join(final, 'atelier.project.json')}`], cwd: final, env: { PATH: process.env.PATH }, writeLocalState: false })
     if (validateProjectConfigDoc(project.config).length) refuse('generation-corrupt')
     if (project.localOverlay.paths.length || project.repos.some((r) => r.pathSource !== 'tracked-config')) refuse('ambient-overlay-present')
-    const graph = buildCanonicalGraph(project)
+    const graph = buildCanonicalGraph(project, { isLinkTargetEligible: (node) => node.repo !== input.overlayRepoId })
     for (const n of [...graph.nodes, ...graph.assets]) {
-      if ((ignored.get(n.repo) || []).some((p) => n.path === p || n.path.startsWith(`${p}/`))) refuse('ignored-source-in-census')
+      if ((ignored.get(n.repo) || []).some((p) => [n.path, n.sidecar].filter(Boolean).some((rel) => rel === p || rel.startsWith(`${p}/`)))) refuse('ignored-source-in-census')
     }
     for (const ref of refs(input.overlay)) {
-      if (!graph.nodes.some((n) => n.id === ref.nodeId && n.repo === ref.repoId)) refuse('stale-reference')
+      if (!graph.nodes.some((n) => n.id === ref.nodeId && n.repo === ref.repoId && (n.markdownHasKgId === true || n.sidecarHasKgId === true))) refuse('stale-reference')
     }
     if (!graph.ok) refuse('source-graph-invalid')
     for (const rel of Object.keys(plan.files).filter((p) => p.startsWith('overlay/'))) {
@@ -305,7 +316,7 @@ function composeAt(plan, final) {
     if (canonical(expectedOverlay) !== canonical(actualOverlay)) refuse('overlay-census-mismatch')
     // Report current source evidence, never claim that an immutable private generation freezes live source bytes.
     const sourceRevisions = input.enrolled.map((repo) => ({ repoId: repo.repoId, remote: repo.remote,
-      observedCensusDigest: hash(canonical(graph.nodes.filter((n) => n.repo === repo.repoId).map((n) => ({ id: n.id, path: n.path, sha256: hash(fs.readFileSync(path.join(repo.root, n.path))) })).sort((a, b) => a.path.localeCompare(b.path)))) }))
+      observedCensusDigest: hash(canonical(graph.nodes.filter((n) => n.repo === repo.repoId).map((n) => ({ id: n.id, path: n.path, sha256: hash(fs.readFileSync(path.join(repo.root, n.path))) })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)))) }))
     if (currentPlan(personalHome).generationId !== plan.generationId) refuse('stale-generation')
     verifyFiles(plan, final)
   return { graph, sourceRevisions, input }

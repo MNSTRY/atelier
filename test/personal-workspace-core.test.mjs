@@ -203,7 +203,7 @@ for (const entry of ['directory', 'file']) test(`generation ancestor .git ${entr
   const f = fixture(t)
   if (entry === 'directory') fs.mkdirSync(path.join(f.personalHome, '.git')); else fs.writeFileSync(path.join(f.personalHome, '.git'), 'gitdir: missing')
   refuses(f.materialize, 'generation-inside-work-tree')
-  assert.equal(fs.existsSync(path.join(f.personalHome, 'generations', f.plan().generationId)), false)
+  assert.equal(fs.existsSync(path.join(f.personalHome, 'generations')), false)
 })
 for (const output of ['true', 'false']) test(`generation rev-parse success ${output} refuses`, (t) => {
   const f = fixture(t)
@@ -353,4 +353,83 @@ test('removing a source and its dependent selections produces a smaller fresh gr
   assert.equal(result.graph.nodes.some((n) => n.repo === 'source-b'), false)
   assert.ok(fs.existsSync(path.join(f.personalHome, 'generations', first.generationId, 'generation.json')))
   refuses(() => composePersonalWorkspace({ personalHome: f.personalHome, generationId: first.generationId }), 'stale-generation')
+})
+
+
+test('review S1: private aliases and body links cannot change shared link resolution', (t) => {
+  const f = fixture(t), file = path.join(f.sources[0], 'overview.md'), bytes = fs.readFileSync(file)
+  const target = path.join(f.sources[1], 'overview.md'), targetBytes = fs.readFileSync(target)
+  try {
+    fs.writeFileSync(target, targetBytes.toString().replace('title: Overview', 'title: Shared target'))
+    fs.appendFileSync(file, '\n[[Shared target]]\n[[Private label]]\n')
+    f.overlay.annotations[0].id = 'overview'; f.overlay.annotations[0].displayAlias = 'Shared target'
+    f.overlay.collections[0].name = 'Private label'
+    f.overlay.annotations[0].note = '[[source-b/overview]] [source](../../source-b/overview.md) ![[asset.png]]'
+    f.save(); f.materialize(); const graph = f.compose().graph
+    assert.ok(graph.edges.some((e) => e.source === 'source-a:overview' && e.target === 'source-b:overview' && e.origin === 'ordinary-link'))
+    assert.equal(graph.edges.some((e) => e.source.startsWith('source-') && e.target.startsWith('personal-')), false)
+    assert.equal(graph.links.some((e) => e.source.startsWith('personal-')), false)
+    assert.equal(graph.embeds.some((e) => e.source?.startsWith('personal-')), false)
+    assert.ok(graph.edges.some((e) => e.source === 'personal-reading:annotation-overview' && e.target === 'source-a:overview' && e.origin === 'declared'))
+    assert.equal(graph.nodes.find((n) => n.id === 'source-b:overview').title, 'Shared target')
+  } finally { fs.writeFileSync(file, bytes); fs.writeFileSync(target, targetBytes) }
+})
+
+test('review S1: global and XDG fsmonitor configuration refuses before any helper runs', (t) => {
+  const f = fixture(t), home = path.join(f.base, 'global-home'), xdg = path.join(home, 'xdg'), marker = path.join(home, 'helper-used')
+  fs.mkdirSync(path.join(xdg, 'git'), { recursive: true }); changeEnv(t, 'HOME', home); changeEnv(t, 'XDG_CONFIG_HOME', xdg)
+  const helper = path.join(home, 'marker-helper')
+  fs.writeFileSync(helper, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(marker)},'used')\n`, { mode: 0o755 })
+  for (const config of [path.join(home, '.gitconfig'), path.join(xdg, 'git/config')]) {
+    fs.writeFileSync(config, `[core]\n fsmonitor = ${helper}\n`)
+    refuses(f.resolve, 'git-helper-configured'); assert.equal(fs.existsSync(marker), false)
+    assert.equal(fs.existsSync(path.join(f.personalHome, 'generations')), false); fs.unlinkSync(config)
+  }
+})
+
+test('review S1: authored comma and quote tags survive and untagged nodes use a private marker', (t) => {
+  const f = fixture(t); f.overlay.annotations[0].tags = ['a,b', 'quoted "tag"']; f.save(); f.materialize()
+  const graph = f.compose().graph
+  assert.deepEqual(graph.nodes.find((n) => n.id === 'personal-reading:annotation-note').tags, ['a,b', 'quoted "tag"'])
+  assert.deepEqual(graph.nodes.find((n) => n.id === 'personal-reading:workspace').tags, ['personal-interpretation'])
+})
+
+test('review S1: ignored asset sidecars cannot enter a fail-open shared census', (t) => {
+  const f = fixture(t), root = f.sources[0], asset = path.join(root, 'reference.pdf'), sidecar = `${asset}.kg.json`, ignore = path.join(root, '.gitignore')
+  fs.writeFileSync(asset, 'synthetic PDF'); writeJSON(sidecar, { schema: 'atelier-source@v1', asset: 'reference.pdf', title: 'Reference', kg: { id: 'source-a:reference', type: 'document', status: 'active', audience: 'private' } })
+  fs.writeFileSync(ignore, 'reference.pdf.kg.json\n')
+  shim(t, f, "if(rest[0]==='ls-files') process.exit(1);")
+  try { refuses(f.materialize, 'ignored-source-in-census') }
+  finally { for (const file of [asset, sidecar, ignore]) fs.unlinkSync(file) }
+})
+
+test('review S1: path-derived IDs are not stable overlay targets', (t) => {
+  const f = fixture(t), file = path.join(f.sources[0], 'overview.md'), bytes = fs.readFileSync(file)
+  try {
+    fs.writeFileSync(file, '---\ntitle: Overview\n---\nUnclassified source\n')
+    refuses(f.materialize, 'stale-reference')
+  } finally { fs.writeFileSync(file, bytes) }
+})
+
+test('review S1: observed remote credentials never enter authored or generated output', (t) => {
+  const f = fixture(t), root = f.sources[0], canonicalRemote = 'https://example.invalid/sample/repository.git'
+  spawnSync(realGit, ['-C', root, 'remote', 'add', 'origin', 'https://reader:invented-token@example.invalid/sample/repository.git?token=invented#private'])
+  try {
+    f.manifest.repos[0].remote = canonicalRemote; f.save(); f.materialize()
+    const result = f.compose(); assert.equal(result.generation.sourceRevisions[0].remote, canonicalRemote)
+    assert.equal(JSON.stringify(result).includes('invented-token'), false)
+    f.manifest.repos[0].remote = 'https://reader:invented-token@example.invalid/sample/repository.git'; f.save()
+    refuses(f.resolve, 'remote-credentials-refused')
+  } finally { spawnSync(realGit, ['-C', root, 'remote', 'remove', 'origin']) }
+})
+
+test('review S1: relocated personal homes rebuild a distinct immutable generation', (t) => {
+  const f = fixture(t), first = f.plan(); f.materialize()
+  const moved = path.join(f.base, 'deeper', 'personal'); fs.mkdirSync(path.dirname(moved)); fs.renameSync(f.personalHome, moved)
+  const p = planPersonalGeneration(resolvePersonalWorkspace({ folder: f.sources[0], personalHome: moved }))
+  assert.notEqual(p.generationId, first.generationId)
+  refuses(() => composePersonalWorkspace({ personalHome: moved, generationId: first.generationId }), 'stale-generation')
+  materializePersonalGeneration(p, { personalHome: moved })
+  assert.equal(composePersonalWorkspace({ personalHome: moved, generationId: p.generationId }).graph.ok, true)
+  assert.ok(fs.existsSync(path.join(moved, 'generations', first.generationId, 'generation.json')))
 })

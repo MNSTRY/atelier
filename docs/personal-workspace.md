@@ -51,8 +51,9 @@ No paths, source excerpts, or graph diagnostic text are included in refusals.
 
 Only `materializePersonalGeneration` writes. It creates
 `generations/<generationId>/` under the explicit private home. The id is a
-digest of canonical schema-tagged manifest and overlay inputs and declared
-stable references. Planning does not pretend to discover source nodes.
+digest of canonical schema-tagged manifest and overlay inputs, declared
+stable references, and the canonical private-home location. Moving that home
+produces a new generation; historical generations remain untouched. Planning does not pretend to discover source nodes.
 Materialization writes exclusive files to a private staging directory, fsyncs
 them, verifies references through the canonical graph, and atomically renames
 the generation. A failed reference check discards only that attempt's staging.
@@ -69,7 +70,8 @@ mutable current pointer and no in-place schema migration.
 Compose revalidates current authored inputs, roots, identity, the generation,
 and every `(repoId, nodeId)` before returning a graph. Removing enrollment
 while retaining references refuses `retained-removed-reference` before
-planning. Missing or misowned nodes refuse `stale-reference`. A source file
+planning. Missing, misowned, or path-derived node IDs refuse `stale-reference`; targets
+must declare an explicit `kg.id`. A source file
 rename preserves references when its stable node ID stays the same. Changed
 inputs refuse use of an old generation; old bytes remain untouched. Authored
 note retention and recipient export are outside this module.
@@ -82,14 +84,24 @@ relative to the generation, with a conservative private read boundary; this
 never upgrades source authority. The graph includes shared source nodes and
 private interpretation nodes, with declared `related` edges. Private aliases
 and preferences do not rewrite source titles, facts, or classifications.
+Private nodes are excluded from ordinary Markdown link scanning and targeting;
+only their explicitly declared stable references create edges. Complex tags
+round-trip through block-list frontmatter. Untagged private nodes receive the
+fixed `personal-interpretation` tag instead of inferred shared-domain tags.
 Saved views are stored selections, not executable queries or policy rules.
 
 Bounded local Git reads are required for identity and the canonical ignore
 census. No network, provider lookup, `gh`, Git fetch, hook execution, service,
 database, credential operation, or shell is requested. The module refuses
-ambient `GIT_*` variables, configured fsmonitor helpers, and failed independent
+ambient `GIT_*` variables, fsmonitor helpers in local, global, XDG, or system
+configuration, and failed independent
 ignore listings. It checks that ignored sources never enter the graph even
-when the shared builder's ignore call fails open. Project inputs have pinned
+when the shared builder's ignore call fails open, including ignored sidecars.
+Every module-owned Git probe disables fsmonitor. Observed remote URLs are
+sanitized before comparison; the authored identity must already be sanitized,
+without user information, query parameters, or fragments. Credential-bearing
+authored remote values refuse `remote-credentials-refused` and are never copied
+to generations or returned observations. Project inputs have pinned
 arguments and environment, no ambient overlays, and no path discovery.
 
 Private generation roots must be outside every worktree, verified by ancestor
