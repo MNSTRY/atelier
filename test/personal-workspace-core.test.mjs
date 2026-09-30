@@ -91,6 +91,7 @@ test('composes two enrolled repos plus a private overlay through one canonical g
   assert.equal(result.graph.nodes.length, 7)
   assert.ok(result.graph.edges.some((e) => e.source === 'personal-reading:annotation-note' && e.target === 'source-a:overview'))
   assert.ok(result.graph.edges.some((e) => e.source === 'personal-reading:connection-bridge' && e.target === 'source-b:overview'))
+  assert.deepEqual(result.graph.nodes.find((n) => n.id === 'personal-reading:annotation-note').tags, ['reading'])
   assert.equal(result.preferences.theme, 'dark')
   assert.equal(result.generation.sourceRevisions.length, 2)
   assert.equal(result.coverage.enforcement, 'none')

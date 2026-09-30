@@ -154,7 +154,7 @@ export function resolvePersonalWorkspace({ folder, personalHome } = {}) {
   })
 }
 function markdown(id, title, body, targets = [], tags = []) {
-  return `---\ntitle: ${JSON.stringify(title)}\nkg:\n  id: ${JSON.stringify(id)}\n  type: document\n  status: active\n  audience: private\n  tags: ${JSON.stringify(tags)}\n${targets.length ? `  relations:\n    related:\n${[...new Set(targets)].sort().map((t) => `      - ${JSON.stringify(t)}\n`).join('')}` : ''}---\n\n${body}\n`
+  return `---\ntitle: ${JSON.stringify(title)}\ntags: ${JSON.stringify(tags)}\nkg:\n  id: ${JSON.stringify(id)}\n  type: document\n  status: active\n  audience: private\n${targets.length ? `  relations:\n    related:\n${[...new Set(targets)].sort().map((t) => `      - ${JSON.stringify(t)}\n`).join('')}` : ''}---\n\n${body}\n`
 }
 export function planPersonalGeneration(resolved) {
   if (!resolvedInputs.has(resolved) || resolved.status !== 'resolved') refuse('malformed-input')
