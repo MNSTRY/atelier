@@ -37,6 +37,7 @@ test('omitted matching evidence cannot pass an abstention case or advance the da
   assert.ok(run.omissions.some(o => o.id === 'sample:sundial' && o.reason === 'source-over-budget'))
   assert.equal(cli(w.dir, ['knowledge', 'evaluate']).status, 1)
   assert.equal(knowledgeDashboard(w).next.stage, 'deepen')
+  assert.match(knowledgeDashboard(w).next.reason, /Matching evidence was omitted; the abstention cannot be verified/)
 })
 
 test('context names omission reasons without returning exception paths or partial sources', async t => {
@@ -145,4 +146,43 @@ test('plan digests bind exact raw bytes and census digests include unselected so
   const changed = context(w)
   assert.deepEqual(changed.sources, first.sources)
   assert.notEqual(changed.censusSha256, first.censusSha256)
+})
+
+test('an expected abstention with selected evidence explains what needs review', t => {
+  let w = setup(t)
+  w.plan.questions.push({ ...w.plan.questions[2], id: 'unexpected-match', question: 'Violet instrument' })
+  fs.writeFileSync(path.join(w.dir, 'knowledge-plan.json'), JSON.stringify(w.plan))
+  fs.writeFileSync(path.join(w.dir, 'records/violet.md'), `---\ntitle: "Violet instrument"\nsummary: "An invented instrument"\nkg:\n  id: "sample:violet"\n  type: "document"\n  status: "active"\n  audience: "private"\n---\n\nAn invented observation.\n`)
+  w = { dir: w.dir, ...loadKnowledgeWorkspace(w.project) }
+  const run = evaluateKnowledgeQuestions(w).cases[3].runs.graph
+  assert.deepEqual(run.sourceIds, ['sample:violet'])
+  assert.equal(run.expectedEvidencePresent, false)
+  assert.equal(knowledgeDashboard(w).next.stage, 'deepen')
+  assert.match(knowledgeDashboard(w).next.reason, /Matching evidence was retrieved for an expected abstention/)
+})
+
+test('a heavily linked seed cannot crowd out an equally relevant lexical seed', t => {
+  let w = setup(t)
+  const write = (name, title, relations = '') => fs.writeFileSync(path.join(w.dir, 'records', name + '.md'), `---\ntitle: "${title}"\nsummary: "An invented observation"\nkg:\n  id: "sample:${name}"\n  type: "document"\n  status: "active"\n  audience: "private"\n${relations}---\n\nAn invented observation.\n`)
+  write('alpha', 'Violet instrument')
+  write('beta', 'Violet instrument')
+  for (let i = 0; i < 6; i++) write('neighbor-' + i, 'Inspection memorandum ' + i, '  relations:\n    depends_on:\n      - "sample:alpha"\n')
+  w = { dir: w.dir, ...loadKnowledgeWorkspace(w.project) }
+  assert.deepEqual(w.graph.errors, [])
+  for (const maxDocuments of [2, 6]) {
+    w.plan.budget.maxDocuments = maxDocuments
+    const lexical = context(w, { question: 'Violet instrument', mode: 'lexical' })
+    assert.deepEqual(lexical.sources.map(s => s.id), ['sample:alpha', 'sample:beta'])
+    const packet = context(w, { question: 'Violet instrument' })
+    const selected = packet.sources.map(s => s.id)
+    const secondSeed = selected.indexOf('sample:beta')
+    assert.ok(secondSeed >= 1, JSON.stringify(selected))
+    assert.ok(selected.slice(0, secondSeed).filter(id => id.startsWith('sample:neighbor-')).length <= 1)
+    if (maxDocuments === 2) assert.deepEqual(selected, ['sample:alpha', 'sample:beta'])
+    assert.equal(packet.sources.length, maxDocuments)
+    assert.equal(new Set(packet.sources.map(s => s.id)).size, maxDocuments)
+    assert.equal(packet.coverage.omitted, 8 - maxDocuments)
+    assert.ok(packet.budget.payloadBytes <= w.plan.budget.maxContextBytes)
+    if (maxDocuments > 2) assert.deepEqual(packet.relations[0], { source: 'sample:neighbor-0', predicate: 'depends_on', target: 'sample:alpha' })
+  }
 })

@@ -192,7 +192,7 @@ Read one JSON request from stdin (maximum 1 MiB). Start takes {"config":{"id":"S
 Start with ${c} init --template knowledge-workspace --target DIR.
 check reports ontology-to-question coverage against the current canonical graph.
 context --question TEXT [--mode graph|lexical] [--max-bytes N] prints a bounded JSON packet of complete active Markdown sources.
-evaluate compares lexical and graph selection on the plan's pinned evidence cases; exit 1 means missing or stale expected evidence.
+evaluate compares lexical and graph selection on the plan's pinned evidence cases; exit 1 means missing or stale expected evidence, missing relationships, or an expected abstention that retrieved or omitted matching evidence.
 The packet is local operator context, may contain private material, and grants no sharing or execution authority. Payload bytes are exact; token estimates are not measured usage. Session operations read JSON on stdin (except list); saved answers are private drafts. See docs/knowledge-setup.md and docs/knowledge-workspace.md.`,
     init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project|knowledge-workspace] [--target DIR] [--actor ID]
 
