@@ -109,13 +109,19 @@ const regularFileDigest = (file, limit, code) => { const bytes = regularFileByte
 // A Git configuration file, which Git itself reads through a link (a managed dotfile): followed, but still only a
 // regular file, bounded, and never waited on.
 const configDigest = (file) => { try { const bytes = regularFileBytes(file, AUTHORED_LIMIT, 'malformed-input', { follow: true }); return bytes === null ? 'missing' : sha256(bytes) } catch { return 'not-regular' } }
-// The configuration files of an enrolled repository: `.git/config`, or, where `.git` is a file (a separate Git
-// directory, a linked worktree, a submodule), the configuration of the directory it names and of its common directory.
+// The configuration files of an enrolled repository: `.git/config` (through `.git` when it is a link to a directory),
+// or, where `.git` is a file (a separate Git directory, a linked worktree, a submodule), the configuration of the
+// directory it names and of its common directory. A root that cannot be looked at (a file, a link loop, no permission)
+// is recorded as such, so the composition answers with its own code.
 function repositoryConfigDigests(repoRoot) {
   const dotGit = path.join(repoRoot, '.git')
-  const kind = fs.lstatSync(dotGit, { throwIfNoEntry: false })
+  let kind
+  try { kind = fs.lstatSync(dotGit, { throwIfNoEntry: false }) } catch (error) { return [`unreadable:${error.code ?? 'error'}`] }
   if (kind === undefined) return ['missing']
   if (kind.isDirectory()) return [configDigest(path.join(dotGit, 'config'))]
+  if (kind.isSymbolicLink()) {
+    try { if (fs.statSync(dotGit).isDirectory()) return ['linked', fs.realpathSync(dotGit), configDigest(path.join(dotGit, 'config'))] } catch (error) { return [`unreadable:${error.code ?? 'error'}`] }
+  }
   let pointer
   try { pointer = regularFileBytes(dotGit, AUTHORED_LIMIT, 'malformed-input', { follow: true }) } catch { return ['not-regular'] }
   const named = /^gitdir:\s*(.+?)\s*$/m.exec(pointer?.toString('utf8') ?? '')
@@ -263,8 +269,8 @@ function composeHere(compose, binding) {
 // to `{ code }` for a refusal; a worker that cannot run answers `personal-composition-unavailable`.
 // A worker that does not answer within the deadline is terminated and let go of, and the composition refuses
 // `personal-composition-unavailable`: the tick does not wait on it. A worker blocked in a system call (a FIFO opened
-// for reading, say) cannot be stopped until that call returns, and until then it keeps the process from exiting; a
-// service stopped in that state needs a kill.
+// for reading, say) cannot be stopped until that call returns: until then it keeps the process from exiting, and each
+// such expiry leaves one thread behind. A service stopped in that state needs a kill.
 export const WORKER_DEADLINE_MS = 120 * 1000
 function composeInWorker({ personalHome, generationId }, { deadlineMs = WORKER_DEADLINE_MS, stallMs = 0 } = {}) {
   return new Promise((resolve) => {

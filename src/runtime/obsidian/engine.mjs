@@ -481,7 +481,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // Observation. The registered proposal adapter is handed a copy of the pending edits and observes the open ones
     // the object store does not know yet, a bounded number per tick: each is classified from its preserved bytes
     // against the source as it is now and recorded as what it is, in manual and in automatic mode alike, and no
-    // source is written. What refused before anything was recorded is offered again on a full reconciliation only.
+    // source is written. What refused before anything was recorded is offered again on a full reconciliation only;
+    // for a personal workspace, also on the tick after one whose graph was pending, which offers every earlier
+    // refusal again.
     const proposalAdapter = extensions.get('proposal-adapter')
     // A personal workspace is never composed on this event loop by the adapter: its builds defer, as the engine's do.
     const adapterContext = () => ({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env, deferPersonalValidation: true })

@@ -1523,7 +1523,9 @@ line, 16 MiB, 10,000 events, and an unreadable line refuses every append.
 | `ledger-corrupt` | refused, for that repository only; other repositories progress in the same tick |
 | `store-unavailable` | the store cannot be read or is locked now; waits like a full one |
 
-A waiting operation is tried at most 8 times, 60 seconds after the first attempt
+For a personal workspace whose graph the engine has not confirmed yet, a due
+operation is left as it is (`personal-validation-pending`), and that tick is not
+counted as an attempt. A waiting operation is tried at most 8 times, 60 seconds after the first attempt
 and twice as long after each, up to an hour. At most 8 operations per repository
 and 64 unexamined edits are looked at per tick. A repository holds at most 4096
 operations, 256 of them open, 64 records of 16 KiB each; a full queue refuses

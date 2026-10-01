@@ -902,14 +902,18 @@ keeps one projection configuration per person.
   When a build finds its key unconfirmed, a caller that builds once composes in
   its own thread. The engine, and the proposal adapter it runs, compose in a
   worker, off the event loop, then build again. The adapter builds only when it
-  looks at a newly observed edit, as for any project. On a pending tick it
-  records nothing for the edits it reached and offers them again next tick, and
-  leaves a due proposal operation as it is, spending no attempt. A worker that
-  does not answer within two minutes is let go of and refuses
-  `personal-composition-unavailable`, so the tick does not wait. A worker blocked
-  in a system call (a FIFO opened for reading) cannot be stopped until that call
-  returns, and until then it keeps the process from exiting: a service stopped
-  in that state needs a kill. A graph that still differs refuses
+  looks at a newly observed edit, as for any project. On a tick whose graph is
+  pending (`personal-validation-pending`), it records nothing for the edits it
+  reached and reports `observed.deferred`. It offers those edits, and every
+  earlier refusal, again next tick, and leaves a due proposal operation as it
+  is, without spending one of its attempts. While shared sources change before
+  every tick, every tick is pending: the edit is deferred again, with one full
+  build per tick, until a tick with no change. A worker that does not answer
+  within two minutes is let go of and refuses `personal-composition-unavailable`,
+  so the tick does not wait. A worker blocked in a system call (a FIFO opened for
+  reading) cannot be stopped until that call returns. Until then it keeps the
+  process from exiting, and each such expiry leaves one thread behind: a service
+  stopped in that state needs a kill. A graph that still differs refuses
   `personal-graph-unconfirmed`.
 - **A copy is refused.** The settings member names the bound generation. A copy
   of a bound project that lost the binding (a structured clone, a JSON round
@@ -1003,7 +1007,9 @@ the event loop's thread.
 adapter's included. The load, a confirmation after a change, and the
 composition at every full reconciliation run in a worker; the tick does not
 wait on one that misses its deadline. An unchanged workspace is not prepared
-again. While an edit stays open, the adapter builds nothing more.
+again. While an edit stays open and shared sources are quiet, the adapter
+builds nothing more; under continuous change it builds once per tick until a
+quiet tick.
 
 **What remains before a service or `open` binds a personal workspace of this
 size.** The first publication blocks the event loop far longer than the

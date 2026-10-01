@@ -62,6 +62,7 @@ const { createProposalAdapter } = await import('../src/projection/obsidian/propo
 const { createSelectionContribution } = await import('../src/projection/obsidian/selection-ui/contribution.mjs')
 const { EXIT, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
 const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
+const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createMaintenanceExtensions } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { readObsidianEnablement } = await import('../src/runtime/obsidian/enablement.mjs')
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
@@ -1022,4 +1023,28 @@ test('the validity key sees a linked user Git configuration, a .git file, and a 
   build()
   git(world.b, ['remote', 'add', 'origin', 'https://example.invalid/b.git'])
   await bothRefuse('repo-identity-replaced', 'a remote added through a .git file')
+})
+
+test('the validity key records an enrolled root it cannot look at, and follows a .git that is a link to a directory', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const { buildGraph } = createProductionSeams()
+  const build = () => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })
+  build()
+  // An enrolled root replaced by a file: the route refuses with the composition's own code, typed.
+  fs.renameSync(world.b, `${world.b}-moved`)
+  fs.writeFileSync(world.b, 'not a repository')
+  assert.throws(build, (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'root-symlinked', 'the route refuses typed')
+  assert.throws(() => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId }), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'root-symlinked', 'a loader refuses typed')
+  fs.rmSync(world.b)
+  fs.renameSync(`${world.b}-moved`, world.b)
+  build()
+  // An enrolled repository's .git replaced by a link to the same Git directory, moved; then a helper added through it.
+  const gitDir = path.join(world.base, 'b-git-directory')
+  fs.renameSync(path.join(world.b, '.git'), gitDir)
+  fs.symlinkSync(gitDir, path.join(world.b, '.git'))
+  build()
+  git(world.b, ['config', 'core.fsmonitor', 'true'])
+  assert.throws(build, (error) => error.code === 'git-helper-configured', 'the route refuses a helper added through the link')
+  assert.deepEqual(await validatePersonalWorkspace(ari.bound.project), { ok: false, code: 'git-helper-configured' })
 })
