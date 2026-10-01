@@ -30,8 +30,11 @@ and their closed extension fields remain unchanged.
 5. Call `prepareSemanticProposals({store, input, candidates})`. It rereads the
    exact evidence, verifies the binding, and validates the candidate envelope.
 6. Use `readSemanticProposals({store, input, proposals, query, limit})` for a
-   fresh, literal search over the proposals. It verifies the same evidence and
-   candidate binding before returning results.
+   fresh, literal search over assertions. It matches all whitespace-separated
+   query terms against endpoint IDs and labels, the predicate, the assertion's
+   own quotes, and its time expression. It excludes JSON field names, digests,
+   domain scope boilerplate and endpoint evidence from other assertions. It
+   verifies the same evidence and candidate binding before returning results.
 7. Present the proposals to the existing knowledge evaluation and review owner.
    That owner separately decides identity, semantic acceptance, activation, and
    any permitted canonical projection. This module never performs those steps.
@@ -115,10 +118,12 @@ retrieval gap without presenting it as a supported assertion.
 Proposals hydrate each support with the source ID, source digest, attempt ID,
 locator, relative source ref, and exact quote. They retain the original candidate
 envelope, pending identity and assertion acceptance, declared unknowns, input
-digest, and domain ref. The read model reports total matches and omitted matches
-when its limit truncates results. It does not synthesize an answer.
+digest, and domain ref. The read model reports total assertion matches and omitted
+assertion matches when its limit truncates results. Entities and unknown findings
+are returned without filtering, to retain interpretation context. The view carries
+the pinned domain reference. It does not synthesize an answer.
 
-Every result declares `authority: 'none'`, `canonicalMutation: false`,
+Every proposal and view declares `authority: 'none'`, `canonicalMutation: false`,
 `semanticAcceptance: 'pending'`, and `coverage: 'selected-spans-only'`.
 Counts report proposed entities, assertions, and explicit unknown findings
 (`abstentions`); successful validation reports zero refusals. A refused request
@@ -143,12 +148,21 @@ The first failing rule refuses the entire request; there is no partial admission
 There are at most 64 references, identity candidates, entities, assertions, or
 unknown findings per input, and at most 16 supporting spans per candidate.
 The existing ingestion plain-JSON bounds apply, including the 256 KiB payload
-limit. Oversized input is refused instead of silently truncated. This is a
-bounded evidence selection, not a complete-document extraction guarantee.
+limit, to caller inputs, assembled semantic inputs, hydrated proposals and read
+views. Hydration can exceed this limit even when raw candidates fit: entity
+supports include source span text and proposals retain raw candidates as well.
+Count, text-length, depth, member and byte overflow reports `SEMANTIC_LIMIT`;
+malformed JSON, invalid identifiers and invalid field shapes retain their typed
+validation codes. Oversized input or output is refused instead of silently
+truncated. This is a bounded evidence selection, not a complete-document
+extraction guarantee.
 
 ## Qualification limits
 
-The tests exercise invented candidates, mutation controls, and the real local
+The tests exercise invented candidates, individually targeted rule mutations,
+direct receipt bindings, saved-proposal tampering, every declared collection
+bound, text/query/result limits, assembled and hydrated byte overflow, search
+exclusion and literal escaped characters, and the real local
 ingestion evidence reader. They check fidelity and refusal mechanics, including
 source correction. They do not qualify a semantic extractor, human review,
 permissions of an installed host, or economic benefit.

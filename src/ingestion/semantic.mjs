@@ -7,8 +7,14 @@ const INPUT_VERSION = 'atelier.semantic-input/v0'
 const PROPOSAL_VERSION = 'atelier.semantic-proposals/v0'
 const modalities = new Set(['asserted', 'conditional', 'proposed', 'possible', 'uncertain', 'unknown'])
 const identifier = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value)
-const string = (value, max = 8192) => typeof value === 'string' && value.length > 0 && value.length <= max
-const array = (value, max) => Array.isArray(value) && value.length <= max
+const string = (value, max = 8192) => {
+  if (typeof value === 'string') check(value.length <= max, 'SEMANTIC_LIMIT', 'Semantic text length exceeded')
+  return typeof value === 'string' && value.length > 0
+}
+const array = (value, max) => {
+  if (Array.isArray(value)) check(value.length <= max, 'SEMANTIC_LIMIT', 'Semantic collection limit exceeded')
+  return Array.isArray(value)
+}
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 
 export class SemanticProposalError extends Error {
@@ -17,10 +23,13 @@ export class SemanticProposalError extends Error {
 function check(condition, code, message) { if (!condition) throw new SemanticProposalError(code, message) }
 function plain(value) {
   try { return ingestionJson(value) }
-  catch { throw new SemanticProposalError('SEMANTIC_INVALID', 'Bounded plain JSON is required') }
+  catch (error) {
+    const limit = ['ingestion JSON depth exceeded', 'ingestion member ceiling exceeded', 'ingestion document byte ceiling exceeded'].includes(error?.message)
+    throw new SemanticProposalError(limit ? 'SEMANTIC_LIMIT' : 'SEMANTIC_INVALID', limit ? 'Semantic JSON limit exceeded' : 'Bounded plain JSON is required')
+  }
 }
 function closed(value, fields, code = 'SEMANTIC_INVALID') {
-  check(value && !Array.isArray(value) && typeof value === 'object' && Object.keys(value).sort().join() === [...fields].sort().join(), code, 'The declared semantic shape is required')
+  check(value && !Array.isArray(value) && typeof value === 'object' && Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value, field)), code, 'The declared semantic shape is required')
 }
 function profile(value) {
   const domain = plain(value)
@@ -36,7 +45,8 @@ function evidenceReference(value) {
   closed(value, ['sourceId', 'sourceDigest', 'attemptId', 'locator'])
   check(identifier(value.sourceId) && digest(value.sourceDigest) && string(value.attemptId, 256), 'SEMANTIC_EVIDENCE', 'Exact source and attempt bindings are required')
   closed(value.locator, ['kind', 'value'])
-  check(['line', 'csv-cell', 'json-pointer'].includes(value.locator.kind) && typeof value.locator.value === 'string' && value.locator.value.length <= 16384, 'SEMANTIC_EVIDENCE', 'A supported exact locator is required')
+  check(['line', 'csv-cell', 'json-pointer'].includes(value.locator.kind) && typeof value.locator.value === 'string', 'SEMANTIC_EVIDENCE', 'A supported exact locator is required')
+  check(value.locator.value.length <= 16384, 'SEMANTIC_LIMIT', 'Semantic locator length exceeded')
 }
 function readEvidence(store, plan, reference) {
   check(typeof store?.getEvidence === 'function', 'SEMANTIC_EVIDENCE', 'The existing exact evidence reader is required')
@@ -162,14 +172,17 @@ export function readSemanticProposals({ store, input, proposals: supplied, query
   check(string(query, 512) && query.trim().length > 0, 'SEMANTIC_INVALID', 'A bounded nonempty query is required')
   check(Number.isSafeInteger(limit) && limit > 0 && limit <= 64, 'SEMANTIC_LIMIT', 'The result limit must be between one and 64')
   const proposals = plain(supplied)
+  closed(proposals, ['schema', 'inputDigest', 'domainRef', 'entities', 'assertions', 'unknowns', 'rawCandidates', 'counts', 'semanticAcceptance', 'authority', 'canonicalMutation', 'coverage', 'readScope'])
   const current = prepareSemanticProposals({ store, input, candidates: proposals.rawCandidates })
   check(ingestionDigest(current) === ingestionDigest(proposals), 'SEMANTIC_BINDING', 'The proposal view differs from its validated candidates')
   const byId = new Map(current.entities.map(entity => [entity.id, entity])), terms = query.toLowerCase().trim().split(/\s+/u)
   const matched = current.assertions.filter(assertion => {
-    const description = JSON.stringify([byId.get(assertion.subjectId), assertion, byId.get(assertion.objectId)]).toLowerCase()
+    const subject = byId.get(assertion.subjectId), object = byId.get(assertion.objectId)
+    const description = [subject.id, subject.label, object?.id ?? '', object?.label ?? '', assertion.predicate,
+      ...assertion.evidence.map(item => item.quote), assertion.time.expression ?? ''].join('\n').toLowerCase()
     return terms.every(term => description.includes(term))
   })
-  return { schema: 'atelier.semantic-proposal-view/v0', inputDigest: current.inputDigest, entities: current.entities,
+  return plain({ schema: 'atelier.semantic-proposal-view/v0', inputDigest: current.inputDigest, domainRef: current.domainRef, entities: current.entities,
     assertions: matched.slice(0, limit), unknowns: current.unknowns, totalMatched: matched.length, omitted: Math.max(0, matched.length - limit),
-    counts: current.counts, coverage: current.coverage, readScope: current.readScope, semanticAcceptance: 'pending', synthesized: false, canonicalMutation: false, authority: 'none' }
+    counts: current.counts, coverage: current.coverage, readScope: current.readScope, semanticAcceptance: 'pending', synthesized: false, canonicalMutation: false, authority: 'none' })
 }
