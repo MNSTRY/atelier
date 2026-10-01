@@ -50,6 +50,8 @@ test('semantic proposals retain duplicate labels, directed parallel assertions, 
 })
 const failures = [
   ['unique identity', s => { s.candidates.unknowns[0].id = 'nora' }, 'SEMANTIC_IDENTITY'],
+  ['identity status', s => { s.candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: [] } }, 'SEMANTIC_IDENTITY'],
+  ['unsupported identity status', s => { s.candidates.entities[0].identity.status = 'unmodeled' }, 'SEMANTIC_IDENTITY'],
   ['identity candidate mapping', s => { s.candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: ['unsupplied'] } }, 'SEMANTIC_IDENTITY'],
   ['type mapping', s => { s.candidates.entities[0].type = 'unmodeled' }, 'SEMANTIC_TYPE'],
   ['predicate mapping', s => { s.candidates.assertions[0].predicate = 'unmodeled' }, 'SEMANTIC_PREDICATE'],
@@ -61,9 +63,15 @@ const failures = [
   ['calendar date', s => { s.candidates.assertions[0].time.from = '2026-02-30' }, 'SEMANTIC_TIME'],
   ['interval order', s => { s.candidates.assertions[0].time = { from: '2026-07-01', until: '2026-06-01', expression: null, unknowns: [] } }, 'SEMANTIC_TIME'],
   ['unstated temporal interpretation', s => { s.candidates.assertions[0].time.unknowns = [] }, 'SEMANTIC_TIME'],
+  ['located temporal expression', s => { s.candidates.assertions[0].time.expression = 'December' }, 'SEMANTIC_TIME'],
   ['explicit unknown', s => { s.candidates.unknowns[0].reason = '' }, 'SEMANTIC_UNKNOWN'],
+  ['unknown related identity', s => { s.candidates.unknowns[0].relatedCandidateId = 'missing' }, 'SEMANTIC_UNKNOWN'],
   ['request binding', s => { s.candidates.inputDigest = `sha256:${'c'.repeat(64)}` }, 'SEMANTIC_BINDING'],
   ['missing evidence', s => { s.candidates.assertions[0].evidence[0].id = 'span-absent' }, 'SEMANTIC_EVIDENCE'],
+  ['empty entity support', s => { s.candidates.entities[0].evidence = [] }, 'SEMANTIC_EVIDENCE'],
+  ['empty assertion support', s => { s.candidates.assertions[2].evidence = [] }, 'SEMANTIC_EVIDENCE'],
+  ['empty unknown support', s => { s.candidates.unknowns[0].evidence = [] }, 'SEMANTIC_EVIDENCE'],
+  ['duplicate support', s => { s.candidates.entities[0].evidence = ['span-1', 'span-1'] }, 'SEMANTIC_EVIDENCE'],
   ['unsupported quote', s => { s.candidates.assertions[0].evidence[0].quote = 'Unsupported invented text.' }, 'SEMANTIC_EVIDENCE'],
   ['unary direction', s => { s.candidates.assertions[0].direction = 'subject-only' }, 'SEMANTIC_DIRECTION'],
 ]
@@ -77,6 +85,8 @@ test('mutation controls prove each candidate refusal oracle detects a disabled r
   const original = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
   const messages = {
     'unique identity': 'Unique source-local candidate identities are required',
+    'identity status': 'Identity status and candidates differ',
+    'unsupported identity status': 'Explicit candidate identity status is required',
     'identity candidate mapping': 'Identity mappings must use supplied matching candidates',
     'type mapping': 'Entity type and label must fit the supplied domain',
     'predicate mapping': 'Unmodeled predicates must remain explicit findings',
@@ -88,9 +98,15 @@ test('mutation controls prove each candidate refusal oracle detects a disabled r
     'calendar date': 'Valid ordered calendar dates are required',
     'interval order': 'Valid ordered calendar dates are required',
     'unstated temporal interpretation': 'Unresolved temporal expressions must preserve their unknowns',
+    'located temporal expression': 'A temporal expression must be located in its cited passage',
     'explicit unknown': 'An explicit finding reason and valid optional subject are required',
+    'unknown related identity': 'An explicit finding reason and valid optional subject are required',
     'request binding': 'Candidates must bind the exact extractor input',
     'missing evidence': 'Supporting evidence must resolve uniquely',
+    'empty entity support': 'At least one bounded supporting span is required',
+    'empty assertion support': 'At least one bounded supporting span is required',
+    'empty unknown support': 'At least one bounded supporting span is required',
+    'duplicate support': 'Supporting evidence must resolve uniquely',
     'unsupported quote': 'The quote must occur in the declared span',
     'unary direction': 'Unary or directed binary roles must match the supplied endpoints',
   }
@@ -136,6 +152,67 @@ test('receipt binding, saved-proposal binding and search mutants defeat their re
   const current = prepareSemanticProposals(clean)
   assert.deepEqual(readSemanticProposals({ ...clean, proposals: current, query: 'June' }).assertions.map(a => a.id), ['management'])
   assert.throws(() => assert.deepEqual(filter.readSemanticProposals({ ...clean, proposals: current, query: 'June' }).assertions.map(a => a.id), ['management']), e => e.code === 'ERR_ASSERTION')
+})
+
+test('input source and unique reference controls discriminate their exact guards', async () => {
+  const source = fs.readFileSync(new URL('../src/ingestion/semantic.mjs', import.meta.url), 'utf8')
+    .replace("'./contracts.mjs'", JSON.stringify(new URL('../src/ingestion/contracts.mjs', import.meta.url).href))
+    .replace("'../harnesses/contracts.mjs'", JSON.stringify(new URL('../src/harnesses/contracts.mjs', import.meta.url).href))
+  const guard = 'if (!condition) throw new SemanticProposalError(code, message)'
+  const cases = [
+    [[reference(1), { ...reference(2), sourceId: 'another-source' }], 'SEMANTIC_SCOPE', 'The first semantic profile processes one source per input'],
+    [[reference(1), reference(1)], 'SEMANTIC_EVIDENCE', 'Duplicate evidence references are refused'],
+  ]
+  for (const [references, code, message] of cases) {
+    const selected = { ...sample(), domain: fixture.domain, references }
+    assert.throws(() => prepareSemanticInput(selected), e => e instanceof SemanticProposalError && e.code === code)
+    assert.equal(source.split(`'${message}'`).length, 2)
+    const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(guard, `if (!condition && message !== ${JSON.stringify(message)}) throw new SemanticProposalError(code, message)`)).toString('base64')}`)
+    assert.throws(() => assert.throws(() => mutant.prepareSemanticInput(selected), e => e.code === code), e => e.code === 'ERR_ASSERTION')
+  }
+})
+
+test('the assertion quote cap has a discriminating oracle below the hydrated byte ceiling', async () => {
+  const s = sample(), native = s.store.getEvidence, quote = 'x'.repeat(65537)
+  s.store.getEvidence = request => ({ ...native(request), text: request.locator.value === '2' ? quote : 'Nora and Atlas.' })
+  s.input = prepareSemanticInput({ ...s, domain: fixture.domain, references: [reference(1), reference(2)] })
+  s.candidates.inputDigest = s.input.digest
+  s.candidates.entities = [s.candidates.entities[0], s.candidates.entities[2]]
+  s.candidates.entities.forEach(entity => { entity.evidence = ['span-1'] })
+  s.candidates.assertions = [{ ...s.candidates.assertions[2], evidence: [{ id: 'span-2', quote }] }]
+  s.candidates.unknowns = []
+  assert.throws(() => prepareSemanticProposals(s), e => e.code === 'SEMANTIC_LIMIT')
+  const source = fs.readFileSync(new URL('../src/ingestion/semantic.mjs', import.meta.url), 'utf8')
+    .replace("'./contracts.mjs'", JSON.stringify(new URL('../src/ingestion/contracts.mjs', import.meta.url).href))
+    .replace("'../harnesses/contracts.mjs'", JSON.stringify(new URL('../src/harnesses/contracts.mjs', import.meta.url).href))
+  assert.equal(source.split('string(quote, 65536)').length, 2)
+  const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace('string(quote, 65536)', 'string(quote, 65537)')).toString('base64')}`)
+  const admitted = mutant.prepareSemanticProposals(s)
+  assert.ok(Buffer.byteLength(JSON.stringify(admitted)) < 256 * 1024)
+  assert.throws(() => assert.throws(() => mutant.prepareSemanticProposals(s), e => e.code === 'SEMANTIC_LIMIT'), e => e.code === 'ERR_ASSERTION')
+})
+
+test('malformed top-level collections retain shape codes instead of capacity codes', () => {
+  for (const field of ['entities', 'assertions', 'unknowns']) for (const value of [null, {}, 'not-an-array']) {
+    const s = sample(); s.candidates[field] = value
+    assert.throws(() => prepareSemanticProposals(s), e => e.code === 'SEMANTIC_INVALID')
+  }
+  const s = sample(), options = { ...s, domain: fixture.domain, references: [reference(1)] }
+  assert.throws(() => prepareSemanticInput({ ...options, references: null }), e => e.code === 'SEMANTIC_INVALID')
+  assert.throws(() => prepareSemanticInput({ ...options, identityCandidates: null }), e => e.code === 'SEMANTIC_IDENTITY')
+})
+
+test('evidence reader cannot rewrite the requested locator and missing locators are typed refusals', () => {
+  const s = sample(), native = s.store.getEvidence, options = { ...s, domain: fixture.domain, references: [reference(1)] }
+  s.store.getEvidence = request => { request.locator.value = '2'; return native(request) }
+  assert.throws(() => prepareSemanticInput(options), e => e.code === 'SEMANTIC_BINDING')
+  assert.equal(options.references[0].locator.value, '1')
+  s.store.getEvidence = request => { const result = native(request); delete result.locator; return result }
+  assert.throws(() => prepareSemanticInput(options), e => e instanceof SemanticProposalError && e.code === 'SEMANTIC_EVIDENCE')
+  for (const receipt of [null, [], 'not-a-receipt']) {
+    s.store.getEvidence = () => receipt
+    assert.throws(() => prepareSemanticInput(options), e => e instanceof SemanticProposalError && e.code === 'SEMANTIC_EVIDENCE')
+  }
 })
 test('semantic input refuses a narrower read scope and foreign evidence bindings', () => {
   const s = sample(), native = s.store.getEvidence
@@ -192,7 +269,8 @@ test('semantic per-field text, depth, member, empty-input and locator bounds ref
     s => { s.candidates.assertions[0].time.expression = 'x'.repeat(8193) },
     s => { s.candidates.assertions[0].time.unknowns = ['x'.repeat(8193)] }]) refuses(changed, 'SEMANTIC_LIMIT')
   const s = sample(), options = { ...s, domain: fixture.domain, references: [reference(1)] }
-  for (const fields of [{ references: [] }, { plan: { ...s.plan, planId: 'x'.repeat(257) } },
+  assert.throws(() => prepareSemanticInput({ ...options, references: [] }), e => e.code === 'SEMANTIC_EVIDENCE')
+  for (const fields of [{ plan: { ...s.plan, planId: 'x'.repeat(257) } },
     { references: [{ ...reference(1), attemptId: 'x'.repeat(257) }] },
     { references: [{ ...reference(1), locator: { kind: 'line', value: 'x'.repeat(16385) } }] },
     { identityCandidates: [{ id: 'person-one', label: 'x'.repeat(8193), type: 'person' }] }]) {
@@ -201,14 +279,6 @@ test('semantic per-field text, depth, member, empty-input and locator bounds ref
   const native = s.store.getEvidence
   s.store.getEvidence = request => ({ ...native(request), ref: 'x'.repeat(16385) })
   assert.throws(() => prepareSemanticInput(options), e => e.code === 'SEMANTIC_LIMIT')
-  const quote = 'x'.repeat(65537)
-  s.store.getEvidence = request => ({ ...native(request), text: quote })
-  s.input = prepareSemanticInput(options)
-  s.candidates.inputDigest = s.input.digest
-  s.candidates.assertions = [{ ...s.candidates.assertions[2], id: 'funding', evidence: [{ id: 'span-1', quote }] }]
-  s.candidates.entities.forEach(entity => { entity.evidence = ['span-1'] })
-  s.candidates.unknowns = []
-  assert.throws(() => prepareSemanticProposals(s), e => e.code === 'SEMANTIC_LIMIT')
   const nested = sample(); let value = 'deep'
   for (let i = 0; i < 30; i++) value = { value }
   nested.candidates.extra = value
@@ -222,7 +292,8 @@ test('semantic per-field text, depth, member, empty-input and locator bounds ref
 test('semantic query, result, text and byte bounds are typed limits', () => {
   const s = sample(), proposals = prepareSemanticProposals(s)
   assert.throws(() => readSemanticProposals({ ...s, proposals, query: 'x'.repeat(513) }), e => e.code === 'SEMANTIC_LIMIT')
-  for (const limit of [0, 65, 1.5]) assert.throws(() => readSemanticProposals({ ...s, proposals, query: 'Nora', limit }), e => e.code === 'SEMANTIC_LIMIT')
+  for (const limit of [0, 65]) assert.throws(() => readSemanticProposals({ ...s, proposals, query: 'Nora', limit }), e => e.code === 'SEMANTIC_LIMIT')
+  for (const limit of [1.5, null, '5']) assert.throws(() => readSemanticProposals({ ...s, proposals, query: 'Nora', limit }), e => e.code === 'SEMANTIC_INVALID')
   refuses(s => { s.candidates.entities[0].label = 'x'.repeat(8193) }, 'SEMANTIC_LIMIT')
   refuses(s => { s.candidates.unknowns[0].reason = 'x'.repeat(256 * 1024) }, 'SEMANTIC_LIMIT')
   const native = s.store.getEvidence

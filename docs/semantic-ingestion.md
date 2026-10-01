@@ -98,6 +98,8 @@ belong to the domain vocabulary. Negation is a Boolean. Modality is `asserted`,
 `conditional`, `proposed`, `possible`, `uncertain`, or `unknown`. Scope must equal
 the supplied domain scope. Separate assertions between the same entities remain
 separate, including statements with different polarity or time.
+The vocabulary supplies IDs and meanings; it does not declare predicate arity
+or allowed endpoint types. The knowledge review owner checks those meanings.
 
 Time has exactly `from`, `until`, `expression`, and `unknowns`. Dates are nullable
 valid `YYYY-MM-DD` calendar dates, with an ordered interval when both are given.
@@ -136,7 +138,7 @@ throws `SemanticProposalError` with `refusalCount: 1` and a typed code:
 | `SEMANTIC_LIMIT` | Input, candidate, or result bounds |
 | `SEMANTIC_READ_SCOPE` | Whole-plan reader profile |
 | `SEMANTIC_EVIDENCE` | Available verified spans and literal quote support |
-| `SEMANTIC_STALE` | Original source is no longer current |
+| `SEMANTIC_STALE` | Existing reader reports a stale source or mismatched plan, digest, or attempt binding |
 | `SEMANTIC_BINDING` | Exact plan, source, attempt, locator, and input digest |
 | `SEMANTIC_IDENTITY` | Unique IDs, supplied identity mappings, and endpoints |
 | `SEMANTIC_TYPE` / `SEMANTIC_PREDICATE` | Declared vocabulary |
@@ -147,6 +149,14 @@ throws `SemanticProposalError` with `refusalCount: 1` and a typed code:
 The first failing rule refuses the entire request; there is no partial admission.
 There are at most 64 references, identity candidates, entities, assertions, or
 unknown findings per input, and at most 16 supporting spans per candidate.
+Identity alternatives and time unknowns also have a 16-item ceiling. Text limits
+are 8192 characters for labels, reasons, time expressions and time unknowns;
+256 for plan and attempt IDs; 16384 for locators and source refs; 65536 for
+quotes; and 512 for queries. Entity and unknown supports copy the full located
+span, so that span must also fit the 65536-character quote ceiling. Result
+limits must be safe integers between one and 64. Empty evidence selections
+are evidence errors; malformed collections and noninteger result limits retain
+shape errors rather than reporting capacity overflow.
 The existing ingestion plain-JSON bounds apply, including the 256 KiB payload
 limit, to caller inputs, assembled semantic inputs, hydrated proposals and read
 views. Hydration can exceed this limit even when raw candidates fit: entity
@@ -159,7 +169,7 @@ extraction guarantee.
 
 ## Qualification limits
 
-The tests exercise invented candidates, individually targeted rule mutations,
+The tests exercise invented candidates, one targeted mutation per checked rule,
 direct receipt bindings, saved-proposal tampering, every declared collection
 bound, text/query/result limits, assembled and hydrated byte overflow, search
 exclusion and literal escaped characters, and the real local

@@ -51,14 +51,16 @@ function evidenceReference(value) {
 function readEvidence(store, plan, reference) {
   check(typeof store?.getEvidence === 'function', 'SEMANTIC_EVIDENCE', 'The existing exact evidence reader is required')
   let receipt
-  try { receipt = plain(store.getEvidence({ ...plan, ...reference })) }
+  try { receipt = plain(store.getEvidence(plain({ ...plan, ...reference }))) }
   catch (error) {
     if (error instanceof SemanticProposalError) throw error
     throw new SemanticProposalError(error?.code === 'INGESTION_STALE' ? 'SEMANTIC_STALE' : 'SEMANTIC_EVIDENCE', 'Current verified evidence could not be read')
   }
+  check(receipt && typeof receipt === 'object' && !Array.isArray(receipt), 'SEMANTIC_EVIDENCE', 'An evidence receipt object is required')
   check(receipt.readScope === 'all-plan', 'SEMANTIC_READ_SCOPE', 'This profile requires the existing all-plan read scope')
   check(receipt.schema === 'mnstry.atelier-ingestion-evidence@v1' && receipt.freshness === 'current' && receipt.integrity === 'verified' && receipt.semanticAcceptance === 'pending' && receipt.synthesized === false && string(receipt.ref, 16384) && typeof receipt.text === 'string', 'SEMANTIC_EVIDENCE', 'Verified located source evidence is required')
   for (const key of ['planId', 'planDigest', 'sourceId', 'sourceDigest', 'attemptId']) check(receipt[key] === { ...plan, ...reference }[key], 'SEMANTIC_BINDING', 'Evidence differs from its requested binding')
+  closed(receipt.locator, ['kind', 'value'], 'SEMANTIC_EVIDENCE')
   check(ingestionDigest(receipt.locator) === ingestionDigest(reference.locator), 'SEMANTIC_BINDING', 'Evidence locator differs from its requested binding')
   return receipt
 }
@@ -70,8 +72,9 @@ export function prepareSemanticInput({ store, plan, domain, references, identity
   const selected = plain({ plan, references, identityCandidates }), definition = profile(domain)
   closed(selected.plan, ['planId', 'planDigest'])
   check(string(selected.plan.planId, 256) && /^sha256:[a-f0-9]{64}$/.test(selected.plan.planDigest), 'SEMANTIC_BINDING', 'A bound ingestion plan is required')
-  check(array(selected.references, 64) && selected.references.length > 0, 'SEMANTIC_LIMIT', 'Select between one and 64 evidence spans')
-  check(array(selected.identityCandidates, 64), 'SEMANTIC_LIMIT', 'Identity candidate limit exceeded')
+  check(array(selected.references, 64), 'SEMANTIC_INVALID', 'Evidence references must be an array')
+  check(selected.references.length > 0, 'SEMANTIC_EVIDENCE', 'At least one evidence span is required')
+  check(array(selected.identityCandidates, 64), 'SEMANTIC_IDENTITY', 'Identity candidates must be an array')
   const identities = new Set(), types = new Set(definition.data.vocabulary.types.map(t => t.id))
   for (const candidate of selected.identityCandidates) {
     closed(candidate, ['id', 'label', 'type'], 'SEMANTIC_IDENTITY')
@@ -96,7 +99,7 @@ function currentInput(store, value) {
   closed(input, ['schema', 'plan', 'domain', 'domainRef', 'identityCandidates', 'evidence', 'coverage', 'readScope', 'authority', 'digest'])
   check(input.schema === INPUT_VERSION && input.authority === 'none' && input.coverage === 'selected-spans-only' && input.readScope === 'all-plan', 'SEMANTIC_BINDING', 'The pinned semantic input is required')
   check(input.digest === ingestionDigest(payload(input)), 'SEMANTIC_BINDING', 'Semantic input digest differs')
-  check(array(input.evidence, 64) && input.evidence.length > 0, 'SEMANTIC_LIMIT', 'Bounded evidence is required')
+  check(array(input.evidence, 64) && input.evidence.length > 0, 'SEMANTIC_BINDING', 'A nonempty evidence array is required')
   for (const span of input.evidence) closed(span, ['id', 'reference', 'receipt'])
   const rebuilt = prepareSemanticInput({ store, plan: input.plan, domain: input.domain, references: input.evidence.map(e => e.reference), identityCandidates: input.identityCandidates })
   check(rebuilt.digest === input.digest, 'SEMANTIC_BINDING', 'Current evidence or profile binding differs')
@@ -113,7 +116,7 @@ export function prepareSemanticProposals({ store, input: original, candidates: s
   const candidates = plain(supplied), input = currentInput(store, original)
   closed(candidates, ['schema', 'inputDigest', 'entities', 'assertions', 'unknowns'])
   check(candidates.schema === SEMANTIC_CANDIDATE_VERSION && candidates.inputDigest === input.digest, 'SEMANTIC_BINDING', 'Candidates must bind the exact extractor input')
-  for (const key of ['entities', 'assertions', 'unknowns']) check(array(candidates[key], 64), 'SEMANTIC_LIMIT', 'Semantic candidate limit exceeded')
+  for (const key of ['entities', 'assertions', 'unknowns']) check(array(candidates[key], 64), 'SEMANTIC_INVALID', 'Semantic candidate collections must be arrays')
   const ids = new Set(), entities = new Map(), spans = new Map(input.evidence.map(e => [e.id, e])), identityCandidates = new Map(input.identityCandidates.map(c => [c.id, c]))
   const types = new Set(input.domain.data.vocabulary.types.map(t => t.id)), predicates = new Set(input.domain.data.vocabulary.relations.map(r => r.id))
   function identity(id) { check(identifier(id) && !ids.has(id), 'SEMANTIC_IDENTITY', 'Unique source-local candidate identities are required'); ids.add(id) }
@@ -170,7 +173,8 @@ export function prepareSemanticProposals({ store, input: original, candidates: s
 // A fresh, derived proposal view. Acceptance is still owned by knowledge review.
 export function readSemanticProposals({ store, input, proposals: supplied, query, limit = 64 }) {
   check(string(query, 512) && query.trim().length > 0, 'SEMANTIC_INVALID', 'A bounded nonempty query is required')
-  check(Number.isSafeInteger(limit) && limit > 0 && limit <= 64, 'SEMANTIC_LIMIT', 'The result limit must be between one and 64')
+  check(Number.isSafeInteger(limit), 'SEMANTIC_INVALID', 'The result limit must be a safe integer')
+  check(limit > 0 && limit <= 64, 'SEMANTIC_LIMIT', 'The result limit must be between one and 64')
   const proposals = plain(supplied)
   closed(proposals, ['schema', 'inputDigest', 'domainRef', 'entities', 'assertions', 'unknowns', 'rawCandidates', 'counts', 'semanticAcceptance', 'authority', 'canonicalMutation', 'coverage', 'readScope'])
   const current = prepareSemanticProposals({ store, input, candidates: proposals.rawCandidates })
