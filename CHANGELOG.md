@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- A personal workspace bound to the Obsidian projection is served from the
+  canonical build, with the composition's link-target rule and the engine's file
+  cache. A graph is used only under a validity key the composition confirmed.
+  Its inputs are read before the composition runs. The engine, and the
+  proposal adapter it runs, compose in a worker with a two-minute deadline: at
+  load (`loadBoundProjectOffThread`), after a change, and at every full
+  reconciliation, which prepares nothing again when nothing changed. A bound
+  project is loaded once. Authored and generation files the key reads are
+  opened without following links or waiting on them. The adapter builds only
+  when it looks at a newly observed edit. The proposal adapter answers a vault edit to a private
+  note with `personal-overlay-not-proposed`, and `personal-binding-lost` now
+  names the reserved settings key.
+
 - Evidence navigation is exported as `@mnstry/atelier/evidence-navigation`
   (the pure contract checks and currency assessments) and
   `@mnstry/atelier/evidence-navigation/local` (the Node local reader, kept

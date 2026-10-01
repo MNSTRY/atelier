@@ -537,7 +537,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         const visibility = decideWith('body-replacement', [])
         if (!visibility.allowed && visibility.code === 'object-not-visible') refuse('object-not-visible')
         // A private note of a personal workspace is authored in its overlay, and its file belongs to a generation the
-        // personal-workspace module owns: an edit to it is a proposal only, and never written there.
+        // personal-workspace module owns: an edit to it is never written there. It is not proposed yet either; it stays
+        // held in the vault.
         if (identity.repoId === personalOverlayRepoOf(workspace.project)) refuse('personal-overlay-proposals-only')
 
         const resolved = resolveEdit(workspace, edit)
