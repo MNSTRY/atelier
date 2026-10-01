@@ -1,0 +1,435 @@
+{
+  "records": [
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "workshop-knowledge",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "domain",
+      "data": {
+        "repository": "workshop-notes",
+        "purpose": "Synthetic learning-cycle demonstration.",
+        "scope": "Invented workshop visitors",
+        "owner": "synthetic-owner",
+        "audience": "private",
+        "questions": [
+          {
+            "id": "return",
+            "question": "What justifies a reversible reminder trial?",
+            "acceptance": "A reviewed rationale traces to a source and its limitations."
+          }
+        ],
+        "vocabulary": {
+          "types": [
+            {
+              "id": "material",
+              "meaning": "A source or interpreted contribution."
+            }
+          ],
+          "relations": [
+            {
+              "id": "justifies",
+              "meaning": "A limited evidential relationship.",
+              "graphPredicate": "supports"
+            }
+          ]
+        },
+        "identityRules": "Keep distinct observations distinct; propose matches for review.",
+        "sourcePolicy": "Invented material only; retain original bytes and provenance.",
+        "acceptancePolicy": "A simulated owner reviews each contribution after evaluation."
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "decision-practice",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "contribution",
+      "data": {
+        "domain": {
+          "id": "workshop-knowledge",
+          "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+        },
+        "category": "decision-rationale",
+        "title": "Invented source reconsideration",
+        "term": "material",
+        "body": "{\n  \"format\": \"atelier.decision-practice/v0\",\n  \"id\": \"reading-room-reconsideration\",\n  \"revision\": \"one\",\n  \"purpose\": \"Prepare a draft for a person when changed source material affects an earlier reading-room decision.\",\n  \"applicability\": \"Invented reading-room material only. Changes are reviewed, never applied automatically.\",\n  \"rightsBasis\": \"Wholly invented conformance material.\",\n  \"evidenceRoles\": [\n    \"source\",\n    \"decision\"\n  ],\n  \"prerequisites\": [\n    \"source-changed\"\n  ],\n  \"rubric\": {\n    \"schema\": \"atelier-decision-request@v1\",\n    \"contractVersion\": \"1.0.0\",\n    \"id\": \"synthetic-request-1\",\n    \"task\": \"passage-triage\",\n    \"rubricVersion\": \"fictional-notes.v1\",\n    \"scope\": {\n      \"workspaceId\": \"synthetic-workspace\",\n      \"authorizationRef\": \"synthetic-consent-1\"\n    },\n    \"state\": \"passage-1: The fictional Cedarbell reading room opens on Saturday. Its blue shelf needs a new bracket.\\npassage-2: This note does not describe Sunday hours.\",\n    \"evidence\": [\n      {\n        \"id\": \"passage-1\",\n        \"sourceRef\": \"fictional-notes:passage-1\"\n      },\n      {\n        \"id\": \"passage-2\",\n        \"sourceRef\": \"fictional-notes:passage-2\"\n      }\n    ],\n    \"questions\": {\n      \"priority\": {\n        \"type\": \"choice\",\n        \"instructions\": \"Which reading-room note should a person inspect next? Keep all source passages regardless of the answer.\",\n        \"evidenceIds\": [\n          \"passage-1\",\n          \"passage-2\"\n        ],\n        \"criteria\": {\n          \"maintenance\": \"A passage describes a repair to inspect.\",\n          \"hours\": \"A passage only describes opening hours.\",\n          \"unmatched\": \"Neither description fits.\"\n        }\n      },\n      \"evidence_score\": {\n        \"type\": \"score\",\n        \"instructions\": \"How directly does passage-1 support the statement that the blue shelf needs repair?\",\n        \"evidenceIds\": [\n          \"passage-1\"\n        ],\n        \"criteria\": [\n          \"No support.\",\n          \"Indirect support.\",\n          \"Direct support.\"\n        ]\n      },\n      \"saturday_open\": {\n        \"type\": \"boolean\",\n        \"instructions\": \"Does passage-1 state that the fictional reading room opens on Saturday?\",\n        \"evidenceIds\": [\n          \"passage-1\"\n        ],\n        \"criteria\": {\n          \"true\": \"The passage explicitly says it opens on Saturday.\",\n          \"false\": \"The passage does not say it opens on Saturday.\"\n        }\n      }\n    }\n  },\n  \"limits\": {\n    \"stages\": 3,\n    \"evidence\": 4,\n    \"assessments\": 1,\n    \"proposals\": 1\n  },\n  \"allowedProposals\": [\n    \"reconsideration\"\n  ],\n  \"outcomeMap\": {\n    \"question\": \"priority\",\n    \"choices\": {\n      \"maintenance\": \"proceed\",\n      \"hours\": \"stop\",\n      \"unmatched\": \"escalate\"\n    }\n  }\n}",
+        "audience": "private",
+        "scope": "Invented workshop visitors",
+        "origin": {
+          "method": "captured",
+          "locator": "decision-practice:reading-room-reconsideration",
+          "contentDigest": "sha256:91b1e3aba8bf452a05fbdc533a51b876629148452091defcf6a917c9d8c6ea3a",
+          "rightsBasis": "Wholly invented conformance material."
+        },
+        "basedOn": []
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "decision-practice-evaluation",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "evaluation",
+      "data": {
+        "contribution": {
+          "id": "decision-practice",
+          "digest": "sha256:23ac06b20ac13ff3cd7c35e3869014d21fda0827b71b518bd2fb900aa655cb7e"
+        },
+        "judgment": "uncertain",
+        "rationale": "Retained for this synthetic scenario only.",
+        "limitations": [
+          "Invented evidence; no empirical or calibrated inference."
+        ],
+        "scope": "Invented workshop visitors"
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "decision-practice-review",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "review",
+      "data": {
+        "target": {
+          "id": "decision-practice",
+          "digest": "sha256:23ac06b20ac13ff3cd7c35e3869014d21fda0827b71b518bd2fb900aa655cb7e"
+        },
+        "disposition": "accepted",
+        "basis": "Invented simulated review.",
+        "evaluations": [
+          {
+            "id": "decision-practice-evaluation",
+            "digest": "sha256:bab1a5bfc1b3232344c39cbb26f624a5950ab5d38fd9fa12f082da7f0b5bbda1"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "decision-practice-activation",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "activation",
+      "data": {
+        "reviews": [
+          {
+            "id": "decision-practice-review",
+            "digest": "sha256:6d4ac53f9f23ba3ce38072a210ee32d09a8fe741d785bec2205c654fb9862cb0"
+          }
+        ],
+        "purpose": "Prepare a graph-backed trial decision.",
+        "destination": "synthetic workspace",
+        "questions": [
+          "return"
+        ]
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "repair-decision",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "contribution",
+      "data": {
+        "domain": {
+          "id": "workshop-knowledge",
+          "digest": "sha256:33fc5924f8a543237cc8ae8e12c7558f740d6062b31dda3d30c80c42ccfee331"
+        },
+        "category": "source",
+        "term": "material",
+        "title": "Invented observation",
+        "body": "An invented repair decision depends on the reading-room note.",
+        "audience": "private",
+        "scope": "Invented workshop visitors",
+        "origin": {
+          "method": "captured",
+          "locator": "reading-room:repair-decision",
+          "contentDigest": "sha256:f3ecc8953e3eee73446c9aa1158744402cb62855b4b5c4fbe80f0725b1df2173",
+          "rightsBasis": "Wholly invented material."
+        },
+        "basedOn": []
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "repair-decision-evaluation",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "evaluation",
+      "data": {
+        "contribution": {
+          "id": "repair-decision",
+          "digest": "sha256:4adee7cc3cb417058d1f28141dbbe954a081a72649cf31f9b1da6cf6179f8ade"
+        },
+        "judgment": "uncertain",
+        "rationale": "Retained for this synthetic scenario only.",
+        "limitations": [
+          "Invented evidence; no empirical or calibrated inference."
+        ],
+        "scope": "Invented workshop visitors"
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "repair-decision-review",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "review",
+      "data": {
+        "target": {
+          "id": "repair-decision",
+          "digest": "sha256:4adee7cc3cb417058d1f28141dbbe954a081a72649cf31f9b1da6cf6179f8ade"
+        },
+        "disposition": "accepted",
+        "basis": "Invented simulated review.",
+        "evaluations": [
+          {
+            "id": "repair-decision-evaluation",
+            "digest": "sha256:6d682dc1aae83e19beee3ca74da989c2e5bffcc14fab3aaf2e92fa339565730c"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "atelier-knowledge-record@v1",
+      "id": "repair-decision-activation",
+      "run": "workshop-knowledge",
+      "at": "2026-01-01T00:00:00Z",
+      "by": "synthetic-owner",
+      "kind": "activation",
+      "data": {
+        "reviews": [
+          {
+            "id": "repair-decision-review",
+            "digest": "sha256:769e1deb91c504454fb90516b79bc4bdaad8f10aa6a21cc2d5bd9a6304691728"
+          }
+        ],
+        "purpose": "Prepare a graph-backed trial decision.",
+        "destination": "synthetic workspace",
+        "questions": [
+          "return"
+        ]
+      }
+    }
+  ],
+  "definitionRef": {
+    "id": "decision-practice",
+    "digest": "sha256:23ac06b20ac13ff3cd7c35e3869014d21fda0827b71b518bd2fb900aa655cb7e"
+  },
+  "instance": {
+    "id": "source-change-one",
+    "evidence": [
+      {
+        "role": "source",
+        "requestId": "passage-1",
+        "sourceRef": "fictional-notes:passage-1",
+        "text": "The fictional Cedarbell reading room opens on Saturday. Its blue shelf needs a new bracket.",
+        "reference": {
+          "owner": "reading-room",
+          "objectId": "note-1",
+          "revision": "one",
+          "selector": {
+            "type": "text-lines",
+            "version": "1",
+            "value": "lines:1"
+          },
+          "contentDigest": "sha256:a145be45e173e1014c544adb6d7ddf95e6180525a2fa54495df58768e83588de"
+        }
+      },
+      {
+        "role": "decision",
+        "requestId": "passage-2",
+        "sourceRef": "fictional-notes:passage-2",
+        "text": "This note does not describe Sunday hours.",
+        "reference": {
+          "owner": "reading-room",
+          "objectId": "note-2",
+          "revision": "one",
+          "selector": {
+            "type": "text-lines",
+            "version": "1",
+            "value": "lines:1"
+          },
+          "contentDigest": "sha256:418a66b19db9f6b204013f07dc63ee07b7754081dde31f016d58e5aa4138b124"
+        }
+      }
+    ],
+    "snapshots": [
+      {
+        "schema": "atelier-evidence-snapshot@v1",
+        "reference": {
+          "owner": "reading-room",
+          "objectId": "note-1",
+          "revision": "one",
+          "selector": {
+            "type": "text-lines",
+            "version": "1",
+            "value": "lines:1"
+          },
+          "contentDigest": "sha256:a145be45e173e1014c544adb6d7ddf95e6180525a2fa54495df58768e83588de"
+        },
+        "currency": "current",
+        "dependencies": [],
+        "validUntil": null
+      },
+      {
+        "schema": "atelier-evidence-snapshot@v1",
+        "reference": {
+          "owner": "reading-room",
+          "objectId": "note-2",
+          "revision": "one",
+          "selector": {
+            "type": "text-lines",
+            "version": "1",
+            "value": "lines:1"
+          },
+          "contentDigest": "sha256:418a66b19db9f6b204013f07dc63ee07b7754081dde31f016d58e5aa4138b124"
+        },
+        "currency": "current",
+        "dependencies": [],
+        "validUntil": null
+      }
+    ],
+    "at": "2026-01-01T00:00:00Z",
+    "prerequisites": [
+      {
+        "id": "source-changed",
+        "value": true
+      }
+    ],
+    "spent": {
+      "stages": 0,
+      "evidence": 0,
+      "assessments": 0,
+      "proposals": 0
+    },
+    "request": {
+      "schema": "atelier-decision-request@v1",
+      "contractVersion": "1.0.0",
+      "id": "synthetic-request-1",
+      "task": "passage-triage",
+      "rubricVersion": "fictional-notes.v1",
+      "scope": {
+        "workspaceId": "synthetic-workspace",
+        "authorizationRef": "synthetic-consent-1"
+      },
+      "state": "passage-1: The fictional Cedarbell reading room opens on Saturday. Its blue shelf needs a new bracket.\npassage-2: This note does not describe Sunday hours.",
+      "evidence": [
+        {
+          "id": "passage-1",
+          "sourceRef": "fictional-notes:passage-1"
+        },
+        {
+          "id": "passage-2",
+          "sourceRef": "fictional-notes:passage-2"
+        }
+      ],
+      "questions": {
+        "priority": {
+          "type": "choice",
+          "instructions": "Which reading-room note should a person inspect next? Keep all source passages regardless of the answer.",
+          "evidenceIds": [
+            "passage-1",
+            "passage-2"
+          ],
+          "criteria": {
+            "maintenance": "A passage describes a repair to inspect.",
+            "hours": "A passage only describes opening hours.",
+            "unmatched": "Neither description fits."
+          }
+        },
+        "evidence_score": {
+          "type": "score",
+          "instructions": "How directly does passage-1 support the statement that the blue shelf needs repair?",
+          "evidenceIds": [
+            "passage-1"
+          ],
+          "criteria": [
+            "No support.",
+            "Indirect support.",
+            "Direct support."
+          ]
+        },
+        "saturday_open": {
+          "type": "boolean",
+          "instructions": "Does passage-1 state that the fictional reading room opens on Saturday?",
+          "evidenceIds": [
+            "passage-1"
+          ],
+          "criteria": {
+            "true": "The passage explicitly says it opens on Saturday.",
+            "false": "The passage does not say it opens on Saturday."
+          }
+        }
+      }
+    },
+    "result": {
+      "schema": "atelier-decision-result@v1",
+      "contractVersion": "1.0.0",
+      "requestId": "synthetic-request-1",
+      "requestDigest": "e08ba4b1c7253986b908aed74c8dcee5e4b47a569c28e233f78b6704151af778",
+      "task": "passage-triage",
+      "rubricVersion": "fictional-notes.v1",
+      "scope": {
+        "workspaceId": "synthetic-workspace",
+        "authorizationRef": "synthetic-consent-1"
+      },
+      "provider": {
+        "id": "synthetic-provider",
+        "model": "synthetic-model.v1"
+      },
+      "authority": "proposal-only",
+      "mode": "shadow",
+      "status": "assessed",
+      "answers": {
+        "priority": {
+          "type": "choice",
+          "choice": "maintenance",
+          "probabilities": {
+            "maintenance": 0.8,
+            "hours": 0.15,
+            "unmatched": 0.05
+          },
+          "confidence": 0.7
+        },
+        "evidence_score": {
+          "type": "score",
+          "score": 1.85,
+          "probabilities": [
+            0.05,
+            0.05,
+            0.9
+          ],
+          "confidence": 0.8
+        },
+        "saturday_open": {
+          "type": "boolean",
+          "probability": 0.95
+        }
+      },
+      "usage": {
+        "inputTokens": 240,
+        "outputTokens": 24
+      },
+      "elapsedMs": 12.5
+    },
+    "proposal": {
+      "type": "reconsideration",
+      "target": {
+        "id": "repair-decision",
+        "digest": "sha256:4adee7cc3cb417058d1f28141dbbe954a081a72649cf31f9b1da6cf6179f8ade"
+      },
+      "term": "material",
+      "title": "Inspect the invented repair decision"
+    }
+  }
+}
