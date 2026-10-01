@@ -22,7 +22,12 @@ export function catalogDocument() {
         "src/knowledge/index.mjs",
         "src/intake/store.mjs",
         "src/ingestion/store.mjs",
-        "src/knowledge/ingestion.mjs"
+        "src/knowledge/ingestion.mjs",
+        "src/commands/knowledge.mjs",
+        "src/knowledge/plan.mjs",
+        "src/knowledge/context.mjs",
+        "src/knowledge/workspace.mjs",
+        "src/knowledge/sessions.mjs"
       ]
     },
     {

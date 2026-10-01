@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- The knowledge workspace states its supported interfaces
+  (`docs/knowledge-workspace.md`).
+  - Two outputs are versioned contracts: the context packet
+    (`atelier-knowledge-context@v1`) and the evaluation report
+    (`atelier-knowledge-evaluation@v1`).
+  - The other CLI outputs, the browser routes and the sidecar's `knowledgeProject`
+    option are experimental.
+  - The workspace modules have no library export. `@mnstry/atelier/knowledge`
+    keeps its existing exports.
+  - `atelier architecture entry knowledge-stewardship` lists the workspace modules
+    and the `knowledge` command.
+  - `npm run knowledge:consumer-proof` installs a packed tarball into a clean
+    consumer and checks the documented CLI paths, writing a receipt bound to the
+    tarball SHA-256.
 - Personal workspaces are exported as `@mnstry/atelier/personal-workspace`,
   with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
   public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,
