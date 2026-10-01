@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A capability operation that has committed no longer reports `EEXIST` ("not
+  entered") when its lock is removed or replaced while cleanup inspects it.
+  Cleanup preserves the other file and returns the operation's result. Lock
+  races in reclamation, readback and cleanup are each covered by a test.
 - The knowledge workspace states its supported interfaces
   (`docs/knowledge-workspace.md`).
   - Two outputs are versioned contracts: the context packet
