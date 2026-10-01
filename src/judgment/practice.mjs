@@ -7,6 +7,7 @@ import { inspectKnowledge } from '../knowledge/ledger.mjs'
 export const DECISION_PRACTICE_FORMAT = 'atelier.decision-practice/v0'
 const flags = { executionAuthorized: false, authorityTransferred: false, semanticTruthVerified: false }
 const refusal = reason => ({ status: 'refused', reason, ...flags })
+const inputReason = (error, fallback) => Object.getOwnPropertyDescriptor(error ?? {}, 'message')?.value === 'evidence value exceeds bounds' ? 'practice-input-exceeds-bounds' : fallback
 const id = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value)
 const text = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 4000
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -52,7 +53,7 @@ export function prepareDecisionPracticeContribution(input) {
       body, audience: domain.data.audience, scope: domain.data.scope,
       origin: { method: 'captured', locator: `decision-practice:${value.definition.id}`, contentDigest: contentDigest(body), rightsBasis: value.definition.rightsBasis }, basedOn: [] },
     semanticAcceptance: 'pending', ...flags }
-  } catch { return refusal('invalid-definition') }
+  } catch (error) { return refusal(inputReason(error, 'invalid-definition')) }
 }
 
 /** Resolve exact reviewed/current activation from the caller's Knowledge history. */
@@ -71,8 +72,13 @@ export function readAdoptedDecisionPractice(input) {
       return review?.data.target.id === contribution.id
     }))
     if (!activation) return refusal('unadopted-definition')
-    const definition = evidenceJson(JSON.parse(contribution.data.body))
-    if (inspect(definition).length) return refusal('invalid-definition')
+    let definition
+    try {
+      definition = evidenceJson(JSON.parse(contribution.data.body))
+      if (inspect(definition).length || contribution.data.body !== JSON.stringify(definition, null, 2) ||
+          contribution.data.category !== 'decision-rationale' || contribution.data.origin.method !== 'captured' ||
+          contribution.data.origin.locator !== `decision-practice:${definition.id}`) return refusal('invalid-definition')
+    } catch { return refusal('invalid-definition') }
     return { status: 'resolved', definition, definitionRef: harnessRef(contribution), activationRef: harnessRef(activation), historyDigest: state.head, ...flags }
-  } catch { return refusal('invalid-definition-history') }
+  } catch (error) { return refusal(inputReason(error, 'invalid-definition-history')) }
 }

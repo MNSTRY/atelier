@@ -5,6 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { decisionRequestDigest } from '../src/decisions/contracts.mjs'
+import { contentDigest, harnessRef } from '../src/harnesses/contracts.mjs'
+import { inspectKnowledge } from '../src/knowledge/ledger.mjs'
+import { validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
 import { evaluateDecisionPractice } from '../src/judgment/practice-evaluation.mjs'
 
 const read = file => JSON.parse(fs.readFileSync(new URL(file, import.meta.url)))
@@ -22,7 +25,11 @@ test('current evidence and a valid bound assessment prepare only a reconsiderati
 
 const negatives = [
   ['missing-evidence', value => { value.instance.evidence.pop() }],
-  ['stale-evidence', value => { value.instance.snapshots[0].currency = 'requires-reconsideration' }],
+  ['stale-evidence', value => { value.instance.snapshots[0].currency = 'stale' }],
+  ['stale-evidence', value => { value.instance.snapshots[0].currency = 'superseded' }],
+  ['stale-evidence', value => { value.instance.snapshots[0].currency = 'withdrawn-from-use' }],
+  ['stale-evidence', value => { value.instance.snapshots[0].validUntil = '2025-01-01T00:00:00Z' }],
+  ['stale-evidence', value => { value.instance.snapshots = [] }],
   ['stale-evidence', value => { value.instance.snapshots[0].reference.revision = 'two' }],
   ['changed-evidence-text', value => { value.instance.evidence[0].text += 'Altered.' }],
   ['unknown-prerequisite', value => { value.instance.prerequisites[0].value = 'unknown' }],
@@ -38,6 +45,9 @@ const negatives = [
   ['invalid-rubric-result', value => { value.instance.result.requestDigest = '0'.repeat(64) }],
   ['invalid-rubric-result', value => { value.instance.result.authority = 'execution' }],
   ['changed-rubric', value => { value.instance.request.questions.priority.instructions += 'Changed rubric.'; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
+  ['changed-rubric', value => { value.instance.request.ext = { unadopted: 'invented' }; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
+  ['changed-rubric', value => { value.instance.request.contractVersion = '1.0.1'; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
+  ['unbound-request-evidence', value => { value.instance.request.evidence[0].ext = { unadopted: 'invented' }; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
   ['unbound-request-evidence', value => { value.instance.request.state += 'Unattributed material.'; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
 ]
 for (const [reason, edit] of negatives) test(`typed refusal: ${reason}`, () => {
@@ -45,6 +55,46 @@ for (const [reason, edit] of negatives) test(`typed refusal: ${reason}`, () => {
   const outcome = evaluateDecisionPractice(value)
   assert.equal(outcome.status, 'refuse'); assert.equal(outcome.reason, reason)
   assert.equal(Object.hasOwn(outcome, 'proposal'), false)
+})
+
+test('a valid large Knowledge history is distinct from malformed operating input', () => {
+  const value = scenario(), contribution = structuredClone(value.records.find(item => item.kind === 'contribution'))
+  contribution.id = 'large-invented-source'; contribution.data.body = 'x'.repeat(260000); contribution.data.basedOn = []
+  contribution.data.origin = { method: 'captured', locator: 'invented:large-source', contentDigest: contentDigest(contribution.data.body), rightsBasis: 'Invented fixture.' }
+  value.records.push(contribution)
+  assert.doesNotThrow(() => inspectKnowledge(value.records))
+  assert.equal(evaluateDecisionPractice(value).reason, 'practice-input-exceeds-bounds')
+})
+
+test('stale and expired cases use valid snapshots rather than schema failures', () => {
+  for (const edit of [snapshot => { snapshot.currency = 'stale' }, snapshot => { snapshot.currency = 'superseded' }, snapshot => { snapshot.currency = 'withdrawn-from-use' }, snapshot => { snapshot.validUntil = '2025-01-01T00:00:00Z' }]) {
+    const value = scenario(); edit(value.instance.snapshots[0])
+    assert.equal(validateEvidenceDocument('snapshot', value.instance.snapshots[0]).valid, true)
+    assert.equal(evaluateDecisionPractice(value).reason, 'stale-evidence')
+  }
+})
+
+function changeAdoptedRubric(value, edit) {
+  const contribution = value.records.find(item => item.id === value.definitionRef.id), definition = JSON.parse(contribution.data.body)
+  edit(definition.rubric); contribution.data.body = JSON.stringify(definition, null, 2); contribution.data.origin.contentDigest = contentDigest(contribution.data.body)
+  value.definitionRef = harnessRef(contribution)
+  for (const item of value.records) {
+    if (item.kind === 'evaluation' && item.data.contribution.id === contribution.id) item.data.contribution = harnessRef(contribution)
+    if (item.kind === 'review' && item.data.target.id === contribution.id) {
+      item.data.target = harnessRef(contribution)
+      item.data.evaluations = item.data.evaluations.map(pin => harnessRef(value.records.find(record => record.id === pin.id)))
+    }
+    if (item.kind === 'activation') item.data.reviews = item.data.reviews.map(pin => harnessRef(value.records.find(record => record.id === pin.id)))
+  }
+  assert.ok(inspectKnowledge(value.records).accepted.includes(contribution.id))
+}
+
+for (const [field, content] of [['ext', { adopted: 'invented' }], ['contractVersion', '1.0.0']]) test(`request cannot drop adopted ${field}`, () => {
+  const value = scenario(); changeAdoptedRubric(value, rubric => { rubric[field] = content })
+  value.instance.request[field] = structuredClone(content); value.instance.result.requestDigest = decisionRequestDigest(value.instance.request)
+  assert.equal(evaluateDecisionPractice(value).status, 'proceed')
+  delete value.instance.request[field]; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request)
+  assert.equal(evaluateDecisionPractice(value).reason, 'changed-rubric')
 })
 
 test('a false known prerequisite stops without preparing a draft', () => {

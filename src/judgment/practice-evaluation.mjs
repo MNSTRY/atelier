@@ -10,6 +10,7 @@ const outcome = (status, reason) => ({ status, reason, ...flags })
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const closed = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 const canonical = value => JSON.stringify(value, (_key, item) => object(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)
+const rubricFields = ({ id, state, evidence, ...rubric }) => rubric
 const countKeys = ['stages', 'evidence', 'assessments', 'proposals']
 
 /** Inspect supplied facts and assessments. Outcomes never execute a stage. */
@@ -42,9 +43,8 @@ export function evaluateDecisionPractice(input) {
       if (assessEvidenceCurrency(item.reference, instance.snapshots, { at: instance.at }).status !== 'current') return outcome('refuse', 'stale-evidence')
     }
     const request = instance.request
-    if (!validateDecisionRequest(request).ok || request.task !== definition.rubric.task || request.rubricVersion !== definition.rubric.rubricVersion ||
-        canonical(request.questions) !== canonical(definition.rubric.questions) || canonical(request.scope) !== canonical(definition.rubric.scope)) return outcome('refuse', 'changed-rubric')
-    if (request.evidence.length !== instance.evidence.length || !request.evidence.every(pin => instance.evidence.some(item => item.requestId === pin.id && item.sourceRef === pin.sourceRef)) ||
+    if (!validateDecisionRequest(request).ok || canonical(rubricFields(request)) !== canonical(rubricFields(definition.rubric))) return outcome('refuse', 'changed-rubric')
+    if (request.evidence.length !== instance.evidence.length || !request.evidence.every(pin => closed(pin, ['id', 'sourceRef']) && instance.evidence.some(item => item.requestId === pin.id && item.sourceRef === pin.sourceRef)) ||
         request.state !== request.evidence.map(pin => `${pin.id}: ${instance.evidence.find(item => item.requestId === pin.id).text}`).join('\n')) return outcome('refuse', 'unbound-request-evidence')
     if (!validateDecisionResult(request, instance.result).ok) return outcome('refuse', 'invalid-rubric-result')
     if (instance.prerequisites.some(item => !item.value)) return outcome('stop', 'prerequisite-false')
@@ -65,5 +65,5 @@ export function evaluateDecisionPractice(input) {
         origin: { method: 'captured', locator: `decision-reconsideration:${instance.id}`, contentDigest: contentDigest(body), rightsBasis: definition.rightsBasis }, basedOn: [] },
       semanticAcceptance: 'pending', ...flags },
       declaredRemaining: Object.fromEntries(countKeys.map(key => [key, definition.limits[key] - instance.spent[key] - required[key]])) }
-  } catch { return outcome('refuse', 'invalid-instance') }
+  } catch (error) { return outcome('refuse', Object.getOwnPropertyDescriptor(error ?? {}, 'message')?.value === 'evidence value exceeds bounds' ? 'practice-input-exceeds-bounds' : 'invalid-instance') }
 }

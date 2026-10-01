@@ -22,6 +22,17 @@ is caller-supplied evidence, not independent proof of actor identity, current ho
 permission or authenticity. Withdrawal, supersession and reconsideration remain
 the existing harness's responsibility.
 
+This portable profile deliberately bounds each complete input, including the
+supplied history, to 262,144 UTF-8 JSON bytes, 8,192 JSON members and depth 24.
+Knowledge itself accepts larger histories. A valid history outside this smaller
+profile returns `practice-input-exceeds-bounds`; it is not reported as malformed
+history. The host must supply an in-profile complete history or retain that typed
+refusal; silently truncating history cannot establish current adoption. An adopted
+body must equal `JSON.stringify(definition, null, 2)`, as produced by the preparation
+function, and retain category `decision-rationale`, captured origin and locator
+`decision-practice:<definition id>`. Invalid, duplicate-key or noncanonical bodies
+return `invalid-definition`.
+
 `evaluateDecisionPractice` returns `proceed`, `stop`, `escalate` or `refuse` with a
 typed reason. It checks declared prerequisites and count budgets, current exact
 evidence snapshots, text digests, and the existing decision request/result
@@ -31,8 +42,10 @@ but no general expression language, workflow execution or confidence threshold
 is introduced. Model confidence does not establish correctness or authority.
 
 Request state must be exactly the request's evidence, in request order, using
-`<evidence id>: <exact text>` lines. Task, rubric version, questions and scope must
-match the adopted specimen. The supplied result must validate against the exact
+`<evidence id>: <exact text>` lines. Every request field except `id`, `state` and
+`evidence` must match the adopted specimen, including optional contract version
+and extensions. Each new evidence pin contains exactly `id` and `sourceRef`, with
+no extensions. The supplied result must validate against the exact
 new request digest. No provider is called or qualified by this module. An
 abstention escalates. Missing/stale evidence, unknown prerequisites, changed or
 unadopted definition, exhausted budgets, unsupported proposals and invalid rubric
@@ -43,6 +56,10 @@ Count budgets are caller-reported consumption plus this assessment's declared
 requirements; they do not measure provider use, elapsed time or durable lifetime
 usage. The host must maintain those facts. Snapshots and records are supplied by
 the caller; their actual authority, authenticity and freshness remain host proof.
+The pure evaluator checks the complete supplied assessment envelope before a
+false prerequisite returns `stop`. It never obtains that assessment itself.
+A host that can stop before calling a provider should precheck prerequisites
+there; this module does not prove that provider work or cost was avoided.
 
 A proceeding outcome prepares an ordinary captured Knowledge contribution draft.
 Its body pins the definition, activation, reconsideration target, exact evidence,
