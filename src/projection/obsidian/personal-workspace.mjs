@@ -29,7 +29,8 @@ import { OBSIDIAN_EXT_KEY } from './contracts.mjs'
 // inputsDigest) and a digest of the built graph's facts. The inputs are read
 // before composing, so a key is confirmed only when the composition accepted
 // those inputs and composed a graph with exactly those facts, and a returned
-// graph is always one the composition built too. A key not yet confirmed is
+// graph is always one the composition built too (a change and its exact undo
+// during one composition is caught at the next full reconciliation). A key not yet confirmed is
 // confirmed by composing: synchronously for a caller that builds once, and off
 // the event loop, in a worker with a deadline, for the engine and the proposal
 // adapter it runs (`validatePersonalWorkspace`). What no key names is asked of
@@ -92,19 +93,38 @@ const NONBLOCK = fs.constants.O_NONBLOCK ?? 0
 
 // One regular file, opened without following a link and without waiting on it (a FIFO or a device never blocks the
 // caller), and read up to `limit`. Anything else refuses `code`, as the composition would.
-function regularFileDigest(file, limit, code) {
+function regularFileBytes(file, limit, code, { follow = false } = {}) {
   let fd
-  try { fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | NONBLOCK) } catch (error) {
-    if (error.code === 'ENOENT') return 'missing'
+  try { fd = fs.openSync(file, fs.constants.O_RDONLY | (follow ? 0 : fs.constants.O_NOFOLLOW) | NONBLOCK) } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null
     throw new PersonalWorkspaceRefusal(code)
   }
   try {
     const stat = fs.fstatSync(fd)
     if (!stat.isFile() || stat.size > limit) throw new PersonalWorkspaceRefusal(code)
-    return sha256(fs.readFileSync(fd))
+    return fs.readFileSync(fd)
   } finally { fs.closeSync(fd) }
 }
-const optionalDigest = (file) => { try { return regularFileDigest(file, AUTHORED_LIMIT, 'malformed-input') } catch { return 'not-regular' } }
+const regularFileDigest = (file, limit, code) => { const bytes = regularFileBytes(file, limit, code); return bytes === null ? 'missing' : sha256(bytes) }
+// A Git configuration file, which Git itself reads through a link (a managed dotfile): followed, but still only a
+// regular file, bounded, and never waited on.
+const configDigest = (file) => { try { const bytes = regularFileBytes(file, AUTHORED_LIMIT, 'malformed-input', { follow: true }); return bytes === null ? 'missing' : sha256(bytes) } catch { return 'not-regular' } }
+// The configuration files of an enrolled repository: `.git/config`, or, where `.git` is a file (a separate Git
+// directory, a linked worktree, a submodule), the configuration of the directory it names and of its common directory.
+function repositoryConfigDigests(repoRoot) {
+  const dotGit = path.join(repoRoot, '.git')
+  const kind = fs.lstatSync(dotGit, { throwIfNoEntry: false })
+  if (kind === undefined) return ['missing']
+  if (kind.isDirectory()) return [configDigest(path.join(dotGit, 'config'))]
+  let pointer
+  try { pointer = regularFileBytes(dotGit, AUTHORED_LIMIT, 'malformed-input', { follow: true }) } catch { return ['not-regular'] }
+  const named = /^gitdir:\s*(.+?)\s*$/m.exec(pointer?.toString('utf8') ?? '')
+  if (named === null) return ['unnamed']
+  const gitDir = path.resolve(repoRoot, named[1])
+  let commonDir = null
+  try { const common = regularFileBytes(path.join(gitDir, 'commondir'), AUTHORED_LIMIT, 'malformed-input', { follow: true }); if (common !== null) commonDir = path.resolve(gitDir, common.toString('utf8').trim()) } catch { commonDir = 'not-regular' }
+  return [gitDir, configDigest(path.join(gitDir, 'config')), commonDir, commonDir === null || commonDir === 'not-regular' ? null : configDigest(path.join(commonDir, 'config'))]
+}
 
 // Everything outside the graph that a composition's answer depends on and a stat or a bounded read can see: the authored
 // inputs (regular files only), every file of the generation (an extra, missing or irregular one too), the private home's
@@ -113,10 +133,8 @@ const optionalDigest = (file) => { try { return regularFileDigest(file, AUTHORED
 // composition gives it, before anything waits on it.
 function inputsDigest({ personalHome, generationId }) {
   const stat = (file) => { try { const s = fs.lstatSync(file); return [s.mode, s.uid, s.ino, s.isSymbolicLink()] } catch (error) { return `missing:${error.code ?? 'error'}` } }
-  const authored = ['atelier.personal.json', 'atelier.overlay.json'].map((name) => {
-    const file = path.join(personalHome, name)
-    return [stat(file), regularFileDigest(file, AUTHORED_LIMIT, 'malformed-input')]
-  })
+  const authoredBytes = ['atelier.personal.json', 'atelier.overlay.json'].map((name) => regularFileBytes(path.join(personalHome, name), AUTHORED_LIMIT, 'malformed-input'))
+  const authored = ['atelier.personal.json', 'atelier.overlay.json'].map((name, index) => [stat(path.join(personalHome, name)), authoredBytes[index] === null ? 'missing' : sha256(authoredBytes[index])])
   const generation = []
   const walk = (directory, prefix) => {
     let entries
@@ -138,18 +156,21 @@ function inputsDigest({ personalHome, generationId }) {
     if (ancestor === path.dirname(ancestor)) break
   }
   let repos = []
-  try { repos = JSON.parse(fs.readFileSync(path.join(personalHome, 'atelier.personal.json'), 'utf8')).repos.filter((repo) => repo.enrolled).map((repo) => repo.root) } catch { repos = [] }
+  // The bytes read above, never the file again.
+  try { repos = JSON.parse(authoredBytes[0]?.toString('utf8') ?? '{}').repos.filter((repo) => repo.enrolled).map((repo) => repo.root) } catch { repos = [] }
   const enrolled = repos.map((repoRoot) => {
     let real
     try { real = fs.realpathSync(repoRoot) === repoRoot } catch { real = false }
-    return [repoRoot, stat(repoRoot), real, optionalDigest(path.join(repoRoot, '.git', 'config'))]
+    return [repoRoot, stat(repoRoot), real, repositoryConfigDigests(repoRoot)]
   })
-  const home = process.env.HOME ?? ''
-  const userGit = [path.join(home, '.gitconfig'), path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'git', 'config')].map(optionalDigest)
+  const home = process.env.HOME
+  const userGit = typeof home === 'string' && path.isAbsolute(home)
+    ? [path.join(home, '.gitconfig'), path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'git', 'config')].map(configDigest)
+    : ['no-home']
   return digestOf({
     authored,
     generation,
-    roots: [stat(personalHome), realHome, stat(path.join(personalHome, 'generations')), stat(root), ancestorsWithGit],
+    roots: [stat(personalHome), realHome, stat(path.join(personalHome, 'generations')), stat(path.join(personalHome, 'generations', '.git')), stat(root), ancestorsWithGit],
     enrolled,
     userGit,
     ambientGit: Object.keys(process.env).filter((name) => /^GIT_/i.test(name)).sort(),
@@ -229,8 +250,9 @@ function assemble({ personalHome, generationId }, composed, route) {
 }
 
 // A composition in this thread, as the summary a worker sends back.
-// The inputs are digested BEFORE composing: a change that lands while the composition runs then either is seen by it, or
-// leaves the confirmed key behind, so the next build composes again. Never the other way round.
+// The inputs are digested BEFORE composing: a single change that lands while the composition runs then either is seen by
+// it, or leaves the confirmed key behind, so the next build composes again. A change and its exact undo within one
+// composition (A, then B, then A again) is not seen this way: it is caught at the next full reconciliation.
 function composeHere(compose, binding) {
   const inputs = inputsDigest(binding)
   const composed = compose({ personalHome: binding.personalHome, generationId: binding.generationId })
@@ -239,8 +261,10 @@ function composeHere(compose, binding) {
 
 // A composition in a worker thread, so the event loop of the caller stays free while it runs. Resolves to the summary, or
 // to `{ code }` for a refusal; a worker that cannot run answers `personal-composition-unavailable`.
-// A worker that does not answer within the deadline is terminated and let go of, so neither the tick nor the process
-// waits on it, and the composition refuses `personal-composition-unavailable`.
+// A worker that does not answer within the deadline is terminated and let go of, and the composition refuses
+// `personal-composition-unavailable`: the tick does not wait on it. A worker blocked in a system call (a FIFO opened
+// for reading, say) cannot be stopped until that call returns, and until then it keeps the process from exiting; a
+// service stopped in that state needs a kill.
 export const WORKER_DEADLINE_MS = 120 * 1000
 function composeInWorker({ personalHome, generationId }, { deadlineMs = WORKER_DEADLINE_MS, stallMs = 0 } = {}) {
   return new Promise((resolve) => {

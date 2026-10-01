@@ -9,8 +9,9 @@
   proposal adapter it runs, compose in a worker with a two-minute deadline: at
   load (`loadBoundProjectOffThread`), after a change, and at every full
   reconciliation, which prepares nothing again when nothing changed. A bound
-  project is loaded once. Files the key reads are opened without following links
-  or waiting on them. The proposal adapter answers a vault edit to a private
+  project is loaded once. Authored and generation files the key reads are
+  opened without following links or waiting on them. The adapter builds only
+  when it looks at a newly observed edit. The proposal adapter answers a vault edit to a private
   note with `personal-overlay-not-proposed`, and `personal-binding-lost` now
   names the reserved settings key.
 

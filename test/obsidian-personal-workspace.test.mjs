@@ -941,3 +941,85 @@ test('a graph whose resolved links differ from the composition is not served', (
   const { buildGraph } = createProductionSeams()
   assert.throws(() => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-graph-unconfirmed')
 })
+
+test('an idle tick with a shared edit open builds nothing in the proposal adapter, for a bound and for an ordinary project', async (t) => {
+  for (const label of ['bound', 'ordinary']) {
+    const { ari } = makeWorld(t, { people: ['ari'] })
+    const production = createProductionSeams()
+    let adapterBuilds = 0
+    const extensions = createMaintenanceExtensions()
+    extensions.register('proposal-adapter', createProposalAdapter({ clock, env: process.env, seams: { ...production, buildGraph: (args) => { adapterBuilds += 1; return production.buildGraph(args) } } }))
+    const loadProject = label === 'bound' ? () => ari.bound.project : () => routedAround(ari.bound.project)
+    const engine = ari.engine({ extensions, loadProject })
+    t.after(() => engine.stop())
+    assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'), label)
+    const note = ari.manifestOf('harbor-only').notes.find((item) => item.nodeId === 'a:harbor')
+    const file = path.join(ari.vault('harbor-only'), note.path)
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Shared harbor note.', 'Shared harbor note, edited.'))
+    const queued = await engine.tick()
+    assert.ok(queued.observed.observed.some((item) => item.status === 'observed'), `${label}: ${JSON.stringify(queued.observed)}`)
+    const afterObservation = adapterBuilds
+    for (let tick = 0; tick < 4; tick += 1) await engine.tick()
+    assert.ok(ari.stateStore().readPendingEdits().edits.some((edit) => edit.closedAt === null), `${label}: the edit stays open`)
+    assert.equal(adapterBuilds, afterObservation, `${label}: no build while nothing new is observed`)
+  }
+})
+
+test('a proposal operation due on a tick whose personal graph is pending is left as it is, spending no attempt', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  // A structural edit: a link typed into a shared note.
+  const notes = ari.manifestOf('harbor-only').notes
+  const harbor = notes.find((item) => item.nodeId === 'a:harbor')
+  const tide = path.basename(notes.find((item) => item.nodeId === 'a:tide').path, '.md')
+  const file = path.join(ari.vault('harbor-only'), harbor.path)
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Shared harbor note.', `Shared harbor note, see [[${tide}]].`))
+  await engine.tick()
+  const adapter = createProposalAdapter({ clock, env: process.env })
+  const context = () => ({ project: ari.bound.project, workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId, repositoryRoots: protectedRoots(ari.bound.project), edits: ari.stateStore().readPendingEdits().edits, clock, env: process.env, deferPersonalValidation: true })
+  const observed = await adapter.observe(context())
+  assert.ok(observed.observed.some((item) => item.kind === 'semantic-proposal'), JSON.stringify(observed))
+  // The graph changes: the operation is due, and the graph is pending.
+  fs.writeFileSync(path.join(world.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replaceAll('Tide', 'Tides'))
+  const proposed = await adapter.propose(context())
+  const outcome = proposed.outcomes.find((item) => item.nodeId === 'a:harbor')
+  assert.deepEqual([outcome?.status, outcome?.code, outcome?.state ?? null], ['deferred', 'personal-validation-pending', null], JSON.stringify(proposed.outcomes))
+})
+
+test('the validity key sees a linked user Git configuration, a .git file, and a .git in the generations folder', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const { buildGraph } = createProductionSeams()
+  const build = () => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })
+  // The route first: it must see the change through its key, before any composition clears what it confirmed.
+  const bothRefuse = async (code, label) => {
+    assert.throws(build, (error) => error.code === code, `${label}: the route refuses`)
+    assert.deepEqual(await validatePersonalWorkspace(ari.bound.project), { ok: false, code }, `${label}: the composition refuses`)
+  }
+  build()
+  // A .git inside generations/.
+  fs.mkdirSync(path.join(ari.home, 'generations', '.git'))
+  await bothRefuse('generation-inside-work-tree', 'a .git in generations')
+  fs.rmSync(path.join(ari.home, 'generations', '.git'), { recursive: true })
+  build()
+  // The user's Git configuration is a link, as a dotfile manager leaves it; then a helper is added to its target.
+  const target = path.join(process.env.HOME, 'dotfiles-gitconfig')
+  fs.writeFileSync(target, '[user]\n\tname = Synthetic\n')
+  fs.symlinkSync(target, path.join(process.env.HOME, '.gitconfig'))
+  try {
+    build()
+    fs.appendFileSync(target, '[core]\n\tfsmonitor = true\n')
+    await bothRefuse('git-helper-configured', 'a helper behind a linked configuration')
+  } finally { fs.rmSync(path.join(process.env.HOME, '.gitconfig')); fs.rmSync(target) }
+  build()
+  // An enrolled repository whose .git is a file naming a separate Git directory; then a remote is added.
+  const gitDir = path.join(world.base, 'b-git-directory')
+  fs.renameSync(path.join(world.b, '.git'), gitDir)
+  fs.writeFileSync(path.join(world.b, '.git'), `gitdir: ${gitDir}\n`)
+  build()
+  git(world.b, ['remote', 'add', 'origin', 'https://example.invalid/b.git'])
+  await bothRefuse('repo-identity-replaced', 'a remote added through a .git file')
+})
