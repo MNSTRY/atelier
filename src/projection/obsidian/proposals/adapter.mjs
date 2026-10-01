@@ -15,6 +15,7 @@ import { isIdentifier } from '../edits/object-identity.mjs'
 import { openObjectStore } from '../edits/object-store.mjs'
 import { decideApply } from '../edits/policy.mjs'
 import { applyEditLens } from '../edits/regions.mjs'
+import { personalOverlayRepoOf } from '../personal-workspace.mjs'
 import { PublicationRefusal } from '../recovery/store.mjs'
 import {
   PROPOSAL_BACKPRESSURE, PROPOSAL_LEDGER_LIMITS, classifyLedgerRead, classifyStoreRefusal, estimateEventLineBytes, isDue, isExhausted, nextAttemptAt, preflightAppend,
@@ -438,7 +439,13 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
       async observe(context, { retryRefused = false } = {}) {
         const workspace = open(context)
         const edits = Array.isArray(context.edits) ? context.edits : []
-        return { adapterId: PROPOSAL_ADAPTER_ID, observed: observation.run(workspace, { edits, retryRefused }) }
+        // A private note of a personal workspace lives in a generation the personal-workspace module owns: its edit is
+        // not observed, recorded or proposed, and stays held in the vault. Answered by name, with nothing written.
+        const overlayRepoId = personalOverlayRepoOf(workspace.project)
+        const isPrivate = (edit) => overlayRepoId !== null && edit?.identity?.repoId === overlayRepoId
+        const privateNotes = edits.filter((edit) => isPrivate(edit) && edit.closedAt === null)
+          .map((edit) => ({ editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId, status: 'refused', code: 'personal-overlay-not-proposed' }))
+        return { adapterId: PROPOSAL_ADAPTER_ID, observed: [...privateNotes, ...observation.run(workspace, { edits: edits.filter((edit) => !isPrivate(edit)), retryRefused })] }
       },
 
       // The tick. `context` is { project, workspaceRoot, workspaceId, repositoryRoots, edits }: the pending edit

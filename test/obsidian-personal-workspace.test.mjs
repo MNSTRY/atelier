@@ -65,7 +65,7 @@ const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, pro
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { viewCounts } = await import('../src/runtime/obsidian/view-counts.mjs')
-const { EVERYTHING_SCOPE_ID, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
+const { EVERYTHING_SCOPE_ID, PERSONAL_MEMBER_KEY, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, loadBoundProjectOffThread, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
 
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const test = (name, fn) => nodeTest(name, {
@@ -366,8 +366,9 @@ test('3. coverage is never permission: no Obsidian source reads it, and a permis
     assert.doesNotMatch(text, /coverage\s*(\?\.|\.)\s*(profile|enforcement|uncovered)|coverage\s*\[|\{[^}]*\bprofile\b[^}]*\}\s*=\s*[^;\n]*coverage/, `${path.relative(ROOT, file)} reads a member of coverage`)
   }
   const route = code(path.join(ROOT, 'src', 'projection', 'obsidian', 'personal-workspace.mjs'))
-  assert.deepEqual(route.match(/coverage/g), ['coverage', 'coverage'], 'the route names coverage once, passing it through')
-  assert.match(route, /coverage: composed\.coverage/)
+  const passThrough = route.match(/coverage: composed\.coverage/g) ?? []
+  assert.ok(passThrough.length > 0)
+  assert.equal(route.match(/coverage/g).length, passThrough.length * 2, 'every mention of coverage in the route passes it through')
 
   // Behavioural: the same person bound twice, once with the module's coverage and once with a permissive one, into
   // two data roots. Every output byte is the same, apart from journal identities and lock records, which are random
@@ -388,7 +389,9 @@ test('3. coverage is never permission: no Obsidian source reads it, and a permis
     runs.push({ tree: treeListing(ari.dataRoot, { normalize: isoNoJournal, skip: (relative) => relative.includes('/engine-lock') || relative.includes('.lock.owners') }), selection: selection.json, counts })
     fs.renameSync(ari.dataRoot, `${ari.dataRoot}-${runs.length}`)
   }
-  assert.ok(calls > 1, 'the permissive composition built the graph of the second run')
+  assert.ok(calls > 0, 'the permissive composition admitted the second binding')
+  // Both runs were built through the route: the graph of the permissive binding is the composition's.
+  assert.deepEqual(graphFacts(createProductionSeams().buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })), graphFacts(ari.expected()), 'the second run read the composed graph')
   assert.equal(ari.bound.coverage.permission, 'granted', 'the coverage was passed through untouched')
   assert.deepEqual(runs[1], runs[0])
 })
@@ -567,6 +570,13 @@ test('6. views come from the overlay; view add, audience and location refuse typ
   assert.ok(edit, JSON.stringify(queued.pendingEdits))
   const applied = await createSourceApplyForOracleTests()({ loadProject: ari.loadProject, dataRoot: ari.dataRoot, env: process.env, clock, quietPeriodMs: 0 }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
   assert.deepEqual([applied.status, applied.code], ['refused', 'personal-overlay-proposals-only'], JSON.stringify(applied))
+  // Nor is it proposed: the proposal adapter answers it by name, records nothing, and hands nothing over.
+  const adapter = createProposalAdapter({ clock, env: process.env })
+  const context = () => ({ project: ari.bound.project, workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId, repositoryRoots: protectedRoots(ari.bound.project), edits: ari.stateStore().readPendingEdits().edits, clock, env: process.env })
+  const observed = await adapter.observe(context(), { retryRefused: true })
+  assert.deepEqual(observed.observed.filter((item) => item.editId === edit.editId).map(({ status, code }) => [status, code]), [['refused', 'personal-overlay-not-proposed']])
+  const proposed = await adapter.propose(context())
+  assert.equal(proposed.outcomes.some((item) => item.editId === edit.editId), false, JSON.stringify(proposed.outcomes))
   assert.deepEqual(treeListing(path.join(ari.home, 'generations')), generationBefore, 'the generation is byte-identical')
   assert.equal(ari.compose().generation.generationId, ari.generationId, 'and still composes')
 })
@@ -685,8 +695,9 @@ test('a full reconciliation composes a bound workspace again: an enrolled reposi
 test('a refusal at load time is typed: the engine reports the code, no view stays current, and status answers typed', async (t) => {
   const world = makeWorld(t, { people: ['ari'] })
   const { ari } = world
+  // The engine loads off the event loop; a command loads in its own thread.
   const loadProject = () => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId })
-  const engine = ari.engine({ loadProject })
+  const engine = ari.engine({ loadProject: () => loadBoundProjectOffThread({ personalHome: ari.home, generationId: ari.generationId }) })
   t.after(() => engine.stop())
   assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
   ari.overlay.annotations[0].note += ' Revised.'
@@ -711,6 +722,83 @@ test('a copy of a bound project that lost its binding is refused, never built as
     assert.equal(personalWorkspaceBindingOf(copy), null, label)
     assert.throws(() => buildGraph({ project: copy, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-binding-lost', label)
     assert.throws(() => viewCounts({ project: copy, audienceAllow: [...ONLY_YOU_AUDIENCES], scope: PROBE_SCOPE }), (error) => error.code === 'personal-binding-lost', `${label}: view counts`)
+  }
+  // An ordinary project whose own settings use the reserved key is refused too, and the message names the key without
+  // presuming a copy.
+  const ordinary = routedAround(ari.bound.project)
+  const declared = { ...ordinary, config: { ...ordinary.config, ext: { [OBSIDIAN_EXT_KEY]: { ...ordinary.config.ext[OBSIDIAN_EXT_KEY], ext: { [PERSONAL_MEMBER_KEY]: {} } } } } }
+  assert.throws(() => buildGraph({ project: declared, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-binding-lost' && error.message.includes(`ext["${PERSONAL_MEMBER_KEY}"]`) && !/\bcopy\b/.test(error.message))
+})
+
+test('the cached route: one load, a composition only when the validity key changes, and identity with the composition', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let composed = 0
+  const counting = createPersonalWorkspaceBinderForOracleTests({ compose: (input) => { composed += 1; return composePersonalWorkspace(input) } })
+  let loads = 0
+  // The engine never composes on its own thread: a build whose key is unconfirmed refuses pending, and is built again
+  // once the composition (off the event loop) confirmed it.
+  const production = createProductionSeams()
+  const builds = []
+  const seams = { buildGraph: (args) => { try { const graph = production.buildGraph(args); builds.push('built'); return graph } catch (error) { builds.push(error.code); throw error } } }
+  const engine = ari.engine({ seams, loadProject: () => { loads += 1; return ari.bind(counting).project } })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  assert.equal(loads, 1, 'a bound project is loaded once')
+  assert.equal(composed, 1, 'the load composed; the first build was served under the key it confirmed')
+  // An idle tick composes nothing.
+  await engine.tick()
+  assert.equal(composed, 1)
+  // A shared note whose title changes changes the graph: the next build composes once, and the views follow it.
+  fs.writeFileSync(path.join(world.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replaceAll('Tide', 'Tides'))
+  const changed = await engine.tick()
+  assert.ok(changed.scopes.every((scope) => scope.state === 'current' && scope.reason === 'published-and-verified'), JSON.stringify(changed.scopes))
+  assert.equal(composed, 2)
+  assert.deepEqual(builds, ['built', 'personal-validation-pending', 'built'])
+  engine.stop()
+  // Every other caller reads that same composed graph, and composes nothing.
+  const run = await fiveCallers(ari)
+  assertOneGraph(ari, run)
+  assert.equal(composed, 2)
+})
+
+test('mutation control: a cached build without the composition\'s link-target rule is caught', async (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ build: (project, options) => buildCanonicalGraph(project, options) }))
+  // The engine publishes nothing from it, and every caller refuses it.
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  const ticked = await engine.tick()
+  assert.ok(ticked.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'personal-graph-unconfirmed'), JSON.stringify(ticked.scopes))
+  assert.throws(() => viewCounts({ project: ari.bound.project, audienceAllow: [...ONLY_YOU_AUDIENCES], scope: PROBE_SCOPE }), (error) => error.code === 'personal-graph-unconfirmed')
+  const selection = await ari.command(['selection', 'resolve', EVERYTHING_SCOPE_ID], { contributions: [createSelectionContribution()] })
+  assert.equal(selection.json.error?.code, 'personal-graph-unconfirmed')
+  // So the five-caller identity test cannot pass on it.
+  await assert.rejects(async () => assertOneGraph(ari, await fiveCallers(ari)))
+})
+
+test('a full reconciliation of an unchanged bound workspace prepares, publishes and locks nothing; an ordinary project is unchanged', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let composed = 0
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ compose: (input) => { composed += 1; return composePersonalWorkspace(input) } }))
+  const lockOwners = () => { const locks = path.join(ari.workspaceRoot(), 'state', 'locks'); return fs.readdirSync(locks).filter((name) => name.endsWith('.lock.owners')).map((name) => fs.readdirSync(path.join(locks, name)).length).reduce((sum, count) => sum + count, 0) }
+  for (const [label, loadProject] of [['bound', () => ari.bound.project], ['ordinary', () => routedAround(ari.bound.project)]]) {
+    const counts = { build: 0, publish: 0 }
+    const production = createProductionSeams()
+    const seams = { buildGraph: (args) => { counts.build += 1; return production.buildGraph(args) }, publishView: (args) => { counts.publish += 1; return production.publishView(args) } }
+    const engine = ari.engine({ loadProject, seams, fullReconciliationIntervalMs: 0 })
+    const first = await engine.tick()
+    assert.ok(first.scopes.every((scope) => scope.state === 'current'), `${label}: ${JSON.stringify(first.scopes)}`)
+    const settled = { ...counts, locks: lockOwners(), composed }
+    for (let tick = 0; tick < 4; tick += 1) {
+      const ticked = await engine.tick()
+      assert.equal(ticked.full, true)
+      assert.deepEqual(ticked.scopes, first.scopes, `${label}: every view keeps its settled entry`)
+    }
+    engine.stop()
+    assert.deepEqual({ build: counts.build, publish: counts.publish, locks: lockOwners() }, { build: settled.build, publish: settled.publish, locks: settled.locks }, `${label}: nothing is built, published or locked again`)
+    if (label === 'bound') assert.equal(composed, settled.composed + 4, 'the composition is asked at every full reconciliation')
   }
 })
 
