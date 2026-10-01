@@ -1,0 +1,603 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-evidence-navigation.v1.schema.json",
+  "title": "Atelier evidence navigation contract",
+  "$comment": "contract revision 1.0.0 (initial portable evidence assessments; no access authority)",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/profile"
+    },
+    {
+      "$ref": "#/$defs/hostCapabilities"
+    },
+    {
+      "$ref": "#/$defs/claim"
+    },
+    {
+      "$ref": "#/$defs/snapshot"
+    }
+  ],
+  "$defs": {
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "value"
+      ]
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "objectId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "owner",
+        "objectId",
+        "revision",
+        "selector",
+        "contentDigest"
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ]
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-evidence-navigation-profile@v1"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "protocol": {
+          "const": "atelier-evidence-navigation@v1"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "searchEvidence",
+              "getEvidence",
+              "followEvidence",
+              "readSynthesis",
+              "compareEvidence"
+            ]
+          },
+          "maxItems": 5,
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$",
+          "const": "1.0.0"
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "revision",
+        "protocol",
+        "operations",
+        "requiredCapabilities"
+      ]
+    },
+    "hostCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-evidence-navigation-host@v1"
+        },
+        "protocols": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "searchEvidence",
+              "getEvidence",
+              "followEvidence",
+              "readSynthesis",
+              "compareEvidence"
+            ]
+          },
+          "maxItems": 5,
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$",
+          "const": "1.0.0"
+        }
+      },
+      "required": [
+        "schema",
+        "protocols",
+        "operations",
+        "capabilities"
+      ]
+    },
+    "evidenceLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/evidenceRef"
+        },
+        "sourceFamily": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "assessmentRef": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "reference",
+        "sourceFamily",
+        "assessmentRef"
+      ]
+    },
+    "validInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "until": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "from",
+        "until"
+      ]
+    },
+    "acceptanceAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "none",
+            "rule",
+            "member",
+            "reviewer"
+          ]
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        }
+      },
+      "required": [
+        "kind",
+        "reference"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "none"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reference": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "reference": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-evidence-claim@v1"
+        },
+        "claimId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ownerRecordRef": {
+          "$ref": "#/$defs/evidenceRef"
+        },
+        "kind": {
+          "enum": [
+            "observation",
+            "attributed-statement",
+            "interpretation",
+            "stated-preference",
+            "inferred-preference",
+            "adopted-guidance-reference",
+            "unclassified-legacy"
+          ]
+        },
+        "subjectRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "recorderRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "eventTime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validInterval": {
+          "$ref": "#/$defs/validInterval"
+        },
+        "support": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceLink"
+          },
+          "maxItems": 64
+        },
+        "counterevidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceLink"
+          },
+          "maxItems": 64
+        },
+        "reviewStatus": {
+          "enum": [
+            "unreviewed",
+            "proposed",
+            "reviewed",
+            "accepted-in-scope",
+            "disputed",
+            "rejected"
+          ]
+        },
+        "acceptanceAuthority": {
+          "$ref": "#/$defs/acceptanceAuthority"
+        },
+        "currency": {
+          "enum": [
+            "current",
+            "superseded",
+            "stale",
+            "withdrawn-from-use",
+            "unknown"
+          ]
+        },
+        "scopeRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "usePolicyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$",
+          "const": "1.0.0"
+        }
+      },
+      "required": [
+        "schema",
+        "claimId",
+        "revision",
+        "ownerRecordRef",
+        "kind",
+        "subjectRef",
+        "recorderRef",
+        "content",
+        "eventTime",
+        "recordedAt",
+        "validInterval",
+        "support",
+        "counterevidence",
+        "reviewStatus",
+        "acceptanceAuthority",
+        "currency",
+        "scopeRef",
+        "usePolicyRef"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "reviewStatus": {
+                "const": "accepted-in-scope"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "acceptanceAuthority": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "rule",
+                      "member",
+                      "reviewer"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "atelier-evidence-snapshot@v1"
+        },
+        "reference": {
+          "$ref": "#/$defs/evidenceRef"
+        },
+        "currency": {
+          "enum": [
+            "current",
+            "superseded",
+            "stale",
+            "withdrawn-from-use",
+            "unknown"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceRef"
+          },
+          "maxItems": 64
+        },
+        "validUntil": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0
+        },
+        "contractVersion": {
+          "type": "string",
+          "pattern": "^1\\.[0-9]+\\.[0-9]+$",
+          "const": "1.0.0"
+        }
+      },
+      "required": [
+        "schema",
+        "reference",
+        "currency",
+        "dependencies",
+        "validUntil"
+      ]
+    }
+  }
+}

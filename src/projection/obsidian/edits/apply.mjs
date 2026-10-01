@@ -13,6 +13,7 @@ import { createProductionSeams, eligibilityFor } from '../../../runtime/obsidian
 import { OPEN_EDIT_STATES, createMaintenanceStateStore } from '../../../runtime/obsidian/state-store.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../contracts.mjs'
 import { readMarkdownLens } from '../materialize/byte-lens.mjs'
+import { personalOverlayRepoOf } from '../personal-workspace.mjs'
 import { exchangeFiles, probeExchange } from '../publication/exchange.mjs'
 import { createJournal, newJournalId } from '../recovery/journal.mjs'
 import { recheckDisplacedFiles } from '../recovery/late-writer.mjs'
@@ -91,6 +92,7 @@ export const SOURCE_APPLY_REFUSALS = Object.freeze([
   'source-inside-managed-root', 'source-inside-git-directory', 'source-git-ignored', 'source-ignore-state-unknown', 'sibling-edit-unobservable', 'lease-held', 'object-conflicted',
   'stale-source', 'edit-not-applicable', 'change-outside-authored-body', 'no-source-change', 'exchange-unavailable', 'apply-volume-mismatch', 'batch-bound-reached',
   'concurrent-source-writer', 'source-changed-during-apply', 'interrupted-before-exchange', 'apply-interrupted-needs-person', 'recovery-state-unreadable', 'apply-outcome-unknown', 'source-changed-after-apply',
+  'personal-overlay-proposals-only',
 ])
 
 // Refusals that say the source or the object is contested, not that this machine or this request cannot apply.
@@ -534,6 +536,9 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         const decideWith = (editClass, attempts) => rules.decide({ request, workspace: { workspaceRoot: workspace.workspaceRoot, workspaceId: workspace.workspaceId }, graph, profile, object: identity, editClass, attempts })
         const visibility = decideWith('body-replacement', [])
         if (!visibility.allowed && visibility.code === 'object-not-visible') refuse('object-not-visible')
+        // A private note of a personal workspace is authored in its overlay, and its file belongs to a generation the
+        // personal-workspace module owns: an edit to it is a proposal only, and never written there.
+        if (identity.repoId === personalOverlayRepoOf(workspace.project)) refuse('personal-overlay-proposals-only')
 
         const resolved = resolveEdit(workspace, edit)
         const key = resolved.idempotencyKey

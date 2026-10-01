@@ -1,0 +1,15 @@
+{
+  "schema": "atelier-evidence-navigation-profile@v1",
+  "id": "garden-source-reader",
+  "revision": "one",
+  "protocol": "atelier-evidence-navigation@v1",
+  "operations": [
+    "executeCommand"
+  ],
+  "requiredCapabilities": [
+    {
+      "id": "exact-source-read",
+      "version": "1"
+    }
+  ]
+}

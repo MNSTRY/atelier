@@ -1,0 +1,36 @@
+{
+  "schema": "atelier-evidence-claim@v1",
+  "claimId": "garden-observation",
+  "revision": "one",
+  "ownerRecordRef": {
+    "owner": "garden-notebook",
+    "objectId": "plot-seven",
+    "revision": "revision-one",
+    "selector": {
+      "type": "text-lines",
+      "version": "1",
+      "value": "lines:2-3"
+    },
+    "contentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "kind": "observation",
+  "subjectRef": "plot-seven",
+  "recorderRef": "unknown",
+  "content": "The invented plot received rain.",
+  "eventTime": null,
+  "recordedAt": "yesterday",
+  "validInterval": {
+    "from": null,
+    "until": null
+  },
+  "support": [],
+  "counterevidence": [],
+  "reviewStatus": "unreviewed",
+  "acceptanceAuthority": {
+    "kind": "none",
+    "reference": null
+  },
+  "currency": "current",
+  "scopeRef": "garden-notebook",
+  "usePolicyRef": "local-reader-policy"
+}
