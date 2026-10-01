@@ -32,6 +32,10 @@ function sample() {
     ], unknowns: [{ id: 'unknown-role', relatedCandidateId: null, reason: 'Role meaning is not supplied.', evidence: [e(4)] }] }
   return { store, plan, input, candidates }
 }
+function withIdentityCandidates(s, identityCandidates) {
+  s.input = prepareSemanticInput({ ...s, domain: fixture.domain, references: [1, 2, 3, 4].map(reference), identityCandidates })
+  s.candidates.inputDigest = s.input.digest
+}
 function refuses(change, code) {
   const s = sample(); change(s)
   assert.throws(() => prepareSemanticProposals(s), error => error instanceof SemanticProposalError && error.code === code && error.refusalCount === 1)
@@ -53,9 +57,14 @@ const failures = [
   ['identity status', s => { s.candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: [] } }, 'SEMANTIC_IDENTITY'],
   ['unsupported identity status', s => { s.candidates.entities[0].identity.status = 'unmodeled' }, 'SEMANTIC_IDENTITY'],
   ['identity candidate mapping', s => { s.candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: ['unsupplied'] } }, 'SEMANTIC_IDENTITY'],
+  ['cross-type identity mapping', s => { withIdentityCandidates(s, [{ id: 'known-atlas', label: 'Atlas', type: 'project' }]); s.candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: ['known-atlas'] } }, 'SEMANTIC_IDENTITY'],
+  ['source-local candidate mapping', s => { withIdentityCandidates(s, [{ id: 'known-nora', label: 'Nora', type: 'person' }]); s.candidates.entities[0].identity.candidateIds = ['known-nora'] }, 'SEMANTIC_IDENTITY'],
+  ['unknown candidate mapping', s => { withIdentityCandidates(s, [{ id: 'known-nora', label: 'Nora', type: 'person' }]); s.candidates.entities[0].identity = { status: 'unknown', candidateIds: ['known-nora'] } }, 'SEMANTIC_IDENTITY'],
+  ['duplicate identity mapping', s => { withIdentityCandidates(s, [{ id: 'known-nora', label: 'Nora', type: 'person' }]); s.candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: ['known-nora', 'known-nora'] } }, 'SEMANTIC_IDENTITY'],
   ['type mapping', s => { s.candidates.entities[0].type = 'unmodeled' }, 'SEMANTIC_TYPE'],
   ['predicate mapping', s => { s.candidates.assertions[0].predicate = 'unmodeled' }, 'SEMANTIC_PREDICATE'],
   ['endpoint identity', s => { s.candidates.assertions[0].subjectId = 'missing' }, 'SEMANTIC_IDENTITY'],
+  ['object identity', s => { s.candidates.assertions[0].objectId = 'missing' }, 'SEMANTIC_IDENTITY'],
   ['direction', s => { s.candidates.assertions[0].direction = 'object-to-subject' }, 'SEMANTIC_DIRECTION'],
   ['negation', s => { s.candidates.assertions[1].negated = 'false' }, 'SEMANTIC_NEGATION'],
   ['modality', s => { s.candidates.assertions[0].modality = 'definite' }, 'SEMANTIC_MODALITY'],
@@ -87,10 +96,15 @@ test('mutation controls prove each candidate refusal oracle detects a disabled r
     'unique identity': 'Unique source-local candidate identities are required',
     'identity status': 'Identity status and candidates differ',
     'unsupported identity status': 'Explicit candidate identity status is required',
-    'identity candidate mapping': 'Identity mappings must use supplied matching candidates',
+    'identity candidate mapping': 'Identity mappings must use supplied candidates',
+    'cross-type identity mapping': 'Identity mappings must use matching candidate types',
+    'source-local candidate mapping': 'Identity status and candidates differ',
+    'unknown candidate mapping': 'Identity status and candidates differ',
+    'duplicate identity mapping': 'Identity candidate mappings must be unique',
     'type mapping': 'Entity type and label must fit the supplied domain',
     'predicate mapping': 'Unmodeled predicates must remain explicit findings',
-    'endpoint identity': 'Assertion endpoints must resolve to supplied entities',
+    'endpoint identity': 'Assertion subject must resolve to a supplied entity',
+    'object identity': 'Assertion object must resolve to a supplied entity',
     direction: 'Unary or directed binary roles must match the supplied endpoints',
     negation: 'Explicit Boolean negation is required',
     modality: 'Explicit supported modality is required',
@@ -389,4 +403,59 @@ test('semantic input and proposals consume real all-plan getEvidence and refuse 
   assert.equal(prepareSemanticProposals({ store, input, candidates }).assertions.length, 3)
   fs.writeFileSync(path.join(root, 'notes.txt'), fixture.sourceText.replace('June', 'July'))
   assert.throws(() => prepareSemanticProposals({ store, input, candidates }), e => e.code === 'SEMANTIC_STALE')
+})
+
+
+test('supplied identity mappings preserve same-type ambiguity as pending proposals', () => {
+  const s = sample()
+  withIdentityCandidates(s, [
+    { id: 'known-nora', label: 'Nora', type: 'person' },
+    { id: 'another-nora', label: 'Nora', type: 'person' },
+  ])
+  s.candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: ['known-nora', 'another-nora'] }
+  s.candidates.entities[1].identity = { status: 'unknown', candidateIds: [] }
+  const proposals = prepareSemanticProposals(s)
+  assert.deepEqual(proposals.entities[0].identity.candidateIds, ['known-nora', 'another-nora'])
+  assert.equal(proposals.entities[0].identityAcceptance, 'pending')
+  assert.equal(readSemanticProposals({ ...s, proposals, query: 'Nora' }).entities[0].identity.status, 'existing-candidate')
+  assert.equal(proposals.entities[1].identity.status, 'unknown')
+})
+
+test('receipt admission and supplied identity admission controls target independent conditions', async () => {
+  const source = fs.readFileSync(new URL('../src/ingestion/semantic.mjs', import.meta.url), 'utf8')
+    .replace("'./contracts.mjs'", JSON.stringify(new URL('../src/ingestion/contracts.mjs', import.meta.url).href))
+    .replace("'../harnesses/contracts.mjs'", JSON.stringify(new URL('../src/harnesses/contracts.mjs', import.meta.url).href))
+  const guard = 'if (!condition) throw new SemanticProposalError(code, message)'
+  const receiptCases = [
+    [{ schema: 'other-evidence' }, 'The existing evidence receipt schema is required'],
+    [{ freshness: 'stale' }, 'Current source evidence is required'],
+    [{ integrity: 'unverified' }, 'Verified source evidence integrity is required'],
+    [{ semanticAcceptance: 'accepted' }, 'Evidence semantic acceptance must remain pending'],
+    [{ synthesized: true }, 'Unsynthesized source evidence is required'],
+    [{ ref: '' }, 'Located source evidence text is required'],
+    [{ text: null }, 'Located source evidence text is required'],
+  ]
+  const candidate = { id: 'known-nora', label: 'Nora', type: 'person' }
+  const identityCases = [
+    [[{ ...candidate, id: 'Invalid ID' }], 'A valid supplied identity candidate identifier is required'],
+    [[candidate, clone(candidate)], 'Supplied identity candidate identifiers must be unique'],
+    [[{ ...candidate, type: 'unmodeled' }], 'Supplied identity candidate types must fit the domain'],
+    [[{ ...candidate, label: '' }], 'A supplied identity candidate label is required'],
+  ]
+  for (const [change, message] of receiptCases) {
+    const s = sample(), native = s.store.getEvidence
+    s.store.getEvidence = request => ({ ...native(request), ...change })
+    const selected = { ...s, domain: fixture.domain, references: [reference(1)] }
+    assert.equal(source.split(`'${message}'`).length, 2)
+    assert.throws(() => prepareSemanticInput(selected), e => e.code === 'SEMANTIC_EVIDENCE')
+    const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(guard, `if (!condition && message !== ${JSON.stringify(message)}) throw new SemanticProposalError(code, message)`)).toString('base64')}`)
+    assert.throws(() => assert.throws(() => mutant.prepareSemanticInput(selected), e => e.code === 'SEMANTIC_EVIDENCE'), e => e.code === 'ERR_ASSERTION')
+  }
+  for (const [identityCandidates, message] of identityCases) {
+    const selected = { ...sample(), domain: fixture.domain, references: [reference(1)], identityCandidates }
+    assert.equal(source.split(`'${message}'`).length, 2)
+    assert.throws(() => prepareSemanticInput(selected), e => e.code === 'SEMANTIC_IDENTITY')
+    const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(guard, `if (!condition && message !== ${JSON.stringify(message)}) throw new SemanticProposalError(code, message)`)).toString('base64')}`)
+    assert.throws(() => assert.throws(() => mutant.prepareSemanticInput(selected), e => e.code === 'SEMANTIC_IDENTITY'), e => e.code === 'ERR_ASSERTION')
+  }
 })

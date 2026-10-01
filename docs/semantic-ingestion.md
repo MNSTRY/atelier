@@ -2,7 +2,8 @@
 
 `src/ingestion/semantic.mjs` connects a host's extractor to Atelier's existing
 ingestion evidence reader. It produces qualified entity and assertion proposals
-and a fresh searchable proposal view. The host chooses and invokes its extractor;
+and an evidence-revalidated searchable proposal view. The host chooses and
+invokes its extractor;
 this module has no provider selection, model call, subprocess, network client,
 runtime dependency, durable write, or graph mutation. Graphify, LightRAG, and Jev
 are optional host adapters and are not required for this processor.
@@ -35,6 +36,9 @@ and their closed extension fields remain unchanged.
    own quotes, and its time expression. It excludes JSON field names, digests,
    domain scope boilerplate and endpoint evidence from other assertions. It
    verifies the same evidence and candidate binding before returning results.
+   Before serving a view the host must compare `domainRef` with its currently
+   adopted domain; this module checks the pinned snapshot, not an external
+   current-domain registry.
 7. Present the proposals to the existing knowledge evaluation and review owner.
    That owner separately decides identity, semantic acceptance, activation, and
    any permitted canonical projection. This module never performs those steps.
@@ -105,7 +109,9 @@ Time has exactly `from`, `until`, `expression`, and `unknowns`. Dates are nullab
 valid `YYYY-MM-DD` calendar dates, with an ordered interval when both are given.
 A temporal expression must occur in a cited quote. An unresolved expression such
 as Friday or through June requires explicit unknowns when neither boundary is
-resolved. Quote matching establishes location; it does not establish that a
+resolved. Resolved dates without an expression are unanchored extractor
+interpretation; calendar validity alone does not provide a textual anchor.
+Quote matching establishes location; it does not establish that a
 date interpretation, predicate, polarity, or identity is semantically correct.
 
 Unknown findings have exactly `{id, relatedCandidateId, reason, evidence}`.
@@ -165,12 +171,15 @@ Count, text-length, depth, member and byte overflow reports `SEMANTIC_LIMIT`;
 malformed JSON, invalid identifiers and invalid field shapes retain their typed
 validation codes. Oversized input or output is refused instead of silently
 truncated. This is a bounded evidence selection, not a complete-document
-extraction guarantee.
+extraction guarantee. It does not report coverage within the selection or list
+selected spans that no candidate cites; zero refusals is not a coverage score.
 
 ## Qualification limits
 
-The tests exercise invented candidates, one targeted mutation per checked rule,
-direct receipt bindings, saved-proposal tampering, every declared collection
+The tests exercise invented candidates, targeted mutation controls for the
+refusal scenarios represented in the test tables, successful pending identity
+mappings, direct receipt bindings, saved-proposal tampering, every declared
+collection
 bound, text/query/result limits, assembled and hydrated byte overflow, search
 exclusion and literal escaped characters, and the real local
 ingestion evidence reader. They check fidelity and refusal mechanics, including

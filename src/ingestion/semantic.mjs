@@ -58,7 +58,12 @@ function readEvidence(store, plan, reference) {
   }
   check(receipt && typeof receipt === 'object' && !Array.isArray(receipt), 'SEMANTIC_EVIDENCE', 'An evidence receipt object is required')
   check(receipt.readScope === 'all-plan', 'SEMANTIC_READ_SCOPE', 'This profile requires the existing all-plan read scope')
-  check(receipt.schema === 'mnstry.atelier-ingestion-evidence@v1' && receipt.freshness === 'current' && receipt.integrity === 'verified' && receipt.semanticAcceptance === 'pending' && receipt.synthesized === false && string(receipt.ref, 16384) && typeof receipt.text === 'string', 'SEMANTIC_EVIDENCE', 'Verified located source evidence is required')
+  check(receipt.schema === 'mnstry.atelier-ingestion-evidence@v1', 'SEMANTIC_EVIDENCE', 'The existing evidence receipt schema is required')
+  check(receipt.freshness === 'current', 'SEMANTIC_EVIDENCE', 'Current source evidence is required')
+  check(receipt.integrity === 'verified', 'SEMANTIC_EVIDENCE', 'Verified source evidence integrity is required')
+  check(receipt.semanticAcceptance === 'pending', 'SEMANTIC_EVIDENCE', 'Evidence semantic acceptance must remain pending')
+  check(receipt.synthesized === false, 'SEMANTIC_EVIDENCE', 'Unsynthesized source evidence is required')
+  check(string(receipt.ref, 16384) && typeof receipt.text === 'string', 'SEMANTIC_EVIDENCE', 'Located source evidence text is required')
   for (const key of ['planId', 'planDigest', 'sourceId', 'sourceDigest', 'attemptId']) check(receipt[key] === { ...plan, ...reference }[key], 'SEMANTIC_BINDING', 'Evidence differs from its requested binding')
   closed(receipt.locator, ['kind', 'value'], 'SEMANTIC_EVIDENCE')
   check(ingestionDigest(receipt.locator) === ingestionDigest(reference.locator), 'SEMANTIC_BINDING', 'Evidence locator differs from its requested binding')
@@ -78,7 +83,10 @@ export function prepareSemanticInput({ store, plan, domain, references, identity
   const identities = new Set(), types = new Set(definition.data.vocabulary.types.map(t => t.id))
   for (const candidate of selected.identityCandidates) {
     closed(candidate, ['id', 'label', 'type'], 'SEMANTIC_IDENTITY')
-    check(identifier(candidate.id) && !identities.has(candidate.id) && string(candidate.label) && types.has(candidate.type), 'SEMANTIC_IDENTITY', 'Unique supplied typed identity candidates are required'); identities.add(candidate.id)
+    check(identifier(candidate.id), 'SEMANTIC_IDENTITY', 'A valid supplied identity candidate identifier is required')
+    check(!identities.has(candidate.id), 'SEMANTIC_IDENTITY', 'Supplied identity candidate identifiers must be unique')
+    check(string(candidate.label), 'SEMANTIC_IDENTITY', 'A supplied identity candidate label is required')
+    check(types.has(candidate.type), 'SEMANTIC_IDENTITY', 'Supplied identity candidate types must fit the domain'); identities.add(candidate.id)
   }
   const seen = new Set(), evidence = []
   let sourceId
@@ -138,14 +146,17 @@ export function prepareSemanticProposals({ store, input: original, candidates: s
     closed(entity.identity, ['status', 'candidateIds'], 'SEMANTIC_IDENTITY')
     check(['source-local', 'existing-candidate', 'unknown'].includes(entity.identity.status) && array(entity.identity.candidateIds, 16), 'SEMANTIC_IDENTITY', 'Explicit candidate identity status is required')
     const candidateIds = entity.identity.candidateIds
-    check(new Set(candidateIds).size === candidateIds.length && candidateIds.every(id => identityCandidates.get(id)?.type === entity.type), 'SEMANTIC_IDENTITY', 'Identity mappings must use supplied matching candidates')
+    check(new Set(candidateIds).size === candidateIds.length, 'SEMANTIC_IDENTITY', 'Identity candidate mappings must be unique')
+    check(candidateIds.every(id => identityCandidates.has(id)), 'SEMANTIC_IDENTITY', 'Identity mappings must use supplied candidates')
+    check(candidateIds.every(id => !identityCandidates.has(id) || identityCandidates.get(id).type === entity.type), 'SEMANTIC_IDENTITY', 'Identity mappings must use matching candidate types')
     check(entity.identity.status === 'existing-candidate' ? candidateIds.length > 0 : candidateIds.length === 0, 'SEMANTIC_IDENTITY', 'Identity status and candidates differ')
     const prepared = { ...entity, evidence: supports(entity.evidence), identityAcceptance: 'pending' }
     entities.set(entity.id, prepared); return prepared
   })
   const preparedAssertions = candidates.assertions.map(assertion => {
     closed(assertion, ['id', 'subjectId', 'predicate', 'objectId', 'direction', 'negated', 'modality', 'scope', 'time', 'evidence']); identity(assertion.id)
-    check(entities.has(assertion.subjectId) && (assertion.objectId === null || entities.has(assertion.objectId)), 'SEMANTIC_IDENTITY', 'Assertion endpoints must resolve to supplied entities')
+    check(entities.has(assertion.subjectId), 'SEMANTIC_IDENTITY', 'Assertion subject must resolve to a supplied entity')
+    check(assertion.objectId === null || entities.has(assertion.objectId), 'SEMANTIC_IDENTITY', 'Assertion object must resolve to a supplied entity')
     check(predicates.has(assertion.predicate), 'SEMANTIC_PREDICATE', 'Unmodeled predicates must remain explicit findings')
     check(assertion.direction === (assertion.objectId === null ? 'subject-only' : 'subject-to-object'), 'SEMANTIC_DIRECTION', 'Unary or directed binary roles must match the supplied endpoints')
     check(typeof assertion.negated === 'boolean', 'SEMANTIC_NEGATION', 'Explicit Boolean negation is required')
