@@ -536,6 +536,13 @@
   Any other error is `[internal-error]` with exit 1, naming only Node's code
   and system call, for example `(ENOENT from lstat)`. `ATELIER_DEBUG=1` still
   prints the full error.
+- Obsidian source apply could reject with an untyped `ELEAFCHANGED` error. This
+  happened when another program renamed a new file over the source while the
+  published note was being prepared again, between the look at the path and its
+  open. That is a source being written: the apply now refuses `stale-source`
+  (cause `changed-while-reading`) and writes nothing. A preparation that fails
+  for any tolerated reason is no longer kept for its scope and generation; only
+  one that succeeded is reused.
 
 ## 0.2.0-alpha.12
 
