@@ -11,6 +11,16 @@
   search and get need a host to construct the reader with its exact plan,
   workspace and current whole-plan admission, and Atelier ships no issuer of that
   authority.
+- The Obsidian projection has one route for a personal workspace. A binding
+  names a private home and a generation explicitly. Every caller that builds
+  the graph (the engine, view counts, source apply, the proposal adapter and the
+  selection operation) then reads the composed graph, which composition checks
+  again at every build. The overlay's saved views become scopes, plus an
+  `everything` view. Composition refusals keep their codes, and no view is
+  current under one. `view add`, `audience` and `location` refuse on a bound
+  project and write nothing. A theme is never written, and coverage is passed
+  through unread. No command or service binds a personal workspace yet.
+
 - The knowledge workspace states its supported interfaces
   (`docs/knowledge-workspace.md`).
   - Two outputs are versioned contracts: the context packet

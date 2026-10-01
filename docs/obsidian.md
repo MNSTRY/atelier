@@ -854,6 +854,58 @@ command-line interface is turned on). So is a listed vault the command line
 does not answer for once it is opened, while only the plugin reports the
 version: `open` says so at once instead of waiting for the app.
 
+## Personal workspaces
+
+A personal workspace (see [personal-workspace.md](personal-workspace.md)) is
+projected through one route, `bindPersonalWorkspace({ personalHome,
+generationId })` in `src/projection/obsidian/personal-workspace.mjs`. Both
+arguments are explicit; neither is discovered from the environment or the
+working directory. No command or service binds one yet: that waits for the
+selection seam that keeps one projection configuration per person.
+
+- **One graph.** The binding is attached to the generation's resolved
+  `atelier.project.json` under one symbol key. When a project carries it, the
+  pipeline's `buildGraph` asks `composePersonalWorkspace` for the graph on every
+  build and applies eligibility as for any project. The engine, view counts,
+  source apply, the proposal adapter and the selection operation all build
+  through it, so they read one graph. A plain build of the generation's
+  configuration would differ: there, a shared note's link can name a private
+  note, and composition never lets a private note be a link target.
+- **Validity.** Composition decides whether the generation may be used, at bind
+  time and at every build. Its refusals keep their codes (`stale-generation`,
+  `generation-missing`, `generation-corrupt`, `generation-relocated`,
+  `retained-removed-reference`, `not-private-location`, `root-symlinked`,
+  `ambient-git-environment`, `future-schema`, `ambiguous-binding` and the rest).
+  A binding throws the module's own `PersonalWorkspaceRefusal`. A build refuses
+  with the same code as a maintenance refusal, so each view says why and none
+  is current. Nothing is published, and no vault, manifest, journal or private
+  home byte is written.
+- **Views.** The overlay's saved views become scopes in memory: each is a
+  scoped view of the repositories it names, and `everything` is a full view of
+  the composed graph. A saved view named `everything` is refused. The
+  preferred view, when it names a saved one, is the default. No generation
+  file is written. `view add` refuses `views-from-personal-overlay`;
+  `audience set`, `audience clear` and `location set` refuse
+  `personal-binding-decision-unavailable`. Each refuses before anything is
+  resolved or written.
+- **Preferences and coverage.** `preferences` are returned read only. A theme
+  is reported and never written: `appearance.json` stays the person's.
+  `coverage` is passed through untouched. No Obsidian code reads it: it states
+  what is not enforced, and is never permission.
+- **Workspace identity.** The bound project's folder is the private home, so
+  the workspace pointer is `<personal home>/.atelier-local/obsidian.json`. A
+  generation is a closed, verified inventory, and an extra file there would
+  invalidate it. This is provisional until the per-person projection
+  configuration exists.
+- **Edits.** A vault edit to a private note is never applied into a
+  generation: source apply refuses it, typed, because the generation is not a
+  Git worktree.
+
+Composition rebuilds the graph on every build, and the graph file cache is not
+used for a bound project. An engine bound to a generation sees that generation
+stop holding only when a view is prepared again: a source change, a requested
+preparation, or a retry. Moving to a new generation means binding again.
+
 ## Known limits
 
 These are the limits known at this release. None is hidden behind a skipped
