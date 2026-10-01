@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `src/ingestion/semantic.mjs` prepares source-bound entity and assertion
+  proposals from a host's extractor output (`docs/semantic-ingestion.md`). It is
+  an internal module: its `v0` formats are not public contracts, and it has no
+  package export or CLI command yet. The host chooses and runs its extractor;
+  the module makes no provider call, durable write or graph change, and claims
+  no extraction quality. Proposals stay pending until the existing knowledge
+  review and activation accept them. `atelier architecture entry
+  knowledge-stewardship` lists the module.
 - A personal workspace bound to the Obsidian projection is served from the
   canonical build, with the composition's link-target rule and the engine's file
   cache. A graph is used only under a validity key the composition confirmed.
