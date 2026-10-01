@@ -65,7 +65,7 @@ const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, pro
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { viewCounts } = await import('../src/runtime/obsidian/view-counts.mjs')
-const { EVERYTHING_SCOPE_ID, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, personalWorkspaceBindingOf } = await import('../src/projection/obsidian/personal-workspace.mjs')
+const { EVERYTHING_SCOPE_ID, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
 
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const test = (name, fn) => nodeTest(name, {
@@ -131,6 +131,12 @@ function canariesIn(directory, needles) {
   return hits
 }
 const unbound = (project) => Object.fromEntries(Object.entries(project)) // the same project, without the symbol-keyed binding
+// The same project as an ordinary one: no binding, and a settings member that does not name a personal workspace. What a
+// caller that routed around the binding would build from.
+const routedAround = (project) => {
+  const { ext: _personal, ...member } = project.config.ext[OBSIDIAN_EXT_KEY]
+  return { ...unbound(project), config: { ...project.config, ext: { ...project.config.ext, [OBSIDIAN_EXT_KEY]: member } } }
+}
 const graphFacts = (graph) => ({ nodes: graph.nodes, edges: graph.edges, embeds: graph.embeds ?? [], assets: graph.assets ?? [] })
 const eligible = (graph) => withEligibility(graph, DEFAULT_ELIGIBILITY.isEligible, assetEligibilityFor({ graph, eligibility: DEFAULT_ELIGIBILITY }))
 const absentAdapter = () => createEditorAdapter({ call: async () => { throw new Error('no app') }, processProbe: () => 'absent', kind: 'absent' })
@@ -181,8 +187,8 @@ function makePerson(world, { name, repos, overlay, fill }) {
     return JSON.parse(fs.readFileSync(path.join(directory, JSON.parse(fs.readFileSync(path.join(directory, 'current.json'), 'utf8')).manifestFile), 'utf8'))
   }
   person.scopes = () => readObsidianEnablement(person.bound.project).scopes
-  person.engine = ({ seams = {}, extensions = createMaintenanceExtensions(), loadProject = person.loadProject } = {}) => createMaintenanceEngine({
-    loadProject, dataRoot: person.dataRoot, adapterFactory: absentAdapter, clock, randomBytes: person.randomBytes, quietPeriodMs: 0, extensions, env: process.env, seams,
+  person.engine = ({ seams = {}, extensions = createMaintenanceExtensions(), loadProject = person.loadProject, ...options } = {}) => createMaintenanceEngine({
+    loadProject, dataRoot: person.dataRoot, adapterFactory: absentAdapter, clock, randomBytes: person.randomBytes, quietPeriodMs: 0, extensions, env: process.env, seams, ...options,
   })
   person.command = async (argv, { contributions = [], loadProject = person.loadProject } = {}) => {
     const out = []
@@ -277,7 +283,7 @@ async function queueVaultEdit(person, engine, scopeId) {
 // The five callers' graphs for one person, and the view counts, each through its own production path.
 async function fiveCallers(person, { routeAround = null } = {}) {
   const rec = recorder()
-  const loadFor = (caller) => (routeAround === caller ? () => unbound(person.bound.project) : person.loadProject)
+  const loadFor = (caller) => (routeAround === caller ? () => routedAround(person.bound.project) : person.loadProject)
   const engine = person.engine({ seams: rec.seamsFor('engine'), loadProject: loadFor('engine') })
   const started = Date.now()
   const first = await engine.tick()
@@ -318,10 +324,10 @@ test('1. five callers, one graph: engine, view counts, apply, proposals and sele
   const { ari } = makeWorld(t, { people: ['ari'] })
   const run = await fiveCallers(ari)
   assertOneGraph(ari, run)
-  // Option A: the composition is asked on every build. The tick time is reported, not asserted.
+  // Composition is asked on every build. The tick time is reported, not asserted.
   const composeStarted = Date.now()
   ari.compose()
-  t.diagnostic(`option A timing: first engine tick ${run.firstTickMs} ms (three views published); one compose ${Date.now() - composeStarted} ms`)
+  t.diagnostic(`composition on every build: first engine tick ${run.firstTickMs} ms (three views published); one compose ${Date.now() - composeStarted} ms`)
   // Mutation controls: the selection operation, and view counts, each given the same project without its binding.
   for (const caller of ['selection', 'view-counts']) {
     const other = makeWorld(t, { people: ['ari'] }).ari
@@ -343,7 +349,7 @@ test('2. divergence control: a plain build of the generation configuration diffe
   // The pipeline's build of the bound project is the composed one, and of the same project without the binding the plain one.
   const { buildGraph } = createProductionSeams()
   assert.deepEqual(graphFacts(buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })), graphFacts(composed))
-  assert.deepEqual(graphFacts(buildGraph({ project: unbound(ari.bound.project), eligibility: DEFAULT_ELIGIBILITY })).edges, plain.edges)
+  assert.deepEqual(graphFacts(buildGraph({ project: routedAround(ari.bound.project), eligibility: DEFAULT_ELIGIBILITY })).edges, plain.edges)
 })
 
 test('3. coverage is never permission: no Obsidian source reads it, and a permissive coverage changes no output byte', async (t) => {
@@ -387,7 +393,7 @@ test('3. coverage is never permission: no Obsidian source reads it, and a permis
   assert.deepEqual(runs[1], runs[0])
 })
 
-// The PW1 codes a binding can reach, how each is brought about at a home that was valid, and how it is undone.
+// The personal-workspace refusal codes a binding can reach, how each is brought about at a home that was valid, and how it is undone.
 function refusalCases(world, person) {
   const generation = path.join(person.home, 'generations', person.generationId)
   const overlayFile = path.join(person.home, 'atelier.overlay.json')
@@ -409,7 +415,7 @@ function refusalCases(world, person) {
   }
 }
 
-test('4. typed refusals: every PW1 code a binding reaches is surfaced, nothing is written, and no view is current', async (t) => {
+test('4. typed refusals: every personal-workspace refusal a binding reaches is surfaced, nothing is written, and no view is current', async (t) => {
   const world = makeWorld(t, { people: ['ari'] })
   const { ari } = world
   const cases = refusalCases(world, ari)
@@ -560,7 +566,7 @@ test('6. views come from the overlay; view add, audience and location refuse typ
   const edit = queued.pendingEdits.find((item) => item.path === annotation.path)
   assert.ok(edit, JSON.stringify(queued.pendingEdits))
   const applied = await createSourceApplyForOracleTests()({ loadProject: ari.loadProject, dataRoot: ari.dataRoot, env: process.env, clock, quietPeriodMs: 0 }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
-  assert.equal(applied.status, 'refused', JSON.stringify(applied))
+  assert.deepEqual([applied.status, applied.code], ['refused', 'personal-overlay-proposals-only'], JSON.stringify(applied))
   assert.deepEqual(treeListing(path.join(ari.home, 'generations')), generationBefore, 'the generation is byte-identical')
   assert.equal(ari.compose().generation.generationId, ari.generationId, 'and still composes')
 })
@@ -595,15 +601,18 @@ test('7. preferences: a theme is reported, never written; no .obsidian path outs
   assert.notDeepEqual(treeListing(settingsOf('harbor-only'), { skip: OWNED }), before['harbor-only'])
 })
 
-test('D2: a repository withdrawn between two ticks: the old generation refuses at once, and the next one prepares nothing from it', async (t) => {
+test('withdrawal: a repository withdrawn between two ticks: the next tick, unasked, leaves no view current and writes no byte of it; the rebound generation prepares nothing from it', async (t) => {
   const world = makeWorld(t, { people: ['ari'] })
   const { ari } = world
-  const engine = ari.engine()
+  // The engine's loader follows the person's current binding, as a binding entry point would.
+  const engine = ari.engine({ loadProject: () => ari.bound.project })
   t.after(() => engine.stop())
   const first = await engine.tick()
   assert.ok(first.scopes.every((scope) => scope.state === 'current'))
   assert.ok(ari.manifestOf('both').notes.some((note) => note.repoId === 'b'), 'b is published before the withdrawal')
   const knownDigests = new Set([...Object.values(treeListing(ari.dataRoot)), ...Object.values(treeListing(ari.home))])
+  const fresh = (directory) => Object.entries(treeListing(directory)).filter(([relative, digest]) => !relative.endsWith('/') && !knownDigests.has(digest)).map(([relative]) => path.join(directory, relative))
+  const bBytesWritten = () => [...fresh(ari.dataRoot), ...fresh(ari.home)].filter((file) => fs.readFileSync(file).includes(CANARY.bOnly)).map((file) => path.relative(world.base, file))
 
   // Withdrawn: b is no longer enrolled, and the overlay no longer refers to it.
   ari.manifest.repos.find((repo) => repo.repoId === 'b').enrolled = false
@@ -612,23 +621,112 @@ test('D2: a repository withdrawn between two ticks: the old generation refuses a
   const withdrawnFrom = ari.generationId
   ari.materialize()
   assert.notEqual(ari.generationId, withdrawnFrom)
-  // The engine still bound to the old generation prepares nothing from it.
-  for (const scope of ari.scopes()) engine.requestPreparation(scope.scopeId)
+  // The next tick, with nothing requested and no full reconciliation due: the authored change is observed, every view
+  // asks the composition again, and the old generation is refused. No view is current.
   const refused = await engine.tick()
+  assert.equal(refused.full, false)
   assert.ok(refused.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'stale-generation'), JSON.stringify(refused.scopes))
+  assert.ok(ari.stateStore().readFreshness().scopes.every((scope) => scope.state !== 'current'))
+  assert.deepEqual(bBytesWritten(), [])
 
-  // The next generation, bound: graph, counts and the selection snapshot hold no b node, and nor do apply and proposals.
+  // Rebound, the same engine follows the next generation: every view is prepared from it, and no b note is published.
   ari.bind()
+  const rebound = await engine.tick()
+  assert.ok(rebound.scopes.every((scope) => scope.state === 'current'), JSON.stringify(rebound.scopes))
+  for (const scope of ari.scopes()) assert.equal(ari.manifestOf(scope.scopeId).notes.some((note) => note.repoId === 'b'), false, `${scope.scopeId}: no b note is published`)
+  engine.stop()
+
+  // Graph, counts and the selection snapshot hold no b node, and nor do apply and proposals.
   const run = await fiveCallers(ari)
   assertOneGraph(ari, run)
   for (const [caller, graph] of run.graphs) assert.equal(graph.nodes.filter((node) => node.repo === 'b').length, 0, `${caller}: no b node`)
   assert.ok(run.counts.every(({ counts }) => counts.corpus === ari.expected().nodes.length))
   assert.equal(run.selection.nodes.some((id) => id.startsWith('b:')), false, 'the selection snapshot holds no b node')
-  for (const scope of ari.scopes()) assert.equal(ari.manifestOf(scope.scopeId).notes.some((note) => note.repoId === 'b'), false, `${scope.scopeId}: no b note is published`)
   // No b canary in any byte written since the withdrawal. Bytes that were already there (a note moved to recovery
   // keeps them, which retention governs) are not new bytes.
-  const fresh = (directory) => Object.entries(treeListing(directory)).filter(([relative, digest]) => !relative.endsWith('/') && !knownDigests.has(digest)).map(([relative]) => path.join(directory, relative))
-  const newlyWritten = [...fresh(ari.dataRoot), ...fresh(ari.home)]
-  assert.ok(newlyWritten.length > 0)
-  assert.deepEqual(newlyWritten.filter((file) => fs.readFileSync(file).includes(CANARY.bOnly)).map((file) => path.relative(world.base, file)), [])
+  assert.ok([...fresh(ari.dataRoot), ...fresh(ari.home)].length > 0)
+  assert.deepEqual(bBytesWritten(), [])
+})
+
+test('a rebound generation with the same enrolment invalidates every view of a running engine', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const engine = ari.engine({ loadProject: () => ari.bound.project })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  const configBytes = () => fs.readFileSync(ari.bound.project.configPath)
+  const before = configBytes()
+  // An overlay change only: the next generation's configuration file is byte-identical to this one.
+  ari.overlay.annotations[0].note += ' Revised.'
+  ari.materialize()
+  ari.bind()
+  assert.ok(configBytes().equals(before), 'the generation configuration is the same bytes')
+  // One tick: the authored change is observed, the loader is asked again, and every view is prepared from the rebound
+  // generation, the configuration and the settings member both changed.
+  const rebound = await engine.tick()
+  assert.ok(rebound.scopes.every((scope) => scope.state === 'current' && scope.changeClasses.includes('config') && scope.changeClasses.includes('ext-settings')), JSON.stringify(rebound.scopes))
+  const annotation = ari.manifestOf(EVERYTHING_SCOPE_ID).notes.find((note) => note.nodeId === 'personal-ari:annotation-harbor-thought')
+  assert.match(fs.readFileSync(path.join(ari.vault(EVERYTHING_SCOPE_ID), annotation.path), 'utf8'), /Revised\./, 'the vault holds the rebound generation')
+})
+
+test('a full reconciliation composes a bound workspace again: an enrolled repository whose identity changed leaves no view current', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const engine = ari.engine({ fullReconciliationIntervalMs: 0 })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  // A remote recorded as none is now there: no file the engine observes changes.
+  git(world.b, ['remote', 'add', 'origin', 'https://example.invalid/b.git'])
+  const ticked = await engine.tick()
+  assert.equal(ticked.full, true)
+  assert.ok(ticked.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'repo-identity-replaced'), JSON.stringify(ticked.scopes))
+})
+
+test('a refusal at load time is typed: the engine reports the code, no view stays current, and status answers typed', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const loadProject = () => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId })
+  const engine = ari.engine({ loadProject })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  ari.overlay.annotations[0].note += ' Revised.'
+  ari.save()
+  const ticked = await engine.tick()
+  assert.deepEqual([ticked.state, ticked.refusal?.code], ['refused', 'stale-generation'], JSON.stringify(ticked))
+  const freshness = ari.stateStore().readFreshness()
+  assert.ok(freshness.scopes.length === 3 && freshness.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'stale-generation'), JSON.stringify(freshness.scopes))
+  for (const argv of [['status'], ['view', 'list']]) {
+    const answered = await ari.command(argv, { loadProject })
+    assert.deepEqual([answered.exit, answered.json.error?.code], [EXIT.refused, 'stale-generation'], `${argv.join(' ')}: ${JSON.stringify(answered.json)}`)
+  }
+  // The binding itself still throws the module's own refusal.
+  assert.throws(() => bindPersonalWorkspace({ personalHome: ari.home, generationId: ari.generationId }), (error) => error instanceof PersonalWorkspaceRefusal && error.code === 'stale-generation')
+})
+
+test('a copy of a bound project that lost its binding is refused, never built as an ordinary project', (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  const { buildGraph } = createProductionSeams()
+  assert.deepEqual(graphFacts(buildGraph({ project: { ...ari.bound.project }, eligibility: DEFAULT_ELIGIBILITY })), graphFacts(ari.expected()), 'a spread keeps the binding')
+  for (const [label, copy] of [['structured clone', structuredClone(ari.bound.project)], ['JSON round trip', JSON.parse(JSON.stringify(ari.bound.project))], ['symbol dropped', unbound(ari.bound.project)]]) {
+    assert.equal(personalWorkspaceBindingOf(copy), null, label)
+    assert.throws(() => buildGraph({ project: copy, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-binding-lost', label)
+    assert.throws(() => viewCounts({ project: copy, audienceAllow: [...ONLY_YOU_AUDIENCES], scope: PROBE_SCOPE }), (error) => error.code === 'personal-binding-lost', `${label}: view counts`)
+  }
+})
+
+test('saved views beyond the Obsidian settings limits are refused at bind, typed, and write nothing', (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const views = (count) => Array.from({ length: count }, (_, index) => ({ id: `view-${index}`, name: `View ${index}`, repoIds: ['a'] }))
+  // 255 saved views and `everything` are what the settings contract allows.
+  const allowed = personalWorkspaceScopes({ views: views(255), preferences: {} }, ari.generationId)
+  assert.equal(readObsidianEnablement({ config: { ext: { [OBSIDIAN_EXT_KEY]: allowed } } }).scopes.length, 256)
+  assert.throws(() => personalWorkspaceScopes({ views: [{ id: 'wide', name: 'Wide', repoIds: Array.from({ length: 257 }, (_, index) => `r${index}`) }], preferences: {} }, ari.generationId), (error) => error.code === 'personal-views-exceed-settings-limit' && error.detail.kind === 'repositories')
+  ari.overlay.views = views(256)
+  ari.overlay.preferences = {}
+  ari.materialize()
+  const before = { homes: treeListing(path.join(world.base, 'homes')), data: treeListing(ari.dataRoot) }
+  assert.throws(() => bindPersonalWorkspace({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'personal-views-exceed-settings-limit' && error.detail.kind === 'views')
+  assert.throws(() => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'personal-views-exceed-settings-limit')
+  assert.deepEqual({ homes: treeListing(path.join(world.base, 'homes')), data: treeListing(ari.dataRoot) }, before)
 })

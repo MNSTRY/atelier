@@ -44,6 +44,14 @@ const BINDING = Symbol('atelier.obsidian.personal-workspace-binding')
 const ROUTES = new WeakMap()
 export const EVERYTHING_SCOPE_ID = 'everything'
 const EXT_SCHEMA = 'atelier-obsidian-ext-settings/v1'
+// The settings member of a bound project names its generation here. It survives any copy of the project (a structured
+// clone, a JSON round trip) that drops the symbol-keyed binding, so such a copy is refused instead of being built as an
+// ordinary project; and a rebound generation changes the member, which invalidates every view.
+export const PERSONAL_MEMBER_KEY = 'mnstry.atelier.personal-workspace'
+// The Obsidian settings contract's limits: at most 256 scopes, one of them `everything`, and at most 256 members in a
+// selector's union.
+const MAX_SAVED_VIEWS = 255
+const MAX_VIEW_REPOSITORIES = 256
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const deepFreeze = (value) => { if (value && typeof value === 'object') { Object.values(value).forEach(deepFreeze); Object.freeze(value) } return value }
@@ -72,9 +80,14 @@ function selectorFor(repoIds) {
 // The Obsidian settings member of a personal binding: one scoped view per saved
 // selection of repositories, in the overlay's order, and one full view of the
 // whole composed graph. A preferred view that names a saved one is the default.
-function personalWorkspaceScopes(overlay) {
+// Refused, typed, where the overlay allows more than a projection can declare.
+export function personalWorkspaceScopes(overlay, generationId) {
   if (overlay.views.some((view) => view.id === EVERYTHING_SCOPE_ID)) {
     refuse('personal-view-id-reserved', `a saved view may not be named "${EVERYTHING_SCOPE_ID}"; that view is the whole personal workspace`)
+  }
+  if (overlay.views.length > MAX_SAVED_VIEWS) refuse('personal-views-exceed-settings-limit', `a personal workspace can show at most ${MAX_SAVED_VIEWS} saved views; nothing is bound`, { limit: MAX_SAVED_VIEWS, kind: 'views' })
+  if (overlay.views.some((view) => new Set(view.repoIds).size > MAX_VIEW_REPOSITORIES)) {
+    refuse('personal-views-exceed-settings-limit', `a saved view can name at most ${MAX_VIEW_REPOSITORIES} repositories; nothing is bound`, { limit: MAX_VIEW_REPOSITORIES, kind: 'repositories' })
   }
   const scopes = [
     ...overlay.views.map((view) => ({ scopeId: view.id, mode: 'scoped', selector: selectorFor(view.repoIds) })),
@@ -82,7 +95,7 @@ function personalWorkspaceScopes(overlay) {
   ]
   const preferred = overlay.preferences?.defaultView
   const defaultScopeId = typeof preferred === 'string' && overlay.views.some((view) => view.id === preferred) ? preferred : EVERYTHING_SCOPE_ID
-  return { schema: EXT_SCHEMA, enabled: true, defaultScopeId, scopes }
+  return { schema: EXT_SCHEMA, enabled: true, defaultScopeId, scopes, ext: { [PERSONAL_MEMBER_KEY]: { generationId } } }
 }
 
 const generationRoot = ({ personalHome, generationId }) => path.join(personalHome, 'generations', generationId)
@@ -110,7 +123,7 @@ export function createPersonalWorkspaceBinderForOracleTests({ compose = composeP
 
     const binding = Object.freeze({ personalHome, generationId, overlayRepoId })
     ROUTES.set(binding, compose)
-    const member = deepFreeze(personalWorkspaceScopes(inputs.overlay))
+    const member = deepFreeze(personalWorkspaceScopes(inputs.overlay, generationId))
     const project = {
       ...resolved,
       config: { ...resolved.config, ext: { ...(resolved.config.ext ?? {}), [OBSIDIAN_EXT_KEY]: member } },
@@ -124,6 +137,17 @@ export function createPersonalWorkspaceBinderForOracleTests({ compose = composeP
 
 export const bindPersonalWorkspace = createPersonalWorkspaceBinderForOracleTests()
 
+// The project of a binding, for a loader: a refusal of the personal-workspace module becomes the maintenance refusal
+// with the same code, as at every build, so the engine and every command report it typed and no view stays current.
+export function loadBoundProject({ personalHome, generationId } = {}, { bind = bindPersonalWorkspace } = {}) {
+  try {
+    return bind({ personalHome, generationId }).project
+  } catch (error) {
+    if (error instanceof PersonalWorkspaceRefusal) refuse(error.code, 'the personal workspace refused this generation; nothing is loaded from it', { source: 'personal-workspace' })
+    throw error
+  }
+}
+
 // The binding a project carries, or null for every other project.
 export function personalWorkspaceBindingOf(project) {
   return project !== null && typeof project === 'object' && Object.hasOwn(project, BINDING) ? project[BINDING] : null
@@ -134,7 +158,10 @@ export function personalWorkspaceBindingOf(project) {
 // personal-workspace module's own code, as a maintenance refusal every caller already reports.
 export function personalWorkspaceGraph(project) {
   const binding = personalWorkspaceBindingOf(project)
-  if (binding === null) return null
+  if (binding === null) {
+    if (project?.config?.ext?.[OBSIDIAN_EXT_KEY]?.ext?.[PERSONAL_MEMBER_KEY] !== undefined) refuse('personal-binding-lost', 'the project names a personal workspace but carries no binding (a copy of a bound project); nothing is prepared from it')
+    return null
+  }
   const compose = ROUTES.get(binding)
   if (compose === undefined) refuse('personal-binding-unrecognized', 'the project carries a personal-workspace binding this release did not make; nothing is prepared from it')
   if (project.configPath !== path.join(generationRoot(binding), 'atelier.project.json')) refuse('personal-binding-mismatch', 'the project is not the configuration of the generation it is bound to; nothing is prepared from it')
@@ -144,6 +171,20 @@ export function personalWorkspaceGraph(project) {
     if (error instanceof PersonalWorkspaceRefusal) refuse(error.code, 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })
     throw error
   }
+}
+
+// The authored and generation files whose change means the binding must be asked again: the manifest, the overlay and
+// the bound generation's record. Observed as configuration by the engine. Empty for any other project.
+export function personalWorkspaceInputs(project) {
+  const binding = personalWorkspaceBindingOf(project)
+  if (binding === null) return []
+  return [path.join(binding.personalHome, 'atelier.personal.json'), path.join(binding.personalHome, 'atelier.overlay.json'), path.join(generationRoot(binding), 'generation.json')]
+}
+
+// The repository of a bound project's private notes, or null. A vault edit to one of them is a proposal only: it is
+// never applied into a module-owned generation.
+export function personalOverlayRepoOf(project) {
+  return personalWorkspaceBindingOf(project)?.overlayRepoId ?? null
 }
 
 // Settings that a personal binding takes from the overlay or does not have yet. A saved view is authored in the
