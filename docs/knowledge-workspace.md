@@ -41,6 +41,68 @@ its nonce. There is no remote collaboration, account, canonical apply, model
 provider, or outbound network path. All people who use this local process have
 the local operator's source access. It is not a multi-user access-control layer.
 
+## Supported interfaces
+
+The workspace is experimental. Two of its outputs are versioned contracts that
+hosts, desktop adapters and agents can bind to:
+
+- the context packet from `atelier knowledge context`
+  (`schema: atelier-knowledge-context@v1`);
+- the evaluation report from `atelier knowledge evaluate`
+  (`schema: atelier-knowledge-evaluation@v1`).
+
+Everything else is experimental and may change without a version bump:
+
+- `atelier knowledge check` and `session list` print unversioned JSON;
+- the dashboard and session records carry `experimental-v1` schemas;
+- the browser surfaces and their `/api/knowledge/*` routes, served by
+  `atelier dev --knowledge` and `atelier server --knowledge`, are experimental;
+- the `knowledgeProject` option of `createAtelierSidecarServer` in
+  `@mnstry/atelier/server` is experimental too, not a supported binding.
+
+This release has no library API for the workspace. The workspace modules
+`src/knowledge/plan.mjs`, `context.mjs`, `workspace.mjs` and `sessions.mjs` are
+not exported, and importing them directly is unsupported.
+`@mnstry/atelier/knowledge` exports these functions, which are separate from the
+workspace:
+
+- `inspectKnowledge`
+- `prepareIntakeContribution` and `prepareKnowledgeImport`
+- `knowledgeGraphProposal`
+- `reconcileKnowledge`
+- `prepareIngestionContribution`, `localKnowledgeContext` and
+  `localKnowledgeGraphProposal`
+
+A workspace library export will be added when a host needs one, reviewed together
+with that host's use of it.
+
+Maintainers check a packed candidate with `npm run knowledge:consumer-proof`, with
+`ATELIER_CANDIDATE_TARBALL` set to the tarball.
+
+- **Install.** The script installs the tarball into a clean temporary consumer
+  and runs the installed CLI with the current Node. The install runs offline,
+  from the locked dependency closure already in the npm cache. With a cold cache
+  it refuses before installing anything. Set
+  `ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1` to allow one declared registry fetch
+  of that closure first; the receipt records whether it ran.
+- **What it checks:**
+  - context for an answerable question selects its caveat source (no answer is
+    generated or judged);
+  - an unsupported question abstains with no sources, candidates or omissions;
+  - evaluation;
+  - a recorded answer stays an unsaved draft until it is saved; the saved
+    private draft and its receipt read back from a new process;
+  - a retried start returns the same session;
+  - an owner correction: the edited source is reported stale, and earlier
+    sessions report changed sources.
+- **The receipt** is bound to the tarball's SHA-256. Any earlier receipt is
+  removed before the inputs are checked, so a refused run leaves none. A step
+  failure or an unexpected stop writes `passed: false`. Local paths in failure
+  text are replaced with placeholders.
+
+A passing receipt shows that these documented CLI paths work for that tarball.
+It does not measure answer quality or cost.
+
 ## Five connected views
 
 | Workspace | What is visible | Coauthored result | Next proof |
