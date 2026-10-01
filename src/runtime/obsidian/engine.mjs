@@ -483,7 +483,8 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // against the source as it is now and recorded as what it is, in manual and in automatic mode alike, and no
     // source is written. What refused before anything was recorded is offered again on a full reconciliation only.
     const proposalAdapter = extensions.get('proposal-adapter')
-    const adapterContext = () => ({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env })
+    // A personal workspace is never composed on this event loop by the adapter: its builds defer, as the engine's do.
+    const adapterContext = () => ({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env, deferPersonalValidation: true })
     let observed = null
     if (proposalAdapter !== null && rules.observeEdits(proposalAdapter)) {
       try { observed = await proposalAdapter.observe(adapterContext(), { retryRefused: full }) } catch { observed = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
@@ -575,11 +576,11 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       if (earlierLayout.has(scope.scopeId) && entry.state === 'current' && layoutHeldOf(scope.scopeId).length === 0) invalidate(scope.scopeId, null)
     }
     for (const change of changes) for (const { scope } of scopes) if (change.scopeId === undefined || change.scopeId === scope.scopeId) invalidate(scope.scopeId, change.changeClass)
-    // A bound personal workspace is composed again, off the event loop, at every full reconciliation: an enrolled
-    // repository's identity or Git settings can stop a generation holding without a file this engine observes. Its
-    // views are prepared again only when the composition refuses, or composed something other than it last confirmed.
+    // A bound personal workspace is composed again, off the event loop, at every full reconciliation, whatever else is
+    // being prepared: a cause outside its validity key can stop a generation holding without a file this engine
+    // observes. Its views are prepared again only when the composition refuses, or confirms another key.
     let personalRefusal = null
-    if (full && personalWorkspaceBindingOf(project) !== null && scopes.some(({ scope }) => !attempt.has(scope.scopeId))) {
+    if (full && personalWorkspaceBindingOf(project) !== null) {
       const verdict = await validatePersonalWorkspace(project)
       if (verdict.ok !== true) personalRefusal = verdict.code
       if (verdict.ok !== true || verdict.changed) for (const { scope } of scopes) invalidate(scope.scopeId, null)

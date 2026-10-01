@@ -25,15 +25,15 @@ import { OBSIDIAN_EXT_KEY } from './contracts.mjs'
 // differ wherever a shared note's link names a private note.
 //
 // Validity. A graph is returned only under a validity key the composition has
-// confirmed: the key names the authored inputs, every file of the generation,
-// the private home's own state, any ambient Git variable, and a digest of the
-// built graph's facts. A key is confirmed only when the composition accepted
-// those inputs and composed a graph with exactly those facts, so a returned
+// confirmed: the key names the inputs a stat or a bounded read can see (see
+// inputsDigest) and a digest of the built graph's facts. The inputs are read
+// before composing, so a key is confirmed only when the composition accepted
+// those inputs and composed a graph with exactly those facts, and a returned
 // graph is always one the composition built too. A key not yet confirmed is
 // confirmed by composing: synchronously for a caller that builds once, and off
-// the event loop, in a worker, for the engine (`validatePersonalWorkspace`).
-// What no key can see (an enrolled repository's remote or Git settings) is
-// asked of the composition at every full reconciliation.
+// the event loop, in a worker with a deadline, for the engine and the proposal
+// adapter it runs (`validatePersonalWorkspace`). What no key names is asked of
+// the composition at every full reconciliation.
 //
 // What a binding returns:
 //   project      the generation's atelier.project.json, resolved, with the
@@ -82,15 +82,41 @@ const digestOf = (value) => sha256(JSON.stringify(sortKeys(value)))
 const generationRoot = ({ personalHome, generationId }) => path.join(personalHome, 'generations', generationId)
 const linkTargetRule = (overlayRepoId) => (node) => node.repo !== overlayRepoId
 
-// The facts of a graph every caller reads: nodes, edges, embeds, assets and link findings.
-const graphFactsDigest = (graph) => digestOf([graph.nodes, graph.edges, graph.embeds ?? [], graph.assets ?? [], graph.linkDiagnostics ?? []])
+// The facts of a graph every caller reads: nodes, edges, embeds, assets, resolved links and every finding.
+const graphFactsDigest = (graph) => digestOf([graph.nodes, graph.edges, graph.embeds ?? [], graph.assets ?? [], graph.links ?? [], graph.linkDiagnostics ?? [], graph.diagnostics ?? []])
 
-// Everything outside the graph that a composition's answer depends on and a stat or a read can see: the authored inputs,
-// every file of the generation (an extra or a missing one too), the private home's own state, and any ambient Git
-// variable. Cheap: small files, a few lstat calls.
+// The personal-workspace module's read limits: an authored input, and a generation file.
+const AUTHORED_LIMIT = 1024 * 1024
+const GENERATION_LIMIT = 8 * 1024 * 1024
+const NONBLOCK = fs.constants.O_NONBLOCK ?? 0
+
+// One regular file, opened without following a link and without waiting on it (a FIFO or a device never blocks the
+// caller), and read up to `limit`. Anything else refuses `code`, as the composition would.
+function regularFileDigest(file, limit, code) {
+  let fd
+  try { fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | NONBLOCK) } catch (error) {
+    if (error.code === 'ENOENT') return 'missing'
+    throw new PersonalWorkspaceRefusal(code)
+  }
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile() || stat.size > limit) throw new PersonalWorkspaceRefusal(code)
+    return sha256(fs.readFileSync(fd))
+  } finally { fs.closeSync(fd) }
+}
+const optionalDigest = (file) => { try { return regularFileDigest(file, AUTHORED_LIMIT, 'malformed-input') } catch { return 'not-regular' } }
+
+// Everything outside the graph that a composition's answer depends on and a stat or a bounded read can see: the authored
+// inputs (regular files only), every file of the generation (an extra, missing or irregular one too), the private home's
+// own state and any `.git` above it, each enrolled root's link status and Git configuration (its remote and its helpers),
+// the user's Git configuration, and any ambient Git variable. A file that is not regular refuses here with the code the
+// composition gives it, before anything waits on it.
 function inputsDigest({ personalHome, generationId }) {
-  const fileDigest = (file) => { try { return sha256(fs.readFileSync(file)) } catch (error) { return `unreadable:${error.code ?? 'error'}` } }
   const stat = (file) => { try { const s = fs.lstatSync(file); return [s.mode, s.uid, s.ino, s.isSymbolicLink()] } catch (error) { return `missing:${error.code ?? 'error'}` } }
+  const authored = ['atelier.personal.json', 'atelier.overlay.json'].map((name) => {
+    const file = path.join(personalHome, name)
+    return [stat(file), regularFileDigest(file, AUTHORED_LIMIT, 'malformed-input')]
+  })
   const generation = []
   const walk = (directory, prefix) => {
     let entries
@@ -98,23 +124,37 @@ function inputsDigest({ personalHome, generationId }) {
     for (const entry of entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))) {
       const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
       const absolute = path.join(directory, entry.name)
-      if (entry.isSymbolicLink()) generation.push([relative, 'link'])
-      else if (entry.isDirectory()) { generation.push([relative, stat(absolute)]); walk(absolute, relative) } else generation.push([relative, fileDigest(absolute)])
+      if (entry.isDirectory()) { generation.push([relative, stat(absolute)]); walk(absolute, relative) } else if (entry.isFile()) generation.push([relative, regularFileDigest(absolute, GENERATION_LIMIT, 'generation-corrupt')])
+      else throw new PersonalWorkspaceRefusal('generation-corrupt')
     }
   }
   const root = generationRoot({ personalHome, generationId })
   walk(root, '')
   let realHome
   try { realHome = fs.realpathSync(personalHome) === personalHome } catch { realHome = false }
+  const ancestorsWithGit = []
+  for (let ancestor = personalHome; ; ancestor = path.dirname(ancestor)) {
+    if (fs.lstatSync(path.join(ancestor, '.git'), { throwIfNoEntry: false }) !== undefined) ancestorsWithGit.push(ancestor)
+    if (ancestor === path.dirname(ancestor)) break
+  }
+  let repos = []
+  try { repos = JSON.parse(fs.readFileSync(path.join(personalHome, 'atelier.personal.json'), 'utf8')).repos.filter((repo) => repo.enrolled).map((repo) => repo.root) } catch { repos = [] }
+  const enrolled = repos.map((repoRoot) => {
+    let real
+    try { real = fs.realpathSync(repoRoot) === repoRoot } catch { real = false }
+    return [repoRoot, stat(repoRoot), real, optionalDigest(path.join(repoRoot, '.git', 'config'))]
+  })
+  const home = process.env.HOME ?? ''
+  const userGit = [path.join(home, '.gitconfig'), path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'git', 'config')].map(optionalDigest)
   return digestOf({
-    authored: ['atelier.personal.json', 'atelier.overlay.json'].map((name) => fileDigest(path.join(personalHome, name))),
+    authored,
     generation,
-    roots: [stat(personalHome), realHome, stat(path.join(personalHome, 'generations')), stat(root)],
+    roots: [stat(personalHome), realHome, stat(path.join(personalHome, 'generations')), stat(root), ancestorsWithGit],
+    enrolled,
+    userGit,
     ambientGit: Object.keys(process.env).filter((name) => /^GIT_/i.test(name)).sort(),
   })
 }
-
-const keyOfComposed = (binding, graph) => ({ inputs: inputsDigest(binding), facts: graphFactsDigest(graph) })
 
 // One generation file, read without following a link, and checked against the
 // digest the generation records for it (and compose verified a moment ago).
@@ -189,19 +229,34 @@ function assemble({ personalHome, generationId }, composed, route) {
 }
 
 // A composition in this thread, as the summary a worker sends back.
+// The inputs are digested BEFORE composing: a change that lands while the composition runs then either is seen by it, or
+// leaves the confirmed key behind, so the next build composes again. Never the other way round.
 function composeHere(compose, binding) {
+  const inputs = inputsDigest(binding)
   const composed = compose({ personalHome: binding.personalHome, generationId: binding.generationId })
-  return { generation: composed.generation, preferences: composed.preferences, coverage: composed.coverage, key: keyOfComposed(binding, composed.graph) }
+  return { generation: composed.generation, preferences: composed.preferences, coverage: composed.coverage, key: { inputs, facts: graphFactsDigest(composed.graph) } }
 }
 
 // A composition in a worker thread, so the event loop of the caller stays free while it runs. Resolves to the summary, or
 // to `{ code }` for a refusal; a worker that cannot run answers `personal-composition-unavailable`.
-function composeInWorker({ personalHome, generationId }) {
+// A worker that does not answer within the deadline is terminated and let go of, so neither the tick nor the process
+// waits on it, and the composition refuses `personal-composition-unavailable`.
+export const WORKER_DEADLINE_MS = 120 * 1000
+function composeInWorker({ personalHome, generationId }, { deadlineMs = WORKER_DEADLINE_MS, stallMs = 0 } = {}) {
   return new Promise((resolve) => {
     let settled = false
-    const settle = (value) => { if (!settled) { settled = true; resolve(value) } }
-    let worker
-    try { worker = new Worker(new URL(import.meta.url), { workerData: { kind: WORKER_KIND, personalHome, generationId } }) } catch { settle({ code: 'personal-composition-unavailable' }); return }
+    let worker = null
+    let timer = null
+    const settle = (value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (value.code === 'personal-composition-unavailable' && worker !== null) { worker.unref(); worker.terminate().catch(() => {}) }
+      resolve(value)
+    }
+    try { worker = new Worker(new URL(import.meta.url), { workerData: { kind: WORKER_KIND, personalHome, generationId, stallMs } }) } catch { settle({ code: 'personal-composition-unavailable' }); return }
+    timer = setTimeout(() => settle({ code: 'personal-composition-unavailable' }), deadlineMs)
+    timer.unref?.()
     worker.once('message', settle)
     worker.once('error', () => settle({ code: 'personal-composition-unavailable' }))
     worker.once('exit', () => settle({ code: 'personal-composition-unavailable' }))
@@ -209,9 +264,10 @@ function composeInWorker({ personalHome, generationId }) {
 }
 
 // Test seam only: `compose` replaces the module's composePersonalWorkspace for the binding and every validation of
-// it, and `build` the canonical build that serves its graph. Production code uses bindPersonalWorkspace.
-export function createPersonalWorkspaceBinderForOracleTests({ compose = composePersonalWorkspace, build = null } = {}) {
-  const route = { compose, offThread: compose === composePersonalWorkspace, build }
+// it, `build` the canonical build that serves its graph, and `worker` the worker's deadline (and a stall, so a worker that
+// never answers can be shown). Production code uses bindPersonalWorkspace.
+export function createPersonalWorkspaceBinderForOracleTests({ compose = composePersonalWorkspace, build = null, worker = {} } = {}) {
+  const route = { compose, offThread: compose === composePersonalWorkspace, build, worker }
   const bind = ({ personalHome, generationId } = {}) => {
     // The validity authority first: a refusal propagates as the module's own typed refusal, and nothing is read or
     // written after it.
@@ -220,7 +276,7 @@ export function createPersonalWorkspaceBinderForOracleTests({ compose = composeP
   }
   // The same binding, with the composition off the event loop.
   bind.offThread = async ({ personalHome, generationId } = {}) => {
-    const composed = route.offThread ? await composeInWorker({ personalHome, generationId }) : composeHere(compose, { personalHome, generationId })
+    const composed = route.offThread ? await composeInWorker({ personalHome, generationId }, route.worker) : composeHere(compose, { personalHome, generationId })
     if (typeof composed.code === 'string') {
       if (composed.code === 'personal-composition-unavailable') refuse(composed.code, 'the personal workspace could not be composed off the event loop; nothing is bound')
       throw new PersonalWorkspaceRefusal(composed.code)
@@ -273,7 +329,9 @@ export function personalWorkspaceGraph(project, { fileCache = null, observedDige
   const pending = () => refuse(PERSONAL_VALIDATION_PENDING, 'the personal workspace has changed since it was last composed; it is composed again before a graph is used', { source: 'personal-workspace-pending' })
   const confirmed = CONFIRMED.get(binding)
   // Inputs that changed are composed before anything is built from them.
-  if (confirmed?.inputs !== inputsDigest(binding)) {
+  let inputs
+  try { inputs = inputsDigest(binding) } catch (error) { CONFIRMED.delete(binding); asMaintenanceRefusal(error, 'the personal workspace refused this generation; nothing is prepared from it') }
+  if (confirmed?.inputs !== inputs) {
     if (defer) pending()
     confirmHere(route, binding)
   }
@@ -302,7 +360,7 @@ export async function validatePersonalWorkspace(project) {
   const route = ROUTES.get(binding)
   if (route === undefined) return { ok: false, code: 'personal-binding-unrecognized' }
   let composed
-  if (route.offThread) composed = await composeInWorker(binding)
+  if (route.offThread) composed = await composeInWorker(binding, route.worker)
   else {
     try { composed = composeHere(route.compose, binding) } catch (error) { if (!(error instanceof PersonalWorkspaceRefusal)) throw error; composed = { code: error.code } }
   }
@@ -338,6 +396,8 @@ export function refuseOnPersonalBinding(project, operation) {
 // The worker side of composeInWorker: one composition, its summary, and exit.
 if (!isMainThread && workerData?.kind === WORKER_KIND) {
   const binding = { personalHome: workerData.personalHome, generationId: workerData.generationId }
+  // A worker that never answers, for the deadline test only: blocked as a system call would block it.
+  if (workerData.stallMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.stallMs)
   try {
     parentPort.postMessage(composeHere(composePersonalWorkspace, binding))
   } catch (error) {

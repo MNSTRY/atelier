@@ -874,15 +874,30 @@ keeps one projection configuration per person.
   read one graph. A plain build of the generation's configuration would differ:
   there, a shared note's link can name a private note.
 - **Only a confirmed graph is used.** A graph is returned only under a validity
-  key that `composePersonalWorkspace` confirmed. The key names the authored
-  manifest and overlay, every file of the generation, the private home's own
-  state, any ambient Git variable, and a digest of the graph's facts (nodes,
-  edges, embeds, assets and link findings). A key is confirmed only when the
-  composition accepted those inputs and composed a graph with exactly those
-  facts, so every graph used is one the composition built too. Binding confirms
-  the first key. When a build finds its key unconfirmed, a caller that builds
-  once composes in its own thread; the engine composes in a worker, off the
-  event loop, and builds again. A graph that still differs refuses
+  key that `composePersonalWorkspace` confirmed. The key names:
+  - the authored manifest and overlay, as regular files;
+  - every file of the generation;
+  - the private home's own state, and any `.git` above it;
+  - each enrolled root's link status and its Git configuration (its remote and
+    its helpers);
+  - the user's Git configuration and any ambient Git variable;
+  - a digest of the graph's facts: nodes, edges, embeds, assets, resolved links
+    and every finding.
+
+  The inputs are read before the composition runs. A key is confirmed only when
+  the composition then accepted the inputs and composed a graph with exactly
+  those facts, so every graph used is one the composition built too. A change
+  that lands while it runs is either seen by it or leaves the key behind.
+  Binding confirms the first key. A file the key reads is opened without
+  following a link and without waiting on it. A FIFO, a device or a link
+  refuses at once, with the composition's code (`generation-corrupt`,
+  `malformed-input`).
+
+  When a build finds its key unconfirmed, a caller that builds once composes in
+  its own thread. The engine, and the proposal adapter it runs, compose in a
+  worker, off the event loop, then build again; the adapter observes nothing on
+  that tick. A worker that does not answer within two minutes is terminated and
+  refuses `personal-composition-unavailable`. A graph that still differs refuses
   `personal-graph-unconfirmed`.
 - **A copy is refused.** The settings member names the bound generation. A copy
   of a bound project that lost the binding (a structured clone, a JSON round
@@ -905,10 +920,17 @@ keeps one projection configuration per person.
   `generation.json` as configuration. A change to any of them prepares every
   view again on the next tick, unasked, and a generation that no longer holds
   is refused there. Every full reconciliation composes a bound workspace again,
-  in a worker, so a change no observed file shows (a repository's remote, its
-  Git settings) is refused within the reconciliation interval. The views are
-  prepared again only when that composition refuses or confirms a different key:
-  an unchanged workspace is not rebuilt, republished or locked. After a refusal the engine
+  in a worker, whatever else it prepares. A cause the key does not name is
+  therefore refused within the reconciliation interval (five minutes by
+  default). Those causes are:
+  - the system Git configuration;
+  - an enrolled repository's work tree or top level changing;
+  - a shared note replaced by a link;
+  - an untracked note becoming ignored.
+
+  The views are prepared again only when that composition refuses or confirms a
+  different key: an unchanged workspace is not rebuilt, republished or locked.
+  After a refusal the engine
   loads the project again at the next tick, so a loader that binds the next
   generation is followed. The generation's record and the settings member both
   name the generation, so a rebound generation invalidates every view even when
@@ -945,33 +967,40 @@ keeps one projection configuration per person.
   every build (`personal-binding-lost`, naming the key).
 
 Measured once on 2,156 notes in three repositories, with 50 annotations and five
-saved views (six views in all), on a host with a load average near 55. That
-host is slower than an idle one, so read the times as upper bounds:
+saved views (six views in all). The production contributions were loaded, as
+the service loads them, so the proposal adapter was registered. The host's load
+average was near 35, slower than an idle one, so read the times as upper
+bounds. "Main-thread compositions" counts the Git probe a composition makes on
+the event loop's thread.
 
-| Step | Wall time | Longest event-loop block |
-| --- | --- | --- |
-| Load, composed in a worker (`loadBoundProjectOffThread`) | 10.0 s | 0.07 s |
-| Load in the calling thread (`loadBoundProject`) | 7.5 s | 7.5 s |
-| One build without a file cache (a caller that builds once) | 3.5 s | 3.5 s |
-| First tick: load, build, and first publication of six vaults | 1,453 s | 1,441 s |
-| Tick with every view prepared again | 6.6 s | 6.5 s |
-| Idle tick | 0.26 s | 0.24 s |
-| Full-reconciliation tick, composition in a worker, nothing changed | 6.2 s | 1.4 s |
+| Step | Wall time | Longest event-loop block | Main-thread compositions |
+| --- | --- | --- | --- |
+| Load, composed in a worker (`loadBoundProjectOffThread`) | 3.8 s | 0.02 s | none |
+| Load in the calling thread (`loadBoundProject`) | 3.7 s | 3.6 s | one |
+| One build without a file cache (a caller that builds once) | 1.3 s | 1.3 s | none |
+| First tick: load, build, and first publication of six vaults | 897 s | 888 s | none |
+| Tick with every view prepared again | 7.5 s | 7.5 s | none |
+| Idle tick | 0.36 s | 0.34 s | none |
+| Tick with a vault edit and a graph change, adapter registered | 16.9 s | 3.6 s | none |
+| Full-reconciliation tick, an edit open | 7.5 s | 3.5 s | none |
 
-**What is met.** The composition never runs on the engine's event loop. The
-load, a confirmation after a change, and the probe of every full
-reconciliation run it in a worker, and an unchanged workspace is not prepared
-again.
+**What is met.** No composition runs on the engine's event loop, the proposal
+adapter's included. The load, a confirmation after a change, and the
+composition at every full reconciliation run in a worker with a deadline. An
+unchanged workspace is not prepared again.
 
 **What remains before a service or `open` binds a personal workspace of this
-size.** Preparing and publishing the views blocks the event loop longer than the
-service's five second health probe: 6.5 s to prepare six views again, and
-about 24 minutes for the first publication. Those are the preparation and
-publication paths that every project takes, not this route. A build without a
-file cache, which a caller that builds once makes, blocks 3.5 s. That is
-under the probe but over a two second target. A service binding needs
-preparation and publication to yield to the event loop (or run off it), or a
-corpus small enough to stay within the probe.
+size.** Preparing and publishing views blocks the event loop longer than the
+service's five second health probe: 7.5 s to prepare six views again, and
+about 15 minutes for the first publication. Those are the preparation and
+publication paths that every project takes, not this route: an ordinary
+project of 450 notes, measured the same way, blocked as long as a bound one.
+The proposal adapter's
+build of an open edit, without the engine's file cache, blocks about 3.5 s.
+That is under the probe but over a two second target, and it is the same for an
+ordinary project. A service binding needs preparation, publication and that
+build to yield to the event loop (or run off it), or a corpus small enough to
+stay within the probe.
 
 ## Known limits
 

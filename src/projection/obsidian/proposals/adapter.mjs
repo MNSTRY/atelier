@@ -15,7 +15,7 @@ import { isIdentifier } from '../edits/object-identity.mjs'
 import { openObjectStore } from '../edits/object-store.mjs'
 import { decideApply } from '../edits/policy.mjs'
 import { applyEditLens } from '../edits/regions.mjs'
-import { personalOverlayRepoOf } from '../personal-workspace.mjs'
+import { PERSONAL_VALIDATION_PENDING, personalOverlayRepoOf } from '../personal-workspace.mjs'
 import { PublicationRefusal } from '../recovery/store.mjs'
 import {
   PROPOSAL_BACKPRESSURE, PROPOSAL_LEDGER_LIMITS, classifyLedgerRead, classifyStoreRefusal, estimateEventLineBytes, isDue, isExhausted, nextAttemptAt, preflightAppend,
@@ -206,7 +206,8 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         if (corpus !== null) return corpus
         const machine = readMachineSettings({ workspaceRoot, workspaceId })
         corpus = {
-          graph: seams.buildGraph({ project, eligibility: fixedEligibility ?? eligibilityFor({ machine, project }) }),
+          // The engine hands its deferral over: a personal workspace is then never composed on its event loop here.
+          graph: seams.buildGraph({ project, eligibility: fixedEligibility ?? eligibilityFor({ machine, project }), deferPersonalValidation: context.deferPersonalValidation === true }),
           profile: seams.profileFor({ project, workspaceId, audienceAllow: machine?.audienceAllow ?? [] }),
         }
         return corpus
@@ -445,7 +446,16 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         const isPrivate = (edit) => overlayRepoId !== null && edit?.identity?.repoId === overlayRepoId
         const privateNotes = edits.filter((edit) => isPrivate(edit) && edit.closedAt === null)
           .map((edit) => ({ editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId, status: 'refused', code: 'personal-overlay-not-proposed' }))
-        return { adapterId: PROPOSAL_ADAPTER_ID, observed: [...privateNotes, ...observation.run(workspace, { edits: edits.filter((edit) => !isPrivate(edit)), retryRefused })] }
+        const shared = edits.filter((edit) => !isPrivate(edit))
+        // A personal workspace whose graph the engine has not confirmed yet is not observed on this tick: nothing is
+        // recorded or remembered as refused, and the edits are looked at again once the engine has confirmed it.
+        if (overlayRepoId !== null && context.deferPersonalValidation === true && shared.some((edit) => edit.closedAt === null)) {
+          try { workspace.corpus() } catch (error) {
+            if (error?.code === PERSONAL_VALIDATION_PENDING) return { adapterId: PROPOSAL_ADAPTER_ID, observed: privateNotes, deferred: PERSONAL_VALIDATION_PENDING }
+            if (!isTyped(error)) throw error
+          }
+        }
+        return { adapterId: PROPOSAL_ADAPTER_ID, observed: [...privateNotes, ...observation.run(workspace, { edits: shared, retryRefused })] }
       },
 
       // The tick. `context` is { project, workspaceRoot, workspaceId, repositoryRoots, edits }: the pending edit

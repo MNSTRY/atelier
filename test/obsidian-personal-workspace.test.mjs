@@ -26,6 +26,9 @@ for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 
     const wrapper = WRAPPERS.includes(programName(words[0]))
     const banned = words.find((word, index) => ((index === 0 || wrapper) && BANNED_PROGRAMS.includes(programName(word))) || /obsidian:\/\//i.test(word) || /--adapter=obsidian-cli|app-production-seams/.test(word))
     if (banned !== undefined) throw new Error(`spawn guard: this suite may never start "${programName(banned)}"`)
+    // The personal-workspace composition asks Git for core.fsmonitor once per enrolled repository: counted here, on the
+    // main thread only (a worker has its own modules), it shows whether a composition ran on the event loop.
+    if (words.includes('core.fsmonitor') && words.includes('--get-all')) globalThis.mainThreadCompositionProbes = (globalThis.mainThreadCompositionProbes ?? 0) + 1
     return original.call(this, command, args, ...rest)
   }
 }
@@ -65,7 +68,7 @@ const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, pro
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { viewCounts } = await import('../src/runtime/obsidian/view-counts.mjs')
-const { EVERYTHING_SCOPE_ID, PERSONAL_MEMBER_KEY, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, loadBoundProjectOffThread, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
+const { EVERYTHING_SCOPE_ID, PERSONAL_MEMBER_KEY, validatePersonalWorkspace, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, loadBoundProjectOffThread, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
 
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const test = (name, fn) => nodeTest(name, {
@@ -745,21 +748,21 @@ test('the cached route: one load, a composition only when the validity key chang
   t.after(() => engine.stop())
   assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
   assert.equal(loads, 1, 'a bound project is loaded once')
-  assert.equal(composed, 1, 'the load composed; the first build was served under the key it confirmed')
+  assert.equal(composed, 2, 'the load composed, and the first (full) reconciliation asked again; the first build was served under the confirmed key')
   // An idle tick composes nothing.
   await engine.tick()
-  assert.equal(composed, 1)
+  assert.equal(composed, 2)
   // A shared note whose title changes changes the graph: the next build composes once, and the views follow it.
   fs.writeFileSync(path.join(world.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replaceAll('Tide', 'Tides'))
   const changed = await engine.tick()
   assert.ok(changed.scopes.every((scope) => scope.state === 'current' && scope.reason === 'published-and-verified'), JSON.stringify(changed.scopes))
-  assert.equal(composed, 2)
+  assert.equal(composed, 3)
   assert.deepEqual(builds, ['built', 'personal-validation-pending', 'built'])
   engine.stop()
   // Every other caller reads that same composed graph, and composes nothing.
   const run = await fiveCallers(ari)
   assertOneGraph(ari, run)
-  assert.equal(composed, 2)
+  assert.equal(composed, 4, 'only the new engine\'s first full reconciliation asked; no caller composed')
 })
 
 test('mutation control: a cached build without the composition\'s link-target rule is caught', async (t) => {
@@ -817,4 +820,124 @@ test('saved views beyond the Obsidian settings limits are refused at bind, typed
   assert.throws(() => bindPersonalWorkspace({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'personal-views-exceed-settings-limit' && error.detail.kind === 'views')
   assert.throws(() => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'personal-views-exceed-settings-limit')
   assert.deepEqual({ homes: treeListing(path.join(world.base, 'homes')), data: treeListing(ari.dataRoot) }, before)
+})
+
+test('inputs that change while the composition runs are never confirmed: the next build refuses', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let withdrawn = false
+  // The edit lands after the composition read the inputs, and before it returns.
+  const racing = createPersonalWorkspaceBinderForOracleTests({ compose: (input) => {
+    const composed = composePersonalWorkspace(input)
+    if (!withdrawn) { withdrawn = true; ari.manifest.repos.find((repo) => repo.repoId === 'b').enrolled = false; ari.save() }
+    return composed
+  } })
+  ari.bind(racing)
+  const { buildGraph } = createProductionSeams()
+  assert.throws(() => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY }), (error) => ['stale-generation', 'retained-removed-reference'].includes(error.code), 'the withdrawn repository is not served')
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  const ticked = await engine.tick()
+  assert.ok(ticked.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(ticked.scopes))
+})
+
+test('with the proposal adapter registered, the engine never composes on its event loop', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const extensions = createMaintenanceExtensions()
+  extensions.register('proposal-adapter', createProposalAdapter({ clock, env: process.env }))
+  const production = createProductionSeams()
+  const builds = []
+  const seams = { buildGraph: (args) => { try { const graph = production.buildGraph(args); builds.push('built'); return graph } catch (error) { builds.push(error.code); throw error } } }
+  const engine = ari.engine({ extensions, seams, loadProject: () => loadBoundProjectOffThread({ personalHome: ari.home, generationId: ari.generationId }) })
+  t.after(() => engine.stop())
+  globalThis.mainThreadCompositionProbes = 0
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  // A vault edit (so the adapter builds) and a graph change, seen in the same tick.
+  const note = ari.manifestOf('harbor-only').notes.find((item) => item.nodeId === 'a:harbor')
+  const file = path.join(ari.vault('harbor-only'), note.path)
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Shared harbor note.', 'Shared harbor note, edited.'))
+  fs.writeFileSync(path.join(world.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replaceAll('Tide', 'Tides'))
+  builds.length = 0
+  const ticked = await engine.tick()
+  assert.equal(ticked.observed?.deferred, 'personal-validation-pending', JSON.stringify(ticked.observed))
+  assert.deepEqual(builds, ['personal-validation-pending', 'built'])
+  assert.equal(globalThis.mainThreadCompositionProbes, 0, 'no composition ran on the main thread')
+  // The next tick observes the edit against the confirmed graph, still without composing here.
+  const next = await engine.tick()
+  assert.ok(next.observed?.observed.some((item) => item.status === 'observed'), JSON.stringify(next.observed))
+  assert.equal(globalThis.mainThreadCompositionProbes, 0)
+})
+
+test('every full reconciliation asks the composition, even when every view is being prepared', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let refusing = false
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ compose: (input) => { if (refusing) throw new PersonalWorkspaceRefusal('repo-identity-replaced'); return composePersonalWorkspace(input) } }))
+  const engine = ari.engine({ fullReconciliationIntervalMs: 0 })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  // A cause no key sees, and every view asked to be prepared again.
+  refusing = true
+  for (const scope of ari.scopes()) engine.requestPreparation(scope.scopeId)
+  const ticked = await engine.tick()
+  assert.ok(ticked.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'repo-identity-replaced'), JSON.stringify(ticked.scopes))
+})
+
+test('the validity key reads only regular files, never waits on one, and sees the causes it can cheaply see', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const { buildGraph } = createProductionSeams()
+  const build = () => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })
+  const refusesWith = (code, label) => assert.throws(build, (error) => error.code === code, label)
+  const generation = path.join(ari.home, 'generations', ari.generationId)
+  // A FIFO in the generation, and a FIFO in place of the manifest: refused at once, as the composition would.
+  childProcess.execFileSync('mkfifo', [path.join(generation, 'overlay', 'pipe')])
+  refusesWith('generation-corrupt', 'a FIFO in the generation')
+  fs.rmSync(path.join(generation, 'overlay', 'pipe'))
+  const manifest = path.join(ari.home, 'atelier.personal.json')
+  const manifestBytes = fs.readFileSync(manifest)
+  fs.renameSync(manifest, `${manifest}.aside`)
+  childProcess.execFileSync('mkfifo', [manifest])
+  refusesWith('malformed-input', 'a FIFO in place of the manifest')
+  assert.throws(() => bindPersonalWorkspace({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'malformed-input')
+  // The manifest replaced by a link to the same bytes.
+  fs.rmSync(manifest)
+  fs.symlinkSync(`${manifest}.aside`, manifest)
+  refusesWith('malformed-input', 'a linked manifest')
+  fs.rmSync(manifest)
+  fs.renameSync(`${manifest}.aside`, manifest)
+  assert.ok(fs.readFileSync(manifest).equals(manifestBytes))
+  assert.ok(build().nodes.length > 0, 'undone, the graph is served again')
+  // A Git work tree above the home.
+  fs.mkdirSync(path.join(world.base, 'homes', '.git'))
+  refusesWith('generation-inside-work-tree', 'a .git above the home')
+  fs.rmSync(path.join(world.base, 'homes', '.git'), { recursive: true })
+  build()
+  // A shared root replaced by a link to itself.
+  fs.renameSync(world.b, `${world.b}-real`)
+  fs.symlinkSync(`${world.b}-real`, world.b)
+  refusesWith('root-symlinked', 'a linked shared root')
+  fs.rmSync(world.b)
+  fs.renameSync(`${world.b}-real`, world.b)
+  build()
+  // A Git helper in the user's configuration.
+  fs.writeFileSync(path.join(process.env.HOME, '.gitconfig'), '[core]\n\tfsmonitor = true\n')
+  try { refusesWith('git-helper-configured', 'a user core.fsmonitor') } finally { fs.rmSync(path.join(process.env.HOME, '.gitconfig')) }
+  build()
+})
+
+test('a composition worker that never answers is terminated at its deadline, and refuses typed', async (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ worker: { deadlineMs: 500, stallMs: 60 * 1000 } }))
+  const started = Date.now()
+  assert.deepEqual(await validatePersonalWorkspace(ari.bound.project), { ok: false, code: 'personal-composition-unavailable' })
+  assert.ok(Date.now() - started < 10 * 1000, 'settled at the deadline, not when the worker would have answered')
+})
+
+test('a graph whose resolved links differ from the composition is not served', (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ build: (project, options) => ({ ...buildCanonicalGraph(project, { ...options, isLinkTargetEligible: (node) => node.repo !== 'personal-ari' }), links: [] }) }))
+  const { buildGraph } = createProductionSeams()
+  assert.throws(() => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-graph-unconfirmed')
 })
