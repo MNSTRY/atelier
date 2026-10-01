@@ -79,6 +79,16 @@ test('invented changed source requires reconsideration and exact retrieval prepa
   const payload = JSON.parse(result.proposal.data.body)
   assert.deepEqual(payload.target, harnessRef(decision))
   assert.equal(payload.evidence[0].reference.contentDigest, contentDigest(changed))
+  // Windows completes the same portable journey but the existing store refuses
+  // writes there. Verify that boundary without skipping retrieval/evaluation.
+  if (process.platform === 'win32') {
+    assert.throws(() => appendHarness({ workspaceRoot: root, profile: 'knowledge',
+      record: value.records[0], confirm: EMPTY_HARNESS_HEAD }), /qualified POSIX filesystem/)
+    assert.equal(fs.existsSync(path.join(root, '.atelier-local', 'harnesses')), false)
+    assert.deepEqual(readHarness({ workspaceRoot: root, profile: 'knowledge',
+      run: value.records[0].run }).records, [])
+    return
+  }
   // This simulated host explicitly appends a draft. Pure evaluation did not.
   let head
   for (const record of value.records) head = appendHarness({ workspaceRoot: root, profile: 'knowledge', record, confirm: head ?? EMPTY_HARNESS_HEAD }).head

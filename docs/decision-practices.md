@@ -55,8 +55,12 @@ the embedded references before adopting any resulting contribution.
 The invented journey changes a captured source, observes the existing Knowledge
 harness's dependent decision reconsideration, rejects the old local-reader
 handle, retrieves fresh exact evidence from a new explicit ingestion plan and
-prepares a separate draft. The simulated host then explicitly appends that draft;
-it remains unaccepted and the original decision remains marked for reconsideration.
+prepares a separate draft. On the existing qualified POSIX reference profile, the simulated host explicitly
+appends that draft; it remains unaccepted and the original decision remains
+marked for reconsideration. Windows completes the same source-change, exact-read
+and pure-evaluation journey, then verifies the existing capability store refuses
+its write and leaves no harness history. The platform refusal does not skip the
+portable evidence or proposal checks.
 Fixtures contain simulated reviews and an invented supplied assessment. They
 establish no model quality, native actor or consent proof, Runtime database
 binding, real supported-consumer acceptance, integration review or deployment.
