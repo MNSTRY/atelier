@@ -136,7 +136,10 @@ are limited to 8192 characters, with unique contribution IDs. Each dependency
 therefore gets one labelled witness: the JSON-string encoding of its first
 cited quote, without outer quotation marks, cut only at complete code points
 and escape sequences. It must occur in the stored contribution body. Endpoint
-dependencies use encoded entity IDs. The body labels `sourceWitness` entries
+dependencies use encoded candidate IDs when present in the entity body, or a
+bounded actual text substring for an ordinary accepted concept. Its record ID
+need not occur in its body. A body with no representable witness is refused.
+The body labels `sourceWitness` entries
 with `encoding: 'json-string-substring'` and `purpose: 'ledger-dependency-only'`.
 Display citations from the candidate, never the dependency witness.
 

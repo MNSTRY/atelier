@@ -294,6 +294,59 @@ transactionTest('vanilla runner captures, admits, projects, reopens and corrects
   assert.equal(reopened.context({ query: 'Nora' }).hits.length, 0)
 })
 
+transactionTest('supplied existing identities require explicit review and work with ordinary accepted prose', t => {
+  const s = setup(t)
+  let head = s.begin.confirm
+  const make = (kind, id, data) => ({ schema: 'atelier-knowledge-record@v1', id, run: fixture.domain.run, at, by: 'simulated-receiver', kind, data })
+  const add = record => { head = appendHarness({ ...s.options, profile: 'knowledge', record, confirm: head }).head; return record }
+  function approve(record, basis = 'Simulated fixture acceptance, not real receiver acceptance.', suffix = '') {
+    if (record.kind === 'contribution') add(make('evaluation', `${record.id}-eval${suffix}`, { contribution: harnessRef(record), judgment: 'supported', rationale: 'Invented fixture evaluation.', limitations: ['Simulated decisions'], scope: fixture.domain.data.scope }))
+    const evaluations = readHarness({ ...s.options, profile: 'knowledge' }).records.filter(item => item.kind === 'evaluation' && item.data.contribution.id === record.id)
+    return add(make('review', `${record.id}-review${suffix}`, { target: harnessRef(record), disposition: 'accepted', basis, evaluations: evaluations.map(harnessRef) }))
+  }
+  const canonical = add(make('contribution', 'nora-canonical', { domain: harnessRef(fixture.domain), category: 'concept', term: 'person', title: 'Nora', body: '\tNora\nA "quoted" participant with \\ literal punctuation.', audience: fixture.domain.data.audience, scope: fixture.domain.data.scope, origin: { method: 'authored', reason: 'Invented existing concept; its body does not repeat its record identifier.' }, basedOn: [] }))
+  approve(canonical)
+  const wrongType = add(make('contribution', 'nora-organization', { ...canonical.data, term: 'organization', body: 'An invented organization with a similar display name.' }))
+  approve(wrongType)
+  // A host-supplied candidate description does not establish the ledger type.
+  const first = s.runner.begin({ ...s.begin, confirm: head, identityCandidates: [canonical, wrongType].map(record => ({ id: record.id, label: 'Nora', type: 'person' })) })
+  const candidates = extractedCandidates(first.input)
+  candidates.entities[0].identity = { status: 'existing-candidate', candidateIds: [canonical.id, wrongType.id] }
+  const output = JSON.stringify(candidates)
+  head = s.runner.complete({ operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }).head
+  const source = prepareIngestionContribution({ ...s.options, records: readHarness({ ...s.options, profile: 'knowledge' }).records, ...s.begin.plan, sourceId: 'notes', title: 'Invented identity source', term: 'material' })
+  const sourceRecord = add({ ...make('contribution', 'identity-source', source.data), by: 'host-model:fixture-structural-extractor' })
+  approve(sourceRecord)
+  const sourceOptions = { source: harnessRef(sourceRecord), sourceBinding: source.sourceBinding }
+  const entities = []
+  for (const entity of candidates.entities) {
+    const prepared = s.runner.prepareContribution({ operationId: 'first', id: `identity-${entity.id}`, kind: 'entity', candidateId: entity.id, term: entity.type, at, confirm: head, ...sourceOptions })
+    head = prepared.head; entities.push(prepared.record); approve(prepared.record)
+  }
+  const claimRequest = () => ({ operationId: 'first', id: 'identity-management', kind: 'assertion', candidateId: 'management', term: 'assertion', at, confirm: head, ...sourceOptions })
+  assert.throws(() => s.runner.prepareContribution(claimRequest()), e => e.code === 'SEMANTIC_IDENTITY_PENDING')
+  const choice = resolution => JSON.stringify({ schema: 'atelier.semantic-identity-decision/v0', operationId: 'first', candidateId: 'nora', resolution })
+  approve(entities[0], choice({ status: 'existing', contribution: harnessRef(entities[2]) }), '-wrong')
+  assert.throws(() => s.runner.prepareContribution(claimRequest()), e => e.code === 'SEMANTIC_IDENTITY_PENDING')
+  approve(entities[0], choice({ status: 'existing', contribution: harnessRef(wrongType) }), '-wrong-type')
+  assert.throws(() => s.runner.prepareContribution(claimRequest()), e => e.code === 'SEMANTIC_IDENTITY_PENDING')
+  approve(entities[0], choice({ status: 'existing', contribution: { id: canonical.id, digest: `sha256:${'0'.repeat(64)}` } }), '-wrong-digest')
+  assert.throws(() => s.runner.prepareContribution(claimRequest()), e => e.code === 'SEMANTIC_IDENTITY_PENDING')
+  approve(entities[0], choice({ status: 'source-local' }), '-local')
+  const local = s.runner.prepareContribution({ ...claimRequest(), id: 'identity-management-local' }); head = local.head
+  assert.deepEqual(JSON.parse(local.record.data.body).endpoints.subject, harnessRef(entities[0]))
+  approve(entities[0], choice({ status: 'existing', contribution: harnessRef(canonical) }), '-explicit')
+  const prepared = s.runner.prepareContribution({ ...claimRequest(), supersedes: harnessRef(local.record), revisionReason: 'Simulated receiver explicitly revises the source-local identity choice.' }); head = prepared.head
+  assert.deepEqual(JSON.parse(prepared.record.data.body).endpoints.subject, harnessRef(canonical))
+  assert.equal(prepared.record.data.basedOn.find(pin => pin.contribution.id === canonical.id).quote, 'Nora')
+  approve(prepared.record)
+  add(make('activation', 'identity-active', { reviews: [harnessRef(readHarness({ ...s.options, profile: 'knowledge' }).records.find(record => record.id === 'identity-management-review'))], purpose: 'Simulated existing identity readback.', destination: 'local-context', questions: ['component'] }))
+  assert.equal(createSemanticOperation(s.options).context({ query: 'manages' }).hits.some(hit => hit.reference.id === prepared.record.id), true)
+  add(make('withdrawal', 'withdraw-canonical', { target: harnessRef(canonical), reason: 'Simulated withdrawal of the explicitly selected identity.' }))
+  assert.equal(createSemanticOperation(s.options).context({ query: 'manages' }).hits.some(hit => hit.reference.id === prepared.record.id), false)
+  assert.throws(() => s.runner.prepareContribution({ ...claimRequest(), id: 'identity-management-v3', supersedes: harnessRef(prepared.record), revisionReason: 'Simulated attempted reuse of a withdrawn identity.' }), e => e.code === 'SEMANTIC_IDENTITY_PENDING')
+})
+
 function witnessSource(index, quotes) {
   const sourceDigest = intakeDigest(`invented-source-${index}`), attemptId = `source-attempt-${index}`
   const record = { schema: 'atelier-knowledge-record@v1', id: `source-${index}`, run: fixture.domain.run, at, by: 'invented-structural-extractor', kind: 'contribution', data: {

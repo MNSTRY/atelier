@@ -299,6 +299,24 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     try { body = JSON.parse(record.data.body) } catch { return null }
     return body?.schema === SEMANTIC_OPERATION_PROFILE ? body : null
   }
+  function endpointWitnessQuote(record) {
+    const candidateId = semanticBody(record)?.candidate?.id
+    if (typeof candidateId === 'string' && record.data.body.includes(JSON.stringify(candidateId).slice(1, -1))) return candidateId
+    // An ordinary accepted concept need not repeat its record identifier.
+    // Choose actual body text whose JSON encoding is also a body substring.
+    let quote = ''
+    for (const point of record.data.body) {
+      if (JSON.stringify(point).slice(1, -1) !== point) {
+        if (quote.trim()) return quote.trim()
+        quote = ''; continue
+      }
+      if (!quote && !point.trim()) continue
+      if (quote.length + point.length > 8192) break
+      quote += point
+    }
+    check(quote.trim().length > 0, 'SEMANTIC_UNSUPPORTED_LEDGER_CITATION', 'The accepted endpoint body has no representable dependency witness')
+    return quote.trim()
+  }
   function verifySemantic(record) {
     const body = semanticBody(record)
     check(body && ['entity', 'assertion', 'unknown'].includes(body.kind), 'SEMANTIC_OPERATION_INTEGRITY', 'An operation interpretation is required')
@@ -313,7 +331,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       if (id === null) { endpoints[role] = null; continue }
       const resolved = endpoint(current.proposals.entities.find(entity => entity.id === id), current)
       endpoints[role] = harnessRef(resolved)
-      endpointWitnesses.push({ record: resolved, quote: semanticBody(resolved)?.candidate.id ?? resolved.id })
+      endpointWitnesses.push({ record: resolved, quote: endpointWitnessQuote(resolved) })
     }
     const witnesses = semanticDependencyWitnesses({ citations: candidate.evidence, sources: [sourceRecord], endpoints: endpointWitnesses })
     check(ingestionDigest(body.endpoints) === ingestionDigest(endpoints) && ingestionDigest(record.data.basedOn) === ingestionDigest(witnesses.basedOn) && ingestionDigest(body.sourceWitness) === ingestionDigest(witnesses.sourceWitness), 'SEMANTIC_OPERATION_INTEGRITY', 'Interpretation dependency, witness or endpoint pins differ')
@@ -368,7 +386,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       if (candidateId === null) { endpoints[role] = null; continue }
       const entity = current.proposals.entities.find(entity => entity.id === candidateId), resolved = endpoint(entity, current)
       endpoints[role] = harnessRef(resolved)
-      endpointWitnesses.push({ record: resolved, quote: semanticBody(resolved)?.candidate.id ?? resolved.id })
+      endpointWitnesses.push({ record: resolved, quote: endpointWitnessQuote(resolved) })
     }
     const witnesses = semanticDependencyWitnesses({ citations: candidate.evidence, sources: [sourceRecord], endpoints: endpointWitnesses })
     const value = current.initial.value, body = canonicalize(json({ schema: SEMANTIC_OPERATION_PROFILE, operationId, kind, candidate, endpoints, raw: current.raw,
