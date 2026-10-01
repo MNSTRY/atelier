@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- Evidence navigation is exported as `@mnstry/atelier/evidence-navigation`
+  (the pure contract checks and currency assessments) and
+  `@mnstry/atelier/evidence-navigation/local` (the Node local reader, kept
+  separate), with its schema at
+  `@mnstry/atelier/contracts/atelier-evidence-navigation.v1.schema.json`. The
+  schema and its fixtures join the contract corpus. There is no CLI command:
+  search and get need a host to construct the reader with its exact plan,
+  workspace and current whole-plan admission, and Atelier ships no issuer of that
+  authority.
+- The Obsidian projection has one route for a personal workspace. A binding
+  names a private home and a generation explicitly. Every caller that builds
+  the graph (the engine, view counts, source apply, the proposal adapter and the
+  selection operation) then reads the composed graph, which composition checks
+  again at every build. The overlay's saved views become scopes, plus an
+  `everything` view. Composition refusals keep their codes, at load and at
+  every build, and no view is current under one. The engine observes the
+  person's manifest and overlay, so a generation that stops holding is refused
+  at the next tick. A copy of a bound project that lost its binding is refused.
+  `view add`, `audience` and `location` refuse on a bound project and write
+  nothing, and a vault edit to a private note is refused, never applied. A
+  theme is never written, and coverage is passed through unread. No command or
+  service binds a personal workspace yet.
+
+- The knowledge workspace states its supported interfaces
+  (`docs/knowledge-workspace.md`).
+  - Two outputs are versioned contracts: the context packet
+    (`atelier-knowledge-context@v1`) and the evaluation report
+    (`atelier-knowledge-evaluation@v1`).
+  - The other CLI outputs, the browser routes and the sidecar's `knowledgeProject`
+    option are experimental.
+  - The workspace modules have no library export. `@mnstry/atelier/knowledge`
+    keeps its existing exports.
+  - `atelier architecture entry knowledge-stewardship` lists the workspace modules
+    and the `knowledge` command.
+  - `npm run knowledge:consumer-proof` installs a packed tarball into a clean
+    consumer and checks the documented CLI paths, writing a receipt bound to the
+    tarball SHA-256.
 - Personal workspaces are published as `@mnstry/atelier/personal-workspace`,
   with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
   public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,

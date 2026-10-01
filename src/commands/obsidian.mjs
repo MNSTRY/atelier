@@ -458,6 +458,9 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
     const pluginOf = async (scopeId) => pluginPresenceOf((await readServiceStatusDocument(lifecycle, lifecycleRules)).document, scopeId)
     const pluginLine = (plugin) => `${plugin.present ? `; plugin present (Obsidian ${plugin.appVersion})` : plugin.reason === 'turned-off-in-this-vault' ? '; plugin turned off in this vault' : `; plugin not present (${plugin.reason})`}${plugin.files === 'waits-for-app' ? '; plugin files wait for the app' : ''}`
 
+    // A project bound to a personal workspace takes its views from the overlay, and has no place for these decisions
+    // yet: the operations that would write them refuse before anything is resolved or written.
+    const refuseOnPersonalBinding = async (project, operation) => (await import('../projection/obsidian/personal-workspace.mjs')).refuseOnPersonalBinding(project, operation)
     const configured = () => {
       const project = loadProject()
       const enablement = readObsidianEnablement(project)
@@ -781,6 +784,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         if (tilde && typeof homedir !== 'string') refuse('real-vault-location-under-test', 'a location under the home folder is never used under the test runner; name an absolute folder')
         // Resolved, so a trailing separator (as tab completion leaves it) is no refusal.
         const parent = tilde ? path.resolve(path.join(homedir, value.slice(1))) : path.resolve(cwd, value)
+        await refuseOnPersonalBinding(loadProject(), 'location set')
         const { project, enablement, workspace, repositoryRoots, now } = writable()
         // A record that cannot be read names no folder here; the engine refuses its view on its own.
         const allocatedPaths = enablement.scopes.map(({ scopeId }) => vaultWhere(workspace, scopeId, null, null)).filter((found) => found.origin === 'allocated').map((found) => found.path)
@@ -810,6 +814,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
       async view() {
         if (sub === 'list' || sub === 'show' || sub === undefined) return operations.scope()
         if (sub !== 'add' || value === undefined) refuse('usage', 'view add ID (--all | --folder PATH [--folder PATH ...] [--repo R] | --tag T) [--expand DEPTH:MAX] [--default] [--allow-empty] [--yes]')
+        await refuseOnPersonalBinding(loadProject(), 'view add')
         const { project, workspace, workspaceId } = readable()
         const repositories = project.repos.filter((repo) => !repo.external && typeof repo.name === 'string').map((repo) => repo.name)
         const scope = viewFromRequest({ scopeId: value, all: flags.all === true, folders: flags.folder ?? [], repo: flags.repo, tag: flags.tag, expand: flags.expand, repositories })
@@ -880,6 +885,7 @@ export async function runObsidianCommandForOracleTests(options = {}, rules = {})
         // `me` stands for "only you". Named beside other audiences, it adds its own to theirs, and the list is the person's own choice.
         const audienceAllow = [...new Set(named.flatMap((item) => (item === 'me' ? ONLY_YOU_AUDIENCES : [item])))]
         const choice = named.length === 1 && named[0] === 'me' ? 'only-you' : 'custom'
+        await refuseOnPersonalBinding(loadProject(), `audience ${sub}`)
         const { workspace, repositoryRoots, now } = writable()
         const current = machineOf(workspace) ?? defaultMachineSettings({ workspaceId: workspace.workspaceId, updatedAt: now })
         // A vault that is only yours shows the notes that carry no classification too; any other list withholds them.
