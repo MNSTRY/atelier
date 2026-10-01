@@ -1,0 +1,16 @@
+{
+  "schema": "atelier-evidence-navigation-host@v1",
+  "protocols": [
+    "atelier-evidence-navigation@v1"
+  ],
+  "operations": [
+    "searchEvidence",
+    "getEvidence"
+  ],
+  "capabilities": [
+    {
+      "id": "exact-source-read",
+      "version": "1"
+    }
+  ]
+}
