@@ -35,6 +35,11 @@ Portable shapes refuse absolute paths. `atelier-project-config.v1` is
 unchanged: extension settings are validated by their own schema, and an
 unknown extension key refuses in the adapter, not in the project validator.
 
+The `ext-settings` key `ext["mnstry.atelier.personal-workspace"]` is reserved.
+Only a personal-workspace binding sets it, in memory, to name its generation.
+A project whose settings declare it without a binding is refused at every
+build with `personal-binding-lost`.
+
 ## Selection
 
 `selectScope({ canonicalSnapshot, profile, selector, expansion })` is the only
@@ -1295,6 +1300,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `interrupted-before-exchange`, `apply-interrupted-needs-person` | what restart recovery decided for an interrupted apply |
 | `recovery-state-unreadable` | a candidate, backup or source path of an interrupted apply may not be looked at or read; nothing is settled from a read this process was denied, that record is reported with its intent still open, and every other one is still settled |
 | `apply-outcome-unknown` | the source was exchanged and the settlement from digests could not be carried out; the source may have been changed, the intent stays open and `apply recover` decides |
+| `personal-overlay-proposals-only` | the note is a private note of a personal workspace, whose file belongs to a module-owned generation; nothing is written there. The proposal adapter's observation answers the same edit with `personal-overlay-not-proposed`, and records nothing |
 
 A path that another program removes or replaces between two steps, before the
 intent is recorded, answers one of these refusals (`source-missing`,
