@@ -81,13 +81,14 @@ Maintainers check a packed candidate with `npm run knowledge:consumer-proof`, wi
 
 - **Install.** The script reads the tarball once, installs exactly those
   hashed bytes into a clean temporary consumer, and runs the installed CLI with
-  the current Node, an empty temporary home and no global or system Git
-  configuration. The install runs offline, from the locked dependency closure
+  the current Node and an empty temporary home. The proof's own Git steps read no
+  global or system Git configuration. The CLI's Git calls get an empty global
+  configuration but may still read the host's system configuration. The install runs offline, from the locked dependency closure
   already in the npm cache. With a cold cache it refuses before installing
   anything. Set `ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1` to allow one declared
   registry fetch of that closure first; the receipt records whether it ran. The
-  receipt also records the installed dependency tree, which must lie within the
-  locked closure.
+  receipt lists the installed dependency tree (`name@version`) and any problems
+  `npm ls` reports. Every entry must lie within the locked closure.
 - **What it checks:**
   - context for an answerable question selects its caveat source (no answer is
     generated or judged);

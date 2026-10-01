@@ -16,8 +16,8 @@
 // receipt records whether it ran. The installed CLI runs through the current Node
 // (process.execPath) on every platform, with its own empty home and configuration
 // folders. The tarball's bytes are read once: the hashed bytes are the installed
-// bytes. The installed dependency tree is recorded and checked against the locked
-// closure. Any earlier receipt is removed before the inputs are checked. Refusals
+// bytes. The receipt lists the installed dependency tree (name@version) and any
+// problems npm ls reports, and every entry must lie within the locked closure. Any earlier receipt is removed before the inputs are checked. Refusals
 // before the temporary consumer exists (missing tarball, digest mismatch, lockfile,
 // bootstrap or cache failures) exit non-zero and leave no receipt; after that, a
 // failed step or an unexpected stop writes passed: false. Failure text in the
@@ -66,7 +66,8 @@ if (bootstrap && closure.length > 0) execNpmSync(['cache', 'add', ...closure], n
 // From here on nothing reaches the network: the closure must already be cached.
 if (closure.length > 0) {
   try {
-    execNpmSync(['cache', 'add', '--offline', ...closure], npmOptions)
+    // An explicit log level keeps npm's ENOTCACHED visible under a silenced caller.
+    execNpmSync(['cache', 'add', '--offline', '--loglevel=error', ...closure], npmOptions)
   } catch (error) {
     // Only npm's ENOTCACHED is a cold cache; anything else is reported as itself.
     if (/ENOTCACHED/.test(String(error?.stderr ?? ''))) console.error('prove-knowledge-consumer: the locked dependency closure is not in the npm cache; set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 for one declared registry fetch')
@@ -81,10 +82,12 @@ const ws = path.join(temp, 'workspace')
 const emptyGitConfig = path.join(temp, 'gitconfig')
 const home = path.join(temp, 'home')
 const xdgConfig = path.join(temp, 'xdg-config')
-// The consumer's Git identity is invented, no inherited GIT_* variable can retarget
-// its repository, and no system or global Git configuration is read. The installed
-// CLI removes GIT_* from its own Git calls, so the home and XDG folders are empty
-// temporary folders too: Git's default global files resolve there.
+// The consumer's Git identity is invented and no inherited GIT_* variable can
+// retarget its repository. The proof's own Git steps read neither global nor system
+// configuration. The installed CLI removes GIT_* from its own Git calls, which also
+// drops GIT_CONFIG_NOSYSTEM: those calls get an empty global configuration (the
+// home and XDG folders below are empty temporary folders) but may still read the
+// host's system Git configuration.
 const env = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
   HOME: home,
@@ -136,7 +139,7 @@ try {
   const walk = (dependencies = {}) => { for (const [name, node] of Object.entries(dependencies)) { if (node?.version) resolved.add(`${name}@${node.version}`); walk(node?.dependencies) } }
   walk(tree?.dependencies?.['@mnstry/atelier']?.dependencies)
   const locked = new Set(closure)
-  installedClosure = { resolved: resolved.size, outsideLock: [...resolved].filter((spec) => !locked.has(spec)).sort() }
+  installedClosure = { resolved: [...resolved].sort(), outsideLock: [...resolved].filter((spec) => !locked.has(spec)).sort(), npmProblems: Array.isArray(tree?.problems) ? tree.problems.map((problem) => redact(problem).slice(0, 500)) : [] }
   check('the installed dependency tree lies within the locked closure', resolved.size > 0 && installedClosure.outsideLock.length === 0, installedClosure)
   const installedRoot = path.join(app, 'node_modules', '@mnstry', 'atelier')
   const installed = JSON.parse(fs.readFileSync(path.join(installedRoot, 'package.json'), 'utf8'))
