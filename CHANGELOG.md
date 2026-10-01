@@ -6,6 +6,15 @@
   entered") when its lock is removed or replaced while cleanup inspects it.
   Cleanup preserves the other file and returns the operation's result. Lock
   races in reclamation, readback and cleanup are each covered by a test.
+- Evidence navigation is exported as `@mnstry/atelier/evidence-navigation`
+  (the pure contract checks and currency assessments) and
+  `@mnstry/atelier/evidence-navigation/local` (the Node local reader, kept
+  separate), with its schema at
+  `@mnstry/atelier/contracts/atelier-evidence-navigation.v1.schema.json`. The
+  schema and its fixtures join the contract corpus. There is no CLI command:
+  search and get need a host to construct the reader with its exact plan,
+  workspace and current whole-plan admission, and Atelier ships no issuer of that
+  authority.
 - The knowledge workspace states its supported interfaces
   (`docs/knowledge-workspace.md`).
   - Two outputs are versioned contracts: the context packet

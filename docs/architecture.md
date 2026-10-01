@@ -6,7 +6,7 @@ contracts, governance, graph and local runtime support eight responsibilities.
 | Responsibility | Work it owns | Existing entry points |
 | --- | --- | --- |
 | Inquiry | Investigate uncertainty and assess evidence | Discovery and Research Harnesses; `inquiry` |
-| Knowledge Stewardship | Curate, govern, connect and operationalize knowledge | `harness knowledge`, `ingest`, intake, graph and context |
+| Knowledge Stewardship | Curate, govern, connect and operationalize knowledge | `harness knowledge`, `ingest`, intake, graph and context; [evidence navigation](evidence-navigation.md), composed by Discovery and Research |
 | Practical Judgment | Discern fitting action, cultivate practice and learn from consequences | `learn`, practical cases, decision adapters, `practice` |
 | Creation and Delivery | Design, implement, verify and deliver changes | `harness build` |
 | Capability Stewardship | Qualify, package, adopt, exercise and evolve reusable abilities | `capability`, Skill Steward and `skills` |
