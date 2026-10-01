@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
+import { personalWorkspaceBindingOf, personalWorkspaceInputs } from '../../projection/obsidian/personal-workspace.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
 import { PublicationRefusal, allocatedFolderState, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
@@ -133,6 +134,10 @@ const isTypedRefusal = (error) => error instanceof ObsidianMaintenanceRefusal ||
 // is a fault of the engine and stops the tick.
 const viewRefusalCode = (error) => (isTypedRefusal(error) ? error.code : typeof error?.code === 'string' && /^E[A-Z]+$/.test(error.code) ? 'vault-location-unusable' : null)
 const digestOfJson = (value) => sha256Digest(Buffer.from(canonicalJson(value)))
+// The configuration a tick observes. A project bound to a personal workspace adds the person's authored manifest and
+// overlay and its generation's record: a change to any of them is a configuration change, so every view is prepared
+// again, asks the composition, and is refused at once when the generation no longer holds.
+const configFilesOf = (project) => [...listConfigFiles(project), ...personalWorkspaceInputs(project).map((absolute) => ({ key: configKey(absolute), changeClass: 'config', absolute }))]
 
 // An editor adapter that `build` makes, synchronously or not, the first time the publisher calls it; a refusal of
 // `build` is thrown from that call, and `refusal()` answers it afterwards.
@@ -358,13 +363,13 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // loaded for good, so the loaded project is never older than the index.
     if (project === null) {
       project = loadProject()
-      reconcile({ index, files: listConfigFiles(project), prefix: CONFIG_PREFIX, full: true, lstat })
+      reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full: true, lstat })
       project = loadProject()
     } else {
-      const config = reconcile({ index, files: listConfigFiles(project), prefix: CONFIG_PREFIX, full, hinted, lstat })
+      const config = reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full, hinted, lstat })
       if (config.changes.length > 0) {
         project = loadProject()
-        reconcile({ index, files: listConfigFiles(project), prefix: CONFIG_PREFIX, full: true, lstat })
+        reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full: true, lstat })
       }
     }
     const enablement = readObsidianEnablement(project)
@@ -445,7 +450,7 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     watch([
       ...(project.repos ?? []).filter((repo) => !repo.external && typeof repo.path === 'string').map((repo) => ({ id: `repo:${repo.name}`, path: repo.path, recursive: true, keyPrefix: sourceKey(repo.name, ''), keyOf: (relative) => sourceKey(repo.name, relative) })),
       ...scopes.map(({ scope, store }) => ({ id: `vault:${scope.scopeId}`, path: store.vaultRoot, recursive: true, keyPrefix: vaultKey(scope.scopeId, ''), keyOf: (relative) => vaultKey(scope.scopeId, relative) })),
-      ...[...new Set(listConfigFiles(project).map((file) => path.dirname(file.absolute)))].filter((directory) => fs.existsSync(directory))
+      ...[...new Set(configFilesOf(project).map((file) => path.dirname(file.absolute)))].filter((directory) => fs.existsSync(directory))
         .map((directory) => ({ id: `config:${directory}`, path: directory, recursive: false, keyPrefix: CONFIG_PREFIX, keyOf: (relative) => configKey(path.join(directory, relative)) })),
     ])
 
@@ -566,6 +571,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       if (earlierLayout.has(scope.scopeId) && entry.state === 'current' && layoutHeldOf(scope.scopeId).length === 0) invalidate(scope.scopeId, null)
     }
     for (const change of changes) for (const { scope } of scopes) if (change.scopeId === undefined || change.scopeId === scope.scopeId) invalidate(scope.scopeId, change.changeClass)
+    // A bound personal workspace is composed again at every full reconciliation, whatever changed: an enrolled
+    // repository's identity or ignore rules can stop a generation holding without a file this engine observes.
+    if (full && personalWorkspaceBindingOf(project) !== null) for (const { scope } of scopes) invalidate(scope.scopeId, null)
 
     // Invalidation is durable before any work: a view is not reported current while it is being rebuilt.
     for (const [scopeId, classes] of attempt) entries.set(scopeId, { ...demote(entries.get(scopeId), 'stale', 'invalidated', now), changeClasses: [...classes].sort() })
@@ -598,6 +606,9 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
         if (!isTypedRefusal(error)) throw error
         for (const scopeId of attempt.keys()) entries.set(scopeId, demote(entries.get(scopeId), 'stale', error.code, now))
         if (REREAD_CODES.has(error.code)) forceFull = true
+        // The personal workspace refused the bound generation: the project is loaded again at the next tick, so a
+        // loader that now binds another generation is followed.
+        if (error.detail?.source === 'personal-workspace') project = null
       }
       for (const { scope, store } of built ? scopes.filter((item) => attempt.has(item.scope.scopeId)) : []) {
         const { scopeId } = scope
