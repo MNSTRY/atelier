@@ -918,16 +918,26 @@ keeps one projection configuration per person.
   generation is a closed, verified inventory, and an extra file there would
   invalidate it. This is provisional until the per-person projection
   configuration exists.
-- **Edits.** A vault edit to a private note is a proposal only. Source apply
-  refuses it with `personal-overlay-proposals-only` and never writes into a
-  generation.
+- **Edits.** A vault edit to a private note is never applied. Source apply
+  refuses it with `personal-overlay-proposals-only`. The proposal adapter does
+  not record it as a proposal either: it refuses it with
+  `source-ignore-state-unknown`, because a generation is not a Git work tree.
+  Nothing is written into a generation, and the view stays
+  `held-for-your-edit` until the edit is undone. Turning such an edit into a
+  change of the person's overlay is not built.
+- **Reserved settings key.** The settings member
+  `ext["mnstry.atelier.personal-workspace"]` is reserved: the binding writes it
+  in memory. A project configuration that declares it itself is refused at
+  every build (`personal-binding-lost`).
 
 Composition rebuilds the graph on every build, and the graph file cache is not
-used for a bound project. One build costs several times a plain cached build,
-and it runs synchronously. No service or `open` binding may be added until the
-build is either cached (with the same identity tests) or composed off the
-event loop, and is measured on a realistic corpus against the service's five
-second health probe.
+used for a bound project. Loading a bound project composes too, and the engine
+loads it again after a refusal. One build or load costs several times a plain
+cached build, and it runs synchronously. A bound project is also re-prepared at
+every full reconciliation even when nothing changed. No service or `open`
+binding may be added until both the load and the build are either cached (with
+the same identity tests) or composed off the event loop, and are measured on a
+realistic corpus against the service's five second health probe.
 
 ## Known limits
 

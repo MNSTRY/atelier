@@ -21,9 +21,9 @@
   person's manifest and overlay, so a generation that stops holding is refused
   at the next tick. A copy of a bound project that lost its binding is refused.
   `view add`, `audience` and `location` refuse on a bound project and write
-  nothing, and a vault edit to a private note is a proposal only. A theme is
-  never written, and coverage is passed through unread. No command or service
-  binds a personal workspace yet.
+  nothing, and a vault edit to a private note is refused, never applied. A
+  theme is never written, and coverage is passed through unread. No command or
+  service binds a personal workspace yet.
 
 - The knowledge workspace states its supported interfaces
   (`docs/knowledge-workspace.md`).
