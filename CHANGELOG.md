@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Personal workspaces are published as `@mnstry/atelier/personal-workspace`,
+  with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
+  public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,
+  `PersonalWorkspaceRefusal`, `loadPersonalManifest`, `loadPersonalOverlay`,
+  `resolvePersonalWorkspace`, `planPersonalGeneration`,
+  `materializePersonalGeneration` and `composePersonalWorkspace`. The composition
+  is manifest-only, with enforcement `none`: filesystem access, disclosure,
+  effects and the host sandbox are reported as uncovered, and no consent or
+  effect enforcement is claimed. The manifest and overlay schemas join the
+  contract corpus.
+
 - The ingestion store adds `getEvidence`, which returns one exact evidence span
   after rechecking only that source and its stored attempt. Query and
   `getEvidence` both report `readScope: "all-plan"`: they read at the scope of
