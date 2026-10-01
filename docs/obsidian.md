@@ -860,8 +860,9 @@ A personal workspace (see [personal-workspace.md](personal-workspace.md)) is
 projected through one route, `bindPersonalWorkspace({ personalHome,
 generationId })` in `src/projection/obsidian/personal-workspace.mjs`. Both
 arguments are explicit; neither is discovered from the environment or the
-working directory. No command or service binds one yet: that waits for the
-selection seam that keeps one projection configuration per person.
+working directory. A loader uses `loadBoundProject` with the same arguments.
+No command or service binds one yet: that waits for the selection seam that
+keeps one projection configuration per person.
 
 - **One graph.** The binding is attached to the generation's resolved
   `atelier.project.json` under one symbol key. When a project carries it, the
@@ -871,20 +872,40 @@ selection seam that keeps one projection configuration per person.
   through it, so they read one graph. A plain build of the generation's
   configuration would differ: there, a shared note's link can name a private
   note, and composition never lets a private note be a link target.
+- **A copy is refused.** The settings member names the bound generation. A copy
+  of a bound project that lost the binding (a structured clone, a JSON round
+  trip) refuses `personal-binding-lost`, and is never built as an ordinary
+  project.
 - **Validity.** Composition decides whether the generation may be used, at bind
   time and at every build. Its refusals keep their codes (`stale-generation`,
   `generation-missing`, `generation-corrupt`, `generation-relocated`,
   `retained-removed-reference`, `not-private-location`, `root-symlinked`,
   `ambient-git-environment`, `future-schema`, `ambiguous-binding` and the rest).
-  A binding throws the module's own `PersonalWorkspaceRefusal`. A build refuses
-  with the same code as a maintenance refusal, so each view says why and none
-  is current. Nothing is published, and no vault, manifest, journal or private
-  home byte is written.
+  `bindPersonalWorkspace` throws them as `PersonalWorkspaceRefusal`.
+  `loadBoundProject` and every build refuse with the same code as a maintenance
+  refusal, so the engine and every command report it typed, and no view stays
+  current. Nothing is published, and no vault, manifest, journal or private home
+  byte is written. A refusal the projection adds (`personal-view-id-reserved`,
+  `personal-views-exceed-settings-limit`) is a maintenance refusal from the
+  start.
+- **Staleness is noticed at the next tick.** The engine observes the person's
+  `atelier.personal.json` and `atelier.overlay.json` and the bound generation's
+  `generation.json` as configuration. A change to any of them prepares every
+  view again on the next tick, unasked, and a generation that no longer holds
+  is refused there. Every full reconciliation composes a bound workspace again,
+  so a change no observed file shows (a repository's remote, its ignore rules)
+  is refused within the reconciliation interval. After a refusal the engine
+  loads the project again at the next tick, so a loader that binds the next
+  generation is followed. The generation's record and the settings member both
+  name the generation, so a rebound generation invalidates every view even when
+  its configuration file is byte-identical.
 - **Views.** The overlay's saved views become scopes in memory: each is a
   scoped view of the repositories it names, and `everything` is a full view of
-  the composed graph. A saved view named `everything` is refused. The
-  preferred view, when it names a saved one, is the default. No generation
-  file is written. `view add` refuses `views-from-personal-overlay`;
+  the composed graph. A saved view named `everything` is refused. More than 255
+  saved views, or a view of more than 256 repositories, is refused at bind
+  (`personal-views-exceed-settings-limit`), within the Obsidian settings
+  contract. The preferred view, when it names a saved one, is the default. No
+  generation file is written. `view add` refuses `views-from-personal-overlay`;
   `audience set`, `audience clear` and `location set` refuse
   `personal-binding-decision-unavailable`. Each refuses before anything is
   resolved or written.
@@ -897,14 +918,16 @@ selection seam that keeps one projection configuration per person.
   generation is a closed, verified inventory, and an extra file there would
   invalidate it. This is provisional until the per-person projection
   configuration exists.
-- **Edits.** A vault edit to a private note is never applied into a
-  generation: source apply refuses it, typed, because the generation is not a
-  Git worktree.
+- **Edits.** A vault edit to a private note is a proposal only. Source apply
+  refuses it with `personal-overlay-proposals-only` and never writes into a
+  generation.
 
 Composition rebuilds the graph on every build, and the graph file cache is not
-used for a bound project. An engine bound to a generation sees that generation
-stop holding only when a view is prepared again: a source change, a requested
-preparation, or a retry. Moving to a new generation means binding again.
+used for a bound project. One build costs several times a plain cached build,
+and it runs synchronously. No service or `open` binding may be added until the
+build is either cached (with the same identity tests) or composed off the
+event loop, and is measured on a realistic corpus against the service's five
+second health probe.
 
 ## Known limits
 
