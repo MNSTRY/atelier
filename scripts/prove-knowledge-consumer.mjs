@@ -14,8 +14,14 @@
 // before anything is installed. Set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 to allow
 // one declared step that first fetches the locked closure from the registry; the
 // receipt records whether it ran. The installed CLI runs through the current Node
-// (process.execPath) on every platform. Any earlier receipt is removed before the
-// inputs are checked, and a run that stops unexpectedly writes passed: false.
+// (process.execPath) on every platform, with its own empty home and configuration
+// folders. The tarball's bytes are read once: the hashed bytes are the installed
+// bytes. The installed dependency tree is recorded and checked against the locked
+// closure. Any earlier receipt is removed before the inputs are checked. Refusals
+// before the temporary consumer exists (missing tarball, digest mismatch, lockfile,
+// bootstrap or cache failures) exit non-zero and leave no receipt; after that, a
+// failed step or an unexpected stop writes passed: false. Failure text in the
+// receipt replaces known local roots with placeholders.
 //
 //   ATELIER_CANDIDATE_TARBALL=<file.tgz> [ATELIER_EXPECTED_TARBALL_SHA256=<hex>]
 //   [ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1] [ATELIER_KNOWLEDGE_CONSUMER_OUTPUT=<dir>]
@@ -41,7 +47,9 @@ if (!tarball || !fs.existsSync(tarball)) {
   console.error('prove-knowledge-consumer: set ATELIER_CANDIDATE_TARBALL to an existing packed tarball')
   process.exit(2)
 }
-const tarballSha256 = createHash('sha256').update(fs.readFileSync(tarball)).digest('hex')
+// Read once: these exact bytes are hashed, copied into the consumer and installed.
+const tarballBytes = fs.readFileSync(tarball)
+const tarballSha256 = createHash('sha256').update(tarballBytes).digest('hex')
 if (process.env.ATELIER_EXPECTED_TARBALL_SHA256 && process.env.ATELIER_EXPECTED_TARBALL_SHA256 !== tarballSha256) {
   console.error(`prove-knowledge-consumer: tarball SHA-256 mismatch: expected ${process.env.ATELIER_EXPECTED_TARBALL_SHA256}, got ${tarballSha256}`)
   process.exit(2)
@@ -59,8 +67,10 @@ if (bootstrap && closure.length > 0) execNpmSync(['cache', 'add', ...closure], n
 if (closure.length > 0) {
   try {
     execNpmSync(['cache', 'add', '--offline', ...closure], npmOptions)
-  } catch {
-    console.error('prove-knowledge-consumer: the locked dependency closure is not in the npm cache; set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 for one declared registry fetch')
+  } catch (error) {
+    // Only npm's ENOTCACHED is a cold cache; anything else is reported as itself.
+    if (/ENOTCACHED/.test(String(error?.stderr ?? ''))) console.error('prove-knowledge-consumer: the locked dependency closure is not in the npm cache; set ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1 for one declared registry fetch')
+    else console.error(`prove-knowledge-consumer: the offline npm cache check failed (not a cold cache): ${error?.code ?? error?.status ?? 'unknown'}`)
     process.exit(2)
   }
 }
@@ -69,10 +79,17 @@ const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'atelier-kno
 const app = path.join(temp, 'app')
 const ws = path.join(temp, 'workspace')
 const emptyGitConfig = path.join(temp, 'gitconfig')
+const home = path.join(temp, 'home')
+const xdgConfig = path.join(temp, 'xdg-config')
 // The consumer's Git identity is invented, no inherited GIT_* variable can retarget
-// its repository, and no system or global Git configuration is read.
+// its repository, and no system or global Git configuration is read. The installed
+// CLI removes GIT_* from its own Git calls, so the home and XDG folders are empty
+// temporary folders too: Git's default global files resolve there.
 const env = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
+  HOME: home,
+  USERPROFILE: home,
+  XDG_CONFIG_HOME: xdgConfig,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_CONFIG_GLOBAL: emptyGitConfig,
   GIT_AUTHOR_NAME: 'Consumer Proof',
@@ -88,6 +105,7 @@ const redact = (text) => locations.reduce((value, [location, label]) => value.sp
 const steps = []
 let unexpected = null
 let installedVersion = null
+let installedClosure = null
 const record = (step) => { steps.push(step); return step }
 const run = (label, command, args, { cwd = ws, input, expect = 0 } = {}) => {
   const result = spawnSync(command, args, { cwd, env, input, encoding: 'utf8', timeout: STEP_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
@@ -102,9 +120,24 @@ const check = (label, condition, detail = null) => record({ label, check: true, 
 
 try {
   fs.writeFileSync(emptyGitConfig, '')
+  fs.mkdirSync(home)
+  fs.mkdirSync(xdgConfig)
   fs.mkdirSync(app)
   fs.writeFileSync(path.join(app, 'package.json'), `${JSON.stringify({ name: 'atelier-knowledge-consumer', private: true, type: 'module' }, null, 2)}\n`)
-  execNpmSync(['install', tarball, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], { ...npmOptions, cwd: app })
+  const candidate = path.join(temp, 'candidate.tgz')
+  fs.writeFileSync(candidate, tarballBytes)
+  check('the installed bytes are the hashed tarball', createHash('sha256').update(fs.readFileSync(candidate)).digest('hex') === tarballSha256)
+  execNpmSync(['install', candidate, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], { ...npmOptions, cwd: app })
+  // Record what npm actually resolved and require it to lie within the locked closure.
+  let tree
+  try { tree = JSON.parse(execNpmSync(['ls', '--all', '--json', '--offline'], { ...npmOptions, cwd: app, encoding: 'utf8' })) }
+  catch (error) { tree = JSON.parse(String(error?.stdout || '{}')) }
+  const resolved = new Set()
+  const walk = (dependencies = {}) => { for (const [name, node] of Object.entries(dependencies)) { if (node?.version) resolved.add(`${name}@${node.version}`); walk(node?.dependencies) } }
+  walk(tree?.dependencies?.['@mnstry/atelier']?.dependencies)
+  const locked = new Set(closure)
+  installedClosure = { resolved: resolved.size, outsideLock: [...resolved].filter((spec) => !locked.has(spec)).sort() }
+  check('the installed dependency tree lies within the locked closure', resolved.size > 0 && installedClosure.outsideLock.length === 0, installedClosure)
   const installedRoot = path.join(app, 'node_modules', '@mnstry', 'atelier')
   const installed = JSON.parse(fs.readFileSync(path.join(installedRoot, 'package.json'), 'utf8'))
   installedVersion = installed.version
@@ -123,7 +156,7 @@ try {
   atelier('build', ['build'])
 
   const question = 'Can the blue telescope be loaned this week?'
-  const packet = parse(atelier('context for a supported question', ['knowledge', 'context', '--question', question]))
+  const packet = parse(atelier('context for an answerable question', ['knowledge', 'context', '--question', question]))
   const selected = (packet?.sources ?? []).map((source) => source.id)
   check('context packet is versioned', packet?.schema === 'atelier-knowledge-context@v1', packet?.schema)
   check('context for an answerable question selects its caveat source', selected.includes('loan:inspection'), selected)
@@ -177,6 +210,7 @@ try {
     tarball: path.basename(tarball),
     tarballSha256,
     packageVersion: installedVersion,
+    installedClosure,
     node: process.version,
     platform: process.platform,
     network: bootstrap ? 'bootstrap-registry-fetch-then-offline' : 'offline',

@@ -79,12 +79,15 @@ with that host's use of it.
 Maintainers check a packed candidate with `npm run knowledge:consumer-proof`, with
 `ATELIER_CANDIDATE_TARBALL` set to the tarball.
 
-- **Install.** The script installs the tarball into a clean temporary consumer
-  and runs the installed CLI with the current Node. The install runs offline,
-  from the locked dependency closure already in the npm cache. With a cold cache
-  it refuses before installing anything. Set
-  `ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1` to allow one declared registry fetch
-  of that closure first; the receipt records whether it ran.
+- **Install.** The script reads the tarball once, installs exactly those
+  hashed bytes into a clean temporary consumer, and runs the installed CLI with
+  the current Node, an empty temporary home and no global or system Git
+  configuration. The install runs offline, from the locked dependency closure
+  already in the npm cache. With a cold cache it refuses before installing
+  anything. Set `ATELIER_KNOWLEDGE_CONSUMER_BOOTSTRAP=1` to allow one declared
+  registry fetch of that closure first; the receipt records whether it ran. The
+  receipt also records the installed dependency tree, which must lie within the
+  locked closure.
 - **What it checks:**
   - context for an answerable question selects its caveat source (no answer is
     generated or judged);
@@ -96,9 +99,12 @@ Maintainers check a packed candidate with `npm run knowledge:consumer-proof`, wi
   - an owner correction: the edited source is reported stale, and earlier
     sessions report changed sources.
 - **The receipt** is bound to the tarball's SHA-256. Any earlier receipt is
-  removed before the inputs are checked, so a refused run leaves none. A step
-  failure or an unexpected stop writes `passed: false`. Local paths in failure
-  text are replaced with placeholders.
+  removed before the inputs are checked. Refusals before the temporary consumer
+  exists (missing tarball, digest mismatch, cold cache, bootstrap or lockfile
+  failure) exit non-zero and leave no receipt. After that, a step failure or an
+  unexpected stop writes `passed: false`. Known local roots in failure text
+  (the temporary folders, the tarball's folder, this repository and the home
+  folder) are replaced with placeholders; other paths may remain.
 
 A passing receipt shows that these documented CLI paths work for that tarball.
 It does not measure answer quality or cost.
