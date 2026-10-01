@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-personal-workspace-overlay.v1.schema.json",
+  "title": "atelier-personal-workspace-overlay@v1",
+  "description": "Private enrollment and interpretation only. This document grants no read, write, disclosure, consent, or effect authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "atelier-personal-workspace-overlay@v1"
+    },
+    "workspaceId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "annotations": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "target": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repoId",
+              "nodeId"
+            ],
+            "properties": {
+              "repoId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "nodeId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[^\\s]+$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0,
+                "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+              }
+            }
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "displayAlias": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "type": "string",
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^(\\S|\\S[\\s\\S]*\\S)$"
+            },
+            "uniqueItems": true
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0,
+            "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+          }
+        },
+        "required": [
+          "id",
+          "target",
+          "note"
+        ]
+      }
+    },
+    "connections": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "from": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repoId",
+              "nodeId"
+            ],
+            "properties": {
+              "repoId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "nodeId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[^\\s]+$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0,
+                "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+              }
+            }
+          },
+          "to": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repoId",
+              "nodeId"
+            ],
+            "properties": {
+              "repoId": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "nodeId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[^\\s]+$"
+              },
+              "ext": {
+                "type": "object",
+                "maxProperties": 0,
+                "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+              }
+            }
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0,
+            "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "to",
+          "label"
+        ]
+      }
+    },
+    "collections": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "members": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "repoId",
+                "nodeId"
+              ],
+              "properties": {
+                "repoId": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "nodeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[^\\s]+$"
+                },
+                "ext": {
+                  "type": "object",
+                  "maxProperties": 0,
+                  "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+                }
+              }
+            }
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0,
+            "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "members"
+        ]
+      }
+    },
+    "views": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "repoIds": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            }
+          },
+          "ext": {
+            "type": "object",
+            "maxProperties": 0,
+            "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "repoIds"
+        ]
+      }
+    },
+    "preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "theme": {
+          "enum": [
+            "light",
+            "dark",
+            "system"
+          ]
+        },
+        "defaultView": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "ext": {
+          "type": "object",
+          "maxProperties": 0,
+          "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+        }
+      },
+      "required": []
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "ext": {
+      "type": "object",
+      "maxProperties": 0,
+      "description": "Reserved for a later admitted extension. Non-empty extensions refuse in this version; they grant no authority."
+    }
+  },
+  "required": [
+    "schema",
+    "workspaceId",
+    "annotations",
+    "connections",
+    "collections",
+    "views",
+    "preferences"
+  ],
+  "$comment": "contract revision 1.0.0 (candidate personal workspace contract)"
+}
