@@ -17,3 +17,13 @@ test('the personal-workspace entry point exports exactly its frozen API', () => 
     'resolvePersonalWorkspace',
   ])
 })
+
+test('the personal-workspace schema subpaths resolve to the schemas the module names', async () => {
+  for (const [subpath, schema] of [
+    ['@mnstry/atelier/contracts/atelier-personal-workspace-manifest.v1.schema.json', personalWorkspace.MANIFEST_SCHEMA],
+    ['@mnstry/atelier/contracts/atelier-personal-workspace-overlay.v1.schema.json', personalWorkspace.OVERLAY_SCHEMA],
+  ]) {
+    const { default: document } = await import(subpath, { with: { type: 'json' } })
+    assert.equal(document.title, schema)
+  }
+})
