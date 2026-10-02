@@ -242,6 +242,26 @@ test('a library host must pass a well-formed owner-keys value', (t) => {
   assert.equal(mismatch(run(ws, { delegations, ownerKeys: forged })).details.delegationReason, 'delegation-owner-keys-invalid')
 })
 
+test('an entry named ext is ordinary policy and stays bound', (t) => {
+  const { privateKeyDoc, publicKeyDoc } = owner()
+  const ws = workspace(t)
+  ws.policy.repos.ext = { kind: 'shared', readBoundary: 'team', allowedAudiences: ['team'], forbiddenAudiences: ['private', 'sensitive'], autoCommit: 'guarded' }
+  const delegations = delegationsDoc(delegation(ws, privateKeyDoc))
+  ws.policy.repos.ext.allowedAudiences.push('private')
+  const report = run(ws, { delegations, ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })
+  assert.equal(report.findings.find((item) => item.code === 'private-domain-actor-mismatch').details.delegationReason, 'delegation-policy-changed')
+})
+
+test('owner and operator ids must be plain identifiers', (t) => {
+  const ws = workspace(t)
+  const { privateKeyDoc } = owner()
+  for (const id of ['operator\u001b[8m-b', 'operator\nrepositories: none', 'operator‐b']) {
+    ws.policy.actors[id] = { gitEmails: ['x@example.invalid'], privateDomainRepo: PRIVATE }
+    const errors = validateDelegationsDocument(delegationsDoc(delegation(ws, privateKeyDoc, { operator: id })), ws.policy)
+    assert.ok(errors.some((message) => /operator must be a declared actor with a plain identifier/.test(message)), JSON.stringify(id))
+  }
+})
+
 test('T11 two matching delegations are ambiguous and grant nothing', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
@@ -393,12 +413,18 @@ test('T19 the owner drafts, signs against the current project and verifies; chec
   const cli = (args) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', cwd: ws.root, env: { ...process.env, ATELIER_BOUNDARY_OWNER_KEYS: path.join(keyDir, 'keys.json') } })
   const keygen = cli(['attestation', 'keygen', '--key-id', 'owner-a-key', '--out', path.join(keyDir, 'owner.key.json')])
   assert.equal(keygen.status, 0, keygen.stderr)
+  // An operator-editable field with a terminal escape must reach the owner neutralised.
+  ws.policy.actors['operator-b'].githubLogin = 'op\u001b[8mhidden'
+  writeJson(path.join(ws.root, 'boundary-policy.v1.json'), ws.policy)
   const draft = cli(['boundary', 'delegation', 'draft', ...projectArgs, '--id', 'operator-b-commits', '--owner', 'owner-a', '--operator', 'operator-b',
     '--repos', PRIVATE, '--operations', 'pre-commit', '--not-before', '2026-01-15T00:00:00Z', '--expires', '2026-03-01T00:00:00Z', '--out', path.join(keyDir, 'draft.json')])
   assert.equal(draft.status, 0, draft.stderr)
   const signed = cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'draft.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json'), '--out', path.join(keyDir, 'signed.json')])
   assert.equal(signed.status, 0, signed.stderr)
   assert.match(signed.stderr, /operator operator-b may pass the actor check owned by owner-a/)
+  assert.match(signed.stderr, /recognised by githubLogin op\?\[8mhidden and gitEmails operator-b@example\.invalid/)
+  assert.match(signed.stderr, /policy and repository set stay sha256:[0-9a-f]{64}/)
+  assert.equal(/[\u0000-\u0008\u000b-\u001f\u007f]/.test(signed.stderr), false)
   assert.equal(cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'signed.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json')]).status, 2)
   // A draft whose bindings do not match the current project is refused before signing.
   const stale = JSON.parse(fs.readFileSync(path.join(keyDir, 'draft.json'), 'utf8'))
@@ -421,6 +447,8 @@ test('T19 the owner drafts, signs against the current project and verifies; chec
   assert.equal(check.status, 1)
   const reason = JSON.parse(check.stdout).errors.find((item) => item.code === 'private-domain-actor-mismatch').details.delegationReason
   assert.ok(['delegation-owner-key-missing', 'delegation-owner-keys-untrusted'].includes(reason), reason)
+  fs.writeFileSync(path.join(ws.root, 'boundary-delegations.v1.json'), 'null')
+  assert.ok(JSON.parse(cli(['boundary', 'check', ...projectArgs, '--actor', 'operator-b', '--json']).stdout).errors.some((item) => item.code === 'boundary-delegations-invalid'))
   fs.writeFileSync(path.join(ws.root, 'boundary-delegations.v1.json'), '{')
   const broken = JSON.parse(cli(['boundary', 'check', ...projectArgs, '--actor', 'operator-b', '--json']).stdout)
   assert.ok(broken.errors.some((item) => item.code === 'boundary-delegations-invalid'))

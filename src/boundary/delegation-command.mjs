@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import { loadSigningKey, signDocument, verifyDocument } from '../attestation/sign.mjs'
+import { loadSigningKey, safeLabel, signDocument, verifyDocument } from '../attestation/sign.mjs'
 import { commandProject, firstString, parseArgs } from '../project/config.mjs'
 import { HOST_OWNER_KEYS_PATH, delegationBindings, draftDelegation, loadOwnerKeysFile, validateDelegation } from './delegation.mjs'
 import { loadBoundaryPolicy } from './policy.mjs'
@@ -73,6 +73,7 @@ function runDraft(args, argv) {
     notBefore: firstString(args['not-before']) ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     expiresAt,
   })
+  if (!draft.ok && !draft.errors.every((message) => /repoRoots/.test(message))) fail(draft.errors.join('\n'))
   if (Object.values(draft.delegation.repoRoots).some((root) => !root)) fail('every listed repository needs at least one commit before it can be delegated')
   if (!draft.ok) fail(draft.errors.join('\n'))
   writeOutput(firstString(args.out), draft.delegation)
@@ -94,13 +95,17 @@ function runSign(args, argv) {
   if (doc.repos.some((name) => !expected.repoRoots[name] || doc.repoRoots[name] !== expected.repoRoots[name])) {
     fail('the draft does not bind these repositories\' root commits; draft it again from this project')
   }
+  // Every value is printed through safeLabel: ids come from operator-editable files.
+  const operatorActor = policy.actors[doc.operator] ?? {}
+  const label = (value) => safeLabel(value, 160)
   console.error([
     'Authorizing:',
-    `  operator ${doc.operator} may pass the actor check owned by ${doc.owner}`,
-    `  repositories: ${doc.repos.map((name) => `${name} (root ${doc.repoRoots[name].slice(0, 12)})`).join(', ')}`,
-    `  operations: ${doc.operations.join(', ')}`,
-    `  from ${doc.notBefore} until ${doc.expiresAt}`,
-    `  while the boundary policy and repository set stay ${doc.policyDigest.slice(0, 19)}`,
+    `  operator ${label(doc.operator)} may pass the actor check owned by ${label(doc.owner)}`,
+    `  the operator is recognised by githubLogin ${label(operatorActor.githubLogin ?? '(none)')} and gitEmails ${(operatorActor.gitEmails ?? []).map((email) => label(email)).join(', ') || '(none)'}`,
+    ...doc.repos.map((name) => `  repository ${label(name)} with root commit ${label(doc.repoRoots[name])}`),
+    `  operations: ${doc.operations.map((op) => label(op)).join(', ')}`,
+    `  from ${label(doc.notBefore)} until ${label(doc.expiresAt)}`,
+    `  while the boundary policy and repository set stay ${label(doc.policyDigest)}`,
   ].join('\n'))
   let signed
   try {

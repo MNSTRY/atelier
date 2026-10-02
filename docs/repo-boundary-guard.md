@@ -118,9 +118,12 @@ machine can replace the host key file.
     and of the project's managed repository names;
   - each listed repository's root commit.
 
-  Any later edit voids it until the owner signs again, and it cannot be replayed
-  into another project that reuses the same names. A repository needs at least
-  one commit before it can be delegated.
+  Any later edit to them voids it until the owner signs again. It cannot be
+  replayed into an independently created repository that reuses the same names.
+  A fork, or any history built on the same root commit, shares that identity.
+  Other project configuration (repo access, graph settings, repository paths)
+  is not bound. A repository needs at least one commit before it can be
+  delegated.
 - **Who signs.** The owner, with their own key from `atelier attestation
   keygen`.
   - `atelier boundary delegation draft` prepares the document.
@@ -138,10 +141,13 @@ machine can replace the host key file.
     by root that are not group- or world-writable.
   - The checks run on the open file, which is also what is read.
   - The root account itself is refused.
-  - On Windows owner keys are not supported yet, so a delegation never applies
-    there.
+  - On Windows the command line does not support owner keys yet, so a
+    delegation never applies through `atelier boundary check` there.
   - A library host passes `ownerKeys` and `delegations` to `checkBoundaryPolicy`
-    directly; the keys are validated either way.
+    directly, on any platform. It vouches for those keys itself; Atelier
+    validates their shape either way.
+  - Owner and operator ids in a delegation must be plain identifiers (letters,
+    digits, `.`, `_`, `-`), because the owner reads them when signing.
 - **Revocation.** The host adds the delegation id to `revokedDelegations` in
   that file, or removes the owner's key, which revokes everything the owner
   issued. Removing the delegation from the operator-writable document also stops

@@ -36,6 +36,9 @@ const DELEGATION_KEYS = ['schema', 'id', 'owner', 'operator', 'repos', 'operatio
 const VERSION_RE = /^1\.[0-9]+\.[0-9]+$/
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const REPO_RE = /^[a-z0-9][a-z0-9._-]*$/
+// Owner and operator ids are shown to the signing owner, so they are restricted
+// to printable identifiers: no control characters, spaces or lookalikes.
+export const DELEGATION_ACTOR_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/
 const COMMIT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
@@ -50,29 +53,47 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const boundedString = (value, max = 128) => typeof value === 'string' && value.length > 0 && value.length <= max
 const timeOf = (value) => (typeof value === 'string' && UTC_RE.test(value) ? Date.parse(value) : Number.NaN)
 
-// `ext` is never read, so it is removed at every level before hashing.
-function withoutExt(value) {
-  if (Array.isArray(value)) return value.map(withoutExt)
+// `ext` is never read, so it is removed before hashing, but only at the
+// extension positions the schema declares. A repository or actor that happens
+// to be named `ext` is ordinary policy and stays bound.
+const dropExt = (value) => {
   if (!isObject(value)) return value
-  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'ext').map(([key, item]) => [key, withoutExt(item)]))
+  const { ext, ...rest } = value
+  return rest
+}
+function withoutExt(policy) {
+  if (!isObject(policy)) return policy ?? null
+  const out = dropExt(policy)
+  const each = (map) => (isObject(map) ? Object.fromEntries(Object.entries(map).map(([key, item]) => [key, dropExt(item)])) : map)
+  if (Object.hasOwn(out, 'repos')) out.repos = each(out.repos)
+  if (Object.hasOwn(out, 'actors')) out.actors = each(out.actors)
+  if (Object.hasOwn(out, 'promotion')) out.promotion = dropExt(out.promotion)
+  if (Array.isArray(out.contentRules)) out.contentRules = out.contentRules.map(dropExt)
+  if (Array.isArray(out.contentRuleExceptions)) out.contentRuleExceptions = out.contentRuleExceptions.map(dropExt)
+  return out
 }
 
 const managedRepoNames = (project) => (project?.repos ?? []).filter((repo) => !repo.external).map((repo) => repo.name).sort()
 
 /**
  * The digest a delegation binds: the whole boundary policy (ext excluded) and the
- * project's managed repository names. Any later edit voids every delegation until
- * the owner signs again, so a delegated operator cannot loosen anything in place.
+ * project's managed repository names. Any later edit to them voids every
+ * delegation until the owner signs again. Other project configuration (repo
+ * access, graph settings, repository paths) is not bound.
  */
 export function policyDigest(policy, project) {
-  const bound = { policy: withoutExt(policy ?? null), managedRepos: managedRepoNames(project) }
+  const bound = { policy: withoutExt(policy), managedRepos: managedRepoNames(project) }
   return `sha256:${crypto.createHash('sha256').update(canonicalize(bound), 'utf8').digest('hex')}`
 }
 
-/** The repository's identity: its first root commit, or null when it has none. */
+/**
+ * The repository's identity: the lowest-sorting root commit of HEAD, ignoring
+ * replace refs, or null when it has none. Forks and histories built on the same
+ * root share it; independently created repositories do not.
+ */
 export function repoRootCommit(repoPath, { gitExecutable = 'git' } = {}) {
   if (!repoPath) return null
-  const result = spawnSync(gitExecutable, ['-C', repoPath, 'rev-list', '--max-parents=0', 'HEAD'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
+  const result = spawnSync(gitExecutable, ['--no-replace-objects', '-C', repoPath, 'rev-list', '--max-parents=0', 'HEAD'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
   if (result.status !== 0) return null
   const roots = result.stdout.split('\n').map((line) => line.trim()).filter((line) => COMMIT_RE.test(line)).sort()
   return roots[0] ?? null
@@ -91,8 +112,8 @@ function delegationErrors(item, at, { actors, repos }) {
   if (item.ext != null && !isObject(item.ext)) errors.push(`${at}.ext must be an object`)
   if (item.schema !== DELEGATION_SCHEMA) errors.push(`${at}.schema must be ${DELEGATION_SCHEMA}`)
   if (typeof item.id !== 'string' || !ID_RE.test(item.id)) errors.push(`${at}.id is invalid`)
-  if (!boundedString(item.owner) || !Object.hasOwn(actors, item.owner)) errors.push(`${at}.owner must be a declared actor`)
-  if (!boundedString(item.operator) || !Object.hasOwn(actors, item.operator)) errors.push(`${at}.operator must be a declared actor`)
+  if (typeof item.owner !== 'string' || !DELEGATION_ACTOR_RE.test(item.owner) || !Object.hasOwn(actors, item.owner)) errors.push(`${at}.owner must be a declared actor with a plain identifier`)
+  if (typeof item.operator !== 'string' || !DELEGATION_ACTOR_RE.test(item.operator) || !Object.hasOwn(actors, item.operator)) errors.push(`${at}.operator must be a declared actor with a plain identifier`)
   if (item.owner === item.operator) errors.push(`${at}.operator must differ from the owner`)
   const repoNames = Array.isArray(item.repos) ? item.repos : []
   if (!repoNames.length || repoNames.length > MAX_REPOS || new Set(repoNames).size !== repoNames.length) {
@@ -248,7 +269,12 @@ export function loadOwnerKeysFile(file = HOST_OWNER_KEYS_PATH, { platform = proc
       return untrusted('owner keys file changed while it was checked')
     }
     for (let dir = path.dirname(real); ; dir = path.dirname(dir)) {
-      const info = fs.statSync(dir)
+      let info
+      try {
+        info = fs.statSync(dir)
+      } catch {
+        return untrusted('owner keys file directories changed while they were checked')
+      }
       if ((info.uid !== trustedUid && info.uid !== 0) || (info.mode & 0o022) !== 0) {
         return untrusted('owner keys file must be in directories owned by the trusted account and not group- or world-writable')
       }
@@ -291,11 +317,14 @@ export function delegationsPathFor(policyPath) {
 /** Read the delegations document beside the policy, if one exists. */
 export function loadDelegationsFile(file) {
   if (!fs.existsSync(file)) return { present: false, document: null, errors: [] }
+  let document
   try {
-    return { present: true, document: JSON.parse(fs.readFileSync(file, 'utf8')), errors: [] }
+    document = JSON.parse(fs.readFileSync(file, 'utf8'))
   } catch {
     return { present: true, document: null, errors: ['delegations document is not valid JSON'] }
   }
+  if (!isObject(document)) return { present: true, document: null, errors: ['delegations document must be a JSON object'] }
+  return { present: true, document, errors: [] }
 }
 
 /**
