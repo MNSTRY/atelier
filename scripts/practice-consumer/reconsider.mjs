@@ -40,7 +40,7 @@ const TERM = 'decision-material'
 const MAX_SOURCE_BYTES = 32768
 const MAX_EXCERPT_LINES = 120
 const CONTEXT_LINES = 3
-const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-source-predicate.v1' })
+const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-source-predicate.v2' })
 
 export const definition = () => JSON.parse(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8'))
 
@@ -119,7 +119,9 @@ export function citations(fragment, corpus = CORPUS) {
     if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('/')) continue
     const file = path.posix.normalize(path.posix.join(path.posix.dirname(corpus), target))
     if (file.startsWith('..')) continue
-    const cited = hash === -1 ? { file, anchor: null } : { file, anchor: null, ...anchorOf(match[1].slice(hash + 1)) }
+    const fragment = hash === -1 ? null : match[1].slice(hash + 1)
+    const parsed = fragment === null ? {} : anchorOf(fragment)
+    const cited = parsed.refusal ? { file, anchor: null, fragment, refusal: parsed.refusal } : { file, anchor: parsed.anchor ?? null }
     const key = `${file}#${cited.anchor?.value ?? cited.refusal ?? ''}`
     if (!out.some((item) => `${item.file}#${item.anchor?.value ?? item.refusal ?? ''}` === key)) out.push(cited)
   }
@@ -297,7 +299,7 @@ function hunks(repo, base, head, file) {
       const start = Number(header[3])
       const count = header[4] === undefined ? 1 : Number(header[4])
       ranges.push([Math.max(1, start - CONTEXT_LINES), start + Math.max(count, 1) - 1 + CONTEXT_LINES])
-      spans.push({ oldStart, oldCount, removed: 0, added: 0 })
+      spans.push({ oldStart, oldCount, newStart: start, newCount: count, removed: 0, added: 0 })
       continue
     }
     // Count the actual changed lines, never hunk-header totals.
@@ -315,39 +317,57 @@ function hunks(repo, base, head, file) {
 
 /**
  * How a change relates to an anchored range of base lines [start, end], in old
- * (base) coordinates only. A hunk that removes or modifies base lines overlaps
- * the anchor when its old lines intersect it. An insertion after old line n is
- * inside the anchor only when start <= n < end, that is between two anchored
- * lines; an insertion directly before or after the anchor is outside it.
- * Changes inside decide relevance. Changes before or inside the anchor move or
- * alter its lines, so the anchor needs re-pointing whatever the assessment.
+ * (base) coordinates. A hunk that removes or modifies base lines touches the
+ * anchor on the old lines it shares with it; only those count as removed. An
+ * insertion after old line n is inside the anchor only when start <= n < end,
+ * between two anchored lines; an insertion directly before or after it is
+ * outside. Changes inside decide relevance; any change before or inside the
+ * anchor moves or alters its lines, so it needs re-pointing whatever the outcome.
+ *
+ * The head lines are found by mapping each endpoint on its own. A surviving old
+ * line moves by the net change of the hunks wholly above it. An endpoint inside
+ * a removed or replaced hunk maps to that hunk's new lines: the first for the
+ * start, the last for the end. For an empty replacement, git's new start names
+ * the line before the gap. No anchored head line remains when the mapped end
+ * precedes the mapped start.
  */
 export function anchorChange(spans, { start, end }) {
   let removed = 0
   let added = 0
-  let shiftBefore = 0
-  let shiftWithin = 0
   let outside = false
+  let moved = false
   for (const span of spans) {
-    const delta = span.added - span.removed
     const oldEnd = span.oldStart + span.oldCount - 1
-    if (span.oldCount > 0 ? oldEnd < start : span.oldStart < start) {
-      shiftBefore += delta
+    const before = span.oldCount > 0 ? oldEnd < start : span.oldStart < start
+    const inside = !before && (span.oldCount > 0 ? span.oldStart <= end : span.oldStart < end)
+    if (before) {
       outside = true
-    } else if (span.oldCount > 0 ? span.oldStart <= end : span.oldStart < end) {
+      if (span.added !== span.removed) moved = true
+    } else if (inside) {
       removed += span.oldCount > 0 ? Math.min(oldEnd, end) - Math.max(span.oldStart, start) + 1 : 0
       added += span.added
-      shiftWithin += delta
     } else {
       outside = true
     }
   }
-  const headStart = start + shiftBefore
-  const headEnd = end + shiftBefore + shiftWithin
+  const map = (line, side) => {
+    let shift = 0
+    for (const span of spans) {
+      const oldEnd = span.oldStart + span.oldCount - 1
+      if (span.oldCount > 0 && span.oldStart <= line && line <= oldEnd) {
+        if (span.newCount === 0) return side === 'start' ? span.newStart + 1 : span.newStart
+        return side === 'start' ? span.newStart : span.newStart + span.newCount - 1
+      }
+      if (span.oldCount > 0 ? oldEnd < line : span.oldStart < line) shift += span.added - span.removed
+    }
+    return line + shift
+  }
+  const headStart = map(start, 'start')
+  const headEnd = map(end, 'end')
   return {
     removed, added, outside,
     head: headEnd >= headStart ? { start: headStart, end: headEnd } : null,
-    reanchor: shiftBefore !== 0 || removed > 0 || added > 0,
+    reanchor: moved || removed > 0 || added > 0,
   }
 }
 
@@ -437,15 +457,17 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
     results.push(entry)
     for (const cited of decision.citations) {
       const { file, anchor } = cited
-      const anchorValue = anchor?.value ?? null
+      // An anchored outcome always carries the same shape: its value, the base
+      // and head references (null when not read), and the re-anchor report.
+      const unread = anchor ? { value: anchor.value, base: null, head: null, outsideChanges: false, reanchor: false } : null
       // A fragment that is not a line anchor is refused, never read as the whole file.
       if (cited.refusal) {
-        entry.outcomes.push({ file, anchor: null, status: 'not-evaluated', reason: cited.refusal })
+        entry.outcomes.push({ file, anchor: null, fragment: cited.fragment, status: 'not-evaluated', reason: cited.refusal })
         continue
       }
       const source = history.sources.get(file)
       if (!source) {
-        entry.outcomes.push({ file, anchor: anchorValue, status: 'not-evaluated', reason: history.unusable.get(file) })
+        entry.outcomes.push({ file, anchor: unread, status: 'not-evaluated', reason: history.unusable.get(file) })
         continue
       }
       // The anchored lines are read at the merge base, where the decision is read.
@@ -453,11 +475,11 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       if (anchor) {
         const baseLines = source.data.body.split('\n')
         if (anchor.end > baseLines.length) {
-          entry.outcomes.push({ file, anchor: anchorValue, status: 'not-evaluated', reason: 'cited-anchor-out-of-range' })
+          entry.outcomes.push({ file, anchor: unread, status: 'not-evaluated', reason: 'cited-anchor-out-of-range' })
           continue
         }
         if (anchor.end - anchor.start + 1 > MAX_EXCERPT_LINES) {
-          entry.outcomes.push({ file, anchor: anchorValue, status: 'not-evaluated', reason: 'cited-anchor-over-bounds' })
+          entry.outcomes.push({ file, anchor: unread, status: 'not-evaluated', reason: 'cited-anchor-over-bounds' })
           continue
         }
         baseAnchor = lineRef(file, base, anchor.start, anchor.end, baseLines.slice(anchor.start - 1, anchor.end).join('\n'))
@@ -465,23 +487,37 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       const fileChanged = changed.has(file)
       const headBuffer = show(repo, head, file)
       const headText = textOf(headBuffer)
+      const headLines = headText === null ? null : headText.split('\n')
       // Binary is decided from the contents at both commits, never from attributes.
       const binary = fileChanged && headBuffer !== null && headText === null
       // Renames are not followed: a moved or deleted file is absent at the head.
       const removedAtHead = fileChanged && headBuffer === null
       const diff = fileChanged ? hunks(repo, base, head, file) : { removed: 0, added: 0, ranges: [], spans: [] }
       const relation = anchor && fileChanged && !binary && !removedAtHead ? anchorChange(diff.spans, anchor) : null
+      // The anchored lines at the head, checked against the head itself: a mapped
+      // range the head does not have (a removed final LF, say) is lost, not unchanged.
+      let headRange = null
+      let lost = false
+      if (anchor && headLines !== null) {
+        headRange = !fileChanged ? { start: anchor.start, end: anchor.end } : relation.head
+        if (headRange && headRange.end > headLines.length) {
+          headRange = null
+          lost = true
+        }
+      }
       // The prerequisite: the cited source changed. For an anchor, its own lines
-      // changed, or the head can no longer show them (removed or binary).
-      const didChange = anchor ? fileChanged && (binary || removedAtHead || relation.removed + relation.added > 0) : fileChanged
+      // changed, or the head can no longer show them (removed, binary or lost).
+      const didChange = anchor ? fileChanged && (binary || removedAtHead || lost || relation.removed + relation.added > 0) : fileChanged
       if (didChange && !entry.changedCited.includes(file)) entry.changedCited.push(file)
       let change
       let region
-      let headRange = null
       if (anchor) {
-        headRange = !fileChanged ? { start: anchor.start, end: anchor.end } : relation?.head ?? null
         change = { binary, removed: relation?.removed ?? 0, added: relation?.added ?? 0 }
-        region = headRange ? { ...headRange, oversize: headRange.end - headRange.start + 1 > MAX_EXCERPT_LINES } : { start: 1, end: 1, oversize: false }
+        // The evidence excerpt is bounded like any other; the head reference below
+        // still names the whole mapped range.
+        region = headRange
+          ? { start: headRange.start, end: Math.min(headRange.end, headRange.start + MAX_EXCERPT_LINES - 1), oversize: headRange.end - headRange.start + 1 > MAX_EXCERPT_LINES }
+          : { start: 1, end: 1, oversize: false }
       } else {
         change = { ...diff, binary }
         if (change.binary) change.ranges = []
@@ -492,17 +528,16 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       const assessment = didChange
         ? assess({ ...change, oversize: region.oversize }, { removedAtHead })
         : { status: 'abstained', reason: 'insufficient-evidence', placeholder: true }
-      const headLines = headText === null ? null : headText.split('\n')
       const shown = headLines !== null && (!anchor || headRange !== null)
       const sourceText = headText === null
         ? `(${file} is ${headBuffer === null ? 'removed' : 'not text'} at ${head})`
-        : shown ? headLines.slice(region.start - 1, region.end).join('\n') : `(${file} ${anchorValue} at ${base} are removed at ${head})`
+        : shown ? headLines.slice(region.start - 1, region.end).join('\n') : `(${file} ${anchor.value} at ${base} has no corresponding lines at ${head})`
       const evidence = [
         evidenceItem({ role: 'source', requestId: 'e1', file, revision: head, text: sourceText, start: shown ? region.start : 1, end: shown ? region.end : 1 }),
         evidenceItem({ role: 'decision', requestId: 'e2', file: CORPUS, revision: base, text: decision.text, start: decision.start, end: decision.end }),
       ]
       // A whole-file citation keeps its revision-one identities.
-      const citedKey = anchor ? `${file}#${anchorValue}` : file
+      const citedKey = anchor ? `${file}#${anchor.value}` : file
       const request = { ...structuredClone(rubric), id: `pr${pr}-${decision.id}-${shortId('f', citedKey)}`,
         state: evidence.map((item) => `${item.requestId}: ${item.text}`).join('\n'), evidence: evidence.map(({ requestId, sourceRef }) => ({ id: requestId, sourceRef })) }
       const instance = {
@@ -514,7 +549,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
         spent: { stages: 0, evidence: 0, assessments: 0, proposals: 0 },
         request,
         result: resultFor(request, assessment),
-        proposal: { type: 'reconsideration', target: harnessRef(target), term: TERM, title: `Reconsider "${decision.title}" after ${anchor ? `${file} ${anchorValue}` : file} changed in pull request #${pr}` },
+        proposal: { type: 'reconsideration', target: harnessRef(target), term: TERM, title: `Reconsider "${decision.title}" after ${anchor ? `${file} ${anchor.value}` : file} changed in pull request #${pr}` },
       }
       const outcome = evaluateDecisionPractice({ records: history.records, definitionRef, instance })
       // What the Knowledge harness itself marks once the changed source is recorded.
@@ -530,10 +565,11 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
         // whether it must be re-pointed. Re-anchoring is reported apart from the
         // practice outcome, so a draft never hides it and a stop never drops it.
         anchor: anchor ? {
+          value: anchor.value,
           base: baseAnchor,
-          head: shown && headRange ? lineRef(file, head, headRange.start, headRange.end, sourceText) : null,
+          head: headRange ? lineRef(file, head, headRange.start, headRange.end, headLines.slice(headRange.start - 1, headRange.end).join('\n')) : null,
           outsideChanges: relation?.outside ?? false,
-          reanchor: binary || removedAtHead || (relation?.reanchor ?? false),
+          reanchor: binary || removedAtHead || lost || (relation?.reanchor ?? false),
         } : null,
         prerequisite: didChange, change: { removed: change.removed, added: change.added, binary: change.binary },
         assessment: assessment.placeholder ? { status: 'not-assessed', reason: 'prerequisite-false' }
@@ -620,11 +656,18 @@ export function main(argv = process.argv.slice(2)) {
     if (!measured) throw new Error('no measurement of this pull request to label')
     if (args.anchor === true) throw new Error(USAGE)
     const anchor = typeof args.anchor === 'string' ? args.anchor : null
-    // A v0 outcome has no anchor field; it is a whole-file citation.
-    const anchorOf = (item) => (typeof item.anchor === 'string' ? item.anchor : item.anchor?.base?.selector.value ?? null)
-    const matches = (JSON.parse(measured).decisions.find((item) => item.id === args.decision)?.outcomes ?? []).filter((item) => item.file === args.file && (anchor === null || anchorOf(item) === anchor))
-    if (matches.length === 0) throw new Error('the measurement has no outcome for this decision, file and anchor')
-    if (matches.length > 1) throw new Error('the file is cited more than once in this decision; name the --anchor')
+    // A v0 outcome has no anchor field; it is a whole-file citation. Without
+    // --anchor only the whole-file outcome of that file matches; a refused
+    // fragment (recorded with its raw fragment) is never a whole-file outcome.
+    const anchorOf = (item) => item.anchor?.value ?? null
+    const outcomes = JSON.parse(measured).decisions.find((item) => item.id === args.decision)?.outcomes ?? []
+    const matches = outcomes.filter((item) => item.file === args.file && anchorOf(item) === anchor && (anchor !== null || item.fragment === undefined))
+    if (matches.length === 0) {
+      const anchored = outcomes.some((item) => item.file === args.file && anchorOf(item) !== null)
+      throw new Error(anchor === null && anchored ? 'the file is cited with a line anchor in this decision; name the --anchor' : 'the measurement has no outcome for this decision, file and anchor')
+    }
+    // Citations are distinct, so more than one match means the outcomes are not the tool's own.
+    if (matches.length > 1) throw new Error('more than one outcome matches; the measurement line is not well formed')
     appendLine(out, label({ pr: args.pr, decision: args.decision, file: args.file, anchor: anchorOf(matches[0]), measurement: contentDigest(measured), value: args.label, reviewMinutes: Number(args.minutes), by: args.by, note: typeof args.note === 'string' ? args.note : '' }))
     return
   }
