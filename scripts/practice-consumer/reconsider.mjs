@@ -46,15 +46,16 @@ export const definition = () => JSON.parse(fs.readFileSync(path.join(HERE, 'defi
 // and global config and attributes are ignored, configuration and attribute
 // overrides from the environment are removed, diffs are forced to text and name
 // their algorithm and options, and paths are passed from the repository top.
+// The environment is an allowlist, so no GIT_* variable from the caller (pathspec
+// magic, replace refs, alternates, config or attribute overrides) reaches git.
 const GIT_ENV = (() => {
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ATTR_NOSYSTEM: '1' }
-  for (const key of ['GIT_EXTERNAL_DIFF', 'GIT_DIFF_OPTS', 'GIT_CONFIG', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_ATTR_SOURCE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[key]
-  return env
+  const env = {}
+  for (const key of ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'SYSTEMROOT', 'LANG', 'LC_ALL']) if (process.env[key] !== undefined) env[key] = process.env[key]
+  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ATTR_NOSYSTEM: '1', GIT_LITERAL_PATHSPECS: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' }
 })()
 const git = (repo, args, encoding = 'utf8') =>
   execFileSync('git', ['-C', repo, '-c', 'core.quotePath=false', '-c', `core.attributesFile=${os.devNull}`, ...args], { encoding, env: GIT_ENV, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
 const DIFF_OPTIONS = ['--text', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-algorithm=myers', '--no-indent-heuristic', '--inter-hunk-context=0']
-const topPath = (file) => `:(top,literal)${file}`
 const PR_RE = /^[1-9]\d*$/
 const MIN_GIT = [2, 32]
 const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
@@ -68,15 +69,17 @@ function objectType(repo, rev, file) {
   }
 }
 
+/** The blob at rev:file, or null when it is absent or not a regular file. */
 function show(repo, rev, file) {
+  if (objectType(repo, rev, file) !== 'blob') return null
   try {
-    return git(repo, ['show', `${rev}:${file}`], 'buffer')
+    return git(repo, ['cat-file', 'blob', `${rev}:${file}`], 'buffer')
   } catch {
     return null
   }
 }
 
-const utc = (repo, rev) => new Date(git(repo, ['show', '-s', '--format=%cI', rev]).trim()).toISOString().replace(/\.\d{3}Z$/, 'Z')
+const utc = (repo, rev) => new Date(git(repo, ['show', '-s', '--no-show-signature', '--format=%cI', rev]).trim()).toISOString().replace(/\.\d{3}Z$/, 'Z')
 const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'item'
 // Knowledge record ids are at most 64 characters including the longest suffix
 // added here (-evaluation), so ids are a short slug plus a stable hash.
@@ -239,7 +242,8 @@ export function buildHistory({ repo, base, decisions }) {
 }
 
 function hunks(repo, base, head, file) {
-  const diff = git(repo, ['diff', ...DIFF_OPTIONS, '-U0', base, head, '--', topPath(file)])
+  // git runs at the repository top with literal pathspecs, so the plain path is exact.
+  const diff = git(repo, ['diff', ...DIFF_OPTIONS, '-U0', base, head, '--', file])
   let removed = 0
   let added = 0
   const ranges = []
@@ -302,6 +306,18 @@ function resultFor(request, assessment) {
 }
 
 /** Measure one pull request. Returns the measurement; writes nothing. */
+/** The commit the tool runs from, and whether its own files are modified there. */
+export function toolProvenance() {
+  const root = path.resolve(HERE, '..', '..')
+  try {
+    const commit = git(root, ['rev-parse', 'HEAD']).trim()
+    const dirty = git(root, ['status', '--porcelain', '--', 'scripts/practice-consumer/reconsider.mjs', 'scripts/practice-consumer/definition.json', 'src']).trim().length > 0
+    return { commit, modified: dirty }
+  } catch {
+    return { commit: null, modified: null }
+  }
+}
+
 export function gitVersion() {
   const text = execFileSync('git', ['--version'], { encoding: 'utf8', env: GIT_ENV }).trim()
   const [major, minor] = (text.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number)
@@ -393,7 +409,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
   return {
     schema: MEASUREMENT_SCHEMA, pr: Number(pr), base: requested, mergeBase: base, head, mode, measuredAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     definitionRef, definitionDigest: contentDigest(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8')),
-    toolDigest: contentDigest(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')), git: gitText, corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
+    toolDigest: contentDigest(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')), tool: toolProvenance(), git: gitText, corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
     summary: {
       decisions: results.length,
       cited: results.filter((item) => item.cited.length).length,
@@ -440,6 +456,7 @@ const USAGE = `Usage:
 
 export function main(argv = process.argv.slice(2)) {
   const args = argsOf(argv)
+  if (args.out === true || args.repo === true) throw new Error(USAGE)
   const out = typeof args.out === 'string' ? args.out : path.join(HERE, 'measurements.jsonl')
   const sha = (value) => typeof value === 'string' && SHA_RE.test(value)
   if (args._[0] === 'measure') {

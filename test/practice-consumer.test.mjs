@@ -160,10 +160,36 @@ test('labels name who labelled them and the exact outcome they judge', (t) => {
 test('a measurement does not depend on the working directory', (t) => {
   const r = repo(t)
   const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  r.git('config', 'diff.relative', 'true')
   const fromTop = outcome(measure({ repo: r.dir, pr: 12, base: r.base, head }))
   const fromSub = outcome(measure({ repo: path.join(r.dir, 'docs'), pr: 12, base: r.base, head }))
   assert.deepEqual(fromSub.change, fromTop.change)
   assert.deepEqual(fromSub.assessment, { status: 'assessed', choice: 'affected' })
+})
+
+test('pathspec and replace-object variables in the caller environment do not change a measurement', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-env-')), 'm.jsonl')
+  t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
+  for (const extra of [{ GIT_LITERAL_PATHSPECS: '1' }, { GIT_ICASE_PATHSPECS: '1' }, { GIT_GLOB_PATHSPECS: '1' }]) {
+    const run = spawnSync(process.execPath, [SCRIPT, 'measure', '--pr', '15', '--base', r.base, '--head', head, '--repo', r.dir, '--print'], { encoding: 'utf8', env: { ...process.env, ...extra } })
+    assert.equal(run.status, 0, run.stderr)
+    const value = JSON.parse(run.stdout).decisions.find((item) => item.cited.length).outcomes[0]
+    assert.deepEqual(value.change, { removed: 1, added: 1, binary: false }, JSON.stringify(extra))
+  }
+})
+
+test('a cited file replaced by a directory at the head counts as removed', (t) => {
+  const r = repo(t)
+  const head = r.commit('replace with a directory', () => {
+    fs.rmSync(path.join(r.dir, 'docs/layers.md'))
+    fs.mkdirSync(path.join(r.dir, 'docs/layers.md'))
+    fs.writeFileSync(path.join(r.dir, 'docs/layers.md/inner.md'), 'inner\n')
+  })
+  const value = outcome(measure({ repo: r.dir, pr: 16, base: r.base, head }))
+  assert.deepEqual(value.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
+  assert.equal(value.status, 'escalate')
 })
 
 test('attributes cannot make a text source binary', (t) => {
@@ -250,4 +276,7 @@ test('measure and the CLI refuse malformed arguments', (t) => {
     assert.equal(run.status, 2, args.join(' '))
   }
   assert.equal(fs.existsSync(never), false)
+  // A bare --out must not fall back to the committed measurements file.
+  const bare = spawnSync(process.execPath, [SCRIPT, 'measure', '--pr', '1', '--base', r.base, '--head', r.base, '--repo', r.dir, '--out'], { encoding: 'utf8' })
+  assert.equal(bare.status, 2)
 })
