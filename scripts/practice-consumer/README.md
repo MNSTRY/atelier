@@ -17,9 +17,13 @@ For each cited file it runs `evaluateDecisionPractice` once:
 
 It appends one measurement line to `measurements.jsonl`.
 
-A reviewer then appends a label with `reconsider.mjs label --by NAME`. The label is one of `correct`, `missed`, `false-alarm` or `useful-abstention`, with the review effort in minutes. That effort includes confirming a correct outcome. `by` records who labelled it.
+A reviewer then appends a label with `reconsider.mjs label --by NAME --decision ID --file PATH`.
+- The label is one of `correct`, `missed`, `false-alarm` or `useful-abstention`.
+- It records the review effort in minutes, which includes confirming a correct outcome.
+- It records the digest of the latest measurement of that pull request, so it judges one exact outcome.
+- `by` records who labelled it.
 
-Git runs without system or global configuration, ignores renames, and names its diff algorithm, so a measurement does not depend on the caller's settings.
+**Reproducibility.** Git (2.32 or later) runs without system or global configuration or attributes, with configuration and attribute overrides removed from the environment. It ignores renames, forces text diffs, names its diff algorithm, and resolves every path from the repository top. A measurement therefore does not depend on the caller's settings or working directory. A file is binary only when its contents at the head contain a NUL byte, never because of an attribute. Each measurement records the tool's own digest and the git version.
 
 The assessment is the predicate the rubric declares:
 
@@ -28,7 +32,9 @@ The assessment is the predicate the rubric declares:
 | A line modified or removed | `affected` | proceed: an unaccepted reconsideration draft |
 | Only lines added | `unaffected` | stop |
 | Binary, removed, renamed or over the excerpt bound | abstained, `insufficient-evidence` | escalate |
+| Changed without line changes (for example a mode change) | `unclear` | escalate |
 | Not changed | not assessed (prerequisite false) | stop |
+| Cited path missing, a directory, unreadable or over bounds at the base | not evaluated (`cited-path-missing`, `cited-path-not-a-file`, `cited-source-unreadable-or-over-bounds`) | none |
 
 Each line also records whether the Knowledge harness itself marks the decision for reconsideration once the changed source is recorded (`harnessReconsider`).
 
@@ -38,7 +44,8 @@ Each line also records whether the Knowledge harness itself marks the decision f
 - The review and activation records in the rebuilt history stand for Foundation's adoption of this practice for its own repository. They are not an independent or human review.
 - The probabilities are declared values (1 for the chosen criterion, 0 otherwise), and the confidence is a fixed, uncalibrated 0.5.
 - For a removed or binary source, the source evidence is a placeholder text that says so, bound to the head commit.
-- An unchanged source is not assessed. The evaluator stops on the false prerequisite before it reads the result, which is a fixed placeholder there.
+- An unchanged source is not assessed. The evaluator validates the result, which is a fixed placeholder there, and then stops on the false prerequisite.
+- Appending to a file that has no final newline also changes its last line, so it counts as `affected`.
 - A decision without an explicit link cannot be measured. A change that matters to a decision without touching a cited file is a miss the tool cannot see.
 
 ## First measurements (retrospective, recorded 2026-10-02)

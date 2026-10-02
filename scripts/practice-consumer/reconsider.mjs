@@ -42,17 +42,31 @@ const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-s
 
 export const definition = () => JSON.parse(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8'))
 
-// Git output must not depend on the caller's configuration: system and global
-// config are ignored, and every diff names its algorithm and options explicitly.
+// Git output must not depend on the caller's configuration or attributes: system
+// and global config and attributes are ignored, configuration and attribute
+// overrides from the environment are removed, diffs are forced to text and name
+// their algorithm and options, and paths are passed from the repository top.
 const GIT_ENV = (() => {
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull }
-  for (const key of ['GIT_EXTERNAL_DIFF', 'GIT_DIFF_OPTS', 'GIT_CONFIG', 'GIT_CONFIG_COUNT', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[key]
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ATTR_NOSYSTEM: '1' }
+  for (const key of ['GIT_EXTERNAL_DIFF', 'GIT_DIFF_OPTS', 'GIT_CONFIG', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_ATTR_SOURCE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[key]
   return env
 })()
 const git = (repo, args, encoding = 'utf8') =>
-  execFileSync('git', ['-C', repo, '-c', 'core.quotePath=false', ...args], { encoding, env: GIT_ENV, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
-const DIFF_OPTIONS = ['--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-algorithm=myers', '--no-indent-heuristic', '--inter-hunk-context=0']
+  execFileSync('git', ['-C', repo, '-c', 'core.quotePath=false', '-c', `core.attributesFile=${os.devNull}`, ...args], { encoding, env: GIT_ENV, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+const DIFF_OPTIONS = ['--text', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-algorithm=myers', '--no-indent-heuristic', '--inter-hunk-context=0']
+const topPath = (file) => `:(top,literal)${file}`
+const PR_RE = /^[1-9]\d*$/
+const MIN_GIT = [2, 32]
 const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+
+/** The object type at rev:file ('blob', 'tree', ...), or null when absent. */
+function objectType(repo, rev, file) {
+  try {
+    return git(repo, ['cat-file', '-t', `${rev}:${file}`]).trim()
+  } catch {
+    return null
+  }
+}
 
 function show(repo, rev, file) {
   try {
@@ -189,12 +203,21 @@ export function buildHistory({ repo, base, decisions }) {
   const records = [domainRecord(at)]
   const domain = records[0]
   const sources = new Map()
+  const unusable = new Map()
   for (const decision of decisions) {
     for (const file of decision.cited) {
       if (sources.has(file)) continue
+      // A cited path must be a file at the base; a directory would never register a change.
+      const type = objectType(repo, base, file)
+      if (type !== 'blob') {
+        sources.set(file, null)
+        unusable.set(file, type === null ? 'cited-path-missing' : 'cited-path-not-a-file')
+        continue
+      }
       const body = textOf(show(repo, base, file))
       if (body === null || !body.trim() || Buffer.byteLength(body) > MAX_SOURCE_BYTES) {
         sources.set(file, null)
+        unusable.set(file, 'cited-source-unreadable-or-over-bounds')
         continue
       }
       sources.set(file, accepted(records, shortId('s', file), captured(domain, { title: file, body, locator: `${OWNER}:${file}@${base}` }), at))
@@ -212,17 +235,20 @@ export function buildHistory({ repo, base, decisions }) {
   const prepared = prepareDecisionPracticeContribution({ records, definition: definition(), title: 'Decision source reconsideration', term: TERM })
   if (prepared.status !== 'prepared') throw new Error(`practice definition was not prepared: ${prepared.reason}`)
   const practice = accepted(records, 'decision-practice', prepared.data, at)
-  return { records, sources, decisionRecords, practice, at }
+  return { records, sources, unusable, decisionRecords, practice, at }
 }
 
 function hunks(repo, base, head, file) {
-  const diff = git(repo, ['diff', ...DIFF_OPTIONS, '-U0', base, head, '--', file])
-  if (/^Binary files /m.test(diff)) return { binary: true, removed: 0, added: 0, ranges: [] }
+  const diff = git(repo, ['diff', ...DIFF_OPTIONS, '-U0', base, head, '--', topPath(file)])
   let removed = 0
   let added = 0
   const ranges = []
   let inBody = false
   for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      inBody = false
+      continue
+    }
     const header = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
     if (header) {
       inBody = true
@@ -276,10 +302,21 @@ function resultFor(request, assessment) {
 }
 
 /** Measure one pull request. Returns the measurement; writes nothing. */
+export function gitVersion() {
+  const text = execFileSync('git', ['--version'], { encoding: 'utf8', env: GIT_ENV }).trim()
+  const [major, minor] = (text.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number)
+  if (!(major > MIN_GIT[0] || (major === MIN_GIT[0] && minor >= MIN_GIT[1]))) throw new Error(`git ${MIN_GIT.join('.')} or later is required (found ${text})`)
+  return text
+}
+
 export function measure({ repo, pr, base, head, mode = 'live' }) {
   if (!SHA_RE.test(String(base)) || !SHA_RE.test(String(head))) throw new Error('base and head must be full commit ids')
-  if (!Number.isSafeInteger(Number(pr)) || Number(pr) < 1) throw new Error('pr must be a positive integer')
+  if (!PR_RE.test(String(pr))) throw new Error('pr must be a positive integer')
+  pr = Number(pr)
   if (!['live', 'retrospective'].includes(mode)) throw new Error('mode must be live or retrospective')
+  const gitText = gitVersion()
+  // Every path below is relative to the repository top, whatever directory was given.
+  repo = git(repo, ['rev-parse', '--show-toplevel']).trim()
   // A pull request is measured from where it branched: the merge base of its base and head.
   const requested = base
   base = git(repo, ['merge-base', base, head]).trim()
@@ -288,7 +325,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
   const decisions = parseDecisions(corpusText)
   const history = buildHistory({ repo, base, decisions })
   const definitionRef = harnessRef(history.practice)
-  const changed = new Set(git(repo, ['diff', '--no-renames', '--name-only', '-z', base, head]).split('\0').filter(Boolean))
+  const changed = new Set(git(repo, ['diff', '--no-renames', '--name-only', '-z', base, head, '--']).split('\0').filter(Boolean))
   const at = utc(repo, head)
   const rubric = definition().rubric
   const results = []
@@ -299,17 +336,19 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
     for (const file of decision.cited) {
       const source = history.sources.get(file)
       if (!source) {
-        entry.outcomes.push({ file, status: 'not-evaluated', reason: 'cited-source-unreadable-or-over-bounds' })
+        entry.outcomes.push({ file, status: 'not-evaluated', reason: history.unusable.get(file) })
         continue
       }
       const didChange = changed.has(file)
       if (didChange) entry.changedCited.push(file)
       const headBuffer = show(repo, head, file)
       const headText = textOf(headBuffer)
-      const change = didChange ? hunks(repo, base, head, file) : { binary: false, removed: 0, added: 0, ranges: [] }
+      // Binary is decided from the contents at both commits, never from attributes.
+      const change = didChange ? { ...hunks(repo, base, head, file), binary: headBuffer !== null && headText === null } : { binary: false, removed: 0, added: 0, ranges: [] }
+      if (change.binary) change.ranges = []
       const region = excerpt(headText ?? source.data.body, change.ranges)
-      // An unchanged source is not assessed: the evaluator stops on the false
-      // prerequisite before reading the result, which is a fixed placeholder here.
+      // An unchanged source is not assessed. The evaluator validates the result,
+      // a fixed placeholder here, and then stops on the false prerequisite.
       const assessment = didChange
         ? assess({ ...change, oversize: region.oversize }, { removedAtHead: headBuffer === null })
         : { status: 'abstained', reason: 'insufficient-evidence', placeholder: true }
@@ -353,7 +392,8 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
   }
   return {
     schema: MEASUREMENT_SCHEMA, pr: Number(pr), base: requested, mergeBase: base, head, mode, measuredAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-    definitionRef, definitionDigest: contentDigest(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8')), corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
+    definitionRef, definitionDigest: contentDigest(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8')),
+    toolDigest: contentDigest(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8')), git: gitText, corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
     summary: {
       decisions: results.length,
       cited: results.filter((item) => item.cited.length).length,
@@ -369,13 +409,15 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
  * A reviewer's label for one measured decision. `by` names who labelled it;
  * `reviewMinutes` is the reviewer's effort, including confirming a correct outcome.
  */
-export function label({ pr, decision, value, reviewMinutes, by, note = '' }) {
-  if (!Number.isSafeInteger(Number(pr)) || Number(pr) < 1) throw new Error('pr must be a positive integer')
+export function label({ pr, decision, file, measurement, value, reviewMinutes, by, note = '' }) {
+  if (!PR_RE.test(String(pr))) throw new Error('pr must be a positive integer')
   if (typeof decision !== 'string' || !/^d-[a-z0-9-]+-[0-9a-f]{8}$/.test(decision)) throw new Error('decision must be a measured decision id')
+  if (typeof file !== 'string' || !file) throw new Error('file must name the cited file the outcome is about')
+  if (typeof measurement !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(measurement)) throw new Error('measurement must be the digest of the measured line')
   if (!LABELS.includes(value)) throw new Error(`label must be one of ${LABELS.join(', ')}`)
   if (!Number.isFinite(reviewMinutes) || reviewMinutes < 0) throw new Error('review minutes must be a nonnegative number')
   if (typeof by !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(by)) throw new Error('by must name who labelled the outcome')
-  return { schema: LABEL_SCHEMA, pr: Number(pr), decision, label: value, reviewMinutes, by, note, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') }
+  return { schema: LABEL_SCHEMA, pr: Number(pr), decision, file, measurement, label: value, reviewMinutes, by, note, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') }
 }
 
 function appendLine(file, value) {
@@ -394,14 +436,14 @@ function argsOf(argv) {
 
 const USAGE = `Usage:
   node scripts/practice-consumer/reconsider.mjs measure --pr N --base SHA --head SHA [--mode live|retrospective] [--repo DIR] [--out FILE | --print]
-  node scripts/practice-consumer/reconsider.mjs label --pr N --decision ID --label ${LABELS.join('|')} --minutes M --by NAME [--note TEXT] [--out FILE]`
+  node scripts/practice-consumer/reconsider.mjs label --pr N --decision ID --file PATH --label ${LABELS.join('|')} --minutes M --by NAME [--note TEXT] [--out FILE]`
 
 export function main(argv = process.argv.slice(2)) {
   const args = argsOf(argv)
   const out = typeof args.out === 'string' ? args.out : path.join(HERE, 'measurements.jsonl')
   const sha = (value) => typeof value === 'string' && SHA_RE.test(value)
   if (args._[0] === 'measure') {
-    if (!/^\d+$/.test(String(args.pr)) || !sha(args.base) || !sha(args.head)) throw new Error(USAGE)
+    if (!PR_RE.test(String(args.pr)) || !sha(args.base) || !sha(args.head)) throw new Error(USAGE)
     if (args.mode !== undefined && !['live', 'retrospective'].includes(args.mode)) throw new Error(USAGE)
     const value = measure({ repo: typeof args.repo === 'string' ? args.repo : process.cwd(), pr: args.pr, base: args.base, head: args.head, mode: args.mode ?? 'live' })
     if (args.print) console.log(JSON.stringify(value, null, 2))
@@ -413,7 +455,14 @@ export function main(argv = process.argv.slice(2)) {
   }
   if (args._[0] === 'label') {
     if (typeof args.minutes !== 'string' || !/^\d+(?:\.\d+)?$/.test(args.minutes)) throw new Error(USAGE)
-    appendLine(out, label({ pr: args.pr, decision: args.decision, value: args.label, reviewMinutes: Number(args.minutes), by: args.by, note: typeof args.note === 'string' ? args.note : '' }))
+    // A label refers to the latest measurement of this pull request in the file,
+    // and to one outcome in it: the decision and the cited file.
+    const lines = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').split('\n').filter(Boolean) : []
+    const measured = lines.filter((line) => JSON.parse(line).schema === MEASUREMENT_SCHEMA && String(JSON.parse(line).pr) === String(args.pr)).at(-1)
+    if (!measured) throw new Error('no measurement of this pull request to label')
+    const outcome = JSON.parse(measured).decisions.find((item) => item.id === args.decision)?.outcomes.find((item) => item.file === args.file)
+    if (!outcome) throw new Error('the measurement has no outcome for this decision and file')
+    appendLine(out, label({ pr: args.pr, decision: args.decision, file: args.file, measurement: contentDigest(measured), value: args.label, reviewMinutes: Number(args.minutes), by: args.by, note: typeof args.note === 'string' ? args.note : '' }))
     return
   }
   throw new Error(USAGE)

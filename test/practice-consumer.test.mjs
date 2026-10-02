@@ -128,18 +128,65 @@ test('measuring changes nothing in the repository; the CLI appends one line', (t
   assert.equal(fs.readFileSync(out, 'utf8').trim().split('\n').length, 1)
 })
 
-test('labels name who labelled them and validate every field', () => {
+test('labels name who labelled them and the exact outcome they judge', (t) => {
   const decision = 'd-layered-example-0123abcd'
-  for (const value of LABELS) {
-    const made = label({ pr: 1, decision, value, reviewMinutes: 0, by: 'atelier-foundation' })
-    assert.equal(made.label, value)
-    assert.equal(made.by, 'atelier-foundation')
-  }
-  assert.throws(() => label({ pr: 1, decision, value: 'accepted', reviewMinutes: 1, by: 'x' }), /label must be one of/)
-  assert.throws(() => label({ pr: 1, decision, value: 'correct', reviewMinutes: -1, by: 'x' }), /nonnegative/)
-  assert.throws(() => label({ pr: 1, decision, value: 'correct', reviewMinutes: 1 }), /by must name/)
-  assert.throws(() => label({ pr: null, decision, value: 'correct', reviewMinutes: 1, by: 'x' }), /pr must be/)
-  assert.throws(() => label({ pr: 1, decision: undefined, value: 'correct', reviewMinutes: 1, by: 'x' }), /decision must be/)
+  const measurement = `sha256:${'a'.repeat(64)}`
+  const base = { pr: 1, decision, file: 'docs/layers.md', measurement, reviewMinutes: 0, by: 'atelier-foundation' }
+  for (const value of LABELS) assert.equal(label({ ...base, value }).label, value)
+  assert.throws(() => label({ ...base, value: 'accepted' }), /label must be one of/)
+  assert.throws(() => label({ ...base, value: 'correct', reviewMinutes: -1 }), /nonnegative/)
+  assert.throws(() => label({ ...base, value: 'correct', by: undefined }), /by must name/)
+  assert.throws(() => label({ ...base, value: 'correct', pr: '1e2' }), /pr must be/)
+  assert.throws(() => label({ ...base, value: 'correct', decision: undefined }), /decision must be/)
+  assert.throws(() => label({ ...base, value: 'correct', file: '' }), /file must name/)
+  assert.throws(() => label({ ...base, value: 'correct', measurement: 'x' }), /measurement must be/)
+  // The CLI binds a label to the latest measurement of that pull request and to one outcome.
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-labels-')), 'm.jsonl')
+  t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
+  const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--out', out], { encoding: 'utf8' })
+  assert.equal(cli('label', '--pr', '11', '--decision', 'd-a-0123abcd', '--file', 'docs/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation').status, 2)
+  assert.equal(cli('measure', '--pr', '11', '--base', r.base, '--head', head, '--repo', r.dir).status, 0)
+  const measured = JSON.parse(fs.readFileSync(out, 'utf8').trim())
+  const id = measured.decisions.find((item) => item.cited.length).id
+  assert.equal(cli('label', '--pr', '11', '--decision', id, '--file', 'docs/other.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation').status, 2)
+  assert.equal(cli('label', '--pr', '11', '--decision', id, '--file', 'docs/layers.md', '--label', 'false-alarm', '--minutes', '1', '--by', 'atelier-foundation').status, 0)
+  const labelled = JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1))
+  assert.equal(labelled.file, 'docs/layers.md')
+  assert.match(labelled.measurement, /^sha256:[0-9a-f]{64}$/)
+})
+
+test('a measurement does not depend on the working directory', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const fromTop = outcome(measure({ repo: r.dir, pr: 12, base: r.base, head }))
+  const fromSub = outcome(measure({ repo: path.join(r.dir, 'docs'), pr: 12, base: r.base, head }))
+  assert.deepEqual(fromSub.change, fromTop.change)
+  assert.deepEqual(fromSub.assessment, { status: 'assessed', choice: 'affected' })
+})
+
+test('attributes cannot make a text source binary', (t) => {
+  const r = repo(t)
+  r.commit('attributes', () => fs.writeFileSync(path.join(r.dir, '.gitattributes'), '*.md binary\n'))
+  const base = r.git('rev-parse', 'HEAD')
+  r.git('config', 'core.bigFileThreshold', '1')
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const value = outcome(measure({ repo: r.dir, pr: 13, base, head }))
+  assert.deepEqual(value.change, { removed: 1, added: 1, binary: false })
+  assert.deepEqual(value.assessment, { status: 'assessed', choice: 'affected' })
+})
+
+test('a cited directory is not evaluated rather than silently stopping', (t) => {
+  const r = repo(t)
+  const base = r.commit('cite a directory', () => {
+    fs.mkdirSync(path.join(r.dir, 'docs/parts'))
+    fs.writeFileSync(path.join(r.dir, 'docs/parts/one.md'), 'one\n')
+    fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('[example layering](layers.md)', '[example parts](parts)'))
+  })
+  const head = r.commit('change inside', () => fs.writeFileSync(path.join(r.dir, 'docs/parts/one.md'), 'changed\n'))
+  const value = measure({ repo: r.dir, pr: 14, base, head }).decisions.find((item) => item.cited.length).outcomes[0]
+  assert.deepEqual(value, { file: 'docs/parts', status: 'not-evaluated', reason: 'cited-path-not-a-file' })
 })
 
 test('a renamed cited source escalates instead of looking unchanged', (t) => {
@@ -194,9 +241,11 @@ test('measure and the CLI refuse malformed arguments', (t) => {
   t.after(() => fs.rmSync(path.dirname(never), { recursive: true, force: true }))
   assert.throws(() => measure({ repo: r.dir, pr: 1, base: 'HEAD', head: r.base }), /full commit ids/)
   assert.throws(() => measure({ repo: r.dir, pr: 0, base: r.base, head: r.base }), /positive integer/)
+  assert.throws(() => measure({ repo: r.dir, pr: '1e2', base: r.base, head: r.base }), /positive integer/)
   assert.throws(() => measure({ repo: r.dir, pr: 1, base: r.base, head: r.base, mode: 'guess' }), /live or retrospective/)
   for (const args of [['measure', '--pr', 'x', '--base', r.base, '--head', r.base], ['measure', '--pr', '1', '--base', r.base, '--head', r.base, '--mode', 'guess'],
-    ['label', '--pr', '1', '--decision', 'd-a-0123abcd', '--label', 'correct', '--minutes'], ['label', '--pr', '1', '--decision', 'd-a-0123abcd', '--label', 'correct', '--minutes', '1']]) {
+    ['label', '--pr', '1', '--decision', 'd-a-0123abcd', '--label', 'correct', '--minutes'], ['label', '--pr', '1', '--decision', 'd-a-0123abcd', '--label', 'correct', '--minutes', '1'],
+    ['measure', '--pr', '0x6f', '--base', r.base, '--head', r.base]]) {
     const run = spawnSync(process.execPath, [SCRIPT, ...args, '--repo', r.dir, '--out', never], { encoding: 'utf8' })
     assert.equal(run.status, 2, args.join(' '))
   }
