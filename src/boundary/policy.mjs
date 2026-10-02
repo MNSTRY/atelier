@@ -171,6 +171,9 @@ export function validateBoundaryPolicy(policy, project = null) {
       errors.push(`actors.${actorId} must be an object`)
       continue
     }
+    // The schema types these fields; a non-string login would still match through String().
+    if (actor.githubLogin != null && typeof actor.githubLogin !== 'string') errors.push(`actors.${actorId}.githubLogin must be a string`)
+    if (actor.gitEmails != null && !Array.isArray(actor.gitEmails)) errors.push(`actors.${actorId}.gitEmails must be a list`)
     if (!firstString(actor.githubLogin) && !asArray(actor.gitEmails).length) {
       errors.push(`actors.${actorId} must declare githubLogin or gitEmails`)
     }

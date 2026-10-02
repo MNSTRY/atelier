@@ -262,6 +262,28 @@ test('owner and operator ids must be plain identifiers', (t) => {
   }
 })
 
+test('a login that is not a string is refused before it can match an operator', (t) => {
+  const ws = workspace(t)
+  for (const login of [['mallory'], 42]) {
+    const policy = structuredClone(ws.policy)
+    policy.actors['operator-b'].githubLogin = login
+    assert.ok(validateBoundaryPolicy(policy, ws.project).includes('actors.operator-b.githubLogin must be a string'), JSON.stringify(login))
+  }
+  const policy = structuredClone(ws.policy)
+  policy.actors['operator-b'].gitEmails = 'operator-b@example.invalid'
+  assert.ok(validateBoundaryPolicy(policy, ws.project).includes('actors.operator-b.gitEmails must be a list'))
+})
+
+test('impossible calendar times are refused, never rolled over', (t) => {
+  const ws = workspace(t)
+  const { privateKeyDoc } = owner()
+  for (const expiresAt of ['2026-02-31T00:00:00Z', '2026-03-01T24:00:00Z', '2026-13-01T00:00:00Z']) {
+    const errors = validateDelegationsDocument(delegationsDoc(delegation(ws, privateKeyDoc, { expiresAt })), ws.policy)
+    assert.ok(errors.some((message) => /expiresAt must be an RFC 3339 UTC time/.test(message)), expiresAt)
+  }
+  assert.deepEqual(validateDelegationsDocument(delegationsDoc(delegation(ws, privateKeyDoc, { expiresAt: '2026-03-01T00:00:00.5Z' })), ws.policy), [])
+})
+
 test('T11 two matching delegations are ambiguous and grant nothing', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
@@ -421,11 +443,20 @@ test('T19 the owner drafts, signs against the current project and verifies; chec
   assert.equal(draft.status, 0, draft.stderr)
   const signed = cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'draft.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json'), '--out', path.join(keyDir, 'signed.json')])
   assert.equal(signed.status, 0, signed.stderr)
+  assert.match(signed.stderr, /Authorizing delegation operator-b-commits:/)
   assert.match(signed.stderr, /operator operator-b may pass the actor check owned by owner-a/)
+  assert.match(signed.stderr, /from 2026-01-15T00:00:00\.000Z until 2026-03-01T00:00:00\.000Z/)
   assert.match(signed.stderr, /recognised by githubLogin op\?\[8mhidden and gitEmails operator-b@example\.invalid/)
   assert.match(signed.stderr, /policy and repository set stay sha256:[0-9a-f]{64}/)
   assert.equal(/[\u0000-\u0008\u000b-\u001f\u007f]/.test(signed.stderr), false)
   assert.equal(cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'signed.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json')]).status, 2)
+  // A policy the check would reject is never signed against.
+  const goodPolicy = JSON.parse(fs.readFileSync(path.join(ws.root, 'boundary-policy.v1.json'), 'utf8'))
+  writeJson(path.join(ws.root, 'boundary-policy.v1.json'), { ...goodPolicy, actors: { ...goodPolicy.actors, 'operator-b': { ...goodPolicy.actors['operator-b'], githubLogin: ['mallory'] } } })
+  const invalidPolicy = cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'draft.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json')])
+  assert.equal(invalidPolicy.status, 2)
+  assert.match(invalidPolicy.stderr, /githubLogin must be a string/)
+  writeJson(path.join(ws.root, 'boundary-policy.v1.json'), goodPolicy)
   // A draft whose bindings do not match the current project is refused before signing.
   const stale = JSON.parse(fs.readFileSync(path.join(keyDir, 'draft.json'), 'utf8'))
   writeJson(path.join(keyDir, 'stale.json'), { ...stale, policyDigest: `sha256:${'0'.repeat(64)}` })

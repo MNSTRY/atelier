@@ -22,7 +22,8 @@ import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 // in the host file at a fixed path, owned by root in root-owned directories. That
 // file is also the only source of revocation. Each delegation binds the whole
 // policy (ext excluded), the managed repository set and each repository's root
-// commit, so it cannot be loosened in place or replayed into another project.
+// commit, so it cannot be loosened in place or replayed into an independently
+// created repository. Forks sharing the root commit are not distinguished.
 // `ext` is accepted and never read.
 
 export const DELEGATION_SCHEMA = 'atelier-boundary-delegation@v1'
@@ -51,7 +52,15 @@ const MAX_REVOKED = 1024
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const boundedString = (value, max = 128) => typeof value === 'string' && value.length > 0 && value.length <= max
-const timeOf = (value) => (typeof value === 'string' && UTC_RE.test(value) ? Date.parse(value) : Number.NaN)
+// A time must be a real calendar instant that round-trips: 2026-02-31 is refused,
+// never rolled over to March.
+const timeOf = (value) => {
+  if (typeof value !== 'string' || !UTC_RE.test(value)) return Number.NaN
+  const ms = Date.parse(value)
+  if (Number.isNaN(ms)) return Number.NaN
+  const iso = new Date(ms).toISOString()
+  return iso === value || iso.replace(/\.000Z$/, 'Z') === value || iso.replace(/0*Z$/, 'Z').replace(/\.Z$/, 'Z') === value ? ms : Number.NaN
+}
 
 // `ext` is never read, so it is removed before hashing, but only at the
 // extension positions the schema declares. A repository or actor that happens
@@ -93,7 +102,7 @@ export function policyDigest(policy, project) {
  */
 export function repoRootCommit(repoPath, { gitExecutable = 'git' } = {}) {
   if (!repoPath) return null
-  const result = spawnSync(gitExecutable, ['--no-replace-objects', '-C', repoPath, 'rev-list', '--max-parents=0', 'HEAD'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
+  const result = spawnSync(gitExecutable, ['--no-replace-objects', '-C', repoPath, 'rev-list', '--max-parents=0', 'HEAD', '--'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
   if (result.status !== 0) return null
   const roots = result.stdout.split('\n').map((line) => line.trim()).filter((line) => COMMIT_RE.test(line)).sort()
   return roots[0] ?? null

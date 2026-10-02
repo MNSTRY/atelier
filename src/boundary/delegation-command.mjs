@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import { loadSigningKey, safeLabel, signDocument, verifyDocument } from '../attestation/sign.mjs'
 import { commandProject, firstString, parseArgs } from '../project/config.mjs'
 import { HOST_OWNER_KEYS_PATH, delegationBindings, draftDelegation, loadOwnerKeysFile, validateDelegation } from './delegation.mjs'
-import { loadBoundaryPolicy } from './policy.mjs'
+import { loadBoundaryPolicy, validateBoundaryPolicy } from './policy.mjs'
 
 export const DELEGATION_USAGE = `Usage: atelier boundary delegation <draft|sign|verify>
 
@@ -55,6 +55,9 @@ function projectAndPolicy(argv) {
   const project = commandProject({ argv })
   const loaded = loadBoundaryPolicy(project)
   if (!loaded.ok) fail(loaded.errors.join('\n'))
+  // Never draft or sign against a policy the check itself would reject.
+  const invalid = validateBoundaryPolicy(loaded.policy, project)
+  if (invalid.length) fail(`the boundary policy is invalid:\n${invalid.join('\n')}`)
   return { project, policy: loaded.policy }
 }
 
@@ -99,12 +102,12 @@ function runSign(args, argv) {
   const operatorActor = policy.actors[doc.operator] ?? {}
   const label = (value) => safeLabel(value, 160)
   console.error([
-    'Authorizing:',
+    `Authorizing delegation ${label(doc.id)}:`,
     `  operator ${label(doc.operator)} may pass the actor check owned by ${label(doc.owner)}`,
     `  the operator is recognised by githubLogin ${label(operatorActor.githubLogin ?? '(none)')} and gitEmails ${(operatorActor.gitEmails ?? []).map((email) => label(email)).join(', ') || '(none)'}`,
     ...doc.repos.map((name) => `  repository ${label(name)} with root commit ${label(doc.repoRoots[name])}`),
     `  operations: ${doc.operations.map((op) => label(op)).join(', ')}`,
-    `  from ${label(doc.notBefore)} until ${label(doc.expiresAt)}`,
+    `  from ${label(new Date(Date.parse(doc.notBefore)).toISOString())} until ${label(new Date(Date.parse(doc.expiresAt)).toISOString())}`,
     `  while the boundary policy and repository set stay ${label(doc.policyDigest)}`,
   ].join('\n'))
   let signed
