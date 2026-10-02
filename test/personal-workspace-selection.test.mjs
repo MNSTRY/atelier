@@ -334,6 +334,81 @@ test('a writer that changes an authored file just before the swap keeps its byte
   assert.ok(fs.existsSync(manifestFile))
 })
 
+test('a writer that recreates the name during the swap keeps its bytes, and the moved file stays listed', (t) => {
+  const f = fixture(t)
+  const g1 = f.materialize()
+  f.overlay.annotations[0].note = 'Revised perspective'; f.save()
+  f.materialize()
+  const plan = planPersonalRestore({ personalHome: f.personalHome, generationId: g1 })
+  const overlayFile = path.join(f.personalHome, 'atelier.overlay.json')
+  const moved = fs.readFileSync(overlayFile)
+  // Right after the restore moves the overlay aside, another writer creates a new one by path.
+  const rename = fs.renameSync
+  let raced = false
+  fs.renameSync = (from, to) => {
+    const result = rename(from, to)
+    if (!raced && from === overlayFile) {
+      raced = true
+      fs.writeFileSync(overlayFile, '{"written":"by another writer"}\n')
+    }
+    return result
+  }
+  try { refuses(() => restorePersonalInputs(plan, { personalHome: f.personalHome, confirm: plan.confirm }), 'authored-input-changed') } finally { fs.renameSync = rename }
+  assert.equal(raced, true)
+  assert.equal(fs.readFileSync(overlayFile, 'utf8'), '{"written":"by another writer"}\n', 'the new writer keeps the name')
+  const temporary = inventoryPersonalHome({ personalHome: f.personalHome }).temporary
+  const aside = temporary.filter((entry) => /^\.restore-[0-9a-f-]{36}-aside-overlay\.json$/.test(entry.name))
+  assert.equal(aside.length, 1, 'the moved file is listed for review')
+  assert.equal(aside[0].digest, sha(moved))
+})
+
+test('a moved file that cannot be read is put back and the restore refuses', (t) => {
+  const f = fixture(t)
+  const g1 = f.materialize()
+  f.overlay.annotations[0].note = 'Revised perspective'; f.save()
+  f.materialize()
+  const plan = planPersonalRestore({ personalHome: f.personalHome, generationId: g1 })
+  const overlayFile = path.join(f.personalHome, 'atelier.overlay.json')
+  const huge = `${JSON.stringify({ padding: 'x'.repeat(1024 * 1024 + 10) })}\n`
+  const rename = fs.renameSync
+  let raced = false
+  fs.renameSync = (from, to) => {
+    if (!raced && from === overlayFile) { raced = true; fs.writeFileSync(overlayFile, huge) }
+    return rename(from, to)
+  }
+  try { refuses(() => restorePersonalInputs(plan, { personalHome: f.personalHome, confirm: plan.confirm }), 'authored-input-changed') } finally { fs.renameSync = rename }
+  assert.equal(raced, true)
+  assert.equal(fs.readFileSync(overlayFile, 'utf8'), huge, 'the name is restored with the writer\'s bytes')
+  assert.deepEqual(inventoryPersonalHome({ personalHome: f.personalHome }).temporary, [], 'no aside remains after a successful put-back')
+})
+
+test('a restore interrupted with the authored name absent refuses restore-interrupted, and the moved file is listed', (t) => {
+  const f = fixture(t)
+  const g1 = f.materialize()
+  const manifestFile = path.join(f.personalHome, 'atelier.personal.json')
+  const aside = path.join(f.personalHome, `.restore-${'0'.repeat(8)}-${'0'.repeat(4)}-${'0'.repeat(4)}-${'0'.repeat(4)}-${'0'.repeat(12)}-aside-manifest.json`)
+  fs.renameSync(manifestFile, aside)
+  refuses(() => planPersonalRestore({ personalHome: f.personalHome, generationId: g1 }), 'restore-interrupted')
+  assert.ok(inventoryPersonalHome({ personalHome: f.personalHome }).temporary.some((entry) => entry.name === path.basename(aside)))
+})
+
+test('the inventory lists unusable authored, generation and selection files instead of failing', (t) => {
+  const f = fixture(t)
+  const g1 = f.materialize()
+  selectPersonalGeneration({ personalHome: f.personalHome, generationId: g1, confirm: selectionConfirmDigest({ generationId: g1, previous: 'genesis' }) })
+  fs.writeFileSync(path.join(f.personalHome, 'atelier.overlay.json'), 'x'.repeat(1024 * 1024 + 10))
+  fs.rmSync(path.join(f.personalHome, 'generations', g1, 'generation.json'))
+  fs.mkdirSync(path.join(f.personalHome, 'generations', g1, 'generation.json'))
+  fs.mkdirSync(path.join(f.personalHome, 'selections', '000002.json'))
+  const inventory = inventoryPersonalHome({ personalHome: f.personalHome })
+  const overlay = inventory.authored.find((entry) => entry.name === 'atelier.overlay.json')
+  assert.equal(overlay.digest, null)
+  assert.equal(overlay.bytes, 1024 * 1024 + 10)
+  assert.equal(inventory.generations.find((entry) => entry.generationId === g1).recordDigest, null)
+  assert.equal(inventory.selections.corrupt, true)
+  refuses(() => readPersonalSelection({ personalHome: f.personalHome }), 'selection-history-corrupt')
+})
+
 test('a schema-invalid current manifest refuses both planning and restoring', (t) => {
   const f = fixture(t)
   const g1 = f.materialize()

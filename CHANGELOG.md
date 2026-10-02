@@ -11,9 +11,11 @@
   current bytes, keeps them, and never widens enrollment or bindings:
   re-admitting a withdrawn repository, a changed repository identity, or a
   re-added binding refuses before any write. Each file is replaced by
-  compare-and-swap, so a write that races the restore is kept and the restore
-  refuses. Authored inputs, generations and records are never deleted; only
-  temporary files are removed.
+  compare-and-swap, so a write that replaces or recreates the file by path
+  during the restore is kept and the restore refuses; an interrupted swap
+  refuses `restore-interrupted` until the listed moved copy is put back.
+  Authored inputs, generations and records are never deleted; only temporary
+  files are removed.
 - `src/ingestion/semantic.mjs` prepares source-bound entity and assertion
   proposals from a host's extractor output, one source per input
   (`docs/semantic-ingestion.md`). It is an internal module: its `v0` formats are

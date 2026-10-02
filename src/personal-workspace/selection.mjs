@@ -19,7 +19,10 @@ const MAX_RECORD = 1024 * 1024
 const MAX_GENERATION_FILE = 8 * 1024 * 1024
 const MAX_RESTORE_RECORD = 4 * MAX_RECORD
 const ID = /^[0-9a-f]{64}$/
-const TEMPORARY = /^\.(selection|restore|validate)-[0-9a-f-]{36}(-[a-z]+)?\.json$/
+// Every temporary name this module writes, including restore aside copies
+// (.restore-<uuid>-aside-<key>.json).
+const TEMPORARY = /^\.(selection|restore|validate)-[0-9a-f-]{36}(-[a-z]+)*\.json$/
+const ASIDE = (key) => new RegExp(`^\\.restore-[0-9a-f-]{36}-aside-${key}\\.json$`)
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const sortObject = (v) => Array.isArray(v) ? v.map(sortObject) : v && typeof v === 'object'
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortObject(v[k])])) : v
@@ -82,9 +85,24 @@ function publishExclusive(dir, final, content, kind) {
   const temporary = path.join(dir, `.${kind}-${randomUUID()}.json`)
   writeExclusive(temporary, content)
   try { fs.linkSync(temporary, path.join(dir, final)) } catch (error) { fs.rmSync(temporary, { force: true }); throw error }
-  // Published. A temporary that cannot be removed now stays listed by the inventory.
+  // Published. A temporary that cannot be removed now stays listed by the inventory,
+  // and a failed directory sync does not turn a published record into a failure.
   try { fs.unlinkSync(temporary) } catch {}
-  syncDir(dir)
+  try { syncDir(dir) } catch {}
+}
+// An inventory entry for a file that may be missing, oversized, not regular or
+// unreadable: it is listed with its size and without a digest rather than
+// failing the whole inventory.
+function inventoryEntry(file, limit) {
+  try {
+    const bytes = readBytes(file, limit)
+    return { bytes: bytes.length, digest: hash(bytes) }
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    let size = null
+    try { size = fs.lstatSync(file).size } catch {}
+    return { bytes: size, digest: null }
+  }
 }
 const eligibility = (personalHome, generationId) => {
   try { composePersonalWorkspace({ personalHome, generationId }); return { eligible: true, reason: null } }
@@ -111,7 +129,8 @@ function readHistory(personalHome) {
   let head = GENESIS
   for (const [index, name] of names.entries()) {
     if (name !== `${String(index + 1).padStart(6, '0')}.json`) refuse('selection-history-corrupt')
-    const bytes = readBytes(path.join(dir, name), MAX_RECORD, 'selection-history-corrupt')
+    let bytes
+    try { bytes = readBytes(path.join(dir, name), MAX_RECORD, 'selection-history-corrupt') } catch { refuse('selection-history-corrupt') }
     let record
     try { record = JSON.parse(bytes) } catch { refuse('selection-history-corrupt') }
     if (record?.schema !== SELECTION_SCHEMA || record.sequence !== index + 1 || record.previous !== head || !ID.test(record.generationId ?? '') ||
@@ -190,14 +209,14 @@ export function inventoryPersonalHome(options) {
     const { personalHome } = options ?? {}
     privateHome(personalHome)
     const authored = [MANIFEST_FILE, OVERLAY_FILE].map((name) => {
-      const bytes = bytesOrNull(path.join(personalHome, name), MAX_RECORD)
-      return { name, bytes: bytes?.length ?? null, digest: bytes ? hash(bytes) : null }
+      const entry = inventoryEntry(path.join(personalHome, name), MAX_RECORD)
+      return { name, bytes: entry?.bytes ?? null, digest: entry?.digest ?? null }
     })
     const root = privateDir(personalHome, 'generations', false)
     const entries = root ? fs.readdirSync(root).sort() : []
     const generations = entries.filter((name) => ID.test(name)).map((generationId) => {
-      const record = bytesOrNull(path.join(root, generationId, 'generation.json'), MAX_GENERATION_FILE)
-      return { generationId, recordDigest: record ? hash(record) : null, ...eligibility(personalHome, generationId) }
+      const record = inventoryEntry(path.join(root, generationId, 'generation.json'), MAX_GENERATION_FILE)
+      return { generationId, recordDigest: record?.digest ?? null, ...eligibility(personalHome, generationId) }
     })
     const staging = entries.filter((name) => name.startsWith('.staging-'))
     const selectionsDir = privateDir(personalHome, 'selections', false)
@@ -240,7 +259,12 @@ function recordedInputs(personalHome, generationId) {
 // The current authored file, read once: its exact bytes, digest and validated value.
 function currentAuthored(personalHome, name, kind) {
   const bytes = bytesOrNull(path.join(personalHome, name), MAX_RECORD)
-  if (bytes === null) refuse('malformed-input')
+  if (bytes === null) {
+    // A restore interrupted between moving the file aside and linking its
+    // replacement leaves the name absent and the aside listed by the inventory.
+    if (fs.readdirSync(personalHome).some((entry) => ASIDE(kind).test(entry))) refuse('restore-interrupted')
+    refuse('malformed-input')
+  }
   return { bytes, digest: hash(bytes), value: validateBytes(personalHome, bytes, kind) }
 }
 // A restore may narrow enrollment and bindings, never widen them: every
@@ -295,14 +319,21 @@ export function planPersonalRestore(options) {
 // Replaces `file` with `staged` only if `file` still holds exactly `expected`:
 // the current file is moved aside, its bytes are verified, and the staged file
 // is linked into place, which fails if another writer recreated the name. On any
-// mismatch the moved-aside file is put back, or kept as a listed temporary file
-// when its name was taken meanwhile, so no writer's bytes are lost. While the
-// swap is in progress the name is briefly absent.
+// mismatch or failure to read the moved file, it is put back; when its name was
+// taken meanwhile it stays as a listed temporary file. Writers that replace or
+// recreate the file by path therefore keep their bytes. While the swap is in
+// progress the name is briefly absent.
 function compareAndSwap(personalHome, file, staged, expected, key) {
   const aside = path.join(personalHome, `.restore-${randomUUID()}-aside-${key}.json`)
   fs.renameSync(file, aside)
-  const putBack = () => { try { fs.linkSync(aside, file); fs.unlinkSync(aside) } catch {} }
-  const moved = readBytes(aside, MAX_RECORD)
+  const putBack = () => {
+    try { fs.linkSync(aside, file) } catch { return false }
+    try { fs.unlinkSync(aside) } catch {}
+    try { syncDir(personalHome) } catch {}
+    return true
+  }
+  let moved
+  try { moved = readBytes(aside, MAX_RECORD) } catch { putBack(); refuse('authored-input-changed') }
   if (hash(moved) !== expected) { putBack(); refuse('authored-input-changed') }
   try { fs.linkSync(staged, file) } catch (error) {
     if (error.code === 'EEXIST') refuse('authored-input-changed')

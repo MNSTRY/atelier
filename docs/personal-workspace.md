@@ -132,9 +132,11 @@ remove only their own temporary files. Every failure is a
   review before any deletion the person chooses: the authored files, each
   generation with its eligibility, interrupted staging directories, every
   selection and restore record, and any leftover temporary file, with sizes and
-  digests. An unreadable or oversized entry is listed without a digest, and a
-  corrupt selection history is flagged rather than failing the inventory. It is
-  read-only.
+  digests. An unreadable, oversized, non-regular or symlinked entry (authored
+  file, generation record or selection record) is listed without a digest, and a
+  corrupt selection history is flagged rather than failing the inventory.
+  Temporary files include restore aside copies (`.restore-<uuid>-aside-<file>.json`).
+  It is read-only.
 - `planPersonalRestore({ personalHome, generationId })` plans restoring the
   authored manifest and overlay that an earlier generation recorded. The
   generation's `inputs.json` must reproduce its id from this private home, or the
@@ -160,11 +162,18 @@ remove only their own temporary files. Every failure is a
   under `restores/`, stages and validates both restored files, then replaces each
   by compare-and-swap: the current file is moved aside and verified to be the
   bytes it read, and the restored file is linked into place, which fails if
-  another writer recreated the name. On any mismatch the moved file is put back,
-  or kept as a listed temporary file if its name was taken meanwhile, and the
-  restore refuses `authored-input-changed`; no writer's bytes are lost. The name
-  is briefly absent during each swap. A rerun after an interruption completes the
-  files not yet restored. A restore does
+  another writer recreated the name. On any mismatch, or if the moved file cannot
+  be read (for example it is now oversized), it is put back, or kept as a listed
+  temporary file if its name was taken meanwhile, and the restore refuses
+  `authored-input-changed`. Writers that replace or recreate the file by path keep
+  their bytes. A writer still holding an open handle on the old file and editing
+  it in place can write into the moved copy, which a completed swap removes. The
+  name is briefly absent during each swap. A rerun after an interruption between
+  swaps completes the files not yet restored. If a crash leaves an authored name
+  absent while its moved copy remains, planning and restoring refuse
+  `restore-interrupted`. The moved copy is listed by the inventory, and the
+  restore record under `restores/` holds the replaced bytes, so the person can put
+  the file back before trying again. A restore does
   not change the selection; selecting the restored generation is the person's next
   explicit act.
 
