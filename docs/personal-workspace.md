@@ -95,6 +95,49 @@ rename preserves references when its stable node ID stays the same. Changed
 inputs refuse use of an old generation; old bytes remain untouched. Authored
 note retention and recipient export are outside this module.
 
+## Selection, inventory and restore
+
+A generation is eligible only while it composes against the current authored
+inputs, roots and enrollment, so at most one generation is eligible at a time.
+These operations record a person's choices about that, and write only under the
+private home. They delete nothing.
+
+- `selectPersonalGeneration({ personalHome, generationId, confirm })` records an
+  explicit choice of the eligible generation. `confirm` is
+  `selectionConfirmDigest({ generationId, previous })`, computed over the head
+  that `readPersonalSelection` returns, so a choice shown against an older history
+  does not apply. Selections are append-only, numbered, hash-chained records under
+  `selections/`. An ineligible generation refuses with its composition code, such
+  as `stale-generation`.
+- `readPersonalSelection({ personalHome })` returns the current selection and
+  whether it is still eligible. A selection never keeps a generation eligible after
+  its inputs, roots or enrollment change. A tampered, reordered or renumbered
+  history refuses `selection-history-corrupt`.
+- `inventoryPersonalHome({ personalHome })` lists the authored files, each
+  generation with its eligibility, interrupted staging directories, and the
+  selection and restore records, with sizes and digests. It is read-only.
+- `planPersonalRestore({ personalHome, generationId })` plans restoring the
+  authored manifest and overlay that an earlier generation recorded. The
+  generation's `inputs.json` must reproduce its id from this private home, or the
+  plan refuses `generation-corrupt`. **A restore never widens enrollment:** a
+  repository the target enrolls must be enrolled now with the same root and
+  remote. Otherwise it refuses `rollback-readmits-repository` or
+  `rollback-identity-changed` with the repository ids, before any write.
+  Re-admission is the person's fresh enrollment; afterwards the same restore is
+  evaluated normally. A restore that only narrows enrollment or changes the
+  overlay proceeds.
+- `restorePersonalInputs(plan, { personalHome, confirm: plan.confirm })` first
+  keeps the replaced authored bytes in an append-only record under `restores/`,
+  then validates and renames each restored file into place. Inputs changed after
+  planning refuse `authored-input-changed`. A rerun after an interruption
+  completes the files not yet restored. A restore does not change the selection;
+  selecting the restored generation is the person's next explicit act.
+
+Retention follows the person's decision: withdrawn material stops being eligible
+immediately, while authored history, generations and these records stay until the
+person reviews the inventory and explicitly confirms deletion. No deletion
+operation is provided yet.
+
 ## Canonical graph and offline checks
 
 Composition uses the existing supported project loader, project validation,

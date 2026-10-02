@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Personal workspaces gain an explicit selection record, a read-only inventory of
+  the private home, and a restore of authored inputs from an earlier generation:
+  `selectPersonalGeneration`, `selectionConfirmDigest`, `readPersonalSelection`,
+  `inventoryPersonalHome`, `planPersonalRestore` and `restorePersonalInputs`. A
+  selection is a confirmed, hash-chained choice of the eligible generation. A
+  restore keeps the replaced bytes and never widens enrollment: re-admitting a
+  withdrawn repository, or a changed repository identity, refuses before any
+  write. Nothing is deleted.
 - A personal workspace bound to the Obsidian projection is served from the
   canonical build, with the composition's link-target rule and the engine's file
   cache. A graph is used only under a validity key the composition confirmed.
