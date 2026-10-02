@@ -589,8 +589,9 @@
   of refusing `published-note-unavailable`. Observation of pending edits on a
   tick had the same gap: a source replaced while its note was prepared again
   raised an untyped `ELEAFCHANGED` from the tick. It now refuses that edit
-  `stale-source`. The failed preparation is no longer kept, so the other edits
-  of that generation in the tick are still observed.
+  `stale-source` when its own source bytes changed, and otherwise refuses
+  `published-note-unavailable`. The failed preparation is no longer kept, so the
+  other edits of that generation in the tick are still observed.
 
 ## 0.2.0-alpha.12
 
