@@ -254,8 +254,8 @@ activation remains usable. Named semantic pin mismatches are withheld with recor
 Low-level IO/intake errors and unexpected history failures still refuse the
 request. The receiver must explicitly revise the assertion for the new choice.
 
-Reconciled reservations are skipped before inspecting their old intake IDs when
-starting another operation. Intake IDs remain workspace-wide: a collision with
+Reconciled reservations permit a fresh operation only after checking that their
+own intake has no partial or completed output. Intake IDs remain workspace-wide: a collision with
 another run refuses exact status readback rather than attributing that run's
 bytes to the old reservation. It does not prevent beginning with a new ID after
 explicit reconciliation. The runner does not add a workspace-wide reservation
@@ -275,5 +275,20 @@ attempt or reach the supported host-readiness return. The host declaration
 remains labelled, not independently authenticated. Reconciled status reports
 `foreign-manifest` with its pin and never returns the other run's raw bytes. A
 fresh distinct attempt ID is required. Own partial or completed output remains
-ineligible for abandonment. Completion checks exact manifest custody before
-raw publication, so another run's begun attempt cannot receive these bytes.
+ineligible for abandonment. Completion requires a present immutable manifest
+with the operation's exact pins before raw publication. An absent manifest
+refuses with `SEMANTIC_RECONCILE_REQUIRED`; a foreign manifest refuses with
+`SEMANTIC_OPERATION_INTEGRITY`. A manifest appearing after an absent read cannot
+receive the refused completion's bytes. The readiness return also requires the
+own attempt to remain `begun`, alongside the unchanged reservation phase/head.
+
+Reconciliation rechecks intake through its post-write status. If contradictory
+own partial or completed output was captured, status and a later fresh-execution
+request refuse with `SEMANTIC_RECONCILE_REQUIRED` and `captured` custody. The
+reconciliation failure also carries its saved `recorded` custody. Raw bytes and
+the original host declaration remain immutable; neither is called unexecuted
+or silently discarded. The intake owner's exact readback remains available.
+These current-read checks do not provide an atomic transaction across the two
+stores or independently prove a host's declaration. Hosts must serialize their
+completion and reconciliation decisions; the runner creates no automatic
+unreconciliation or new execution permission after a detected contradiction.

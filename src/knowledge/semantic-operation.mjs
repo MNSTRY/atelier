@@ -203,6 +203,13 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     }
     return result
   }
+  function assertNoReconciledCapture(initial, attempt, state) {
+    if (!foreignAttempt(initial, attempt) && ['partial', 'complete'].includes(attempt.status)) {
+      const error = new SemanticOperationError('SEMANTIC_RECONCILE_REQUIRED', 'Own output contradicts the host reconciliation; do not start another execution')
+      error.captured = { attemptId: initial.value.attemptId, completion: attempt.completion, head: state.head, nextAction: 'reopen-captured-output' }
+      throw error
+    }
+  }
   function status({ operationId }) {
     const { initial, latest, state } = operation(operationId), value = initial.value
     let attempt
@@ -213,7 +220,10 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
         latest.value.outcome === 'not-executed' && foreignAttempt(initial, actual) && recovery.manifestDigest === ingestionDigest(actual.attempt),
         'SEMANTIC_OPERATION_INTEGRITY', 'Reconciled foreign manifest readback differs')
       attempt = { status: 'foreign-manifest', attemptId: value.attemptId, manifestDigest: recovery.manifestDigest }
-    } else attempt = inspected(initial)
+    } else {
+      attempt = inspected(initial)
+      if (latest.value.phase === 'reconciled') assertNoReconciledCapture(initial, attempt, state)
+    }
     let freshness = 'current'
     try {
       intake.readSource({ ref: value.source.ref, expectedDigest: value.source.digest })
@@ -242,7 +252,10 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     for (const prior of starts) {
       if (prior.value.source.digest !== source.digest || prior.value.source.ref !== source.ref || prior.value.extractor.configurationDigest !== extractor.configurationDigest) continue
       const known = operation(prior.value.operationId, state)
-      if (known.latest.value.phase === 'reconciled') continue
+      if (known.latest.value.phase === 'reconciled') {
+        assertNoReconciledCapture(known.initial, intake.readAttempt(prior.value.attemptId), state)
+        continue
+      }
       const attempt = inspected(known.initial)
       check(attempt.status === 'complete', 'SEMANTIC_EXECUTION_UNKNOWN', 'Reconcile the prior source/configuration execution before a new attempt')
       check(known.latest.value.phase === 'completed', 'SEMANTIC_RECONCILE_REQUIRED', 'Finish recording the existing completed attempt before reuse')
@@ -258,7 +271,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     try {
       intake.beginAttempt({ attemptId, blobId: source.digest, extractorId: extractor.id, extractorVersion: extractor.version, configurationDigest: extractor.configurationDigest })
       const ready = status({ operationId })
-      check(ready.phase === 'reserved' && ready.head === recorded.head, 'SEMANTIC_RECONCILE_REQUIRED', 'Reservation changed before host execution')
+      check(ready.phase === 'reserved' && ready.head === recorded.head && ready.attempt.status === 'begun', 'SEMANTIC_RECONCILE_REQUIRED', 'Reservation changed before host execution')
       check(ready.freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'Source or domain changed during reservation')
       return { ...ready, execution: 'ready-for-host', cacheReuse: false }
     } catch (error) {
@@ -286,7 +299,8 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     const { initial, latest, state } = operation(operationId), value = initial.value
     check(state.head === confirm && latest.value.phase === 'reserved', 'SEMANTIC_OPERATION_HEAD', 'Complete the reserved operation against current history')
     // Verify byte custody before publication; never write into another run's attempt.
-    inspected(initial)
+    const before = inspected(initial)
+    check(before.status !== 'absent', 'SEMANTIC_RECONCILE_REQUIRED', 'Reconcile the absent own manifest before completing output')
     // Store owned executed bytes before interpreting even an oversized/malformed envelope.
     intake.completeAttempt({ attemptId: value.attemptId, output, expectedOutputDigest })
     const attempt = inspected(initial)

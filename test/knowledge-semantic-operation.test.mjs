@@ -617,9 +617,97 @@ transactionTest('completion refuses a foreign begun manifest before publishing a
   assert.equal(foreign.attempt.status, 'begun'); assert.equal(foreign.attempt.output, null)
   const moduleUrl = new URL('../src/knowledge/semantic-operation.mjs', import.meta.url)
   const source = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original)
-  const marker = '// Verify byte custody before publication; never write into another run\'s attempt.\n    inspected(initial)'
+  const marker = 'const before = inspected(initial)'
   assert.equal(source.split(marker).length, 2)
-  const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(marker, 'void initial')).toString('base64')}`)
+  const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(marker, "const before = { status: 'begun' }")).toString('base64')}`)
   assert.throws(() => mutant.createSemanticOperation(s.options).complete({ operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }), e => e.code === 'SEMANTIC_OPERATION_INTEGRITY')
   assert.equal(other.status({ operationId: 'first' }).attempt.output, output, 'Removing pre-publication custody writes into the foreign attempt.')
+})
+
+transactionTest('completion requires a present own manifest across the pre-publication interval', async t => {
+  const moduleUrl = new URL('../src/knowledge/semantic-operation.mjs', import.meta.url)
+  let source = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original)
+  const inspectedStart = source.indexOf('  function inspected(')
+  const inspectedEnd = source.indexOf('\n  function ', inspectedStart + 1)
+  const returnAt = source.indexOf('    return result\n  }', inspectedStart)
+  assert.ok(inspectedStart >= 0 && returnAt > inspectedStart && returnAt < inspectedEnd)
+  source = source.slice(0, returnAt) + '    globalThis.__atelierSemanticAbsentCompleteFixture?.(result)\n' + source.slice(returnAt)
+  t.after(() => { delete globalThis.__atelierSemanticAbsentCompleteFixture })
+  async function scenario(text, expectedCode) {
+    const s = setup(t), first = s.runner.begin(s.begin)
+    fs.rmSync(path.join(s.root, '.atelier-local/intake/attempts/model-first'), { recursive: true })
+    const domain = { ...structuredClone(fixture.domain), id: 'interval-collision', run: 'interval-collision' }
+    const head = appendHarness({ ...s.options, profile: 'knowledge', record: domain, confirm: EMPTY_HARNESS_HEAD }).head
+    const other = createSemanticOperation({ ...s.options, run: domain.run })
+    globalThis.__atelierSemanticAbsentCompleteFixture = result => {
+      if (result.status === 'absent') other.begin({ ...s.begin, confirm: head })
+    }
+    const instrumented = await import(`data:text/javascript;base64,${Buffer.from(text).toString('base64')}`)
+    const candidates = emptyCandidates(first.input), output = JSON.stringify(candidates)
+    assert.throws(() => instrumented.createSemanticOperation(s.options).complete({ operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }), e => e.code === expectedCode)
+    return { attempt: other.status({ operationId: 'first' }).attempt, output }
+  }
+  const safe = await scenario(source, 'SEMANTIC_RECONCILE_REQUIRED')
+  assert.equal(safe.attempt.status, 'begun'); assert.equal(safe.attempt.output, null)
+  const guard = "before.status !== 'absent'"
+  assert.equal(source.split(guard).length, 2)
+  const unsafe = await scenario(source.replace(guard, 'true'), 'SEMANTIC_OPERATION_INTEGRITY')
+  assert.equal(unsafe.attempt.status, 'complete'); assert.equal(unsafe.attempt.output, unsafe.output)
+})
+
+transactionTest('begin refuses completed intake before declaring readiness and retains reservation custody', async t => {
+  const moduleUrl = new URL('../src/knowledge/semantic-operation.mjs', import.meta.url)
+  let source = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original)
+  const marker = '      const ready = status({ operationId })\n      check(ready.phase'
+  assert.equal(source.split(marker).length, 2)
+  source = source.replace(marker, '      globalThis.__atelierSemanticBeginCaptureFixture()\n' + marker)
+  t.after(() => { delete globalThis.__atelierSemanticBeginCaptureFixture })
+  const output = 'Invented premature host capture.'
+  function configure(s) {
+    globalThis.__atelierSemanticBeginCaptureFixture = () => createIntakeStore(s.options).completeAttempt({ attemptId: s.begin.attemptId, output, expectedOutputDigest: intakeDigest(output) })
+  }
+  const s = setup(t); configure(s)
+  const instrumented = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
+  let failure
+  try { instrumented.createSemanticOperation(s.options).begin(s.begin) } catch (error) { failure = error }
+  assert.equal(failure?.code, 'SEMANTIC_RECONCILE_REQUIRED')
+  assert.equal(failure.recorded.head, readHarness({ ...s.options, profile: 'knowledge' }).head)
+  assert.equal(createIntakeStore(s.options).readAttempt(s.begin.attemptId).output, output)
+  const guard = " && ready.attempt.status === 'begun'"
+  assert.equal(source.split(guard).length, 2)
+  const unsafe = setup(t); configure(unsafe)
+  const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(guard, '')).toString('base64')}`)
+  const ready = mutant.createSemanticOperation(unsafe.options).begin(unsafe.begin)
+  assert.equal(ready.execution, 'ready-for-host'); assert.equal(ready.attempt.status, 'complete')
+})
+
+transactionTest('capture during reconciliation refuses with saved custody and blocks another execution', async t => {
+  const s = setup(t), first = s.runner.begin(s.begin), moduleUrl = new URL('../src/knowledge/semantic-operation.mjs', import.meta.url)
+  let source = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original)
+  const marker = '    try { return { ...status({ operationId }), head: recorded.head } }'
+  assert.equal(source.split(marker).length, 2)
+  source = source.replace(marker, '    try { globalThis.__atelierSemanticReconcileCaptureFixture(); return { ...status({ operationId }), head: recorded.head } }')
+  const output = 'Invented capture contradicting a concurrent host reconciliation.'
+  globalThis.__atelierSemanticReconcileCaptureFixture = () => createIntakeStore(s.options).completeAttempt({ attemptId: s.begin.attemptId, output, expectedOutputDigest: intakeDigest(output) })
+  t.after(() => { delete globalThis.__atelierSemanticReconcileCaptureFixture })
+  const instrumented = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
+  let failure
+  try { instrumented.createSemanticOperation(s.options).reconcile({ operationId: 'first', at, by: 'simulated-receiver', reason: 'Invented contradictory concurrent host declaration.', outcome: 'not-executed', confirm: first.head }) } catch (error) { failure = error }
+  assert.equal(failure?.code, 'SEMANTIC_RECONCILE_REQUIRED')
+  const saved = readHarness({ ...s.options, profile: 'knowledge' })
+  assert.equal(failure.recorded.head, saved.head)
+  assert.equal(failure.captured.completion.outputDigest, intakeDigest(output))
+  assert.equal(createIntakeStore(s.options).readAttempt(s.begin.attemptId).output, output)
+  assert.throws(() => s.runner.status({ operationId: 'first' }), e => e.code === 'SEMANTIC_RECONCILE_REQUIRED' && e.captured.head === saved.head)
+  const next = { ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: saved.head }
+  assert.throws(() => s.runner.begin(next), e => e.code === 'SEMANTIC_RECONCILE_REQUIRED' && e.captured.head === saved.head)
+  const statusGuard = "if (latest.value.phase === 'reconciled') assertNoReconciledCapture(initial, attempt, state)"
+  assert.equal(source.split(statusGuard).length, 2)
+  const statusMutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(statusGuard, 'void state')).toString('base64')}`)
+  const incorrect = statusMutant.createSemanticOperation(s.options).status({ operationId: 'first' })
+  assert.equal(incorrect.execution, 'reconciled'); assert.equal(incorrect.attempt.status, 'complete')
+  const beginGuard = 'assertNoReconciledCapture(known.initial, intake.readAttempt(prior.value.attemptId), state)'
+  assert.equal(source.split(beginGuard).length, 2)
+  const beginMutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(beginGuard, 'void state')).toString('base64')}`)
+  assert.equal(beginMutant.createSemanticOperation(s.options).begin(next).execution, 'ready-for-host')
 })
