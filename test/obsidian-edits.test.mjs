@@ -2883,6 +2883,71 @@ test('apply beside a real removal: the source deleted, or its directory replaced
   }
 })
 
+// The seam that prepares the published note again, counted, with the code of anything it throws. While `arm` is set,
+// the first open of `sourceFile` inside it is preceded by another program saving the source the way an editor does:
+// complete new bytes renamed over the path, after the look at the path and before its open, so the production open
+// answers ELEAFCHANGED.
+function replacedWhilePreparing(t, sourceFile) {
+  const production = createProductionSeams()
+  const state = { arm: null, preparations: 0, codes: [], replaced: 0 }
+  let preparing = false
+  const originalOpen = fs.openSync
+  fs.openSync = function patched(file, flags, ...rest) {
+    if (preparing && state.arm !== null && typeof file === 'string' && path.resolve(file) === path.resolve(sourceFile)) {
+      const bytes = state.arm
+      state.arm = null
+      const saved = `${sourceFile}.saving`
+      fs.writeFileSync(saved, bytes)
+      fs.renameSync(saved, sourceFile)
+      state.replaced += 1
+    }
+    return originalOpen.call(this, file, flags, ...rest)
+  }
+  const restore = () => { fs.openSync = originalOpen }
+  t.after(restore)
+  const seams = {
+    prepareView: (input) => {
+      state.preparations += 1
+      preparing = true
+      try { return production.prepareView(input) } catch (error) { state.codes.push(error?.code ?? null); throw error } finally { preparing = false }
+    },
+  }
+  return { state, seams, restore }
+}
+
+test('apply beside a writer that replaces the source while the published note is prepared again: the open that sees another file refuses stale-source typed, with nothing written', needsExchange, async (t) => {
+  const world = raceWorld(t, 1)
+  const sourceFile = world.source('race-room/rounds/round-0.md')
+  const theirs = Buffer.from(`${fs.readFileSync(sourceFile, 'utf8')}\nSaved by another program while the note was prepared.\n`)
+  const race = replacedWhilePreparing(t, sourceFile)
+  race.state.arm = theirs
+  let result
+  try { result = await world.sourceApply({ seams: race.seams }).apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' }) } finally { race.restore() }
+  assert.deepEqual([race.state.replaced, race.state.codes], [1, ['ELEAFCHANGED']], 'the source was replaced between the look at its path and its open')
+  assert.deepEqual([result.status, result.code, result.detail?.cause, SOURCE_APPLY_REFUSALS.includes(result.code)], ['conflict', 'stale-source', 'changed-while-reading', true], JSON.stringify(result))
+  assert.deepEqual(fs.readFileSync(sourceFile), theirs, 'the bytes of the other program are the source')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was written')
+})
+
+test('apply after a source replaced while the published note was prepared: the race is answered, and the next edit of the same scope and generation prepares the note again and applies', needsExchange, async (t) => {
+  const world = raceWorld(t, 2)
+  const first = world.editOf('race-room:round-0')
+  const second = world.editOf('race-room:round-1')
+  assert.deepEqual([second.scopeId, second.generationId], [first.scopeId, first.generationId], 'both edits are of one scope and one generation')
+  const sourceFile = world.source('race-room/rounds/round-0.md')
+  const race = replacedWhilePreparing(t, sourceFile)
+  race.state.arm = Buffer.from(`${fs.readFileSync(sourceFile, 'utf8')}\nSaved by another program while the note was prepared.\n`)
+  const raced = await world.sourceApply({ seams: race.seams }).apply({ editId: first.editId, mode: 'manual', actor: 'person-synthetic' })
+  assert.deepEqual([race.state.codes, raced.code], [['ELEAFCHANGED'], 'stale-source'], JSON.stringify(raced))
+  const preparedBefore = race.state.preparations
+  const next = await world.sourceApply({ seams: race.seams }).apply({ editId: second.editId, mode: 'manual', actor: 'person-synthetic' })
+  race.restore()
+  assert.ok(race.state.preparations > preparedBefore, 'the note of the next edit was prepared again')
+  assert.deepEqual(race.state.codes, ['ELEAFCHANGED'], 'and that preparation succeeded')
+  assert.deepEqual([next.status, next.code], ['applied', 'applied'], JSON.stringify(next))
+  assert.match(fs.readFileSync(world.source('race-room/rounds/round-1.md'), 'utf8'), /Edited sentence 1\./)
+})
+
 test('apply command beside a damaged object log: recover settles the healthy interrupted apply and reports the damaged object by its code, show answers a typed refusal, and nothing is repaired or deleted', needsExchange, async (t) => {
   const world = raceWorld(t, 2)
   const [healthy, damaged] = [0, 1].map((index) => world.editOf(`race-room:round-${index}`))
