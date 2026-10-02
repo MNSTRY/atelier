@@ -42,6 +42,8 @@ export function catalogDocument() {
       "implementation": [
         "src/learning/store.mjs",
         "src/judgment/index.mjs",
+        "src/judgment/practice.mjs",
+        "src/judgment/practice-evaluation.mjs",
         "src/capabilities/instructions.mjs"
       ]
     },
