@@ -3,6 +3,7 @@ import path from 'node:path'
 import { buildCanonicalGraph, createGraphFileCache } from '../../graph/graph.mjs'
 import { markdownMetadata } from '../../graph/knowledge-graph.mjs'
 import { EMITTER_VERSION, createPreparationCache, prepareView, readMarkdownLens, withEligibility } from '../../projection/obsidian/materialize/index.mjs'
+import { personalWorkspaceGraph } from '../../projection/obsidian/personal-workspace.mjs'
 import { publishView } from '../../projection/obsidian/publication/publisher.mjs'
 import { recheckDisplacedFiles } from '../../projection/obsidian/recovery/late-writer.mjs'
 import { createRecoveryStore, readFileBytes } from '../../projection/obsidian/recovery/store.mjs'
@@ -122,9 +123,13 @@ export function profileFor({ project, workspaceId, audienceAllow }) {
 // `index` is the engine's observation index. With both, a source whose observed digest is the cached one is not
 // opened: observation already decided by digest that it did not change, under the stat-hint bound observation
 // documents, and a full reconciliation hashes it again. Without an index every source is read and hashed here.
-export function buildGraph({ project, eligibility, cache = null, index = null }) {
+// A project bound to a personal workspace (personal-workspace.mjs) is built by that route, for every caller, with the
+// same caches: the composition's graph, served only under a validity key the composition confirmed. With
+// `deferPersonalValidation` (the engine), an unconfirmed key refuses `personal-validation-pending` instead of composing
+// on this thread.
+export function buildGraph({ project, eligibility, cache = null, index = null, deferPersonalValidation = false }) {
   const observedDigest = cache && index ? (repoId, relative) => index.get(sourceKey(repoId, relative))?.digest ?? null : null
-  const canonical = buildCanonicalGraph(project, { fileCache: cache, observedDigest })
+  const canonical = personalWorkspaceGraph(project, { fileCache: cache, observedDigest, defer: deferPersonalValidation }) ?? buildCanonicalGraph(project, { fileCache: cache, observedDigest })
   if (!canonical.ok) refuse('canonical-graph-invalid', 'the canonical graph has errors; no view is prepared from it', { errorCount: canonical.errors.length })
   return withEligibility(canonical, eligibility.isEligible, assetEligibilityFor({ graph: canonical, eligibility }))
 }
