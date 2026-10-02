@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { CORPUS, LABELS, assess, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
+import { CORPUS, LABELS, assess, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
 
 // Foundation's repository-local decision-practice consumer, exercised on a
 // disposable git repository with invented decisions and sources.
@@ -61,6 +61,7 @@ test('an unrelated change stops on the false prerequisite and prepares nothing',
   const head = r.commit('unrelated', () => fs.writeFileSync(path.join(r.dir, 'other.md'), 'x\n'))
   const value = outcome(measure({ repo: r.dir, pr: 1, base: r.base, head }))
   assert.equal(value.prerequisite, false)
+  assert.deepEqual(value.assessment, { status: 'not-assessed', reason: 'prerequisite-false' })
   assert.equal(value.status, 'stop')
   assert.equal(value.reason, 'prerequisite-false')
   assert.equal(value.draftDigest, null)
@@ -127,8 +128,77 @@ test('measuring changes nothing in the repository; the CLI appends one line', (t
   assert.equal(fs.readFileSync(out, 'utf8').trim().split('\n').length, 1)
 })
 
-test('labels are the four measured outcomes with nonnegative correction effort', () => {
-  for (const value of LABELS) assert.equal(label({ pr: 1, decision: 'd-x', value, correctionMinutes: 0 }).label, value)
-  assert.throws(() => label({ pr: 1, decision: 'd-x', value: 'accepted', correctionMinutes: 1 }), /label must be one of/)
-  assert.throws(() => label({ pr: 1, decision: 'd-x', value: 'correct', correctionMinutes: -1 }), /nonnegative/)
+test('labels name who labelled them and validate every field', () => {
+  const decision = 'd-layered-example-0123abcd'
+  for (const value of LABELS) {
+    const made = label({ pr: 1, decision, value, reviewMinutes: 0, by: 'atelier-foundation' })
+    assert.equal(made.label, value)
+    assert.equal(made.by, 'atelier-foundation')
+  }
+  assert.throws(() => label({ pr: 1, decision, value: 'accepted', reviewMinutes: 1, by: 'x' }), /label must be one of/)
+  assert.throws(() => label({ pr: 1, decision, value: 'correct', reviewMinutes: -1, by: 'x' }), /nonnegative/)
+  assert.throws(() => label({ pr: 1, decision, value: 'correct', reviewMinutes: 1 }), /by must name/)
+  assert.throws(() => label({ pr: null, decision, value: 'correct', reviewMinutes: 1, by: 'x' }), /pr must be/)
+  assert.throws(() => label({ pr: 1, decision: undefined, value: 'correct', reviewMinutes: 1, by: 'x' }), /decision must be/)
+})
+
+test('a renamed cited source escalates instead of looking unchanged', (t) => {
+  const r = repo(t)
+  const head = r.commit('rename', () => r.git('mv', 'docs/layers.md', 'docs/moved-layers.md'))
+  const value = outcome(measure({ repo: r.dir, pr: 7, base: r.base, head }))
+  assert.equal(value.prerequisite, true)
+  assert.deepEqual(value.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
+  assert.equal(value.status, 'escalate')
+})
+
+test('repository diff settings cannot turn additions into removals', (t) => {
+  const r = repo(t)
+  r.git('config', 'diff.interHunkContext', '20')
+  r.git('config', 'diff.renames', 'copies')
+  const head = r.commit('two additions', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one of the invented model.', 'Line one of the invented model.\nAdded A.').replace('Line three.', 'Line three.\nAdded B.')))
+  const value = outcome(measure({ repo: r.dir, pr: 8, base: r.base, head }))
+  assert.deepEqual(value.change, { removed: 0, added: 2, binary: false })
+  assert.deepEqual(value.assessment, { status: 'assessed', choice: 'unaffected' })
+})
+
+test('a pull request is measured from its merge base, and an unchanged source is not assessed', (t) => {
+  const r = repo(t)
+  const branch = r.commit('unrelated', () => fs.writeFileSync(path.join(r.dir, 'other.md'), 'x\n'))
+  r.git('checkout', '-q', '-b', 'side', r.base)
+  const side = r.commit('side change to the source', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Side two')))
+  const measured = measure({ repo: r.dir, pr: 9, base: side, head: branch })
+  assert.equal(measured.mergeBase, r.base)
+  assert.equal(measured.base, side)
+  const value = outcome(measured)
+  assert.equal(value.prerequisite, false)
+  assert.deepEqual(value.assessment, { status: 'not-assessed', reason: 'prerequisite-false' })
+  assert.match(measured.definitionDigest, /^sha256:[0-9a-f]{64}$/)
+})
+
+test('citations exclude schemes, absolute paths and escapes from the repository', () => {
+  assert.deepEqual(citedPaths('[a](https://example.invalid/x.md) [b](/etc/x.md) [c](../../outside.md) [d](layers.md#part)'), ['docs/layers.md'])
+})
+
+test('a change larger than the excerpt bound abstains', (t) => {
+  const r = repo(t)
+  const long = Array.from({ length: 300 }, (_, index) => `Line ${index}`).join('\n')
+  const base = r.commit('long source', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), `${long}\n`))
+  const head = r.commit('rewrite', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), `${long.replaceAll('Line', 'Row')}\n`))
+  const value = outcome(measure({ repo: r.dir, pr: 10, base, head }))
+  assert.deepEqual(value.assessment, { status: 'abstained', reason: 'insufficient-evidence' })
+})
+
+test('measure and the CLI refuse malformed arguments', (t) => {
+  const r = repo(t)
+  const never = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-never-')), 'never.jsonl')
+  t.after(() => fs.rmSync(path.dirname(never), { recursive: true, force: true }))
+  assert.throws(() => measure({ repo: r.dir, pr: 1, base: 'HEAD', head: r.base }), /full commit ids/)
+  assert.throws(() => measure({ repo: r.dir, pr: 0, base: r.base, head: r.base }), /positive integer/)
+  assert.throws(() => measure({ repo: r.dir, pr: 1, base: r.base, head: r.base, mode: 'guess' }), /live or retrospective/)
+  for (const args of [['measure', '--pr', 'x', '--base', r.base, '--head', r.base], ['measure', '--pr', '1', '--base', r.base, '--head', r.base, '--mode', 'guess'],
+    ['label', '--pr', '1', '--decision', 'd-a-0123abcd', '--label', 'correct', '--minutes'], ['label', '--pr', '1', '--decision', 'd-a-0123abcd', '--label', 'correct', '--minutes', '1']]) {
+    const run = spawnSync(process.execPath, [SCRIPT, ...args, '--repo', r.dir, '--out', never], { encoding: 'utf8' })
+    assert.equal(run.status, 2, args.join(' '))
+  }
+  assert.equal(fs.existsSync(never), false)
 })
