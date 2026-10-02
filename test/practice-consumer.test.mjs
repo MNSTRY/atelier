@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import crypto from 'node:crypto'
-import { CORPUS, LABELS, anchorChange, assess, citations, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
+import { CORPUS, LABELS, anchorChange as anchorChangeWithQuote, assess, citations, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
 
 // Foundation's repository-local decision-practice consumer, exercised on a
 // disposable git repository with invented decisions and sources.
@@ -351,6 +351,7 @@ test('anchor relevance uses base hunk coordinates and explicit insertion boundar
   // A hunk as git reports it: old start and count, new start and count.
   const at = (oldStart, oldCount, newStart, newCount) => ({ oldStart, oldCount, newStart, newCount, removed: oldCount, added: newCount })
   const anchor = { start: 10, end: 12 }
+  const anchorChange = (...args) => { const { touching, ...rest } = anchorChangeWithQuote(...args); return rest }
   // A modified line inside.
   assert.deepEqual(anchorChange([at(11, 1, 11, 1)], anchor), { removed: 1, added: 1, outside: false, head: { start: 10, end: 12 }, reanchor: true })
   // Insertions directly before (after line 9) and directly after (after line 12) are outside.
@@ -373,6 +374,9 @@ test('anchor relevance uses base hunk coordinates and explicit insertion boundar
   assert.deepEqual(anchorChange([at(8, 4, 8, 2), at(14, 0, 13, 3), at(18, 8, 18, 0)], { start: 10, end: 20 }).head, { start: 8, end: 18 })
   // Removing every anchored line leaves no head lines.
   assert.equal(anchorChange([at(10, 3, 9, 0)], anchor).head, null)
+  // The quote ranges are the touching hunks only, never hunks elsewhere.
+  assert.deepEqual(anchorChangeWithQuote([at(5, 1, 5, 1), at(10, 3, 9, 0)], anchor).touching, [[6, 12]])
+  assert.deepEqual(anchorChangeWithQuote([at(5, 1, 5, 1)], anchor).touching, [])
   assert.equal(anchorChange([at(9, 5, 8, 0)], anchor).head, null)
 })
 
@@ -425,7 +429,7 @@ test('anchors refuse out-of-range and unsupported citations, and a removed file 
   const gone = anchoredRepo(t)
   const goneHead = gone.commit('move', () => fs.renameSync(path.join(gone.dir, 'docs/layers.md'), path.join(gone.dir, 'docs/moved.md')))
   const lost = outcome(measure({ repo: gone.dir, pr: 36, base: gone.base, head: goneHead }))
-  assert.deepEqual([lost.status, lost.assessment.reason, lost.anchor.head, lost.anchor.reanchor], ['escalate', 'insufficient-evidence', null, true])
+  assert.deepEqual([lost.status, lost.assessment.reason, lost.anchor.head, lost.anchor.reanchor, lost.quoted], ['escalate', 'insufficient-evidence', null, true, null])
 })
 
 test('anchored text keeps CR and BOM bytes; only LF separates lines', (t) => {
@@ -565,4 +569,30 @@ test('a block moved above an anchor leaves it in place, and quoted text always m
 test('two different refused fragments of one file stay two refusals', () => {
   const refused = citations('[a](layers.md#intro) [b](layers.md#usage) [c](layers.md#intro)')
   assert.deepEqual(refused.map((item) => item.fragment), ['intro', 'usage'])
+})
+
+test('an unrelated hunk far from a removed anchor neither widens the quote nor escalates it', (t) => {
+  const numbered = lines(...Array.from({ length: 200 }, (_, index) => `line ${index + 1}`))
+  const r = anchoredRepo(t, '#L150-L152', numbered)
+  const edited = numbered.split('\n')
+  edited.splice(149, 3)
+  edited[4] = 'line five, edited'
+  const head = r.commit('edit far away and remove the anchor', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), edited.join('\n')))
+  const value = outcome(measure({ repo: r.dir, pr: 52, base: r.base, head }))
+  assert.deepEqual([value.status, value.anchor.head, value.anchor.reanchor], ['proceed', null, true])
+  const [, from, to] = value.quoted.selector.value.match(/^lines:(\d+)-(\d+)$/)
+  // The gap lies between head lines 149 and 150; the quote surrounds it and nothing near line 5.
+  assert.ok(Number(from) <= 149 && Number(to) >= 150 && Number(from) > 100, value.quoted.selector.value)
+  assert.equal(value.quoted.contentDigest, sha(edited.slice(Number(from) - 1, Number(to)).join('\n')))
+})
+
+test('a lost anchor in a long file quotes the end of the head, where its lines would have been', (t) => {
+  const numbered = lines(...Array.from({ length: 200 }, (_, index) => `line ${index + 1}`))
+  // #L201 is the empty line after the final LF; the head drops that LF and has 200 lines.
+  const r = anchoredRepo(t, '#L201', numbered)
+  const head = r.commit('drop final newline', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), numbered.replace(/\n$/, '')))
+  const value = outcome(measure({ repo: r.dir, pr: 53, base: r.base, head }))
+  assert.deepEqual([value.status, value.anchor.head, value.anchor.reanchor], ['escalate', null, true])
+  assert.equal(value.quoted.selector.value, 'lines:194-200')
+  assert.equal(value.quoted.contentDigest, sha(numbered.split('\n').slice(193, 200).join('\n')))
 })

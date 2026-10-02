@@ -336,6 +336,9 @@ export function anchorChange(spans, { start, end }) {
   let removed = 0
   let added = 0
   let outside = false
+  // Head lines, with context, of the hunks that touch the anchor: what a quote of
+  // the change to the anchor shows. Hunks elsewhere in the file never widen it.
+  const touching = []
   for (const span of spans) {
     const oldEnd = span.oldStart + span.oldCount - 1
     const before = span.oldCount > 0 ? oldEnd < start : span.oldStart < start
@@ -345,6 +348,7 @@ export function anchorChange(spans, { start, end }) {
     } else if (inside) {
       removed += span.oldCount > 0 ? Math.min(oldEnd, end) - Math.max(span.oldStart, start) + 1 : 0
       added += span.added
+      touching.push([Math.max(1, span.newStart - CONTEXT_LINES), span.newStart + Math.max(span.newCount, 1) - 1 + CONTEXT_LINES])
     } else {
       outside = true
     }
@@ -365,7 +369,7 @@ export function anchorChange(spans, { start, end }) {
   const headEnd = map(end, 'end')
   const head = headEnd >= headStart ? { start: headStart, end: headEnd } : null
   return {
-    removed, added, outside, head,
+    removed, added, outside, head, touching,
     reanchor: removed > 0 || added > 0 || head === null || head.start !== start || head.end !== end,
   }
 }
@@ -376,6 +380,14 @@ export function assess(change, { removedAtHead = false } = {}) {
   if (change.removed > 0) return { status: 'assessed', choice: 'affected' }
   if (change.added > 0) return { status: 'assessed', choice: 'unaffected' }
   return { status: 'assessed', choice: 'unclear' }
+}
+
+// Where to quote when no anchored line can be shown at a text head: the hunks that
+// touched the anchor, or, when none did (the mapped lines lie past the end of the
+// head), the last lines of the head.
+function gapRanges(relation, headLength) {
+  if (relation?.touching.length) return relation.touching
+  return [[Math.max(1, headLength - 2 * CONTEXT_LINES), headLength]]
 }
 
 function excerpt(text, ranges) {
@@ -516,7 +528,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
         // still names the whole mapped range.
         region = headRange
           ? { start: headRange.start, end: Math.min(headRange.end, headRange.start + MAX_EXCERPT_LINES - 1), oversize: headRange.end - headRange.start + 1 > MAX_EXCERPT_LINES }
-          : headText !== null ? excerpt(headText, diff.ranges) : { start: 1, end: 1, oversize: false }
+          : headText !== null ? excerpt(headText, gapRanges(relation, headLines.length)) : { start: 1, end: 1, oversize: false }
       } else {
         change = { ...diff, binary }
         if (change.binary) change.ranges = []
@@ -573,7 +585,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
           reanchor: binary || removedAtHead || lost || (relation?.reanchor ?? false),
         } : null,
         // The exact head text the assessment quoted (e1), so its lines can be checked.
-        quoted: structuredClone(evidence[0].reference),
+        quoted: headText === null ? null : structuredClone(evidence[0].reference),
         prerequisite: didChange, change: { removed: change.removed, added: change.added, binary: change.binary },
         assessment: assessment.placeholder ? { status: 'not-assessed', reason: 'prerequisite-false' }
           : assessment.status === 'abstained' ? { status: 'abstained', reason: assessment.reason } : { status: 'assessed', choice: assessment.choice },

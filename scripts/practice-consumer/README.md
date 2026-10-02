@@ -32,7 +32,7 @@ The assessment is the predicate the rubric declares:
 | A line modified or removed | `affected` | proceed: an unaccepted reconsideration draft |
 | Only lines added | `unaffected` | stop |
 | Binary, removed, renamed or over the excerpt bound | abstained, `insufficient-evidence` | escalate |
-| Changed without line changes (for example a mode change); for an anchor, the head lacks the mapped lines | `unclear` | escalate. A mode-only change leaves an anchor's lines unchanged, so an anchor stops |
+| Changed without line changes (for example a mode change); for an anchor, the head lacks the mapped lines and no anchored line changed | `unclear` | escalate. A mode-only change leaves an anchor's lines unchanged, so an anchor stops |
 | Not changed; for an anchor, changed only outside it | not assessed (prerequisite false) | stop |
 | Cited path missing, a directory, unreadable or over bounds at the base | not evaluated (`cited-path-missing`, `cited-path-not-a-file`, `cited-source-unreadable-or-over-bounds`) | none |
 | An anchor past the end of the file or over 120 lines at the base, or a fragment that is not a line anchor | not evaluated (`cited-anchor-out-of-range`, `cited-anchor-over-bounds`, `cited-anchor-unsupported`, `cited-anchor-malformed`) | none |
@@ -50,14 +50,14 @@ A decision can cite some lines of a file rather than the whole file, with a GitH
 - Lines are the UTF-8 file split on LF. A CR or a BOM stays in the text, and a final LF makes a final empty line.
 - Each outcome records two references, each with its own revision and digest:
   - the anchor at the merge base (`anchor.base`);
-  - the same lines mapped to the head (`anchor.head`). Each end of the anchor is mapped on its own; an end inside a removed or replaced hunk maps to that hunk's new lines. The head range is checked against the head file. It is null when no anchored line remains, or when the head does not have the mapped lines (for example after a removed final LF). If anchored lines were removed or modified the outcome is `affected` and drafts; if not, it is `unclear` and escalates. Either way the anchor needs re-anchoring, and the quoted head text is the changed region around where the anchor was.
+  - the same lines mapped to the head (`anchor.head`). Each end of the anchor is mapped on its own; an end inside a removed or replaced hunk maps to that hunk's new lines. The head range is checked against the head file. It is null when no anchored line remains, or when the head does not have the mapped lines (for example after a removed final LF). If anchored lines were removed or modified the outcome is `affected` and drafts; if not, it is `unclear` and escalates. Either way the anchor needs re-anchoring. The quoted head text is then the hunks that touched the anchor, with context, or, when none did, the last lines of the head; hunks elsewhere in the file never widen it.
 
 **Whether a change touches an anchor** is decided in base coordinates:
 - A removed or modified base line inside the anchor counts as removed.
 - An insertion counts as inside only between two anchored lines. Insertions directly before or after the anchor are outside it.
 - The prerequisite is that the anchored lines changed, or that the head cannot show them (file removed or binary). A change only outside the anchor stops on the false prerequisite, and `anchor.outsideChanges` records it.
 
-**Re-anchoring is reported apart from the outcome.** `anchor.reanchor` is true when the anchored lines changed or the anchor lands on different lines at the head; changes above it that cancel out leave it in place. `summary.reanchors` counts these. Every outcome also records `quoted`, the exact head lines the assessment quoted. A draft never hides a needed re-anchor, and a stop never drops one.
+**Re-anchoring is reported apart from the outcome.** `anchor.reanchor` is true when the anchored lines changed or the anchor lands on different lines at the head; changes above it that cancel out leave it in place. `summary.reanchors` counts these. Every evaluated outcome also records `quoted`, the exact head lines the assessment quoted, or null when the head is removed or binary and the assessment saw only a placeholder. A draft never hides a needed re-anchor, and a stop never drops one.
 
 Renames are not followed. A moved file is absent at the head, so its anchors escalate and need re-anchoring.
 
