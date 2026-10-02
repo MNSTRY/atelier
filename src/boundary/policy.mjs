@@ -338,7 +338,7 @@ function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActo
     } else if (current.actorId !== repo.ownerActor) {
       // Only an owner-signed delegation, verified against a host-supplied key,
       // changes this outcome, and only for its operator, repos and operation.
-      const delegated = resolveDelegation({ policy, delegations, repoName, repo, actorId: current.actorId, operation, ownerKeys, now })
+      const delegated = resolveDelegation({ policy, project, delegations, repoName, repo, actorId: current.actorId, operation, ownerKeys, now })
       if (delegated.applies) {
         const { id, owner, expiresAt } = delegated.delegation
         findings.push(finding({ severity: 'info', code: 'private-domain-delegated-operator', repo: repoName,
@@ -710,7 +710,7 @@ export function runBoundaryCheckCommand(argv = process.argv.slice(2)) {
   const sidecar = loaded.ok ? loadDelegationsFile(delegationsPathFor(loaded.policyPath)) : { present: false, document: null, errors: [] }
   const sidecarFindings = sidecar.errors.map((message) => finding({ code: 'boundary-delegations-invalid', message }))
   // Owner keys are read only when a delegations document exists.
-  const ownerKeys = sidecar.present && sidecar.document ? ownerKeysForCommand(project, args) : null
+  const ownerKeys = sidecar.present && sidecar.document ? ownerKeysForCommand() : null
   let report = loaded.ok
     ? checkBoundaryPolicy({ project, policy: loaded.policy, staged, stagedOnly, actor: firstString(args.actor), delegations: sidecar.document, ownerKeys })
     : { ok: false, mode: null, schema: BOUNDARY_POLICY_SCHEMA, graphCounts: null, findings: missingFindings, errors: missingFindings, warnings: [] }

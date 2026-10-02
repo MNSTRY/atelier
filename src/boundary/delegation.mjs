@@ -1,62 +1,85 @@
+import { spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { canonicalize } from '../attestation/jcs.mjs'
 import { verifyDocument } from '../attestation/sign.mjs'
+import { sanitizedGitEnvironment } from '../runtime/git-adapter.mjs'
 
 // Owner-signed delegation of the local boundary actor check (FD-BOUND-1).
 // A delegation lets one declared operator pass the private-domain actor check
 // for named repositories and operations. It never changes ownership, audiences,
 // paths, content rules, promotion, push-content approval or publication.
 //
-// Trust: the policy and the delegations document beside it are operator-writable,
-// so a delegation is authority only when its signature verifies against an owner
-// key the host supplies from outside them. Revocation also comes from the host: a
-// revocation kept in an operator-writable file could be deleted by the operator it
-// restrains. `ext` is accepted and never read.
+// Guarantee: attribution integrity for a cooperating operator. The actor check
+// itself stays attribution-grade: an operator can still declare another actor
+// (--actor, MNSTRY_ATELIER_ACTOR), edit the policy or project configuration, or
+// control the process that runs the check. A delegation adds that an owner's
+// signed, current, host-anchored consent is recorded when someone else commits.
+//
+// Trust: the policy and the delegations document are operator-writable, so a
+// delegation is authority only when its signature verifies against an owner key
+// in the host file at a fixed path, owned by root in root-owned directories. That
+// file is also the only source of revocation. Each delegation binds the whole
+// policy (ext excluded), the managed repository set and each repository's root
+// commit, so it cannot be loosened in place or replayed into another project.
+// `ext` is accepted and never read.
 
 export const DELEGATION_SCHEMA = 'atelier-boundary-delegation@v1'
 export const DELEGATIONS_DOCUMENT_SCHEMA = 'atelier-boundary-delegations@v1'
 export const OWNER_KEYS_SCHEMA = 'atelier-boundary-owner-keys@v1'
 export const DELEGATION_OPERATIONS = Object.freeze(['boundary-check', 'pre-commit'])
 export const MAX_DELEGATION_SPAN_MS = 90 * 24 * 60 * 60 * 1000
+export const HOST_OWNER_KEYS_PATH = '/etc/atelier/boundary-owner-keys.json'
 
-const DELEGATION_KEYS = ['schema', 'id', 'owner', 'operator', 'repos', 'operations', 'notBefore', 'expiresAt', 'policyBinding', 'signature', 'ext']
+const DELEGATION_KEYS = ['schema', 'id', 'owner', 'operator', 'repos', 'operations', 'notBefore', 'expiresAt', 'policyDigest', 'repoRoots', 'signature', 'ext']
 const VERSION_RE = /^1\.[0-9]+\.[0-9]+$/
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const REPO_RE = /^[a-z0-9][a-z0-9._-]*$/
 const UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/
-const BINDING_RE = /^sha256:[0-9a-f]{64}$/
+const DIGEST_RE = /^sha256:[0-9a-f]{64}$/
+const COMMIT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+const JWK_X_RE = /^[A-Za-z0-9_-]{43}$/
 const OWNER_KEYS_MAX_BYTES = 64 * 1024
+const MAX_DELEGATIONS = 64
+const MAX_REPOS = 64
+const MAX_KEYS = 64
+const MAX_REVOKED = 1024
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-const nonEmptyString = (value) => typeof value === 'string' && value.length > 0
+const boundedString = (value, max = 128) => typeof value === 'string' && value.length > 0 && value.length <= max
 const timeOf = (value) => (typeof value === 'string' && UTC_RE.test(value) ? Date.parse(value) : Number.NaN)
 
-const withoutExt = (value) => {
-  if (!isObject(value)) return value ?? null
-  const { ext, ...rest } = value
-  return rest
+// `ext` is never read, so it is removed at every level before hashing.
+function withoutExt(value) {
+  if (Array.isArray(value)) return value.map(withoutExt)
+  if (!isObject(value)) return value
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'ext').map(([key, item]) => [key, withoutExt(item)]))
 }
 
+const managedRepoNames = (project) => (project?.repos ?? []).filter((repo) => !repo.external).map((repo) => repo.name).sort()
+
 /**
- * The digest a delegation binds for one repository: its policy entry plus the
- * policy-wide protections that apply to it (mode, forbidden paths, content rules,
- * their exceptions and promotion). Any later edit to those voids the delegation
- * until the owner re-signs, so a delegated operator cannot loosen them. `ext` is
- * excluded because it is never read.
+ * The digest a delegation binds: the whole boundary policy (ext excluded) and the
+ * project's managed repository names. Any later edit voids every delegation until
+ * the owner signs again, so a delegated operator cannot loosen anything in place.
  */
-export function repoPolicyBinding(policy, repoName) {
-  const repos = isObject(policy?.repos) ? policy.repos : {}
-  const bound = {
-    repo: repoName,
-    entry: withoutExt(Object.hasOwn(repos, repoName) ? repos[repoName] : null),
-    mode: policy?.mode ?? null,
-    forbiddenPaths: policy?.forbiddenPaths ?? null,
-    contentRules: Array.isArray(policy?.contentRules) ? policy.contentRules.map(withoutExt) : policy?.contentRules ?? null,
-    contentRuleExceptions: Array.isArray(policy?.contentRuleExceptions) ? policy.contentRuleExceptions.map(withoutExt) : policy?.contentRuleExceptions ?? null,
-    promotion: withoutExt(policy?.promotion),
-  }
+export function policyDigest(policy, project) {
+  const bound = { policy: withoutExt(policy ?? null), managedRepos: managedRepoNames(project) }
   return `sha256:${crypto.createHash('sha256').update(canonicalize(bound), 'utf8').digest('hex')}`
+}
+
+/** The repository's identity: its first root commit, or null when it has none. */
+export function repoRootCommit(repoPath, { gitExecutable = 'git' } = {}) {
+  if (!repoPath) return null
+  const result = spawnSync(gitExecutable, ['-C', repoPath, 'rev-list', '--max-parents=0', 'HEAD'], { encoding: 'utf8', env: sanitizedGitEnvironment() })
+  if (result.status !== 0) return null
+  const roots = result.stdout.split('\n').map((line) => line.trim()).filter((line) => COMMIT_RE.test(line)).sort()
+  return roots[0] ?? null
+}
+
+function repoPathFor(project, name) {
+  return (project?.repos ?? []).find((repo) => repo.name === name && !repo.external)?.path ?? null
 }
 
 function delegationErrors(item, at, { actors, repos }) {
@@ -68,13 +91,15 @@ function delegationErrors(item, at, { actors, repos }) {
   if (item.ext != null && !isObject(item.ext)) errors.push(`${at}.ext must be an object`)
   if (item.schema !== DELEGATION_SCHEMA) errors.push(`${at}.schema must be ${DELEGATION_SCHEMA}`)
   if (typeof item.id !== 'string' || !ID_RE.test(item.id)) errors.push(`${at}.id is invalid`)
-  if (!nonEmptyString(item.owner) || !Object.hasOwn(actors, item.owner)) errors.push(`${at}.owner must be a declared actor`)
-  if (!nonEmptyString(item.operator) || !Object.hasOwn(actors, item.operator)) errors.push(`${at}.operator must be a declared actor`)
+  if (!boundedString(item.owner) || !Object.hasOwn(actors, item.owner)) errors.push(`${at}.owner must be a declared actor`)
+  if (!boundedString(item.operator) || !Object.hasOwn(actors, item.operator)) errors.push(`${at}.operator must be a declared actor`)
   if (item.owner === item.operator) errors.push(`${at}.operator must differ from the owner`)
   const repoNames = Array.isArray(item.repos) ? item.repos : []
-  if (!repoNames.length || new Set(repoNames).size !== repoNames.length) errors.push(`${at}.repos must be a non-empty list without duplicates`)
+  if (!repoNames.length || repoNames.length > MAX_REPOS || new Set(repoNames).size !== repoNames.length) {
+    errors.push(`${at}.repos must be a non-empty list of at most ${MAX_REPOS} without duplicates`)
+  }
   for (const name of repoNames) {
-    const repo = typeof name === 'string' && Object.hasOwn(repos, name) ? repos[name] : null
+    const repo = typeof name === 'string' && REPO_RE.test(name) && Object.hasOwn(repos, name) ? repos[name] : null
     if (!repo || repo.kind !== 'private_domain') errors.push(`${at}.repos ${String(name)} must be a declared private_domain repo`)
     else if (repo.ownerActor !== item.owner) errors.push(`${at}.repos ${name} is not owned by ${String(item.owner)}`)
   }
@@ -89,17 +114,23 @@ function delegationErrors(item, at, { actors, repos }) {
   if (!Number.isNaN(notBefore) && !Number.isNaN(expiresAt) && !(expiresAt > notBefore && expiresAt - notBefore <= MAX_DELEGATION_SPAN_MS)) {
     errors.push(`${at}.expiresAt must be after notBefore and at most 90 days later`)
   }
-  const binding = item.policyBinding
-  if (!isObject(binding) || Object.keys(binding).length !== repoNames.length ||
-      !repoNames.every((name) => typeof name === 'string' && Object.hasOwn(binding, name) && typeof binding[name] === 'string' && BINDING_RE.test(binding[name]))) {
-    errors.push(`${at}.policyBinding must hold one sha256 digest per listed repo`)
+  if (typeof item.policyDigest !== 'string' || !DIGEST_RE.test(item.policyDigest)) errors.push(`${at}.policyDigest must be a sha256 digest`)
+  const roots = item.repoRoots
+  if (!isObject(roots) || Object.keys(roots).length !== repoNames.length ||
+      !repoNames.every((name) => typeof name === 'string' && Object.hasOwn(roots, name) && typeof roots[name] === 'string' && COMMIT_RE.test(roots[name]))) {
+    errors.push(`${at}.repoRoots must hold one root commit per listed repo`)
   }
   const signature = item.signature
-  if (!isObject(signature) || signature.algorithm !== 'ed25519' || !nonEmptyString(signature.keyId) || !nonEmptyString(signature.value) ||
+  if (!isObject(signature) || signature.algorithm !== 'ed25519' || !boundedString(signature.keyId) || !boundedString(signature.value, 512) ||
       Object.keys(signature).some((key) => !['algorithm', 'keyId', 'value', 'ext'].includes(key))) {
     errors.push(`${at}.signature must be an ed25519 signature; an unsigned delegation grants nothing`)
   }
   return errors
+}
+
+/** Errors for one delegation checked against a policy (used before signing). */
+export function validateDelegation(item, policy) {
+  return delegationErrors(item, 'delegation', { actors: isObject(policy?.actors) ? policy.actors : {}, repos: isObject(policy?.repos) ? policy.repos : {} })
 }
 
 /**
@@ -117,6 +148,7 @@ export function validateDelegationsDocument(doc, policy) {
   if (doc.contractVersion != null && !(typeof doc.contractVersion === 'string' && VERSION_RE.test(doc.contractVersion))) errors.push('delegations document contractVersion must be a 1.x.y version')
   if (doc.ext != null && !isObject(doc.ext)) errors.push('delegations document ext must be an object')
   if (!Array.isArray(doc.delegations)) return [...errors, 'delegations document must list delegations']
+  if (doc.delegations.length > MAX_DELEGATIONS) errors.push(`delegations document lists more than ${MAX_DELEGATIONS} delegations`)
   const context = { actors: isObject(policy?.actors) ? policy.actors : {}, repos: isObject(policy?.repos) ? policy.repos : {} }
   const seen = new Set()
   for (const [index, item] of doc.delegations.entries()) {
@@ -139,13 +171,13 @@ function ownerKeysErrors(doc) {
   if (doc.schema !== OWNER_KEYS_SCHEMA) errors.push(`owner keys schema must be ${OWNER_KEYS_SCHEMA}`)
   if (doc.contractVersion != null && !(typeof doc.contractVersion === 'string' && VERSION_RE.test(doc.contractVersion))) errors.push('owner keys contractVersion must be a 1.x.y version')
   if (doc.ext != null && !isObject(doc.ext)) errors.push('owner keys ext must be an object')
-  if (!Array.isArray(doc.keys)) errors.push('owner keys must list keys')
+  if (!Array.isArray(doc.keys) || doc.keys.length > MAX_KEYS) errors.push(`owner keys must list at most ${MAX_KEYS} keys`)
   const seen = new Set()
   for (const [index, key] of (Array.isArray(doc.keys) ? doc.keys : []).entries()) {
     if (!isObject(key) || Object.keys(key).some((name) => !['actorId', 'keyId', 'algorithm', 'publicKeyJwk', 'ext'].includes(name)) ||
-        (key.ext != null && !isObject(key.ext)) ||
-        !nonEmptyString(key.actorId) || !nonEmptyString(key.keyId) || key.algorithm !== 'ed25519' ||
-        !isObject(key.publicKeyJwk) || key.publicKeyJwk.kty !== 'OKP' || key.publicKeyJwk.crv !== 'Ed25519' || Object.hasOwn(key.publicKeyJwk, 'd')) {
+        (key.ext != null && !isObject(key.ext)) || !boundedString(key.actorId) || !boundedString(key.keyId) || key.algorithm !== 'ed25519' ||
+        !isObject(key.publicKeyJwk) || key.publicKeyJwk.kty !== 'OKP' || key.publicKeyJwk.crv !== 'Ed25519' ||
+        typeof key.publicKeyJwk.x !== 'string' || !JWK_X_RE.test(key.publicKeyJwk.x) || Object.hasOwn(key.publicKeyJwk, 'd')) {
       errors.push(`owner keys keys[${index}] must be an ed25519 public key with actorId and keyId`)
       continue
     }
@@ -153,8 +185,10 @@ function ownerKeysErrors(doc) {
     if (seen.has(identity)) errors.push(`owner keys keys[${index}] duplicates ${key.actorId}/${key.keyId}`)
     seen.add(identity)
   }
-  if (doc.revokedDelegations != null && (!Array.isArray(doc.revokedDelegations) || doc.revokedDelegations.some((id) => typeof id !== 'string'))) {
-    errors.push('owner keys revokedDelegations must be a list of delegation ids')
+  const revoked = doc.revokedDelegations
+  if (revoked != null && (!Array.isArray(revoked) || revoked.length > MAX_REVOKED || new Set(revoked).size !== revoked.length ||
+      revoked.some((id) => typeof id !== 'string' || !ID_RE.test(id)))) {
+    errors.push('owner keys revokedDelegations must be a list of distinct delegation ids')
   }
   return errors
 }
@@ -166,93 +200,87 @@ export function ownerKeysFromDocument(doc) {
   return { ok: true, keys: doc.keys, revoked: new Set(doc.revokedDelegations ?? []) }
 }
 
-function inside(child, parent) {
-  const relative = path.relative(parent, child)
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
-}
-
-function realOrResolved(value) {
-  try {
-    return fs.realpathSync(value)
-  } catch {
-    return path.resolve(value)
+/** The normalized form of a host `ownerKeys` value, re-validated. */
+function normalizedOwnerKeys(ownerKeys) {
+  if (!isObject(ownerKeys)) return null
+  if (ownerKeys.ok === false) return ownerKeys
+  if (ownerKeys.ok === true && Array.isArray(ownerKeys.keys) && ownerKeys.revoked instanceof Set) {
+    return ownerKeysFromDocument({ schema: OWNER_KEYS_SCHEMA, keys: ownerKeys.keys, revokedDelegations: [...ownerKeys.revoked] })
   }
-}
-
-/** The host location the CLI reads when no path is given. */
-export function defaultOwnerKeysPath({ env = process.env, platform = process.platform } = {}) {
-  if (platform === 'win32') return path.join(env.ProgramData || 'C:\\ProgramData', 'atelier', 'boundary-owner-keys.json')
-  return '/etc/atelier/boundary-owner-keys.json'
+  return ownerKeysFromDocument(ownerKeys)
 }
 
 /**
- * Load an owner-keys file for the CLI. On POSIX the file must be one the current
- * user can neither write nor replace: a regular file outside the project and its
- * repositories, not a symlink, not owned by the current user, not group- or
- * world-writable, not writable by this process, and under directories the user
- * cannot write (a sticky directory counts only when the user does not own it).
- * The current user's root account is refused, because it can replace anything.
- * On Windows only location, link, regular-file and writability checks apply.
+ * Load the host owner-keys file. It is trusted only when it is a regular file
+ * owned by the trusted account (root), not group- or world-writable, opened
+ * without following links, and every directory above it is owned by that
+ * account (or root) and not group- or world-writable. The checks run on the open
+ * descriptor, which is also what is read. The current account must not be the
+ * trusted one. Windows is refused until an owner and DACL check exists.
  */
-export function loadOwnerKeysFile(file, { project = null, access = fs.accessSync, uid = process.getuid?.(), platform = process.platform } = {}) {
+export function loadOwnerKeysFile(file = HOST_OWNER_KEYS_PATH, { platform = process.platform, trustedUid = 0, currentUid = process.getuid?.() } = {}) {
   const untrusted = (detail) => ({ ok: false, reason: 'delegation-owner-keys-untrusted', errors: [detail] })
+  if (platform === 'win32') return untrusted('owner keys are not supported on Windows')
+  if (typeof currentUid !== 'number') return untrusted('the current account cannot be determined')
+  if (currentUid === 0) return untrusted('owner keys cannot be trusted for the root account')
+  if (currentUid === trustedUid) return untrusted('the current account must not own the owner keys')
   const resolved = path.resolve(file)
-  let stat
+  let fd
   try {
-    stat = fs.lstatSync(resolved)
-  } catch {
-    return { ok: false, reason: 'delegation-owner-key-missing', errors: ['owner keys file not found'] }
+    fd = fs.openSync(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { ok: false, reason: 'delegation-owner-key-missing', errors: ['owner keys file not found'] }
+    if (error?.code === 'ELOOP') return untrusted('owner keys file must not be a symlink')
+    return untrusted('owner keys file cannot be opened')
   }
-  if (stat.isSymbolicLink()) return untrusted('owner keys file must not be a symlink')
-  if (!stat.isFile()) return untrusted('owner keys file must be a regular file')
-  if (stat.size > OWNER_KEYS_MAX_BYTES) return untrusted('owner keys file is too large')
-  const real = realOrResolved(resolved)
-  const roots = [project?.configDir, project?.workspaceRoot, project?.repoOpsRoot, ...(project?.repos ?? []).map((repo) => repo.path)]
-    .filter((root) => typeof root === 'string' && root)
-    .map(realOrResolved)
-  if (roots.some((root) => inside(real, root))) return untrusted('owner keys file must be outside the project and its repositories')
-  const writable = (target) => {
-    try {
-      access(target, fs.constants.W_OK)
-      return true
-    } catch {
-      return false
-    }
-  }
-  if (platform !== 'win32') {
-    if (uid === 0) return untrusted('owner keys cannot be trusted for the root account')
-    if (typeof uid === 'number' && stat.uid === uid) return untrusted('owner keys file must not be owned by the current user')
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile()) return untrusted('owner keys file must be a regular file')
+    if (stat.size > OWNER_KEYS_MAX_BYTES) return untrusted('owner keys file is too large')
+    if (stat.uid !== trustedUid) return untrusted('owner keys file must be owned by the trusted account')
     if ((stat.mode & 0o022) !== 0) return untrusted('owner keys file must not be group- or world-writable')
+    let real
+    try {
+      real = fs.realpathSync(resolved)
+      const named = fs.lstatSync(real)
+      if (named.dev !== stat.dev || named.ino !== stat.ino) return untrusted('owner keys file changed while it was checked')
+    } catch {
+      return untrusted('owner keys file changed while it was checked')
+    }
     for (let dir = path.dirname(real); ; dir = path.dirname(dir)) {
       const info = fs.statSync(dir)
-      const sticky = (info.mode & 0o1000) !== 0
-      if (writable(dir) && !(sticky && info.uid !== uid)) return untrusted('owner keys file must not be in a directory the current user can write')
-      if (typeof uid === 'number' && info.uid === uid) return untrusted('owner keys file must not be in a directory the current user owns')
+      if ((info.uid !== trustedUid && info.uid !== 0) || (info.mode & 0o022) !== 0) {
+        return untrusted('owner keys file must be in directories owned by the trusted account and not group- or world-writable')
+      }
       if (path.dirname(dir) === dir) break
     }
+    let doc
+    try {
+      doc = JSON.parse(fs.readFileSync(fd, 'utf8'))
+    } catch {
+      return { ok: false, reason: 'delegation-owner-keys-invalid', errors: ['owner keys file is not valid JSON'] }
+    }
+    return ownerKeysFromDocument(doc)
+  } finally {
+    fs.closeSync(fd)
   }
-  if (writable(real)) return untrusted('owner keys file must not be writable by the current user')
-  let doc
-  try {
-    doc = JSON.parse(fs.readFileSync(real, 'utf8'))
-  } catch {
-    return { ok: false, reason: 'delegation-owner-keys-invalid', errors: ['owner keys file is not valid JSON'] }
-  }
-  return ownerKeysFromDocument(doc)
 }
 
 /**
- * Owner keys for a CLI run: `--owner-keys FILE`, else `ATELIER_BOUNDARY_OWNER_KEYS`,
- * else the host default when it exists. Returns null when none is present. A path
- * from the environment is only a location; trust comes from the file itself.
+ * Owner keys for a CLI check: only the host file at its fixed path. The command
+ * line and environment cannot choose another file, so the host's keys and
+ * revocations always apply. Returns null when the host has none.
  */
-export function ownerKeysForCommand(project, args = {}, { env = process.env } = {}) {
-  const explicit = typeof args['owner-keys'] === 'string' && args['owner-keys'].trim() ? args['owner-keys'].trim() : null
-  const fromEnv = typeof env.ATELIER_BOUNDARY_OWNER_KEYS === 'string' && env.ATELIER_BOUNDARY_OWNER_KEYS.trim() ? env.ATELIER_BOUNDARY_OWNER_KEYS.trim() : null
-  const file = explicit || fromEnv
-  if (file) return loadOwnerKeysFile(file, { project })
-  const fallback = defaultOwnerKeysPath({ env })
-  return fs.existsSync(fallback) ? loadOwnerKeysFile(fallback, { project }) : null
+export function ownerKeysForCommand() {
+  return fs.existsSync(HOST_OWNER_KEYS_PATH) || isSymlink(HOST_OWNER_KEYS_PATH) ? loadOwnerKeysFile(HOST_OWNER_KEYS_PATH) : null
+}
+
+function isSymlink(file) {
+  try {
+    return fs.lstatSync(file).isSymbolicLink()
+  } catch {
+    return false
+  }
 }
 
 /** The delegations document beside a boundary policy file. */
@@ -275,7 +303,7 @@ export function loadDelegationsFile(file) {
  * repository and operation. Returns `{ applies: true, delegation }` or
  * `{ applies: false, reason }`; it never widens anything else.
  */
-export function resolveDelegation({ policy, delegations = [], repoName, repo, actorId, operation, ownerKeys = null, now = Date.now() }) {
+export function resolveDelegation({ policy, project, delegations = [], repoName, repo, actorId, operation, ownerKeys = null, now = Date.now(), rootCommitOf = repoRootCommit }) {
   const deny = (reason) => ({ applies: false, reason })
   const all = Array.isArray(delegations) ? delegations.filter(isObject) : []
   const forOperator = all.filter((item) => item.operator === actorId)
@@ -285,27 +313,34 @@ export function resolveDelegation({ policy, delegations = [], repoName, repo, ac
   if (!inScope.length) return deny('delegation-scope')
   if (inScope.length > 1) return deny('delegation-ambiguous')
   const [delegation] = inScope
-  if (delegationErrors(delegation, 'delegation', { actors: isObject(policy?.actors) ? policy.actors : {}, repos: isObject(policy?.repos) ? policy.repos : {} }).length ||
-      delegation.owner !== repo?.ownerActor) return deny('delegation-malformed')
-  if (!ownerKeys) return deny('delegation-owner-key-missing')
-  if (!ownerKeys.ok) return deny(ownerKeys.reason)
-  const key = ownerKeys.keys.find((item) => item.actorId === delegation.owner && item.keyId === delegation.signature.keyId)
+  if (validateDelegation(delegation, policy).length || delegation.owner !== repo?.ownerActor) return deny('delegation-malformed')
+  const keys = normalizedOwnerKeys(ownerKeys)
+  if (!keys) return deny('delegation-owner-key-missing')
+  if (!keys.ok) return deny(keys.reason)
+  // The key must be registered for the delegation's owner, not merely present.
+  const key = keys.keys.find((item) => item.actorId === delegation.owner && item.keyId === delegation.signature.keyId)
   if (!key) return deny('delegation-owner-key-missing')
   if (!verifyDocument(delegation, { publicKey: key }).valid) return deny('delegation-signature-invalid')
-  if (ownerKeys.revoked.has(delegation.id)) return deny('delegation-revoked')
+  if (keys.revoked.has(delegation.id)) return deny('delegation-revoked')
   if (now < Date.parse(delegation.notBefore)) return deny('delegation-not-yet-valid')
   if (now >= Date.parse(delegation.expiresAt)) return deny('delegation-expired')
-  if (delegation.policyBinding[repoName] !== repoPolicyBinding(policy, repoName)) return deny('delegation-policy-binding-changed')
+  if (delegation.policyDigest !== policyDigest(policy, project)) return deny('delegation-policy-changed')
+  for (const name of delegation.repos) {
+    if (rootCommitOf(repoPathFor(project, name)) !== delegation.repoRoots[name]) return deny('delegation-repository-changed')
+  }
   return { applies: true, delegation }
 }
 
-/** Errors for one delegation checked against a policy (used before signing). */
-export function validateDelegation(item, policy) {
-  return delegationErrors(item, 'delegation', { actors: isObject(policy?.actors) ? policy.actors : {}, repos: isObject(policy?.repos) ? policy.repos : {} })
+/** The bound values a delegation must carry for this policy and project. */
+export function delegationBindings({ policy, project, repos, rootCommitOf = repoRootCommit }) {
+  return {
+    policyDigest: policyDigest(policy, project),
+    repoRoots: Object.fromEntries((Array.isArray(repos) ? repos : []).map((name) => [name, rootCommitOf(repoPathFor(project, name))])),
+  }
 }
 
 /** An unsigned delegation document for the owner to read and sign. */
-export function draftDelegation({ policy, id, owner, operator, repos, operations, notBefore, expiresAt }) {
+export function draftDelegation({ policy, project, id, owner, operator, repos, operations, notBefore, expiresAt, rootCommitOf = repoRootCommit }) {
   const doc = {
     schema: DELEGATION_SCHEMA,
     id,
@@ -315,9 +350,9 @@ export function draftDelegation({ policy, id, owner, operator, repos, operations
     operations,
     notBefore,
     expiresAt,
-    policyBinding: Object.fromEntries((Array.isArray(repos) ? repos : []).map((name) => [name, repoPolicyBinding(policy, name)])),
+    ...delegationBindings({ policy, project, repos, rootCommitOf }),
     signature: null,
   }
-  const errors = delegationErrors({ ...doc, signature: { algorithm: 'ed25519', keyId: 'unsigned', value: 'unsigned' } }, 'delegation', { actors: isObject(policy?.actors) ? policy.actors : {}, repos: isObject(policy?.repos) ? policy.repos : {} })
+  const errors = validateDelegation({ ...doc, signature: { algorithm: 'ed25519', keyId: 'unsigned', value: 'unsigned' } }, policy)
   return { ok: errors.length === 0, delegation: doc, errors }
 }

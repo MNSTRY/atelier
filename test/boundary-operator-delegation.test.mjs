@@ -17,7 +17,8 @@ import {
   draftDelegation,
   loadOwnerKeysFile,
   ownerKeysFromDocument,
-  repoPolicyBinding,
+  policyDigest,
+  repoRootCommit,
   validateDelegationsDocument,
 } from '../src/boundary/delegation.mjs'
 import { commandProject, writeJson } from '../src/project/config.mjs'
@@ -58,6 +59,7 @@ function workspace(t) {
     git(repo, ['init', '-q'])
     git(repo, ['config', 'user.email', 'operator-b@example.invalid'])
     git(repo, ['config', 'user.name', 'Operator'])
+    git(repo, ['commit', '-q', '--allow-empty', '-m', `root of ${name} ${root}`])
   }
   writeJson(path.join(root, 'atelier.project.json'), {
     schema: 'mnstry.atelier-project-config@v1',
@@ -87,9 +89,10 @@ function sign(doc, privateKeyDoc) {
   return signDocument({ ...doc, signature: null }, { privateKey: privateKeyDoc.privateKeyJwk, keyId: privateKeyDoc.keyId, algorithm: privateKeyDoc.algorithm })
 }
 
-function delegation(policy, privateKeyDoc, overrides = {}) {
+function delegation(ws, privateKeyDoc, overrides = {}) {
   const { delegation: doc } = draftDelegation({
-    policy,
+    policy: ws.policy,
+    project: ws.project,
     id: 'operator-b-commits',
     owner: 'owner-a',
     operator: 'operator-b',
@@ -121,7 +124,7 @@ test('T1 without a delegation the operator mismatch still refuses', (t) => {
 test('T2 a signed, current, in-scope delegation with a host key lets the operator commit', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
-  const report = run(ws, { delegations: delegationsDoc(delegation(ws.policy, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })
+  const report = run(ws, { delegations: delegationsDoc(delegation(ws, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })
   assert.equal(report.ok, true, JSON.stringify(report.errors))
   const notice = report.findings.find((item) => item.code === 'private-domain-delegated-operator')
   assert.deepEqual(notice.details, { actorId: 'operator-b', owner: 'owner-a', delegationId: 'operator-b-commits', expiresAt: '2026-03-01T00:00:00Z', operation: 'pre-commit' })
@@ -133,13 +136,13 @@ test('T3 and T4 the operation and the repositories are limited to the signed sco
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
   const ownerKeys = ownerKeysFromDocument(keysDoc(publicKeyDoc))
-  const checkOnly = delegation(ws.policy, privateKeyDoc, { operations: ['boundary-check'] })
+  const checkOnly = delegation(ws, privateKeyDoc, { operations: ['boundary-check'] })
   assert.equal(mismatch(run(ws, { delegations: delegationsDoc(checkOnly), ownerKeys })).details.delegationReason, 'delegation-scope')
   assert.equal(run(ws, { staged: false, stagedOnly: true, delegations: delegationsDoc(checkOnly), ownerKeys }).ok, true)
   const ws2 = workspace(t)
   ws2.policy.repos['example-second-private'] = { ...ws2.policy.repos[PRIVATE] }
   ws2.project.repos.push({ name: 'example-second-private', path: path.join(ws2.root, PRIVATE) })
-  const report = run(ws2, { delegations: delegationsDoc(delegation(ws2.policy, privateKeyDoc)), ownerKeys })
+  const report = run(ws2, { delegations: delegationsDoc(delegation(ws2, privateKeyDoc)), ownerKeys })
   const second = report.errors.find((item) => item.code === 'private-domain-actor-mismatch' && item.repo === 'example-second-private')
   assert.equal(second.details.delegationReason, 'delegation-scope')
 })
@@ -147,7 +150,7 @@ test('T3 and T4 the operation and the repositories are limited to the signed sco
 test('T5 and T7 a delegation needs the host owner key and a valid signature', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
-  const signed = delegation(ws.policy, privateKeyDoc)
+  const signed = delegation(ws, privateKeyDoc)
   assert.equal(mismatch(run(ws, { delegations: delegationsDoc(signed) })).details.delegationReason, 'delegation-owner-key-missing')
   const other = owner()
   assert.equal(mismatch(run(ws, { delegations: delegationsDoc(signed), ownerKeys: ownerKeysFromDocument(keysDoc(other.publicKeyDoc)) })).details.delegationReason, 'delegation-signature-invalid')
@@ -160,10 +163,10 @@ test('T5 and T7 a delegation needs the host owner key and a valid signature', (t
 test('T8 a delegation applies only inside its validity window, at most 90 days', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
-  const options = { delegations: delegationsDoc(delegation(ws.policy, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) }
+  const options = { delegations: delegationsDoc(delegation(ws, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) }
   assert.equal(mismatch(run(ws, { ...options, now: Date.parse('2026-01-14T23:59:59Z') })).details.delegationReason, 'delegation-not-yet-valid')
   assert.equal(mismatch(run(ws, { ...options, now: Date.parse('2026-03-01T00:00:00Z') })).details.delegationReason, 'delegation-expired')
-  const long = delegation(ws.policy, privateKeyDoc, { expiresAt: '2026-04-15T00:00:01Z' })
+  const long = delegation(ws, privateKeyDoc, { expiresAt: '2026-04-15T00:00:01Z' })
   const report = run(ws, { delegations: delegationsDoc(long), ownerKeys: options.ownerKeys })
   assert.ok(report.errors.some((item) => item.code === 'boundary-delegations-invalid' && /at most 90 days/.test(item.message)))
   assert.equal(mismatch(report).details.delegationReason, 'delegation-missing')
@@ -172,40 +175,78 @@ test('T8 a delegation applies only inside its validity window, at most 90 days',
 test('T9 the host revokes a delegation, or removes the owner key', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
-  const delegations = delegationsDoc(delegation(ws.policy, privateKeyDoc))
+  const delegations = delegationsDoc(delegation(ws, privateKeyDoc))
   assert.equal(mismatch(run(ws, { delegations, ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc, { revokedDelegations: ['operator-b-commits'] })) })).details.delegationReason, 'delegation-revoked')
   assert.equal(mismatch(run(ws, { delegations, ownerKeys: ownerKeysFromDocument({ schema: OWNER_KEYS_SCHEMA, keys: [] }) })).details.delegationReason, 'delegation-owner-key-missing')
 })
 
-test('T10 editing the delegated repository or a policy-wide protection voids the delegation', (t) => {
+test('T10 any edit to the policy or the managed repositories voids the delegation', (t) => {
   const { privateKeyDoc, publicKeyDoc } = owner()
   const edits = [
-    (policy) => { policy.repos[PRIVATE].allowedAudiences.push('public') },
-    (policy) => { policy.mode = 'legacy-warning' },
-    (policy) => { policy.forbiddenPaths = ['notes/**'] },
-    (policy) => { policy.contentRuleExceptions = [{ rule: 'private-key-block', repo: PRIVATE, paths: ['keys/**'], reason: 'invented' }] },
-    (policy) => { policy.promotion.requiresGitPromote = false },
+    ['delegated repo audiences', (ws) => { ws.policy.repos[PRIVATE].allowedAudiences.push('public') }],
+    ['sibling repo audiences', (ws) => { ws.policy.repos[SHARED].allowedAudiences.push('private') }],
+    ['actors', (ws) => { ws.policy.actors['operator-b'].gitEmails.push('another@example.invalid') }],
+    ['mode', (ws) => { ws.policy.mode = 'legacy-warning' }],
+    ['forbidden paths', (ws) => { ws.policy.forbiddenPaths = ['notes/**'] }],
+    ['content rule exceptions', (ws) => { ws.policy.contentRuleExceptions = [{ rule: 'private-key-block', repo: PRIVATE, paths: ['keys/**'], reason: 'invented' }] }],
+    ['promotion', (ws) => { ws.policy.promotion.requiresGitPromote = false }],
+    ['governance ledger', (ws) => { ws.policy.governanceLedgerPath = 'elsewhere.md' }],
+    ['managed repository set', (ws) => { ws.project.repos = ws.project.repos.filter((repo) => repo.name !== SHARED) }],
   ]
-  for (const edit of edits) {
+  for (const [name, edit] of edits) {
     const ws = workspace(t)
-    const delegations = delegationsDoc(delegation(ws.policy, privateKeyDoc))
-    edit(ws.policy)
+    const delegations = delegationsDoc(delegation(ws, privateKeyDoc))
+    edit(ws)
     const report = run(ws, { delegations, ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })
     const refused = report.findings.find((item) => item.code === 'private-domain-actor-mismatch')
-    assert.ok(refused, `edit ${edit} must leave the mismatch`)
-    assert.equal(refused.details.delegationReason, 'delegation-policy-binding-changed')
+    assert.ok(refused, `${name}: the mismatch must remain`)
+    assert.equal(refused.details.delegationReason, 'delegation-policy-changed', name)
   }
   const ws = workspace(t)
-  const before = repoPolicyBinding(ws.policy, PRIVATE)
+  const before = policyDigest(ws.policy, ws.project)
   ws.policy.repos[PRIVATE].ext = { 'example.note': 'ignored' }
-  assert.equal(repoPolicyBinding(ws.policy, PRIVATE), before, 'ext is never read, so it is outside the binding')
+  ws.policy.ext = { 'example.top': { ext: 'nested' } }
+  assert.equal(policyDigest(ws.policy, ws.project), before, 'ext is never read, so it is outside the digest')
+})
+
+test('a signed delegation does not replay into another project with the same names and policy', (t) => {
+  const { privateKeyDoc, publicKeyDoc } = owner()
+  const first = workspace(t)
+  const signed = delegation(first, privateKeyDoc)
+  const second = workspace(t)
+  assert.equal(policyDigest(second.policy, second.project), signed.policyDigest)
+  assert.notEqual(repoRootCommit(path.join(second.root, PRIVATE)), signed.repoRoots[PRIVATE])
+  const report = run(second, { delegations: delegationsDoc(signed), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })
+  assert.equal(mismatch(report).details.delegationReason, 'delegation-repository-changed')
+})
+
+test('an operator key registered on the host cannot sign for the owner', (t) => {
+  const ws = workspace(t)
+  const ownerKey = owner()
+  const operatorKey = generateKeyPair({ keyId: 'operator-b-key' })
+  const forged = delegation(ws, operatorKey.privateKeyDoc)
+  const keys = { schema: OWNER_KEYS_SCHEMA, keys: [
+    { actorId: 'owner-a', keyId: ownerKey.publicKeyDoc.keyId, algorithm: 'ed25519', publicKeyJwk: ownerKey.publicKeyDoc.publicKeyJwk },
+    { actorId: 'operator-b', keyId: operatorKey.publicKeyDoc.keyId, algorithm: 'ed25519', publicKeyJwk: operatorKey.publicKeyDoc.publicKeyJwk },
+  ] }
+  assert.equal(mismatch(run(ws, { delegations: delegationsDoc(forged), ownerKeys: ownerKeysFromDocument(keys) })).details.delegationReason, 'delegation-owner-key-missing')
+})
+
+test('a library host must pass a well-formed owner-keys value', (t) => {
+  const ws = workspace(t)
+  const { privateKeyDoc, publicKeyDoc } = owner()
+  const delegations = delegationsDoc(delegation(ws, privateKeyDoc))
+  const raw = keysDoc(publicKeyDoc)
+  assert.equal(run(ws, { delegations, ownerKeys: raw }).ok, true, 'a raw document is validated and accepted')
+  const forged = { ok: true, keys: [{ actorId: 'owner-a', keyId: 'owner-a-key', algorithm: 'ed25519', publicKeyJwk: { kty: 'OKP', crv: 'Ed25519', x: 'not-a-key' } }], revoked: new Set() }
+  assert.equal(mismatch(run(ws, { delegations, ownerKeys: forged })).details.delegationReason, 'delegation-owner-keys-invalid')
 })
 
 test('T11 two matching delegations are ambiguous and grant nothing', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
-  const first = delegation(ws.policy, privateKeyDoc)
-  const second = delegation(ws.policy, privateKeyDoc, { id: 'operator-b-second' })
+  const first = delegation(ws, privateKeyDoc)
+  const second = delegation(ws, privateKeyDoc, { id: 'operator-b-second' })
   assert.equal(mismatch(run(ws, { delegations: delegationsDoc(first, second), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })).details.delegationReason, 'delegation-ambiguous')
 })
 
@@ -216,18 +257,18 @@ test('T12 malformed delegations are invalid documents and grant nothing', (t) =>
     [{ owner: 'operator-b' }, /not owned by operator-b/],
     [{ operator: 'owner-a' }, /must differ from the owner/],
     [{ operator: 'stranger' }, /operator must be a declared actor/],
-    [{ repos: [SHARED], policyBinding: { [SHARED]: repoPolicyBinding(ws.policy, SHARED) } }, /must be a declared private_domain repo/],
+    [{ repos: [SHARED], repoRoots: { [SHARED]: repoRootCommit(path.join(ws.root, SHARED)) } }, /must be a declared private_domain repo/],
     [{ operations: ['pre-push'] }, /operations must be/],
     [{ readBoundary: 'public' }, /must not include additional property readBoundary/],
   ]
   for (const [overrides, expected] of cases) {
-    const item = delegation(ws.policy, privateKeyDoc, overrides)
+    const item = delegation(ws, privateKeyDoc, overrides)
     const errors = validateDelegationsDocument(delegationsDoc(item), ws.policy)
     assert.ok(errors.some((message) => expected.test(message)), `${JSON.stringify(overrides)}: ${errors.join('; ')}`)
   }
-  const unsigned = { ...delegation(ws.policy, privateKeyDoc), signature: null }
+  const unsigned = { ...delegation(ws, privateKeyDoc), signature: null }
   assert.ok(validateDelegationsDocument(delegationsDoc(unsigned), ws.policy).some((message) => /unsigned delegation grants nothing/.test(message)))
-  const duplicate = delegation(ws.policy, privateKeyDoc)
+  const duplicate = delegation(ws, privateKeyDoc)
   assert.ok(validateDelegationsDocument(delegationsDoc(duplicate, duplicate), ws.policy).some((message) => /is duplicated/.test(message)))
 })
 
@@ -243,7 +284,7 @@ test('owner keys carry public keys only', () => {
 test('T13 and T14 an unverified actor and the owner keep today\'s outcomes', (t) => {
   const ws = workspace(t)
   const { privateKeyDoc, publicKeyDoc } = owner()
-  const options = { delegations: delegationsDoc(delegation(ws.policy, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) }
+  const options = { delegations: delegationsDoc(delegation(ws, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) }
   const unverified = run(ws, { ...options, actor: 'nobody-declared' })
   assert.ok(unverified.errors.some((item) => item.code === 'actor-resolution-refused'))
   const asOwner = run(ws, { ...options, actor: 'owner-a' })
@@ -258,7 +299,7 @@ test('T15 content and placement checks still apply under a delegation', (t) => {
   fs.mkdirSync(path.join(repo, '.atelier-local'), { recursive: true })
   fs.writeFileSync(path.join(repo, '.atelier-local/state.json'), '{}\n')
   git(repo, ['add', '.'])
-  const report = run(ws, { delegations: delegationsDoc(delegation(ws.policy, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })
+  const report = run(ws, { delegations: delegationsDoc(delegation(ws, privateKeyDoc)), ownerKeys: ownerKeysFromDocument(keysDoc(publicKeyDoc)) })
   assert.equal(report.ok, false)
   assert.ok(report.errors.some((item) => item.code === 'forbidden-path-staged'))
   assert.ok(codes(report).includes('private-domain-delegated-operator'))
@@ -300,30 +341,42 @@ test('T18 legacy-warning mode keeps its severity rule', (t) => {
   assert.equal(report.warnings.find((item) => item.code === 'private-domain-actor-mismatch').severity, 'warning')
 })
 
-test('T6 the CLI trusts only an owner-keys file the user can neither write nor replace', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, (t) => {
-  const ws = workspace(t)
+test('T6 the host owner-keys file is trusted only when owned by the trusted account in trusted directories', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, (t) => {
   const { publicKeyDoc } = owner()
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-owner-keys-'))
-  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
-  const file = path.join(outside, 'keys.json')
+  const me = process.getuid()
+  const someoneElse = me + 1
+  // A directory under the home directory stands in for /etc/atelier: the test
+  // treats the current account as the trusted owner and runs as someone else.
+  const home = fs.realpathSync(os.homedir())
+  const dirs = []
+  for (let dir = home; ; dir = path.dirname(dir)) {
+    dirs.push(fs.statSync(dir))
+    if (path.dirname(dir) === dir) break
+  }
+  const homeIsTrustable = dirs.every((info) => (info.uid === me || info.uid === 0) && (info.mode & 0o022) === 0)
+  const base = fs.mkdtempSync(path.join(home, '.atelier-owner-keys-test-'))
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }))
+  fs.chmodSync(base, 0o755)
+  const file = path.join(base, 'keys.json')
   writeJson(file, keysDoc(publicKeyDoc))
-  fs.chmodSync(file, 0o444)
-  assert.match(loadOwnerKeysFile(file, { project: ws.project }).errors[0], /owned by the current user/)
-  const inProject = path.join(ws.root, 'keys.json')
-  writeJson(inProject, keysDoc(publicKeyDoc))
-  assert.match(loadOwnerKeysFile(inProject, { project: ws.project }).errors[0], /outside the project/)
-  const link = path.join(outside, 'link.json')
-  fs.symlinkSync(file, link)
-  assert.match(loadOwnerKeysFile(link, { project: ws.project }).errors[0], /symlink/)
-  assert.match(loadOwnerKeysFile(file, { project: ws.project, uid: 0 }).errors[0], /root account/)
-  // Simulate a host-owned file in host-owned, read-only directories.
-  const notMine = 4294967294
-  const nothingWritable = () => { throw new Error('EACCES') }
-  assert.equal(loadOwnerKeysFile(file, { project: ws.project, uid: notMine, access: nothingWritable }).ok, true)
+  fs.chmodSync(file, 0o644)
+  const as = (options = {}) => loadOwnerKeysFile(file, { trustedUid: me, currentUid: someoneElse, ...options })
+  if (homeIsTrustable) assert.equal(as().ok, true, JSON.stringify(as()))
+  assert.equal(loadOwnerKeysFile(file, { trustedUid: 0, currentUid: someoneElse }).errors[0], 'owner keys file must be owned by the trusted account')
+  assert.match(as({ currentUid: me }).errors[0], /current account must not own/)
+  assert.match(as({ currentUid: 0 }).errors[0], /root account/)
+  assert.match(as({ platform: 'win32' }).errors[0], /not supported on Windows/)
   fs.chmodSync(file, 0o664)
-  assert.match(loadOwnerKeysFile(file, { project: ws.project, uid: notMine, access: nothingWritable }).errors[0], /group- or world-writable/)
-  fs.chmodSync(file, 0o444)
-  assert.match(loadOwnerKeysFile(file, { project: ws.project, uid: notMine }).errors[0], /directory the current user/)
+  assert.match(as().errors[0], /group- or world-writable/)
+  fs.chmodSync(file, 0o644)
+  fs.chmodSync(base, 0o775)
+  assert.match(as().errors[0], /directories owned by the trusted account/)
+  fs.chmodSync(base, 0o755)
+  const link = path.join(base, 'link.json')
+  fs.symlinkSync(file, link)
+  assert.match(loadOwnerKeysFile(link, { trustedUid: me, currentUid: someoneElse }).errors[0], /symlink/)
+  assert.match(loadOwnerKeysFile(base, { trustedUid: me, currentUid: someoneElse }).errors[0], /regular file/)
+  assert.equal(loadOwnerKeysFile(path.join(base, 'absent.json'), { trustedUid: me, currentUid: someoneElse }).reason, 'delegation-owner-key-missing')
 })
 
 function inside(child, parent) {
@@ -331,38 +384,45 @@ function inside(child, parent) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
-test('T19 the owner drafts, signs and verifies with the CLI; check reads the sidecar', (t) => {
+test('T19 the owner drafts, signs against the current project and verifies; check reads the sidecar', (t) => {
   const ws = workspace(t)
   const keyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-owner-cli-'))
   t.after(() => fs.rmSync(keyDir, { recursive: true, force: true }))
   const bin = path.join(ROOT, 'bin/atelier.mjs')
-  const cli = (args, options = {}) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', cwd: ws.root, env: { ...process.env, ATELIER_BOUNDARY_OWNER_KEYS: '' }, ...options })
+  const projectArgs = ['--project', path.join(ws.root, 'atelier.project.json')]
+  const cli = (args) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', cwd: ws.root, env: { ...process.env, ATELIER_BOUNDARY_OWNER_KEYS: path.join(keyDir, 'keys.json') } })
   const keygen = cli(['attestation', 'keygen', '--key-id', 'owner-a-key', '--out', path.join(keyDir, 'owner.key.json')])
   assert.equal(keygen.status, 0, keygen.stderr)
-  const draft = cli(['boundary', 'delegation', 'draft', '--project', path.join(ws.root, 'atelier.project.json'), '--id', 'operator-b-commits', '--owner', 'owner-a', '--operator', 'operator-b',
+  const draft = cli(['boundary', 'delegation', 'draft', ...projectArgs, '--id', 'operator-b-commits', '--owner', 'owner-a', '--operator', 'operator-b',
     '--repos', PRIVATE, '--operations', 'pre-commit', '--not-before', '2026-01-15T00:00:00Z', '--expires', '2026-03-01T00:00:00Z', '--out', path.join(keyDir, 'draft.json')])
   assert.equal(draft.status, 0, draft.stderr)
-  const signed = cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'draft.json'), '--key', path.join(keyDir, 'owner.key.json'), '--out', path.join(keyDir, 'signed.json')])
+  const signed = cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'draft.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json'), '--out', path.join(keyDir, 'signed.json')])
   assert.equal(signed.status, 0, signed.stderr)
-  const again = cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'signed.json'), '--key', path.join(keyDir, 'owner.key.json')])
-  assert.equal(again.status, 2)
+  assert.match(signed.stderr, /operator operator-b may pass the actor check owned by owner-a/)
+  assert.equal(cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'signed.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json')]).status, 2)
+  // A draft whose bindings do not match the current project is refused before signing.
+  const stale = JSON.parse(fs.readFileSync(path.join(keyDir, 'draft.json'), 'utf8'))
+  writeJson(path.join(keyDir, 'stale.json'), { ...stale, policyDigest: `sha256:${'0'.repeat(64)}` })
+  const refused = cli(['boundary', 'delegation', 'sign', path.join(keyDir, 'stale.json'), ...projectArgs, '--key', path.join(keyDir, 'owner.key.json')])
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, /does not bind the current boundary policy/)
   const doc = JSON.parse(fs.readFileSync(path.join(keyDir, 'signed.json'), 'utf8'))
   assert.equal(doc.signature.keyId, 'owner-a-key')
-  // The owner-keys file the test can write is refused, so verify reports untrusted.
-  const publicKey = JSON.parse(keygen.stdout)
-  writeJson(path.join(keyDir, 'keys.json'), keysDoc(publicKey))
+  // A keys file the test account owns is never trusted, so verify reports it.
+  writeJson(path.join(keyDir, 'keys.json'), keysDoc(JSON.parse(keygen.stdout)))
   const verify = cli(['boundary', 'delegation', 'verify', path.join(keyDir, 'signed.json'), '--owner-keys', path.join(keyDir, 'keys.json'), '--json'])
   assert.equal(verify.status, 1)
-  assert.equal(JSON.parse(verify.stdout).reasons[0].code, 'delegation-owner-keys-untrusted')
-  // With the sidecar in place and no trusted keys, the check still refuses the operator.
+  const verified = JSON.parse(verify.stdout)
+  assert.equal(verified.hostTrust.ok, false)
+  assert.equal(verified.valid, false)
+  // The check reads only the fixed host path: neither a flag nor the environment chooses the keys.
   writeJson(path.join(ws.root, 'boundary-delegations.v1.json'), delegationsDoc(doc))
-  const check = cli(['boundary', 'check', '--staged', '--project', path.join(ws.root, 'atelier.project.json'), '--actor', 'operator-b', '--owner-keys', path.join(keyDir, 'keys.json'), '--json'])
+  const check = cli(['boundary', 'check', '--staged', ...projectArgs, '--actor', 'operator-b', '--owner-keys', path.join(keyDir, 'keys.json'), '--json'])
   assert.equal(check.status, 1)
-  const report = JSON.parse(check.stdout)
-  assert.equal(report.errors.find((item) => item.code === 'private-domain-actor-mismatch').details.delegationReason, 'delegation-owner-keys-untrusted')
-  // A malformed sidecar is an error of its own.
+  const reason = JSON.parse(check.stdout).errors.find((item) => item.code === 'private-domain-actor-mismatch').details.delegationReason
+  assert.ok(['delegation-owner-key-missing', 'delegation-owner-keys-untrusted'].includes(reason), reason)
   fs.writeFileSync(path.join(ws.root, 'boundary-delegations.v1.json'), '{')
-  const broken = JSON.parse(cli(['boundary', 'check', '--project', path.join(ws.root, 'atelier.project.json'), '--actor', 'operator-b', '--json']).stdout)
+  const broken = JSON.parse(cli(['boundary', 'check', ...projectArgs, '--actor', 'operator-b', '--json']).stdout)
   assert.ok(broken.errors.some((item) => item.code === 'boundary-delegations-invalid'))
 })
 

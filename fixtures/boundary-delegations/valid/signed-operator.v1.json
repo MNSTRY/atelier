@@ -16,13 +16,14 @@
       ],
       "notBefore": "2026-01-01T00:00:00Z",
       "expiresAt": "2026-03-01T00:00:00Z",
-      "policyBinding": {
-        "example-private-workspace": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      "policyDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "repoRoots": {
+        "example-private-workspace": "1111111111111111111111111111111111111111"
       },
       "signature": {
         "algorithm": "ed25519",
         "keyId": "owner-a-fixture-key",
-        "value": "4GgOC68tCVdh6VdO-DpQzSiGgHGz44FfJPusXzK4ob8zfm5MNmni5jHKABi7-T7AFx3Npj_FWuADlb0Y4vUpBQ"
+        "value": "W74_44GSVTc8ZDmvyDWK-usJonkGCtTwCFRheCgUGjYeY7gSTiNZuUCy8SykYvAF_5TfqlR0hoxDqdH1D_FZCQ"
       }
     }
   ]
