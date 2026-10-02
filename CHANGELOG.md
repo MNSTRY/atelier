@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- A private-domain repository owner can let one named operator pass the local
+  boundary actor check by signing a delegation
+  (`docs/repo-boundary-guard.md`). It covers only `atelier boundary check` and
+  the `pre-commit` path, for listed repositories, for at most 90 days. It never
+  changes ownership, audiences, paths, content rules, promotion, push-content
+  checks or publication. It applies only when all of these hold:
+  - its ed25519 signature verifies against the owner's key in the host file
+    `/etc/atelier/boundary-owner-keys.json`, owned by root in root-owned
+    directories (Windows is not supported yet);
+  - it is current and not revoked in that file;
+  - the whole boundary policy, the managed repository set and each repository's
+    root commit match what the owner signed.
+
+  It records consent for a cooperating operator; the actor check stays
+  attribution, not authentication. Delegations live in
+  `boundary-delegations.v1.json` beside the policy, under the new
+  `atelier-boundary-delegations@v1` and `atelier-boundary-owner-keys@v1`
+  contracts; the boundary policy contract is unchanged.
+  `atelier boundary delegation draft|sign|verify` prepares, signs (after
+  recomputing the bindings) and inspects them. The policy validator now accepts
+  the `contractVersion` and `ext` members its schema already declared; `ext` is
+  ignored.
 - A capability operation that has committed no longer reports `EEXIST` ("not
   entered") when its lock is removed or replaced while cleanup inspects it.
   Cleanup preserves the other file and returns the operation's result. Lock
