@@ -122,8 +122,8 @@ export function citations(fragment, corpus = CORPUS) {
     const fragment = hash === -1 ? null : match[1].slice(hash + 1)
     const parsed = fragment === null ? {} : anchorOf(fragment)
     const cited = parsed.refusal ? { file, anchor: null, fragment, refusal: parsed.refusal } : { file, anchor: parsed.anchor ?? null }
-    const key = `${file}#${cited.anchor?.value ?? cited.refusal ?? ''}`
-    if (!out.some((item) => `${item.file}#${item.anchor?.value ?? item.refusal ?? ''}` === key)) out.push(cited)
+    const key = (item) => `${item.file}#${item.anchor ? item.anchor.value : item.refusal ? `!${item.fragment}` : ''}`
+    if (!out.some((item) => key(item) === key(cited))) out.push(cited)
   }
   return out
 }
@@ -321,8 +321,9 @@ function hunks(repo, base, head, file) {
  * anchor on the old lines it shares with it; only those count as removed. An
  * insertion after old line n is inside the anchor only when start <= n < end,
  * between two anchored lines; an insertion directly before or after it is
- * outside. Changes inside decide relevance; any change before or inside the
- * anchor moves or alters its lines, so it needs re-pointing whatever the outcome.
+ * outside. Changes inside decide relevance. The anchor needs re-pointing when its
+ * lines changed or it lands elsewhere at the head, whatever the outcome; hunks
+ * above it that cancel out leave it where it was.
  *
  * The head lines are found by mapping each endpoint on its own. A surviving old
  * line moves by the net change of the hunks wholly above it. An endpoint inside
@@ -335,14 +336,12 @@ export function anchorChange(spans, { start, end }) {
   let removed = 0
   let added = 0
   let outside = false
-  let moved = false
   for (const span of spans) {
     const oldEnd = span.oldStart + span.oldCount - 1
     const before = span.oldCount > 0 ? oldEnd < start : span.oldStart < start
     const inside = !before && (span.oldCount > 0 ? span.oldStart <= end : span.oldStart < end)
     if (before) {
       outside = true
-      if (span.added !== span.removed) moved = true
     } else if (inside) {
       removed += span.oldCount > 0 ? Math.min(oldEnd, end) - Math.max(span.oldStart, start) + 1 : 0
       added += span.added
@@ -364,10 +363,10 @@ export function anchorChange(spans, { start, end }) {
   }
   const headStart = map(start, 'start')
   const headEnd = map(end, 'end')
+  const head = headEnd >= headStart ? { start: headStart, end: headEnd } : null
   return {
-    removed, added, outside,
-    head: headEnd >= headStart ? { start: headStart, end: headEnd } : null,
-    reanchor: moved || removed > 0 || added > 0,
+    removed, added, outside, head,
+    reanchor: removed > 0 || added > 0 || head === null || head.start !== start || head.end !== end,
   }
 }
 
@@ -517,7 +516,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
         // still names the whole mapped range.
         region = headRange
           ? { start: headRange.start, end: Math.min(headRange.end, headRange.start + MAX_EXCERPT_LINES - 1), oversize: headRange.end - headRange.start + 1 > MAX_EXCERPT_LINES }
-          : { start: 1, end: 1, oversize: false }
+          : headText !== null ? excerpt(headText, diff.ranges) : { start: 1, end: 1, oversize: false }
       } else {
         change = { ...diff, binary }
         if (change.binary) change.ranges = []
@@ -528,10 +527,12 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       const assessment = didChange
         ? assess({ ...change, oversize: region.oversize }, { removedAtHead })
         : { status: 'abstained', reason: 'insufficient-evidence', placeholder: true }
-      const shown = headLines !== null && (!anchor || headRange !== null)
+      // A text head always supplies real lines: the anchored lines, or, when none
+      // of them can be shown, the changed region around where they were.
+      const shown = headLines !== null
       const sourceText = headText === null
         ? `(${file} is ${headBuffer === null ? 'removed' : 'not text'} at ${head})`
-        : shown ? headLines.slice(region.start - 1, region.end).join('\n') : `(${file} ${anchor.value} at ${base} has no corresponding lines at ${head})`
+        : headLines.slice(region.start - 1, region.end).join('\n')
       const evidence = [
         evidenceItem({ role: 'source', requestId: 'e1', file, revision: head, text: sourceText, start: shown ? region.start : 1, end: shown ? region.end : 1 }),
         evidenceItem({ role: 'decision', requestId: 'e2', file: CORPUS, revision: base, text: decision.text, start: decision.start, end: decision.end }),
@@ -571,6 +572,8 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
           outsideChanges: relation?.outside ?? false,
           reanchor: binary || removedAtHead || lost || (relation?.reanchor ?? false),
         } : null,
+        // The exact head text the assessment quoted (e1), so its lines can be checked.
+        quoted: structuredClone(evidence[0].reference),
         prerequisite: didChange, change: { removed: change.removed, added: change.added, binary: change.binary },
         assessment: assessment.placeholder ? { status: 'not-assessed', reason: 'prerequisite-false' }
           : assessment.status === 'abstained' ? { status: 'abstained', reason: assessment.reason } : { status: 'assessed', choice: assessment.choice },

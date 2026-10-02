@@ -367,6 +367,10 @@ test('anchor relevance uses base hunk coordinates and explicit insertion boundar
   assert.deepEqual(anchorChange([at(8, 3, 8, 1)], anchor), { removed: 1, added: 1, outside: false, head: { start: 8, end: 10 }, reanchor: true })
   assert.deepEqual(anchorChange([at(18, 10, 17, 0)], { start: 10, end: 20 }).head, { start: 10, end: 17 })
   assert.deepEqual(anchorChange([at(1, 3, 0, 0)], { start: 2, end: 5 }).head, { start: 1, end: 2 })
+  // Hunks above the anchor that cancel out leave it in place: nothing to re-anchor.
+  assert.deepEqual(anchorChange([at(2, 1, 1, 0), at(5, 0, 5, 1)], anchor), { removed: 0, added: 0, outside: true, head: { start: 10, end: 12 }, reanchor: false })
+  // Several hunks interacting with a wider anchor.
+  assert.deepEqual(anchorChange([at(8, 4, 8, 2), at(14, 0, 13, 3), at(18, 8, 18, 0)], { start: 10, end: 20 }).head, { start: 8, end: 18 })
   // Removing every anchored line leaves no head lines.
   assert.equal(anchorChange([at(10, 3, 9, 0)], anchor).head, null)
   assert.equal(anchorChange([at(9, 5, 8, 0)], anchor).head, null)
@@ -530,4 +534,35 @@ test('a whole-file citation stays labellable beside an anchored or refused citat
   const refusedLabel = cli('label', '--pr', '47', '--decision', refusedId, '--file', 'docs/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation')
   assert.equal(refusedLabel.status, 2)
   assert.match(refusedLabel.stderr, /no outcome for this decision, file and anchor/)
+})
+
+test('a block moved above an anchor leaves it in place, and quoted text always matches its lines', (t) => {
+  const numbered = lines(...Array.from({ length: 20 }, (_, index) => `line ${index + 1}`))
+  const r = anchoredRepo(t, '#L10-L12', numbered)
+  // Move line 2 below line 5: two hunks above the anchor that cancel out.
+  const moved = numbered.split('\n')
+  const [two] = moved.splice(1, 1)
+  moved.splice(4, 0, two)
+  const head = r.commit('move', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), moved.join('\n')))
+  const still = outcome(measure({ repo: r.dir, pr: 50, base: r.base, head }))
+  assert.deepEqual([still.status, still.anchor.reanchor, still.anchor.head.selector.value, still.anchor.outsideChanges], ['stop', false, 'lines:10-12', true])
+  // Removing every anchored line: a draft whose quoted text is real head lines its selector names.
+  const gone = anchoredRepo(t, '#L10-L12', numbered)
+  const goneLines = numbered.split('\n')
+  goneLines.splice(9, 3)
+  const goneHead = gone.commit('remove anchored lines', () => fs.writeFileSync(path.join(gone.dir, 'docs/layers.md'), goneLines.join('\n')))
+  const removed = outcome(measure({ repo: gone.dir, pr: 51, base: gone.base, head: goneHead }))
+  assert.deepEqual([removed.status, removed.anchor.head, removed.anchor.reanchor], ['proceed', null, true])
+  const [, from, to] = removed.quoted.selector.value.match(/^lines:(\d+)-(\d+)$/)
+  assert.equal(removed.quoted.revision, goneHead)
+  // The quote surrounds where the anchor was: old lines 9 and 13 are head lines 9 and 10.
+  assert.ok(Number(from) <= 9 && Number(to) >= 10, removed.quoted.selector.value)
+  assert.equal(removed.quoted.contentDigest, sha(goneLines.slice(Number(from) - 1, Number(to)).join('\n')))
+  // The same holds for every anchored outcome on a text head.
+  assert.equal(still.quoted.contentDigest, sha(moved.slice(9, 12).join('\n')))
+})
+
+test('two different refused fragments of one file stay two refusals', () => {
+  const refused = citations('[a](layers.md#intro) [b](layers.md#usage) [c](layers.md#intro)')
+  assert.deepEqual(refused.map((item) => item.fragment), ['intro', 'usage'])
 })

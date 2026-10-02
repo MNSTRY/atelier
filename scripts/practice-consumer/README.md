@@ -50,14 +50,14 @@ A decision can cite some lines of a file rather than the whole file, with a GitH
 - Lines are the UTF-8 file split on LF. A CR or a BOM stays in the text, and a final LF makes a final empty line.
 - Each outcome records two references, each with its own revision and digest:
   - the anchor at the merge base (`anchor.base`);
-  - the same lines mapped to the head (`anchor.head`). Each end of the anchor is mapped on its own; an end inside a removed or replaced hunk maps to that hunk's new lines. The head range is checked against the head file. It is null when no anchored line remains (the removals are inside the anchor, so the outcome is a draft) or when the head does not have the mapped lines, for example after a removed final LF (`unclear`, so it escalates). Either way the anchor needs re-anchoring.
+  - the same lines mapped to the head (`anchor.head`). Each end of the anchor is mapped on its own; an end inside a removed or replaced hunk maps to that hunk's new lines. The head range is checked against the head file. It is null when no anchored line remains, or when the head does not have the mapped lines (for example after a removed final LF). If anchored lines were removed or modified the outcome is `affected` and drafts; if not, it is `unclear` and escalates. Either way the anchor needs re-anchoring, and the quoted head text is the changed region around where the anchor was.
 
 **Whether a change touches an anchor** is decided in base coordinates:
 - A removed or modified base line inside the anchor counts as removed.
 - An insertion counts as inside only between two anchored lines. Insertions directly before or after the anchor are outside it.
 - The prerequisite is that the anchored lines changed, or that the head cannot show them (file removed or binary). A change only outside the anchor stops on the false prerequisite, and `anchor.outsideChanges` records it.
 
-**Re-anchoring is reported apart from the outcome.** `anchor.reanchor` is true when the anchor moved or its lines changed, and `summary.reanchors` counts these. A draft never hides a needed re-anchor, and a stop never drops one.
+**Re-anchoring is reported apart from the outcome.** `anchor.reanchor` is true when the anchored lines changed or the anchor lands on different lines at the head; changes above it that cancel out leave it in place. `summary.reanchors` counts these. Every outcome also records `quoted`, the exact head lines the assessment quoted. A draft never hides a needed re-anchor, and a stop never drops one.
 
 Renames are not followed. A moved file is absent at the head, so its anchors escalate and need re-anchoring.
 
