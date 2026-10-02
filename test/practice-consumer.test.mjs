@@ -33,6 +33,10 @@ function repo(t) {
   git('init', '-q')
   git('config', 'user.email', 'foundation@example.invalid')
   git('config', 'user.name', 'Foundation')
+  // Fixtures commit their exact bytes on every host: a host default such as
+  // core.autocrlf=true (Windows runners) would strip CRs before the tool reads them.
+  git('config', 'core.autocrlf', 'false')
+  git('config', 'core.safecrlf', 'false')
   fs.mkdirSync(path.join(dir, 'docs'))
   fs.writeFileSync(path.join(dir, CORPUS), CORPUS_TEXT)
   fs.writeFileSync(path.join(dir, 'docs/layers.md'), SOURCE)
