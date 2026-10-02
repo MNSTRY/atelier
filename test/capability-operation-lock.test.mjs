@@ -234,3 +234,80 @@ test('competing recoverers admit one writer after a journal-free process crash',
   assert.equal(fs.readFileSync(effect, 'utf8'), 'one writer\n')
   assert.equal(fs.existsSync(path.join(root, lockRelative)), false)
 })
+
+// Replace the lock when a named caller opens it for reading, as a competing
+// writer would between that caller's stat and its read. Write opens (flags with
+// an access mode other than read-only) are never intercepted.
+const READ_ACCESS = 3
+function replaceOnRead(t, file, caller, replacement, { remove = false } = {}) {
+  const open = fs.openSync
+  let replaced = false
+  fs.openSync = (target, flags, ...rest) => {
+    if (!replaced && target === file && ((flags ?? 0) & READ_ACCESS) === 0 && fs.existsSync(file) && caller(new Error().stack)) {
+      replaced = true
+      if (remove) fs.unlinkSync(file)
+      else { fs.renameSync(file, `${file}.displaced`); fs.writeFileSync(file, replacement) }
+    }
+    return open(target, flags, ...rest)
+  }
+  const restore = () => { fs.openSync = open }
+  t.after(restore)
+  return { restore, replaced: () => replaced }
+}
+const inRemoval = stack => /removeOperationLock/.test(stack)
+const inReadback = stack => /readOperationLock/.test(stack) && !/removeOperationLock/.test(stack) && /withOperationLock/.test(stack)
+const liveReplacement = () => JSON.stringify({ owner: 'another-writer', pid: process.pid, operationId: randomUUID() })
+function assertReleasedAfterRemoving(root, file) {
+  fs.rmSync(file, { force: true })
+  assert.equal(withOperationLock(root, () => 'acquired again'), 'acquired again')
+}
+
+test('a replacement while reclaiming a dead owner prevents entry, survives and releases the ticket', t => {
+  const root = workspace(t), file = seedLock(root, deadOwner()), replacement = liveReplacement()
+  const hook = replaceOnRead(t, file, inRemoval, replacement)
+  let entered = false
+  assert.throws(() => withOperationLock(root, () => { entered = true }), error => error.code === 'EEXIST' && /changed/.test(error.message))
+  hook.restore()
+  assert.equal(hook.replaced(), true)
+  assert.equal(entered, false)
+  assert.equal(fs.readFileSync(file, 'utf8'), replacement)
+  assertReleasedAfterRemoving(root, file)
+})
+
+test('a replacement during the post-install readback prevents entry, survives and releases the ticket', t => {
+  const root = workspace(t), file = path.join(root, lockRelative), replacement = liveReplacement()
+  // Only the readback sees this process's own freshly installed lock.
+  const ownLock = stack => inReadback(stack) && JSON.parse(fs.readFileSync(file, 'utf8')).owner === 'capability-steward'
+  const hook = replaceOnRead(t, file, ownLock, replacement)
+  let entered = false
+  assert.throws(() => withOperationLock(root, () => { entered = true }), error => error.code === 'EEXIST' && /changed/.test(error.message))
+  hook.restore()
+  assert.equal(hook.replaced(), true)
+  assert.equal(entered, false)
+  assert.equal(fs.readFileSync(file, 'utf8'), replacement)
+  assertReleasedAfterRemoving(root, file)
+})
+
+test('a replacement during cleanup after a committed callback is preserved and does not report the operation as not entered', t => {
+  const root = workspace(t), file = path.join(root, lockRelative), replacement = liveReplacement()
+  let hook
+  // The callback commits, then a competing writer replaces the lock while
+  // cleanup inspects it. EEXIST means "not entered"; it must not follow a commit.
+  const result = withOperationLock(root, () => { hook = replaceOnRead(t, file, inRemoval, replacement); return 'committed' })
+  hook.restore()
+  assert.equal(result, 'committed')
+  assert.equal(hook.replaced(), true)
+  assert.equal(fs.readFileSync(file, 'utf8'), replacement)
+  assertReleasedAfterRemoving(root, file)
+})
+
+test('a lock removed during cleanup after a committed callback still returns the committed result', t => {
+  const root = workspace(t), file = path.join(root, lockRelative)
+  let hook
+  const result = withOperationLock(root, () => { hook = replaceOnRead(t, file, inRemoval, null, { remove: true }); return 'committed' })
+  hook.restore()
+  assert.equal(result, 'committed')
+  assert.equal(hook.replaced(), true)
+  assert.equal(fs.existsSync(file), false)
+  assert.equal(withOperationLock(root, () => 'acquired again'), 'acquired again')
+})

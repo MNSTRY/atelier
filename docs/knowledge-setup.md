@@ -136,7 +136,15 @@ metadata. `--max-bytes` may lower it. `maxDocuments` bounds the selected source
 count, and `maxSourceBytes` bounds each selected file read. A source that cannot
 fit is omitted whole, preserving qualifications rather than clipping them.
 Any omission warrants inspecting coverage. No match means `needs-evidence`,
-not a claim that the real-world fact does not exist.
+not a claim that the real-world fact does not exist. When search misses a
+qualification that a source owner has selected, a trusted host can read the
+complete cited unit exactly from an ingestion plan that includes the source
+with a completed attempt; see
+[read a complete selected citation](evidence-navigation.md#read-a-complete-selected-citation).
+The line locations in this packet are not ingestion `line` locators: ingestion
+also splits on a lone CR and removes a leading BOM (U+FEFF). Map them
+explicitly; a wrong mapping fails safe, because the hash check withholds the
+selection.
 
 The graph builder still censuses the configured workspace before selection.
 This byte cap is not a corpus processing or wall-time limit. Use the project's
