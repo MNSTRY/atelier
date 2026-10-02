@@ -215,7 +215,8 @@ test('a hand-built or altered restore plan is refused, however its confirmation 
   const genuine = planPersonalRestore({ personalHome: f.personalHome, generationId: g1 })
   f.withdrawB()
   // A forgery that matches the withdrawn manifest and carries a correctly recomputed
-  // confirmation: only the plan's provenance can reject it.
+  // confirmation. Provenance rejects it first (the widening check would also reject
+  // it, with another code); it must refuse as unconfirmed and write nothing.
   const sortObject = (v) => Array.isArray(v) ? v.map(sortObject) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortObject(v[k])])) : v
   const from = { ...genuine.from, manifest: sha(fs.readFileSync(path.join(f.personalHome, 'atelier.personal.json'))) }
   const confirm = `sha256:${sha(`${JSON.stringify(sortObject({ action: 'restore', generationId: genuine.generationId, from, to: genuine.to }))}\n`)}`
@@ -262,10 +263,16 @@ test('a crash while publishing a selection leaves the history readable and the t
   const f = fixture(t)
   const g1 = f.materialize()
   f.select(g1)
-  const link = fs.linkSync, unlink = fs.unlinkSync
-  fs.linkSync = () => { throw Object.assign(new Error('crash'), { code: 'EIO' }) }
-  fs.unlinkSync = () => {}
-  try { refuses(() => f.select(g1), 'selection-write-failed') } finally { fs.linkSync = link; fs.unlinkSync = unlink }
+  // The process dies after writing the complete temporary record and before publishing it.
+  const module = new URL('../src/personal-workspace/index.mjs', import.meta.url).href
+  const head = readPersonalSelection({ personalHome: f.personalHome }).head
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import fs from 'node:fs'; import { selectPersonalGeneration, selectionConfirmDigest } from ${JSON.stringify(module)};
+    fs.linkSync = () => process.exit(75);
+    const [personalHome, generationId, previous] = process.argv.slice(1);
+    selectPersonalGeneration({ personalHome, generationId, confirm: selectionConfirmDigest({ generationId, previous }) });
+  `, f.personalHome, g1, head], { encoding: 'utf8', env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k))) })
+  assert.equal(child.status, 75, child.stderr)
   const read = readPersonalSelection({ personalHome: f.personalHome })
   assert.deepEqual([read.selected, read.sequence], [g1, 1])
   const [temporary] = inventoryPersonalHome({ personalHome: f.personalHome }).temporary
@@ -289,7 +296,7 @@ test('an oversized generation input record refuses with its own code', (t) => {
   refuses(() => planPersonalRestore({ personalHome: f.personalHome, generationId: g1 }), 'generation-inputs-too-large')
 })
 
-test('a raw filesystem failure surfaces as a stable refusal without a path', (t) => {
+nodeTest('a raw filesystem failure surfaces as a stable refusal without a path', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, (t) => {
   const f = fixture(t)
   const g1 = f.materialize()
   f.select(g1)
@@ -299,4 +306,48 @@ test('a raw filesystem failure surfaces as a stable refusal without a path', (t)
     assert.throws(() => readPersonalSelection({ personalHome: f.personalHome }),
       (e) => e instanceof PersonalWorkspaceRefusal && e.code === 'personal-home-unavailable' && !e.message.includes(f.base))
   } finally { fs.chmodSync(selections, 0o700) }
+})
+
+test('a writer that changes an authored file just before the swap keeps its bytes, and the restore refuses', (t) => {
+  const f = fixture(t)
+  const g1 = f.materialize()
+  f.overlay.annotations[0].note = 'Revised perspective'; f.save()
+  f.materialize()
+  const plan = planPersonalRestore({ personalHome: f.personalHome, generationId: g1 })
+  const manifestFile = path.join(f.personalHome, 'atelier.personal.json')
+  // Another writer edits the overlay after the restore read it, just as the
+  // restore moves it aside.
+  const rename = fs.renameSync
+  let raced = false
+  fs.renameSync = (from, to) => {
+    if (!raced && from.endsWith('atelier.overlay.json')) {
+      raced = true
+      f.overlay.annotations[0].note = 'A third, concurrent revision'
+      fs.writeFileSync(from, JSON.stringify(f.overlay))
+    }
+    return rename(from, to)
+  }
+  try { refuses(() => restorePersonalInputs(plan, { personalHome: f.personalHome, confirm: plan.confirm }), 'authored-input-changed') } finally { fs.renameSync = rename }
+  assert.equal(raced, true)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.personalHome, 'atelier.overlay.json'))), f.overlay, 'the late write is kept')
+  assert.deepEqual(inventoryPersonalHome({ personalHome: f.personalHome }).temporary, [])
+  assert.ok(fs.existsSync(manifestFile))
+})
+
+test('a schema-invalid current manifest refuses both planning and restoring', (t) => {
+  const f = fixture(t)
+  const g1 = f.materialize()
+  f.overlay.annotations[0].note = 'Revised perspective'; f.save()
+  f.materialize()
+  const plan = planPersonalRestore({ personalHome: f.personalHome, generationId: g1 })
+  const invalid = { ...f.manifest, repos: [f.manifest.repos[0], { ...f.manifest.repos[0] }] }
+  fs.writeFileSync(path.join(f.personalHome, 'atelier.personal.json'), JSON.stringify(invalid))
+  refuses(() => planPersonalRestore({ personalHome: f.personalHome, generationId: g1 }), 'malformed-input')
+  refuses(() => restorePersonalInputs(plan, { personalHome: f.personalHome, confirm: plan.confirm }), 'malformed-input')
+})
+
+test('null or missing options refuse with a stable code', () => {
+  for (const call of [() => selectPersonalGeneration(null), () => readPersonalSelection(null), () => inventoryPersonalHome(), () => planPersonalRestore(null), () => restorePersonalInputs(null, null), () => selectionConfirmDigest(null)]) {
+    assert.throws(call, (e) => e instanceof PersonalWorkspaceRefusal && typeof e.code === 'string')
+  }
 })

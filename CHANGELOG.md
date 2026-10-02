@@ -10,8 +10,10 @@
   restore accepts only a plan from `planPersonalRestore`, re-checks the exact
   current bytes, keeps them, and never widens enrollment or bindings:
   re-admitting a withdrawn repository, a changed repository identity, or a
-  re-added binding refuses before any write. Authored inputs, generations and
-  records are never deleted; only temporary files are removed.
+  re-added binding refuses before any write. Each file is replaced by
+  compare-and-swap, so a write that races the restore is kept and the restore
+  refuses. Authored inputs, generations and records are never deleted; only
+  temporary files are removed.
 - A personal workspace bound to the Obsidian projection is served from the
   canonical build, with the composition's link-target rule and the engine's file
   cache. A graph is used only under a validity key the composition confirmed.

@@ -71,7 +71,9 @@ function privateDir(personalHome, name, create) {
 }
 function writeExclusive(file, content) {
   const fd = fs.openSync(file, 'wx', 0o600)
-  try { fs.writeFileSync(fd, content); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  try { fs.writeFileSync(fd, content); fs.fsyncSync(fd) }
+  catch (error) { fs.closeSync(fd); fs.rmSync(file, { force: true }); throw error }
+  fs.closeSync(fd)
 }
 // Writes complete bytes to a temporary name, then publishes them under `final`
 // with link, which never replaces an existing name. A crash leaves only a
@@ -79,7 +81,9 @@ function writeExclusive(file, content) {
 function publishExclusive(dir, final, content, kind) {
   const temporary = path.join(dir, `.${kind}-${randomUUID()}.json`)
   writeExclusive(temporary, content)
-  try { fs.linkSync(temporary, path.join(dir, final)) } finally { fs.unlinkSync(temporary) }
+  try { fs.linkSync(temporary, path.join(dir, final)) } catch (error) { fs.rmSync(temporary, { force: true }); throw error }
+  // Published. A temporary that cannot be removed now stays listed by the inventory.
+  try { fs.unlinkSync(temporary) } catch {}
   syncDir(dir)
 }
 const eligibility = (personalHome, generationId) => {
@@ -94,10 +98,11 @@ function validateBytes(personalHome, bytes, kind) {
   finally { fs.unlinkSync(temporary) }
 }
 
-// The selection history is an append-only hash chain of numbered records. The
-// chain detects any change to a record other than the last, and any reordering or
-// renumbering. Deleting or rewriting the last record changes the head; a host that
-// needs to detect that keeps the head it last observed and compares it.
+// The selection history is an append-only hash chain of numbered records. It
+// proves internal consistency only: an edited record whose successors were not
+// re-linked, a gap, or a reordering refuses. Truncating, or consistently rewriting,
+// any trailing run of records (up to the whole history) yields another valid chain
+// and is detectable only by comparing the head with one the host observed earlier.
 function readHistory(personalHome) {
   const dir = privateDir(personalHome, 'selections', false)
   if (!dir) return { records: [], files: [], head: GENESIS }
@@ -117,12 +122,19 @@ function readHistory(personalHome) {
   }
   return { records, files, head }
 }
-export const selectionConfirmDigest = ({ generationId, previous }) => `sha256:${hash(canonical({ action: 'select', generationId, previous }))}`
+export function selectionConfirmDigest(options) {
+  return safe(() => {
+    const { generationId, previous } = options ?? {}
+    if (typeof generationId !== 'string' || typeof previous !== 'string') refuse('malformed-input')
+    return `sha256:${hash(canonical({ action: 'select', generationId, previous }))}`
+  }, 'malformed-input')
+}
 
 // Records the person's explicit choice of the currently eligible generation.
 // The caller first reads the current head and shows the person what it selects.
-export function selectPersonalGeneration({ personalHome, generationId, confirm } = {}) {
+export function selectPersonalGeneration(options) {
   return safe(() => {
+    const { personalHome, generationId, confirm } = options ?? {}
     privateHome(personalHome)
     if (typeof generationId !== 'string' || !ID.test(generationId)) refuse('malformed-input')
     const { records, head } = readHistory(personalHome)
@@ -140,8 +152,9 @@ export function selectPersonalGeneration({ personalHome, generationId, confirm }
 
 // The current selection and whether it is still eligible now. A selection never
 // keeps a generation eligible after its inputs, roots or enrollment change.
-export function readPersonalSelection({ personalHome } = {}) {
+export function readPersonalSelection(options) {
   return safe(() => {
+    const { personalHome } = options ?? {}
     privateHome(personalHome)
     const { records, head } = readHistory(personalHome)
     const current = records.at(-1) ?? null
@@ -150,17 +163,31 @@ export function readPersonalSelection({ personalHome } = {}) {
   }, 'personal-home-unavailable')
 }
 
+// Lists entries without failing the whole inventory: a concurrently removed entry
+// is skipped; an unreadable, foreign or oversized one is reported without a digest.
 function listFiles(dir, keep) {
   if (!dir) return []
-  return fs.readdirSync(dir).filter(keep).sort().map((name) => {
-    const bytes = readBytes(path.join(dir, name), MAX_RESTORE_RECORD, 'record-too-large')
-    return { name, bytes: bytes.length, digest: hash(bytes) }
-  })
+  const listed = []
+  for (const name of fs.readdirSync(dir).filter(keep).sort()) {
+    try {
+      const bytes = readBytes(path.join(dir, name), MAX_RESTORE_RECORD, 'record-too-large')
+      listed.push({ name, bytes: bytes.length, digest: hash(bytes) })
+    } catch (error) {
+      if (error.code === 'ENOENT') continue
+      let size = null
+      try { size = fs.lstatSync(path.join(dir, name)).size } catch {}
+      listed.push({ name, bytes: size, digest: null, unreadable: true })
+    }
+  }
+  return listed
 }
-// A read-only inventory of everything the private home retains, for a person to
-// review before any deletion they choose to confirm. It writes and deletes nothing.
-export function inventoryPersonalHome({ personalHome } = {}) {
+// A read-only inventory of what this module writes in the private home (authored
+// inputs, generations, staging, selection and restore records, and its temporary
+// files), for a person to review before any deletion they choose to confirm. It
+// writes and deletes nothing.
+export function inventoryPersonalHome(options) {
   return safe(() => {
+    const { personalHome } = options ?? {}
     privateHome(personalHome)
     const authored = [MANIFEST_FILE, OVERLAY_FILE].map((name) => {
       const bytes = bytesOrNull(path.join(personalHome, name), MAX_RECORD)
@@ -175,14 +202,19 @@ export function inventoryPersonalHome({ personalHome } = {}) {
     const staging = entries.filter((name) => name.startsWith('.staging-'))
     const selectionsDir = privateDir(personalHome, 'selections', false)
     const restoresDir = privateDir(personalHome, 'restores', false)
-    const { files: selections, head } = readHistory(personalHome)
+    let history
+    try { history = readHistory(personalHome) } catch (error) {
+      if (!(error instanceof PersonalWorkspaceRefusal)) throw error
+      history = { files: listFiles(selectionsDir, (name) => !name.startsWith('.')), head: null, corrupt: true }
+    }
+    const { files: selections, head } = history
     const restores = listFiles(restoresDir, (name) => !name.startsWith('.'))
     const temporary = [
       ...listFiles(personalHome, (name) => TEMPORARY.test(name)).map((file) => ({ ...file, location: '.' })),
       ...listFiles(selectionsDir, (name) => TEMPORARY.test(name)).map((file) => ({ ...file, location: 'selections' })),
       ...listFiles(restoresDir, (name) => TEMPORARY.test(name)).map((file) => ({ ...file, location: 'restores' })),
     ]
-    return freeze({ authored, generations, staging, selections: { head, records: selections }, restores, temporary })
+    return freeze({ authored, generations, staging, selections: { head, records: selections, corrupt: history.corrupt === true }, restores, temporary })
   }, 'personal-home-unavailable')
 }
 
@@ -193,7 +225,9 @@ function recordedInputs(personalHome, generationId) {
   if (typeof generationId !== 'string' || !ID.test(generationId)) refuse('malformed-input')
   const root = privateDir(personalHome, 'generations', false)
   if (!root) refuse('generation-missing')
-  try { fs.lstatSync(path.join(root, generationId)) } catch { refuse('generation-missing') }
+  let entry
+  try { entry = fs.lstatSync(path.join(root, generationId)) } catch { refuse('generation-missing') }
+  if (!entry.isDirectory() || entry.isSymbolicLink()) refuse('generation-corrupt')
   let bytes
   try { bytes = readBytes(path.join(root, generationId, 'inputs.json'), MAX_GENERATION_FILE, 'generation-inputs-too-large') }
   catch (error) { if (error instanceof PersonalWorkspaceRefusal) throw error; refuse('generation-corrupt') }
@@ -234,12 +268,17 @@ const summaryOf = (target, current, targets) => ({
 export const restoreConfirmDigest = (plan) => `sha256:${hash(canonical({ action: 'restore', generationId: plan.generationId, from: plan.from, to: plan.to }))}`
 
 // Plans restoring the authored manifest and overlay recorded by an earlier
-// generation. Re-admission or a re-added binding is the person's fresh edit,
-// never a restore's side effect.
-export function planPersonalRestore({ personalHome, generationId } = {}) {
+// generation. The target files are validated now. Re-admission or a re-added
+// binding is the person's fresh edit, never a restore's side effect. Restored
+// files are written in the generation's canonical form (sorted keys, no
+// indentation), not the person's original formatting.
+export function planPersonalRestore(options) {
   return safe(() => {
+    const { personalHome, generationId } = options ?? {}
     privateHome(personalHome)
     const inputs = recordedInputs(personalHome, generationId)
+    validateBytes(personalHome, canonical(inputs.manifest), 'manifest')
+    validateBytes(personalHome, canonical(inputs.overlay), 'overlay')
     const manifest = currentAuthored(personalHome, MANIFEST_FILE, 'manifest')
     const overlay = currentAuthored(personalHome, OVERLAY_FILE, 'overlay')
     wideningCheck(inputs.manifest, manifest.value)
@@ -253,13 +292,35 @@ export function planPersonalRestore({ personalHome, generationId } = {}) {
   }, 'personal-home-unavailable')
 }
 
+// Replaces `file` with `staged` only if `file` still holds exactly `expected`:
+// the current file is moved aside, its bytes are verified, and the staged file
+// is linked into place, which fails if another writer recreated the name. On any
+// mismatch the moved-aside file is put back, or kept as a listed temporary file
+// when its name was taken meanwhile, so no writer's bytes are lost. While the
+// swap is in progress the name is briefly absent.
+function compareAndSwap(personalHome, file, staged, expected, key) {
+  const aside = path.join(personalHome, `.restore-${randomUUID()}-aside-${key}.json`)
+  fs.renameSync(file, aside)
+  const putBack = () => { try { fs.linkSync(aside, file); fs.unlinkSync(aside) } catch {} }
+  const moved = readBytes(aside, MAX_RECORD)
+  if (hash(moved) !== expected) { putBack(); refuse('authored-input-changed') }
+  try { fs.linkSync(staged, file) } catch (error) {
+    if (error.code === 'EEXIST') refuse('authored-input-changed')
+    putBack(); throw error
+  }
+  fs.unlinkSync(staged)
+  fs.unlinkSync(aside)
+  syncDir(personalHome)
+}
+
 // Restores a plan from planPersonalRestore. The current authored bytes are read
-// once, validated, checked again against the plan and re-checked for widening;
-// those exact bytes are kept in an append-only restore record before anything is
-// replaced. Each file is staged, validated and renamed only if its bytes are
-// still the ones that were checked. A rerun completes an interrupted restore.
-export function restorePersonalInputs(plan, { personalHome, confirm } = {}) {
+// once, validated, required to match the plan and re-checked for widening; those
+// exact bytes are kept in an append-only restore record first. Both restored
+// files are staged and validated before either is replaced, then each is
+// replaced by compare-and-swap. A rerun completes an interrupted restore.
+export function restorePersonalInputs(plan, options) {
   return safe(() => {
+    const { personalHome, confirm } = options ?? {}
     privateHome(personalHome)
     if (!restorePlans.has(plan) || confirm !== plan.confirm || confirm !== restoreConfirmDigest(plan)) refuse('confirmation-mismatch')
     const inputs = recordedInputs(personalHome, plan.generationId)
@@ -275,18 +336,18 @@ export function restorePersonalInputs(plan, { personalHome, confirm } = {}) {
     const record = canonical({ schema: RESTORE_SCHEMA, generationId: plan.generationId, from: plan.from, to: plan.to,
       replaced: { manifest: current.manifest.bytes.toString('base64'), overlay: current.overlay.bytes.toString('base64') } })
     publishExclusive(dir, `${Date.now()}-${randomUUID()}.json`, record, 'restore')
-    for (const [key, [name, content]] of Object.entries(targets)) {
-      if (current[key].digest === plan.to[key]) continue
-      const file = path.join(personalHome, name)
-      const staged = path.join(personalHome, `.restore-${randomUUID()}-${key}.json`)
-      writeExclusive(staged, content)
-      try {
-        (key === 'manifest' ? loadPersonalManifest : loadPersonalOverlay)(staged, { personalHome })
-        const now = bytesOrNull(file, MAX_RECORD)
-        if (now === null || hash(now) !== current[key].digest) refuse('authored-input-changed')
-        fs.renameSync(staged, file)
-      } catch (error) { fs.rmSync(staged, { force: true }); throw error }
-      syncDir(personalHome)
+    const pending = Object.entries(targets).filter(([key]) => current[key].digest !== plan.to[key])
+    const staged = []
+    try {
+      for (const [key, [, content]] of pending) {
+        const file = path.join(personalHome, `.restore-${randomUUID()}-${key}.json`)
+        writeExclusive(file, content)
+        staged.push([key, file])
+        ;(key === 'manifest' ? loadPersonalManifest : loadPersonalOverlay)(file, { personalHome })
+      }
+      for (const [key, file] of staged) compareAndSwap(personalHome, path.join(personalHome, targets[key][0]), file, current[key].digest, key)
+    } finally {
+      for (const [, file] of staged) fs.rmSync(file, { force: true })
     }
     return freeze({ generationId: plan.generationId, ...eligibility(personalHome, plan.generationId) })
   }, 'restore-write-failed')

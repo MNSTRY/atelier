@@ -122,15 +122,19 @@ remove only their own temporary files. Every failure is a
   `stale-generation`.
 - `readPersonalSelection({ personalHome })` returns the current selection and
   whether it is still eligible. A selection never keeps a generation eligible after
-  its inputs, roots or enrollment change. A change to any record other than the
-  last, or a reordered or renumbered history, refuses `selection-history-corrupt`.
-  Deleting or rewriting the last record cannot be detected from the history
-  alone: it changes the returned `head`, so a host that needs that keeps the head
-  it last observed and compares it.
-- `inventoryPersonalHome({ personalHome })` lists, for review before any deletion
-  the person chooses: the authored files, each generation with its eligibility,
-  interrupted staging directories, every selection and restore record, and any
-  leftover temporary file, with sizes and digests. It is read-only.
+  its inputs, roots or enrollment change. The chain proves internal consistency
+  only: an edited record whose successors were not re-linked, a gap, or a
+  reordering refuses `selection-history-corrupt`. Truncating, or consistently
+  rewriting, any trailing run of records (up to the whole history) yields another
+  valid chain; it changes the returned `head`, so a host that needs to detect it
+  keeps the head it last observed and compares it.
+- `inventoryPersonalHome({ personalHome })` lists what these operations write, for
+  review before any deletion the person chooses: the authored files, each
+  generation with its eligibility, interrupted staging directories, every
+  selection and restore record, and any leftover temporary file, with sizes and
+  digests. An unreadable or oversized entry is listed without a digest, and a
+  corrupt selection history is flagged rather than failing the inventory. It is
+  read-only.
 - `planPersonalRestore({ personalHome, generationId })` plans restoring the
   authored manifest and overlay that an earlier generation recorded. The
   generation's `inputs.json` must reproduce its id from this private home, or the
@@ -141,16 +145,26 @@ remove only their own temporary files. Every failure is a
   it refuses `rollback-readmits-repository` or `rollback-identity-changed` (with
   the repository ids) or `rollback-readds-binding`, before any write.
   Re-admission is the person's fresh edit; afterwards the same restore is
-  evaluated normally. The plan carries a summary of the enrollment and bindings it
-  removes and whether each file changes. A restore that only narrows proceeds.
+  evaluated normally. The plan validates the target files and carries a summary
+  of the enrollment and bindings it removes and whether each file changes. A
+  restore that only narrows proceeds. Restored files are written in the
+  generation's canonical form (sorted keys, no indentation), not the person's
+  original formatting; planning and restoring briefly write private `.validate-*`
+  and `.restore-*` copies of authored data, which are removed afterwards and
+  listed by the inventory if a crash leaves them.
 - `restorePersonalInputs(plan, { personalHome, confirm: plan.confirm })` accepts
   only a plan returned by `planPersonalRestore`. It reads the current authored
   files once, validates those exact bytes, requires them to match the plan, and
   re-runs the widening check on them; inputs changed after planning refuse
   `authored-input-changed`. It keeps those exact bytes in an append-only record
-  under `restores/`, then stages, validates and renames each restored file,
-  re-checking just before each rename that the file is still the one it read. A
-  rerun after an interruption completes the files not yet restored. A restore does
+  under `restores/`, stages and validates both restored files, then replaces each
+  by compare-and-swap: the current file is moved aside and verified to be the
+  bytes it read, and the restored file is linked into place, which fails if
+  another writer recreated the name. On any mismatch the moved file is put back,
+  or kept as a listed temporary file if its name was taken meanwhile, and the
+  restore refuses `authored-input-changed`; no writer's bytes are lost. The name
+  is briefly absent during each swap. A rerun after an interruption completes the
+  files not yet restored. A restore does
   not change the selection; selecting the restored generation is the person's next
   explicit act.
 
