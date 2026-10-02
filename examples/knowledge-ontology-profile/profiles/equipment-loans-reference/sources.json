@@ -1,0 +1,9 @@
+{
+  "schema": "atelier-ontology-profile-sources/local-v1",
+  "sourceDigests": {
+    "records/telescope.md": "60fc57b0914792934bfbef7f0933668f7d9aad0af69e09428b713d41d7a8c3bf",
+    "records/inspection.md": "367f6d81a7c4d2216b064d65ba08f6070fd6e19fed8e1900a628d2a6bf0e0a9e",
+    "records/forecast.md": "e6c0764a0cd5c9544d8da5a94732883ae03645b4e3504c50f30886519bf82f40"
+  },
+  "scope": "Existing independently invented reference sources; no private partner data."
+}
