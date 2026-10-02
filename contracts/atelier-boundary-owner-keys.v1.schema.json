@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-boundary-owner-keys.v1.schema.json",
+  "$comment": "contract revision 1.0.0 (contract-stability epoch)",
+  "title": "atelier-boundary-owner-keys@v1",
+  "description": "Owner public keys and revocations supplied by the trusted host for boundary delegations. The file must live outside the project and must not be writable by the operator. It carries public keys only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "keys"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-boundary-owner-keys@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "keys": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/ownerKey"
+      }
+    },
+    "revokedDelegations": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+    }
+  },
+  "$defs": {
+    "ownerKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actorId",
+        "keyId",
+        "algorithm",
+        "publicKeyJwk"
+      ],
+      "properties": {
+        "actorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "keyId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "publicKeyJwk": {
+          "type": "object",
+          "required": [
+            "kty",
+            "crv",
+            "x"
+          ],
+          "properties": {
+            "kty": {
+              "const": "OKP"
+            },
+            "crv": {
+              "const": "Ed25519"
+            },
+            "x": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          },
+          "not": {
+            "required": [
+              "d"
+            ]
+          }
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      }
+    }
+  }
+}

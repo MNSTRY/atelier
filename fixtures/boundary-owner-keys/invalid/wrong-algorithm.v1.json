@@ -1,0 +1,15 @@
+{
+  "schema": "atelier-boundary-owner-keys@v1",
+  "keys": [
+    {
+      "actorId": "owner-a",
+      "keyId": "k",
+      "algorithm": "es256",
+      "publicKeyJwk": {
+        "crv": "Ed25519",
+        "x": "X8BF1HEXn3fPcGD1tiQtxhg1KaUP2o5gKtpNN-ZNd-Q",
+        "kty": "OKP"
+      }
+    }
+  ]
+}

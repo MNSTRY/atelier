@@ -80,6 +80,100 @@ A marker committed in a sibling file, or already sitting elsewhere in a file
 that this commit does not touch, approves nothing — the guard reads the diff,
 not the working tree.
 
+## Owner-signed operator delegation
+
+A private-domain repository names one `ownerActor`. When anyone else runs
+`atelier boundary check` or commits through the installed `pre-commit` hook,
+the guard refuses with `private-domain-actor-mismatch`. An owner can let one
+named operator pass that check, without handing over ownership, by signing a
+delegation.
+
+**What it guarantees.** Attribution integrity for a cooperating operator: when
+the operator commits under their own identity, the record shows a current,
+owner-signed consent that the host has not revoked.
+
+**What it does not guarantee.** The actor check stays attribution-grade, not
+authentication:
+- An operator can still declare another actor with `--actor` or
+  `MNSTRY_ATELIER_ACTOR`.
+- They can still edit the boundary policy or the project configuration.
+- They control the process that runs the check: `NODE_OPTIONS`, the local
+  install the hook runs, and the clock.
+
+A delegation does not make the policy tamper-proof. An administrator of the
+machine can replace the host key file.
+
+- **Where it lives.** Delegations are kept in `boundary-delegations.v1.json`
+  beside the boundary policy (`atelier-boundary-delegations@v1`). The policy
+  contract is unchanged.
+- **What it covers.** One operator, the listed private-domain repositories, and
+  the operations `boundary-check` and `pre-commit` (a staged check is the commit
+  path). Expiry is required, at most 90 days after `notBefore`. Ownership,
+  audiences, the read boundary, forbidden paths, content rules and their
+  exceptions, promotion, push-content checks and publication are never changed.
+  Every other finding is still reported, and the operator still appears as the
+  actor.
+- **Binding.** Each delegation binds:
+  - a digest of the whole boundary policy (with `ext` removed at every level)
+    and of the project's managed repository names;
+  - each listed repository's root commit.
+
+  Any later edit to them voids it until the owner signs again. It cannot be
+  replayed into an independently created repository that reuses the same names.
+  A fork, or any history built on the same root commit, shares that identity.
+  Other project configuration (repo access, graph settings, repository paths)
+  is not bound. A repository needs at least one commit before it can be
+  delegated.
+- **Who signs.** The owner, with their own key from `atelier attestation
+  keygen`.
+  - `atelier boundary delegation draft` prepares the document.
+  - `atelier boundary delegation sign <draft> --key <owner key>` must run against
+    the project. It recomputes the bindings, refuses a draft that does not match,
+    and prints what is being authorized before it signs.
+  - Nobody else needs the private key.
+- **What the host supplies.** The owner's public key, and any revocations, in an
+  `atelier-boundary-owner-keys@v1` file at the fixed path
+  `/etc/atelier/boundary-owner-keys.json`.
+  - The check reads only that path: no flag or environment variable chooses
+    another file.
+  - It is trusted only when it is a regular file owned by root, not group- or
+    world-writable, opened without following links, and inside directories owned
+    by root that are not group- or world-writable.
+  - The checks run on the open file, which is also what is read.
+  - The root account itself is refused.
+  - On Windows the command line does not support owner keys yet, so a
+    delegation never applies through `atelier boundary check` there.
+  - A library host passes `ownerKeys` and `delegations` to `checkBoundaryPolicy`
+    directly, on any platform. It vouches for those keys itself; Atelier
+    validates their shape either way.
+  - Owner and operator ids in a delegation must be plain identifiers (letters,
+    digits, `.`, `_`, `-`), because the owner reads them when signing.
+- **Revocation.** The host adds the delegation id to `revokedDelegations` in
+  that file, or removes the owner's key, which revokes everything the owner
+  issued. Removing the delegation from the operator-writable document also stops
+  it, but only the host file is a revocation the owner can rely on.
+- **Outcome.** A delegation that applies replaces the mismatch with the
+  informational finding `private-domain-delegated-operator`, naming the operator,
+  owner, delegation id and expiry. Otherwise the mismatch stays, with a typed
+  `details.delegationReason`:
+  - `delegation-missing`, `delegation-scope`, `delegation-ambiguous` or
+    `delegation-malformed`;
+  - `delegation-owner-key-missing`, `delegation-owner-keys-untrusted` or
+    `delegation-owner-keys-invalid`;
+  - `delegation-signature-invalid` or `delegation-revoked`;
+  - `delegation-not-yet-valid` or `delegation-expired`;
+  - `delegation-policy-changed` or `delegation-repository-changed`.
+
+  An invalid delegations document is reported as `boundary-delegations-invalid`.
+  It grants nothing, and it fails every check until it is fixed or removed,
+  including the owner's.
+- **Diagnostics.** `atelier boundary delegation verify` reports the signature,
+  revocation and host-file trust only. Scope, time and bindings are decided by
+  `boundary check`.
+
+The policy validator now also accepts the `contractVersion` and `ext` members
+the v1 schema already declared. `ext` is ignored and never carries authority.
+
 ## Non-Goals
 
 Repo Boundary Guard V1 does not:

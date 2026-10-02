@@ -62,8 +62,9 @@ export function validateContentRules(rules, { label = 'contentRules' } = {}) {
       continue
     }
     for (const key of Object.keys(rule)) {
-      if (!['id', 'kind', 'severity', 'pattern', 'paths', 'description'].includes(key)) errors.push(`${at} must not include additional property ${key}`)
+      if (!['id', 'kind', 'severity', 'pattern', 'paths', 'description', 'ext'].includes(key)) errors.push(`${at} must not include additional property ${key}`)
     }
+    if (rule.ext != null && !isObject(rule.ext)) errors.push(`${at}.ext must be an object`)
     const id = trimmed(rule.id)
     if (!id) errors.push(`${at}.id is required`)
     else if (seen.has(id)) errors.push(`${at}.id duplicates an earlier rule: ${id}`)
@@ -96,8 +97,9 @@ export function validateContentRuleExceptions(exceptions, rules = DEFAULT_CONTEN
       continue
     }
     for (const key of Object.keys(exception)) {
-      if (!['rule', 'repo', 'paths', 'reason'].includes(key)) errors.push(`${at} must not include additional property ${key}`)
+      if (!['rule', 'repo', 'paths', 'reason', 'ext'].includes(key)) errors.push(`${at} must not include additional property ${key}`)
     }
+    if (exception.ext != null && !isObject(exception.ext)) errors.push(`${at}.ext must be an object`)
     const rule = trimmed(exception.rule)
     if (!rule) errors.push(`${at}.rule is required; an exception must name the rule it excepts`)
     else if (ruleIds.size && !ruleIds.has(rule)) errors.push(`${at}.rule "${rule}" is not a declared content rule`)
