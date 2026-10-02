@@ -2,7 +2,8 @@
 
 This module composes enrolled local repositories and private interpretation in
 one Atelier graph. The person supplies a private home outside every enrolled
-repository. Shared source files and private authored inputs stay unchanged.
+repository. Shared source files are never changed. Private authored inputs change
+only through an explicit, confirmed restore (see below).
 This is a local composition module. Host integration and release require
 separate acceptance.
 
@@ -28,7 +29,7 @@ stable local enrollment keys; matching a recorded remote is an offline change
 check, not proof of upstream membership or provider identity.
 
 The module entrypoint is `src/personal-workspace/index.mjs`; its public package
-subpath is `@mnstry/atelier/personal-workspace`. The API consists of nine exports:
+subpath is `@mnstry/atelier/personal-workspace`. The API consists of fifteen exports:
 
 - `MANIFEST_SCHEMA` and `OVERLAY_SCHEMA`.
 - `PersonalWorkspaceRefusal`.
@@ -36,6 +37,10 @@ subpath is `@mnstry/atelier/personal-workspace`. The API consists of nine export
 - `resolvePersonalWorkspace`.
 - `planPersonalGeneration`, `materializePersonalGeneration`, and
   `composePersonalWorkspace`.
+- `selectPersonalGeneration`, `selectionConfirmDigest`, and
+  `readPersonalSelection`.
+- `inventoryPersonalHome`.
+- `planPersonalRestore` and `restorePersonalInputs`.
 
 Package registration and installed-consumer qualification are separate from
 module source qualification. A registered package can be used as follows:
@@ -66,7 +71,9 @@ input from this module. These operations write nothing. Failures throw
 `PersonalWorkspaceRefusal`, with a stable `code` and a sanitized message.
 No paths, source excerpts, or graph diagnostic text are included in refusals.
 
-Only `materializePersonalGeneration` writes. It creates
+Of the composition operations, only `materializePersonalGeneration` writes. (The
+selection and restore operations below write their own records and, on an explicit
+confirmed restore, the authored inputs.) It creates
 `generations/<generationId>/` under the explicit private home. The id is a
 digest of canonical schema-tagged manifest and overlay inputs, declared
 stable references, and the canonical private-home location. Moving that home
@@ -100,38 +107,52 @@ note retention and recipient export are outside this module.
 A generation is eligible only while it composes against the current authored
 inputs, roots and enrollment, so at most one generation is eligible at a time.
 These operations record a person's choices about that, and write only under the
-private home. They delete nothing.
+private home. They never delete authored inputs, generations or records; they
+remove only their own temporary files. Every failure is a
+`PersonalWorkspaceRefusal` with a stable code and no path.
 
 - `selectPersonalGeneration({ personalHome, generationId, confirm })` records an
   explicit choice of the eligible generation. `confirm` is
   `selectionConfirmDigest({ generationId, previous })`, computed over the head
   that `readPersonalSelection` returns, so a choice shown against an older history
   does not apply. Selections are append-only, numbered, hash-chained records under
-  `selections/`. An ineligible generation refuses with its composition code, such
-  as `stale-generation`.
+  `selections/`, each written completely before it is published, so a crash leaves
+  only a temporary file. Concurrent selections refuse `selection-concurrent`. An
+  ineligible generation refuses with its composition code, such as
+  `stale-generation`.
 - `readPersonalSelection({ personalHome })` returns the current selection and
   whether it is still eligible. A selection never keeps a generation eligible after
-  its inputs, roots or enrollment change. A tampered, reordered or renumbered
-  history refuses `selection-history-corrupt`.
-- `inventoryPersonalHome({ personalHome })` lists the authored files, each
-  generation with its eligibility, interrupted staging directories, and the
-  selection and restore records, with sizes and digests. It is read-only.
+  its inputs, roots or enrollment change. A change to any record other than the
+  last, or a reordered or renumbered history, refuses `selection-history-corrupt`.
+  Deleting or rewriting the last record cannot be detected from the history
+  alone: it changes the returned `head`, so a host that needs that keeps the head
+  it last observed and compares it.
+- `inventoryPersonalHome({ personalHome })` lists, for review before any deletion
+  the person chooses: the authored files, each generation with its eligibility,
+  interrupted staging directories, every selection and restore record, and any
+  leftover temporary file, with sizes and digests. It is read-only.
 - `planPersonalRestore({ personalHome, generationId })` plans restoring the
   authored manifest and overlay that an earlier generation recorded. The
   generation's `inputs.json` must reproduce its id from this private home, or the
-  plan refuses `generation-corrupt`. **A restore never widens enrollment:** a
-  repository the target enrolls must be enrolled now with the same root and
-  remote. Otherwise it refuses `rollback-readmits-repository` or
-  `rollback-identity-changed` with the repository ids, before any write.
-  Re-admission is the person's fresh enrollment; afterwards the same restore is
-  evaluated normally. A restore that only narrows enrollment or changes the
-  overlay proceeds.
-- `restorePersonalInputs(plan, { personalHome, confirm: plan.confirm })` first
-  keeps the replaced authored bytes in an append-only record under `restores/`,
-  then validates and renames each restored file into place. Inputs changed after
-  planning refuse `authored-input-changed`. A rerun after an interruption
-  completes the files not yet restored. A restore does not change the selection;
-  selecting the restored generation is the person's next explicit act.
+  plan refuses `generation-corrupt`; an oversized record refuses
+  `generation-inputs-too-large`. **A restore never widens enrollment or
+  bindings:** a repository the target enrolls must be enrolled now with the same
+  root and remote, and every binding it declares must be declared now. Otherwise
+  it refuses `rollback-readmits-repository` or `rollback-identity-changed` (with
+  the repository ids) or `rollback-readds-binding`, before any write.
+  Re-admission is the person's fresh edit; afterwards the same restore is
+  evaluated normally. The plan carries a summary of the enrollment and bindings it
+  removes and whether each file changes. A restore that only narrows proceeds.
+- `restorePersonalInputs(plan, { personalHome, confirm: plan.confirm })` accepts
+  only a plan returned by `planPersonalRestore`. It reads the current authored
+  files once, validates those exact bytes, requires them to match the plan, and
+  re-runs the widening check on them; inputs changed after planning refuse
+  `authored-input-changed`. It keeps those exact bytes in an append-only record
+  under `restores/`, then stages, validates and renames each restored file,
+  re-checking just before each rename that the file is still the one it read. A
+  rerun after an interruption completes the files not yet restored. A restore does
+  not change the selection; selecting the restored generation is the person's next
+  explicit act.
 
 Retention follows the person's decision: withdrawn material stops being eligible
 immediately, while authored history, generations and these records stay until the

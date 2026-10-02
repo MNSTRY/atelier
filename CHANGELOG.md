@@ -7,9 +7,11 @@
   `selectPersonalGeneration`, `selectionConfirmDigest`, `readPersonalSelection`,
   `inventoryPersonalHome`, `planPersonalRestore` and `restorePersonalInputs`. A
   selection is a confirmed, hash-chained choice of the eligible generation. A
-  restore keeps the replaced bytes and never widens enrollment: re-admitting a
-  withdrawn repository, or a changed repository identity, refuses before any
-  write. Nothing is deleted.
+  restore accepts only a plan from `planPersonalRestore`, re-checks the exact
+  current bytes, keeps them, and never widens enrollment or bindings:
+  re-admitting a withdrawn repository, a changed repository identity, or a
+  re-added binding refuses before any write. Authored inputs, generations and
+  records are never deleted; only temporary files are removed.
 - A personal workspace bound to the Obsidian projection is served from the
   canonical build, with the composition's link-target rule and the engine's file
   cache. A graph is used only under a validity key the composition confirmed.
