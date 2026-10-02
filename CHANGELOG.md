@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- A private-domain repository owner can let one named operator pass the local
+  boundary actor check by signing a delegation
+  (`docs/repo-boundary-guard.md`). It covers only `atelier boundary check` and
+  the `pre-commit` path, for listed repositories, for at most 90 days, and never
+  changes ownership, audiences, paths, content rules, promotion, push-content
+  checks or publication. It applies only when its ed25519 signature verifies
+  against an owner key that the host supplies in a file the operator can neither
+  write nor replace, it is current and not revoked by the host, and the
+  repository's policy and the policy-wide protections are unchanged since
+  signing. Delegations live in `boundary-delegations.v1.json` beside the policy,
+  under the new `atelier-boundary-delegations@v1` and
+  `atelier-boundary-owner-keys@v1` contracts; the boundary policy contract is
+  unchanged. `atelier boundary delegation draft|sign|verify` prepares, signs and
+  checks them. The policy validator now accepts the `contractVersion` and `ext`
+  members its schema already declared; `ext` is ignored.
 - `src/ingestion/semantic.mjs` prepares source-bound entity and assertion
   proposals from a host's extractor output, one source per input
   (`docs/semantic-ingestion.md`). It is an internal module: its `v0` formats are

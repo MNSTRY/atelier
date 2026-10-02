@@ -13,6 +13,8 @@ const INVALID_EXPECTATIONS = new Map([
   ...Object.entries({ interaction: ['observation', 'assessment', 'act', 'policy'], coordination: ['outcome', 'dependency', 'directive', 'disposition', 'recovery'] }).flatMap(([profile, shapes]) => shapes.map(shape => [`atelier-${profile}-${shape}`, new Map([['document.json', /must NOT have additional properties/]])])),
   ...['definition', 'request'].map(shape => [`atelier-trackable-${shape}`, new Map([['document.json', /must NOT have additional properties/]])]),
   ...['campaign', 'hypothesis', 'request', 'source', 'bundle', 'assessment', 'decision', 'withdrawal', 'feedback', 'legacy-assessment', 'ledger', 'handoff'].map(shape => [`atelier-inquiry-${shape}`, new Map([['document.json', /must NOT have additional properties/]])]),
+  ['atelier-boundary-delegations', new Map([['push-operation.v1.json', /operations.*must be equal to one of the allowed values/], ['unsigned.v1.json', /signature.*must be object/], ['authority-key.v1.json', /must NOT have additional properties/]])],
+  ['atelier-boundary-owner-keys', new Map([['wrong-curve.v1.json', /crv.*must be equal to constant/], ['wrong-algorithm.v1.json', /algorithm.*must be equal to constant/]])],
   ['atelier-ingestion', new Map([['authority.json', /must NOT have additional properties/]])],
   ['atelier-learning', new Map([['authority.json', /must NOT have additional properties/]])],
   ['atelier-vault-publication', new Map([['publication.json', /expectedRevision.*must be >= 0/]])],

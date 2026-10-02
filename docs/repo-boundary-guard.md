@@ -80,6 +80,66 @@ A marker committed in a sibling file, or already sitting elsewhere in a file
 that this commit does not touch, approves nothing — the guard reads the diff,
 not the working tree.
 
+## Owner-signed operator delegation
+
+A private-domain repository names one `ownerActor`. When anyone else runs
+`atelier boundary check` or commits through the installed `pre-commit` hook,
+the guard refuses with `private-domain-actor-mismatch`. That check is
+attribution under the reviewed configuration, not authentication: the policy is
+a workspace file. The owner can let one named operator pass it, without handing
+over ownership, by signing a delegation.
+
+- **Where it lives.** Delegations are kept in `boundary-delegations.v1.json`
+  beside the boundary policy (`atelier-boundary-delegations@v1`). The policy
+  contract is unchanged.
+- **What it covers.** One operator, the listed private-domain repositories, and
+  the operations `boundary-check` and `pre-commit` (a staged check is the commit
+  path). Expiry is required, at most 90 days after `notBefore`. Ownership,
+  audiences, the read boundary, forbidden paths, content rules and their
+  exceptions, promotion, push-content checks and publication are never changed.
+  Every other finding is still reported, and the operator still appears as the
+  actor.
+- **Who signs.** The owner, with their own key from `atelier attestation
+  keygen`. `atelier boundary delegation draft` prepares the document;
+  `atelier boundary delegation sign <draft> --key <owner key>` signs it. Nobody
+  else needs the private key.
+- **What the host supplies.** The owner's public key, and any revocations, in an
+  `atelier-boundary-owner-keys@v1` file outside the project. The CLI reads
+  `--owner-keys FILE`, else `ATELIER_BOUNDARY_OWNER_KEYS`, else
+  `/etc/atelier/boundary-owner-keys.json` (on Windows,
+  `%ProgramData%\atelier\boundary-owner-keys.json`). On macOS and Linux the file
+  must be a regular file that the current user does not own and cannot write or
+  replace, in directories the user cannot write, and not group- or
+  world-writable; the root account is refused. On Windows only location, link,
+  regular-file and writability checks apply. Keys in the policy, the delegations
+  document, the environment or `ext` are never trusted. A library host passes
+  `ownerKeys` and `delegations` to `checkBoundaryPolicy` directly.
+- **Binding.** Each delegation records a digest of the repository's policy entry
+  and the policy-wide protections (mode, forbidden paths, content rules, their
+  exceptions and promotion). Editing any of them voids the delegation until the
+  owner signs again, so a delegated operator cannot loosen them.
+- **Revocation.** The host adds the delegation id to `revokedDelegations`, or
+  removes the owner's key. Removing the delegation from the operator-writable
+  document also stops it, but only the host list is a revocation the owner can
+  rely on.
+- **Outcome.** A delegation that applies replaces the mismatch with the
+  informational finding `private-domain-delegated-operator`, naming the operator,
+  owner, delegation id and expiry. Otherwise the mismatch stays, with a typed
+  `details.delegationReason`: `delegation-missing`, `delegation-scope`,
+  `delegation-ambiguous`, `delegation-malformed`, `delegation-owner-key-missing`,
+  `delegation-owner-keys-untrusted`, `delegation-owner-keys-invalid`,
+  `delegation-signature-invalid`, `delegation-revoked`, `delegation-not-yet-valid`,
+  `delegation-expired` or `delegation-policy-binding-changed`. An invalid
+  delegations document is reported as `boundary-delegations-invalid` and grants
+  nothing.
+- **Limit.** This protects against an operator who cannot write the host key
+  location. An administrator of the same machine can replace that file, and
+  nothing local prevents it. The operator can still edit the policy itself, as
+  before; a delegation does not make the policy tamper-proof.
+
+The policy validator now also accepts the `contractVersion` and `ext` members
+the v1 schema already declared. `ext` is ignored and never carries authority.
+
 ## Non-Goals
 
 Repo Boundary Guard V1 does not:

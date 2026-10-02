@@ -97,6 +97,8 @@ export const CONTRACT_CORPUS = [
     fixtureRoot: 'fixtures/boundary-policy',
     registry: false,
   },
+  { name: 'atelier-boundary-delegations', contractFile: 'contracts/atelier-boundary-delegations.v1.schema.json', fixtureRoot: 'fixtures/boundary-delegations', registry: true },
+  { name: 'atelier-boundary-owner-keys', contractFile: 'contracts/atelier-boundary-owner-keys.v1.schema.json', fixtureRoot: 'fixtures/boundary-owner-keys', registry: true },
   {
     name: 'atelier-export',
     contractFile: 'contracts/atelier-export.v1.schema.json',
