@@ -582,7 +582,11 @@
   A source replaced while the published note is prepared again now leads to a
   fresh preparation, up to three in all. If the source was saved with the same
   bytes, or another source of the scope was replaced, the edit applies instead
-  of refusing `published-note-unavailable`.
+  of refusing `published-note-unavailable`. Observation of pending edits on a
+  tick had the same gap: a source replaced while its note was prepared again
+  raised an untyped `ELEAFCHANGED` from the tick. It now refuses that edit
+  `stale-source`. The failed preparation is no longer kept, so the other edits
+  of that generation in the tick are still observed.
 
 ## 0.2.0-alpha.12
 
