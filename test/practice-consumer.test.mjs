@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { CORPUS, LABELS, assess, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
 
 // Foundation's repository-local decision-practice consumer, exercised on a
@@ -279,4 +279,44 @@ test('measure and the CLI refuse malformed arguments', (t) => {
   // A bare --out must not fall back to the committed measurements file.
   const bare = spawnSync(process.execPath, [SCRIPT, 'measure', '--pr', '1', '--base', r.base, '--head', r.base, '--repo', r.dir, '--out'], { encoding: 'utf8' })
   assert.equal(bare.status, 2)
+})
+
+test('the CLI measures when invoked through a symlinked path, and importing it runs nothing', (t) => {
+  const r = repo(t)
+  const head = r.commit('modify', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const links = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-links-'))
+  t.after(() => fs.rmSync(links, { recursive: true, force: true }))
+  const args = ['measure', '--pr', '16', '--base', r.base, '--head', head, '--repo', r.dir, '--print']
+  const run = (script) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', cwd: links })
+  const direct = run(SCRIPT)
+  assert.equal(direct.status, 0, direct.stderr)
+  const expected = JSON.parse(direct.stdout)
+  assert.equal(expected.summary.drafts, 1)
+  const same = (label, script) => {
+    const linked = run(script)
+    assert.equal(linked.status, 0, `${label}: ${linked.stderr}`)
+    assert.notEqual(linked.stdout, '', `${label}: the command printed nothing`)
+    const value = JSON.parse(linked.stdout)
+    assert.deepEqual({ ...value, measuredAt: null }, { ...expected, measuredAt: null }, label)
+  }
+  // A linked checkout: the repository root reached through a directory link.
+  const root = path.join(links, 'root')
+  fs.symlinkSync(ROOT, root, process.platform === 'win32' ? 'junction' : 'dir')
+  same('directory link', path.join(root, 'scripts/practice-consumer/reconsider.mjs'))
+  // A link to the script itself, where the platform allows file links.
+  const file = path.join(links, 'reconsider.mjs')
+  try {
+    fs.symlinkSync(SCRIPT, file, 'file')
+  } catch (error) {
+    if (error.code !== 'EPERM') throw error
+    t.diagnostic('file symlinks need a privilege this host lacks')
+    return
+  }
+  same('file link', file)
+  // Importing the module, through either path, measures and writes nothing.
+  for (const target of [SCRIPT, file]) {
+    const imported = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(target).href)})`], { encoding: 'utf8', cwd: links })
+    assert.equal(imported.status, 0, imported.stderr)
+    assert.equal(imported.stdout, '')
+  }
 })

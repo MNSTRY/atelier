@@ -487,7 +487,20 @@ export function main(argv = process.argv.slice(2)) {
   throw new Error(USAGE)
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+// Run only as the entry script, never on import. Node loads the entry through
+// its real path but leaves argv[1] as typed, so a symlinked path (a linked
+// checkout, or /tmp on macOS) must be compared by real path, or the command
+// would exit 0 having done nothing.
+function invokedDirectly() {
+  if (!process.argv[1]) return false
+  try {
+    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(path.resolve(process.argv[1]))
+  } catch {
+    return false
+  }
+}
+
+if (invokedDirectly()) {
   try {
     main()
   } catch (error) {
