@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Personal workspaces gain an explicit selection record, a read-only inventory of
+  the private home, and a restore of authored inputs from an earlier generation:
+  `selectPersonalGeneration`, `selectionConfirmDigest`, `readPersonalSelection`,
+  `inventoryPersonalHome`, `planPersonalRestore` and `restorePersonalInputs`. A
+  selection is a confirmed, hash-chained choice of the eligible generation. A
+  restore accepts only a plan from `planPersonalRestore`, re-checks the exact
+  current bytes, keeps them, and never widens enrollment or bindings:
+  re-admitting a withdrawn repository, a changed repository identity, or a
+  re-added binding refuses before any write. Each file is replaced by
+  compare-and-swap, so a write that replaces or recreates the file by path
+  during the restore is kept and the restore refuses; an interrupted swap
+  refuses `restore-interrupted` until the listed moved copy is put back.
+  Authored inputs, generations and records are never deleted; only temporary
+  files are removed.
 - A private-domain repository owner can let one named operator pass the local
   boundary actor check by signing a delegation
   (`docs/repo-boundary-guard.md`). It covers only `atelier boundary check` and
