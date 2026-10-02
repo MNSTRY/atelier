@@ -35,6 +35,11 @@ Portable shapes refuse absolute paths. `atelier-project-config.v1` is
 unchanged: extension settings are validated by their own schema, and an
 unknown extension key refuses in the adapter, not in the project validator.
 
+The `ext-settings` key `ext["mnstry.atelier.personal-workspace"]` is reserved.
+Only a personal-workspace binding sets it, in memory, to name its generation.
+A project whose settings declare it without a binding is refused at every
+build with `personal-binding-lost`.
+
 ## Selection
 
 `selectScope({ canonicalSnapshot, profile, selector, expansion })` is the only
@@ -1295,6 +1300,7 @@ today) it refuses `exchange-unavailable`. Both write nothing.
 | `interrupted-before-exchange`, `apply-interrupted-needs-person` | what restart recovery decided for an interrupted apply |
 | `recovery-state-unreadable` | a candidate, backup or source path of an interrupted apply may not be looked at or read; nothing is settled from a read this process was denied, that record is reported with its intent still open, and every other one is still settled |
 | `apply-outcome-unknown` | the source was exchanged and the settlement from digests could not be carried out; the source may have been changed, the intent stays open and `apply recover` decides |
+| `personal-overlay-proposals-only` | the note is a private note of a personal workspace, whose file belongs to a module-owned generation; nothing is written there. The proposal adapter's observation answers the same edit with `personal-overlay-not-proposed`, and records nothing |
 
 A path that another program removes or replaces between two steps, before the
 intent is recorded, answers one of these refusals (`source-missing`,
@@ -1517,7 +1523,9 @@ line, 16 MiB, 10,000 events, and an unreadable line refuses every append.
 | `ledger-corrupt` | refused, for that repository only; other repositories progress in the same tick |
 | `store-unavailable` | the store cannot be read or is locked now; waits like a full one |
 
-A waiting operation is tried at most 8 times, 60 seconds after the first attempt
+For a personal workspace whose graph the engine has not confirmed yet, a due
+operation is left as it is (`personal-validation-pending`), and that tick is not
+counted as an attempt. A waiting operation is tried at most 8 times, 60 seconds after the first attempt
 and twice as long after each, up to an hour. At most 8 operations per repository
 and 64 unexamined edits are looked at per tick. A repository holds at most 4096
 operations, 256 of them open, 64 records of 16 KiB each; a full queue refuses
