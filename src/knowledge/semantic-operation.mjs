@@ -228,8 +228,9 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     const starts = events(state).filter(event => event.value.phase === 'reserved')
     for (const prior of starts) {
       if (prior.value.source.digest !== source.digest || prior.value.source.ref !== source.ref || prior.value.extractor.configurationDigest !== extractor.configurationDigest) continue
-      const known = operation(prior.value.operationId, state), attempt = inspected(known.initial)
+      const known = operation(prior.value.operationId, state)
       if (known.latest.value.phase === 'reconciled') continue
+      const attempt = inspected(known.initial)
       check(attempt.status === 'complete', 'SEMANTIC_EXECUTION_UNKNOWN', 'Reconcile the prior source/configuration execution before a new attempt')
       check(known.latest.value.phase === 'completed', 'SEMANTIC_RECONCILE_REQUIRED', 'Finish recording the existing completed attempt before reuse')
       const cached = status({ operationId: prior.value.operationId })
@@ -458,15 +459,37 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     return { head, cleaned, authority: 'none' }
   }
   function context({ query }) {
-    const state = history(), bindings = []
+    const state = history(), bindings = [], failures = []
     for (const record of state.records) {
       const body = semanticBody(record)
       if (!body) continue
       try { if (state.accepted.includes(record.id)) verifySemantic(record) }
-      catch (error) { if (error.code !== 'SEMANTIC_OPERATION_STALE') throw error }
+      catch (error) {
+        if (!(error instanceof SemanticOperationError) || !['SEMANTIC_OPERATION_STALE', 'SEMANTIC_OPERATION_INTEGRITY', 'SEMANTIC_IDENTITY_PENDING', 'SEMANTIC_UNSUPPORTED_LEDGER_CITATION'].includes(error.code)) throw error
+        failures.push({ id: record.id, reason: 'semantic-record-requires-reconsideration', code: error.code })
+      }
       if (!bindings.some(binding => ingestionDigest(binding) === ingestionDigest(body.sourceBinding))) bindings.push(body.sourceBinding)
     }
-    return { answerClass: 'accepted-knowledge', ...localKnowledgeContext({ workspaceRoot, workspaceId, records: state.records, sourceBindings: bindings, query }) }
+    const view = localKnowledgeContext({ workspaceRoot, workspaceId, records: state.records, sourceBindings: bindings, query })
+    const reconsider = new Map(view.reconsider.map(item => [item.id, [...item.reasons]]))
+    for (const failure of failures) reconsider.set(failure.id, [...new Set([...(reconsider.get(failure.id) ?? []), failure.reason])])
+    // Preserve the full immutable ledger. Withhold failed interpretations and
+    // their dependents from this view without changing receiver decisions.
+    for (const record of state.records) {
+      const d = record.data
+      const refs = record.kind === 'contribution' ? [d.domain, ...d.basedOn.map(pin => pin.contribution)]
+        : record.kind === 'evaluation' ? [d.contribution]
+        : record.kind === 'relation' ? [d.domain, d.subject, d.object]
+        : record.kind === 'review' ? [d.target, ...d.evaluations]
+        : record.kind === 'activation' ? d.reviews : []
+      const reasons = refs.flatMap(pin => reconsider.get(pin.id) ?? [])
+      if (reasons.length) reconsider.set(record.id, [...new Set([...(reconsider.get(record.id) ?? []), ...reasons])])
+    }
+    return { answerClass: 'accepted-knowledge', ...view,
+      hits: view.hits.filter(hit => !reconsider.has(hit.reference.id)),
+      reconsider: [...reconsider].map(([id, reasons]) => ({ id, reasons })),
+      diagnostics: [...view.diagnostics, ...failures] }
+
   }
   function project({ activationId, namespace }) {
     const state = history(), view = context({ query: 'semantic' })

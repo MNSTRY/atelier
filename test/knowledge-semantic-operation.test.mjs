@@ -343,7 +343,7 @@ transactionTest('supplied existing identities require explicit review and work w
   assert.equal(sourceText.split(membershipGuard).length, 2)
   const identityMutant = await import(`data:text/javascript;base64,${Buffer.from(sourceText.replace(membershipGuard, 'true')).toString('base64')}`)
   try {
-    assert.throws(() => assert.throws(() => identityMutant.createSemanticOperation(s.options).prepareContribution({ ...claimRequest(), id: 'identity-unsupplied-mutant' }), e => e.code === 'SEMANTIC_IDENTITY_PENDING'), e => e.code === 'ERR_ASSERTION')
+    assert.equal(identityMutant.createSemanticOperation(s.options).prepareContribution({ ...claimRequest(), id: 'identity-unsupplied-mutant' }).record.id, 'identity-unsupplied-mutant')
   } finally { fs.writeFileSync(identityLedger, identitySnapshot) }
 
   approve(entities[0], choice({ status: 'existing', contribution: harnessRef(wrongType) }), '-wrong-type')
@@ -365,7 +365,7 @@ transactionTest('supplied existing identities require explicit review and work w
   add(make('activation', 'identity-unaffected-active', { reviews: [harnessRef(readHarness({ ...s.options, profile: 'knowledge' }).records.find(record => record.id === `${entities[2].id}-review`))], purpose: 'Independent accepted identity readback.', destination: 'local-graph', questions: ['component'] }))
   const ledgerFile = path.join(s.root, '.atelier-local/harnesses/knowledge', fixture.domain.run, 'ledger.json')
   const savedLedger = fs.readFileSync(ledgerFile), savedHead = head
-  for (const change of ['withdraw', 'evaluate', 'supersede', 're-decide']) {
+  for (const change of ['withdraw', 'evaluate', 'supersede', 're-decide', 'reaccept-local', 'reaccept-prose']) {
     fs.writeFileSync(ledgerFile, savedLedger); head = savedHead
     if (change === 'withdraw') add(make('withdrawal', 'withdraw-identity-choice', { target: harnessRef(entities[0]), reason: 'Simulated receiver withdraws the identity interpretation.' }))
     if (change === 'evaluate') add(make('evaluation', 'reevaluate-identity-choice', { contribution: harnessRef(entities[0]), judgment: 'uncertain', rationale: 'Simulated receiver reconsiders the identity choice.', limitations: ['Invented case'], scope: fixture.domain.data.scope }))
@@ -374,7 +374,22 @@ transactionTest('supplied existing identities require explicit review and work w
       head = next.head; approve(next.record, choice({ status: 'existing', contribution: harnessRef(canonical) }))
     }
     if (change === 're-decide') approve(entities[0], choice({ status: 'source-local' }), '-changed-choice')
+    if (change.startsWith('reaccept-')) {
+      add(make('evaluation', 'reconsider-identity-before-reaccept', { contribution: harnessRef(entities[0]), judgment: 'uncertain', rationale: 'Invented correction before renewed review.', limitations: ['Invented case'], scope: fixture.domain.data.scope }))
+      approve(entities[0], change === 'reaccept-local' ? choice({ status: 'source-local' }) : 'Prose acceptance without an identity choice.', '-renewed')
+      approve(prepared.record, 'Receiver re-accepts the original immutable assertion.', '-renewed')
+      add(make('activation', 'identity-renewed-active', { reviews: [harnessRef(readHarness({ ...s.options, profile: 'knowledge' }).records.find(record => record.id === 'identity-management-review-renewed'))], purpose: 'Invented re-acceptance readback.', destination: 'local-context', questions: ['component'] }))
+    }
     const reopened = createSemanticOperation(s.options), view = reopened.context({ query: 'manages' })
+    if (change.startsWith('reaccept-')) {
+      assert.ok(view.diagnostics.some(item => item.id === prepared.record.id && ['SEMANTIC_OPERATION_INTEGRITY', 'SEMANTIC_IDENTITY_PENDING'].includes(item.code)), change)
+      const failureMarker = "failures.push({ id: record.id, reason: 'semantic-record-requires-reconsideration', code: error.code })"
+      const correctedSource = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original)
+      assert.equal(correctedSource.split(failureMarker).length, 2)
+      const unfiltered = await import(`data:text/javascript;base64,${Buffer.from(correctedSource.replace(failureMarker, 'void error')).toString('base64')}`)
+      assert.ok(unfiltered.createSemanticOperation(s.options).context({ query: 'manages' }).hits.some(hit => hit.reference.id === prepared.record.id), 'Removing reconsideration exposes the incompatible accepted assertion.')
+      assert.throws(() => reopened.project({ activationId: 'identity-renewed-active', namespace: 'fixture' }), e => e.code === 'SEMANTIC_PROJECTION_STALE')
+    }
     assert.equal(view.hits.some(hit => hit.reference.id === prepared.record.id), false, change)
     assert.ok(view.reconsider.some(item => item.id === prepared.record.id || item.id === 'identity-management-review'), change)
     assert.throws(() => reopened.project({ activationId: 'identity-active', namespace: 'fixture' }), e => e.code.startsWith('SEMANTIC_PROJECTION_'))
@@ -437,22 +452,22 @@ test('rule-specific mutation controls discriminate support, digest, witness and 
   const selected = { records: withdrawn.records, activationId: withdrawn.activation.id }
   assert.throws(() => assertSemanticProjection(selected), e => e.code === 'SEMANTIC_PROJECTION_SUPPORT')
   const support = await mutant('Relation support must be currently accepted, active and not withdrawn or superseded')
-  assert.throws(() => assert.throws(() => support.assertSemanticProjection(selected), e => e.code === 'SEMANTIC_PROJECTION_SUPPORT'), e => e.code === 'ERR_ASSERTION')
+  assert.throws(() => support.assertSemanticProjection(selected), e => e.code === 'SEMANTIC_PROJECTION_STALE')
   const wrong = projectionFixture({ support: 'wrong-digest' }), selectedWrong = { records: wrong.records, activationId: wrong.activation.id }
   assert.throws(() => assertSemanticProjection(selectedWrong), e => e.code === 'SEMANTIC_PROJECTION_SUPPORT')
   const digest = await mutant('Relation assertion support digest differs')
-  assert.throws(() => assert.throws(() => digest.assertSemanticProjection(selectedWrong), e => e.code === 'SEMANTIC_PROJECTION_SUPPORT'), e => e.code === 'ERR_ASSERTION')
+  assert.ok(digest.assertSemanticProjection(selectedWrong).selected.includes(wrong.assertions[0].id))
   const sourceUnit = witnessSource(0, ['missing passage']); sourceUnit.record.data.body = 'Different content.'
   const selectedWitness = { citations: sourceUnit.citations, sources: [sourceUnit.record] }
   assert.throws(() => semanticDependencyWitnesses(selectedWitness), e => e.code === 'SEMANTIC_UNSUPPORTED_LEDGER_CITATION')
   const witness = await mutant('The encoded dependency witness is absent from the stored contribution body')
-  assert.throws(() => assert.throws(() => witness.semanticDependencyWitnesses(selectedWitness), e => e.code === 'SEMANTIC_UNSUPPORTED_LEDGER_CITATION'), e => e.code === 'ERR_ASSERTION')
+  assert.equal(witness.semanticDependencyWitnesses(selectedWitness).basedOn[0].quote, 'missing passage')
   const negative = { id: 'negative', objectId: 'atlas', direction: 'subject-to-object', negated: true, modality: 'asserted', scope: fixture.domain.data.scope, time: { from: null, until: null, expression: null, unknowns: [] } }
   const marker = "if (assertion.negated !== false) reasons.push('negated')"
   assert.equal(source.split(marker).length, 2)
   const negation = await import(`data:text/javascript;base64,${Buffer.from(source.replace(marker, "if (false) reasons.push('negated')")).toString('base64')}`)
   assert.equal(plainAssertionEligibility(negative, fixture.domain).eligible, false)
-  assert.throws(() => assert.equal(negation.plainAssertionEligibility(negative, fixture.domain).eligible, false), e => e.code === 'ERR_ASSERTION')
+  assert.equal(negation.plainAssertionEligibility(negative, fixture.domain).eligible, true)
 })
 
 transactionTest('unknown-execution guard has a discriminating mutation control', async t => {
@@ -464,7 +479,7 @@ transactionTest('unknown-execution guard has a discriminating mutation control',
   const message = 'Reconcile the prior source/configuration execution before a new attempt'
   assert.equal(source.split(`'${message}'`).length, 2)
   const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(guard, `if (!condition && message !== ${JSON.stringify(message)}) throw new SemanticOperationError(code, message)`)).toString('base64')}`)
-  assert.throws(() => assert.throws(() => mutant.createSemanticOperation(s.options).begin(request), e => e.code === 'SEMANTIC_EXECUTION_UNKNOWN'), e => e.code === 'ERR_ASSERTION')
+  assert.throws(() => mutant.createSemanticOperation(s.options).begin(request), e => e.code === 'SEMANTIC_RECONCILE_REQUIRED')
 })
 
 transactionTest('a reservation already owns its attempt identity before intake publication', async t => {
@@ -479,7 +494,7 @@ transactionTest('a reservation already owns its attempt identity before intake p
   const marker = '!starts.some(prior => prior.value.attemptId === attemptId)'
   assert.equal(source.split(marker).length, 2)
   const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(marker, 'true')).toString('base64')}`)
-  try { assert.throws(() => assert.throws(() => mutant.createSemanticOperation(s.options).begin(next), e => e.code === 'SEMANTIC_OPERATION_EXISTS'), e => e.code === 'ERR_ASSERTION') }
+  try { assert.equal(mutant.createSemanticOperation(s.options).begin(next).execution, 'ready-for-host') }
   finally { fs.writeFileSync(ledgerFile, snapshot); fs.rmSync(path.join(s.root, '.atelier-local/intake/attempts/model-first'), { recursive: true, force: true }) }
 
   assert.equal(s.runner.status({ operationId: 'first' }).attempt.status, 'absent')
@@ -528,7 +543,7 @@ transactionTest('begin refuses a reservation reconciled before intake publicatio
   const guard = "ready.phase === 'reserved' && ready.head === recorded.head"
   assert.equal(source.split(guard).length, 2)
   const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(guard, 'true')).toString('base64')}`)
-  assert.throws(() => assert.throws(() => mutant.createSemanticOperation(s.options).begin(s.begin), e => e.code === 'SEMANTIC_RECONCILE_REQUIRED'), e => e.code === 'ERR_ASSERTION')
+  assert.equal(mutant.createSemanticOperation(s.options).begin(s.begin).execution, 'ready-for-host')
 
 })
 
@@ -539,4 +554,17 @@ transactionTest('cascade skips a generated relation whose assertion support dige
   head = s.runner.record({ record: graph.make('withdrawal', 'wrong-pin-withdrawal', { target: harnessRef(graph.assertions[0]), reason: 'Simulated withdrawal cannot authorize cleanup under a different support digest.' }), confirm: head }).head
   assert.deepEqual(s.runner.cascade({ withdrawalId: 'wrong-pin-withdrawal', at, confirm: head }).cleaned, [])
   assert.equal(readHarness({ ...s.options, profile: 'knowledge' }).records.some(record => record.kind === 'withdrawal' && record.data.target.id === graph.relations[0].id), false)
+})
+
+transactionTest('a reconciled reservation permits a new attempt when another run took its absent intake ID', t => {
+  const s = setup(t), first = s.runner.begin(s.begin)
+  fs.rmSync(path.join(s.root, '.atelier-local/intake/attempts/model-first'), { recursive: true })
+  const reconciled = s.runner.reconcile({ operationId: 'first', at, by: 'simulated-receiver', reason: 'Invented host confirms no execution before intake publication.', outcome: 'not-executed', confirm: first.head })
+  const otherDomain = { ...structuredClone(fixture.domain), id: 'other-run', run: 'other-run' }
+  const otherHead = appendHarness({ ...s.options, profile: 'knowledge', record: otherDomain, confirm: EMPTY_HARNESS_HEAD }).head
+  const other = createSemanticOperation({ ...s.options, run: 'other-run' })
+  assert.equal(other.begin({ ...s.begin, confirm: otherHead }).execution, 'ready-for-host')
+  assert.throws(() => s.runner.status({ operationId: 'first' }), e => e.code === 'SEMANTIC_OPERATION_INTEGRITY')
+  assert.equal(s.runner.begin({ ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: reconciled.head }).execution, 'ready-for-host')
+  assert.equal(other.status({ operationId: 'first' }).execution, 'unknown')
 })

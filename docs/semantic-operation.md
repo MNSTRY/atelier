@@ -243,3 +243,19 @@ Use `semanticAssertions` and their qualifiers for those assertions. Consequentia
 withdrawal cleanup matches both the generated semantic relation identity and its
 exact supporting assertion digest, leaving ordinary support-like rationale text
 untouched.
+
+If a receiver re-accepts an immutable assertion after changing its endpoint
+identity choice, acceptance in the ledger alone does not restore semantic
+compatibility. Context reports the affected record in `diagnostics` and
+`reconsider`, withholds it and dependent records, and preserves unrelated
+accepted retrieval and projection. Its old body is never rewritten. An
+activation selecting the incompatible assertion refuses; an independent
+activation remains usable. Unexpected storage or history failures still refuse
+the request. The receiver must explicitly revise the assertion for the new choice.
+
+Reconciled reservations are skipped before inspecting their old intake IDs when
+starting another operation. Intake IDs remain workspace-wide: a collision with
+another run refuses exact status readback rather than attributing that run's
+bytes to the old reservation. It does not prevent beginning with a new ID after
+explicit reconciliation. The runner does not add a workspace-wide reservation
+owner or claim atomic publication across intake and knowledge ledgers.
