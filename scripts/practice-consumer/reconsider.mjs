@@ -1,0 +1,394 @@
+#!/usr/bin/env node
+// Foundation's deterministic decision-practice consumer for this repository.
+//
+// For one real root pull request (exact base and head commits) it reads the
+// recorded decisions in docs/integration-contract-decisions.md at the base, the
+// repository files each decision links to, and how the pull request changed
+// them. It runs the internal decision practice (src/judgment) once per cited
+// decision with a deterministic assessment, and appends one measurement line.
+//
+// It calls no provider, appends to no Knowledge store, accepts or activates
+// nothing, and writes only its measurement file. The Knowledge history it builds
+// is reconstructed in memory from the base commit: the review and activation
+// records stand for Foundation's adoption of this practice for its own
+// repository, not an independent or human review. The assessment is a declared
+// predicate, not a model, and its confidence is not calibrated.
+
+import { execFileSync } from 'node:child_process'
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { decisionRequestDigest } from '../../src/decisions/contracts.mjs'
+import { contentDigest, harnessRef } from '../../src/harnesses/contracts.mjs'
+import { prepareDecisionPracticeContribution } from '../../src/judgment/practice.mjs'
+import { evaluateDecisionPractice } from '../../src/judgment/practice-evaluation.mjs'
+import { inspectKnowledge } from '../../src/knowledge/ledger.mjs'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+export const CORPUS = 'docs/integration-contract-decisions.md'
+export const MEASUREMENT_SCHEMA = 'atelier-practice-consumer-measurement@v0'
+export const LABEL_SCHEMA = 'atelier-practice-consumer-label@v0'
+export const LABELS = Object.freeze(['correct', 'missed', 'false-alarm', 'useful-abstention'])
+const OWNER = 'atelier-root'
+const BY = 'atelier-foundation'
+const RUN = 'atelier-integration-decisions'
+const TERM = 'decision-material'
+const MAX_SOURCE_BYTES = 32768
+const MAX_EXCERPT_LINES = 120
+const CONTEXT_LINES = 3
+const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-source-predicate.v1' })
+
+export const definition = () => JSON.parse(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8'))
+
+const git = (repo, args, encoding = 'utf8') =>
+  execFileSync('git', ['-C', repo, ...args], { encoding, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+
+function show(repo, rev, file) {
+  try {
+    return git(repo, ['show', `${rev}:${file}`], 'buffer')
+  } catch {
+    return null
+  }
+}
+
+const utc = (repo, rev) => new Date(git(repo, ['show', '-s', '--format=%cI', rev]).trim()).toISOString().replace(/\.\d{3}Z$/, 'Z')
+const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'item'
+// Knowledge record ids are at most 64 characters including the longest suffix
+// added here (-evaluation), so ids are a short slug plus a stable hash.
+const shortId = (prefix, value) => `${prefix}-${slug(value).slice(0, 30).replace(/-+$/, '')}-${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 8)}`
+const textOf = (buffer) => (buffer && !buffer.includes(0) ? buffer.toString('utf8') : null)
+
+/** Links in a markdown fragment that point at repository files, resolved from the corpus. */
+export function citedPaths(fragment, corpus = CORPUS) {
+  const out = []
+  for (const match of fragment.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
+    const target = match[1].split('#')[0]
+    if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('/')) continue
+    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(corpus), target))
+    if (!resolved.startsWith('..') && !out.includes(resolved)) out.push(resolved)
+  }
+  return out
+}
+
+/**
+ * The recorded decisions: each `##` section's prose, and each row of a decision
+ * table, with the line span it occupies and the files it links to.
+ */
+export function parseDecisions(markdown, corpus = CORPUS) {
+  const lines = markdown.split('\n')
+  const decisions = []
+  let heading = null
+  let prose = null
+  const closeProse = () => {
+    if (prose && prose.lines.some((line) => line.trim())) {
+      const text = prose.lines.join('\n').replace(/<!--[\s\S]*?-->/g, '').trim()
+      if (text) decisions.push({ key: heading, title: heading, text, start: prose.start, end: prose.end, cited: citedPaths(text, corpus) })
+    }
+    prose = null
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line.startsWith('## ')) {
+      closeProse()
+      heading = line.slice(3).trim()
+      continue
+    }
+    if (!heading) continue
+    if (/^\s*<!--.*-->\s*$/.test(line)) {
+      // A comment line separates blocks; it is never part of a decision.
+      closeProse()
+      continue
+    }
+    if (line.startsWith('|')) {
+      closeProse()
+      const cells = line.split('|').slice(1, -1).map((cell) => cell.trim())
+      const separator = cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+      const header = index + 1 < lines.length && /^\|\s*:?-{3,}/.test(lines[index + 1])
+      if (!separator && !header && cells[0]) {
+        decisions.push({ key: `${heading}: ${cells[0]}`, title: `${heading}: ${cells[0]}`, text: line.trim(), start: index + 1, end: index + 1, cited: citedPaths(line, corpus) })
+      }
+      continue
+    }
+    // Prose runs from the first non-blank line after a heading or table up to
+    // the next heading or table; blank lines inside it are kept.
+    if (!prose && !line.trim()) continue
+    if (!prose) prose = { start: index + 1, end: index + 1, lines: [] }
+    prose.lines.push(line)
+    if (line.trim()) prose.end = index + 1
+  }
+  closeProse()
+  const seen = new Map()
+  for (const decision of decisions) {
+    const count = (seen.get(decision.key) ?? 0) + 1
+    seen.set(decision.key, count)
+    decision.id = shortId('d', count > 1 ? `${decision.key} ${count}` : decision.key)
+    delete decision.key
+  }
+  return decisions
+}
+
+function record(kind, id, data, at) {
+  return { schema: 'atelier-knowledge-record@v1', id, run: RUN, at, by: BY, kind, data }
+}
+
+function domainRecord(at) {
+  return record('domain', RUN, {
+    repository: 'atelier',
+    purpose: 'Reconsider this repository\'s recorded integration decisions when the sources they cite change.',
+    scope: 'Atelier root repository',
+    owner: BY,
+    audience: 'public',
+    questions: [{ id: 'reconsider', question: 'Which recorded decisions need reconsideration after a source change?', acceptance: 'A person confirms or dismisses each draft against the exact change.' }],
+    vocabulary: {
+      types: [{ id: TERM, meaning: 'A recorded decision or a repository source it cites.' }],
+      relations: [{ id: 'cites', meaning: 'A decision links to a repository source.', graphPredicate: 'supports' }],
+    },
+    identityRules: 'One contribution per recorded decision and per cited repository file at an exact commit.',
+    sourcePolicy: 'Public repository files at exact commits; bytes are hashed and never edited.',
+    acceptancePolicy: 'Foundation adopts this practice for its own repository; drafts stay pending until a person reviews them.',
+  }, at)
+}
+
+function accepted(records, id, data, at) {
+  const contribution = record('contribution', id, data, at)
+  records.push(contribution)
+  const evaluation = record('evaluation', `${id}-evaluation`, {
+    contribution: harnessRef(contribution), judgment: 'uncertain',
+    rationale: 'Recorded by Foundation for its own repository practice.',
+    limitations: ['Deterministic predicate over file changes; no semantic or calibrated inference.'],
+    scope: data.scope,
+  }, at)
+  records.push(evaluation)
+  const review = record('review', `${id}-review`, { target: harnessRef(contribution), disposition: 'accepted', basis: 'Foundation adoption for its own repository (cfab92cd).', evaluations: [harnessRef(evaluation)] }, at)
+  records.push(review)
+  records.push(record('activation', `${id}-activation`, { reviews: [harnessRef(review)], purpose: 'Reconsider recorded decisions after source changes.', destination: 'atelier root repository', questions: ['reconsider'] }, at))
+  return contribution
+}
+
+function captured(domain, { title, body, locator, category = 'source', basedOn = [] }) {
+  return {
+    domain: harnessRef(domain), category, term: TERM, title, body, audience: 'public', scope: domain.data.scope,
+    origin: { method: 'captured', locator, contentDigest: contentDigest(body), rightsBasis: 'Public Apache-2.0 repository source.' }, basedOn,
+  }
+}
+
+/** The in-memory Knowledge history for a base commit. */
+export function buildHistory({ repo, base, decisions }) {
+  const at = utc(repo, base)
+  const records = [domainRecord(at)]
+  const domain = records[0]
+  const sources = new Map()
+  for (const decision of decisions) {
+    for (const file of decision.cited) {
+      if (sources.has(file)) continue
+      const body = textOf(show(repo, base, file))
+      if (body === null || !body.trim() || Buffer.byteLength(body) > MAX_SOURCE_BYTES) {
+        sources.set(file, null)
+        continue
+      }
+      sources.set(file, accepted(records, shortId('s', file), captured(domain, { title: file, body, locator: `${OWNER}:${file}@${base}` }), at))
+    }
+  }
+  const decisionRecords = new Map()
+  for (const decision of decisions) {
+    const basedOn = decision.cited.map((file) => sources.get(file)).filter(Boolean)
+      .map((source) => ({ contribution: harnessRef(source), quote: source.data.body.split('\n').find((line) => line.trim()) }))
+    decisionRecords.set(decision.id, accepted(records, decision.id, captured(domain, {
+      title: decision.title, body: decision.text, locator: `${OWNER}:${CORPUS}#${decision.id}`, category: 'decision-rationale', basedOn,
+    }), at))
+  }
+  inspectKnowledge(records)
+  const prepared = prepareDecisionPracticeContribution({ records, definition: definition(), title: 'Decision source reconsideration', term: TERM })
+  if (prepared.status !== 'prepared') throw new Error(`practice definition was not prepared: ${prepared.reason}`)
+  const practice = accepted(records, 'decision-practice', prepared.data, at)
+  return { records, sources, decisionRecords, practice, at }
+}
+
+function hunks(repo, base, head, file) {
+  const diff = git(repo, ['diff', '--no-color', '--no-ext-diff', '-U0', base, head, '--', file])
+  if (/^Binary files /m.test(diff)) return { binary: true, removed: 0, added: 0, ranges: [] }
+  let removed = 0
+  let added = 0
+  const ranges = []
+  for (const match of diff.matchAll(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+    const oldCount = match[1] === undefined ? 1 : Number(match[1])
+    const start = Number(match[2])
+    const count = match[3] === undefined ? 1 : Number(match[3])
+    removed += oldCount
+    added += count
+    ranges.push([Math.max(1, start - CONTEXT_LINES), start + Math.max(count, 1) - 1 + CONTEXT_LINES])
+  }
+  return { binary: false, removed, added, ranges }
+}
+
+/** The deterministic assessment the rubric declares. */
+export function assess(change, { removedAtHead = false } = {}) {
+  if (change.binary || removedAtHead || change.oversize) return { status: 'abstained', reason: 'insufficient-evidence' }
+  if (change.removed > 0) return { status: 'assessed', choice: 'affected' }
+  if (change.added > 0) return { status: 'assessed', choice: 'unaffected' }
+  return { status: 'assessed', choice: 'unclear' }
+}
+
+function excerpt(text, ranges) {
+  const lines = text.split('\n')
+  if (!ranges.length) return { start: 1, end: Math.min(lines.length, MAX_EXCERPT_LINES) }
+  const start = Math.max(1, Math.min(...ranges.map(([a]) => a)))
+  const end = Math.min(lines.length, Math.max(...ranges.map(([, b]) => b)))
+  return { start, end: Math.min(end, start + MAX_EXCERPT_LINES - 1), oversize: end - start + 1 > MAX_EXCERPT_LINES }
+}
+
+function evidenceItem({ role, requestId, file, revision, text, start, end }) {
+  return {
+    role, requestId, sourceRef: `${OWNER}:${file}`, text,
+    reference: { owner: OWNER, objectId: file, revision, selector: { type: 'text-lines', version: '1', value: `lines:${start}-${end}` }, contentDigest: contentDigest(text) },
+  }
+}
+
+function resultFor(request, assessment) {
+  const common = {
+    schema: 'atelier-decision-result@v1', contractVersion: '1.0.0', requestId: request.id, requestDigest: decisionRequestDigest(request),
+    task: request.task, rubricVersion: request.rubricVersion, scope: request.scope, provider: { ...PROVIDER },
+    authority: 'proposal-only', mode: 'shadow', usage: null, elapsedMs: 0,
+  }
+  if (assessment.status === 'abstained') return { ...common, status: 'abstained', answers: {}, reason: assessment.reason }
+  const criteria = Object.keys(request.questions.impact.criteria)
+  const probabilities = Object.fromEntries(criteria.map((key) => [key, key === assessment.choice ? 1 : 0]))
+  // A declared predicate, not a model: confidence is a fixed, uncalibrated value.
+  return { ...common, status: 'assessed', answers: { impact: { type: 'choice', choice: assessment.choice, probabilities, confidence: 0.5 } } }
+}
+
+/** Measure one pull request. Returns the measurement; writes nothing. */
+export function measure({ repo, pr, base, head, mode = 'live' }) {
+  const corpusText = textOf(show(repo, base, CORPUS))
+  if (corpusText === null) throw new Error(`${CORPUS} is not readable at ${base}`)
+  const decisions = parseDecisions(corpusText)
+  const history = buildHistory({ repo, base, decisions })
+  const definitionRef = harnessRef(history.practice)
+  const changed = new Set(git(repo, ['diff', '--name-only', base, head]).split('\n').filter(Boolean))
+  const at = utc(repo, head)
+  const rubric = definition().rubric
+  const results = []
+  for (const decision of decisions) {
+    const target = history.decisionRecords.get(decision.id)
+    const entry = { id: decision.id, title: decision.title, cited: decision.cited, changedCited: [], outcomes: [] }
+    results.push(entry)
+    for (const file of decision.cited) {
+      const source = history.sources.get(file)
+      if (!source) {
+        entry.outcomes.push({ file, status: 'not-evaluated', reason: 'cited-source-unreadable-or-over-bounds' })
+        continue
+      }
+      const didChange = changed.has(file)
+      if (didChange) entry.changedCited.push(file)
+      const headBuffer = show(repo, head, file)
+      const headText = textOf(headBuffer)
+      const change = didChange ? hunks(repo, base, head, file) : { binary: false, removed: 0, added: 0, ranges: [] }
+      const region = excerpt(headText ?? source.data.body, change.ranges)
+      const assessment = assess({ ...change, oversize: region.oversize }, { removedAtHead: didChange && headBuffer === null })
+      const sourceText = headText === null
+        ? `(${file} is ${headBuffer === null ? 'removed' : 'not text'} at ${head})`
+        : headText.split('\n').slice(region.start - 1, region.end).join('\n')
+      const evidence = [
+        evidenceItem({ role: 'source', requestId: 'e1', file, revision: head, text: sourceText, start: headText === null ? 1 : region.start, end: headText === null ? 1 : region.end }),
+        evidenceItem({ role: 'decision', requestId: 'e2', file: CORPUS, revision: base, text: decision.text, start: decision.start, end: decision.end }),
+      ]
+      const request = { ...structuredClone(rubric), id: `pr${pr}-${decision.id}-${shortId('f', file)}`,
+        state: evidence.map((item) => `${item.requestId}: ${item.text}`).join('\n'), evidence: evidence.map(({ requestId, sourceRef }) => ({ id: requestId, sourceRef })) }
+      const instance = {
+        id: shortId(`pr${pr}`, `${decision.id} ${file}`),
+        evidence,
+        snapshots: evidence.map((item) => ({ schema: 'atelier-evidence-snapshot@v1', reference: structuredClone(item.reference), currency: 'current', dependencies: [], validUntil: null })),
+        at,
+        prerequisites: [{ id: 'cited-source-changed', value: didChange }],
+        spent: { stages: 0, evidence: 0, assessments: 0, proposals: 0 },
+        request,
+        result: resultFor(request, assessment),
+        proposal: { type: 'reconsideration', target: harnessRef(target), term: TERM, title: `Reconsider "${decision.title}" after ${file} changed in pull request #${pr}` },
+      }
+      const outcome = evaluateDecisionPractice({ records: history.records, definitionRef, instance })
+      // What the Knowledge harness itself marks once the changed source is recorded.
+      let harnessReconsider = null
+      if (didChange && headText !== null && Buffer.byteLength(headText) <= MAX_SOURCE_BYTES && headText !== source.data.body) {
+        const revised = { ...source, id: shortId('r', `${file}@${head}`), data: { ...source.data, body: headText,
+          origin: { ...source.data.origin, locator: `${OWNER}:${file}@${head}`, contentDigest: contentDigest(headText) }, supersedes: harnessRef(source), revisionReason: `Changed in pull request #${pr}.` } }
+        harnessReconsider = inspectKnowledge([...history.records, revised]).reconsider.some((item) => item.id === decision.id)
+      }
+      entry.outcomes.push({
+        file, prerequisite: didChange, change: { removed: change.removed, added: change.added, binary: change.binary },
+        assessment: assessment.status === 'abstained' ? { status: 'abstained', reason: assessment.reason } : { status: 'assessed', choice: assessment.choice },
+        status: outcome.status, reason: outcome.reason,
+        draftDigest: outcome.proposal ? contentDigest(outcome.proposal.data.body) : null,
+        harnessReconsider,
+      })
+    }
+  }
+  return {
+    schema: MEASUREMENT_SCHEMA, pr: Number(pr), base, head, mode, measuredAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    definitionRef, corpusDigest: contentDigest(corpusText), provider: { ...PROVIDER }, decisions: results,
+    summary: {
+      decisions: results.length,
+      cited: results.filter((item) => item.cited.length).length,
+      changedCited: results.filter((item) => item.changedCited.length).length,
+      drafts: results.flatMap((item) => item.outcomes).filter((item) => item.status === 'proceed').length,
+      escalations: results.flatMap((item) => item.outcomes).filter((item) => item.status === 'escalate').length,
+      refusals: results.flatMap((item) => item.outcomes).filter((item) => item.status === 'refuse').length,
+    },
+  }
+}
+
+/** A person's label for one measured decision, appended after review. */
+export function label({ pr, decision, value, correctionMinutes, note = '' }) {
+  if (!LABELS.includes(value)) throw new Error(`label must be one of ${LABELS.join(', ')}`)
+  if (!Number.isFinite(correctionMinutes) || correctionMinutes < 0) throw new Error('correction minutes must be a nonnegative number')
+  return { schema: LABEL_SCHEMA, pr: Number(pr), decision, label: value, correctionMinutes, note, by: BY, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') }
+}
+
+function appendLine(file, value) {
+  fs.appendFileSync(file, `${JSON.stringify(value)}\n`)
+}
+
+function argsOf(argv) {
+  const out = { _: [] }
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg.startsWith('--')) out[arg.slice(2)] = argv[index + 1]?.startsWith('--') === false ? argv[++index] : true
+    else out._.push(arg)
+  }
+  return out
+}
+
+const USAGE = `Usage:
+  node scripts/practice-consumer/reconsider.mjs measure --pr N --base SHA --head SHA [--mode live|retrospective] [--repo DIR] [--out FILE | --print]
+  node scripts/practice-consumer/reconsider.mjs label --pr N --decision ID --label ${LABELS.join('|')} --minutes M [--note TEXT] [--out FILE]`
+
+export function main(argv = process.argv.slice(2)) {
+  const args = argsOf(argv)
+  const out = typeof args.out === 'string' ? args.out : path.join(HERE, 'measurements.jsonl')
+  const sha = (value) => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value)
+  if (args._[0] === 'measure') {
+    if (!/^\d+$/.test(String(args.pr)) || !sha(args.base) || !sha(args.head)) throw new Error(USAGE)
+    if (!['live', 'retrospective'].includes(args.mode ?? 'live')) throw new Error(USAGE)
+    const value = measure({ repo: typeof args.repo === 'string' ? args.repo : process.cwd(), pr: args.pr, base: args.base, head: args.head, mode: args.mode ?? 'live' })
+    if (args.print) console.log(JSON.stringify(value, null, 2))
+    else {
+      appendLine(out, value)
+      console.log(JSON.stringify(value.summary))
+    }
+    return
+  }
+  if (args._[0] === 'label') {
+    appendLine(out, label({ pr: args.pr, decision: args.decision, value: args.label, correctionMinutes: Number(args.minutes), note: typeof args.note === 'string' ? args.note : '' }))
+    return
+  }
+  throw new Error(USAGE)
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  try {
+    main()
+  } catch (error) {
+    console.error(error.message)
+    process.exit(2)
+  }
+}
