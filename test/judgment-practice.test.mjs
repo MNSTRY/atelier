@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { contentDigest, harnessRef } from '../src/harnesses/contracts.mjs'
+import { contentDigest, harnessRef, validateHarnessDocument } from '../src/harnesses/contracts.mjs'
+import { evidenceJson } from '../src/evidence-navigation/contracts.mjs'
 import { inspectKnowledge } from '../src/knowledge/ledger.mjs'
 import { validateDecisionPractice, prepareDecisionPracticeContribution, readAdoptedDecisionPractice } from '../src/judgment/practice.mjs'
 
@@ -73,6 +74,41 @@ test('valid Knowledge history beyond this portable profile has a distinct bounds
   const input = { records: value.records, definitionRef: value.definitionRef }
   assert.equal(readAdoptedDecisionPractice(input).reason, 'practice-input-exceeds-bounds')
   assert.equal(prepareDecisionPracticeContribution({ records: value.records, definition: fixture, title: 'Invented bounded practice', term: 'material' }).reason, 'practice-input-exceeds-bounds')
+})
+
+for (const [name, body] of [['astral', '\u{1f331}'.repeat(140000)], ['nul', 'Invented\u0000captured source']]) test(`valid ${name} Knowledge history has a typed portable profile refusal`, () => {
+  const value = adopted()
+  addAcceptedSource(value.records, `${name}-source`, body)
+  assert.ok(inspectKnowledge(value.records).accepted.includes(`${name}-source`))
+  assert.equal(readAdoptedDecisionPractice({ records: value.records, definitionRef: value.definitionRef }).reason, 'practice-input-exceeds-bounds')
+  assert.equal(prepareDecisionPracticeContribution({ records: value.records, definition: fixture, title: 'Invented profile check', term: 'material' }).reason, 'practice-input-exceeds-bounds')
+})
+
+test('preparation distinguishes malformed Knowledge history from an invalid definition', () => {
+  const records = [structuredClone(template[0])]; records[0].schema = 'invalid-invented-schema'
+  assert.equal(prepareDecisionPracticeContribution({ records, definition: fixture, title: 'Invented history check', term: 'material' }).reason, 'invalid-definition-history')
+})
+
+function expandedExtension() {
+  let value = Object.fromEntries(Array.from({ length: 6000 }, (_, index) => [`leaf-${index}`, 1]))
+  for (let depth = 0; depth < 18; depth++) value = { inside: value }
+  return value
+}
+
+test('an in-profile definition whose prepared body exceeds the Knowledge bound refuses before returning data', () => {
+  const definition = structuredClone(fixture); definition.rubric.ext = expandedExtension()
+  const input = { records: [structuredClone(template[0])], definition, title: 'Invented output bound', term: 'material' }
+  assert.doesNotThrow(() => evidenceJson(input))
+  assert.equal(validateDecisionPractice(definition).valid, true)
+  assert.ok([...JSON.stringify(definition, null, 2)].length > 262144)
+  const result = prepareDecisionPracticeContribution(input)
+  assert.equal(result.reason, 'practice-output-exceeds-bounds')
+  assert.equal(Object.hasOwn(result, 'data'), false)
+})
+
+test('a successfully prepared draft fits the ordinary Knowledge contribution shape', () => {
+  const data = prepareDecisionPracticeContribution({ records: [structuredClone(template[0])], definition: fixture, title: 'Invented shape check', term: 'material' }).data
+  assert.deepEqual(validateHarnessDocument({ ...structuredClone(template[1]), data }, 'knowledge', 'contribution'), [])
 })
 
 test('malformed and duplicate-key adopted bodies refuse as invalid definitions', () => {

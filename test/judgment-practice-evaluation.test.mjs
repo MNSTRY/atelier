@@ -4,10 +4,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { decisionRequestDigest } from '../src/decisions/contracts.mjs'
-import { contentDigest, harnessRef } from '../src/harnesses/contracts.mjs'
+import { decisionRequestDigest, validateDecisionResult } from '../src/decisions/contracts.mjs'
+import { contentDigest, harnessRef, validateHarnessDocument } from '../src/harnesses/contracts.mjs'
 import { inspectKnowledge } from '../src/knowledge/ledger.mjs'
-import { validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
+import { evidenceJson, validateEvidenceDocument } from '../src/evidence-navigation/contracts.mjs'
 import { evaluateDecisionPractice } from '../src/judgment/practice-evaluation.mjs'
 
 const read = file => JSON.parse(fs.readFileSync(new URL(file, import.meta.url)))
@@ -20,6 +20,7 @@ test('current evidence and a valid bound assessment prepare only a reconsiderati
   assert.equal(outcome.executionAuthorized, false)
   assert.equal(outcome.authorityTransferred, false)
   assert.equal(outcome.semanticTruthVerified, false)
+  assert.deepEqual(validateHarnessDocument({ ...value.records.find(record => record.kind === 'contribution'), data: outcome.proposal.data }, 'knowledge', 'contribution'), [])
   assert.equal(JSON.stringify(value), before)
 })
 
@@ -49,6 +50,13 @@ const negatives = [
   ['changed-rubric', value => { value.instance.request.contractVersion = '1.0.1'; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
   ['unbound-request-evidence', value => { value.instance.request.evidence[0].ext = { unadopted: 'invented' }; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
   ['unbound-request-evidence', value => { value.instance.request.state += 'Unattributed material.'; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
+  ['changed-proposal-target', value => { value.instance.proposal.target.digest = `sha256:${'0'.repeat(64)}` }],
+  ['changed-proposal-target', value => { value.instance.proposal.target.id = 'unknown-invented-target' }],
+  ['changed-proposal-target', value => { value.instance.proposal.target = harnessRef(value.records.find(record => record.kind === 'domain')) }],
+  ['changed-proposal-target', value => { value.instance.proposal.target.ext = { unbound: true } }],
+  ['invalid-proposal', value => { value.instance.proposal.term = 'unknown-invented-term' }],
+  ['invalid-proposal', value => { value.instance.proposal.title = '   ' }],
+  ['invalid-proposal', value => { value.instance.proposal.title = 'x'.repeat(4001) }],
 ]
 for (const [reason, edit] of negatives) test(`typed refusal: ${reason}`, () => {
   const value = scenario(); edit(value)
@@ -64,6 +72,44 @@ test('a valid large Knowledge history is distinct from malformed operating input
   value.records.push(contribution)
   assert.doesNotThrow(() => inspectKnowledge(value.records))
   assert.equal(evaluateDecisionPractice(value).reason, 'practice-input-exceeds-bounds')
+})
+
+for (const [name, body] of [['astral', '\u{1f331}'.repeat(140000)], ['nul', 'Invented\u0000captured source']]) test(`valid ${name} history refuses with the portable profile reason during evaluation`, () => {
+  const value = scenario(), contribution = structuredClone(value.records.find(item => item.kind === 'contribution'))
+  contribution.id = `${name}-invented-source`; contribution.data.body = body; contribution.data.basedOn = []
+  contribution.data.origin = { method: 'captured', locator: `invented:${name}-source`, contentDigest: contentDigest(body), rightsBasis: 'Invented fixture.' }
+  value.records.push(contribution)
+  assert.doesNotThrow(() => inspectKnowledge(value.records))
+  assert.equal(evaluateDecisionPractice(value).reason, 'practice-input-exceeds-bounds')
+})
+
+test('an unsupported string does not hide a non-JSON accessor or invoke it', () => {
+  const value = scenario(); value.instance.result.ext = { note: 'Invented\u0000metadata' }
+  let reads = 0
+  Object.defineProperty(value, 'extra', { enumerable: true, get() { reads++; return 'untrusted' } })
+  assert.equal(evaluateDecisionPractice(value).reason, 'invalid-instance')
+  assert.equal(reads, 0)
+})
+
+test('an unsupported string does not hide cycles, custom prototypes or sparse arrays', () => {
+  for (const malformed of [() => { const value = {}; value.self = value; return value },
+    () => Object.create({ inherited: true }), () => new Array(1)]) {
+    const value = scenario(); value.instance.result.ext = { note: 'Invented\u0000metadata', malformed: malformed() }
+    assert.equal(evaluateDecisionPractice(value).reason, 'invalid-instance')
+  }
+})
+
+test('an in-profile result with an oversized pretty-printed draft refuses before returning a proposal', () => {
+  const value = scenario()
+  let ext = Object.fromEntries(Array.from({ length: 6000 }, (_, index) => [`leaf-${index}`, 1]))
+  for (let depth = 0; depth < 18; depth++) ext = { inside: ext }
+  value.instance.result.ext = ext
+  assert.doesNotThrow(() => evidenceJson(value))
+  assert.equal(validateDecisionResult(value.instance.request, value.instance.result).ok, true)
+  assert.ok([...JSON.stringify({ assessment: value.instance.result }, null, 2)].length > 262144)
+  const result = evaluateDecisionPractice(value)
+  assert.equal(result.reason, 'practice-output-exceeds-bounds')
+  assert.equal(Object.hasOwn(result, 'proposal'), false)
 })
 
 test('stale and expired cases use valid snapshots rather than schema failures', () => {
@@ -148,6 +194,8 @@ test('mutation controls demonstrate that the refusal cases detect omitted checks
     ['invalid-rubric-result', value => { value.instance.result.requestDigest = '0'.repeat(64) }],
     ['changed-rubric', value => { value.instance.request.questions.priority.instructions += 'Changed.'; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
     ['unbound-request-evidence', value => { value.instance.request.state += 'Unattributed.'; value.instance.result.requestDigest = decisionRequestDigest(value.instance.request) }],
+    ['changed-proposal-target', value => { value.instance.proposal.target.digest = `sha256:${'0'.repeat(64)}` }],
+    ['invalid-proposal', value => { value.instance.proposal.term = 'unknown-invented-term' }],
   ]
   for (const [reason, edit] of cases) {
     const value = scenario(); edit(value)

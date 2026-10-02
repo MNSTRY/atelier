@@ -1,9 +1,9 @@
-import { evidenceJson, validateEvidenceDocument } from '../evidence-navigation/contracts.mjs'
+import { validateEvidenceDocument } from '../evidence-navigation/contracts.mjs'
 import { assessEvidenceCurrency } from '../evidence-navigation/evaluate.mjs'
 import { validateDecisionRequest, validateDecisionResult, decisionRequestDigest } from '../decisions/contracts.mjs'
 import { contentDigest, harnessRef } from '../harnesses/contracts.mjs'
 import { inspectKnowledge } from '../knowledge/ledger.mjs'
-import { readAdoptedDecisionPractice } from './practice.mjs'
+import { decisionPracticeJson, decisionPracticeDraftValid, readAdoptedDecisionPractice } from './practice.mjs'
 
 const flags = { executionAuthorized: false, authorityTransferred: false, semanticTruthVerified: false }
 const outcome = (status, reason) => ({ status, reason, ...flags })
@@ -16,7 +16,7 @@ const countKeys = ['stages', 'evidence', 'assessments', 'proposals']
 /** Inspect supplied facts and assessments. Outcomes never execute a stage. */
 export function evaluateDecisionPractice(input) {
   try {
-    const value = evidenceJson(input)
+    const value = decisionPracticeJson(input)
     if (!closed(value, ['records', 'definitionRef', 'instance']) ||
         !closed(value.instance, ['id', 'evidence', 'snapshots', 'at', 'prerequisites', 'spent', 'request', 'result', 'proposal']) ||
         typeof value.instance.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(value.instance.id)) return outcome('refuse', 'invalid-instance')
@@ -59,11 +59,12 @@ export function evaluateDecisionPractice(input) {
       definitionRef: adopted.definitionRef, activationRef: adopted.activationRef, target: harnessRef(target),
       evidence: instance.evidence.map(item => ({ role: item.role, reference: item.reference })), requestDigest: decisionRequestDigest(request),
       assessment: instance.result, nativeAuthorityTransferred: false }, null, 2)
-    return { ...outcome('proceed', 'reconsideration-draft-prepared'),
-      proposal: { data: { domain: harnessRef(state.domain), category: 'interpretation', term: instance.proposal.term, title: instance.proposal.title,
+    const data = { domain: harnessRef(state.domain), category: 'interpretation', term: instance.proposal.term, title: instance.proposal.title,
         body, audience: state.domain.data.audience, scope: state.domain.data.scope,
-        origin: { method: 'captured', locator: `decision-reconsideration:${instance.id}`, contentDigest: contentDigest(body), rightsBasis: definition.rightsBasis }, basedOn: [] },
-      semanticAcceptance: 'pending', ...flags },
+        origin: { method: 'captured', locator: `decision-reconsideration:${instance.id}`, contentDigest: contentDigest(body), rightsBasis: definition.rightsBasis }, basedOn: [] }
+    if (!decisionPracticeDraftValid(data)) return outcome('refuse', 'practice-output-exceeds-bounds')
+    return { ...outcome('proceed', 'reconsideration-draft-prepared'),
+      proposal: { data, semanticAcceptance: 'pending', ...flags },
       declaredRemaining: Object.fromEntries(countKeys.map(key => [key, definition.limits[key] - instance.spent[key] - required[key]])) }
   } catch (error) { return outcome('refuse', Object.getOwnPropertyDescriptor(error ?? {}, 'message')?.value === 'evidence value exceeds bounds' ? 'practice-input-exceeds-bounds' : 'invalid-instance') }
 }
