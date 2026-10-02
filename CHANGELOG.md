@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- A capability operation that has committed no longer reports `EEXIST` ("not
+  entered") when its lock is removed or replaced while cleanup inspects it.
+  Cleanup preserves the other file and returns the operation's result. Lock
+  races in reclamation, readback and cleanup are each covered by a test.
+- `src/judgment/practice.mjs` and `src/judgment/practice-evaluation.mjs` keep a
+  reusable decision practice inside an ordinary Knowledge contribution
+  (`docs/decision-practices.md`). They are internal: the
+  `atelier.decision-practice/v0` format is experimental, not a registered public
+  contract, and has no package export, CLI command, adoption store, scheduler or
+  model route. A definition is prepared as a captured contribution for the
+  existing Knowledge review path, and is read as adopted only from an exact
+  contribution digest with a current accepted review and activation in the
+  supplied history. `evaluateDecisionPractice` returns `proceed`, `stop`,
+  `escalate` or `refuse` with a typed reason from declared prerequisites, count
+  budgets, exact current evidence and an existing decision request and result.
+  It calls no provider, and an abstention escalates. A proceeding outcome
+  prepares an unaccepted reconsideration draft; nothing is appended, accepted or
+  activated by the module. Inputs are bounded to a portable profile, and a
+  larger history refuses `practice-input-exceeds-bounds`. The instruction
+  adoption command `atelier practice` is a separate concept.
+  `atelier architecture entry practical-judgment` lists both modules.
+- `src/ingestion/semantic.mjs` prepares source-bound entity and assertion
+  proposals from a host's extractor output, one source per input
+  (`docs/semantic-ingestion.md`). It is an internal module: its `v0` formats are
+  not public contracts, and it has no package export or CLI command. The host
+  must already hold whole-plan read permission, which the module does not grant,
+  and chooses and runs its extractor. The module makes no provider call, durable
+  write or graph change, and claims no extraction quality. `readSemanticProposals`
+  gives a search view that rereads the cited evidence. Proposals and identity
+  mappings stay pending and carry no authority: identity, semantic acceptance and
+  activation remain separate decisions of the existing knowledge review owner, and
+  this release maps nothing into knowledge review or activation records.
+  `atelier architecture entry knowledge-stewardship` lists the module.
 - A personal workspace bound to the Obsidian projection is served from the
   canonical build, with the composition's link-target rule and the engine's file
   cache. A graph is used only under a validity key the composition confirmed.
@@ -52,7 +85,7 @@
   - `npm run knowledge:consumer-proof` installs a packed tarball into a clean
     consumer and checks the documented CLI paths, writing a receipt bound to the
     tarball SHA-256.
-- Personal workspaces are published as `@mnstry/atelier/personal-workspace`,
+- Personal workspaces are exported as `@mnstry/atelier/personal-workspace`,
   with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
   public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,
   `PersonalWorkspaceRefusal`, `loadPersonalManifest`, `loadPersonalOverlay`,
