@@ -6,6 +6,23 @@
   entered") when its lock is removed or replaced while cleanup inspects it.
   Cleanup preserves the other file and returns the operation's result. Lock
   races in reclamation, readback and cleanup are each covered by a test.
+- `src/judgment/practice.mjs` and `src/judgment/practice-evaluation.mjs` keep a
+  reusable decision practice inside an ordinary Knowledge contribution
+  (`docs/decision-practices.md`). They are internal: the
+  `atelier.decision-practice/v0` format is experimental, not a registered public
+  contract, and has no package export, CLI command, adoption store, scheduler or
+  model route. A definition is prepared as a captured contribution for the
+  existing Knowledge review path, and is read as adopted only from an exact
+  contribution digest with a current accepted review and activation in the
+  supplied history. `evaluateDecisionPractice` returns `proceed`, `stop`,
+  `escalate` or `refuse` with a typed reason from declared prerequisites, count
+  budgets, exact current evidence and an existing decision request and result.
+  It calls no provider, and an abstention escalates. A proceeding outcome
+  prepares an unaccepted reconsideration draft; nothing is appended, accepted or
+  activated by the module. Inputs are bounded to a portable profile, and a
+  larger history refuses `practice-input-exceeds-bounds`. The instruction
+  adoption command `atelier practice` is a separate concept.
+  `atelier architecture entry practical-judgment` lists both modules.
 - `src/ingestion/semantic.mjs` prepares source-bound entity and assertion
   proposals from a host's extractor output, one source per input
   (`docs/semantic-ingestion.md`). It is an internal module: its `v0` formats are
