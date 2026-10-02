@@ -26,6 +26,9 @@ for (const method of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 
     const wrapper = WRAPPERS.includes(programName(words[0]))
     const banned = words.find((word, index) => ((index === 0 || wrapper) && BANNED_PROGRAMS.includes(programName(word))) || /obsidian:\/\//i.test(word) || /--adapter=obsidian-cli|app-production-seams/.test(word))
     if (banned !== undefined) throw new Error(`spawn guard: this suite may never start "${programName(banned)}"`)
+    // The personal-workspace composition asks Git for core.fsmonitor once per enrolled repository: counted here, on the
+    // main thread only (a worker has its own modules), it shows whether a composition ran on the event loop.
+    if (words.includes('core.fsmonitor') && words.includes('--get-all')) globalThis.mainThreadCompositionProbes = (globalThis.mainThreadCompositionProbes ?? 0) + 1
     return original.call(this, command, args, ...rest)
   }
 }
@@ -59,13 +62,14 @@ const { createProposalAdapter } = await import('../src/projection/obsidian/propo
 const { createSelectionContribution } = await import('../src/projection/obsidian/selection-ui/contribution.mjs')
 const { EXIT, runObsidianCommandForOracleTests } = await import('../src/commands/obsidian.mjs')
 const { createMaintenanceEngine } = await import('../src/runtime/obsidian/engine.mjs')
+const { ObsidianMaintenanceRefusal } = await import('../src/runtime/obsidian/errors.mjs')
 const { createMaintenanceExtensions } = await import('../src/runtime/obsidian/extension-points.mjs')
 const { readObsidianEnablement } = await import('../src/runtime/obsidian/enablement.mjs')
 const { ONLY_YOU_AUDIENCES, defaultMachineSettings, ensureWorkspaceIdentity, protectedRoots, withDecision, workspaceStateRoot, writeMachineSettings } = await import('../src/runtime/obsidian/machine-settings.mjs')
 const { DEFAULT_ELIGIBILITY, assetEligibilityFor, captureSnapshot, createProductionSeams, profileFor } = await import('../src/runtime/obsidian/pipeline.mjs')
 const { createMaintenanceStateStore } = await import('../src/runtime/obsidian/state-store.mjs')
 const { viewCounts } = await import('../src/runtime/obsidian/view-counts.mjs')
-const { EVERYTHING_SCOPE_ID, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
+const { EVERYTHING_SCOPE_ID, PERSONAL_MEMBER_KEY, validatePersonalWorkspace, bindPersonalWorkspace, createPersonalWorkspaceBinderForOracleTests, loadBoundProject, loadBoundProjectOffThread, personalWorkspaceBindingOf, personalWorkspaceScopes } = await import('../src/projection/obsidian/personal-workspace.mjs')
 
 const EXCHANGE_HERE = (() => { try { resolveExchange({}); return true } catch { return false } })()
 const test = (name, fn) => nodeTest(name, {
@@ -366,8 +370,9 @@ test('3. coverage is never permission: no Obsidian source reads it, and a permis
     assert.doesNotMatch(text, /coverage\s*(\?\.|\.)\s*(profile|enforcement|uncovered)|coverage\s*\[|\{[^}]*\bprofile\b[^}]*\}\s*=\s*[^;\n]*coverage/, `${path.relative(ROOT, file)} reads a member of coverage`)
   }
   const route = code(path.join(ROOT, 'src', 'projection', 'obsidian', 'personal-workspace.mjs'))
-  assert.deepEqual(route.match(/coverage/g), ['coverage', 'coverage'], 'the route names coverage once, passing it through')
-  assert.match(route, /coverage: composed\.coverage/)
+  const passThrough = route.match(/coverage: composed\.coverage/g) ?? []
+  assert.ok(passThrough.length > 0)
+  assert.equal(route.match(/coverage/g).length, passThrough.length * 2, 'every mention of coverage in the route passes it through')
 
   // Behavioural: the same person bound twice, once with the module's coverage and once with a permissive one, into
   // two data roots. Every output byte is the same, apart from journal identities and lock records, which are random
@@ -388,7 +393,9 @@ test('3. coverage is never permission: no Obsidian source reads it, and a permis
     runs.push({ tree: treeListing(ari.dataRoot, { normalize: isoNoJournal, skip: (relative) => relative.includes('/engine-lock') || relative.includes('.lock.owners') }), selection: selection.json, counts })
     fs.renameSync(ari.dataRoot, `${ari.dataRoot}-${runs.length}`)
   }
-  assert.ok(calls > 1, 'the permissive composition built the graph of the second run')
+  assert.ok(calls > 0, 'the permissive composition admitted the second binding')
+  // Both runs were built through the route: the graph of the permissive binding is the composition's.
+  assert.deepEqual(graphFacts(createProductionSeams().buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })), graphFacts(ari.expected()), 'the second run read the composed graph')
   assert.equal(ari.bound.coverage.permission, 'granted', 'the coverage was passed through untouched')
   assert.deepEqual(runs[1], runs[0])
 })
@@ -567,6 +574,13 @@ test('6. views come from the overlay; view add, audience and location refuse typ
   assert.ok(edit, JSON.stringify(queued.pendingEdits))
   const applied = await createSourceApplyForOracleTests()({ loadProject: ari.loadProject, dataRoot: ari.dataRoot, env: process.env, clock, quietPeriodMs: 0 }).apply({ editId: edit.editId, mode: 'manual', actor: 'person-synthetic' })
   assert.deepEqual([applied.status, applied.code], ['refused', 'personal-overlay-proposals-only'], JSON.stringify(applied))
+  // Nor is it proposed: the proposal adapter answers it by name, records nothing, and hands nothing over.
+  const adapter = createProposalAdapter({ clock, env: process.env })
+  const context = () => ({ project: ari.bound.project, workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId, repositoryRoots: protectedRoots(ari.bound.project), edits: ari.stateStore().readPendingEdits().edits, clock, env: process.env })
+  const observed = await adapter.observe(context(), { retryRefused: true })
+  assert.deepEqual(observed.observed.filter((item) => item.editId === edit.editId).map(({ status, code }) => [status, code]), [['refused', 'personal-overlay-not-proposed']])
+  const proposed = await adapter.propose(context())
+  assert.equal(proposed.outcomes.some((item) => item.editId === edit.editId), false, JSON.stringify(proposed.outcomes))
   assert.deepEqual(treeListing(path.join(ari.home, 'generations')), generationBefore, 'the generation is byte-identical')
   assert.equal(ari.compose().generation.generationId, ari.generationId, 'and still composes')
 })
@@ -685,8 +699,9 @@ test('a full reconciliation composes a bound workspace again: an enrolled reposi
 test('a refusal at load time is typed: the engine reports the code, no view stays current, and status answers typed', async (t) => {
   const world = makeWorld(t, { people: ['ari'] })
   const { ari } = world
+  // The engine loads off the event loop; a command loads in its own thread.
   const loadProject = () => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId })
-  const engine = ari.engine({ loadProject })
+  const engine = ari.engine({ loadProject: () => loadBoundProjectOffThread({ personalHome: ari.home, generationId: ari.generationId }) })
   t.after(() => engine.stop())
   assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
   ari.overlay.annotations[0].note += ' Revised.'
@@ -712,6 +727,83 @@ test('a copy of a bound project that lost its binding is refused, never built as
     assert.throws(() => buildGraph({ project: copy, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-binding-lost', label)
     assert.throws(() => viewCounts({ project: copy, audienceAllow: [...ONLY_YOU_AUDIENCES], scope: PROBE_SCOPE }), (error) => error.code === 'personal-binding-lost', `${label}: view counts`)
   }
+  // An ordinary project whose own settings use the reserved key is refused too, and the message names the key without
+  // presuming a copy.
+  const ordinary = routedAround(ari.bound.project)
+  const declared = { ...ordinary, config: { ...ordinary.config, ext: { [OBSIDIAN_EXT_KEY]: { ...ordinary.config.ext[OBSIDIAN_EXT_KEY], ext: { [PERSONAL_MEMBER_KEY]: {} } } } } }
+  assert.throws(() => buildGraph({ project: declared, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-binding-lost' && error.message.includes(`ext["${PERSONAL_MEMBER_KEY}"]`) && !/\bcopy\b/.test(error.message))
+})
+
+test('the cached route: one load, a composition only when the validity key changes, and identity with the composition', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let composed = 0
+  const counting = createPersonalWorkspaceBinderForOracleTests({ compose: (input) => { composed += 1; return composePersonalWorkspace(input) } })
+  let loads = 0
+  // The engine never composes on its own thread: a build whose key is unconfirmed refuses pending, and is built again
+  // once the composition (off the event loop) confirmed it.
+  const production = createProductionSeams()
+  const builds = []
+  const seams = { buildGraph: (args) => { try { const graph = production.buildGraph(args); builds.push('built'); return graph } catch (error) { builds.push(error.code); throw error } } }
+  const engine = ari.engine({ seams, loadProject: () => { loads += 1; return ari.bind(counting).project } })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  assert.equal(loads, 1, 'a bound project is loaded once')
+  assert.equal(composed, 2, 'the load composed, and the first (full) reconciliation asked again; the first build was served under the confirmed key')
+  // An idle tick composes nothing.
+  await engine.tick()
+  assert.equal(composed, 2)
+  // A shared note whose title changes changes the graph: the next build composes once, and the views follow it.
+  fs.writeFileSync(path.join(world.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replaceAll('Tide', 'Tides'))
+  const changed = await engine.tick()
+  assert.ok(changed.scopes.every((scope) => scope.state === 'current' && scope.reason === 'published-and-verified'), JSON.stringify(changed.scopes))
+  assert.equal(composed, 3)
+  assert.deepEqual(builds, ['built', 'personal-validation-pending', 'built'])
+  engine.stop()
+  // Every other caller reads that same composed graph, and composes nothing.
+  const run = await fiveCallers(ari)
+  assertOneGraph(ari, run)
+  assert.equal(composed, 4, 'only the new engine\'s first full reconciliation asked; no caller composed')
+})
+
+test('mutation control: a cached build without the composition\'s link-target rule is caught', async (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ build: (project, options) => buildCanonicalGraph(project, options) }))
+  // The engine publishes nothing from it, and every caller refuses it.
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  const ticked = await engine.tick()
+  assert.ok(ticked.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'personal-graph-unconfirmed'), JSON.stringify(ticked.scopes))
+  assert.throws(() => viewCounts({ project: ari.bound.project, audienceAllow: [...ONLY_YOU_AUDIENCES], scope: PROBE_SCOPE }), (error) => error.code === 'personal-graph-unconfirmed')
+  const selection = await ari.command(['selection', 'resolve', EVERYTHING_SCOPE_ID], { contributions: [createSelectionContribution()] })
+  assert.equal(selection.json.error?.code, 'personal-graph-unconfirmed')
+  // So the five-caller identity test cannot pass on it.
+  await assert.rejects(async () => assertOneGraph(ari, await fiveCallers(ari)))
+})
+
+test('a full reconciliation of an unchanged bound workspace prepares, publishes and locks nothing; an ordinary project is unchanged', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let composed = 0
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ compose: (input) => { composed += 1; return composePersonalWorkspace(input) } }))
+  const lockOwners = () => { const locks = path.join(ari.workspaceRoot(), 'state', 'locks'); return fs.readdirSync(locks).filter((name) => name.endsWith('.lock.owners')).map((name) => fs.readdirSync(path.join(locks, name)).length).reduce((sum, count) => sum + count, 0) }
+  for (const [label, loadProject] of [['bound', () => ari.bound.project], ['ordinary', () => routedAround(ari.bound.project)]]) {
+    const counts = { build: 0, publish: 0 }
+    const production = createProductionSeams()
+    const seams = { buildGraph: (args) => { counts.build += 1; return production.buildGraph(args) }, publishView: (args) => { counts.publish += 1; return production.publishView(args) } }
+    const engine = ari.engine({ loadProject, seams, fullReconciliationIntervalMs: 0 })
+    const first = await engine.tick()
+    assert.ok(first.scopes.every((scope) => scope.state === 'current'), `${label}: ${JSON.stringify(first.scopes)}`)
+    const settled = { ...counts, locks: lockOwners(), composed }
+    for (let tick = 0; tick < 4; tick += 1) {
+      const ticked = await engine.tick()
+      assert.equal(ticked.full, true)
+      assert.deepEqual(ticked.scopes, first.scopes, `${label}: every view keeps its settled entry`)
+    }
+    engine.stop()
+    assert.deepEqual({ build: counts.build, publish: counts.publish, locks: lockOwners() }, { build: settled.build, publish: settled.publish, locks: settled.locks }, `${label}: nothing is built, published or locked again`)
+    if (label === 'bound') assert.equal(composed, settled.composed + 4, 'the composition is asked at every full reconciliation')
+  }
 })
 
 test('saved views beyond the Obsidian settings limits are refused at bind, typed, and write nothing', (t) => {
@@ -729,4 +821,230 @@ test('saved views beyond the Obsidian settings limits are refused at bind, typed
   assert.throws(() => bindPersonalWorkspace({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'personal-views-exceed-settings-limit' && error.detail.kind === 'views')
   assert.throws(() => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'personal-views-exceed-settings-limit')
   assert.deepEqual({ homes: treeListing(path.join(world.base, 'homes')), data: treeListing(ari.dataRoot) }, before)
+})
+
+test('inputs that change while the composition runs are never confirmed: the next build refuses', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let withdrawn = false
+  // The edit lands after the composition read the inputs, and before it returns.
+  const racing = createPersonalWorkspaceBinderForOracleTests({ compose: (input) => {
+    const composed = composePersonalWorkspace(input)
+    if (!withdrawn) { withdrawn = true; ari.manifest.repos.find((repo) => repo.repoId === 'b').enrolled = false; ari.save() }
+    return composed
+  } })
+  ari.bind(racing)
+  const { buildGraph } = createProductionSeams()
+  assert.throws(() => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY }), (error) => ['stale-generation', 'retained-removed-reference'].includes(error.code), 'the withdrawn repository is not served')
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  const ticked = await engine.tick()
+  assert.ok(ticked.scopes.every((scope) => scope.state !== 'current'), JSON.stringify(ticked.scopes))
+})
+
+test('with the proposal adapter registered, the engine never composes on its event loop', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const extensions = createMaintenanceExtensions()
+  extensions.register('proposal-adapter', createProposalAdapter({ clock, env: process.env }))
+  const production = createProductionSeams()
+  const builds = []
+  const seams = { buildGraph: (args) => { try { const graph = production.buildGraph(args); builds.push('built'); return graph } catch (error) { builds.push(error.code); throw error } } }
+  const engine = ari.engine({ extensions, seams, loadProject: () => loadBoundProjectOffThread({ personalHome: ari.home, generationId: ari.generationId }) })
+  t.after(() => engine.stop())
+  globalThis.mainThreadCompositionProbes = 0
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  // A vault edit (so the adapter builds) and a graph change, seen in the same tick.
+  const note = ari.manifestOf('harbor-only').notes.find((item) => item.nodeId === 'a:harbor')
+  const file = path.join(ari.vault('harbor-only'), note.path)
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Shared harbor note.', 'Shared harbor note, edited.'))
+  fs.writeFileSync(path.join(world.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replaceAll('Tide', 'Tides'))
+  builds.length = 0
+  const ticked = await engine.tick()
+  assert.equal(ticked.observed?.deferred, 'personal-validation-pending', JSON.stringify(ticked.observed))
+  assert.deepEqual(builds, ['personal-validation-pending', 'built'])
+  assert.equal(globalThis.mainThreadCompositionProbes, 0, 'no composition ran on the main thread')
+  // The next tick observes the edit against the confirmed graph, still without composing here.
+  const next = await engine.tick()
+  assert.ok(next.observed?.observed.some((item) => item.status === 'observed'), JSON.stringify(next.observed))
+  assert.equal(globalThis.mainThreadCompositionProbes, 0)
+})
+
+test('every full reconciliation asks the composition, even when every view is being prepared', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  let refusing = false
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ compose: (input) => { if (refusing) throw new PersonalWorkspaceRefusal('repo-identity-replaced'); return composePersonalWorkspace(input) } }))
+  const engine = ari.engine({ fullReconciliationIntervalMs: 0 })
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  // A cause no key sees, and every view asked to be prepared again.
+  refusing = true
+  for (const scope of ari.scopes()) engine.requestPreparation(scope.scopeId)
+  const ticked = await engine.tick()
+  assert.ok(ticked.scopes.every((scope) => scope.state === 'stale' && scope.reason === 'repo-identity-replaced'), JSON.stringify(ticked.scopes))
+})
+
+test('the validity key reads only regular files, never waits on one, and sees the causes it can cheaply see', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const { buildGraph } = createProductionSeams()
+  const build = () => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })
+  const refusesWith = (code, label) => assert.throws(build, (error) => error.code === code, label)
+  const generation = path.join(ari.home, 'generations', ari.generationId)
+  // A FIFO in the generation, and a FIFO in place of the manifest: refused at once, as the composition would.
+  childProcess.execFileSync('mkfifo', [path.join(generation, 'overlay', 'pipe')])
+  refusesWith('generation-corrupt', 'a FIFO in the generation')
+  fs.rmSync(path.join(generation, 'overlay', 'pipe'))
+  const manifest = path.join(ari.home, 'atelier.personal.json')
+  const manifestBytes = fs.readFileSync(manifest)
+  fs.renameSync(manifest, `${manifest}.aside`)
+  childProcess.execFileSync('mkfifo', [manifest])
+  refusesWith('malformed-input', 'a FIFO in place of the manifest')
+  assert.throws(() => bindPersonalWorkspace({ personalHome: ari.home, generationId: ari.generationId }), (error) => error.code === 'malformed-input')
+  // The manifest replaced by a link to the same bytes.
+  fs.rmSync(manifest)
+  fs.symlinkSync(`${manifest}.aside`, manifest)
+  refusesWith('malformed-input', 'a linked manifest')
+  fs.rmSync(manifest)
+  fs.renameSync(`${manifest}.aside`, manifest)
+  assert.ok(fs.readFileSync(manifest).equals(manifestBytes))
+  assert.ok(build().nodes.length > 0, 'undone, the graph is served again')
+  // A Git work tree above the home.
+  fs.mkdirSync(path.join(world.base, 'homes', '.git'))
+  refusesWith('generation-inside-work-tree', 'a .git above the home')
+  fs.rmSync(path.join(world.base, 'homes', '.git'), { recursive: true })
+  build()
+  // A shared root replaced by a link to itself.
+  fs.renameSync(world.b, `${world.b}-real`)
+  fs.symlinkSync(`${world.b}-real`, world.b)
+  refusesWith('root-symlinked', 'a linked shared root')
+  fs.rmSync(world.b)
+  fs.renameSync(`${world.b}-real`, world.b)
+  build()
+  // A Git helper in the user's configuration.
+  fs.writeFileSync(path.join(process.env.HOME, '.gitconfig'), '[core]\n\tfsmonitor = true\n')
+  try { refusesWith('git-helper-configured', 'a user core.fsmonitor') } finally { fs.rmSync(path.join(process.env.HOME, '.gitconfig')) }
+  build()
+})
+
+test('a composition worker that never answers is terminated at its deadline, and refuses typed', async (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ worker: { deadlineMs: 500, stallMs: 60 * 1000 } }))
+  const started = Date.now()
+  assert.deepEqual(await validatePersonalWorkspace(ari.bound.project), { ok: false, code: 'personal-composition-unavailable' })
+  assert.ok(Date.now() - started < 10 * 1000, 'settled at the deadline, not when the worker would have answered')
+})
+
+test('a graph whose resolved links differ from the composition is not served', (t) => {
+  const { ari } = makeWorld(t, { people: ['ari'] })
+  ari.bind(createPersonalWorkspaceBinderForOracleTests({ build: (project, options) => ({ ...buildCanonicalGraph(project, { ...options, isLinkTargetEligible: (node) => node.repo !== 'personal-ari' }), links: [] }) }))
+  const { buildGraph } = createProductionSeams()
+  assert.throws(() => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY }), (error) => error.code === 'personal-graph-unconfirmed')
+})
+
+test('an idle tick with a shared edit open builds nothing in the proposal adapter, for a bound and for an ordinary project', async (t) => {
+  for (const label of ['bound', 'ordinary']) {
+    const { ari } = makeWorld(t, { people: ['ari'] })
+    const production = createProductionSeams()
+    let adapterBuilds = 0
+    const extensions = createMaintenanceExtensions()
+    extensions.register('proposal-adapter', createProposalAdapter({ clock, env: process.env, seams: { ...production, buildGraph: (args) => { adapterBuilds += 1; return production.buildGraph(args) } } }))
+    const loadProject = label === 'bound' ? () => ari.bound.project : () => routedAround(ari.bound.project)
+    const engine = ari.engine({ extensions, loadProject })
+    t.after(() => engine.stop())
+    assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'), label)
+    const note = ari.manifestOf('harbor-only').notes.find((item) => item.nodeId === 'a:harbor')
+    const file = path.join(ari.vault('harbor-only'), note.path)
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Shared harbor note.', 'Shared harbor note, edited.'))
+    const queued = await engine.tick()
+    assert.ok(queued.observed.observed.some((item) => item.status === 'observed'), `${label}: ${JSON.stringify(queued.observed)}`)
+    const afterObservation = adapterBuilds
+    for (let tick = 0; tick < 4; tick += 1) await engine.tick()
+    assert.ok(ari.stateStore().readPendingEdits().edits.some((edit) => edit.closedAt === null), `${label}: the edit stays open`)
+    assert.equal(adapterBuilds, afterObservation, `${label}: no build while nothing new is observed`)
+  }
+})
+
+test('a proposal operation due on a tick whose personal graph is pending is left as it is, spending no attempt', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const engine = ari.engine()
+  t.after(() => engine.stop())
+  assert.ok((await engine.tick()).scopes.every((scope) => scope.state === 'current'))
+  // A structural edit: a link typed into a shared note.
+  const notes = ari.manifestOf('harbor-only').notes
+  const harbor = notes.find((item) => item.nodeId === 'a:harbor')
+  const tide = path.basename(notes.find((item) => item.nodeId === 'a:tide').path, '.md')
+  const file = path.join(ari.vault('harbor-only'), harbor.path)
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Shared harbor note.', `Shared harbor note, see [[${tide}]].`))
+  await engine.tick()
+  const adapter = createProposalAdapter({ clock, env: process.env })
+  const context = () => ({ project: ari.bound.project, workspaceRoot: ari.workspaceRoot(), workspaceId: ari.workspaceId, repositoryRoots: protectedRoots(ari.bound.project), edits: ari.stateStore().readPendingEdits().edits, clock, env: process.env, deferPersonalValidation: true })
+  const observed = await adapter.observe(context())
+  assert.ok(observed.observed.some((item) => item.kind === 'semantic-proposal'), JSON.stringify(observed))
+  // The graph changes: the operation is due, and the graph is pending.
+  fs.writeFileSync(path.join(world.a, 'notes', 'tide.md'), SHARED_A['notes/tide.md'].replaceAll('Tide', 'Tides'))
+  const proposed = await adapter.propose(context())
+  const outcome = proposed.outcomes.find((item) => item.nodeId === 'a:harbor')
+  assert.deepEqual([outcome?.status, outcome?.code, outcome?.state ?? null], ['deferred', 'personal-validation-pending', null], JSON.stringify(proposed.outcomes))
+})
+
+test('the validity key sees a linked user Git configuration, a .git file, and a .git in the generations folder', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const { buildGraph } = createProductionSeams()
+  const build = () => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })
+  // The route first: it must see the change through its key, before any composition clears what it confirmed.
+  const bothRefuse = async (code, label) => {
+    assert.throws(build, (error) => error.code === code, `${label}: the route refuses`)
+    assert.deepEqual(await validatePersonalWorkspace(ari.bound.project), { ok: false, code }, `${label}: the composition refuses`)
+  }
+  build()
+  // A .git inside generations/.
+  fs.mkdirSync(path.join(ari.home, 'generations', '.git'))
+  await bothRefuse('generation-inside-work-tree', 'a .git in generations')
+  fs.rmSync(path.join(ari.home, 'generations', '.git'), { recursive: true })
+  build()
+  // The user's Git configuration is a link, as a dotfile manager leaves it; then a helper is added to its target.
+  const target = path.join(process.env.HOME, 'dotfiles-gitconfig')
+  fs.writeFileSync(target, '[user]\n\tname = Synthetic\n')
+  fs.symlinkSync(target, path.join(process.env.HOME, '.gitconfig'))
+  try {
+    build()
+    fs.appendFileSync(target, '[core]\n\tfsmonitor = true\n')
+    await bothRefuse('git-helper-configured', 'a helper behind a linked configuration')
+  } finally { fs.rmSync(path.join(process.env.HOME, '.gitconfig')); fs.rmSync(target) }
+  build()
+  // An enrolled repository whose .git is a file naming a separate Git directory; then a remote is added.
+  const gitDir = path.join(world.base, 'b-git-directory')
+  fs.renameSync(path.join(world.b, '.git'), gitDir)
+  fs.writeFileSync(path.join(world.b, '.git'), `gitdir: ${gitDir}\n`)
+  build()
+  git(world.b, ['remote', 'add', 'origin', 'https://example.invalid/b.git'])
+  await bothRefuse('repo-identity-replaced', 'a remote added through a .git file')
+})
+
+test('the validity key records an enrolled root it cannot look at, and follows a .git that is a link to a directory', async (t) => {
+  const world = makeWorld(t, { people: ['ari'] })
+  const { ari } = world
+  const { buildGraph } = createProductionSeams()
+  const build = () => buildGraph({ project: ari.bound.project, eligibility: DEFAULT_ELIGIBILITY })
+  build()
+  // An enrolled root replaced by a file: the route refuses with the composition's own code, typed.
+  fs.renameSync(world.b, `${world.b}-moved`)
+  fs.writeFileSync(world.b, 'not a repository')
+  assert.throws(build, (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'root-symlinked', 'the route refuses typed')
+  assert.throws(() => loadBoundProject({ personalHome: ari.home, generationId: ari.generationId }), (error) => error instanceof ObsidianMaintenanceRefusal && error.code === 'root-symlinked', 'a loader refuses typed')
+  fs.rmSync(world.b)
+  fs.renameSync(`${world.b}-moved`, world.b)
+  build()
+  // An enrolled repository's .git replaced by a link to the same Git directory, moved; then a helper added through it.
+  const gitDir = path.join(world.base, 'b-git-directory')
+  fs.renameSync(path.join(world.b, '.git'), gitDir)
+  fs.symlinkSync(gitDir, path.join(world.b, '.git'))
+  build()
+  git(world.b, ['config', 'core.fsmonitor', 'true'])
+  assert.throws(build, (error) => error.code === 'git-helper-configured', 'the route refuses a helper added through the link')
+  assert.deepEqual(await validatePersonalWorkspace(ari.bound.project), { ok: false, code: 'git-helper-configured' })
 })

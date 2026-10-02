@@ -1,0 +1,30 @@
+{
+  "schema": "atelier-boundary-delegations@v1",
+  "delegations": [
+    {
+      "schema": "atelier-boundary-delegation@v1",
+      "id": "operator-b-commits",
+      "owner": "owner-a",
+      "operator": "operator-b",
+      "repos": [
+        "example-private-workspace"
+      ],
+      "operations": [
+        "pre-commit",
+        "boundary-check"
+      ],
+      "notBefore": "2026-01-01T00:00:00Z",
+      "expiresAt": "2026-03-01T00:00:00Z",
+      "policyDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "repoRoots": {
+        "example-private-workspace": "1111111111111111111111111111111111111111"
+      },
+      "signature": {
+        "algorithm": "ed25519",
+        "keyId": "owner-a-fixture-key",
+        "value": "W74_44GSVTc8ZDmvyDWK-usJonkGCtTwCFRheCgUGjYeY7gSTiNZuUCy8SykYvAF_5TfqlR0hoxDqdH1D_FZCQ"
+      },
+      "readBoundary": "public"
+    }
+  ]
+}

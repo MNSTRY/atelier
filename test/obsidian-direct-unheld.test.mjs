@@ -330,8 +330,13 @@ test('publication while an app runs, into an allocated vault no list names, comm
   assert.equal(world.store.readCurrent().generationId, 'gen-0001')
   // The only call the app got is the probe that found it answering for another vault.
   assert.deepEqual(app.calls, ['inspect'])
-  // Read at path selection and again immediately before the first unit.
-  assert.equal(world.reads.length, 2)
+  // Read at path selection and again immediately before the first unit. A slow host can add the publisher's
+  // periodic re-check, which reads again only once more than two seconds have passed since its last check
+  // (publisher.mjs), so any further read is spaced, never a repeat of the one before.
+  assert.ok(world.reads.length >= 2, `read at path selection and before the first unit, got ${world.reads.length}`)
+  for (let index = 2; index < world.reads.length; index += 1) {
+    assert.ok(world.reads[index] - world.reads[index - 1] >= 1000, 'a further read is only the periodic re-check')
+  }
   // Besides notes, attachments, the settings file and the plugin files, only the vault lock is written.
   assert.deepEqual(Object.keys(vaultFiles(world)).filter((relative) => !relative.endsWith('/')).sort(), [NOTE, OTHER, PICTURE, POLICY, PLUGIN_MAIN, PLUGIN_DATA].sort())
   assert.equal(fs.statSync(path.join(world.vault, VAULT_LOCK_DIRECTORY)).isDirectory(), true, 'the vault lock is still taken')

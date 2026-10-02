@@ -151,7 +151,7 @@ export function resolvePersonalWorkspace({ folder, personalHome } = {}) {
     const bindings = input.manifest.bindings.map((b) => rootCheck(b))
     const matching = bindings.filter((b) => inside(b, folder))
     if (!matching.length) return freeze({ status: 'none', reasons: [{ code: 'not-enrolled' }] })
-    if (matching.length > 1) return freeze({ status: 'ambiguous', reasons: [{ code: 'ambiguous-binding' }] })
+    if (matching.length > 1) refuse('ambiguous-binding')
     const resolved = { status: 'resolved', personalHome, ...input, workspaceId: input.manifest.workspaceId,
       manifestRevision: input.manifest.revision, coverage: { profile: 'manifest-only', enforcement: 'none', uncovered: ['filesystem-access', 'disclosure', 'effects', 'host-sandbox'] } }
     resolvedInputs.add(resolved)

@@ -23,6 +23,7 @@ export function catalogDocument() {
         "src/intake/store.mjs",
         "src/ingestion/store.mjs",
         "src/knowledge/ingestion.mjs",
+        "src/ingestion/semantic.mjs",
         "src/commands/knowledge.mjs",
         "src/knowledge/plan.mjs",
         "src/knowledge/context.mjs",
@@ -41,6 +42,8 @@ export function catalogDocument() {
       "implementation": [
         "src/learning/store.mjs",
         "src/judgment/index.mjs",
+        "src/judgment/practice.mjs",
+        "src/judgment/practice-evaluation.mjs",
         "src/capabilities/instructions.mjs"
       ]
     },

@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 export const CONTRACT_CORPUS = [
   { name: 'atelier-evidence-navigation', contractFile: 'contracts/atelier-evidence-navigation.v1.schema.json', fixtureRoot: 'fixtures/evidence-navigation', registry: false },
   { name: 'atelier-personal-workspace-manifest', contractFile: 'contracts/atelier-personal-workspace-manifest.v1.schema.json', fixtureRoot: 'fixtures/atelier-personal-workspace-contract/manifest', registry: true },
-  { name: 'atelier-personal-workspace-overlay', contractFile: 'contracts/atelier-personal-workspace-overlay.v1.schema.json', validFiles: ['fixtures/personal-workspace/overlay.json'], registry: false },
+  { name: 'atelier-personal-workspace-overlay', contractFile: 'contracts/atelier-personal-workspace-overlay.v1.schema.json', validFiles: ['fixtures/personal-workspace/overlay.json'], invalidFiles: ['authority-key.json', 'unknown-top-level-field.json', 'wrong-schema.json'].map((file) => `fixtures/atelier-personal-workspace-contract/overlay/invalid/${file}`), registry: true },
   { name: 'atelier-template-profile', contractFile: 'contracts/atelier-template-profile.v1.schema.json', validFiles: ['fixtures/templates/local-library.v1.json'], registry: false },
   ...['adoption-policy.v2', 'migration.v3', 'template-adoption.v1', 'upgrade-plan.v3'].map(shape => ({
     name: `atelier-template-${shape}`, contractFile: `contracts/atelier-${shape}.schema.json`,
@@ -97,6 +97,8 @@ export const CONTRACT_CORPUS = [
     fixtureRoot: 'fixtures/boundary-policy',
     registry: false,
   },
+  { name: 'atelier-boundary-delegations', contractFile: 'contracts/atelier-boundary-delegations.v1.schema.json', fixtureRoot: 'fixtures/boundary-delegations', registry: true },
+  { name: 'atelier-boundary-owner-keys', contractFile: 'contracts/atelier-boundary-owner-keys.v1.schema.json', fixtureRoot: 'fixtures/boundary-owner-keys', registry: true },
   {
     name: 'atelier-export',
     contractFile: 'contracts/atelier-export.v1.schema.json',

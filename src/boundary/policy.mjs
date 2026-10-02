@@ -15,6 +15,7 @@ import {
   validateContentRuleExceptions,
   validateContentRules,
 } from './content-rules.mjs'
+import { delegationsPathFor, loadDelegationsFile, ownerKeysForCommand, resolveDelegation, validateDelegationsDocument } from './delegation.mjs'
 
 export const BOUNDARY_POLICY_SCHEMA = 'mnstry.atelier-boundary-policy@v1'
 export const PROMOTE_EVENT_SCHEMA = 'git-promote-event@v1'
@@ -115,6 +116,12 @@ function unknownKeys(value, label, allowed) {
     .map((key) => `${label} must not include additional property ${key}`)
 }
 
+// The schema declares `ext` as a reserved extension container that consumers
+// must ignore. It is accepted, never read, and never carries authority.
+function extErrors(value, label) {
+  return value?.ext != null && !isObject(value.ext) ? [`${label}.ext must be an object`] : []
+}
+
 function validAudienceList(value, label, required = false) {
   if (value == null && !required) return []
   if (!Array.isArray(value)) return [`${label} must be a list`]
@@ -128,8 +135,12 @@ function validAudienceList(value, label, required = false) {
 export function validateBoundaryPolicy(policy, project = null) {
   const errors = []
   if (!isObject(policy)) return ['boundary policy must be a JSON object']
-  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath'])))
+  errors.push(...unknownKeys(policy, '/', new Set(['schema', 'contractVersion', 'mode', 'actors', 'repos', 'promotion', 'forbiddenPaths', 'contentRules', 'contentRuleExceptions', 'governanceLedgerPath', 'ext'])))
   if (policy.schema !== BOUNDARY_POLICY_SCHEMA) errors.push(`schema must be ${BOUNDARY_POLICY_SCHEMA}`)
+  if (policy.contractVersion != null && !(typeof policy.contractVersion === 'string' && /^1\.[0-9]+\.[0-9]+$/.test(policy.contractVersion))) {
+    errors.push('contractVersion must be a 1.x.y version')
+  }
+  errors.push(...extErrors(policy, '/'))
   if (!VALID_BOUNDARY_MODES.has(policy.mode)) errors.push('mode must be strict or legacy-warning')
 
   const actors = policy.actors
@@ -138,7 +149,8 @@ export function validateBoundaryPolicy(policy, project = null) {
   if (!isObject(actors)) errors.push('actors must be an object')
   if (!isObject(repos)) errors.push('repos must be an object')
   if (policy.promotion != null && !isObject(policy.promotion)) errors.push('promotion must be an object')
-  errors.push(...unknownKeys(promotion, 'promotion', new Set(['requiresGitPromote', 'recordsPath'])))
+  errors.push(...unknownKeys(promotion, 'promotion', new Set(['requiresGitPromote', 'recordsPath', 'ext'])))
+  errors.push(...extErrors(promotion, 'promotion'))
   if (policy.forbiddenPaths != null && !Array.isArray(policy.forbiddenPaths)) errors.push('forbiddenPaths must be a list')
   if (policy.contentRules != null) errors.push(...validateContentRules(policy.contentRules))
   if (policy.contentRuleExceptions != null) {
@@ -153,11 +165,15 @@ export function validateBoundaryPolicy(policy, project = null) {
   }
 
   for (const [actorId, actor] of Object.entries(isObject(actors) ? actors : {})) {
-    errors.push(...unknownKeys(actor, `actors.${actorId}`, new Set(['githubLogin', 'gitEmails', 'privateDomainRepo'])))
+    errors.push(...unknownKeys(actor, `actors.${actorId}`, new Set(['githubLogin', 'gitEmails', 'privateDomainRepo', 'ext'])))
+    errors.push(...extErrors(actor, `actors.${actorId}`))
     if (!isObject(actor)) {
       errors.push(`actors.${actorId} must be an object`)
       continue
     }
+    // The schema types these fields; a non-string login would still match through String().
+    if (actor.githubLogin != null && typeof actor.githubLogin !== 'string') errors.push(`actors.${actorId}.githubLogin must be a string`)
+    if (actor.gitEmails != null && !Array.isArray(actor.gitEmails)) errors.push(`actors.${actorId}.gitEmails must be a list`)
     if (!firstString(actor.githubLogin) && !asArray(actor.gitEmails).length) {
       errors.push(`actors.${actorId} must declare githubLogin or gitEmails`)
     }
@@ -176,7 +192,8 @@ export function validateBoundaryPolicy(policy, project = null) {
   }
 
   for (const [repoName, repo] of Object.entries(isObject(repos) ? repos : {})) {
-    errors.push(...unknownKeys(repo, `repos.${repoName}`, new Set(['kind', 'ownerActor', 'readBoundary', 'allowedAudiences', 'forbiddenAudiences', 'autoCommit'])))
+    errors.push(...unknownKeys(repo, `repos.${repoName}`, new Set(['kind', 'ownerActor', 'readBoundary', 'allowedAudiences', 'forbiddenAudiences', 'autoCommit', 'ext'])))
+    errors.push(...extErrors(repo, `repos.${repoName}`))
     if (!isObject(repo)) {
       errors.push(`repos.${repoName} must be an object`)
       continue
@@ -306,7 +323,7 @@ function nodePlacementFindings({ node, policy }) {
   return findings
 }
 
-function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }) {
+function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors, operation, delegations, ownerKeys, now }) {
   const findings = []
   const operatedRepos = new Set(managedRepos(project).map((repo) => repo.name))
   const ownedRepos = Object.entries(policy.repos ?? {}).filter(([name, repo]) =>
@@ -322,7 +339,20 @@ function actorFindings({ policy, project, actor, gitExecutable, allowNetworkActo
       findings.push(finding({ severity, code: 'private-domain-actor-unverified', repo: repoName,
         message: `${repoName}: could not verify local actor for private domain repo owned by ${repo.ownerActor}${current.reason ? ` (${current.reason})` : ''}` }))
     } else if (current.actorId !== repo.ownerActor) {
-      findings.push(finding({ severity, code: 'private-domain-actor-mismatch', repo: repoName, message: `${repoName}: private domain repo is owned by ${repo.ownerActor}, but current actor is ${current.actorId}` }))
+      // Only an owner-signed delegation, verified against a host-supplied key,
+      // changes this outcome, and only for its operator, repos and operation.
+      const delegated = resolveDelegation({ policy, project, delegations, repoName, repo, actorId: current.actorId, operation, ownerKeys, now })
+      if (delegated.applies) {
+        const { id, owner, expiresAt } = delegated.delegation
+        findings.push(finding({ severity: 'info', code: 'private-domain-delegated-operator', repo: repoName,
+          message: `${repoName}: ${current.actorId} operates under delegation ${id} from owner ${owner} until ${expiresAt}`,
+          details: { actorId: current.actorId, owner, delegationId: id, expiresAt, operation } }))
+      } else {
+        const note = delegated.reason === 'delegation-missing' ? '' : ` (${delegated.reason})`
+        findings.push(finding({ severity, code: 'private-domain-actor-mismatch', repo: repoName,
+          message: `${repoName}: private domain repo is owned by ${repo.ownerActor}, but current actor is ${current.actorId}${note}`,
+          details: { delegationReason: delegated.reason } }))
+      }
     }
   }
   return findings
@@ -635,7 +665,7 @@ function promotionFindings({ policy, project, graph }) {
   return findings
 }
 
-export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false } = {}) {
+export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnly = false, actor = null, gitExecutable = 'git', allowNetworkActorResolution = true, allowHistoryActorResolution = false, forceActorErrors = false, delegations = null, ownerKeys = null, now = Date.now() } = {}) {
   const validationErrors = validateBoundaryPolicy(policy, project)
   let graph = null
   const findings = validationErrors.map((message) => finding({ severity: 'error', code: 'boundary-policy-invalid', message }))
@@ -645,7 +675,14 @@ export function checkBoundaryPolicy({ project, policy, staged = false, stagedOnl
     for (const node of graph.nodes ?? []) findings.push(...nodePlacementFindings({ node, policy }))
     findings.push(...promotionFindings({ policy, project, graph }))
   }
-  findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors }))
+  // Delegations come from their own document, never from the policy. An invalid
+  // document is an error and grants nothing.
+  const delegationErrors = delegations == null ? [] : validateDelegationsDocument(delegations, policy)
+  findings.push(...delegationErrors.map((message) => finding({ severity: 'error', code: 'boundary-delegations-invalid', message })))
+  const delegationList = delegations != null && !delegationErrors.length ? delegations.delegations : []
+  // A staged check is the commit path (the installed pre-commit hook runs it).
+  const operation = staged ? 'pre-commit' : 'boundary-check'
+  findings.push(...actorFindings({ policy, project, actor, gitExecutable, allowNetworkActorResolution, allowHistoryActorResolution, forceActorErrors, operation, delegations: delegationList, ownerKeys, now }))
   if (staged) {
     const stagedPaths = stagedPathsForProject(project, { gitExecutable })
     findings.push(...forbiddenPathFindings({ policy, stagedPaths }))
@@ -673,9 +710,14 @@ export function runBoundaryCheckCommand(argv = process.argv.slice(2)) {
   const project = commandProject({ argv })
   const loaded = loadBoundaryPolicy(project)
   const missingFindings = loaded.errors?.map((message) => finding({ code: 'boundary-policy-missing', message })) ?? []
-  const report = loaded.ok
-    ? checkBoundaryPolicy({ project, policy: loaded.policy, staged, stagedOnly, actor: firstString(args.actor) })
+  const sidecar = loaded.ok ? loadDelegationsFile(delegationsPathFor(loaded.policyPath)) : { present: false, document: null, errors: [] }
+  const sidecarFindings = sidecar.errors.map((message) => finding({ code: 'boundary-delegations-invalid', message }))
+  // Owner keys are read only when a delegations document exists.
+  const ownerKeys = sidecar.present && sidecar.document ? ownerKeysForCommand() : null
+  let report = loaded.ok
+    ? checkBoundaryPolicy({ project, policy: loaded.policy, staged, stagedOnly, actor: firstString(args.actor), delegations: sidecar.document, ownerKeys })
     : { ok: false, mode: null, schema: BOUNDARY_POLICY_SCHEMA, graphCounts: null, findings: missingFindings, errors: missingFindings, warnings: [] }
+  if (sidecarFindings.length) report = { ...report, ok: false, findings: [...sidecarFindings, ...report.findings], errors: [...sidecarFindings, ...report.errors] }
 
   if (json) {
     console.log(JSON.stringify(report, null, 2))
