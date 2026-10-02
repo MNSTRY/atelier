@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- A private-domain repository owner can let one named operator pass the local
+  boundary actor check by signing a delegation
+  (`docs/repo-boundary-guard.md`). It covers only `atelier boundary check` and
+  the `pre-commit` path, for listed repositories, for at most 90 days. It never
+  changes ownership, audiences, paths, content rules, promotion, push-content
+  checks or publication. It applies only when all of these hold:
+  - its ed25519 signature verifies against the owner's key in the host file
+    `/etc/atelier/boundary-owner-keys.json`, owned by root in root-owned
+    directories (Windows is not supported yet);
+  - it is current and not revoked in that file;
+  - the whole boundary policy, the managed repository set and each repository's
+    root commit match what the owner signed.
+
+  It records consent for a cooperating operator; the actor check stays
+  attribution, not authentication. Delegations live in
+  `boundary-delegations.v1.json` beside the policy, under the new
+  `atelier-boundary-delegations@v1` and `atelier-boundary-owner-keys@v1`
+  contracts; the boundary policy contract is unchanged.
+  `atelier boundary delegation draft|sign|verify` prepares, signs (after
+  recomputing the bindings) and inspects them. The policy validator now accepts
+  the `contractVersion` and `ext` members its schema already declared; `ext` is
+  ignored.
+- A capability operation that has committed no longer reports `EEXIST` ("not
+  entered") when its lock is removed or replaced while cleanup inspects it.
+  Cleanup preserves the other file and returns the operation's result. Lock
+  races in reclamation, readback and cleanup are each covered by a test.
 - `src/judgment/practice.mjs` and `src/judgment/practice-evaluation.mjs` keep a
   reusable decision practice inside an ordinary Knowledge contribution
   (`docs/decision-practices.md`). They are internal: the
@@ -81,7 +107,7 @@
   - `npm run knowledge:consumer-proof` installs a packed tarball into a clean
     consumer and checks the documented CLI paths, writing a receipt bound to the
     tarball SHA-256.
-- Personal workspaces are published as `@mnstry/atelier/personal-workspace`,
+- Personal workspaces are exported as `@mnstry/atelier/personal-workspace`,
   with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
   public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,
   `PersonalWorkspaceRefusal`, `loadPersonalManifest`, `loadPersonalOverlay`,
