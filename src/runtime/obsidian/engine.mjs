@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { AtelierDiagnosticError } from '../../project/config.mjs'
 import { OBSIDIAN_EXT_KEY, ObsidianContractRefusal, manifestLayoutVersion } from '../../projection/obsidian/contracts.mjs'
-import { personalWorkspaceBindingOf, personalWorkspaceInputs } from '../../projection/obsidian/personal-workspace.mjs'
+import { PERSONAL_VALIDATION_PENDING, personalWorkspaceBindingOf, personalWorkspaceInputs, validatePersonalWorkspace } from '../../projection/obsidian/personal-workspace.mjs'
 import { PROTOCOL_ID } from '../../projection/obsidian/publication/bridge-script.mjs'
 import { PublicationRefusal, allocatedFolderState, hasCommittedGeneration, readVaultAllocation } from '../../projection/obsidian/recovery/store.mjs'
 import { canonicalJson, compareText, isoTime } from './documents.mjs'
@@ -361,14 +361,18 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
 
     // 1. Project and enablement. The digests are seeded before the project is
     // loaded for good, so the loaded project is never older than the index.
+    // A loader may answer a promise (one that composes a personal workspace off
+    // the event loop). A project bound to a personal workspace is loaded once:
+    // what a generation holds is fixed, and an input that changed after the load
+    // changes the validity key every build is checked against.
     if (project === null) {
-      project = loadProject()
+      project = await loadProject()
       reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full: true, lstat })
-      project = loadProject()
+      if (personalWorkspaceBindingOf(project) === null) project = await loadProject()
     } else {
       const config = reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full, hinted, lstat })
       if (config.changes.length > 0) {
-        project = loadProject()
+        project = await loadProject()
         reconcile({ index, files: configFilesOf(project), prefix: CONFIG_PREFIX, full: true, lstat })
       }
     }
@@ -477,9 +481,12 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     // Observation. The registered proposal adapter is handed a copy of the pending edits and observes the open ones
     // the object store does not know yet, a bounded number per tick: each is classified from its preserved bytes
     // against the source as it is now and recorded as what it is, in manual and in automatic mode alike, and no
-    // source is written. What refused before anything was recorded is offered again on a full reconciliation only.
+    // source is written. What refused before anything was recorded is offered again on a full reconciliation only;
+    // for a personal workspace, also on the tick after one whose graph was pending, which offers every earlier
+    // refusal again.
     const proposalAdapter = extensions.get('proposal-adapter')
-    const adapterContext = () => ({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env })
+    // A personal workspace is never composed on this event loop by the adapter: its builds defer, as the engine's do.
+    const adapterContext = () => ({ project, workspaceRoot, workspaceId, repositoryRoots, edits: structuredClone(edits), clock, env, deferPersonalValidation: true })
     let observed = null
     if (proposalAdapter !== null && rules.observeEdits(proposalAdapter)) {
       try { observed = await proposalAdapter.observe(adapterContext(), { retryRefused: full }) } catch { observed = { adapterId: proposalAdapter.id, failed: 'proposal-adapter-threw' } }
@@ -571,9 +578,15 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
       if (earlierLayout.has(scope.scopeId) && entry.state === 'current' && layoutHeldOf(scope.scopeId).length === 0) invalidate(scope.scopeId, null)
     }
     for (const change of changes) for (const { scope } of scopes) if (change.scopeId === undefined || change.scopeId === scope.scopeId) invalidate(scope.scopeId, change.changeClass)
-    // A bound personal workspace is composed again at every full reconciliation, whatever changed: an enrolled
-    // repository's identity or ignore rules can stop a generation holding without a file this engine observes.
-    if (full && personalWorkspaceBindingOf(project) !== null) for (const { scope } of scopes) invalidate(scope.scopeId, null)
+    // A bound personal workspace is composed again, off the event loop, at every full reconciliation, whatever else is
+    // being prepared: a cause outside its validity key can stop a generation holding without a file this engine
+    // observes. Its views are prepared again only when the composition refuses, or confirms another key.
+    let personalRefusal = null
+    if (full && personalWorkspaceBindingOf(project) !== null) {
+      const verdict = await validatePersonalWorkspace(project)
+      if (verdict.ok !== true) personalRefusal = verdict.code
+      if (verdict.ok !== true || verdict.changed) for (const { scope } of scopes) invalidate(scope.scopeId, null)
+    }
 
     // Invalidation is durable before any work: a view is not reported current while it is being rebuilt.
     for (const [scopeId, classes] of attempt) entries.set(scopeId, { ...demote(entries.get(scopeId), 'stale', 'invalidated', now), changeClasses: [...classes].sort() })
@@ -588,7 +601,19 @@ export function createMaintenanceEngineForOracleTests(options = {}, primitives =
     if (attempt.size > 0) {
       let built = null
       try {
-        const graph = seams.buildGraph({ project, eligibility, cache: graphCache, index })
+        if (personalRefusal !== null) refuse(personalRefusal, 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })
+        // A personal workspace whose validity key is not confirmed yet is composed off the event loop, then built again.
+        const build = () => seams.buildGraph({ project, eligibility, cache: graphCache, index, deferPersonalValidation: true })
+        let graph
+        try { graph = build() } catch (error) {
+          if (error?.code !== PERSONAL_VALIDATION_PENDING) throw error
+          const verdict = await validatePersonalWorkspace(project)
+          if (verdict?.ok !== true) refuse(verdict?.code ?? 'personal-binding-unrecognized', 'the personal workspace refused this generation; nothing is prepared from it', { source: 'personal-workspace' })
+          try { graph = build() } catch (again) {
+            if (again?.code !== PERSONAL_VALIDATION_PENDING) throw again
+            refuse('personal-graph-unconfirmed', 'the graph built for the personal workspace is not the one its composition built; nothing is prepared from it', { source: 'personal-workspace' })
+          }
+        }
         // The assets this graph lets a view copy are observed from now on, and hashed now so the snapshot pins
         // what observation saw. A withheld asset is not observed: its bytes can change no view.
         const formerAssetKeys = new Set(observedAssets.map((asset) => sourceKey(asset.repo, asset.path)))
