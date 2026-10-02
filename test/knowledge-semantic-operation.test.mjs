@@ -379,6 +379,7 @@ transactionTest('supplied existing identities require explicit review and work w
       approve(entities[0], change === 'reaccept-local' ? choice({ status: 'source-local' }) : 'Prose acceptance without an identity choice.', '-renewed')
       approve(prepared.record, 'Receiver re-accepts the original immutable assertion.', '-renewed')
       add(make('activation', 'identity-renewed-active', { reviews: [harnessRef(readHarness({ ...s.options, profile: 'knowledge' }).records.find(record => record.id === 'identity-management-review-renewed'))], purpose: 'Invented re-acceptance readback.', destination: 'local-context', questions: ['component'] }))
+      add(make('activation', 'identity-mixed-active', { reviews: ['identity-nora-review-renewed', 'identity-management-review-renewed'].map(id => harnessRef(readHarness({ ...s.options, profile: 'knowledge' }).records.find(record => record.id === id))), purpose: 'Invented mixed activation must be current as a whole.', destination: 'local-context', questions: ['component'] }))
     }
     const reopened = createSemanticOperation(s.options), view = reopened.context({ query: 'manages' })
     if (change.startsWith('reaccept-')) {
@@ -389,6 +390,16 @@ transactionTest('supplied existing identities require explicit review and work w
       const unfiltered = await import(`data:text/javascript;base64,${Buffer.from(correctedSource.replace(failureMarker, 'void error')).toString('base64')}`)
       assert.ok(unfiltered.createSemanticOperation(s.options).context({ query: 'manages' }).hits.some(hit => hit.reference.id === prepared.record.id), 'Removing reconsideration exposes the incompatible accepted assertion.')
       assert.throws(() => reopened.project({ activationId: 'identity-renewed-active', namespace: 'fixture' }), e => e.code === 'SEMANTIC_PROJECTION_STALE')
+      assert.ok(view.reconsider.some(item => item.id === 'identity-mixed-active'), change)
+      assert.equal(reopened.context({ query: 'Nora' }).hits.some(hit => hit.reference.id === entities[0].id), false, 'A withheld mixed activation cannot activate its other members.')
+      const activationMarker = 'active.has(hit.reference.id) && !reconsider.has(hit.reference.id)'
+      assert.equal(correctedSource.split(activationMarker).length, 2)
+      const staleActivation = await import(`data:text/javascript;base64,${Buffer.from(correctedSource.replace(activationMarker, '!reconsider.has(hit.reference.id)')).toString('base64')}`)
+      assert.ok(staleActivation.createSemanticOperation(s.options).context({ query: 'Nora' }).hits.some(hit => hit.reference.id === entities[0].id), 'Removing merged activation membership exposes the other member.')
+      assert.throws(() => reopened.project({ activationId: 'identity-mixed-active', namespace: 'fixture' }), e => e.code === 'SEMANTIC_PROJECTION_STALE')
+      add(make('activation', 'identity-independent-renewed', { reviews: [harnessRef(readHarness({ ...s.options, profile: 'knowledge' }).records.find(record => record.id === 'identity-nora-review-renewed'))], purpose: 'Independent current activation of the compatible identity.', destination: 'local-graph', questions: ['component'] }))
+      assert.ok(reopened.context({ query: 'Nora' }).hits.some(hit => hit.reference.id === entities[0].id))
+      assert.ok(reopened.project({ activationId: 'identity-independent-renewed', namespace: 'fixture' }).semanticEntities.some(entity => entity.record.id === entities[0].id))
     }
     assert.equal(view.hits.some(hit => hit.reference.id === prepared.record.id), false, change)
     assert.ok(view.reconsider.some(item => item.id === prepared.record.id || item.id === 'identity-management-review'), change)
@@ -567,4 +578,48 @@ transactionTest('a reconciled reservation permits a new attempt when another run
   assert.throws(() => s.runner.status({ operationId: 'first' }), e => e.code === 'SEMANTIC_OPERATION_INTEGRITY')
   assert.equal(s.runner.begin({ ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: reconciled.head }).execution, 'ready-for-host')
   assert.equal(other.status({ operationId: 'first' }).execution, 'unknown')
+})
+
+transactionTest('an unreconciled reservation can recover a foreign immutable intake manifest without claiming its bytes', async t => {
+  const s = setup(t), first = s.runner.begin(s.begin)
+  fs.rmSync(path.join(s.root, '.atelier-local/intake/attempts/model-first'), { recursive: true })
+  const otherDomain = { ...structuredClone(fixture.domain), id: 'collision-run', run: 'collision-run' }
+  const otherHead = appendHarness({ ...s.options, profile: 'knowledge', record: otherDomain, confirm: EMPTY_HARNESS_HEAD }).head
+  const other = createSemanticOperation({ ...s.options, run: 'collision-run' }), otherFirst = other.begin({ ...s.begin, confirm: otherHead })
+  const otherCandidates = emptyCandidates(otherFirst.input), otherOutput = JSON.stringify(otherCandidates)
+  const otherCompletion = other.complete({ operationId: 'first', output: otherOutput, expectedOutputDigest: intakeDigest(otherOutput), candidates: otherCandidates, usage: unknownUsage, at, confirm: otherFirst.head })
+  assert.throws(() => s.runner.status({ operationId: 'first' }), e => e.code === 'SEMANTIC_OPERATION_INTEGRITY')
+  const request = { operationId: 'first', at, by: 'simulated-receiver', reason: 'Foreign immutable manifest proves the interrupted reservation never published its own attempt.', outcome: 'not-executed', confirm: first.head }
+  const moduleUrl = new URL('../src/knowledge/semantic-operation.mjs', import.meta.url)
+  const source = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original)
+  const marker = 'const foreign = foreignAttempt(initial, attempt)'
+  assert.equal(source.split(marker).length, 2)
+  const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(marker, 'const foreign = false')).toString('base64')}`)
+  assert.throws(() => mutant.createSemanticOperation(s.options).reconcile(request), e => e.code === 'SEMANTIC_RECONCILE_REQUIRED')
+  assert.throws(() => s.runner.reconcile({ ...request, outcome: 'failed-no-output' }), e => e.code === 'SEMANTIC_RECONCILE_REQUIRED')
+  const recovered = s.runner.reconcile(request)
+  assert.equal(recovered.phase, 'reconciled'); assert.equal(recovered.execution, 'reconciled')
+  assert.equal(recovered.attempt.status, 'foreign-manifest'); assert.equal(recovered.attempt.output, undefined)
+  assert.deepEqual(other.status({ operationId: 'first' }).attempt.completion, otherCompletion.attempt.completion)
+  assert.equal(s.runner.begin({ ...s.begin, operationId: 'second', attemptId: 'model-second', confirm: recovered.head }).execution, 'ready-for-host')
+})
+
+transactionTest('completion refuses a foreign begun manifest before publishing any raw output', async t => {
+  const s = setup(t), first = s.runner.begin(s.begin)
+  fs.rmSync(path.join(s.root, '.atelier-local/intake/attempts/model-first'), { recursive: true })
+  const otherDomain = { ...structuredClone(fixture.domain), id: 'capture-collision', run: 'capture-collision' }
+  const otherHead = appendHarness({ ...s.options, profile: 'knowledge', record: otherDomain, confirm: EMPTY_HARNESS_HEAD }).head
+  const other = createSemanticOperation({ ...s.options, run: 'capture-collision' })
+  other.begin({ ...s.begin, confirm: otherHead })
+  const candidates = emptyCandidates(first.input), output = JSON.stringify(candidates)
+  assert.throws(() => s.runner.complete({ operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }), e => e.code === 'SEMANTIC_OPERATION_INTEGRITY')
+  const foreign = other.status({ operationId: 'first' })
+  assert.equal(foreign.attempt.status, 'begun'); assert.equal(foreign.attempt.output, null)
+  const moduleUrl = new URL('../src/knowledge/semantic-operation.mjs', import.meta.url)
+  const source = fs.readFileSync(moduleUrl, 'utf8').replace(/from '([^']+)'/g, (original, ref) => ref.startsWith('.') ? `from ${JSON.stringify(new URL(ref, moduleUrl).href)}` : original)
+  const marker = '// Verify byte custody before publication; never write into another run\'s attempt.\n    inspected(initial)'
+  assert.equal(source.split(marker).length, 2)
+  const mutant = await import(`data:text/javascript;base64,${Buffer.from(source.replace(marker, 'void initial')).toString('base64')}`)
+  assert.throws(() => mutant.createSemanticOperation(s.options).complete({ operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }), e => e.code === 'SEMANTIC_OPERATION_INTEGRITY')
+  assert.equal(other.status({ operationId: 'first' }).attempt.output, output, 'Removing pre-publication custody writes into the foreign attempt.')
 })

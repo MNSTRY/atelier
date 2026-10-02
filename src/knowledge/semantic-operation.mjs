@@ -187,12 +187,17 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     } }
     return appendHarness({ workspaceRoot, profile: 'knowledge', record, confirm })
   }
+  function expectedAttempt(initial) {
+    const value = initial.value
+    return { schema: 'mnstry.atelier-intake-attempt@v1', attemptId: value.attemptId, blobId: value.source.digest,
+      extractorId: value.extractor.id, extractorVersion: value.extractor.version, configurationDigest: value.extractor.configurationDigest }
+  }
+  function foreignAttempt(initial, result) {
+    return result.status !== 'absent' && ingestionDigest(result.attempt) !== ingestionDigest(expectedAttempt(initial))
+  }
   function inspected(initial) {
     const value = initial.value, result = intake.readAttempt(value.attemptId)
-    if (result.status !== 'absent') {
-      check(ingestionDigest(result.attempt) === ingestionDigest({ schema: 'mnstry.atelier-intake-attempt@v1', attemptId: value.attemptId, blobId: value.source.digest,
-        extractorId: value.extractor.id, extractorVersion: value.extractor.version, configurationDigest: value.extractor.configurationDigest }), 'SEMANTIC_OPERATION_INTEGRITY', 'Raw attempt differs from its operation pins')
-    }
+    check(!foreignAttempt(initial, result), 'SEMANTIC_OPERATION_INTEGRITY', 'Raw attempt differs from its operation pins')
     if (result.status === 'complete') {
       check(ingestionDigest(intake.readCompletion(value.attemptId)) === ingestionDigest(result.completion), 'SEMANTIC_OPERATION_INTEGRITY', 'Completion readback differs')
     }
@@ -200,7 +205,15 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
   }
   function status({ operationId }) {
     const { initial, latest, state } = operation(operationId), value = initial.value
-    const attempt = inspected(initial)
+    let attempt
+    if (latest.value.phase === 'reconciled' && latest.value.recovery) {
+      const actual = intake.readAttempt(value.attemptId), recovery = latest.value.recovery
+      closed(recovery, ['kind', 'attemptId', 'manifestDigest'])
+      check(recovery.kind === 'foreign-manifest-before-readiness' && recovery.attemptId === value.attemptId &&
+        latest.value.outcome === 'not-executed' && foreignAttempt(initial, actual) && recovery.manifestDigest === ingestionDigest(actual.attempt),
+        'SEMANTIC_OPERATION_INTEGRITY', 'Reconciled foreign manifest readback differs')
+      attempt = { status: 'foreign-manifest', attemptId: value.attemptId, manifestDigest: recovery.manifestDigest }
+    } else attempt = inspected(initial)
     let freshness = 'current'
     try {
       intake.readSource({ ref: value.source.ref, expectedDigest: value.source.digest })
@@ -255,16 +268,26 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     }
   }
   function reconcile({ operationId, at, by, reason, outcome, confirm }) {
-    const { initial, latest } = operation(operationId), attempt = inspected(initial)
-    check(latest.value.phase === 'reserved' && ['absent', 'begun'].includes(attempt.status), 'SEMANTIC_RECONCILE_REQUIRED', 'Partial output must be completed on its original attempt; completed attempts cannot be abandoned')
+    const { initial, latest } = operation(operationId), attempt = intake.readAttempt(initial.value.attemptId)
+    const foreign = foreignAttempt(initial, attempt)
+    check(latest.value.phase === 'reserved' && (foreign && outcome === 'not-executed' || !foreign && ['absent', 'begun'].includes(attempt.status)),
+      'SEMANTIC_RECONCILE_REQUIRED', 'Partial own output must be completed; a foreign manifest permits only explicit not-executed reconciliation')
     check(['not-executed', 'failed-no-output'].includes(outcome) && typeof reason === 'string' && reason.trim().length > 0 && reason.length <= 8192, 'SEMANTIC_OPERATION_INVALID', 'An explicit host reconciliation outcome and reason are required')
-    const recorded = append({ schema: OPERATION, operationId, phase: 'reconciled', reserved: harnessRef(initial.record), outcome, reason, assurance: 'host-declared-not-independently-verified' }, { term: initial.record.data.term, at, by, confirm })
-    return { ...status({ operationId }), head: recorded.head }
+    const recovery = foreign ? { recovery: { kind: 'foreign-manifest-before-readiness', attemptId: initial.value.attemptId, manifestDigest: ingestionDigest(attempt.attempt) } } : {}
+    const recorded = append({ schema: OPERATION, operationId, phase: 'reconciled', reserved: harnessRef(initial.record), outcome, reason, assurance: 'host-declared-not-independently-verified', ...recovery }, { term: initial.record.data.term, at, by, confirm })
+    try { return { ...status({ operationId }), head: recorded.head } }
+    catch (error) {
+      const saved = history()
+      error.recorded = { record: harnessRef(saved.records.find(record => record.id === eventId(operationId, 'reconciled'))), head: saved.head, nextAction: 'reopen-recorded-write' }
+      throw error
+    }
   }
   function complete({ operationId, output, expectedOutputDigest, candidates, usage, at, confirm }) {
     const { initial, latest, state } = operation(operationId), value = initial.value
     check(state.head === confirm && latest.value.phase === 'reserved', 'SEMANTIC_OPERATION_HEAD', 'Complete the reserved operation against current history')
-    // Store executed bytes before interpreting even an oversized/malformed envelope.
+    // Verify byte custody before publication; never write into another run's attempt.
+    inspected(initial)
+    // Store owned executed bytes before interpreting even an oversized/malformed envelope.
     intake.completeAttempt({ attemptId: value.attemptId, output, expectedOutputDigest })
     const attempt = inspected(initial)
     try {
@@ -485,8 +508,12 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       const reasons = refs.flatMap(pin => reconsider.get(pin.id) ?? [])
       if (reasons.length) reconsider.set(record.id, [...new Set([...(reconsider.get(record.id) ?? []), ...reasons])])
     }
+    const active = new Set()
+    for (const record of state.records) if (record.kind === 'activation' && !reconsider.has(record.id)) {
+      for (const pin of record.data.reviews) active.add(state.records.find(item => item.id === pin.id).data.target.id)
+    }
     return { answerClass: 'accepted-knowledge', ...view,
-      hits: view.hits.filter(hit => !reconsider.has(hit.reference.id)),
+      hits: view.hits.filter(hit => active.has(hit.reference.id) && !reconsider.has(hit.reference.id)),
       reconsider: [...reconsider].map(([id, reasons]) => ({ id, reasons })),
       diagnostics: [...view.diagnostics, ...failures] }
 

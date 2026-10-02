@@ -250,8 +250,9 @@ compatibility. Context reports the affected record in `diagnostics` and
 `reconsider`, withholds it and dependent records, and preserves unrelated
 accepted retrieval and projection. Its old body is never rewritten. An
 activation selecting the incompatible assertion refuses; an independent
-activation remains usable. Unexpected storage or history failures still refuse
-the request. The receiver must explicitly revise the assertion for the new choice.
+activation remains usable. Named semantic pin mismatches are withheld with record-specific diagnostics.
+Low-level IO/intake errors and unexpected history failures still refuse the
+request. The receiver must explicitly revise the assertion for the new choice.
 
 Reconciled reservations are skipped before inspecting their old intake IDs when
 starting another operation. Intake IDs remain workspace-wide: a collision with
@@ -259,3 +260,20 @@ another run refuses exact status readback rather than attributing that run's
 bytes to the old reservation. It does not prevent beginning with a new ID after
 explicit reconciliation. The runner does not add a workspace-wide reservation
 owner or claim atomic publication across intake and knowledge ledgers.
+
+Activation membership is recomputed against the merged reconsideration set.
+A mixed activation containing an incompatible assertion cannot activate its
+other members in context. A separate current activation can make those
+compatible members available again; retrieval and projection use the same
+activation eligibility.
+
+If an interrupted reserved operation discovers a different immutable intake
+manifest under its attempt ID, explicit `not-executed` reconciliation records a
+`foreign-manifest-before-readiness` recovery pin and the exact manifest digest.
+That conflicting manifest confirms this reservation did not publish a matching
+attempt or reach the supported host-readiness return. The host declaration
+remains labelled, not independently authenticated. Reconciled status reports
+`foreign-manifest` with its pin and never returns the other run's raw bytes. A
+fresh distinct attempt ID is required. Own partial or completed output remains
+ineligible for abandonment. Completion checks exact manifest custody before
+raw publication, so another run's begun attempt cannot receive these bytes.
