@@ -17,7 +17,6 @@
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { decisionRequestDigest } from '../../src/decisions/contracts.mjs'
@@ -46,15 +45,18 @@ export const definition = () => JSON.parse(fs.readFileSync(path.join(HERE, 'defi
 // and global config and attributes are ignored, configuration and attribute
 // overrides from the environment are removed, diffs are forced to text and name
 // their algorithm and options, and paths are passed from the repository top.
+// git documents /dev/null for disabling a config or attributes file on every
+// platform; on Windows the native null device path (\\.\nul) is refused.
+const GIT_NULL = '/dev/null'
 // The environment is an allowlist, so no GIT_* variable from the caller (pathspec
 // magic, replace refs, alternates, config or attribute overrides) reaches git.
 const GIT_ENV = (() => {
   const env = {}
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'SYSTEMROOT', 'LANG', 'LC_ALL']) if (process.env[key] !== undefined) env[key] = process.env[key]
-  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ATTR_NOSYSTEM: '1', GIT_LITERAL_PATHSPECS: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' }
+  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: GIT_NULL, GIT_ATTR_NOSYSTEM: '1', GIT_LITERAL_PATHSPECS: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' }
 })()
 const git = (repo, args, encoding = 'utf8') =>
-  execFileSync('git', ['-C', repo, '-c', 'core.quotePath=false', '-c', `core.attributesFile=${os.devNull}`, ...args], { encoding, env: GIT_ENV, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+  execFileSync('git', ['-C', repo, '-c', 'core.quotePath=false', '-c', `core.attributesFile=${GIT_NULL}`, ...args], { encoding, env: GIT_ENV, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
 const DIFF_OPTIONS = ['--text', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-algorithm=myers', '--no-indent-heuristic', '--inter-hunk-context=0']
 const PR_RE = /^[1-9]\d*$/
 const MIN_GIT = [2, 32]
