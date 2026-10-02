@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A capability operation that has committed no longer reports `EEXIST` ("not
+  entered") when its lock is removed or replaced while cleanup inspects it.
+  Cleanup preserves the other file and returns the operation's result. Lock
+  races in reclamation, readback and cleanup are each covered by a test.
 - `src/judgment/practice.mjs` and `src/judgment/practice-evaluation.mjs` keep a
   reusable decision practice inside an ordinary Knowledge contribution
   (`docs/decision-practices.md`). They are internal: the
@@ -81,7 +85,7 @@
   - `npm run knowledge:consumer-proof` installs a packed tarball into a clean
     consumer and checks the documented CLI paths, writing a receipt bound to the
     tarball SHA-256.
-- Personal workspaces are published as `@mnstry/atelier/personal-workspace`,
+- Personal workspaces are exported as `@mnstry/atelier/personal-workspace`,
   with their manifest and overlay schemas under `@mnstry/atelier/contracts/`. The
   public API is these nine exports: `MANIFEST_SCHEMA`, `OVERLAY_SCHEMA`,
   `PersonalWorkspaceRefusal`, `loadPersonalManifest`, `loadPersonalOverlay`,

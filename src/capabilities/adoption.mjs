@@ -216,6 +216,16 @@ function removeOperationLock(root, observed) {
   return true
 }
 
+// After the callback has run, a lock that changed or vanished while cleanup
+// inspected it is not ours: preserve it. EEXIST means "not entered", so it must
+// never be reported for an operation that already committed.
+function releaseOwnedOperationLock(root, owned) {
+  try { return removeOperationLock(root, owned) } catch (error) {
+    if (error.code === 'EEXIST' || error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
 function withOperationLock(root, callback) {
   within(root, path.posix.dirname(OPERATION_LOCK), { directory: true, create: true })
   const prior = readOperationLock(root)
@@ -237,7 +247,7 @@ function withOperationLock(root, callback) {
     return callback()
   } catch (error) { failed = true; throw error } finally {
     let cleanupError
-    try { if (owned) removeOperationLock(root, owned) } catch (error) { cleanupError = error }
+    try { if (owned) releaseOwnedOperationLock(root, owned) } catch (error) { cleanupError = error }
     try { release() } catch (error) { cleanupError ??= error }
     // A missing or changed file never authorizes deleting a replacement; a
     // cleanup failure must also preserve the operation's original exception.
