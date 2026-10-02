@@ -70,7 +70,7 @@ export function assertSemanticOperationProfile({ references = [], candidates = n
 }
 export function semanticDependencyWitnesses({ citations, sources, endpoints = [] }) {
   const basedOn = [], sourceWitness = []
-  function witness(record, quote) {
+  function witness(record, quote, dependency = 'source') {
     check(typeof quote === 'string' && quote.length > 0, 'SEMANTIC_UNSUPPORTED_LEDGER_CITATION', 'A source quote is required for a dependency witness')
     let encoded = ''
     for (const point of quote) {
@@ -82,14 +82,14 @@ export function semanticDependencyWitnesses({ citations, sources, endpoints = []
     if (basedOn.some(item => item.contribution.id === record.id)) return
     check(basedOn.length < 64, 'SEMANTIC_UNSUPPORTED_LEDGER_CITATION', 'Sources and endpoints exceed the existing dependency limit')
     basedOn.push({ contribution: harnessRef(record), quote: encoded })
-    sourceWitness.push({ contributionId: record.id, encoding: 'json-string-substring', purpose: 'ledger-dependency-only' })
+    sourceWitness.push({ contributionId: record.id, encoding: 'json-string-substring', purpose: 'ledger-dependency-only', dependency })
   }
   for (const citation of citations) {
     const matches = sources.filter(record => record.data.origin.method === 'extracted' && record.data.origin.attemptId === citation.attemptId && record.data.origin.blobDigest === `sha256:${citation.sourceDigest}`)
     check(matches.length === 1, 'SEMANTIC_UNSUPPORTED_LEDGER_CITATION', 'Each citation needs one exact current structural source contribution')
     witness(matches[0], citation.quote)
   }
-  for (const endpoint of endpoints) witness(endpoint.record, endpoint.quote)
+  for (const endpoint of endpoints) witness(endpoint.record, endpoint.quote, endpoint.dependency)
   return { basedOn, sourceWitness }
 }
 // Relation support is not a ledger dependency in harness v1. This guard is
@@ -236,14 +236,22 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
       check(cached.freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'Cached semantic input is stale')
       return { ...cached, cacheReuse: true }
     }
+    check(!starts.some(prior => prior.value.attemptId === attemptId), 'SEMANTIC_OPERATION_EXISTS', 'Attempt identity is already reserved')
     check(intake.readAttempt(attemptId).status === 'absent', 'SEMANTIC_OPERATION_EXISTS', 'Attempt identity is already in use')
     intake.ingest({ ref: source.ref, expectedDigest: source.digest })
     const value = { schema: OPERATION, operationId, phase: 'reserved', attemptId, source, input, extractor }
     const recorded = append(value, { term, at, by: `host-model:${extractor.id}@${extractor.version}`, confirm })
-    intake.beginAttempt({ attemptId, blobId: source.digest, extractorId: extractor.id, extractorVersion: extractor.version, configurationDigest: extractor.configurationDigest })
-    const ready = status({ operationId })
-    check(ready.freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'Source or domain changed during reservation')
-    return { ...ready, head: recorded.head, execution: 'ready-for-host', cacheReuse: false }
+    try {
+      intake.beginAttempt({ attemptId, blobId: source.digest, extractorId: extractor.id, extractorVersion: extractor.version, configurationDigest: extractor.configurationDigest })
+      const ready = status({ operationId })
+      check(ready.phase === 'reserved' && ready.head === recorded.head, 'SEMANTIC_RECONCILE_REQUIRED', 'Reservation changed before host execution')
+      check(ready.freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'Source or domain changed during reservation')
+      return { ...ready, execution: 'ready-for-host', cacheReuse: false }
+    } catch (error) {
+      const saved = history()
+      error.recorded = { record: harnessRef(saved.records.find(record => record.id === eventId(operationId, 'reserved'))), head: saved.head, nextAction: 'reopen-recorded-write' }
+      throw error
+    }
   }
   function reconcile({ operationId, at, by, reason, outcome, confirm }) {
     const { initial, latest } = operation(operationId), attempt = inspected(initial)
@@ -255,28 +263,33 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
   function complete({ operationId, output, expectedOutputDigest, candidates, usage, at, confirm }) {
     const { initial, latest, state } = operation(operationId), value = initial.value
     check(state.head === confirm && latest.value.phase === 'reserved', 'SEMANTIC_OPERATION_HEAD', 'Complete the reserved operation against current history')
-    check(status({ operationId }).freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'The source or adopted domain changed before completion')
     // Store executed bytes before interpreting even an oversized/malformed envelope.
     intake.completeAttempt({ attemptId: value.attemptId, output, expectedOutputDigest })
     const attempt = inspected(initial)
-    const declared = json({ candidates, usage })
-    closed(declared.usage, ['inputTokens', 'outputTokens', 'cost', 'currency', 'elapsedMs', 'retries'])
-    for (const key of ['inputTokens', 'outputTokens', 'elapsedMs', 'retries']) check(declared.usage[key] === null || Number.isSafeInteger(declared.usage[key]) && declared.usage[key] >= 0, 'SEMANTIC_OPERATION_INVALID', 'Usage counts are nonnegative integers or unknown')
-    check(declared.usage.cost === null || typeof declared.usage.cost === 'number' && Number.isFinite(declared.usage.cost) && declared.usage.cost >= 0, 'SEMANTIC_OPERATION_INVALID', 'Cost is nonnegative or unknown')
-    check(declared.usage.currency === null || typeof declared.usage.currency === 'string' && /^[A-Z]{3}$/.test(declared.usage.currency), 'SEMANTIC_OPERATION_INVALID', 'Currency is explicit or unknown')
-    assertSemanticOperationProfile({ candidates: declared.candidates })
-    // Preserve executed raw bytes even when their interpretation is refused.
-    // Resuming interpretation reuses this completion; it never runs the host.
-    const proposals = prepareSemanticProposals({ store, input: value.input, candidates: declared.candidates })
-    const recorded = append({ schema: OPERATION, operationId, phase: 'completed', reserved: harnessRef(initial.record), completion: attempt.completion,
-      candidates: declared.candidates, usage: declared.usage, usageAssurance: 'host-reported', inputDigest: value.input.digest }, { term: initial.record.data.term, at, by: `host-model:${value.extractor.id}@${value.extractor.version}`, confirm })
-    const ready = status({ operationId })
-    if (ready.freshness !== 'current') {
-      const error = new SemanticOperationError('SEMANTIC_OPERATION_STALE', 'Source or domain changed after recording completion')
-      error.recorded = { record: harnessRef(history().records.find(record => record.id === eventId(operationId, 'completed'))), head: recorded.head, nextAction: 'reopen-recorded-write' }
+    try {
+      check(status({ operationId }).freshness === 'current', 'SEMANTIC_OPERATION_STALE', 'The source or adopted domain changed before completion')
+      const declared = json({ candidates, usage })
+      closed(declared.usage, ['inputTokens', 'outputTokens', 'cost', 'currency', 'elapsedMs', 'retries'])
+      for (const key of ['inputTokens', 'outputTokens', 'elapsedMs', 'retries']) check(declared.usage[key] === null || Number.isSafeInteger(declared.usage[key]) && declared.usage[key] >= 0, 'SEMANTIC_OPERATION_INVALID', 'Usage counts are nonnegative integers or unknown')
+      check(declared.usage.cost === null || typeof declared.usage.cost === 'number' && Number.isFinite(declared.usage.cost) && declared.usage.cost >= 0, 'SEMANTIC_OPERATION_INVALID', 'Cost is nonnegative or unknown')
+      check(declared.usage.currency === null || typeof declared.usage.currency === 'string' && /^[A-Z]{3}$/.test(declared.usage.currency), 'SEMANTIC_OPERATION_INVALID', 'Currency is explicit or unknown')
+      assertSemanticOperationProfile({ candidates: declared.candidates })
+      // Preserve executed raw bytes even when their interpretation is refused.
+      // Resuming interpretation reuses this completion; it never runs the host.
+      const proposals = prepareSemanticProposals({ store, input: value.input, candidates: declared.candidates })
+      const recorded = append({ schema: OPERATION, operationId, phase: 'completed', reserved: harnessRef(initial.record), completion: attempt.completion,
+        candidates: declared.candidates, usage: declared.usage, usageAssurance: 'host-reported', inputDigest: value.input.digest }, { term: initial.record.data.term, at, by: `host-model:${value.extractor.id}@${value.extractor.version}`, confirm })
+      const ready = status({ operationId })
+      if (ready.freshness !== 'current') {
+        const error = new SemanticOperationError('SEMANTIC_OPERATION_STALE', 'Source or domain changed after recording completion')
+        error.recorded = { record: harnessRef(history().records.find(record => record.id === eventId(operationId, 'completed'))), head: recorded.head, nextAction: 'reopen-recorded-write' }
+        throw error
+      }
+      return { ...ready, head: recorded.head, proposals }
+    } catch (error) {
+      error.captured = { attemptId: value.attemptId, completion: attempt.completion, head: history().head, nextAction: 'reopen-captured-output' }
       throw error
     }
-    return { ...ready, head: recorded.head, proposals }
   }
   function completed(operationId) {
     if (verification?.completed.has(operationId)) return verification.completed.get(operationId)
@@ -329,9 +342,10 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     if (body.kind === 'assertion') for (const role of ['subject', 'object']) {
       const id = candidate[`${role}Id`]
       if (id === null) { endpoints[role] = null; continue }
-      const resolved = endpoint(current.proposals.entities.find(entity => entity.id === id), current)
+      const { target: resolved, interpretation } = endpoint(current.proposals.entities.find(entity => entity.id === id), current)
       endpoints[role] = harnessRef(resolved)
-      endpointWitnesses.push({ record: resolved, quote: endpointWitnessQuote(resolved) })
+      endpointWitnesses.push({ record: interpretation, quote: endpointWitnessQuote(interpretation), dependency: 'identity-choice' })
+      if (resolved.id !== interpretation.id) endpointWitnesses.push({ record: resolved, quote: endpointWitnessQuote(resolved), dependency: 'resolved-identity' })
     }
     const witnesses = semanticDependencyWitnesses({ citations: candidate.evidence, sources: [sourceRecord], endpoints: endpointWitnesses })
     check(ingestionDigest(body.endpoints) === ingestionDigest(endpoints) && ingestionDigest(record.data.basedOn) === ingestionDigest(witnesses.basedOn) && ingestionDigest(body.sourceWitness) === ingestionDigest(witnesses.sourceWitness), 'SEMANTIC_OPERATION_INTEGRITY', 'Interpretation dependency, witness or endpoint pins differ')
@@ -361,17 +375,17 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     })
     check(record && current.state.accepted.includes(record.id), 'SEMANTIC_IDENTITY_PENDING', 'The receiver must review each endpoint entity first')
     verifySemantic(record)
-    if (entity.identity.status === 'source-local') return record
+    if (entity.identity.status === 'source-local') return { target: record, interpretation: record }
     // The ordinary review record carries the explicit receiver identity choice.
     const acceptedReview = current.state.records.findLast(item => item.kind === 'review' && item.data.target.id === record.id)
     let decision
     try { decision = JSON.parse(acceptedReview.data.basis) } catch { /* A prose acceptance does not resolve a canonical identity. */ }
     check(decision?.schema === 'atelier.semantic-identity-decision/v0' && decision.operationId === current.initial.value.operationId && decision.candidateId === entity.id && ['existing', 'source-local'].includes(decision.resolution?.status), 'SEMANTIC_IDENTITY_PENDING', 'An explicit receiver identity review is required')
-    if (decision.resolution.status === 'source-local') return record
+    if (decision.resolution.status === 'source-local') return { target: record, interpretation: record }
     const target = current.state.records.find(item => item.id === decision.resolution.contribution?.id)
     check(target?.kind === 'contribution' && entity.identity.candidateIds.includes(target.id) && target.data.term === entity.type && current.state.accepted.includes(target.id) && harnessRef(target).digest === decision.resolution.contribution.digest,
       'SEMANTIC_IDENTITY_PENDING', 'Canonical identity must be a supplied currently accepted matching contribution')
-    return target
+    return { target, interpretation: record }
   }
   function prepareContribution({ operationId, id, kind, candidateId, source, sourceBinding, term, at, confirm, supersedes = null, revisionReason = null }) {
     identifier(id)
@@ -384,9 +398,10 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     if (kind === 'assertion') for (const role of ['subject', 'object']) {
       const candidateId = candidate[`${role}Id`]
       if (candidateId === null) { endpoints[role] = null; continue }
-      const entity = current.proposals.entities.find(entity => entity.id === candidateId), resolved = endpoint(entity, current)
+      const entity = current.proposals.entities.find(entity => entity.id === candidateId), { target: resolved, interpretation } = endpoint(entity, current)
       endpoints[role] = harnessRef(resolved)
-      endpointWitnesses.push({ record: resolved, quote: endpointWitnessQuote(resolved) })
+      endpointWitnesses.push({ record: interpretation, quote: endpointWitnessQuote(interpretation), dependency: 'identity-choice' })
+      if (resolved.id !== interpretation.id) endpointWitnesses.push({ record: resolved, quote: endpointWitnessQuote(resolved), dependency: 'resolved-identity' })
     }
     const witnesses = semanticDependencyWitnesses({ citations: candidate.evidence, sources: [sourceRecord], endpoints: endpointWitnesses })
     const value = current.initial.value, body = canonicalize(json({ schema: SEMANTIC_OPERATION_PROFILE, operationId, kind, candidate, endpoints, raw: current.raw,
@@ -431,7 +446,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     const cleaned = []
     for (const relation of state.records.filter(record => record.kind === 'relation')) {
       const support = /(?:^|\n)semantic-support: ([a-z][a-z0-9-]{0,63}) (sha256:[a-f0-9]{64})$/.exec(relation.data.rationale)
-      if (support?.[1] !== withdrawal.data.target.id) continue
+      if (support?.[1] !== withdrawal.data.target.id || support[2] !== withdrawal.data.target.digest || relation.id !== semanticRelationId(support[1])) continue
       state = history()
       if (state.records.some(record => record.kind === 'withdrawal' && record.data.target.id === relation.id)) continue
       const cleanup = { schema: 'atelier-knowledge-record@v1', id: `cleanup-${intakeDigest(`${withdrawalId}:${relation.id}`).slice(0, 40)}`, run, at, by: 'semantic-operation:withdrawal-cleanup', kind: 'withdrawal', data: {
@@ -461,6 +476,7 @@ export function createSemanticOperation({ workspaceRoot, workspaceId, run }) {
     return { ...knowledgeGraphProposal(state.records, { activationId, namespace }), semanticProfile: SEMANTIC_OPERATION_PROFILE,
       semanticEntities: typed.filter(item => item.body.kind === 'entity').map(item => ({ record: harnessRef(item.record), candidate: item.body.candidate })),
       semanticAssertions: typed.filter(item => item.body.kind === 'assertion').map(item => ({ record: harnessRef(item.record), candidate: item.body.candidate, endpoints: item.body.endpoints })),
+      dependencyWitnesses: typed.map(item => ({ record: harnessRef(item.record), witnesses: item.body.sourceWitness })),
       projectionOmissions: typed.filter(item => item.body.kind === 'assertion').map(item => ({ assertion: harnessRef(item.record), ...plainAssertionEligibility(item.body.candidate, state.domain) })).filter(item => !item.eligible) }
   }
   return Object.freeze({ begin, status, reconcile, complete, proposals: request => verified(() => proposals(request)),

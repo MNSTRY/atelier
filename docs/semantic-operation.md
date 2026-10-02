@@ -211,3 +211,35 @@ separate qualification work. A real receiver run through the installed command,
 saved-state readback, a correction repeat and an independent useful-task repeat
 are required before claiming completion. Measure cold ingestion, incremental
 correction and warm retrieval separately, retaining unknown cost and omissions.
+
+
+### Correction dependencies and captured-output refusals
+
+An assertion depends on each reviewed endpoint interpretation, including the
+receiver's explicit identity choice, as well as a distinct resolved canonical
+contribution. These dependency-only witnesses are labelled `identity-choice`
+and `resolved-identity`. Withdrawing, re-evaluating, superseding or changing the
+reviewed interpretation makes the affected assertion or its acceptance require
+reconsideration through the existing ledger. Unaffected accepted knowledge stays
+retrievable. Corrected interpretations reuse immutable raw capture.
+
+A ledger reservation owns its attempt identifier even before intake publication.
+After intake begins, the reservation must still be reserved at the returned
+history head before `ready-for-host` is returned. A refused saved reservation
+carries `recorded` with the actual record and current head for reopening.
+
+Executed output is captured before source-freshness or interpretation checks.
+If the original or adopted domain changed, interpretation refuses as stale and
+carries `captured` with the actual intake completion and current history head.
+`status` can reopen those exact bytes as complete while the semantic operation
+remains reserved and stale; it does not imply accepted interpretation or permit
+claiming the output was never executed. The existing completed-attempt guard
+still prevents abandonment, and identical-byte completion remains idempotent.
+
+The semantic projection also returns labelled `dependencyWitnesses`. The existing
+generic projector emits `evidences` claims for ledger dependencies; these are
+provenance/dependency proposals, not additional extracted domain assertions.
+Use `semanticAssertions` and their qualifiers for those assertions. Consequential
+withdrawal cleanup matches both the generated semantic relation identity and its
+exact supporting assertion digest, leaving ordinary support-like rationale text
+untouched.
