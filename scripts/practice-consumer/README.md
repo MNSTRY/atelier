@@ -38,6 +38,34 @@ The assessment is the predicate the rubric declares:
 
 Each line also records whether the Knowledge harness itself marks the decision for reconsideration once the changed source is recorded (`harnessReconsider`).
 
+## Anchored citations (definition revision two)
+
+A decision can cite some lines of a file rather than the whole file, with a GitHub line anchor: `[text](../src/example.mjs#L12-L30)` or `#L12`. Put the link in a table row's second or third cell; the first cell names the decision, and changing it changes the decision's id.
+
+**How an anchor is read**
+- The anchor is translated at this boundary into the existing selector `text-lines@1`, value `lines:12-30`, owner `atelier-root`, with the repository path as the object id. Nothing downstream sees the `#L` form.
+- Any other fragment (a heading, `#L0`, `#L5-L3`, `#L1-2`) is refused as `cited-anchor-unsupported` or `cited-anchor-malformed`. It is never read as the whole file.
+- The anchored lines are read at the merge base, where the decision is read. A range past the end of the file is refused (`cited-anchor-out-of-range`), and so is one longer than 120 lines (`cited-anchor-over-bounds`).
+- Lines are the UTF-8 file split on LF. A CR or a BOM stays in the text, and a final LF makes a final empty line.
+- Each outcome records two references, each with its own revision and digest:
+  - the anchor at the merge base (`anchor.base`);
+  - the same lines mapped to the head (`anchor.head`, null when every anchored line was removed).
+
+**Whether a change touches an anchor** is decided in base coordinates:
+- A removed or modified base line inside the anchor counts as removed.
+- An insertion counts as inside only between two anchored lines. Insertions directly before or after the anchor are outside it.
+- The prerequisite is that the anchored lines changed, or that the head cannot show them (file removed or binary). A change only outside the anchor stops on the false prerequisite, and `anchor.outsideChanges` records it.
+
+**Re-anchoring is reported apart from the outcome.** `anchor.reanchor` is true when the anchor moved or its lines changed, and `summary.reanchors` counts these. A draft never hides a needed re-anchor, and a stop never drops one.
+
+Renames are not followed. A moved file is absent at the head, so its anchors escalate and need re-anchoring.
+
+**Versions**
+- Revision two writes `atelier-practice-consumer-measurement@v1` lines, which add the `anchor` field.
+- Labels are `atelier-practice-consumer-label@v1`. `label --anchor lines:S-E` names the anchored outcome, and is required when a decision cites the same file more than once.
+- Earlier `@v0` lines keep their own definition and tool digests and stay labelable as whole-file citations.
+- Whole-file citations keep their revision-one request and instance identities.
+
 ## What it does not do
 
 - It calls no provider and appends to no Knowledge store. It accepts or activates nothing, and it writes only its measurement file.
@@ -46,7 +74,7 @@ Each line also records whether the Knowledge harness itself marks the decision f
 - For a removed or binary source, the source evidence is a placeholder text that says so, bound to the head commit.
 - An unchanged source is not assessed. The evaluator validates the result, which is a fixed placeholder there, and then stops on the false prerequisite.
 - Appending to a file that has no final newline also changes its last line, so it counts as `affected`.
-- A decision without an explicit link cannot be measured. A change that matters to a decision without touching a cited file is a miss the tool cannot see.
+- A decision without an explicit link cannot be measured. A change that matters to a decision without touching a cited file, or its anchored lines, is a miss the tool cannot see.
 
 ## First measurements (retrospective, recorded 2026-10-02)
 

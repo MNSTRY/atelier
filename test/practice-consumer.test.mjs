@@ -5,7 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { CORPUS, LABELS, assess, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
+import crypto from 'node:crypto'
+import { CORPUS, LABELS, anchorChange, assess, citations, citedPaths, label, measure, parseDecisions } from '../scripts/practice-consumer/reconsider.mjs'
 
 // Foundation's repository-local decision-practice consumer, exercised on a
 // disposable git repository with invented decisions and sources.
@@ -212,7 +213,7 @@ test('a cited directory is not evaluated rather than silently stopping', (t) => 
   })
   const head = r.commit('change inside', () => fs.writeFileSync(path.join(r.dir, 'docs/parts/one.md'), 'changed\n'))
   const value = measure({ repo: r.dir, pr: 14, base, head }).decisions.find((item) => item.cited.length).outcomes[0]
-  assert.deepEqual(value, { file: 'docs/parts', status: 'not-evaluated', reason: 'cited-path-not-a-file' })
+  assert.deepEqual(value, { file: 'docs/parts', anchor: null, status: 'not-evaluated', reason: 'cited-path-not-a-file' })
 })
 
 test('a renamed cited source escalates instead of looking unchanged', (t) => {
@@ -319,4 +320,128 @@ test('the CLI measures when invoked through a symlinked path, and importing it r
     assert.equal(imported.status, 0, imported.stderr)
     assert.equal(imported.stdout, '')
   }
+})
+
+// Line anchors: GitHub #L fragments become the existing text-lines@1 selector.
+const sha = (text) => `sha256:${crypto.createHash('sha256').update(text).digest('hex')}`
+const anchoredRepo = (t, fragment = '#L3-L4', source = SOURCE) => {
+  const r = repo(t)
+  const base = r.commit('anchor', () => {
+    fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), source)
+    fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', `(layers.md${fragment})`))
+  })
+  return { ...r, base }
+}
+const lines = (...items) => [...items, ''].join('\n')
+
+test('citations translate #L anchors and refuse every other fragment without widening it', () => {
+  const cite = (target) => citations(`see [x](${target})`)
+  assert.deepEqual(cite('layers.md'), [{ file: 'docs/layers.md', anchor: null }])
+  assert.deepEqual(cite('layers.md#L3-L4'), [{ file: 'docs/layers.md', anchor: { start: 3, end: 4, value: 'lines:3-4' } }])
+  assert.deepEqual(cite('layers.md#L4'), [{ file: 'docs/layers.md', anchor: { start: 4, end: 4, value: 'lines:4-4' } }])
+  for (const fragment of ['heading', 'L0', 'L01', 'L1-2', 'l3', 'L3-L', 'L3-L4-L5', '']) assert.equal(cite(`layers.md#${fragment}`)[0].refusal, 'cited-anchor-unsupported', fragment)
+  for (const fragment of ['L5-L3', 'L99999999999999999999']) assert.equal(cite(`layers.md#${fragment}`)[0].refusal, 'cited-anchor-malformed', fragment)
+  assert.equal(cite('layers.md#heading')[0].anchor, null)
+  // The same file anchored twice is two citations; citedPaths still names the file once.
+  assert.equal(citations('[a](layers.md#L1-L2) [b](layers.md#L3-L4) [c](layers.md#L1-L2)').length, 2)
+  assert.deepEqual(citedPaths('[a](layers.md#L1-L2) [b](layers.md#heading)'), ['docs/layers.md'])
+})
+
+test('anchor relevance uses base hunk coordinates and explicit insertion boundaries', () => {
+  const at = (oldStart, oldCount, removed, added) => ({ oldStart, oldCount, removed, added })
+  const anchor = { start: 10, end: 12 }
+  // A modified line inside.
+  assert.deepEqual(anchorChange([at(11, 1, 1, 1)], anchor), { removed: 1, added: 1, outside: false, head: { start: 10, end: 12 }, reanchor: true })
+  // Insertions directly before (after line 9) and directly after (after line 12) are outside.
+  assert.deepEqual(anchorChange([at(9, 0, 0, 2)], anchor), { removed: 0, added: 0, outside: true, head: { start: 12, end: 14 }, reanchor: true })
+  assert.deepEqual(anchorChange([at(12, 0, 0, 2)], anchor), { removed: 0, added: 0, outside: true, head: { start: 10, end: 12 }, reanchor: false })
+  // An insertion between anchored lines is inside, as additions only.
+  assert.deepEqual(anchorChange([at(10, 0, 0, 1)], anchor), { removed: 0, added: 1, outside: false, head: { start: 10, end: 13 }, reanchor: true })
+  // A hunk straddling the start overlaps only on its anchored lines.
+  assert.equal(anchorChange([at(8, 4, 4, 0)], anchor).removed, 2)
+  // Removing every anchored line leaves no head lines.
+  assert.equal(anchorChange([at(10, 3, 3, 0)], anchor).head, null)
+  // A change below the anchor leaves it in place.
+  assert.deepEqual(anchorChange([at(20, 1, 1, 1)], anchor), { removed: 0, added: 0, outside: true, head: { start: 10, end: 12 }, reanchor: false })
+})
+
+test('a change inside an anchor drafts; a change only outside stops and still reports re-anchoring', (t) => {
+  const inside = anchoredRepo(t)
+  const changedHead = inside.commit('inside', () => fs.writeFileSync(path.join(inside.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const m = measure({ repo: inside.dir, pr: 30, base: inside.base, head: changedHead })
+  const hit = outcome(m)
+  assert.equal(m.schema, 'atelier-practice-consumer-measurement@v1')
+  assert.equal(hit.status, 'proceed')
+  assert.deepEqual(hit.change, { removed: 1, added: 1, binary: false })
+  assert.deepEqual(hit.anchor.base, { owner: 'atelier-root', objectId: 'docs/layers.md', revision: inside.base, selector: { type: 'text-lines', version: '1', value: 'lines:3-4' }, contentDigest: sha('Line one of the invented model.\nLine two of the invented model.') })
+  assert.deepEqual(hit.anchor.head, { owner: 'atelier-root', objectId: 'docs/layers.md', revision: changedHead, selector: { type: 'text-lines', version: '1', value: 'lines:3-4' }, contentDigest: sha('Line one of the invented model.\nChanged two of the invented model.') })
+  assert.equal(hit.anchor.reanchor, true)
+  assert.equal(m.summary.reanchors, 1)
+
+  // Lines added above the anchor move it: no draft, but the re-anchor is reported.
+  const above = anchoredRepo(t)
+  const movedHead = above.commit('above', () => fs.writeFileSync(path.join(above.dir, 'docs/layers.md'), SOURCE.replace('# Layers\n', '# Layers\nA new first paragraph.\n')))
+  const moved = outcome(measure({ repo: above.dir, pr: 31, base: above.base, head: movedHead }))
+  assert.equal(moved.prerequisite, false)
+  assert.equal(moved.status, 'stop')
+  assert.equal(moved.anchor.outsideChanges, true)
+  assert.equal(moved.anchor.reanchor, true)
+  assert.equal(moved.anchor.head.selector.value, 'lines:4-5')
+  assert.equal(moved.anchor.head.contentDigest, moved.anchor.base.contentDigest)
+
+  // A change below the anchor neither drafts nor moves it.
+  const below = anchoredRepo(t)
+  const belowHead = below.commit('below', () => fs.writeFileSync(path.join(below.dir, 'docs/layers.md'), SOURCE.replace('Line three.', 'Line three, changed.')))
+  const still = outcome(measure({ repo: below.dir, pr: 32, base: below.base, head: belowHead }))
+  assert.deepEqual([still.status, still.anchor.outsideChanges, still.anchor.reanchor, still.anchor.head.selector.value], ['stop', true, false, 'lines:3-4'])
+})
+
+test('anchors refuse out-of-range and unsupported citations, and a removed file escalates', (t) => {
+  const far = anchoredRepo(t, '#L6-L9')
+  const farHead = far.commit('edit', () => fs.writeFileSync(path.join(far.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
+  assert.deepEqual(outcome(measure({ repo: far.dir, pr: 33, base: far.base, head: farHead })), { file: 'docs/layers.md', anchor: 'lines:6-9', status: 'not-evaluated', reason: 'cited-anchor-out-of-range' })
+  // The split keeps a final empty element after the last LF: line 6 exists.
+  const last = anchoredRepo(t, '#L6')
+  const lastHead = last.commit('edit', () => fs.writeFileSync(path.join(last.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
+  assert.equal(outcome(measure({ repo: last.dir, pr: 34, base: last.base, head: lastHead })).anchor.base.contentDigest, sha(''))
+  // An unsupported fragment is refused even though the file changed: no whole-file fallback.
+  const named = anchoredRepo(t, '#layers')
+  const namedHead = named.commit('edit', () => fs.writeFileSync(path.join(named.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'X')))
+  const refused = measure({ repo: named.dir, pr: 35, base: named.base, head: namedHead })
+  assert.deepEqual(outcome(refused), { file: 'docs/layers.md', anchor: null, status: 'not-evaluated', reason: 'cited-anchor-unsupported' })
+  assert.equal(refused.summary.drafts, 0)
+  // Renames are not followed: the file is absent at the head, so the anchor escalates.
+  const gone = anchoredRepo(t)
+  const goneHead = gone.commit('move', () => fs.renameSync(path.join(gone.dir, 'docs/layers.md'), path.join(gone.dir, 'docs/moved.md')))
+  const lost = outcome(measure({ repo: gone.dir, pr: 36, base: gone.base, head: goneHead }))
+  assert.deepEqual([lost.status, lost.assessment.reason, lost.anchor.head, lost.anchor.reanchor], ['escalate', 'insufficient-evidence', null, true])
+})
+
+test('anchored text keeps CR and BOM bytes; only LF separates lines', (t) => {
+  const crlf = '﻿# Layers\r\n\r\nLine one.\r\nLine two.\r\n'
+  const r = anchoredRepo(t, '#L1-L3', crlf)
+  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), crlf.replace('Line two.', 'Changed.')))
+  assert.equal(outcome(measure({ repo: r.dir, pr: 37, base: r.base, head })).anchor.base.contentDigest, sha('﻿# Layers\r\n\r\nLine one.\r'))
+})
+
+test('a label names the anchor it judges, and a file cited twice needs --anchor', (t) => {
+  const r = repo(t)
+  const base = r.commit('two anchors', () => fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', '(layers.md#L3) and [more](layers.md#L4)')))
+  const head = r.commit('edit', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line two', 'Changed two')))
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-anchor-labels-')), 'm.jsonl')
+  t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
+  const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--out', out], { encoding: 'utf8' })
+  assert.equal(cli('measure', '--pr', '38', '--base', base, '--head', head, '--repo', r.dir).status, 0)
+  const measured = JSON.parse(fs.readFileSync(out, 'utf8').trim())
+  const decision = measured.decisions.find((item) => item.cited.length)
+  assert.deepEqual(decision.outcomes.map((item) => [item.anchor.base.selector.value, item.status]), [['lines:3-3', 'stop'], ['lines:4-4', 'proceed']])
+  const base3 = ['label', '--pr', '38', '--decision', decision.id, '--file', 'docs/layers.md', '--label', 'correct', '--minutes', '1', '--by', 'atelier-foundation']
+  const ambiguous = cli(...base3)
+  assert.equal(ambiguous.status, 2)
+  assert.match(ambiguous.stderr, /name the --anchor/)
+  assert.equal(cli(...base3, '--anchor', 'lines:9-9').status, 2)
+  assert.equal(cli(...base3, '--anchor', 'lines:4-4').status, 0)
+  const labelled = JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1))
+  assert.deepEqual([labelled.schema, labelled.anchor], ['atelier-practice-consumer-label@v1', 'lines:4-4'])
+  assert.throws(() => label({ pr: 1, decision: decision.id, file: 'docs/layers.md', anchor: 'L4', measurement: `sha256:${'a'.repeat(64)}`, value: 'correct', reviewMinutes: 0, by: 'atelier-foundation' }), /anchor must be/)
 })

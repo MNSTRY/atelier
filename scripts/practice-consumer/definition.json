@@ -1,9 +1,9 @@
 {
   "format": "atelier.decision-practice/v0",
   "id": "atelier-decision-source-reconsideration",
-  "revision": "one",
-  "purpose": "Prepare a visible, unaccepted reconsideration draft when a root pull request changes a source that a recorded decision of this repository cites.",
-  "applicability": "The recorded decisions in docs/integration-contract-decisions.md and the repository files they link to, at exact commits. A person reviews every draft; nothing is applied automatically.",
+  "revision": "two",
+  "purpose": "Prepare a visible, unaccepted reconsideration draft when a root pull request changes a source, or the anchored lines of a source, that a recorded decision of this repository cites.",
+  "applicability": "The recorded decisions in docs/integration-contract-decisions.md and the repository files they link to, whole or by a #L line anchor read as text-lines@1 at the merge base, at exact commits. A person reviews every draft; nothing is applied automatically.",
   "rightsBasis": "Public Apache-2.0 repository source.",
   "evidenceRoles": [
     "source",
@@ -17,12 +17,12 @@
     "contractVersion": "1.0.0",
     "id": "specimen",
     "task": "decision-source-reconsideration",
-    "rubricVersion": "cited-source-predicate.v1",
+    "rubricVersion": "cited-source-predicate.v2",
     "scope": {
       "workspaceId": "atelier-root",
       "authorizationRef": "public-repository-source"
     },
-    "state": "e1: (the changed region of a cited source)\ne2: (the recorded decision)",
+    "state": "e1: (the changed region of a cited source, or its anchored lines mapped to the head)\ne2: (the recorded decision)",
     "evidence": [
       {
         "id": "e1",
@@ -42,8 +42,8 @@
           "e2"
         ],
         "criteria": {
-          "affected": "The change modifies or removes lines of a source the decision cites.",
-          "unaffected": "The change only adds lines to the cited source.",
+          "affected": "The change modifies or removes lines of a cited source; for an anchored citation, lines inside the anchor at the merge base.",
+          "unaffected": "The change only adds lines to the cited source; for an anchored citation, only between its anchored lines.",
           "unclear": "Neither description fits."
         }
       }
