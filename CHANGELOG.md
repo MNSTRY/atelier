@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- `src/ingestion/semantic.mjs` prepares source-bound entity and assertion
+  proposals from a host's extractor output, one source per input
+  (`docs/semantic-ingestion.md`). It is an internal module: its `v0` formats are
+  not public contracts, and it has no package export or CLI command. The host
+  must already hold whole-plan read permission, which the module does not grant,
+  and chooses and runs its extractor. The module makes no provider call, durable
+  write or graph change, and claims no extraction quality. `readSemanticProposals`
+  gives a search view that rereads the cited evidence. Proposals and identity
+  mappings stay pending and carry no authority: identity, semantic acceptance and
+  activation remain separate decisions of the existing knowledge review owner, and
+  this release maps nothing into knowledge review or activation records.
+  `atelier architecture entry knowledge-stewardship` lists the module.
+- A personal workspace bound to the Obsidian projection is served from the
+  canonical build, with the composition's link-target rule and the engine's file
+  cache. A graph is used only under a validity key the composition confirmed.
+  Its inputs are read before the composition runs. The engine, and the
+  proposal adapter it runs, compose in a worker with a two-minute deadline: at
+  load (`loadBoundProjectOffThread`), after a change, and at every full
+  reconciliation, which prepares nothing again when nothing changed. A bound
+  project is loaded once. Authored and generation files the key reads are
+  opened without following links or waiting on them. The adapter builds only
+  when it looks at a newly observed edit. The proposal adapter answers a vault edit to a private
+  note with `personal-overlay-not-proposed`, and `personal-binding-lost` now
+  names the reserved settings key.
+
 - Evidence navigation is exported as `@mnstry/atelier/evidence-navigation`
   (the pure contract checks and currency assessments) and
   `@mnstry/atelier/evidence-navigation/local` (the Node local reader, kept
@@ -523,6 +548,13 @@
   Any other error is `[internal-error]` with exit 1, naming only Node's code
   and system call, for example `(ENOENT from lstat)`. `ATELIER_DEBUG=1` still
   prints the full error.
+- Obsidian source apply could reject with an untyped `ELEAFCHANGED` error. This
+  happened when another program renamed a new file over the source while the
+  published note was being prepared again, between the look at the path and its
+  open. That is a source being written: the apply now refuses `stale-source`
+  (cause `changed-while-reading`) and writes nothing. A preparation that fails
+  for any tolerated reason is no longer kept for its scope and generation; only
+  one that succeeded is reused.
 
 ## 0.2.0-alpha.12
 

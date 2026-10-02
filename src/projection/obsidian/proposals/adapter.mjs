@@ -15,6 +15,7 @@ import { isIdentifier } from '../edits/object-identity.mjs'
 import { openObjectStore } from '../edits/object-store.mjs'
 import { decideApply } from '../edits/policy.mjs'
 import { applyEditLens } from '../edits/regions.mjs'
+import { PERSONAL_VALIDATION_PENDING, personalOverlayRepoOf } from '../personal-workspace.mjs'
 import { PublicationRefusal } from '../recovery/store.mjs'
 import {
   PROPOSAL_BACKPRESSURE, PROPOSAL_LEDGER_LIMITS, classifyLedgerRead, classifyStoreRefusal, estimateEventLineBytes, isDue, isExhausted, nextAttemptAt, preflightAppend,
@@ -184,6 +185,9 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
     let observation = { key: null, run: null }
     // Edits whose operation is known not to be a proposal. A cache: losing it costs one read of an object.
     const notProposals = new Set()
+    // Set when an observation found the personal workspace's graph pending: the edits it could not look at are offered
+    // again on the next observation, not parked until a full reconciliation.
+    let observePendingAgain = false
 
     // -- the workspace of one call -------------------------------------------
 
@@ -201,14 +205,27 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
       // The canonical graph as it is now and the corpus profile of this machine, built once per call with the notes the
       // machine settings let into a view, as the engine builds it (eligibilityFor). Throws typed.
       let corpus = null
+      // A pending answer is kept for the call too, so a call that looks at several edits builds at most once.
+      let pendingCorpus = null
       const currentCorpus = () => {
         if (corpus !== null) return corpus
+        if (pendingCorpus !== null) throw pendingCorpus
         const machine = readMachineSettings({ workspaceRoot, workspaceId })
         corpus = {
-          graph: seams.buildGraph({ project, eligibility: fixedEligibility ?? eligibilityFor({ machine, project }) }),
+          // The engine hands its deferral over: a personal workspace is then never composed on its event loop here.
+          graph: (() => {
+            try { return seams.buildGraph({ project, eligibility: fixedEligibility ?? eligibilityFor({ machine, project }), deferPersonalValidation: context.deferPersonalValidation === true }) } catch (error) {
+              if (error?.code === PERSONAL_VALIDATION_PENDING) pendingCorpus = error
+              throw error
+            }
+          })(),
           profile: seams.profileFor({ project, workspaceId, audienceAllow: machine?.audienceAllow ?? [] }),
         }
         return corpus
+      }
+      // Whether the personal workspace's graph is pending on this call. Asked only where a graph would be built anyway.
+      const personalPending = () => {
+        try { currentCorpus(); return false } catch (error) { if (error?.code === PERSONAL_VALIDATION_PENDING) return true; if (isTyped(error)) return false; throw error }
       }
       // true, false, or null when the canonical graph cannot be read now. The rule is the one source apply asks.
       const visible = options.isVisible ? (identity) => options.isVisible(identity, context) : ({ repoId, nodeId }) => {
@@ -229,6 +246,7 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
       return {
         ...context, recoveryOf, visible, clock, env: env ?? context.env ?? process.env,
         corpus: currentCorpus,
+        personalPending,
         objects: () => (objects ??= objectStore({ stateRoot: workspaceRoot, workspaceId, repositoryRoots, clock })),
         queue,
         managedRoots: () => [workspaceRoot, ...[...stores.values()].map((store) => store.vaultRoot)],
@@ -310,6 +328,8 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
         if (requireOpenEdit && editState !== 'open') return known ? refused(`edit-${editState}`) : outcome('skipped', null, { code: `edit-${editState}` })
         // The object store no longer says this is a proposed structural edit, so there is nothing to describe.
         if (item.observed === null) return refused('operation-not-proposed')
+        // A personal workspace whose graph is pending leaves the operation as it is: no attempt is spent on this tick.
+        if (workspace.deferPersonalValidation === true && personalOverlayRepoOf(workspace.project) !== null && workspace.personalPending()) return outcome('deferred', history?.head ?? null, { code: PERSONAL_VALIDATION_PENDING })
         const resolved = resolveProposalRoute({ project: workspace.project, workspaceId: workspace.workspaceId, identity: item, sourcePath: item.sourcePath, managedRoots: workspace.managedRoots(), isVisible: workspace.visible, isGitIgnored, env: env ?? workspace.env ?? process.env })
         if (!resolved.ok && !resolved.transient) return refused(resolved.code)
         // Recorded before anything is asked of the store.
@@ -438,7 +458,20 @@ export function createProposalAdapterForOracleTests(primitives = PROPOSAL_ADAPTE
       async observe(context, { retryRefused = false } = {}) {
         const workspace = open(context)
         const edits = Array.isArray(context.edits) ? context.edits : []
-        return { adapterId: PROPOSAL_ADAPTER_ID, observed: observation.run(workspace, { edits, retryRefused }) }
+        // A private note of a personal workspace lives in a generation the personal-workspace module owns: its edit is
+        // not observed, recorded or proposed, and stays held in the vault. Answered by name, with nothing written.
+        const overlayRepoId = personalOverlayRepoOf(workspace.project)
+        const isPrivate = (edit) => overlayRepoId !== null && edit?.identity?.repoId === overlayRepoId
+        const privateNotes = edits.filter((edit) => isPrivate(edit) && edit.closedAt === null)
+          .map((edit) => ({ editId: edit.editId, repoId: edit.identity.repoId, nodeId: edit.identity.nodeId, status: 'refused', code: 'personal-overlay-not-proposed' }))
+        const shared = edits.filter((edit) => !isPrivate(edit))
+        // The graph is built only when an edit is looked at, as for any project. When the personal workspace's graph is
+        // pending, the edits it reached are not reported or recorded, and are offered again on the next observation.
+        const retry = retryRefused || observePendingAgain
+        const looked = observation.run(workspace, { edits: shared, retryRefused: retry })
+        const pending = looked.filter((item) => item.code === PERSONAL_VALIDATION_PENDING)
+        observePendingAgain = pending.length > 0
+        return { adapterId: PROPOSAL_ADAPTER_ID, observed: [...privateNotes, ...looked.filter((item) => item.code !== PERSONAL_VALIDATION_PENDING)], ...(pending.length > 0 ? { deferred: PERSONAL_VALIDATION_PENDING } : {}) }
       },
 
       // The tick. `context` is { project, workspaceRoot, workspaceId, repositoryRoots, edits }: the pending edit
