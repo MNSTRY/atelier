@@ -344,13 +344,19 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
     // publisher keeps no copy of a note it created, so the note is prepared again from the sources as they are now,
     // in the vault layout of that generation, and used only when it has the digest the manifest recorded; a retained
     // object of that digest serves as well.
+    //
+    // A preparation that cannot be carried out answers null, and the caller reads the source once more to tell which
+    // typed refusal that is. A source replaced between the look at its path and its open (ELEAFCHANGED) is another
+    // program writing it, as it is to the publisher, so the caller finds another digest and refuses stale-source.
+    // Only a preparation that succeeded is kept for its scope and generation: a failure tells of one moment, not of
+    // the generation, and is never the answer to a later edit.
     function publishedNoteOf(workspace, { scope, manifest, noteEntry }) {
       const store = workspace.storeOf(scope.scopeId)
       try { return store.readObject(noteEntry.noteDigest) } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'recovery-object-corrupt') throw error }
       workspace.prepared ??= new Map()
       const preparedKey = `${scope.scopeId}\u0000${manifest.generationId}`
       if (!workspace.prepared.has(preparedKey)) {
-        let files = []
+        let files
         try {
           const { graph, profile } = currentCorpus(workspace)
           const snapshot = seams.captureSnapshot({ project: workspace.project, graph, workspaceId: workspace.workspaceId, index: new Map(), configDigest: manifest.ext?.[EXT]?.configDigest ?? `sha256:${'0'.repeat(64)}`, capturedAt: isoTime(clock) })
@@ -358,7 +364,10 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
             snapshot, profile, scope, persistentPathRegistry: workspace.stateStore.readPathRegistry(), priorManifest: manifest, existingSettings: null, clock,
             vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), layout: manifestLayoutVersion(manifest),
           }).files
-        } catch (error) { if (!isTyped(error) && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error }
+        } catch (error) {
+          if (!isTyped(error) && error?.code !== 'ELEAFCHANGED' && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error
+          return null
+        }
         workspace.prepared.set(preparedKey, files)
       }
       const file = workspace.prepared.get(preparedKey).find((item) => item.path === noteEntry.path && item.digest === noteEntry.noteDigest)
@@ -537,7 +546,8 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
         const visibility = decideWith('body-replacement', [])
         if (!visibility.allowed && visibility.code === 'object-not-visible') refuse('object-not-visible')
         // A private note of a personal workspace is authored in its overlay, and its file belongs to a generation the
-        // personal-workspace module owns: an edit to it is a proposal only, and never written there.
+        // personal-workspace module owns: an edit to it is never written there. It is not proposed yet either; it stays
+        // held in the vault.
         if (identity.repoId === personalOverlayRepoOf(workspace.project)) refuse('personal-overlay-proposals-only')
 
         const resolved = resolveEdit(workspace, edit)
