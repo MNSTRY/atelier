@@ -84,6 +84,26 @@ for (const [name, body] of [['astral', '\u{1f331}'.repeat(140000)], ['nul', 'Inv
   assert.equal(prepareDecisionPracticeContribution({ records: value.records, definition: fixture, title: 'Invented profile check', term: 'material' }).reason, 'practice-input-exceeds-bounds')
 })
 
+for (const [name, body] of [['astral', '\u{1f331}'.repeat(140000)], ['nul', 'Invented\u0000captured source']]) test(`valid ${name} member-bounded history has a typed refusal in either order`, () => {
+  for (const earlyString of [true, false]) {
+    const value = adopted(), prototype = template[1]
+    function source(id, body, basedOn = []) {
+      return { ...structuredClone(prototype), id, data: { ...structuredClone(prototype.data), body, basedOn,
+        origin: { method: 'captured', locator: `invented:${id}`, contentDigest: contentDigest(body), rightsBasis: 'Invented fixture.' } } }
+    }
+    const anchors = Array.from({ length: 6 }, (_, index) => source(`anchor-${index}`, 'Invented anchor.'))
+    const basedOn = anchors.map(item => ({ contribution: harnessRef(item), quote: 'Invented anchor.' }))
+    const tail = Array.from({ length: 200 }, (_, index) => source(`tail-${index}`, 'Invented cited source.', structuredClone(basedOn)))
+    const excluded = source(`${name}-many-members`, body)
+    value.records.push(...anchors, ...(earlyString ? [excluded, ...tail] : [...tail, excluded]))
+    assert.doesNotThrow(() => inspectKnowledge(value.records))
+    const members = item => 1 + (item && typeof item === 'object' ? Object.values(item).reduce((sum, child) => sum + members(child), 0) : 0)
+    assert.ok(members(value.records) > 8192)
+    assert.equal(readAdoptedDecisionPractice({ records: value.records, definitionRef: value.definitionRef }).reason, 'practice-input-exceeds-bounds')
+    assert.equal(prepareDecisionPracticeContribution({ records: value.records, definition: fixture, title: 'Invented member bound', term: 'material' }).reason, 'practice-input-exceeds-bounds')
+  }
+})
+
 test('preparation distinguishes malformed Knowledge history from an invalid definition', () => {
   const records = [structuredClone(template[0])]; records[0].schema = 'invalid-invented-schema'
   assert.equal(prepareDecisionPracticeContribution({ records, definition: fixture, title: 'Invented history check', term: 'material' }).reason, 'invalid-definition-history')
@@ -109,6 +129,19 @@ test('an in-profile definition whose prepared body exceeds the Knowledge bound r
 test('a successfully prepared draft fits the ordinary Knowledge contribution shape', () => {
   const data = prepareDecisionPracticeContribution({ records: [structuredClone(template[0])], definition: fixture, title: 'Invented shape check', term: 'material' }).data
   assert.deepEqual(validateHarnessDocument({ ...structuredClone(template[1]), data }, 'knowledge', 'contribution'), [])
+})
+
+for (const [name, note] of [['ascii', 'x'.repeat(250000)], ['astral', '\u{1f331}'.repeat(60000)]]) test(`preparation refuses a ${name} definition whose repeated operating footprint cannot fit`, () => {
+  const definition = structuredClone(fixture); definition.rubric.ext = { note }
+  const input = { records: [structuredClone(template[0])], definition, title: 'Invented operating bound', term: 'material' }
+  assert.doesNotThrow(() => evidenceJson(input))
+  assert.equal(validateDecisionPractice(definition).valid, true)
+  const oldDraft = { ...structuredClone(template[1]), data: { ...structuredClone(template[1].data), body: JSON.stringify(definition, null, 2) } }
+  assert.deepEqual(validateHarnessDocument(oldDraft, 'knowledge', 'contribution'), [])
+  assert.ok(Buffer.byteLength(JSON.stringify({ records: [...input.records, oldDraft], instance: { request: definition.rubric } })) > 262144)
+  const result = prepareDecisionPracticeContribution(input)
+  assert.equal(result.reason, 'practice-output-exceeds-bounds')
+  assert.equal(Object.hasOwn(result, 'data'), false)
 })
 
 test('malformed and duplicate-key adopted bodies refuse as invalid definitions', () => {

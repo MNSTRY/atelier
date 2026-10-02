@@ -28,13 +28,17 @@ Each string also has a 262,144 UTF-16-unit limit and must not contain NUL.
 Knowledge itself accepts larger histories. A valid history outside this smaller
 profile returns `practice-input-exceeds-bounds`; it is not reported as malformed
 history. The host must supply an in-profile complete history or retain that typed
-refusal; silently truncating history cannot establish current adoption. Accessors,
-cycles, custom prototypes and sparse arrays remain malformed input. Preparation
-reports a malformed Knowledge history as `invalid-definition-history`. An adopted
+refusal; silently truncating history cannot establish current adoption. Within
+the bounded inspected prefix, accessors, cycles, custom prototypes and sparse
+arrays remain malformed input. Reaching the traversal bound before a malformed
+value keeps the bounds refusal. Preparation reports a plain JSON history that
+fails Knowledge replay as `invalid-definition-history`; failure of the initial
+whole-input JSON copy remains `invalid-definition`. An adopted
 body must equal `JSON.stringify(definition, null, 2)`, as produced by the preparation
 function, and retain category `decision-rationale`, captured origin and locator
 `decision-practice:<definition id>`. Invalid, duplicate-key or noncanonical bodies
-return `invalid-definition`.
+return `invalid-definition`. A parsed adopted body outside the portable profile
+instead returns `practice-input-exceeds-bounds`.
 
 `evaluateDecisionPractice` returns `proceed`, `stop`, `escalate` or `refuse` with a
 typed reason. It checks declared prerequisites and count budgets, current exact
@@ -75,6 +79,14 @@ completed draft against the existing Knowledge contribution shape before returni
 it. Pretty-print expansion beyond the writer's body limit returns
 `practice-output-exceeds-bounds` with no draft. This shape check uses a fixed
 validation-only envelope; it establishes no native record or actor authority.
+Definition preparation also checks the operating core: the complete supplied
+history, new draft data including its escaped body, and the repeated full rubric
+must fit the portable profile with 8,192 UTF-8 bytes reserved for additional
+adoption/instance metadata. Otherwise it returns `practice-output-exceeds-bounds`.
+This rejects definitions whose necessary repetition can never fit; it does not
+guarantee arbitrary future history, evidence, assessment or metadata will fit.
+The host must still validate the complete actual operating input before adoption
+and execution. A Knowledge-valid body alone proves no operating capacity.
 The assessment includes supplied provider/model/usage/extensions verbatim at the
 domain audience. Its inherited `rightsBasis` remains a declaration. The host must
 verify rights/consent and the full draft's permitted disclosure before review or

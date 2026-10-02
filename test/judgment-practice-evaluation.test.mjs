@@ -83,6 +83,37 @@ for (const [name, body] of [['astral', '\u{1f331}'.repeat(140000)], ['nul', 'Inv
   assert.equal(evaluateDecisionPractice(value).reason, 'practice-input-exceeds-bounds')
 })
 
+for (const [name, body] of [['astral', '\u{1f331}'.repeat(140000)], ['nul', 'Invented\u0000captured source']]) test(`valid ${name} member-bounded history has a typed refusal in either order`, () => {
+  for (const earlyString of [true, false]) {
+    const value = scenario(), prototype = value.records.find(item => item.kind === 'contribution')
+    function source(id, body, basedOn = []) {
+      return { ...structuredClone(prototype), id, data: { ...structuredClone(prototype.data), body, basedOn,
+        origin: { method: 'captured', locator: `invented:${id}`, contentDigest: contentDigest(body), rightsBasis: 'Invented fixture.' } } }
+    }
+    const anchors = Array.from({ length: 6 }, (_, index) => source(`anchor-${index}`, 'Invented anchor.'))
+    const basedOn = anchors.map(item => ({ contribution: harnessRef(item), quote: 'Invented anchor.' }))
+    const tail = Array.from({ length: 200 }, (_, index) => source(`tail-${index}`, 'Invented cited source.', structuredClone(basedOn)))
+    const excluded = source(`${name}-many-members`, body)
+    value.records.push(...anchors, ...(earlyString ? [excluded, ...tail] : [...tail, excluded]))
+    assert.doesNotThrow(() => inspectKnowledge(value.records))
+    const members = item => 1 + (item && typeof item === 'object' ? Object.values(item).reduce((sum, child) => sum + members(child), 0) : 0)
+    assert.ok(members(value.records) > 8192)
+    assert.equal(evaluateDecisionPractice(value).reason, 'practice-input-exceeds-bounds')
+  }
+})
+
+test('non-JSON values before the member bound remain malformed after an excluded string', () => {
+  for (const kind of ['accessor', 'cycle']) {
+    let reads = 0; const malformed = {}
+    if (kind === 'cycle') malformed.self = malformed
+    else Object.defineProperty(malformed, 'value', { enumerable: true, get() { reads++; return 'untrusted' } })
+    const value = scenario(); value.instance.result.ext = { note: 'Invented\u0000metadata', malformed,
+      tail: Object.fromEntries(Array.from({ length: 8500 }, (_, index) => [`member-${index}`, index])) }
+    assert.equal(evaluateDecisionPractice(value).reason, 'invalid-instance')
+    assert.equal(reads, 0)
+  }
+})
+
 test('an unsupported string does not hide a non-JSON accessor or invoke it', () => {
   const value = scenario(); value.instance.result.ext = { note: 'Invented\u0000metadata' }
   let reads = 0

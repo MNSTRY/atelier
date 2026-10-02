@@ -16,34 +16,38 @@ const ids = value => Array.isArray(value) && value.length > 0 && value.length <=
 
 // The shared copier reports per-string/NUL exclusions as non-JSON. Only a
 // bounded, descriptor-plain JSON graph can reclassify that as a profile limit.
-// Continue past strings to avoid hiding a later accessor, cycle or prototype.
+// Continue past strings to avoid hiding an accessor, cycle or prototype before
+// the bound. A bound reached first retains the shared copier's refusal order.
 function hasExcludedJsonString(value) {
   const active = new Set()
   let remaining = EVIDENCE_LIMITS.members, excluded = false
   function inspect(item, depth) {
-    if (--remaining < 0 || depth > EVIDENCE_LIMITS.depth) return false
-    if (item === null || typeof item === 'boolean') return true
+    if (--remaining < 0 || depth > EVIDENCE_LIMITS.depth) return 'bounded'
+    if (item === null || typeof item === 'boolean') return 'plain'
     if (typeof item === 'string') {
       excluded ||= item.length > EVIDENCE_LIMITS.bytes || item.includes('\u0000')
-      return true
+      return 'plain'
     }
-    if (typeof item === 'number') return Number.isFinite(item)
-    if (typeof item !== 'object' || active.has(item)) return false
+    if (typeof item === 'number') return Number.isFinite(item) ? 'plain' : 'malformed'
+    if (typeof item !== 'object' || active.has(item)) return 'malformed'
     const array = Array.isArray(item), prototype = Object.getPrototypeOf(item)
-    if (array ? prototype !== Array.prototype : ![Object.prototype, null].includes(prototype)) return false
+    if (array ? prototype !== Array.prototype : ![Object.prototype, null].includes(prototype)) return 'malformed'
     active.add(item)
-    let count = 0
+    let count = 0, dense = true
     for (const key of Reflect.ownKeys(item)) {
       if (array && key === 'length') continue
       const descriptor = Object.getOwnPropertyDescriptor(item, key)
-      if (typeof key !== 'string' || !descriptor?.enumerable || !Object.hasOwn(descriptor, 'value') ||
-          (array && key !== String(count)) || !inspect(descriptor.value, depth + 1)) return false
+      if (typeof key !== 'string' || !descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return 'malformed'
+      const status = inspect(descriptor.value, depth + 1)
+      if (status !== 'plain') return status
+      if (array && key !== String(count)) dense = false
       count++
     }
     active.delete(item)
-    return !array || count === Object.getOwnPropertyDescriptor(item, 'length')?.value
+    return (!array || (dense && count === Object.getOwnPropertyDescriptor(item, 'length')?.value)) ? 'plain' : 'malformed'
   }
-  return inspect(value, 0) && excluded
+  const status = inspect(value, 0)
+  return status === 'bounded' || (status === 'plain' && excluded)
 }
 
 // Internal helpers shared only by the two allocated composition modules.
@@ -101,6 +105,13 @@ export function prepareDecisionPracticeContribution(input) {
       body, audience: domain.data.audience, scope: domain.data.scope,
       origin: { method: 'captured', locator: `decision-practice:${value.definition.id}`, contentDigest: contentDigest(body), rightsBasis: value.definition.rightsBasis }, basedOn: [] }
     if (!decisionPracticeDraftValid(data)) return refusal('practice-output-exceeds-bounds')
+    // The adopted body and full rubric both travel in an operating instance.
+    // Bound that core with the supplied history and reserve 8 KiB for additional
+    // adoption/instance metadata. This is a size check, never a native record.
+    try {
+      const core = decisionPracticeJson({ records: [...value.records, { data }], instance: { request: value.definition.rubric } })
+      if (new TextEncoder().encode(JSON.stringify(core)).byteLength > EVIDENCE_LIMITS.bytes - 8192) return refusal('practice-output-exceeds-bounds')
+    } catch { return refusal('practice-output-exceeds-bounds') }
     return { status: 'prepared', data, semanticAcceptance: 'pending', ...flags }
   } catch (error) { return refusal(inputReason(error, 'invalid-definition')) }
 }
