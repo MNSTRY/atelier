@@ -1,0 +1,106 @@
+{
+  "schema": "atelier-ontology-profile-reference/local-v1",
+  "id": "equipment-loans-reference",
+  "version": "1.0.0",
+  "cohort": "known-regression",
+  "sourcePlan": "atelier-knowledge-plan@v1",
+  "purpose": "Describe one physical item, its inspection, and a qualified forecast without inventing approval or arrival.",
+  "identityRules": [
+    {
+      "concept": "equipment",
+      "scope": "one owning inventory",
+      "authoritativeKey": "asset label",
+      "sameCandidate": "Equal owner-recognized asset labels in the same inventory",
+      "different": "Different owner-recognized labels, even when display names match",
+      "aliasRule": "A scoped alias may reference an owner-recognized entity ID; similarity or alias text alone remains unresolved",
+      "example": {
+        "inventory": "example-library",
+        "assetLabel": "T-17",
+        "displayName": "Blue telescope"
+      },
+      "counterexample": {
+        "inventory": "example-library",
+        "assetLabel": "T-18",
+        "displayName": "Blue telescope"
+      }
+    },
+    {
+      "concept": "inspection",
+      "scope": "one item and observation event",
+      "authoritativeKey": "item plus event identity",
+      "sameCandidate": "The same recorded observation, not every report about the item",
+      "different": "A new inspection or correction retains the earlier observation",
+      "aliasRule": "A source occurrence ID is evidence identity, not physical-item identity"
+    },
+    {
+      "concept": "forecast",
+      "scope": "one attributed expectation and source revision",
+      "authoritativeKey": "source occurrence plus asserted expectation",
+      "sameCandidate": "The same attributed forecast at the same revision",
+      "different": "A possible event, its observed completion, and a revised forecast are separate records",
+      "aliasRule": "The supplier label does not authenticate a named actor"
+    }
+  ],
+  "relationships": [
+    {
+      "id": "loan-check",
+      "nativeSourcePredicate": "depends_on",
+      "from": "equipment source",
+      "to": "inspection source",
+      "meaning": "Loan deliberation depends on inspection evidence; the edge does not claim success or approval",
+      "reverseMeaning": "The reverse is not the same dependency"
+    },
+    {
+      "id": "repair-context",
+      "nativeSourcePredicate": "related",
+      "from": "inspection source",
+      "to": "forecast source",
+      "meaning": "The forecast informs unresolved inspection context; it is not an observed repair"
+    }
+  ],
+  "assertionRequirements": [
+    "source occurrence and exact passage/revision",
+    "subject",
+    "predicate",
+    "optional object or value; null for unary assertions",
+    "polarity",
+    "modality",
+    "scope",
+    "time with unresolved values retained",
+    "proposed review state",
+    "explicit native-projection omission when the vocabulary is lossy"
+  ],
+  "nativeBoundary": {
+    "newNativeTypes": false,
+    "newNativePredicates": false,
+    "sourceTagCreatesDomainEntity": false,
+    "lossyQualifiedEdgeAllowed": false,
+    "implicitApproval": false
+  },
+  "questions": [
+    {
+      "id": "fresh-obstacle",
+      "question": "What prevents lending the blue telescope?",
+      "expect": "evidence",
+      "expectedSourceIds": [
+        "loan:blue-telescope",
+        "loan:inspection"
+      ],
+      "meaningCheck": "The answer preserves the failed/incomplete check, missing cap, and need for a new inspection; it records no approved loan."
+    },
+    {
+      "id": "missing-order",
+      "question": "Who signed the lunar station maintenance order?",
+      "expect": "needs-evidence",
+      "expectedSourceIds": [],
+      "meaningCheck": "An empty selection is retrieval behavior, not proof of global absence or semantic answer grading."
+    }
+  ],
+  "unknowns": {
+    "semanticExtractionQuality": null,
+    "completeTaskCost": null,
+    "hostPermissions": null,
+    "adopterAcceptance": null
+  },
+  "authority": "Reference definitions and known-case expectations only. No admission, canonical merge, authenticated review, processing consent, disclosure, or effects."
+}

@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/$defs/measurement",
+  "$defs": {
+    "count": {"type": ["integer", "null"], "minimum": 0},
+    "amount": {"type": ["number", "null"], "minimum": 0},
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "experiment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourceSetSha256", "modelSha256", "questionSetSha256", "procedureSha256", "cohort", "runKind"],
+      "properties": {
+        "sourceSetSha256": {"$ref": "#/$defs/sha"},
+        "modelSha256": {"$ref": "#/$defs/sha"},
+        "questionSetSha256": {"$ref": "#/$defs/sha"},
+        "procedureSha256": {"$ref": "#/$defs/sha"},
+        "cohort": {"enum": ["worked-example", "regression", "held-out"]},
+        "runKind": {"enum": ["cold", "warm"]}
+      }
+    },
+    "measurement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "id", "observedAt", "reportedBy", "method", "experiment", "evidenceRefs", "ingestion", "quality", "time", "usage", "cost", "outcome", "notes"],
+      "properties": {
+        "schema": {"const": "atelier-enablement-measurement/local-v1"},
+        "id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"},
+        "observedAt": {"type": "string", "format": "date-time"},
+        "reportedBy": {"$ref": "#/$defs/text"},
+        "method": {"enum": ["direct-source-search", "declared-graph", "structured-extractor", "structured-extractor-plus-jev"]},
+        "experiment": {"$ref": "#/$defs/experiment"},
+        "evidenceRefs": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+        "ingestion": {
+          "type": "object", "additionalProperties": false,
+          "required": ["sourcesSelected", "sourcesParsed", "sourcesFailed", "sourcesOmitted", "proposedNodes", "proposedEdges", "proposedAssertions", "admittedAssertions", "verifiedReadbacks"],
+          "properties": {
+            "sourcesSelected": {"$ref": "#/$defs/count"}, "sourcesParsed": {"$ref": "#/$defs/count"},
+            "sourcesFailed": {"$ref": "#/$defs/count"}, "sourcesOmitted": {"$ref": "#/$defs/count"},
+            "proposedNodes": {"$ref": "#/$defs/count"}, "proposedEdges": {"$ref": "#/$defs/count"},
+            "proposedAssertions": {"$ref": "#/$defs/count"}, "admittedAssertions": {"$ref": "#/$defs/count"},
+            "verifiedReadbacks": {"$ref": "#/$defs/count"}
+          }
+        },
+        "quality": {
+          "type": "object", "additionalProperties": false,
+          "required": ["reviewedAssertions", "supportedAssertions", "wrongMerges", "qualificationErrors", "evaluatedQuestions", "supportedAnswers", "correctAbstentions"],
+          "properties": {
+            "reviewedAssertions": {"$ref": "#/$defs/count"}, "supportedAssertions": {"$ref": "#/$defs/count"},
+            "wrongMerges": {"$ref": "#/$defs/count"}, "qualificationErrors": {"$ref": "#/$defs/count"},
+            "evaluatedQuestions": {"$ref": "#/$defs/count"}, "supportedAnswers": {"$ref": "#/$defs/count"},
+            "correctAbstentions": {"$ref": "#/$defs/count"}
+          }
+        },
+        "time": {
+          "type": "object", "additionalProperties": false,
+          "required": ["ingestionMs", "reviewMinutes", "correctionMinutes", "totalElapsedMs", "firstSupportedResultMs"],
+          "properties": {
+            "ingestionMs": {"$ref": "#/$defs/amount"}, "reviewMinutes": {"$ref": "#/$defs/amount"},
+            "correctionMinutes": {"$ref": "#/$defs/amount"}, "totalElapsedMs": {"$ref": "#/$defs/amount"},
+            "firstSupportedResultMs": {"$ref": "#/$defs/amount"}
+          }
+        },
+        "usage": {
+          "type": "object", "additionalProperties": false,
+          "required": ["providerCalls", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "accountingNote"],
+          "properties": {
+            "providerCalls": {"$ref": "#/$defs/count"}, "inputTokens": {"$ref": "#/$defs/count"},
+            "outputTokens": {"$ref": "#/$defs/count"}, "cacheReadTokens": {"$ref": "#/$defs/count"},
+            "cacheWriteTokens": {"$ref": "#/$defs/count"}, "accountingNote": {"$ref": "#/$defs/text"}
+          }
+        },
+        "cost": {
+          "type": "object", "additionalProperties": false,
+          "required": ["currency", "providerAmount", "computeAmount", "humanAmount", "totalAmount"],
+          "properties": {
+            "currency": {"type": ["string", "null"], "pattern": "^[A-Z]{3}$"},
+            "providerAmount": {"$ref": "#/$defs/amount"}, "computeAmount": {"$ref": "#/$defs/amount"},
+            "humanAmount": {"$ref": "#/$defs/amount"}, "totalAmount": {"$ref": "#/$defs/amount"}
+          }
+        },
+        "outcome": {
+          "type": "object", "additionalProperties": false,
+          "required": ["userAccepted", "observedUsefulResult", "laterAppropriateReuse", "evidenceRef"],
+          "properties": {
+            "userAccepted": {"type": ["boolean", "null"]}, "observedUsefulResult": {"type": ["boolean", "null"]},
+            "laterAppropriateReuse": {"type": ["boolean", "null"]}, "evidenceRef": {"type": ["string", "null"], "minLength": 1, "maxLength": 2000}
+          }
+        },
+        "notes": {"$ref": "#/$defs/text"}
+      }
+    },
+    "floor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "declaredAt", "declaredBy", "experiment", "minReviewedAssertions", "minEvaluatedQuestions", "minSupportedPrecision", "minTaskSuccessRatio", "maxWrongMerges", "maxQualificationErrors"],
+      "properties": {
+        "schema": {"const": "atelier-enablement-quality-floor/local-v1"},
+        "declaredAt": {"type": "string", "format": "date-time"}, "declaredBy": {"$ref": "#/$defs/text"},
+        "experiment": {"$ref": "#/$defs/experiment"},
+        "minReviewedAssertions": {"type": "integer", "minimum": 1}, "minEvaluatedQuestions": {"type": "integer", "minimum": 1},
+        "minSupportedPrecision": {"type": "number", "minimum": 0, "maximum": 1}, "minTaskSuccessRatio": {"type": "number", "minimum": 0, "maximum": 1},
+        "maxWrongMerges": {"type": "integer", "minimum": 0}, "maxQualificationErrors": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}
