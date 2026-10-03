@@ -923,3 +923,51 @@ test('observation on a tick: an edit whose observation refuses before anything i
   assert.deepEqual(classifiedOf(await adapter.observe(world.context(), { retryRefused: true })), [['east-wing:third', 'observed', 'observed', 'semantic-proposal', 'proposed']])
   assert.deepEqual((({ kind, state }) => [kind, state])(recordedOperationOf(objects, world.editOf('east-wing:third'))), ['semantic-proposal', 'proposed'])
 })
+
+import { createProductionSeams } from '../src/runtime/obsidian/pipeline.mjs'
+
+test('observation on a tick: a source replaced while the published note is prepared again refuses stale-source typed, and that failed preparation is not the answer for the other edit of the generation in the same tick', async (t) => {
+  const world = makeProposalWorld(t)
+  world.editNote('east-wing:plain', 'Only the body', 'Nothing but the body')
+  world.editNote('east-wing:second', 'A second sheet.', 'A second sheet, reworded.')
+  world.queueDirectly()
+  // The edits in the order a tick looks at them: the first one's source is the one another program saves.
+  const [first, second, ...rest] = world.pendingEdits().filter((edit) => edit.closedAt === null)
+    .sort((left, right) => (left.observedAt < right.observedAt ? -1 : left.observedAt > right.observedAt ? 1 : left.editId < right.editId ? -1 : 1))
+  assert.deepEqual([rest.length, second.scopeId, second.generationId], [0, first.scopeId, first.generationId], 'two edits of one scope and one generation')
+  const sourceFile = world.source(`east-wing/notes/${first.identity.nodeId.slice('east-wing:'.length)}.md`)
+  const theirs = Buffer.from(`${fs.readFileSync(sourceFile, 'utf8')}\nSaved by another program while the note was prepared.\n`)
+  // Complete new bytes renamed over the source after the look at its path and before its open, inside the
+  // preparation: the production open answers ELEAFCHANGED.
+  const production = createProductionSeams()
+  const state = { preparations: 0, codes: [], replaced: 0 }
+  let preparing = false
+  const originalOpen = fs.openSync
+  fs.openSync = function patched(file, flags, ...rest) {
+    if (preparing && state.replaced === 0 && typeof file === 'string' && path.resolve(file) === path.resolve(sourceFile)) {
+      fs.writeFileSync(`${sourceFile}.saving`, theirs)
+      fs.renameSync(`${sourceFile}.saving`, sourceFile)
+      state.replaced += 1
+    }
+    return originalOpen.call(this, file, flags, ...rest)
+  }
+  const restore = () => { fs.openSync = originalOpen }
+  t.after(restore)
+  const seams = {
+    prepareView: (input) => {
+      state.preparations += 1
+      preparing = true
+      try { return production.prepareView(input) } catch (error) { state.codes.push(error?.code ?? null); throw error } finally { preparing = false }
+    },
+  }
+  const objects = openObjectStore({ stateRoot: world.workspaceRoot(), workspaceId: WORKSPACE_ID, repositoryRoots: protectedRoots(world.loadProject()), clock: world.clock })
+  let report
+  try { report = await adapterFor(world, { seams }).observe(world.context()) } finally { restore() }
+  assert.deepEqual([state.replaced, state.codes], [1, ['ELEAFCHANGED']], 'the source was replaced between the look at its path and its open')
+  assert.equal(state.preparations, 2, 'the note of the other edit was prepared again, not answered from the failure')
+  const byEdit = new Map(report.observed.map((item) => [item.editId, item]))
+  assert.deepEqual([byEdit.get(first.editId).status, byEdit.get(first.editId).code], ['refused', 'stale-source'], JSON.stringify(report.observed))
+  assert.deepEqual((({ status, code, kind, operationState }) => [status, code, kind, operationState])(byEdit.get(second.editId)), ['observed', 'observed', 'body-replacement', 'pending'], JSON.stringify(report.observed))
+  assert.equal(recordedOperationOf(objects, first), null, 'nothing was recorded for the edit whose source changed')
+  assert.deepEqual(fs.readFileSync(sourceFile), theirs, 'the bytes of the other program are the source')
+})
