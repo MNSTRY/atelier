@@ -33,6 +33,7 @@ Core commands:
   graph [--check]                 Build or check the knowledge graph.
   knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
   knowledge dashboard|session     Inspect guided work and retain private drafts.
+  knowledge semantic OPERATION    Record a host-run semantic extraction for review.
   enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.

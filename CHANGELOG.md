@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- `atelier knowledge semantic` exposes the internal semantic operation runner
+  (`docs/semantic-operation.md`) as eleven operations: `begin`, `status`,
+  `reconcile`, `complete`, `proposals`, `contribution`, `relation`, `record`,
+  `cascade`, `context` and `project`. Each reads one JSON object
+  `{workspaceId, run, request}` from stdin, at most 256 KiB, in the workspace
+  `atelier ingest` uses. Each operation accepts exactly its documented request
+  fields, each of a declared kind; an unknown or missing field, a null
+  required field or a value of the wrong kind refuses as
+  `SEMANTIC_OPERATION_INVALID` before any store is opened, so nothing is
+  written. Formats such as timestamps are checked by the runner. Atelier calls no model: the host supplies its raw output, candidates
+  and usage (`null` when unknown), and interpretations stay pending until
+  receiver records, which are caller assertions, accept them. Failures print
+  `{ok:false, code, error}` with the runner's own `SEMANTIC_*` code,
+  `SEMANTIC_OPERATION_INTERRUPTED` for an uncoded error, or
+  `SEMANTIC_OPERATION_REFUSED` for Atelier's other refusals; `recorded` or
+  `captured` details are included whenever the runner attached them. No package export
+  or schema changes.
 - Personal workspaces gain an explicit selection record, a read-only inventory of
   the private home, and a restore of authored inputs from an earlier generation:
   `selectPersonalGeneration`, `selectionConfirmDigest`, `readPersonalSelection`,
