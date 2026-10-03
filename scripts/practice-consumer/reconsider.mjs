@@ -27,8 +27,11 @@ import { inspectKnowledge } from '../../src/knowledge/ledger.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const CORPUS = 'docs/integration-contract-decisions.md'
-export const MEASUREMENT_SCHEMA = 'atelier-practice-consumer-measurement@v0'
-export const LABEL_SCHEMA = 'atelier-practice-consumer-label@v0'
+// v1 adds per-outcome anchors; v0 lines stay valid as recorded.
+export const MEASUREMENT_SCHEMA = 'atelier-practice-consumer-measurement@v1'
+const MEASUREMENT_SCHEMAS = Object.freeze(['atelier-practice-consumer-measurement@v0', MEASUREMENT_SCHEMA])
+// v1 labels name the anchor they judge (null for a whole-file citation).
+export const LABEL_SCHEMA = 'atelier-practice-consumer-label@v1'
 export const LABELS = Object.freeze(['correct', 'missed', 'false-alarm', 'useful-abstention'])
 const OWNER = 'atelier-root'
 const BY = 'atelier-foundation'
@@ -37,7 +40,7 @@ const TERM = 'decision-material'
 const MAX_SOURCE_BYTES = 32768
 const MAX_EXCERPT_LINES = 120
 const CONTEXT_LINES = 3
-const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-source-predicate.v1' })
+const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-source-predicate.v2' })
 
 export const definition = () => JSON.parse(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8'))
 
@@ -88,16 +91,46 @@ const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').
 const shortId = (prefix, value) => `${prefix}-${slug(value).slice(0, 30).replace(/-+$/, '')}-${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 8)}`
 const textOf = (buffer) => (buffer && !buffer.includes(0) ? buffer.toString('utf8') : null)
 
-/** Links in a markdown fragment that point at repository files, resolved from the corpus. */
-export function citedPaths(fragment, corpus = CORPUS) {
+// A line anchor in the GitHub form #L<n> or #L<start>-L<end>. It is translated at
+// this boundary to the existing text-lines@1 selector value lines:<start>-<end>;
+// nothing downstream sees the GitHub form.
+const ANCHOR_RE = /^L([1-9]\d*)(?:-L([1-9]\d*))?$/
+
+function anchorOf(fragment) {
+  const match = fragment.match(ANCHOR_RE)
+  if (!match) return { refusal: 'cited-anchor-unsupported' }
+  const start = Number(match[1])
+  const end = match[2] === undefined ? start : Number(match[2])
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) return { refusal: 'cited-anchor-malformed' }
+  return { anchor: { start, end, value: `lines:${start}-${end}` } }
+}
+
+/**
+ * Links in a markdown fragment that point at repository files, resolved from the
+ * corpus. A link without a fragment cites the whole file. A #L line anchor cites
+ * those lines. Any other fragment is kept as a refused citation, never widened to
+ * the whole file.
+ */
+export function citations(fragment, corpus = CORPUS) {
   const out = []
   for (const match of fragment.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
-    const target = match[1].split('#')[0]
+    const hash = match[1].indexOf('#')
+    const target = hash === -1 ? match[1] : match[1].slice(0, hash)
     if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('/')) continue
-    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(corpus), target))
-    if (!resolved.startsWith('..') && !out.includes(resolved)) out.push(resolved)
+    const file = path.posix.normalize(path.posix.join(path.posix.dirname(corpus), target))
+    if (file.startsWith('..')) continue
+    const fragment = hash === -1 ? null : match[1].slice(hash + 1)
+    const parsed = fragment === null ? {} : anchorOf(fragment)
+    const cited = parsed.refusal ? { file, anchor: null, fragment, refusal: parsed.refusal } : { file, anchor: parsed.anchor ?? null }
+    const key = (item) => `${item.file}#${item.anchor ? item.anchor.value : item.refusal ? `!${item.fragment}` : ''}`
+    if (!out.some((item) => key(item) === key(cited))) out.push(cited)
   }
   return out
+}
+
+/** The distinct repository files a markdown fragment cites, anchored or not. */
+export function citedPaths(fragment, corpus = CORPUS) {
+  return [...new Set(citations(fragment, corpus).map((item) => item.file))]
 }
 
 /**
@@ -112,7 +145,7 @@ export function parseDecisions(markdown, corpus = CORPUS) {
   const closeProse = () => {
     if (prose && prose.lines.some((line) => line.trim())) {
       const text = prose.lines.join('\n').replace(/<!--[\s\S]*?-->/g, '').trim()
-      if (text) decisions.push({ key: heading, title: heading, text, start: prose.start, end: prose.end, cited: citedPaths(text, corpus) })
+      if (text) decisions.push({ key: heading, title: heading, text, start: prose.start, end: prose.end, cited: citedPaths(text, corpus), citations: citations(text, corpus) })
     }
     prose = null
   }
@@ -135,7 +168,7 @@ export function parseDecisions(markdown, corpus = CORPUS) {
       const separator = cells.every((cell) => /^:?-{3,}:?$/.test(cell))
       const header = index + 1 < lines.length && /^\|\s*:?-{3,}/.test(lines[index + 1])
       if (!separator && !header && cells[0]) {
-        decisions.push({ key: `${heading}: ${cells[0]}`, title: `${heading}: ${cells[0]}`, text: line.trim(), start: index + 1, end: index + 1, cited: citedPaths(line, corpus) })
+        decisions.push({ key: `${heading}: ${cells[0]}`, title: `${heading}: ${cells[0]}`, text: line.trim(), start: index + 1, end: index + 1, cited: citedPaths(line, corpus), citations: citations(line, corpus) })
       }
       continue
     }
@@ -249,26 +282,96 @@ function hunks(repo, base, head, file) {
   let removed = 0
   let added = 0
   const ranges = []
+  // Each hunk in both coordinate systems: old (base) lines and new (head) lines.
+  // A zero old count is an insertion after old line oldStart (0: before line 1).
+  const spans = []
   let inBody = false
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git ')) {
       inBody = false
       continue
     }
-    const header = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
+    const header = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
     if (header) {
       inBody = true
-      const start = Number(header[1])
-      const count = header[2] === undefined ? 1 : Number(header[2])
+      const oldStart = Number(header[1])
+      const oldCount = header[2] === undefined ? 1 : Number(header[2])
+      const start = Number(header[3])
+      const count = header[4] === undefined ? 1 : Number(header[4])
       ranges.push([Math.max(1, start - CONTEXT_LINES), start + Math.max(count, 1) - 1 + CONTEXT_LINES])
+      spans.push({ oldStart, oldCount, newStart: start, newCount: count, removed: 0, added: 0 })
       continue
     }
     // Count the actual changed lines, never hunk-header totals.
     if (!inBody) continue
-    if (line.startsWith('-')) removed += 1
-    else if (line.startsWith('+')) added += 1
+    if (line.startsWith('-')) {
+      removed += 1
+      spans.at(-1).removed += 1
+    } else if (line.startsWith('+')) {
+      added += 1
+      spans.at(-1).added += 1
+    }
   }
-  return { binary: false, removed, added, ranges }
+  return { binary: false, removed, added, ranges, spans }
+}
+
+/**
+ * How a change relates to an anchored range of base lines [start, end], in old
+ * (base) coordinates. A hunk that removes or modifies base lines touches the
+ * anchor on the old lines it shares with it; only those count as removed. An
+ * insertion after old line n is inside the anchor only when start <= n < end,
+ * between two anchored lines; an insertion directly before or after it is
+ * outside. Changes inside decide relevance. The anchor needs re-pointing when its
+ * lines changed or it lands elsewhere at the head, whatever the outcome; hunks
+ * above it that cancel out leave it where it was.
+ *
+ * The head lines are found by mapping each endpoint on its own. A surviving old
+ * line moves by the net change of the hunks wholly above it. An endpoint inside
+ * a removed or replaced hunk maps to that hunk's new lines: the first for the
+ * start, the last for the end. For an empty replacement, git's new start names
+ * the line before the gap. No anchored head line remains when the mapped end
+ * precedes the mapped start.
+ */
+export function anchorChange(spans, { start, end }) {
+  let removed = 0
+  let added = 0
+  let outside = false
+  // Head lines, with context, of the hunks that touch the anchor: what a quote of
+  // the change to the anchor shows. Hunks elsewhere in the file never widen it.
+  const touching = []
+  for (const span of spans) {
+    const oldEnd = span.oldStart + span.oldCount - 1
+    const before = span.oldCount > 0 ? oldEnd < start : span.oldStart < start
+    const inside = !before && (span.oldCount > 0 ? span.oldStart <= end : span.oldStart < end)
+    if (before) {
+      outside = true
+    } else if (inside) {
+      removed += span.oldCount > 0 ? Math.min(oldEnd, end) - Math.max(span.oldStart, start) + 1 : 0
+      added += span.added
+      touching.push([Math.max(1, span.newStart - CONTEXT_LINES), span.newStart + Math.max(span.newCount, 1) - 1 + CONTEXT_LINES])
+    } else {
+      outside = true
+    }
+  }
+  const map = (line, side) => {
+    let shift = 0
+    for (const span of spans) {
+      const oldEnd = span.oldStart + span.oldCount - 1
+      if (span.oldCount > 0 && span.oldStart <= line && line <= oldEnd) {
+        if (span.newCount === 0) return side === 'start' ? span.newStart + 1 : span.newStart
+        return side === 'start' ? span.newStart : span.newStart + span.newCount - 1
+      }
+      if (span.oldCount > 0 ? oldEnd < line : span.oldStart < line) shift += span.added - span.removed
+    }
+    return line + shift
+  }
+  const headStart = map(start, 'start')
+  const headEnd = map(end, 'end')
+  const head = headEnd >= headStart ? { start: headStart, end: headEnd } : null
+  return {
+    removed, added, outside, head, touching,
+    reanchor: removed > 0 || added > 0 || head === null || head.start !== start || head.end !== end,
+  }
 }
 
 /** The deterministic assessment the rubric declares. */
@@ -279,6 +382,14 @@ export function assess(change, { removedAtHead = false } = {}) {
   return { status: 'assessed', choice: 'unclear' }
 }
 
+// Where to quote when no anchored line can be shown at a text head: the hunks that
+// touched the anchor, or, when none did (the mapped lines lie past the end of the
+// head), the last lines of the head.
+function gapRanges(relation, headLength) {
+  if (relation?.touching.length) return relation.touching
+  return [[Math.max(1, headLength - 2 * CONTEXT_LINES), headLength]]
+}
+
 function excerpt(text, ranges) {
   const lines = text.split('\n')
   if (!ranges.length) return { start: 1, end: Math.min(lines.length, MAX_EXCERPT_LINES) }
@@ -287,11 +398,15 @@ function excerpt(text, ranges) {
   return { start, end: Math.min(end, start + MAX_EXCERPT_LINES - 1), oversize: end - start + 1 > MAX_EXCERPT_LINES }
 }
 
+// An exact line reference in the existing evidence-navigation shape: owner
+// atelier-root, the repository path, a full commit, the text-lines@1 selector and
+// the digest of the selected text (one-based inclusive lines, joined with LF).
+function lineRef(file, revision, start, end, text) {
+  return { owner: OWNER, objectId: file, revision, selector: { type: 'text-lines', version: '1', value: `lines:${start}-${end}` }, contentDigest: contentDigest(text) }
+}
+
 function evidenceItem({ role, requestId, file, revision, text, start, end }) {
-  return {
-    role, requestId, sourceRef: `${OWNER}:${file}`, text,
-    reference: { owner: OWNER, objectId: file, revision, selector: { type: 'text-lines', version: '1', value: `lines:${start}-${end}` }, contentDigest: contentDigest(text) },
-  }
+  return { role, requestId, sourceRef: `${OWNER}:${file}`, text, reference: lineRef(file, revision, start, end, text) }
 }
 
 function resultFor(request, assessment) {
@@ -351,36 +466,95 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
     const target = history.decisionRecords.get(decision.id)
     const entry = { id: decision.id, title: decision.title, cited: decision.cited, changedCited: [], outcomes: [] }
     results.push(entry)
-    for (const file of decision.cited) {
-      const source = history.sources.get(file)
-      if (!source) {
-        entry.outcomes.push({ file, status: 'not-evaluated', reason: history.unusable.get(file) })
+    for (const cited of decision.citations) {
+      const { file, anchor } = cited
+      // An anchored outcome always carries the same shape: its value, the base
+      // and head references (null when not read), and the re-anchor report.
+      const unread = anchor ? { value: anchor.value, base: null, head: null, outsideChanges: false, reanchor: false } : null
+      // A fragment that is not a line anchor is refused, never read as the whole file.
+      if (cited.refusal) {
+        entry.outcomes.push({ file, anchor: null, fragment: cited.fragment, status: 'not-evaluated', reason: cited.refusal })
         continue
       }
-      const didChange = changed.has(file)
-      if (didChange) entry.changedCited.push(file)
+      const source = history.sources.get(file)
+      if (!source) {
+        entry.outcomes.push({ file, anchor: unread, status: 'not-evaluated', reason: history.unusable.get(file) })
+        continue
+      }
+      // The anchored lines are read at the merge base, where the decision is read.
+      let baseAnchor = null
+      if (anchor) {
+        const baseLines = source.data.body.split('\n')
+        if (anchor.end > baseLines.length) {
+          entry.outcomes.push({ file, anchor: unread, status: 'not-evaluated', reason: 'cited-anchor-out-of-range' })
+          continue
+        }
+        if (anchor.end - anchor.start + 1 > MAX_EXCERPT_LINES) {
+          entry.outcomes.push({ file, anchor: unread, status: 'not-evaluated', reason: 'cited-anchor-over-bounds' })
+          continue
+        }
+        baseAnchor = lineRef(file, base, anchor.start, anchor.end, baseLines.slice(anchor.start - 1, anchor.end).join('\n'))
+      }
+      const fileChanged = changed.has(file)
       const headBuffer = show(repo, head, file)
       const headText = textOf(headBuffer)
+      const headLines = headText === null ? null : headText.split('\n')
       // Binary is decided from the contents at both commits, never from attributes.
-      const change = didChange ? { ...hunks(repo, base, head, file), binary: headBuffer !== null && headText === null } : { binary: false, removed: 0, added: 0, ranges: [] }
-      if (change.binary) change.ranges = []
-      const region = excerpt(headText ?? source.data.body, change.ranges)
+      const binary = fileChanged && headBuffer !== null && headText === null
+      // Renames are not followed: a moved or deleted file is absent at the head.
+      const removedAtHead = fileChanged && headBuffer === null
+      const diff = fileChanged ? hunks(repo, base, head, file) : { removed: 0, added: 0, ranges: [], spans: [] }
+      const relation = anchor && fileChanged && !binary && !removedAtHead ? anchorChange(diff.spans, anchor) : null
+      // The anchored lines at the head, checked against the head itself: a mapped
+      // range the head does not have (a removed final LF, say) is lost, not unchanged.
+      let headRange = null
+      let lost = false
+      if (anchor && headLines !== null) {
+        headRange = !fileChanged ? { start: anchor.start, end: anchor.end } : relation.head
+        if (headRange && headRange.end > headLines.length) {
+          headRange = null
+          lost = true
+        }
+      }
+      // The prerequisite: the cited source changed. For an anchor, its own lines
+      // changed, or the head can no longer show them (removed, binary or lost).
+      const didChange = anchor ? fileChanged && (binary || removedAtHead || lost || relation.removed + relation.added > 0) : fileChanged
+      if (didChange && !entry.changedCited.includes(file)) entry.changedCited.push(file)
+      let change
+      let region
+      if (anchor) {
+        change = { binary, removed: relation?.removed ?? 0, added: relation?.added ?? 0 }
+        // The evidence excerpt is bounded like any other; the head reference below
+        // still names the whole mapped range.
+        region = headRange
+          ? { start: headRange.start, end: Math.min(headRange.end, headRange.start + MAX_EXCERPT_LINES - 1), oversize: headRange.end - headRange.start + 1 > MAX_EXCERPT_LINES }
+          : headText !== null ? excerpt(headText, gapRanges(relation, headLines.length)) : { start: 1, end: 1, oversize: false }
+      } else {
+        change = { ...diff, binary }
+        if (change.binary) change.ranges = []
+        region = excerpt(headText ?? source.data.body, change.ranges)
+      }
       // An unchanged source is not assessed. The evaluator validates the result,
       // a fixed placeholder here, and then stops on the false prerequisite.
       const assessment = didChange
-        ? assess({ ...change, oversize: region.oversize }, { removedAtHead: headBuffer === null })
+        ? assess({ ...change, oversize: region.oversize }, { removedAtHead })
         : { status: 'abstained', reason: 'insufficient-evidence', placeholder: true }
+      // A text head always supplies real lines: the anchored lines, or, when none
+      // of them can be shown, the changed region around where they were.
+      const shown = headLines !== null
       const sourceText = headText === null
         ? `(${file} is ${headBuffer === null ? 'removed' : 'not text'} at ${head})`
-        : headText.split('\n').slice(region.start - 1, region.end).join('\n')
+        : headLines.slice(region.start - 1, region.end).join('\n')
       const evidence = [
-        evidenceItem({ role: 'source', requestId: 'e1', file, revision: head, text: sourceText, start: headText === null ? 1 : region.start, end: headText === null ? 1 : region.end }),
+        evidenceItem({ role: 'source', requestId: 'e1', file, revision: head, text: sourceText, start: shown ? region.start : 1, end: shown ? region.end : 1 }),
         evidenceItem({ role: 'decision', requestId: 'e2', file: CORPUS, revision: base, text: decision.text, start: decision.start, end: decision.end }),
       ]
-      const request = { ...structuredClone(rubric), id: `pr${pr}-${decision.id}-${shortId('f', file)}`,
+      // A whole-file citation keeps its revision-one identities.
+      const citedKey = anchor ? `${file}#${anchor.value}` : file
+      const request = { ...structuredClone(rubric), id: `pr${pr}-${decision.id}-${shortId('f', citedKey)}`,
         state: evidence.map((item) => `${item.requestId}: ${item.text}`).join('\n'), evidence: evidence.map(({ requestId, sourceRef }) => ({ id: requestId, sourceRef })) }
       const instance = {
-        id: shortId(`pr${pr}`, `${decision.id} ${file}`),
+        id: shortId(`pr${pr}`, `${decision.id} ${citedKey}`),
         evidence,
         snapshots: evidence.map((item) => ({ schema: 'atelier-evidence-snapshot@v1', reference: structuredClone(item.reference), currency: 'current', dependencies: [], validUntil: null })),
         at,
@@ -388,7 +562,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
         spent: { stages: 0, evidence: 0, assessments: 0, proposals: 0 },
         request,
         result: resultFor(request, assessment),
-        proposal: { type: 'reconsideration', target: harnessRef(target), term: TERM, title: `Reconsider "${decision.title}" after ${file} changed in pull request #${pr}` },
+        proposal: { type: 'reconsideration', target: harnessRef(target), term: TERM, title: `Reconsider "${decision.title}" after ${anchor ? `${file} ${anchor.value}` : file} changed in pull request #${pr}` },
       }
       const outcome = evaluateDecisionPractice({ records: history.records, definitionRef, instance })
       // What the Knowledge harness itself marks once the changed source is recorded.
@@ -399,7 +573,20 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
         harnessReconsider = inspectKnowledge([...history.records, revised]).reconsider.some((item) => item.id === decision.id)
       }
       entry.outcomes.push({
-        file, prerequisite: didChange, change: { removed: change.removed, added: change.added, binary: change.binary },
+        file,
+        // The anchor as cited at the base, its separately mapped head lines, and
+        // whether it must be re-pointed. Re-anchoring is reported apart from the
+        // practice outcome, so a draft never hides it and a stop never drops it.
+        anchor: anchor ? {
+          value: anchor.value,
+          base: baseAnchor,
+          head: headRange ? lineRef(file, head, headRange.start, headRange.end, headLines.slice(headRange.start - 1, headRange.end).join('\n')) : null,
+          outsideChanges: relation?.outside ?? false,
+          reanchor: binary || removedAtHead || lost || (relation?.reanchor ?? false),
+        } : null,
+        // The exact head text the assessment quoted (e1), so its lines can be checked.
+        quoted: headText === null ? null : structuredClone(evidence[0].reference),
+        prerequisite: didChange, change: { removed: change.removed, added: change.added, binary: change.binary },
         assessment: assessment.placeholder ? { status: 'not-assessed', reason: 'prerequisite-false' }
           : assessment.status === 'abstained' ? { status: 'abstained', reason: assessment.reason } : { status: 'assessed', choice: assessment.choice },
         status: outcome.status, reason: outcome.reason,
@@ -419,6 +606,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       drafts: results.flatMap((item) => item.outcomes).filter((item) => item.status === 'proceed').length,
       escalations: results.flatMap((item) => item.outcomes).filter((item) => item.status === 'escalate').length,
       refusals: results.flatMap((item) => item.outcomes).filter((item) => item.status === 'refuse').length,
+      reanchors: results.flatMap((item) => item.outcomes).filter((item) => item.anchor?.reanchor).length,
     },
   }
 }
@@ -427,15 +615,16 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
  * A reviewer's label for one measured decision. `by` names who labelled it;
  * `reviewMinutes` is the reviewer's effort, including confirming a correct outcome.
  */
-export function label({ pr, decision, file, measurement, value, reviewMinutes, by, note = '' }) {
+export function label({ pr, decision, file, anchor = null, measurement, value, reviewMinutes, by, note = '' }) {
   if (!PR_RE.test(String(pr))) throw new Error('pr must be a positive integer')
   if (typeof decision !== 'string' || !/^d-[a-z0-9-]+-[0-9a-f]{8}$/.test(decision)) throw new Error('decision must be a measured decision id')
   if (typeof file !== 'string' || !file) throw new Error('file must name the cited file the outcome is about')
+  if (anchor !== null && (typeof anchor !== 'string' || !/^lines:[1-9]\d*-[1-9]\d*$/.test(anchor))) throw new Error('anchor must be null or a text-lines value lines:<start>-<end>')
   if (typeof measurement !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(measurement)) throw new Error('measurement must be the digest of the measured line')
   if (!LABELS.includes(value)) throw new Error(`label must be one of ${LABELS.join(', ')}`)
   if (!Number.isFinite(reviewMinutes) || reviewMinutes < 0) throw new Error('review minutes must be a nonnegative number')
   if (typeof by !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(by)) throw new Error('by must name who labelled the outcome')
-  return { schema: LABEL_SCHEMA, pr: Number(pr), decision, file, measurement, label: value, reviewMinutes, by, note, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') }
+  return { schema: LABEL_SCHEMA, pr: Number(pr), decision, file, anchor, measurement, label: value, reviewMinutes, by, note, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z') }
 }
 
 function appendLine(file, value) {
@@ -454,7 +643,7 @@ function argsOf(argv) {
 
 const USAGE = `Usage:
   node scripts/practice-consumer/reconsider.mjs measure --pr N --base SHA --head SHA [--mode live|retrospective] [--repo DIR] [--out FILE | --print]
-  node scripts/practice-consumer/reconsider.mjs label --pr N --decision ID --file PATH --label ${LABELS.join('|')} --minutes M --by NAME [--note TEXT] [--out FILE]`
+  node scripts/practice-consumer/reconsider.mjs label --pr N --decision ID --file PATH [--anchor lines:S-E] --label ${LABELS.join('|')} --minutes M --by NAME [--note TEXT] [--out FILE]`
 
 export function main(argv = process.argv.slice(2)) {
   const args = argsOf(argv)
@@ -475,13 +664,26 @@ export function main(argv = process.argv.slice(2)) {
   if (args._[0] === 'label') {
     if (typeof args.minutes !== 'string' || !/^\d+(?:\.\d+)?$/.test(args.minutes)) throw new Error(USAGE)
     // A label refers to the latest measurement of this pull request in the file,
-    // and to one outcome in it: the decision and the cited file.
+    // and to one outcome in it: the decision, the cited file and, for an anchored
+    // citation, its anchor. A file cited more than once needs --anchor.
     const lines = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').split('\n').filter(Boolean) : []
-    const measured = lines.filter((line) => JSON.parse(line).schema === MEASUREMENT_SCHEMA && String(JSON.parse(line).pr) === String(args.pr)).at(-1)
+    const measured = lines.filter((line) => MEASUREMENT_SCHEMAS.includes(JSON.parse(line).schema) && String(JSON.parse(line).pr) === String(args.pr)).at(-1)
     if (!measured) throw new Error('no measurement of this pull request to label')
-    const outcome = JSON.parse(measured).decisions.find((item) => item.id === args.decision)?.outcomes.find((item) => item.file === args.file)
-    if (!outcome) throw new Error('the measurement has no outcome for this decision and file')
-    appendLine(out, label({ pr: args.pr, decision: args.decision, file: args.file, measurement: contentDigest(measured), value: args.label, reviewMinutes: Number(args.minutes), by: args.by, note: typeof args.note === 'string' ? args.note : '' }))
+    if (args.anchor === true) throw new Error(USAGE)
+    const anchor = typeof args.anchor === 'string' ? args.anchor : null
+    // A v0 outcome has no anchor field; it is a whole-file citation. Without
+    // --anchor only the whole-file outcome of that file matches; a refused
+    // fragment (recorded with its raw fragment) is never a whole-file outcome.
+    const anchorOf = (item) => item.anchor?.value ?? null
+    const outcomes = JSON.parse(measured).decisions.find((item) => item.id === args.decision)?.outcomes ?? []
+    const matches = outcomes.filter((item) => item.file === args.file && anchorOf(item) === anchor && (anchor !== null || item.fragment === undefined))
+    if (matches.length === 0) {
+      const anchored = outcomes.some((item) => item.file === args.file && anchorOf(item) !== null)
+      throw new Error(anchor === null && anchored ? 'the file is cited with a line anchor in this decision; name the --anchor' : 'the measurement has no outcome for this decision, file and anchor')
+    }
+    // Citations are distinct, so more than one match means the outcomes are not the tool's own.
+    if (matches.length > 1) throw new Error('more than one outcome matches; the measurement line is not well formed')
+    appendLine(out, label({ pr: args.pr, decision: args.decision, file: args.file, anchor: anchorOf(matches[0]), measurement: contentDigest(measured), value: args.label, reviewMinutes: Number(args.minutes), by: args.by, note: typeof args.note === 'string' ? args.note : '' }))
     return
   }
   throw new Error(USAGE)
