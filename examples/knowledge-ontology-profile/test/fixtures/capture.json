@@ -1,0 +1,484 @@
+{
+  "schema": "atelier-enablement-capture/local-v1",
+  "observedAt": "2026-01-01T00:00:00.000Z",
+  "runtimeCandidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "dashboard": {
+    "schema": "atelier-knowledge-dashboard/experimental-v1",
+    "snapshot": "7417a4e055b92942794c24d7d8ee06e2c8fb4e06e788e64184eae99c34b7c1cf",
+    "name": "equipment-loan-workspace",
+    "purpose": "Make supported equipment loan decisions and spend less context on irrelevant material.",
+    "steward": "Workspace owner (replace with a real accountable role).",
+    "reviewer": "Loan reviewer (replace before operational use).",
+    "governance": {
+      "admission": "Use only sources the operator has permission to process; retain originals, identity, revision, and evidence location.",
+      "review": "Treat extracted meaning as proposed. A named reviewer checks evidence, negation, possibility, identity, and scope before acceptance.",
+      "correction": "Keep corrections and withdrawals explicit; rebuild derived context from current sources, and retain historical evidence only where permitted.",
+      "expression": "This private repository and its context are for its operator. A separate recipient and purpose decision is required before sharing."
+    },
+    "budget": {
+      "maxContextBytes": 16384,
+      "maxSourceBytes": 65536,
+      "maxDocuments": 6
+    },
+    "inspection": {
+      "ok": true,
+      "status": "structurally-valid",
+      "errors": [],
+      "warnings": [],
+      "concepts": [
+        {
+          "id": "equipment",
+          "records": 1,
+          "questions": [
+            "loan"
+          ]
+        },
+        {
+          "id": "inspection",
+          "records": 1,
+          "questions": [
+            "loan",
+            "arrival"
+          ]
+        },
+        {
+          "id": "forecast",
+          "records": 1,
+          "questions": [
+            "arrival"
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "id": "loan-check",
+          "matchingEdges": 1
+        },
+        {
+          "id": "repair-context",
+          "matchingEdges": 1
+        }
+      ],
+      "unclassifiedRecords": 0,
+      "assurance": "Structure and coverage only; definitions, source rights, meaning, and usefulness require human review."
+    },
+    "concepts": [
+      {
+        "id": "equipment",
+        "definition": "A particular physical item that may be loaned.",
+        "identityRule": "Use its stable asset label; similar names are not identity.",
+        "tag": "concept:equipment",
+        "coverage": {
+          "id": "equipment",
+          "records": 1,
+          "questions": [
+            "loan"
+          ]
+        }
+      },
+      {
+        "id": "inspection",
+        "definition": "A dated observation of one item's condition, with limitations.",
+        "identityRule": "One observation event per item; corrections preserve the earlier event.",
+        "tag": "concept:inspection",
+        "coverage": {
+          "id": "inspection",
+          "records": 1,
+          "questions": [
+            "loan",
+            "arrival"
+          ]
+        }
+      },
+      {
+        "id": "forecast",
+        "definition": "A qualified expectation about a possible future event.",
+        "identityRule": "Retain the speaker, passage, revision, possibility, and unresolved timing.",
+        "tag": "concept:forecast",
+        "coverage": {
+          "id": "forecast",
+          "records": 1,
+          "questions": [
+            "arrival"
+          ]
+        }
+      }
+    ],
+    "relations": [
+      {
+        "id": "loan-check",
+        "predicate": "depends_on",
+        "from": "equipment",
+        "to": "inspection",
+        "meaning": "A loan decision needs the inspection evidence. The edge does not claim the item passed.",
+        "coverage": {
+          "id": "loan-check",
+          "matchingEdges": 1
+        }
+      },
+      {
+        "id": "repair-context",
+        "predicate": "related",
+        "from": "inspection",
+        "to": "forecast",
+        "meaning": "The forecast informs the inspection's unresolved context; it is not an observed repair.",
+        "coverage": {
+          "id": "repair-context",
+          "matchingEdges": 1
+        }
+      }
+    ],
+    "questions": [
+      {
+        "id": "loan",
+        "question": "Can the blue telescope be loaned this week?",
+        "work": "Decide whether to approve a loan or request a completed inspection.",
+        "concepts": [
+          "equipment",
+          "inspection"
+        ],
+        "relations": [
+          "loan-check"
+        ],
+        "expect": "evidence",
+        "expectedEvidence": [
+          {
+            "id": "loan:blue-telescope",
+            "sha256": "60fc57b0914792934bfbef7f0933668f7d9aad0af69e09428b713d41d7a8c3bf"
+          },
+          {
+            "id": "loan:inspection",
+            "sha256": "367f6d81a7c4d2216b064d65ba08f6070fd6e19fed8e1900a628d2a6bf0e0a9e"
+          }
+        ]
+      },
+      {
+        "id": "arrival",
+        "question": "Has the replacement cap arrived?",
+        "work": "Choose whether to schedule an inspection or obtain receipt evidence.",
+        "concepts": [
+          "inspection",
+          "forecast"
+        ],
+        "relations": [
+          "repair-context"
+        ],
+        "expect": "evidence",
+        "expectedEvidence": [
+          {
+            "id": "loan:repair-forecast",
+            "sha256": "e6c0764a0cd5c9544d8da5a94732883ae03645b4e3504c50f30886519bf82f40"
+          },
+          {
+            "id": "loan:inspection",
+            "sha256": "367f6d81a7c4d2216b064d65ba08f6070fd6e19fed8e1900a628d2a6bf0e0a9e"
+          }
+        ]
+      },
+      {
+        "id": "unknown",
+        "question": "What is next month's lunar eclipse schedule?",
+        "work": "Recognize that the admitted sources cannot answer this question.",
+        "concepts": [],
+        "relations": [],
+        "expect": "abstain",
+        "expectedEvidence": []
+      }
+    ],
+    "evaluation": {
+      "schema": "atelier-knowledge-evaluation@v1",
+      "planSha256": "91d804b28c832cfbb905cf824f3e759d9927ae58888263eaf7a312fea73d156e",
+      "cases": [
+        {
+          "id": "loan",
+          "question": "Can the blue telescope be loaned this week?",
+          "work": "Decide whether to approve a loan or request a completed inspection.",
+          "expect": "evidence",
+          "runs": {
+            "lexical": {
+              "sourceIds": [
+                "loan:blue-telescope"
+              ],
+              "missing": [
+                "loan:inspection"
+              ],
+              "stale": [],
+              "missingRelations": [
+                "loan-check"
+              ],
+              "evidenceRecall": 0.5,
+              "expectedEvidencePresent": false,
+              "payloadBytes": 1689,
+              "sourceBytes": 650,
+              "estimatedTokens": 423,
+              "omitted": 0
+            },
+            "graph": {
+              "sourceIds": [
+                "loan:blue-telescope",
+                "loan:inspection"
+              ],
+              "missing": [],
+              "stale": [],
+              "missingRelations": [],
+              "evidenceRecall": 1,
+              "expectedEvidencePresent": true,
+              "payloadBytes": 2767,
+              "sourceBytes": 1349,
+              "estimatedTokens": 692,
+              "omitted": 0
+            }
+          }
+        },
+        {
+          "id": "arrival",
+          "question": "Has the replacement cap arrived?",
+          "work": "Choose whether to schedule an inspection or obtain receipt evidence.",
+          "expect": "evidence",
+          "runs": {
+            "lexical": {
+              "sourceIds": [
+                "loan:repair-forecast"
+              ],
+              "missing": [
+                "loan:inspection"
+              ],
+              "stale": [],
+              "missingRelations": [
+                "repair-context"
+              ],
+              "evidenceRecall": 0.5,
+              "expectedEvidencePresent": false,
+              "payloadBytes": 1706,
+              "sourceBytes": 682,
+              "estimatedTokens": 427,
+              "omitted": 0
+            },
+            "graph": {
+              "sourceIds": [
+                "loan:repair-forecast",
+                "loan:inspection"
+              ],
+              "missing": [],
+              "stale": [],
+              "missingRelations": [],
+              "evidenceRecall": 1,
+              "expectedEvidencePresent": true,
+              "payloadBytes": 2782,
+              "sourceBytes": 1381,
+              "estimatedTokens": 696,
+              "omitted": 0
+            }
+          }
+        },
+        {
+          "id": "unknown",
+          "question": "What is next month's lunar eclipse schedule?",
+          "work": "Recognize that the admitted sources cannot answer this question.",
+          "expect": "abstain",
+          "runs": {
+            "lexical": {
+              "sourceIds": [],
+              "missing": [],
+              "stale": [],
+              "missingRelations": [],
+              "evidenceRecall": null,
+              "expectedEvidencePresent": true,
+              "payloadBytes": 732,
+              "sourceBytes": 0,
+              "estimatedTokens": 183,
+              "omitted": 0
+            },
+            "graph": {
+              "sourceIds": [],
+              "missing": [],
+              "stale": [],
+              "missingRelations": [],
+              "evidenceRecall": null,
+              "expectedEvidencePresent": true,
+              "payloadBytes": 730,
+              "sourceBytes": 0,
+              "estimatedTokens": 183,
+              "omitted": 0
+            }
+          }
+        }
+      ],
+      "scope": "Author-specified evidence retrieval checks; no answer correctness, held-out evaluation, or user acceptance is inferred.",
+      "providerCalls": 0,
+      "measuredTokens": null,
+      "providerCost": null,
+      "humanCorrectionMinutes": null,
+      "next": "Use unseen questions with an unfamiliar person and agent; record supported answers, abstention, correction time, total measured usage, and resulting work."
+    },
+    "flows": [
+      {
+        "id": "onboard",
+        "title": "Onboard",
+        "description": "Choose useful work and establish who can steward it.",
+        "prompts": [
+          [
+            "work",
+            "What decision or deliverable should this workspace improve?",
+            "Name a real task, who needs it, and what a useful result would change."
+          ],
+          [
+            "people",
+            "Who owns the sources, maintains the model, and reviews the result?",
+            "Name accountable roles and your own role. A typed name records a local assertion."
+          ],
+          [
+            "sources",
+            "Which sources may be processed, and where must their use stop?",
+            "Record source permissions, audiences, excluded material, and correction or withdrawal arrangements."
+          ],
+          [
+            "success",
+            "How will you recognize useful work at an acceptable cost?",
+            "Choose an unseen question, a direct-search comparison, and the time, correction, and measured usage you will record."
+          ]
+        ]
+      },
+      {
+        "id": "model",
+        "title": "Model",
+        "description": "Give the smallest useful vocabulary a precise meaning.",
+        "prompts": [
+          [
+            "concept",
+            "Which concept matters to this question, and what does it mean?",
+            "Give its definition, an example, and a counterexample. Reuse a concept before adding another."
+          ],
+          [
+            "identity",
+            "How do you distinguish the same thing from two similar things?",
+            "State a stable identity rule, aliases, false-merge risks, and how corrections preserve history."
+          ],
+          [
+            "relation",
+            "Which directed relationship makes the evidence useful?",
+            "Name both concepts, a native predicate, its direction, and its precise meaning. Distinguish an observation from an expectation."
+          ],
+          [
+            "test",
+            "Which source-supported question would expose a bad model?",
+            "Name decisive passages and unresolved evidence. Propose plan and record changes for the source owner to review."
+          ]
+        ]
+      },
+      {
+        "id": "deepen",
+        "title": "Deepen",
+        "description": "Resolve missing evidence, conflicting claims, and gaps in the model.",
+        "prompts": [
+          [
+            "gap",
+            "What can this workspace still not answer reliably?",
+            "Choose a missing relationship, unsupported claim, stale source, contradiction, or unmodeled finding."
+          ],
+          [
+            "evidence",
+            "What exactly does the source support?",
+            "Cite record IDs and passages. Preserve speaker, date, negation, uncertainty, and alternative explanations."
+          ],
+          [
+            "proposal",
+            "What is the smallest justified correction or addition?",
+            "Propose a concept, relationship, or source correction. State why it helps this question and what could disprove it."
+          ],
+          [
+            "review",
+            "Who should review it, and what remains unresolved?",
+            "Record the reviewer, next evidence needed, and a concrete owner handoff. This draft does not apply a source change."
+          ]
+        ]
+      },
+      {
+        "id": "apply",
+        "title": "Apply",
+        "description": "Use bounded evidence to produce a useful answer or an explicit abstention.",
+        "prompts": [
+          [
+            "answer",
+            "What answer does the selected evidence support?",
+            "Use source IDs and exact passages. Keep qualifications visible, and say when evidence is insufficient."
+          ],
+          [
+            "limits",
+            "What remains uncertain or contradicted?",
+            "Separate recorded facts, inference, proposals, and missing evidence. Do not fill a gap from a forecast."
+          ],
+          [
+            "action",
+            "What should happen next, and who owns that decision?",
+            "Name the proposed action or deliverable, prerequisites, recipient, and accountable owner. Saving does not execute it."
+          ],
+          [
+            "validation",
+            "What must a reviewer verify before using this result?",
+            "Specify the source checks and the observable outcome that would demonstrate useful work."
+          ]
+        ]
+      },
+      {
+        "id": "learn",
+        "title": "Learn",
+        "description": "Use observed outcomes to improve the next task.",
+        "prompts": [
+          [
+            "outcome",
+            "What actually happened when this result was used?",
+            "Separate intended action, observed outcome, and user acceptance. Cite outcome evidence or say it is not yet observed."
+          ],
+          [
+            "quality",
+            "What did the person or agent get right, miss, or need help with?",
+            "Record correctness, abstention, confusion, assistance, and correction effort on an unseen question."
+          ],
+          [
+            "cost",
+            "What did the work cost compared with direct source search?",
+            "Record elapsed time, actual input/output/cache tokens, provider cost, and correction minutes. Use unknown for unmeasured values."
+          ],
+          [
+            "change",
+            "What should change in the ontology or workflow?",
+            "Propose the smallest useful change, its owner, a regression question, and any lesson suitable for later reviewed reuse."
+          ]
+        ]
+      }
+    ],
+    "next": {
+      "stage": "apply",
+      "reason": "Try a useful question, inspect its evidence, and record the result for review."
+    },
+    "assurance": "Coverage checks describe retrieval. Human judgment, useful outcomes, and measured savings remain to be observed.",
+    "sourceEditsApplied": false,
+    "providerCalls": 0
+  },
+  "finalSnapshot": "7417a4e055b92942794c24d7d8ee06e2c8fb4e06e788e64184eae99c34b7c1cf",
+  "consistent": true,
+  "sessions": {
+    "listed": 1,
+    "complete": true,
+    "error": null,
+    "items": [
+      {
+        "id": "kg-invented-test",
+        "flow": "apply",
+        "question": "Can the blue telescope be loaned this week?",
+        "author": "Invented unit fixture; no human acceptance",
+        "revision": 3,
+        "phase": "saved",
+        "current": true,
+        "savedFields": 1,
+        "totalFields": 4,
+        "receiptMatches": true,
+        "pending": false,
+        "savedMeaning": "private-draft-only",
+        "sourceEditsApplied": false
+      }
+    ]
+  },
+  "source": "Synthetic public-template projection and invented session metadata; no private captured session."
+}

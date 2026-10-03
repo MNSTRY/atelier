@@ -1,0 +1,176 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:atelier:consumer-reference:equipment-loans-profile:1",
+  "title": "Consumer-local equipment-loan reference profile; no portable/public ABI or authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "version",
+    "cohort",
+    "sourcePlan",
+    "purpose",
+    "identityRules",
+    "relationships",
+    "assertionRequirements",
+    "nativeBoundary",
+    "questions",
+    "unknowns",
+    "authority"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-ontology-profile-reference/local-v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "cohort": {
+      "const": "known-regression"
+    },
+    "sourcePlan": {
+      "const": "atelier-knowledge-plan@v1"
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "identityRules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": [
+          "concept",
+          "scope",
+          "authoritativeKey",
+          "sameCandidate",
+          "different",
+          "aliasRule"
+        ]
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "nativeSourcePredicate",
+          "from",
+          "to",
+          "meaning"
+        ],
+        "properties": {
+          "nativeSourcePredicate": {
+            "enum": [
+              "depends_on",
+              "related"
+            ]
+          }
+        }
+      }
+    },
+    "assertionRequirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "nativeBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "newNativeTypes",
+        "newNativePredicates",
+        "sourceTagCreatesDomainEntity",
+        "lossyQualifiedEdgeAllowed",
+        "implicitApproval"
+      ],
+      "properties": {
+        "newNativeTypes": {
+          "const": false
+        },
+        "newNativePredicates": {
+          "const": false
+        },
+        "sourceTagCreatesDomainEntity": {
+          "const": false
+        },
+        "lossyQualifiedEdgeAllowed": {
+          "const": false
+        },
+        "implicitApproval": {
+          "const": false
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "question",
+          "expect",
+          "expectedSourceIds",
+          "meaningCheck"
+        ],
+        "properties": {
+          "expect": {
+            "enum": [
+              "evidence",
+              "needs-evidence"
+            ]
+          },
+          "expectedSourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "unknowns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semanticExtractionQuality",
+        "completeTaskCost",
+        "hostPermissions",
+        "adopterAcceptance"
+      ],
+      "properties": {
+        "semanticExtractionQuality": {
+          "type": "null"
+        },
+        "completeTaskCost": {
+          "type": "null"
+        },
+        "hostPermissions": {
+          "type": "null"
+        },
+        "adopterAcceptance": {
+          "type": "null"
+        }
+      }
+    },
+    "authority": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
