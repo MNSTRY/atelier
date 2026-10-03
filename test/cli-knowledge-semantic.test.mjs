@@ -237,6 +237,11 @@ posix('an uncoded failure after raw capture still returns the captured detail, a
   assert.doesNotMatch(JSON.stringify(failure), HOST_PATH)
   // The captured attempt is complete: reopening finds the same raw output, so the host does not run again.
   assert.equal(ok(call(s.root, 'status', { operationId: 'first' })).attempt.status, 'complete')
+  // Completing again with the identical bytes and a valid timestamp records the same capture.
+  const recompleted = ok(call(s.root, 'complete', { operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }))
+  assert.equal(recompleted.phase, 'completed')
+  assert.equal(recompleted.attempt.status, 'complete')
+  assert.deepEqual(recompleted.attempt.completion, failure.captured.completion)
 })
 
 posix('Atelier\'s own uncoded refusals are typed SEMANTIC_OPERATION_REFUSED; null and wrongly typed fields never reach the runner', t => {
@@ -246,10 +251,13 @@ posix('Atelier\'s own uncoded refusals are typed SEMANTIC_OPERATION_REFUSED; nul
   assert.equal(bad.captured, undefined)
   const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-semantic-cli-outside-')))
   t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
-  const placed = JSON.parse(call(outside, 'status', { operationId: 'first' }).stderr)
-  assert.equal(placed.ok, false)
-  assert.match(placed.code, /^SEMANTIC_OPERATION_(REFUSED|MISSING)$/)
+  const placed = refused(call(outside, 'status', { operationId: 'first' }), 'SEMANTIC_OPERATION_REFUSED')
+  assert.match(placed.error, /Git workspace/)
   assert.doesNotMatch(JSON.stringify(placed), HOST_PATH)
+  // A numeric timestamp, as Date.now() gives, is refused before intake captures anything.
+  const beforeComplete = snapshot(s.root)
+  refused(call(s.root, 'complete', { operationId: 'first', output: 'raw', expectedOutputDigest: intakeDigest('raw'), candidates: {}, usage: unknownUsage, at: 0, confirm: first.head }), 'SEMANTIC_OPERATION_INVALID')
+  assert.deepEqual(snapshot(s.root), beforeComplete)
   const valid = validRequests(s)
   const before = snapshot(s.root)
   for (const [command, spec] of Object.entries(SEMANTIC_COMMANDS)) {
@@ -257,9 +265,11 @@ posix('Atelier\'s own uncoded refusals are typed SEMANTIC_OPERATION_REFUSED; nul
       const failure = refused(call(s.root, command, { ...valid[command], [field]: null }), 'SEMANTIC_OPERATION_INVALID')
       assert.match(failure.error, new RegExp(`invalid ${command} request field type: ${field}`))
     }
+    // One value of the wrong kind for every field, required or optional.
+    const wrongFor = { string: 0, object: 'text', array: {}, integer: '8', 'object-or-null': 'text', 'string-or-null': 0, 'interpretation-kind': 'constructor' }
     for (const [field, type] of Object.entries(spec.types)) {
-      const wrong = type === 'string' ? {} : 'text'
-      refused(call(s.root, command, { ...valid[command], [field]: wrong }), 'SEMANTIC_OPERATION_INVALID')
+      const failure = refused(call(s.root, command, { ...valid[command], [field]: wrongFor[type] }), 'SEMANTIC_OPERATION_INVALID')
+      assert.match(failure.error, new RegExp(`invalid ${command} request field type: ${field}`))
     }
   }
   assert.deepEqual(snapshot(s.root), before)
@@ -348,6 +358,7 @@ test('the field sets equal the runner methods\' own parameters, so drift fails h
   const names = text => text.split(',').map(part => part.trim().split(/\s*=/)[0]).filter(Boolean)
   for (const [command, spec] of Object.entries(SEMANTIC_COMMANDS)) {
     const declared = [...spec.required, ...spec.optional].sort()
+    assert.deepEqual(Object.keys(spec.types).sort(), declared, `${command} types every field`)
     if (spec.method === 'begin') {
       const closedList = source.match(/function begin\(request\) \{[\s\S]*?closed\(selected, \[([^\]]+)\]\)/)[1]
       assert.deepEqual(declared, closedList.split(',').map(item => item.trim().replace(/'/g, '')).sort(), command)

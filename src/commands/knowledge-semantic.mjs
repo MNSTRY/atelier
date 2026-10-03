@@ -15,25 +15,26 @@ import { safeCommandMessage } from '../cli/command-failure.mjs'
 
 export const SEMANTIC_REQUEST_BYTES = 256 * 1024
 
-// Required fields are never null. Fields the runner reads as objects, arrays or
-// text are checked for that type here, so a wrong type is a typed refusal
-// rather than a JavaScript error from inside the runner.
-const spec = (method, required, optional = [], types = {}) => Object.freeze({ method, required: Object.freeze(required), optional: Object.freeze(optional), types: Object.freeze(types) })
+// Every request field has a declared kind, checked before the runner exists, so
+// a wrong kind is a typed refusal with nothing written. Formats (timestamps,
+// digests, identifiers) are the runner's to judge. Required fields are never
+// null; optional ones may be null only where the kind says so.
+const S = 'string', O = 'object', A = 'array'
+const spec = (method, types, optional = []) => Object.freeze({ method, types: Object.freeze(types),
+  required: Object.freeze(Object.keys(types).filter(field => !optional.includes(field))), optional: Object.freeze(optional) })
 export const SEMANTIC_COMMANDS = Object.freeze({
-  begin: spec('begin', ['operationId', 'attemptId', 'at', 'term', 'plan', 'references', 'identityCandidates', 'extractor', 'confirm'], [],
-    { plan: 'object', references: 'array', identityCandidates: 'array', extractor: 'object' }),
-  status: spec('status', ['operationId']),
-  reconcile: spec('reconcile', ['operationId', 'at', 'by', 'reason', 'outcome', 'confirm']),
-  complete: spec('complete', ['operationId', 'output', 'expectedOutputDigest', 'candidates', 'usage', 'at', 'confirm'], [],
-    { output: 'string', candidates: 'object', usage: 'object' }),
-  proposals: spec('proposals', ['operationId', 'query'], ['limit']),
-  contribution: spec('prepareContribution', ['operationId', 'id', 'kind', 'candidateId', 'source', 'sourceBinding', 'term', 'at', 'confirm'], ['supersedes', 'revisionReason'],
-    { source: 'object', sourceBinding: 'object' }),
-  relation: spec('prepareRelation', ['assertion', 'at', 'confirm'], [], { assertion: 'object' }),
-  record: spec('record', ['record', 'confirm'], [], { record: 'object' }),
-  cascade: spec('cascade', ['withdrawalId', 'at', 'confirm']),
-  context: spec('context', ['query']),
-  project: spec('project', ['activationId', 'namespace']),
+  begin: spec('begin', { operationId: S, attemptId: S, at: S, term: S, plan: O, references: A, identityCandidates: A, extractor: O, confirm: S }),
+  status: spec('status', { operationId: S }),
+  reconcile: spec('reconcile', { operationId: S, at: S, by: S, reason: S, outcome: S, confirm: S }),
+  complete: spec('complete', { operationId: S, output: S, expectedOutputDigest: S, candidates: O, usage: O, at: S, confirm: S }),
+  proposals: spec('proposals', { operationId: S, query: S, limit: 'integer' }, ['limit']),
+  contribution: spec('prepareContribution', { operationId: S, id: S, kind: 'interpretation-kind', candidateId: S, source: O, sourceBinding: O, term: S, at: S, confirm: S,
+    supersedes: 'object-or-null', revisionReason: 'string-or-null' }, ['supersedes', 'revisionReason']),
+  relation: spec('prepareRelation', { assertion: O, at: S, confirm: S }),
+  record: spec('record', { record: O, confirm: S }),
+  cascade: spec('cascade', { withdrawalId: S, at: S, confirm: S }),
+  context: spec('context', { query: S }),
+  project: spec('project', { activationId: S, namespace: S }),
 })
 
 const USAGE = `use knowledge semantic ${Object.keys(SEMANTIC_COMMANDS).join('|')} with one JSON object on stdin; see knowledge --help`
@@ -43,6 +44,17 @@ class SemanticRequestError extends Error {
 }
 
 const plainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+const KINDS = Object.freeze({
+  string: value => typeof value === 'string',
+  object: plainObject,
+  array: Array.isArray,
+  integer: Number.isSafeInteger,
+  'object-or-null': value => value === null || plainObject(value),
+  'string-or-null': value => value === null || typeof value === 'string',
+  // The runner maps exactly these three kinds; any other, even an inherited
+  // property name, is refused here.
+  'interpretation-kind': value => value === 'entity' || value === 'assertion' || value === 'unknown',
+})
 const exactFields = (value, required, optional = []) => plainObject(value)
   && Object.keys(value).every(key => required.includes(key) || optional.includes(key))
   && required.every(key => Object.hasOwn(value, key))
@@ -66,12 +78,8 @@ export function selectSemanticRequest(command, body) {
     throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', 'semantic request needs exactly workspaceId, run and request')
   if (!exactFields(body.request, selected.required, selected.optional))
     throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', `unknown or missing ${command} request field`)
-  const typeOk = { object: plainObject, array: Array.isArray, string: value => typeof value === 'string' }
-  for (const field of selected.required) {
-    const value = body.request[field]
-    if (value === null || value === undefined || (selected.types[field] && !typeOk[selected.types[field]](value)))
-      throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', `invalid ${command} request field type: ${field}`)
-  }
+  for (const [field, value] of Object.entries(body.request))
+    if (!KINDS[selected.types[field]](value)) throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', `invalid ${command} request field type: ${field}`)
   return selected
 }
 
@@ -79,8 +87,8 @@ const TYPED = /^SEMANTIC_[A-Z_]+$/
 // The printed failure for an error, or null when it must go to the command
 // executor's redaction. Three cases:
 // - a SEMANTIC_* refusal keeps its own code;
-// - any error after the runner saved a write or raw output keeps that
-//   recorded/captured detail, as SEMANTIC_OPERATION_INTERRUPTED when uncoded;
+// - any error carrying the runner's recorded/captured detail keeps it, as
+//   SEMANTIC_OPERATION_INTERRUPTED when uncoded;
 // - Atelier's own other refusals (safe text, no host detail) become
 //   SEMANTIC_OPERATION_REFUSED.
 // Only an error with unsafe text and nothing saved is left to the executor.
