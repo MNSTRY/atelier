@@ -139,6 +139,10 @@ function readNoFollow(file, { withMode = false } = {}) {
 }
 
 const NOT_A_FILE = new Set(['EISDIR', 'EINVAL', 'ENOTDIR', 'EMLINK'])
+// How often a file another program replaces by rename is read again: the pointer to the current manifest, as the
+// publisher reads a note, and the published note prepared again. One that keeps changing is a typed refusal.
+const READ_ATTEMPTS = 5
+const PREPARE_ATTEMPTS = 3
 const UNREADABLE = new Set(['EACCES', 'EPERM', 'EIO'])
 
 // The digest of the file, null when nothing is there, 'unreadable' when what is there is not a regular file: whatever
@@ -308,24 +312,38 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
     // The canonical graph as it is now, and the corpus profile of this machine. Built once per call, with the notes the
     // machine settings let into a view, exactly as the engine builds it (eligibilityFor), unless a test fixes them.
     function currentCorpus(workspace) {
-      // The graph reads every enrolled source. A file this process may not read is a refusal that names no file.
+      // The graph reads every enrolled source. A file this process may not read is a refusal that names no file. So is
+      // one another program removes or replaces while the graph is built (a save by delete and create, a checkout):
+      // the graph cannot be built from what is there at this moment, and the cause says which of the two it was.
       try {
         workspace.corpus ??= {
           graph: seams.buildGraph({ project: workspace.project, eligibility: fixedEligibility ?? eligibilityFor({ machine: workspace.machine, project: workspace.project }) }),
           profile: seams.profileFor({ project: workspace.project, workspaceId: workspace.workspaceId, audienceAllow: workspace.machine.audienceAllow }),
         }
       } catch (error) {
-        if (isTyped(error) || !UNREADABLE.has(error?.code)) throw error
+        if (isTyped(error) || !(UNREADABLE.has(error?.code) || GONE.has(error?.code) || error?.code === 'ELEAFCHANGED')) throw error
         refuse('corpus-unreadable', { cause: error.code })
       }
       return workspace.corpus
+    }
+
+    // The pointer to the current manifest is replaced by rename as the last step of every publication, so a
+    // publication by the engine can replace it between the look at its path and its open (ELEAFCHANGED). Every rename
+    // leaves a complete pointer, so it is read again, as the publisher reads a note; one that keeps changing refuses.
+    function currentManifestOf(store) {
+      for (let attempt = 1; ; attempt += 1) {
+        try { return store.readCurrentManifest() } catch (error) {
+          if (error?.code !== 'ELEAFCHANGED') throw error
+          if (attempt >= READ_ATTEMPTS) refuse('manifest-unavailable', { cause: 'changed-while-reading' })
+        }
+      }
     }
 
     // The immutable manifest of one generation of one view. The current one when it is that generation; otherwise
     // the stored file, whose name carries the generation and the head of its digest.
     function manifestOf(workspace, scopeId, generationId) {
       const store = workspace.storeOf(scopeId)
-      const current = store.readCurrentManifest()
+      const current = currentManifestOf(store)
       if (current?.generationId === generationId) return current
       const directory = path.join(workspace.workspaceRoot, 'state', 'manifests', segment(scopeId))
       let names = []
@@ -345,11 +363,13 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
     // in the vault layout of that generation, and used only when it has the digest the manifest recorded; a retained
     // object of that digest serves as well.
     //
-    // A preparation that cannot be carried out answers null, and the caller reads the source once more to tell which
-    // typed refusal that is. A source replaced between the look at its path and its open (ELEAFCHANGED) is another
-    // program writing it, as it is to the publisher, so the caller finds another digest and refuses stale-source.
-    // Only a preparation that succeeded is kept for its scope and generation: a failure tells of one moment, not of
-    // the generation, and is never the answer to a later edit.
+    // A source replaced between the look at its path and its open (ELEAFCHANGED) is another program writing it, as it
+    // is to the publisher. A rename leaves a complete file, so the note is prepared again from what is there now: a
+    // source saved with the same bytes, or another source of the scope replaced, then prepares the note as published,
+    // and a source with other bytes prepares another note, which the caller tells from the digest and refuses
+    // stale-source. A preparation that cannot be carried out answers null, and the caller reads the source once more
+    // to tell which typed refusal that is. Only a preparation that succeeded is kept for its scope and generation: a
+    // failure tells of one moment, not of the generation, and is never the answer to a later edit.
     function publishedNoteOf(workspace, { scope, manifest, noteEntry }) {
       const store = workspace.storeOf(scope.scopeId)
       try { return store.readObject(noteEntry.noteDigest) } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'recovery-object-corrupt') throw error }
@@ -357,16 +377,19 @@ export function createSourceApplyForOracleTests(primitives = SOURCE_APPLY_PRIMIT
       const preparedKey = `${scope.scopeId}\u0000${manifest.generationId}`
       if (!workspace.prepared.has(preparedKey)) {
         let files
-        try {
-          const { graph, profile } = currentCorpus(workspace)
-          const snapshot = seams.captureSnapshot({ project: workspace.project, graph, workspaceId: workspace.workspaceId, index: new Map(), configDigest: manifest.ext?.[EXT]?.configDigest ?? `sha256:${'0'.repeat(64)}`, capturedAt: isoTime(clock) })
-          files = seams.prepareView({
-            snapshot, profile, scope, persistentPathRegistry: workspace.stateStore.readPathRegistry(), priorManifest: manifest, existingSettings: null, clock,
-            vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), layout: manifestLayoutVersion(manifest),
-          }).files
-        } catch (error) {
-          if (!isTyped(error) && error?.code !== 'ELEAFCHANGED' && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error
-          return null
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            const { graph, profile } = currentCorpus(workspace)
+            const snapshot = seams.captureSnapshot({ project: workspace.project, graph, workspaceId: workspace.workspaceId, index: new Map(), configDigest: manifest.ext?.[EXT]?.configDigest ?? `sha256:${'0'.repeat(64)}`, capturedAt: isoTime(clock) })
+            files = seams.prepareView({
+              snapshot, profile, scope, persistentPathRegistry: workspace.stateStore.readPathRegistry(), priorManifest: manifest, existingSettings: null, clock,
+              vaultRootBytes: Buffer.byteLength(store.vaultRoot, 'utf8'), layout: manifestLayoutVersion(manifest),
+            }).files
+            break
+          } catch (error) {
+            if (!isTyped(error) && error?.code !== 'ELEAFCHANGED' && !GONE.has(error?.code) && !UNREADABLE.has(error?.code)) throw error
+            if (error?.code !== 'ELEAFCHANGED' || attempt >= PREPARE_ATTEMPTS) return null
+          }
         }
         workspace.prepared.set(preparedKey, files)
       }

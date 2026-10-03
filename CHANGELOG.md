@@ -612,6 +612,22 @@
   (cause `changed-while-reading`) and writes nothing. A preparation that fails
   for any tolerated reason is no longer kept for its scope and generation; only
   one that succeeded is reused.
+- Obsidian source apply answers three more races with another program typed.
+  An enrolled source removed while apply builds the graph used to reject with
+  an untyped `ENOENT`; it now refuses `corpus-unreadable`, with the system code
+  as the cause, and writes nothing. When a publication replaced the pointer to
+  the current manifest during an apply, the read used to reject with an untyped
+  `ELEAFCHANGED`. The pointer is now read again, up to five times, and one that
+  keeps changing refuses `manifest-unavailable` (cause `changed-while-reading`).
+  A source replaced while the published note is prepared again now leads to a
+  fresh preparation, up to three in all. If the source was saved with the same
+  bytes, or another source of the scope was replaced, the edit applies instead
+  of refusing `published-note-unavailable`. Observation of pending edits on a
+  tick had the same gap: a source replaced while its note was prepared again
+  raised an untyped `ELEAFCHANGED` from the tick. It now refuses that edit
+  `stale-source` when its own source bytes changed, and otherwise refuses
+  `published-note-unavailable`. The failed preparation is no longer kept, so the
+  other edits of that generation in the tick are still observed.
 
 ## 0.2.0-alpha.12
 
