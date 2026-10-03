@@ -40,7 +40,7 @@ const TERM = 'decision-material'
 const MAX_SOURCE_BYTES = 32768
 const MAX_EXCERPT_LINES = 120
 const CONTEXT_LINES = 3
-const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-source-predicate.v2' })
+const PROVIDER = Object.freeze({ id: 'foundation-deterministic', model: 'cited-source-predicate.v3' })
 
 export const definition = () => JSON.parse(fs.readFileSync(path.join(HERE, 'definition.json'), 'utf8'))
 
@@ -375,10 +375,13 @@ export function anchorChange(spans, { start, end }) {
 }
 
 /** The deterministic assessment the rubric declares. */
-export function assess(change, { removedAtHead = false } = {}) {
+export function assess(change, { removedAtHead = false, anchored = false } = {}) {
   if (change.binary || removedAtHead || change.oversize) return { status: 'abstained', reason: 'insufficient-evidence' }
   if (change.removed > 0) return { status: 'assessed', choice: 'affected' }
-  if (change.added > 0) return { status: 'assessed', choice: 'unaffected' }
+  // Revision three: lines added anywhere in a whole-file citation change that
+  // source, so they draft. Only an anchor still reads additions between its
+  // lines as unaffected.
+  if (change.added > 0) return { status: 'assessed', choice: anchored ? 'unaffected' : 'affected' }
   return { status: 'assessed', choice: 'unclear' }
 }
 
@@ -537,7 +540,7 @@ export function measure({ repo, pr, base, head, mode = 'live' }) {
       // An unchanged source is not assessed. The evaluator validates the result,
       // a fixed placeholder here, and then stops on the false prerequisite.
       const assessment = didChange
-        ? assess({ ...change, oversize: region.oversize }, { removedAtHead })
+        ? assess({ ...change, oversize: region.oversize }, { removedAtHead, anchored: Boolean(anchor) })
         : { status: 'abstained', reason: 'insufficient-evidence', placeholder: true }
       // A text head always supplies real lines: the anchored lines, or, when none
       // of them can be shown, the changed region around where they were.

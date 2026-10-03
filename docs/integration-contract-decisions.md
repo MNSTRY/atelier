@@ -35,7 +35,7 @@ independent review, publication or human acceptance.
 | Inspection bundle | Separate inert artifact; reuse disclosure/JCS ([inspection-bundle.mjs](../src/collaboration/inspection-bundle.mjs); [prepareInspectionBundle](../src/collaboration/inspection-bundle.mjs#L37-L105)) | No active-state overwrite, execution, secret transfer or approval import ([prohibitedKeys](../src/collaboration/inspection-bundle.mjs#L16-L36), [inspectBundle](../src/collaboration/inspection-bundle.mjs#L106-L197), [read and write paths](../src/collaboration/inspection-bundle.mjs#L198-L223)). |
 | Pack compatibility | New versioned lifecycle declaration ([lifecycle.mjs](../src/extension-packs/lifecycle.mjs); [inspectPackLifecycle](../src/extension-packs/lifecycle.mjs#L14-L121)) | Legacy packs remain inspectable; closed v1 contracts are not silently widened ([legacy packs inspectable; closed declaration and entries](../src/extension-packs/lifecycle.mjs#L14-L121), [rootVersion](../src/extension-packs/lifecycle.mjs#L7-L12)). |
 
-<!-- Uncited: Package provenance, Evidence snapshot, Claim decision and Document response await symbol-level citation support in the decision-practice consumer. -->
+<!-- Whole-file citations here rely on decision-practice definition revision three, which drafts on added as well as modified or removed lines. Uncited: Package provenance, Evidence snapshot, Claim decision and Document response await symbol-level citation support in the decision-practice consumer. -->
 
 Reuse existing private-file, ledger, origin/nonce, JSON validation and
 attestation primitives where applicable. Decisions retain complete history;
