@@ -1,0 +1,75 @@
+{
+  "sourceText": "Nora manages the Atlas project through June.\nNora does not own the Atlas project.\nThe Atlas organization funds Nora.\nAn incomplete note names a role whose meaning is unknown.\nNora is not available on Friday.\nThe Atlas organization may fund Nora.\n",
+  "domain": {
+    "schema": "atelier-knowledge-record@v1",
+    "id": "component-domain",
+    "run": "component-domain",
+    "at": "2026-01-01T00:00:00Z",
+    "by": "synthetic-owner",
+    "kind": "domain",
+    "data": {
+      "repository": "invented-components",
+      "purpose": "Inspect supported component assertions in an invented fixture.",
+      "scope": "Invented project only",
+      "owner": "synthetic-owner",
+      "audience": "private",
+      "questions": [
+        {
+          "id": "component",
+          "question": "Who manages or funds Atlas?",
+          "acceptance": "Retain exact support, qualifications, and unknowns."
+        }
+      ],
+      "vocabulary": {
+        "types": [
+          {
+            "id": "person",
+            "meaning": "An invented person."
+          },
+          {
+            "id": "project",
+            "meaning": "An invented project."
+          },
+          {
+            "id": "organization",
+            "meaning": "An invented organization."
+          },
+          {
+            "id": "assertion",
+            "meaning": "A qualified source-supported statement proposal."
+          },
+          {
+            "id": "material",
+            "meaning": "Original source evidence."
+          }
+        ],
+        "relations": [
+          {
+            "id": "manages",
+            "meaning": "A management statement, retaining polarity and time.",
+            "graphPredicate": "related"
+          },
+          {
+            "id": "owns",
+            "meaning": "An ownership statement, retaining polarity.",
+            "graphPredicate": "related"
+          },
+          {
+            "id": "funds",
+            "meaning": "A funding statement with directed participants.",
+            "graphPredicate": "related"
+          },
+          {
+            "id": "available",
+            "meaning": "A unary availability statement, retaining polarity and unresolved time.",
+            "graphPredicate": "related"
+          }
+        ]
+      },
+      "identityRules": "Labels do not establish identity. Existing identity candidates are proposals only.",
+      "sourcePolicy": "Invented material only; retain original bytes and exact locations.",
+      "acceptancePolicy": "The existing knowledge owner evaluates and reviews; this fixture grants no authority."
+    }
+  },
+  "purpose": "Invented operation fixture; host extraction and receiver decisions are simulated only."
+}
