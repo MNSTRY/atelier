@@ -2,10 +2,10 @@
 
 ## Responsibility architecture
 
-The [responsibility architecture](architecture.md#L6-L23) is the canonical naming and
-composition model. Keep existing source/API identifiers as [compatibility
-surfaces](architecture.md#L38-L41). Responsibilities, roles, methods, resources,
-records and hosts have distinct kinds and typed relationships. This decision adopts the architecture
+The [responsibility architecture](architecture.md) is the canonical naming and
+composition model. Keep existing source/API identifiers as compatibility
+surfaces. Responsibilities, roles, methods, resources, records and hosts have
+distinct kinds and typed relationships. This decision adopts the architecture
 direction; it does not declare every consumer implemented or qualified.
 
 Use additive contracts for architecture bindings, practical cases, native ADR
@@ -32,8 +32,8 @@ independent review, publication or human acceptance.
 | Claim decision | Separate immutable decision aggregate and contract | Never insert new event types into legacy proposal aggregates. Stable request identity and expected version are mandatory. |
 | Document response | Separate passage-bound record | A question/correction is not a semantic claim or agreement. |
 | Owner handoff | Derived proposed change | No canonical apply or publication authority; cross-repository Git disclosure is a distinct event. |
-| Inspection bundle | Separate inert artifact; reuse disclosure/JCS ([prepareInspectionBundle](../src/collaboration/inspection-bundle.mjs#L37-L105)) | No active-state overwrite, execution, secret transfer or approval import ([prohibitedKeys](../src/collaboration/inspection-bundle.mjs#L16-L36), [inspectBundle](../src/collaboration/inspection-bundle.mjs#L106-L197), [read and write paths](../src/collaboration/inspection-bundle.mjs#L198-L223)). |
-| Pack compatibility | New versioned lifecycle declaration ([inspectPackLifecycle](../src/extension-packs/lifecycle.mjs#L14-L121)) | Legacy packs remain inspectable; closed v1 contracts are not silently widened ([legacy packs inspectable; closed declaration and entries](../src/extension-packs/lifecycle.mjs#L14-L121), [rootVersion](../src/extension-packs/lifecycle.mjs#L7-L12)). |
+| Inspection bundle | Separate inert artifact; reuse disclosure/JCS ([inspection-bundle.mjs](../src/collaboration/inspection-bundle.mjs); [prepareInspectionBundle](../src/collaboration/inspection-bundle.mjs#L37-L105)) | No active-state overwrite, execution, secret transfer or approval import ([prohibitedKeys](../src/collaboration/inspection-bundle.mjs#L16-L36), [inspectBundle](../src/collaboration/inspection-bundle.mjs#L106-L197), [read and write paths](../src/collaboration/inspection-bundle.mjs#L198-L223)). |
+| Pack compatibility | New versioned lifecycle declaration ([lifecycle.mjs](../src/extension-packs/lifecycle.mjs); [inspectPackLifecycle](../src/extension-packs/lifecycle.mjs#L14-L121)) | Legacy packs remain inspectable; closed v1 contracts are not silently widened ([legacy packs inspectable; closed declaration and entries](../src/extension-packs/lifecycle.mjs#L14-L121), [rootVersion](../src/extension-packs/lifecycle.mjs#L7-L12)). |
 
 <!-- Uncited: Package provenance, Evidence snapshot, Claim decision and Document response await symbol-level citation support in the decision-practice consumer. -->
 
