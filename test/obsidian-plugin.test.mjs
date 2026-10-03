@@ -1979,6 +1979,8 @@ test('status and open report the plugin, and open takes the app version from it 
   // is what is missing, and the answer says so rather than that no vault is open.
   listed = false
   asked.length = 0
+  // This stand-in stops automatic renewals; each fallback starts with a live plugin lease.
+  await plugin.cycle()
   const silent = await world.run(['open', '--json', '--consent-actor', CONSENT.actor], { seams })
   assert.deepEqual([silent.json.outcome, silent.json.reason, asked, launches.length], ['app-cli-unavailable', 'vault-open-cli-silent', ['readSettings'], 1])
   assert.match(silent.json.next, /has this view's vault open, as Atelier's plugin in it shows, but its command line did not answer/)
@@ -1990,6 +1992,7 @@ test('status and open report the plugin, and open takes the app version from it 
   listed = true
   asked.length = 0
   seams.appProbe = { ...seams.appProbe, vaultState: async () => ({ answered: false, indexReady: false }) }
+  await plugin.cycle()
   const started = Date.now()
   const cliOff = await world.run(['open', '--json', '--consent-actor', CONSENT.actor], { seams })
   assert.deepEqual([cliOff.json.outcome, cliOff.json.reason, asked, launches.length], ['app-cli-unavailable', 'vault-open-cli-silent', ['readSettings'], 2])
