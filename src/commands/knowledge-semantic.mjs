@@ -11,20 +11,26 @@
 import { createSemanticOperation } from '../knowledge/semantic-operation.mjs'
 import { encodeKnowledgeOutput } from '../knowledge/context.mjs'
 import { parseArgs } from '../project/config.mjs'
-import { reportCommandFailure, safeCommandMessage } from '../cli/command-failure.mjs'
+import { safeCommandMessage } from '../cli/command-failure.mjs'
 
 export const SEMANTIC_REQUEST_BYTES = 256 * 1024
 
-const spec = (method, required, optional = []) => Object.freeze({ method, required: Object.freeze(required), optional: Object.freeze(optional) })
+// Required fields are never null. Fields the runner reads as objects, arrays or
+// text are checked for that type here, so a wrong type is a typed refusal
+// rather than a JavaScript error from inside the runner.
+const spec = (method, required, optional = [], types = {}) => Object.freeze({ method, required: Object.freeze(required), optional: Object.freeze(optional), types: Object.freeze(types) })
 export const SEMANTIC_COMMANDS = Object.freeze({
-  begin: spec('begin', ['operationId', 'attemptId', 'at', 'term', 'plan', 'references', 'identityCandidates', 'extractor', 'confirm']),
+  begin: spec('begin', ['operationId', 'attemptId', 'at', 'term', 'plan', 'references', 'identityCandidates', 'extractor', 'confirm'], [],
+    { plan: 'object', references: 'array', identityCandidates: 'array', extractor: 'object' }),
   status: spec('status', ['operationId']),
   reconcile: spec('reconcile', ['operationId', 'at', 'by', 'reason', 'outcome', 'confirm']),
-  complete: spec('complete', ['operationId', 'output', 'expectedOutputDigest', 'candidates', 'usage', 'at', 'confirm']),
+  complete: spec('complete', ['operationId', 'output', 'expectedOutputDigest', 'candidates', 'usage', 'at', 'confirm'], [],
+    { output: 'string', candidates: 'object', usage: 'object' }),
   proposals: spec('proposals', ['operationId', 'query'], ['limit']),
-  contribution: spec('prepareContribution', ['operationId', 'id', 'kind', 'candidateId', 'source', 'sourceBinding', 'term', 'at', 'confirm'], ['supersedes', 'revisionReason']),
-  relation: spec('prepareRelation', ['assertion', 'at', 'confirm']),
-  record: spec('record', ['record', 'confirm']),
+  contribution: spec('prepareContribution', ['operationId', 'id', 'kind', 'candidateId', 'source', 'sourceBinding', 'term', 'at', 'confirm'], ['supersedes', 'revisionReason'],
+    { source: 'object', sourceBinding: 'object' }),
+  relation: spec('prepareRelation', ['assertion', 'at', 'confirm'], [], { assertion: 'object' }),
+  record: spec('record', ['record', 'confirm'], [], { record: 'object' }),
   cascade: spec('cascade', ['withdrawalId', 'at', 'confirm']),
   context: spec('context', ['query']),
   project: spec('project', ['activationId', 'namespace']),
@@ -60,17 +66,38 @@ export function selectSemanticRequest(command, body) {
     throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', 'semantic request needs exactly workspaceId, run and request')
   if (!exactFields(body.request, selected.required, selected.optional))
     throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', `unknown or missing ${command} request field`)
+  const typeOk = { object: plainObject, array: Array.isArray, string: value => typeof value === 'string' }
+  for (const field of selected.required) {
+    const value = body.request[field]
+    if (value === null || value === undefined || (selected.types[field] && !typeOk[selected.types[field]](value)))
+      throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', `invalid ${command} request field type: ${field}`)
+  }
   return selected
 }
 
 const TYPED = /^SEMANTIC_[A-Z_]+$/
-// Typed semantic refusals keep their code and the runner's saved diagnostics;
-// anything else goes to the shared failure reporting, which redacts host detail.
-function reportSemanticFailure(error) {
-  if (typeof error?.code !== 'string' || !TYPED.test(error.code)) return reportCommandFailure(error)
-  const failure = { ok: false, code: error.code, error: safeCommandMessage(error) ?? '[internal-error]' }
+// The printed failure for an error, or null when it must go to the command
+// executor's redaction. Three cases:
+// - a SEMANTIC_* refusal keeps its own code;
+// - any error after the runner saved a write or raw output keeps that
+//   recorded/captured detail, as SEMANTIC_OPERATION_INTERRUPTED when uncoded;
+// - Atelier's own other refusals (safe text, no host detail) become
+//   SEMANTIC_OPERATION_REFUSED.
+// Only an error with unsafe text and nothing saved is left to the executor.
+export function semanticFailure(error) {
+  const typed = typeof error?.code === 'string' && TYPED.test(error.code)
+  const saved = error?.recorded !== undefined || error?.captured !== undefined
+  const message = safeCommandMessage(error)
+  if (!typed && !saved && message === null) return null
+  const failure = { ok: false, code: typed ? error.code : saved ? 'SEMANTIC_OPERATION_INTERRUPTED' : 'SEMANTIC_OPERATION_REFUSED', error: message ?? '[internal-error]' }
   if (error.recorded !== undefined) failure.recorded = error.recorded
   if (error.captured !== undefined) failure.captured = error.captured
+  return failure
+}
+
+function reportSemanticFailure(error) {
+  const failure = semanticFailure(error)
+  if (failure === null) throw error
   console.error(JSON.stringify(failure))
   process.exitCode = 1
 }
@@ -79,7 +106,8 @@ export async function runKnowledgeSemantic(argv) {
   try {
     const args = parseArgs(argv)
     const command = args._[0]
-    if (args._.length !== 1 || !Object.hasOwn(SEMANTIC_COMMANDS, command) || Object.keys(args).some(key => key !== '_')) throw new Error(USAGE)
+    if (args._.length !== 1 || !Object.hasOwn(SEMANTIC_COMMANDS, command) || Object.keys(args).some(key => key !== '_'))
+      throw new SemanticRequestError('SEMANTIC_OPERATION_INVALID', USAGE)
     const body = await readRequest()
     const selected = selectSemanticRequest(command, body)
     // The workspace is the current directory, as for ingest and learn: the

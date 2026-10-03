@@ -12,7 +12,7 @@ import { EMPTY_HARNESS_HEAD, harnessRef } from '../src/harnesses/contracts.mjs'
 import { intakeDigest } from '../src/intake/store.mjs'
 import { prepareIngestionContribution } from '../src/knowledge/ingestion.mjs'
 import { createSemanticOperation } from '../src/knowledge/semantic-operation.mjs'
-import { SEMANTIC_COMMANDS, SEMANTIC_REQUEST_BYTES } from '../src/commands/knowledge-semantic.mjs'
+import { SEMANTIC_COMMANDS, SEMANTIC_REQUEST_BYTES, semanticFailure } from '../src/commands/knowledge-semantic.mjs'
 
 // The public `atelier knowledge semantic` adapter over the internal semantic
 // operation runner, exercised as separate CLI processes on invented sources.
@@ -102,10 +102,8 @@ test('dispatch refuses a missing or unknown operation, extra positionals and eve
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-semantic-cli-usage-')))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   for (const args of [[], ['execute'], ['status', 'extra'], ['status', '--project', 'atelier.project.json'], ['status', '--workspace', root]]) {
-    const result = cli(root, args, '{}')
-    assert.equal(result.status, 1, `${args.join(' ')}: ${result.stdout}`)
-    assert.equal(result.stdout, '')
-    assert.match(result.stderr, /knowledge semantic/)
+    const failure = refused(cli(root, args, '{}'), 'SEMANTIC_OPERATION_INVALID')
+    assert.match(failure.error, /knowledge semantic/)
   }
   assert.deepEqual(Object.keys(SEMANTIC_COMMANDS), ['begin', 'status', 'reconcile', 'complete', 'proposals', 'contribution', 'relation', 'record', 'cascade', 'context', 'project'])
 })
@@ -214,19 +212,71 @@ posix('typed runner refusals keep their codes through the CLI and never print a 
   assert.equal(fromCli.attempt.status, 'complete')
 })
 
-posix('a stale write after recording returns the recorded diagnostic for reopening', t => {
+posix('a source changed before completion keeps the captured raw output for reopening', t => {
   const s = setup(t)
   const first = ok(call(s.root, 'begin', s.begin))
   const candidates = extractedCandidates(first.input), output = JSON.stringify(candidates)
-  // Change the source between begin and completion: completion is recorded, then refused as stale.
+  // The source changes after begin: the raw bytes are captured, then the completion is refused as stale
+  // before anything is recorded in the ledger.
   fs.writeFileSync(path.join(s.root, 'notes.txt'), fixture.sourceText.replace('June', 'July'))
-  const failure = JSON.parse(call(s.root, 'complete', { operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }).stderr)
-  assert.equal(failure.ok, false)
-  assert.equal(failure.code, 'SEMANTIC_OPERATION_STALE')
-  assert.ok(failure.captured || failure.recorded)
-  const diagnostic = failure.recorded ?? failure.captured
-  assert.match(diagnostic.nextAction, /^reopen-(recorded-write|captured-output)$/)
+  const failure = refused(call(s.root, 'complete', { operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at, confirm: first.head }), 'SEMANTIC_OPERATION_STALE')
+  assert.equal(failure.recorded, undefined)
+  assert.equal(failure.captured.nextAction, 'reopen-captured-output')
+  assert.equal(failure.captured.attemptId, 'model-first')
   assert.doesNotMatch(JSON.stringify(failure), HOST_PATH)
+})
+
+posix('an uncoded failure after raw capture still returns the captured detail, as SEMANTIC_OPERATION_INTERRUPTED', t => {
+  const s = setup(t)
+  const first = ok(call(s.root, 'begin', s.begin))
+  const candidates = extractedCandidates(first.input), output = JSON.stringify(candidates)
+  // An invalid timestamp is only refused by the knowledge ledger, after intake has captured the raw bytes.
+  const failure = refused(call(s.root, 'complete', { operationId: 'first', output, expectedOutputDigest: intakeDigest(output), candidates, usage: unknownUsage, at: 'not-a-time', confirm: first.head }), 'SEMANTIC_OPERATION_INTERRUPTED')
+  assert.equal(failure.captured.nextAction, 'reopen-captured-output')
+  assert.equal(failure.captured.attemptId, 'model-first')
+  assert.doesNotMatch(JSON.stringify(failure), HOST_PATH)
+  // The captured attempt is complete: reopening finds the same raw output, so the host does not run again.
+  assert.equal(ok(call(s.root, 'status', { operationId: 'first' })).attempt.status, 'complete')
+})
+
+posix('Atelier\'s own uncoded refusals are typed SEMANTIC_OPERATION_REFUSED; null and wrongly typed fields never reach the runner', t => {
+  const s = setup(t)
+  const first = ok(call(s.root, 'begin', s.begin))
+  const bad = refused(call(s.root, 'complete', { operationId: 'first', output: 'raw', expectedOutputDigest: 'not-a-digest', candidates: {}, usage: unknownUsage, at, confirm: first.head }), 'SEMANTIC_OPERATION_REFUSED')
+  assert.equal(bad.captured, undefined)
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-semantic-cli-outside-')))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  const placed = JSON.parse(call(outside, 'status', { operationId: 'first' }).stderr)
+  assert.equal(placed.ok, false)
+  assert.match(placed.code, /^SEMANTIC_OPERATION_(REFUSED|MISSING)$/)
+  assert.doesNotMatch(JSON.stringify(placed), HOST_PATH)
+  const valid = validRequests(s)
+  const before = snapshot(s.root)
+  for (const [command, spec] of Object.entries(SEMANTIC_COMMANDS)) {
+    for (const field of spec.required) {
+      const failure = refused(call(s.root, command, { ...valid[command], [field]: null }), 'SEMANTIC_OPERATION_INVALID')
+      assert.match(failure.error, new RegExp(`invalid ${command} request field type: ${field}`))
+    }
+    for (const [field, type] of Object.entries(spec.types)) {
+      const wrong = type === 'string' ? {} : 'text'
+      refused(call(s.root, command, { ...valid[command], [field]: wrong }), 'SEMANTIC_OPERATION_INVALID')
+    }
+  }
+  assert.deepEqual(snapshot(s.root), before)
+})
+
+test('the failure formatter keeps saved detail for every error and leaves only unsafe, unsaved errors to redaction', () => {
+  const recorded = { record: { id: 'r', digest: 'd' }, head: 'h', nextAction: 'reopen-recorded-write' }
+  const coded = Object.assign(new Error('Knowledge history changed during the operation'), { code: 'SEMANTIC_OPERATION_HEAD', recorded })
+  assert.deepEqual(semanticFailure(coded), { ok: false, code: 'SEMANTIC_OPERATION_HEAD', error: 'Knowledge history changed during the operation', recorded })
+  const uncoded = Object.assign(new Error('lock busy'), { recorded })
+  assert.deepEqual(semanticFailure(uncoded), { ok: false, code: 'SEMANTIC_OPERATION_INTERRUPTED', error: 'lock busy', recorded })
+  // A Node error naming a host path keeps the saved detail but not its text.
+  const host = Object.assign(new Error(`EACCES: permission denied, open '${path.join(os.homedir(), 'x')}'`), { code: 'EACCES', errno: -13, syscall: 'open', recorded })
+  assert.deepEqual(semanticFailure(host), { ok: false, code: 'SEMANTIC_OPERATION_INTERRUPTED', error: '[internal-error]', recorded })
+  assert.deepEqual(semanticFailure(new Error('invalid content digest')), { ok: false, code: 'SEMANTIC_OPERATION_REFUSED', error: 'invalid content digest' })
+  assert.equal(semanticFailure(Object.assign(new Error(`ENOENT: open '${path.join(os.homedir(), 'x')}'`), { code: 'ENOENT', errno: -2, syscall: 'open' })), null)
+  assert.equal(semanticFailure(new SyntaxError('Unexpected token')), null)
 })
 
 posix('the whole receiver journey runs as separate processes: capture, admit, project, reopen, correct and withdraw', t => {

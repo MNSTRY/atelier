@@ -215,15 +215,25 @@ the command.
   `cascade`, `context` and `project`.
 - `request` holds exactly the operation's fields. Optional fields are `limit`
   for `proposals`, and `supersedes` with `revisionReason` for `contribution`.
-  Any other field, or a missing one, refuses as `SEMANTIC_OPERATION_INVALID`
-  and writes nothing. The command closes every request; the internal library
+  Any other field, a missing or null one, or a field of the wrong kind (for
+  example `record` that is not an object) refuses as
+  `SEMANTIC_OPERATION_INVALID` and writes nothing. The command closes every request; the internal library
   closes only `begin` and some nested values, so library callers do not get
   this check.
-- Success prints the operation's JSON result. A refusal prints
-  `{"ok": false, "code": "SEMANTIC_...", "error": "..."}` on stderr and exits 1.
-  When the runner already saved a completion or captured raw output, the
-  refusal also carries `recorded` or `captured` with a `nextAction`: reopen the
-  same operation rather than running the extraction again.
+- Success prints the operation's JSON result. A failure prints
+  `{"ok": false, "code": "SEMANTIC_...", "error": "..."}` on stderr and exits 1:
+  - the operation's own refusals keep their `SEMANTIC_*` code;
+  - any failure after the runner saved a ledger write or captured raw output
+    carries `recorded` or `captured` with a `nextAction`, coded
+    `SEMANTIC_OPERATION_INTERRUPTED` when the underlying error had no code.
+    Reopen the same operation rather than running the extraction again;
+  - Atelier's other refusals, such as an invalid digest or a directory that is
+    not the Git workspace, are coded `SEMANTIC_OPERATION_REFUSED`.
+
+  A failure whose text could reveal host detail and that saved nothing is
+  reported by the command runner as `[internal-error]` instead.
+- Receiver records submitted through `record` are the caller's assertions:
+  Atelier checks their consistency but does not authenticate who made them.
 - Raw output travels inside the 256 KiB request as UTF-8 text, so larger raw
   output cannot be recorded through the command yet.
 - Known limits from the runner's review stay: contradictory host declarations
