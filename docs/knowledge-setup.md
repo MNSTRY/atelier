@@ -198,3 +198,35 @@ Use `atelier dev --knowledge` after graph/build to work through Onboard, Model,
 Deepen, Apply, and Learn. The browser and `knowledge session` CLI share
 source-bound private drafts, confirmation, and recovery. See
 [knowledge workspaces](knowledge-workspace.md) for the complete flow and limits.
+
+## Recording a host's semantic extraction
+
+`atelier knowledge semantic` records an extraction that your own tool or model
+ran, so a receiver can review it against the exact source. Atelier never runs
+the extraction. The runner, its request shapes and the receiver journey are
+described in [semantic operation](semantic-operation.md); this section covers
+the command.
+
+- Run it in the Git workspace where `atelier ingest` planned and ran the
+  sources. Each call reads one JSON object from stdin, at most 256 KiB:
+  `{"workspaceId": "...", "run": "<knowledge domain run>", "request": {...}}`.
+- Operations: `begin`, `status`, `reconcile`, `complete`, `proposals`,
+  `contribution` (prepareContribution), `relation` (prepareRelation), `record`,
+  `cascade`, `context` and `project`.
+- `request` holds exactly the operation's fields. Optional fields are `limit`
+  for `proposals`, and `supersedes` with `revisionReason` for `contribution`.
+  Any other field, or a missing one, refuses as `SEMANTIC_OPERATION_INVALID`
+  and writes nothing. The command closes every request; the internal library
+  closes only `begin` and some nested values, so library callers do not get
+  this check.
+- Success prints the operation's JSON result. A refusal prints
+  `{"ok": false, "code": "SEMANTIC_...", "error": "..."}` on stderr and exits 1.
+  When the runner already saved a completion or captured raw output, the
+  refusal also carries `recorded` or `captured` with a `nextAction`: reopen the
+  same operation rather than running the extraction again.
+- Raw output travels inside the 256 KiB request as UTF-8 text, so larger raw
+  output cannot be recorded through the command yet.
+- Known limits from the runner's review stay: contradictory host declarations
+  across the ledger and intake can lead to two executions, found afterwards,
+  and a detected contradiction cannot yet be resolved. Neither is hidden by the
+  command.

@@ -117,6 +117,7 @@ Core commands:
   graph [--check]                 Build or check the knowledge graph.
   knowledge check|context|evaluate Check an ontology plan and select bounded evidence.
   knowledge dashboard|session     Inspect guided work and retain private drafts.
+  knowledge semantic OPERATION    Record a host-run semantic extraction for review.
   enroll documents                Write private sidecars for documents missing one.
   project [--check]               Build or check the workspace projection.
   build [--check]                 Build or check a realm portal.
@@ -214,12 +215,14 @@ Observations are local metadata, never automatic telemetry.`,
 Read one JSON request from stdin (maximum 1 MiB). Start takes {"config":{"id":"SESSION","fields":[{"id":"FIELD","source":{"ref":"packet.md","digest":"SHA256"}}]}}. Read/recover take {"sessionId":"SESSION"}. Event takes {"sessionId":"SESSION","event":{"id":"UNIQUE","expectedRevision":0,"type":"answer","text":"ANSWER"}}. Run from the intended Git workspace with ignored .atelier-local/. Saves are private drafts, never canonical source edits.`,
     knowledge: `Usage: ${c} knowledge check|context|evaluate|dashboard [--project FILE] [--plan FILE]
        ${c} knowledge session start|read|event|recover|list [--project FILE] [--plan FILE]
+       ${c} knowledge semantic begin|status|reconcile|complete|proposals|contribution|relation|record|cascade|context|project
 
 Start with ${c} init --template knowledge-workspace --target DIR.
 check reports ontology-to-question coverage against the current canonical graph.
 context --question TEXT [--mode graph|lexical] [--max-bytes N] prints a bounded JSON packet of complete active Markdown sources.
 evaluate compares lexical and graph selection on the plan's pinned evidence cases; exit 1 means missing or stale expected evidence, missing relationships, or an expected abstention that retrieved or omitted matching evidence.
-The packet is local operator context, may contain private material, and grants no sharing or execution authority. Payload bytes are exact; token estimates are not measured usage. Session operations read JSON on stdin (except list); saved answers are private drafts. See docs/knowledge-setup.md and docs/knowledge-workspace.md.`,
+The packet is local operator context, may contain private material, and grants no sharing or execution authority. Payload bytes are exact; token estimates are not measured usage. Session operations read JSON on stdin (except list); saved answers are private drafts.
+semantic reads one JSON object {workspaceId, run, request} on stdin (at most 256 KiB) in the intended Git workspace, the one ingest uses. Each operation accepts exactly its documented request fields; any other refuses as SEMANTIC_OPERATION_INVALID before anything is written. Atelier calls no model: the host supplies its raw output, candidates and usage (null when unknown), and every interpretation stays pending until the receiver's own records accept it. Failures print {ok:false, code, error} with recorded or captured details for reopening. See docs/knowledge-setup.md, docs/knowledge-workspace.md and docs/semantic-operation.md.`,
     init: `Usage: ${c} init [--template private-domain|shared-project|sample-workspace|distribution|external-project|knowledge-workspace] [--target DIR] [--actor ID]
 
 Creates tracked starter files and an Atelier lockfile. It does not install hooks unless asked separately. An unrecognized --template exits 1 and writes nothing; omit --template for the blank scaffold.`,
