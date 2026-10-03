@@ -1,0 +1,26 @@
+{
+  "schema": "atelier-authoring-projection@v1",
+  "projectionId": "sample:projection:review",
+  "tenantRef": "sample-studio",
+  "extensionPack": {
+    "id": "sample.authoring",
+    "version": "v1"
+  },
+  "surface": {
+    "surfaceRef": "sample:surface:workbench",
+    "sourceRefs": [
+      "sample:manifest:editorial"
+    ]
+  },
+  "capabilities": [
+    "review.read"
+  ],
+  "authority": {
+    "projectionOnly": true,
+    "localAuthoringState": "consumer-owned",
+    "publicationMutation": false,
+    "editorialGateMutation": false,
+    "runtimeMutation": false
+  },
+  "implementationPath": "private/engine.js"
+}
