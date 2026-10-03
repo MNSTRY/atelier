@@ -2886,15 +2886,15 @@ test('apply beside a real removal: the source deleted, or its directory replaced
 // The seam that prepares the published note again, counted, with the code of anything it throws. While `arm` is set,
 // the first open of `sourceFile` inside it is preceded by another program saving the source the way an editor does:
 // complete new bytes renamed over the path, after the look at the path and before its open, so the production open
-// answers ELEAFCHANGED.
+// answers ELEAFCHANGED. While `every` is set, every such open is.
 function replacedWhilePreparing(t, sourceFile) {
   const production = createProductionSeams()
-  const state = { arm: null, preparations: 0, codes: [], replaced: 0 }
+  const state = { arm: null, every: null, preparations: 0, codes: [], replaced: 0 }
   let preparing = false
   const originalOpen = fs.openSync
   fs.openSync = function patched(file, flags, ...rest) {
-    if (preparing && state.arm !== null && typeof file === 'string' && path.resolve(file) === path.resolve(sourceFile)) {
-      const bytes = state.arm
+    if (preparing && (state.arm !== null || state.every !== null) && typeof file === 'string' && path.resolve(file) === path.resolve(sourceFile)) {
+      const bytes = state.arm ?? state.every
       state.arm = null
       const saved = `${sourceFile}.saving`
       fs.writeFileSync(saved, bytes)
@@ -2946,6 +2946,96 @@ test('apply after a source replaced while the published note was prepared: the r
   assert.deepEqual(race.state.codes, ['ELEAFCHANGED'], 'and that preparation succeeded')
   assert.deepEqual([next.status, next.code], ['applied', 'applied'], JSON.stringify(next))
   assert.match(fs.readFileSync(world.source('race-room/rounds/round-1.md'), 'utf8'), /Edited sentence 1\./)
+})
+
+test('apply beside a writer that replaces the source with the same bytes, or another source of the scope, while the published note is prepared again: the note is prepared again and the edit applies; a source that keeps being replaced refuses typed and writes nothing', needsExchange, async (t) => {
+  const world = raceWorld(t, 3)
+  const rows = [
+    { name: 'the source saved again with the same bytes', index: 0, file: world.source('race-room/rounds/round-0.md'), bytes: (file) => fs.readFileSync(file) },
+    { name: 'another source of the scope saved', index: 1, file: world.source('race-room/about.md'), bytes: (file) => Buffer.from(`${fs.readFileSync(file, 'utf8')}\nSaved by another program while the note was prepared.\n`) },
+  ]
+  for (const row of rows) {
+    const race = replacedWhilePreparing(t, row.file)
+    race.state.arm = row.bytes(row.file)
+    let result
+    try { result = await world.sourceApply({ seams: race.seams }).apply({ editId: world.editOf(`race-room:round-${row.index}`).editId, mode: 'manual', actor: 'person-synthetic' }) } finally { race.restore() }
+    assert.deepEqual([race.state.replaced, race.state.codes], [1, ['ELEAFCHANGED']], `${row.name}: the file was replaced between the look at its path and its open`)
+    assert.deepEqual([result.status, result.code], ['applied', 'applied'], `${row.name}: ${JSON.stringify(result)}`)
+    assert.match(fs.readFileSync(world.source(`race-room/rounds/round-${row.index}.md`), 'utf8'), new RegExp(`Edited sentence ${row.index}\\.`), row.name)
+  }
+  // Replaced at every open: the preparation is tried a bounded number of times, then answered without a guess.
+  const sourceFile = world.source('race-room/rounds/round-2.md')
+  const before = fs.readFileSync(sourceFile)
+  const race = replacedWhilePreparing(t, sourceFile)
+  race.state.every = before
+  let result
+  try { result = await world.sourceApply({ seams: race.seams }).apply({ editId: world.editOf('race-room:round-2').editId, mode: 'manual', actor: 'person-synthetic' }) } finally { race.restore() }
+  assert.deepEqual(race.state.codes, ['ELEAFCHANGED', 'ELEAFCHANGED', 'ELEAFCHANGED'], 'three preparations, each met a replaced source')
+  assert.deepEqual([result.status, result.code, SOURCE_APPLY_REFUSALS.includes(result.code)], ['refused', 'published-note-unavailable', true], JSON.stringify(result))
+  assert.deepEqual(fs.readFileSync(sourceFile), before, 'the source is as it was')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was written')
+  assert.equal((await world.sourceApply().apply({ editId: world.editOf('race-room:round-2').editId, mode: 'manual', actor: 'person-synthetic' })).status, 'applied', 'the edit applies once the race is over')
+})
+
+test('apply beside a program that removes an enrolled source while the graph is built: refuses corpus-unreadable typed with the cause, names no file, writes nothing, and applies once the race is over', needsExchange, async (t) => {
+  const world = raceWorld(t, 1)
+  const removed = world.source('race-room/about.md')
+  const sourceFile = world.source('race-room/rounds/round-0.md')
+  const before = fs.readFileSync(sourceFile)
+  // The graph lists the files of the repository, then reads each by its path: the file is removed between the two.
+  const production = createProductionSeams()
+  const originalRead = fs.readFileSync
+  let building = false
+  let removals = 0
+  fs.readFileSync = function patched(file, ...rest) {
+    if (building && removals === 0 && typeof file === 'string' && path.resolve(file) === path.resolve(removed)) { fs.rmSync(removed); removals += 1 }
+    return originalRead.call(this, file, ...rest)
+  }
+  const restore = () => { fs.readFileSync = originalRead }
+  t.after(restore)
+  const seams = { buildGraph: (input) => { building = true; try { return production.buildGraph(input) } finally { building = false } } }
+  let result
+  try { result = await world.sourceApply({ seams }).apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' }) } finally { restore() }
+  assert.equal(removals, 1, 'the file was removed while the graph was built')
+  assert.deepEqual([result.status, result.code, result.detail?.cause, SOURCE_APPLY_REFUSALS.includes(result.code)], ['refused', 'corpus-unreadable', 'ENOENT', true], JSON.stringify(result))
+  assert.equal(/rounds|about|\.md/.test(JSON.stringify(result)), false, 'the refusal names no file')
+  assert.deepEqual(fs.readFileSync(sourceFile), before, 'the source is as it was')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was written')
+  assert.equal((await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })).status, 'applied', 'the edit applies once the race is over')
+})
+
+test('apply while a publication replaces the pointer to the current manifest: the pointer is read again and the edit applies; a pointer that keeps being replaced refuses manifest-unavailable typed and writes nothing', needsExchange, async (t) => {
+  const world = raceWorld(t, 2)
+  const pointer = path.join(world.workspaceRoot(), 'state', 'manifests', 'scope-whole', 'current.json')
+  const pointerBytes = fs.readFileSync(pointer)
+  // A publication replaces the pointer by rename, after the look at its path and before its open.
+  const originalOpen = fs.openSync
+  let mode = null
+  let replaced = 0
+  fs.openSync = function patched(file, flags, ...rest) {
+    if (mode !== null && typeof file === 'string' && path.resolve(file) === path.resolve(pointer)) {
+      if (mode === 'once') mode = null
+      fs.writeFileSync(`${pointer}.publishing`, pointerBytes)
+      fs.renameSync(`${pointer}.publishing`, pointer)
+      replaced += 1
+    }
+    return originalOpen.call(this, file, flags, ...rest)
+  }
+  const restore = () => { fs.openSync = originalOpen }
+  t.after(restore)
+  mode = 'once'
+  const once = await world.sourceApply().apply({ editId: world.editOf('race-room:round-0').editId, mode: 'manual', actor: 'person-synthetic' })
+  assert.deepEqual([replaced, once.status, once.code], [1, 'applied', 'applied'], JSON.stringify(once))
+  const sourceFile = world.source('race-room/rounds/round-1.md')
+  const before = fs.readFileSync(sourceFile)
+  replaced = 0
+  mode = 'every'
+  let result
+  try { result = await world.sourceApply().apply({ editId: world.editOf('race-room:round-1').editId, mode: 'manual', actor: 'person-synthetic' }) } finally { mode = null; restore() }
+  assert.equal(replaced, 5, 'the pointer was read a bounded number of times')
+  assert.deepEqual([result.status, result.code, result.detail?.cause, SOURCE_APPLY_REFUSALS.includes(result.code)], ['refused', 'manifest-unavailable', 'changed-while-reading', true], JSON.stringify(result))
+  assert.deepEqual(fs.readFileSync(sourceFile), before, 'the source is as it was')
+  assert.deepEqual(filesUnder(world.recovery()).filter((file) => file.endsWith('.candidate')), [], 'no candidate was written')
 })
 
 test('apply command beside a damaged object log: recover settles the healthy interrupted apply and reports the damaged object by its code, show answers a typed refusal, and nothing is repaired or deleted', needsExchange, async (t) => {
