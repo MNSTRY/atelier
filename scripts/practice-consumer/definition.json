@@ -1,0 +1,69 @@
+{
+  "format": "atelier.decision-practice/v0",
+  "id": "atelier-decision-source-reconsideration",
+  "revision": "three",
+  "purpose": "Prepare a visible, unaccepted reconsideration draft when a root pull request changes a source, or the anchored lines of a source, that a recorded decision of this repository cites.",
+  "applicability": "The recorded decisions in docs/integration-contract-decisions.md and the repository files they link to, whole or by a #L line anchor read as text-lines@1 at the merge base, at exact commits. A person reviews every draft; nothing is applied automatically.",
+  "rightsBasis": "Public Apache-2.0 repository source.",
+  "evidenceRoles": [
+    "source",
+    "decision"
+  ],
+  "prerequisites": [
+    "cited-source-changed"
+  ],
+  "rubric": {
+    "schema": "atelier-decision-request@v1",
+    "contractVersion": "1.0.0",
+    "id": "specimen",
+    "task": "decision-source-reconsideration",
+    "rubricVersion": "cited-source-predicate.v3",
+    "scope": {
+      "workspaceId": "atelier-root",
+      "authorizationRef": "public-repository-source"
+    },
+    "state": "e1: (the changed region of a cited source, or its anchored lines mapped to the head)\ne2: (the recorded decision)",
+    "evidence": [
+      {
+        "id": "e1",
+        "sourceRef": "atelier-root:specimen-source"
+      },
+      {
+        "id": "e2",
+        "sourceRef": "atelier-root:specimen-decision"
+      }
+    ],
+    "questions": {
+      "impact": {
+        "type": "choice",
+        "instructions": "Does the change to the cited source (e1) affect the recorded decision (e2)? Keep both texts regardless of the answer.",
+        "evidenceIds": [
+          "e1",
+          "e2"
+        ],
+        "criteria": {
+          "affected": "The change modifies, removes or adds lines of a whole-file cited source; for an anchored citation, it modifies or removes lines inside the anchor at the merge base.",
+          "unaffected": "For an anchored citation, the change only adds lines between its anchored lines.",
+          "unclear": "Neither description fits."
+        }
+      }
+    }
+  },
+  "limits": {
+    "stages": 1,
+    "evidence": 2,
+    "assessments": 1,
+    "proposals": 1
+  },
+  "allowedProposals": [
+    "reconsideration"
+  ],
+  "outcomeMap": {
+    "question": "impact",
+    "choices": {
+      "affected": "proceed",
+      "unaffected": "stop",
+      "unclear": "escalate"
+    }
+  }
+}

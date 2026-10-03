@@ -97,7 +97,7 @@ const SHARED_B = {
 }
 
 const GIT_ENV = () => ({ PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME })
-const git = (cwd, args) => childProcess.execFileSync('git', ['-c', 'user.name=Synthetic Author', '-c', 'user.email=author@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd, env: GIT_ENV(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+const git = (cwd, args) => childProcess.execFileSync('git', ['-c', 'user.name=Synthetic Author', '-c', 'user.email=author@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'maintenance.auto=false', ...args], { cwd, env: GIT_ENV(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 const digestOf = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 const isoNoJournal = (text) => text.replace(/journal-\d{17}-[0-9a-f]{8}/g, 'journal-X')
 

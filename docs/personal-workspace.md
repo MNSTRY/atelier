@@ -2,7 +2,8 @@
 
 This module composes enrolled local repositories and private interpretation in
 one Atelier graph. The person supplies a private home outside every enrolled
-repository. Shared source files and private authored inputs stay unchanged.
+repository. Shared source files are never changed. Private authored inputs change
+only through an explicit, confirmed restore (see below).
 This is a local composition module. Host integration and release require
 separate acceptance.
 
@@ -28,7 +29,7 @@ stable local enrollment keys; matching a recorded remote is an offline change
 check, not proof of upstream membership or provider identity.
 
 The module entrypoint is `src/personal-workspace/index.mjs`; its public package
-subpath is `@mnstry/atelier/personal-workspace`. The API consists of nine exports:
+subpath is `@mnstry/atelier/personal-workspace`. The API consists of fifteen exports:
 
 - `MANIFEST_SCHEMA` and `OVERLAY_SCHEMA`.
 - `PersonalWorkspaceRefusal`.
@@ -36,6 +37,10 @@ subpath is `@mnstry/atelier/personal-workspace`. The API consists of nine export
 - `resolvePersonalWorkspace`.
 - `planPersonalGeneration`, `materializePersonalGeneration`, and
   `composePersonalWorkspace`.
+- `selectPersonalGeneration`, `selectionConfirmDigest`, and
+  `readPersonalSelection`.
+- `inventoryPersonalHome`.
+- `planPersonalRestore` and `restorePersonalInputs`.
 
 Package registration and installed-consumer qualification are separate from
 module source qualification. A registered package can be used as follows:
@@ -66,7 +71,9 @@ input from this module. These operations write nothing. Failures throw
 `PersonalWorkspaceRefusal`, with a stable `code` and a sanitized message.
 No paths, source excerpts, or graph diagnostic text are included in refusals.
 
-Only `materializePersonalGeneration` writes. It creates
+Of the composition operations, only `materializePersonalGeneration` writes. (The
+selection and restore operations below write their own records and, on an explicit
+confirmed restore, the authored inputs.) It creates
 `generations/<generationId>/` under the explicit private home. The id is a
 digest of canonical schema-tagged manifest and overlay inputs, declared
 stable references, and the canonical private-home location. Moving that home
@@ -94,6 +101,86 @@ planning. Missing or misowned IDs refuse `stale-reference`; path-derived IDs ref
 rename preserves references when its stable node ID stays the same. Changed
 inputs refuse use of an old generation; old bytes remain untouched. Authored
 note retention and recipient export are outside this module.
+
+## Selection, inventory and restore
+
+A generation is eligible only while it composes against the current authored
+inputs, roots and enrollment, so at most one generation is eligible at a time.
+These operations record a person's choices about that, and write only under the
+private home. They never delete authored inputs, generations or records; they
+remove only their own temporary files. Every failure is a
+`PersonalWorkspaceRefusal` with a stable code and no path.
+
+- `selectPersonalGeneration({ personalHome, generationId, confirm })` records an
+  explicit choice of the eligible generation. `confirm` is
+  `selectionConfirmDigest({ generationId, previous })`, computed over the head
+  that `readPersonalSelection` returns, so a choice shown against an older history
+  does not apply. Selections are append-only, numbered, hash-chained records under
+  `selections/`, each written completely before it is published, so a crash leaves
+  only a temporary file. Concurrent selections refuse `selection-concurrent`. An
+  ineligible generation refuses with its composition code, such as
+  `stale-generation`.
+- `readPersonalSelection({ personalHome })` returns the current selection and
+  whether it is still eligible. A selection never keeps a generation eligible after
+  its inputs, roots or enrollment change. The chain proves internal consistency
+  only: an edited record whose successors were not re-linked, a gap, or a
+  reordering refuses `selection-history-corrupt`. Truncating, or consistently
+  rewriting, any trailing run of records (up to the whole history) yields another
+  valid chain; it changes the returned `head`, so a host that needs to detect it
+  keeps the head it last observed and compares it.
+- `inventoryPersonalHome({ personalHome })` lists what these operations write, for
+  review before any deletion the person chooses: the authored files, each
+  generation with its eligibility, interrupted staging directories, every
+  selection and restore record, and any leftover temporary file, with sizes and
+  digests. An unreadable, oversized, non-regular or symlinked entry (authored
+  file, generation record or selection record) is listed without a digest, and a
+  corrupt selection history is flagged rather than failing the inventory.
+  Temporary files include restore aside copies (`.restore-<uuid>-aside-<file>.json`).
+  It is read-only.
+- `planPersonalRestore({ personalHome, generationId })` plans restoring the
+  authored manifest and overlay that an earlier generation recorded. The
+  generation's `inputs.json` must reproduce its id from this private home, or the
+  plan refuses `generation-corrupt`; an oversized record refuses
+  `generation-inputs-too-large`. **A restore never widens enrollment or
+  bindings:** a repository the target enrolls must be enrolled now with the same
+  root and remote, and every binding it declares must be declared now. Otherwise
+  it refuses `rollback-readmits-repository` or `rollback-identity-changed` (with
+  the repository ids) or `rollback-readds-binding`, before any write.
+  Re-admission is the person's fresh edit; afterwards the same restore is
+  evaluated normally. The plan validates the target files and carries a summary
+  of the enrollment and bindings it removes and whether each file changes. A
+  restore that only narrows proceeds. Restored files are written in the
+  generation's canonical form (sorted keys, no indentation), not the person's
+  original formatting; planning and restoring briefly write private `.validate-*`
+  and `.restore-*` copies of authored data, which are removed afterwards and
+  listed by the inventory if a crash leaves them.
+- `restorePersonalInputs(plan, { personalHome, confirm: plan.confirm })` accepts
+  only a plan returned by `planPersonalRestore`. It reads the current authored
+  files once, validates those exact bytes, requires them to match the plan, and
+  re-runs the widening check on them; inputs changed after planning refuse
+  `authored-input-changed`. It keeps those exact bytes in an append-only record
+  under `restores/`, stages and validates both restored files, then replaces each
+  by compare-and-swap: the current file is moved aside and verified to be the
+  bytes it read, and the restored file is linked into place, which fails if
+  another writer recreated the name. On any mismatch, or if the moved file cannot
+  be read (for example it is now oversized), it is put back, or kept as a listed
+  temporary file if its name was taken meanwhile, and the restore refuses
+  `authored-input-changed`. Writers that replace or recreate the file by path keep
+  their bytes. A writer still holding an open handle on the old file and editing
+  it in place can write into the moved copy, which a completed swap removes. The
+  name is briefly absent during each swap. A rerun after an interruption between
+  swaps completes the files not yet restored. If a crash leaves an authored name
+  absent while its moved copy remains, planning and restoring refuse
+  `restore-interrupted`. The moved copy is listed by the inventory, and the
+  restore record under `restores/` holds the replaced bytes, so the person can put
+  the file back before trying again. A restore does
+  not change the selection; selecting the restored generation is the person's next
+  explicit act.
+
+Retention follows the person's decision: withdrawn material stops being eligible
+immediately, while authored history, generations and these records stay until the
+person reviews the inventory and explicitly confirms deletion. No deletion
+operation is provided yet.
 
 ## Canonical graph and offline checks
 

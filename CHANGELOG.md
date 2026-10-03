@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- Personal workspaces gain an explicit selection record, a read-only inventory of
+  the private home, and a restore of authored inputs from an earlier generation:
+  `selectPersonalGeneration`, `selectionConfirmDigest`, `readPersonalSelection`,
+  `inventoryPersonalHome`, `planPersonalRestore` and `restorePersonalInputs`. A
+  selection is a confirmed, hash-chained choice of the eligible generation. A
+  restore accepts only a plan from `planPersonalRestore`, re-checks the exact
+  current bytes, keeps them, and never widens enrollment or bindings:
+  re-admitting a withdrawn repository, a changed repository identity, or a
+  re-added binding refuses before any write. Each file is replaced by
+  compare-and-swap, so a write that replaces or recreates the file by path
+  during the restore is kept and the restore refuses; an interrupted swap
+  refuses `restore-interrupted` until the listed moved copy is put back.
+  Authored inputs, generations and records are never deleted; only temporary
+  files are removed.
+- A private-domain repository owner can let one named operator pass the local
+  boundary actor check by signing a delegation
+  (`docs/repo-boundary-guard.md`). It covers only `atelier boundary check` and
+  the `pre-commit` path, for listed repositories, for at most 90 days. It never
+  changes ownership, audiences, paths, content rules, promotion, push-content
+  checks or publication. It applies only when all of these hold:
+  - its ed25519 signature verifies against the owner's key in the host file
+    `/etc/atelier/boundary-owner-keys.json`, owned by root in root-owned
+    directories (Windows is not supported yet);
+  - it is current and not revoked in that file;
+  - the whole boundary policy, the managed repository set and each repository's
+    root commit match what the owner signed.
+
+  It records consent for a cooperating operator; the actor check stays
+  attribution, not authentication. Delegations live in
+  `boundary-delegations.v1.json` beside the policy, under the new
+  `atelier-boundary-delegations@v1` and `atelier-boundary-owner-keys@v1`
+  contracts; the boundary policy contract is unchanged.
+  `atelier boundary delegation draft|sign|verify` prepares, signs (after
+  recomputing the bindings) and inspects them. The policy validator now accepts
+  the `contractVersion` and `ext` members its schema already declared; `ext` is
+  ignored.
 - A capability operation that has committed no longer reports `EEXIST` ("not
   entered") when its lock is removed or replaced while cleanup inspects it.
   Cleanup preserves the other file and returns the operation's result. Lock
@@ -576,6 +612,22 @@
   (cause `changed-while-reading`) and writes nothing. A preparation that fails
   for any tolerated reason is no longer kept for its scope and generation; only
   one that succeeded is reused.
+- Obsidian source apply answers three more races with another program typed.
+  An enrolled source removed while apply builds the graph used to reject with
+  an untyped `ENOENT`; it now refuses `corpus-unreadable`, with the system code
+  as the cause, and writes nothing. When a publication replaced the pointer to
+  the current manifest during an apply, the read used to reject with an untyped
+  `ELEAFCHANGED`. The pointer is now read again, up to five times, and one that
+  keeps changing refuses `manifest-unavailable` (cause `changed-while-reading`).
+  A source replaced while the published note is prepared again now leads to a
+  fresh preparation, up to three in all. If the source was saved with the same
+  bytes, or another source of the scope was replaced, the edit applies instead
+  of refusing `published-note-unavailable`. Observation of pending edits on a
+  tick had the same gap: a source replaced while its note was prepared again
+  raised an untyped `ELEAFCHANGED` from the tick. It now refuses that edit
+  `stale-source` when its own source bytes changed, and otherwise refuses
+  `published-note-unavailable`. The failed preparation is no longer kept, so the
+  other edits of that generation in the tick are still observed.
 
 ## 0.2.0-alpha.12
 

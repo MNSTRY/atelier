@@ -6,6 +6,7 @@ import {
   runBoundaryInstallHooksCommand,
   runBoundaryPushCheckCommand,
 } from '../boundary/policy.mjs'
+import { runBoundaryDelegationCommand } from '../boundary/delegation-command.mjs'
 
 const args = parseArgs(process.argv.slice(2))
 const subcommand = args._[0] || 'check'
@@ -19,6 +20,8 @@ if (subcommand === 'check' || subcommand === 'doctor') {
   runBoundaryAuditCommand(rest('audit'))
 } else if (subcommand === 'install-hooks') {
   runBoundaryInstallHooksCommand(rest('install-hooks'))
+} else if (subcommand === 'delegation') {
+  runBoundaryDelegationCommand(rest('delegation'))
 } else {
   console.error(`Unknown boundary command: ${subcommand}`)
   process.exit(1)

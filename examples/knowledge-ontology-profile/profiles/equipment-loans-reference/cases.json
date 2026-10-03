@@ -1,0 +1,226 @@
+{
+  "schema": "atelier-ontology-profile-cases/local-v1",
+  "profileId": "equipment-loans-reference",
+  "profileVersion": "1.0.0",
+  "cohort": "known-regression",
+  "cases": [
+    {
+      "id": "negative-unary",
+      "dimensions": [
+        "polarity",
+        "unary",
+        "scope",
+        "time",
+        "source-revision",
+        "proposal-only",
+        "projection"
+      ],
+      "expected": {
+        "kind": "assertion",
+        "reviewState": "proposed",
+        "object": null,
+        "nativeProjection": {
+          "emitted": false,
+          "reason": "qualified-domain-assertion-not-expressible-as-native-source-edge"
+        },
+        "subject": "example-library:asset:T-17",
+        "predicate": "passes-loan-check",
+        "polarity": "negative",
+        "modality": "asserted",
+        "scope": {
+          "item": "T-17",
+          "observation": "bench-inspection"
+        },
+        "time": {
+          "date": null,
+          "resolution": "unrecorded"
+        },
+        "evidence": {
+          "sourceId": "loan:inspection",
+          "path": "records/inspection.md",
+          "sha256": "367f6d81a7c4d2216b064d65ba08f6070fd6e19fed8e1900a628d2a6bf0e0a9e",
+          "byteStart": 332,
+          "byteEnd": 468,
+          "quote": "The inspection found a missing lens cap. The telescope has **not** passed its\nloan check. The observer recorded the check as incomplete."
+        }
+      }
+    },
+    {
+      "id": "possible-arrival",
+      "dimensions": [
+        "modality",
+        "time",
+        "source-revision",
+        "proposal-only",
+        "projection"
+      ],
+      "expected": {
+        "kind": "assertion",
+        "reviewState": "proposed",
+        "object": null,
+        "nativeProjection": {
+          "emitted": false,
+          "reason": "qualified-domain-assertion-not-expressible-as-native-source-edge"
+        },
+        "subject": "example-library:replacement-cap",
+        "predicate": "arrives",
+        "polarity": "positive",
+        "modality": "possible",
+        "scope": {
+          "forecast": "loan:repair-forecast"
+        },
+        "time": {
+          "date": null,
+          "expression": "Friday",
+          "resolution": "unanchored"
+        },
+        "evidence": {
+          "sourceId": "loan:repair-forecast",
+          "path": "records/forecast.md",
+          "sha256": "e6c0764a0cd5c9544d8da5a94732883ae03645b4e3504c50f30886519bf82f40",
+          "byteStart": 305,
+          "byteEnd": 398,
+          "quote": "A supplier said the replacement cap **may** arrive on Friday. Receipt has not\nbeen confirmed."
+        },
+        "attribution": {
+          "speakerLabel": "supplier",
+          "authenticatedActor": null
+        }
+      }
+    },
+    {
+      "id": "receipt-unconfirmed",
+      "dimensions": [
+        "polarity",
+        "scope",
+        "source-revision",
+        "projection"
+      ],
+      "expected": {
+        "kind": "assertion",
+        "reviewState": "proposed",
+        "object": null,
+        "nativeProjection": {
+          "emitted": false,
+          "reason": "qualified-domain-assertion-not-expressible-as-native-source-edge"
+        },
+        "subject": "example-library:replacement-cap",
+        "predicate": "receipt-confirmed",
+        "polarity": "negative",
+        "modality": "asserted",
+        "scope": {
+          "report": "loan:repair-forecast"
+        },
+        "time": {
+          "date": null,
+          "resolution": "unrecorded"
+        },
+        "evidence": {
+          "sourceId": "loan:repair-forecast",
+          "path": "records/forecast.md",
+          "sha256": "e6c0764a0cd5c9544d8da5a94732883ae03645b4e3504c50f30886519bf82f40",
+          "byteStart": 305,
+          "byteEnd": 398,
+          "quote": "A supplier said the replacement cap **may** arrive on Friday. Receipt has not\nbeen confirmed."
+        },
+        "attribution": {
+          "speakerLabel": "supplier",
+          "authenticatedActor": null
+        }
+      }
+    },
+    {
+      "id": "dependency-direction",
+      "dimensions": [
+        "direction",
+        "native-vocabulary",
+        "source-vs-domain",
+        "proposal-only"
+      ],
+      "expected": {
+        "kind": "source-edge-proposal",
+        "reviewState": "proposed",
+        "source": "loan:blue-telescope",
+        "predicate": "depends_on",
+        "target": "loan:inspection",
+        "semanticMeaning": "requires-inspection-evidence; not passed or approved"
+      }
+    },
+    {
+      "id": "identity-false-merge",
+      "dimensions": [
+        "identity",
+        "scope",
+        "proposal-only"
+      ],
+      "expected": {
+        "kind": "identity-proposal",
+        "reviewState": "proposed",
+        "left": {
+          "inventory": "example-library",
+          "assetLabel": "T-17",
+          "displayName": "Blue telescope"
+        },
+        "right": {
+          "inventory": "example-library",
+          "assetLabel": "T-18",
+          "displayName": "Blue telescope"
+        },
+        "assessment": "different"
+      }
+    },
+    {
+      "id": "alias-not-identity",
+      "dimensions": [
+        "identity",
+        "alias",
+        "scope",
+        "proposal-only"
+      ],
+      "expected": {
+        "kind": "identity-proposal",
+        "reviewState": "proposed",
+        "alias": "Blue telescope",
+        "leftInventory": "example-library",
+        "rightInventory": "other-example-library",
+        "ownerRecognizedId": null,
+        "assessment": "insufficient-evidence"
+      }
+    },
+    {
+      "id": "unmodeled-predicate",
+      "dimensions": [
+        "native-vocabulary",
+        "unmodeled",
+        "proposal-only",
+        "projection"
+      ],
+      "expected": {
+        "kind": "unmodeled-finding",
+        "reviewState": "proposed",
+        "predicate": "inspectionPassed",
+        "nativeProjection": {
+          "emitted": false,
+          "reason": "unsupported-native-predicate"
+        },
+        "next": "review-domain-assertion; do not add an arbitrary native edge"
+      }
+    },
+    {
+      "id": "missing-evidence",
+      "dimensions": [
+        "retrieval",
+        "unknown",
+        "authority"
+      ],
+      "expected": {
+        "kind": "retrieval-observation",
+        "status": "needs-evidence",
+        "selectedSourceIds": [],
+        "sourceEditsApplied": false,
+        "semanticAnswerCorrectness": null
+      }
+    }
+  ],
+  "scope": "Authored source-bound fixture expectations and invented identity counterexamples. Not outputs of a qualified extractor or held-out semantic evaluation."
+}

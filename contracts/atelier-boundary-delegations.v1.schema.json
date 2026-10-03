@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnstry.ai/schemas/atelier/atelier-boundary-delegations.v1.schema.json",
+  "$comment": "contract revision 1.0.0 (contract-stability epoch)",
+  "title": "atelier-boundary-delegations@v1",
+  "description": "Owner-signed delegations of the local boundary actor check, kept beside the boundary policy. A delegation is authority only when its signature verifies against an owner key the host supplies outside operator-writable files, it is current and not revoked by the host, its policy digest and repository root commits match. It covers only the local boundary check and the pre-commit path; it never changes ownership, audiences, paths, content rules, promotion, push-content approval or publication.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "delegations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "atelier-boundary-delegations@v1"
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+    },
+    "delegations": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/delegation"
+      }
+    },
+    "ext": {
+      "type": "object",
+      "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "actorId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "repoName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?Z$"
+    },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "owner",
+        "operator",
+        "repos",
+        "operations",
+        "notBefore",
+        "expiresAt",
+        "policyDigest",
+        "repoRoots",
+        "signature"
+      ],
+      "properties": {
+        "schema": {
+          "const": "atelier-boundary-delegation@v1"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "owner": {
+          "$ref": "#/$defs/actorId"
+        },
+        "operator": {
+          "$ref": "#/$defs/actorId"
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repoName"
+          }
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "boundary-check",
+              "pre-commit"
+            ]
+          }
+        },
+        "notBefore": {
+          "$ref": "#/$defs/utc"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/utc"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        },
+        "policyDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 of the RFC 8785 form of the whole boundary policy (ext removed at every level) and the managed repository names."
+        },
+        "repoRoots": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/repoName"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+          },
+          "minProperties": 1,
+          "maxProperties": 64,
+          "description": "Each listed repository's first root commit."
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "keyId",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "keyId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "ext": {
+          "type": "object",
+          "description": "Reserved extension container. Producers MAY add namespaced members (recommend vendor-prefixed keys). Consumers MUST ignore members they do not recognize. Contents are not validated at v1 and carry no authority over first-class fields."
+        }
+      }
+    }
+  }
+}
