@@ -13,7 +13,7 @@ For each citation (a cited file, or an anchored range of one) it runs `evaluateD
 - **Practice:** the adopted definition in `definition.json`.
 - **History:** an in-memory Knowledge history rebuilt from the base commit.
 - **Evidence:** exact evidence for the changed region and for the decision.
-- **Assessment:** a deterministic one, under provider `foundation-deterministic` and model `cited-source-predicate.v2`, with `usage: null` and no model call.
+- **Assessment:** a deterministic one, under provider `foundation-deterministic` and model `cited-source-predicate.v3`, with `usage: null` and no model call.
 
 It appends one measurement line to `measurements.jsonl`.
 
@@ -30,7 +30,8 @@ The assessment is the predicate the rubric declares:
 | Change to the cited file (or, for an anchor, to its lines) | Assessment | Practice outcome |
 | --- | --- | --- |
 | A line modified or removed | `affected` | proceed: an unaccepted reconsideration draft |
-| Only lines added | `unaffected` | stop |
+| Only lines added to a whole-file citation (anywhere: before, between or after existing lines) | `affected` | proceed: an unaccepted reconsideration draft |
+| For an anchor, only lines added between its anchored lines | `unaffected` | stop |
 | Binary, removed, renamed or over the excerpt bound | abstained, `insufficient-evidence` | escalate |
 | Changed without line changes (for example a mode change); for an anchor, the head lacks the mapped lines and no anchored line changed | `unclear` | escalate. A mode-only change leaves an anchor's lines unchanged, so an anchor stops |
 | Not changed; for an anchor, changed only outside it | not assessed (prerequisite false) | stop |
@@ -38,6 +39,17 @@ The assessment is the predicate the rubric declares:
 | An anchor past the end of the file or over 120 lines at the base, or a fragment that is not a line anchor | not evaluated (`cited-anchor-out-of-range`, `cited-anchor-over-bounds`, `cited-anchor-unsupported`, `cited-anchor-malformed`) | none |
 
 Each line also records whether the Knowledge harness itself marks the decision for reconsideration once the changed source is recorded (`harnessReconsider`).
+
+## Added lines in a whole-file citation (definition revision three)
+
+Under revision two, a change that only added lines to a cited file was `unaffected` and stopped. A new function appended to a module, or inserted between existing ones, therefore never reached the decisions citing that module, even though new code can contradict a decision as easily as edited code.
+
+Revision three (rubric `cited-source-predicate.v3`) treats lines added anywhere in a whole-file citation as `affected`, so they prepare the same unaccepted reconsideration draft as a modified line. Nothing else changes:
+- The draft quotes the exact head lines it judged (`quoted`), and a person still confirms or dismisses it with a label.
+- An anchored citation keeps its revision-two rule: lines added only between its anchored lines are `unaffected`, and changes outside it stop.
+- Binary, removed and over-bound sources still abstain.
+
+**This is deliberately conservative.** Any added line in a whole-file citation drafts, including a comment, a blank line or a table row that does not bear on the decision. Such a draft is dismissed with a `false-alarm` label; the over-triggering is the price of not missing additions.
 
 ## Anchored citations (definition revision two)
 
@@ -63,6 +75,7 @@ Renames are not followed. A moved file is absent at the head, so its anchors esc
 
 **Versions**
 - Revision two writes `atelier-practice-consumer-measurement@v1` lines, which add the `anchor` field.
+- Revision three changes only the predicate, so it writes the same `@v1` line shape. Each line names its predicate in `provider.model` and its definition and tool in `definitionDigest` and `toolDigest`, so lines measured under revision two keep their meaning.
 - Labels are `atelier-practice-consumer-label@v1`. Without `--anchor`, a label judges the whole-file citation of that file; `--anchor lines:S-E` names an anchored one. A refused fragment records its raw text (`fragment`) and is never taken for the whole-file citation.
 - Earlier `@v0` lines keep their own definition and tool digests and stay labelable as whole-file citations.
 - Whole-file citations keep their revision-one request and instance identities.
@@ -74,7 +87,7 @@ Renames are not followed. A moved file is absent at the head, so its anchors esc
 - The probabilities are declared values (1 for the chosen criterion, 0 otherwise), and the confidence is a fixed, uncalibrated 0.5.
 - For a removed or binary source, the source evidence is a placeholder text that says so, bound to the head commit.
 - An unchanged source is not assessed. The evaluator validates the result, which is a fixed placeholder there, and then stops on the false prerequisite.
-- Appending to a file that has no final newline also changes its last line, so it counts as `affected`.
+- Appending to a file that has no final newline also changes its last line, so an anchor that ends on that line counts it as `affected`.
 - A decision without an explicit link cannot be measured. A change that matters to a decision without touching a cited file, or its anchored lines, is a miss the tool cannot see.
 
 ## First measurements (retrospective, recorded 2026-10-02)

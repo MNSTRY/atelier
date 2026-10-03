@@ -85,13 +85,52 @@ test('a modified cited line proceeds to an unaccepted draft and the harness mark
   assert.equal(measurement.summary.drafts, 1)
 })
 
-test('an addition only is unaffected and stops by the adopted rubric', (t) => {
+test('lines only added to a whole-file citation proceed to an unaccepted draft (revision three)', (t) => {
+  // Prepending, inserting between lines and appending each only add lines.
+  const edits = {
+    prepend: (text) => `A prepended line.\n${text}`,
+    insert: (text) => text.replace('Line one of the invented model.\n', 'Line one of the invented model.\nAn inserted line.\n'),
+    append: (text) => `${text}An appended line.\n`,
+  }
+  for (const [name, edit] of Object.entries(edits)) {
+    const r = repo(t)
+    const headText = edit(SOURCE)
+    const head = r.commit(name, () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), headText))
+    const value = outcome(measure({ repo: r.dir, pr: 3, base: r.base, head }))
+    assert.deepEqual(value.change, { removed: 0, added: 1, binary: false }, name)
+    assert.deepEqual(value.assessment, { status: 'assessed', choice: 'affected' }, name)
+    assert.equal(value.status, 'proceed', name)
+    assert.equal(value.reason, 'reconsideration-draft-prepared', name)
+    assert.match(value.draftDigest, /^sha256:[0-9a-f]{64}$/)
+    // The draft quotes the exact head lines it judged, including the added one.
+    const [start, end] = value.quoted.selector.value.slice('lines:'.length).split('-').map(Number)
+    const quoted = headText.split('\n').slice(start - 1, end).join('\n')
+    assert.deepEqual([value.quoted.objectId, value.quoted.revision], ['docs/layers.md', head], name)
+    assert.equal(value.quoted.contentDigest, `sha256:${crypto.createHash('sha256').update(quoted).digest('hex')}`, name)
+    assert.match(quoted, /A prepended|An inserted|An appended/, name)
+    // Nothing is applied: the commits and the decision record are unchanged.
+    assert.equal(r.git('rev-parse', 'HEAD'), head)
+    assert.equal(r.git('status', '--porcelain'), '')
+    assert.equal(r.git('rev-parse', `${head}:${CORPUS}`), r.git('rev-parse', `${r.base}:${CORPUS}`))
+  }
+})
+
+test('an anchor still reads additions between its lines as unaffected beside a whole-file draft, and a person judges the draft', (t) => {
   const r = repo(t)
-  const head = r.commit('append', () => fs.appendFileSync(path.join(r.dir, 'docs/layers.md'), 'An added line.\n'))
-  const value = outcome(measure({ repo: r.dir, pr: 3, base: r.base, head }))
-  assert.deepEqual(value.assessment, { status: 'assessed', choice: 'unaffected' })
-  assert.equal(value.status, 'stop')
-  assert.equal(value.reason, 'rubric-disposition')
+  const base = r.commit('mixed', () => fs.writeFileSync(path.join(r.dir, CORPUS), CORPUS_TEXT.replace('(layers.md)', '(layers.md) and [lines](layers.md#L3-L4)')))
+  const head = r.commit('insert inside', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one of the invented model.\n', 'Line one of the invented model.\nAn inserted line.\n')))
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-practice-add-only-')), 'm.jsonl')
+  t.after(() => fs.rmSync(path.dirname(out), { recursive: true, force: true }))
+  const cli = (...args) => spawnSync(process.execPath, [SCRIPT, ...args, '--out', out], { encoding: 'utf8' })
+  assert.equal(cli('measure', '--pr', '48', '--base', base, '--head', head, '--repo', r.dir).status, 0)
+  const measured = JSON.parse(fs.readFileSync(out, 'utf8').trim())
+  assert.equal(measured.provider.model, 'cited-source-predicate.v3')
+  const decision = measured.decisions.find((item) => item.cited.length)
+  assert.deepEqual(decision.outcomes.map((item) => [item.anchor?.value ?? null, item.assessment.choice, item.status]), [[null, 'affected', 'proceed'], ['lines:3-4', 'unaffected', 'stop']])
+  // The draft stays a proposal: only a person's label judges it, against this exact measurement.
+  assert.equal(cli('label', '--pr', '48', '--decision', decision.id, '--file', 'docs/layers.md', '--label', 'false-alarm', '--minutes', '1', '--by', 'atelier-foundation').status, 0)
+  const labelled = JSON.parse(fs.readFileSync(out, 'utf8').trim().split('\n').at(-1))
+  assert.deepEqual([labelled.anchor, labelled.label, labelled.measurement], [null, 'false-alarm', `sha256:${crypto.createHash('sha256').update(fs.readFileSync(out, 'utf8').trim().split('\n')[0]).digest('hex')}`])
 })
 
 test('a removed or binary source abstains with its reason recorded and escalates', (t) => {
@@ -110,7 +149,9 @@ test('a removed or binary source abstains with its reason recorded and escalates
 
 test('the assessment is the declared predicate', () => {
   assert.deepEqual(assess({ binary: false, removed: 1, added: 0 }), { status: 'assessed', choice: 'affected' })
-  assert.deepEqual(assess({ binary: false, removed: 0, added: 2 }), { status: 'assessed', choice: 'unaffected' })
+  assert.deepEqual(assess({ binary: false, removed: 0, added: 2 }), { status: 'assessed', choice: 'affected' })
+  assert.deepEqual(assess({ binary: false, removed: 0, added: 2 }, { anchored: true }), { status: 'assessed', choice: 'unaffected' })
+  assert.deepEqual(assess({ binary: false, removed: 1, added: 0 }, { anchored: true }), { status: 'assessed', choice: 'affected' })
   assert.deepEqual(assess({ binary: false, removed: 0, added: 0 }), { status: 'assessed', choice: 'unclear' })
   assert.deepEqual(assess({ binary: true, removed: 0, added: 0 }), { status: 'abstained', reason: 'insufficient-evidence' })
   assert.deepEqual(assess({ binary: false, removed: 1, added: 1, oversize: true }), { status: 'abstained', reason: 'insufficient-evidence' })
@@ -236,7 +277,7 @@ test('repository diff settings cannot turn additions into removals', (t) => {
   const head = r.commit('two additions', () => fs.writeFileSync(path.join(r.dir, 'docs/layers.md'), SOURCE.replace('Line one of the invented model.', 'Line one of the invented model.\nAdded A.').replace('Line three.', 'Line three.\nAdded B.')))
   const value = outcome(measure({ repo: r.dir, pr: 8, base: r.base, head }))
   assert.deepEqual(value.change, { removed: 0, added: 2, binary: false })
-  assert.deepEqual(value.assessment, { status: 'assessed', choice: 'unaffected' })
+  assert.deepEqual(value.assessment, { status: 'assessed', choice: 'affected' })
 })
 
 test('a pull request is measured from its merge base, and an unchanged source is not assessed', (t) => {
