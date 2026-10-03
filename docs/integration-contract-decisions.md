@@ -27,13 +27,13 @@ independent review, publication or human acceptance.
 
 | Artifact | Decision | Compatibility and authority |
 | --- | --- | --- |
-| Package provenance | Separate versioned diagnostic; retain v1 lock fields | Declared origin and observed bytes do not authenticate an upstream publisher. Exact checks require verified binding. |
-| Evidence snapshot | Separate content-addressed record using existing JCS | Existing v1 runs stay readable; missing snapshot means no current decision eligibility. |
-| Claim decision | Separate immutable decision aggregate and contract | Never insert new event types into legacy proposal aggregates. Stable request identity and expected version are mandatory. |
-| Document response | Separate passage-bound record | A question/correction is not a semantic claim or agreement. |
-| Owner handoff | Derived proposed change | No canonical apply or publication authority; cross-repository Git disclosure is a distinct event. |
-| Inspection bundle | Separate inert artifact; reuse disclosure/JCS | No active-state overwrite, execution, secret transfer or approval import. |
-| Pack compatibility | New versioned lifecycle declaration | Legacy packs remain inspectable; closed v1 contracts are not silently widened. |
+| Package provenance | Separate versioned diagnostic; retain v1 lock fields ([inspectPackageProvenance](../src/upgrade/provenance.mjs#L206-L318)) | Declared origin and observed bytes do not authenticate an upstream publisher. Exact checks require verified binding. |
+| Evidence snapshot | Separate content-addressed record using existing JCS ([hashEvidence](../src/readiness-protocols/evidence.mjs#L20-L24), [captureReviewEvidence](../src/readiness-protocols/evidence.mjs#L170-L180)) | Existing v1 runs stay readable; missing snapshot means no current decision eligibility. |
+| Claim decision | Separate immutable decision aggregate and contract ([validContribution](../src/collaboration/review-store.mjs#L27-L35), [history replay](../src/collaboration/review-store.mjs#L45-L67), [decision fields](../src/collaboration/review-store.mjs#L106-L114)) | Never insert new event types into legacy proposal aggregates. Stable request identity and expected version are mandatory. |
+| Document response | Separate passage-bound record ([passage identity](../src/collaboration/review-store.mjs#L115-L122), [response type and wording](../src/collaboration/review-store.mjs#L123-L128)) | A question/correction is not a semantic claim or agreement. |
+| Owner handoff | Derived proposed change ([handoff](../src/collaboration/review-store.mjs#L267-L301)) | No canonical apply or publication authority; cross-repository Git disclosure is a distinct event. |
+| Inspection bundle | Separate inert artifact; reuse disclosure/JCS ([prepareInspectionBundle](../src/collaboration/inspection-bundle.mjs#L37-L105)) | No active-state overwrite, execution, secret transfer or approval import. |
+| Pack compatibility | New versioned lifecycle declaration ([inspectPackLifecycle](../src/extension-packs/lifecycle.mjs#L14-L121)) | Legacy packs remain inspectable; closed v1 contracts are not silently widened. |
 
 Reuse existing private-file, ledger, origin/nonce, JSON validation and
 attestation primitives where applicable. Decisions retain complete history;
