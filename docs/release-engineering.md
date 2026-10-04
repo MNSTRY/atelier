@@ -227,6 +227,43 @@ receives it from disk. The offline smoke deliberately warms the locked registry
 dependency closure first; it does not prove that a not-yet-published version
 resolves from a cold or live registry.
 
+That default path warms the cache from the *publisher's* lockfile, but npm
+applies `overrides` only in the root project, so a consumer resolves its own
+dependency ranges. When the two disagree, the offline install fails with npm's
+`ENOTCACHED`. PR #89 showed this: with fast-uri pinned to 4.2.1, a consumer's
+Ajv still needed a 3.x copy that the publisher lockfile never recorded.
+
+`npm run consumer:smoke -- --captured-closure` (or
+`ATELIER_CONSUMER_CLOSURE=1`) adds a second, opt-in phase after the default
+one. It uses the registry, so it is off by default and offline-only hosts keep
+the behaviour above:
+
+1. Install the tarball online into a fresh bare consumer, with an empty HOME,
+   user config and npm cache, and no inherited `npm_config_*` settings.
+2. Read the consumer's own `package-lock.json` and require exactly one copy, at
+   the pinned version, of every package the publisher pins in `overrides`.
+   Only exact-version overrides can be checked; any other shape is refused.
+3. Warm a second empty cache only from that lockfile's registry tarballs.
+4. Run `npm ci --offline` and require the same `npm ls --all` tree as the
+   online install.
+
+Both phases report the two consumer-closure failures as typed diagnostics,
+printed as `[code] message` with a `Next:` step. The pure classifiers are in
+`scripts/consumer-closure-diagnostics.mjs`:
+
+- `consumer-closure-incomplete`: an offline install or reinstall hit
+  `ENOTCACHED`, or the captured lockfile has a registry entry without
+  `resolved` and `integrity`. The message names the package and version npm
+  requested.
+- `override-not-inherited`: the consumer's own lockfile holds a pinned package
+  at another version, or more than one copy of it. The message lists each
+  copy's path and version.
+
+Any other npm failure keeps its original error. The classifiers are tested
+against recorded #89 stderr and the recorded fast-uri 3.1.8 consumer lockfile
+(`test/consumer-closure-diagnostics.test.mjs`). CI runs only the default
+phase.
+
 ### assurance:mutation-smoke
 
 `npm run assurance:mutation-smoke` runs local, synthetic negative controls for
