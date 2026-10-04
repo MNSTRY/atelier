@@ -234,33 +234,41 @@ dependency ranges. When the two disagree, the offline install fails with npm's
 Ajv still needed a 3.x copy that the publisher lockfile never recorded.
 
 `npm run consumer:smoke -- --captured-closure` (or
-`ATELIER_CONSUMER_CLOSURE=1`) adds a second, opt-in phase after the default
-one. It uses the registry, so it is off by default and offline-only hosts keep
-the behaviour above:
+`ATELIER_CONSUMER_CLOSURE=1`) adds a second, opt-in phase. It runs after the
+default phase succeeds, and also after the default offline install fails with
+`ENOTCACHED`, because that is the failure it can explain; the smoke still
+fails in that case. It uses the registry, so it is off by default and
+offline-only hosts keep the behaviour above:
 
 1. Install the tarball online into a fresh bare consumer, with an empty HOME,
-   user config and npm cache, and no inherited `npm_config_*` settings.
-2. Read the consumer's own `package-lock.json` and require exactly one copy, at
-   the pinned version, of every package the publisher pins in `overrides`.
-   Only exact-version overrides can be checked; any other shape is refused.
+   user config and npm cache, and no inherited `npm_config_*` environment
+   settings. The global npmrc and proxy variables such as `HTTPS_PROXY` still
+   apply, and a registry, proxy or CA set only through `npm_config_*` is not.
+2. Read the consumer's own `package-lock.json`. For every package the
+   publisher pins in `overrides` that the consumer installs, require exactly
+   one copy, at the pinned version. A pinned package the consumer does not
+   install has nothing to honour. Only an unconditional exact-version pin can
+   be checked: a non-exact value or a version-selector key (`name@range`) is
+   refused.
 3. Warm a second empty cache only from that lockfile's registry tarballs.
 4. Run `npm ci --offline` and require the same `npm ls --all` tree as the
    online install.
 
-Both phases report the two consumer-closure failures as typed diagnostics,
-printed as `[code] message` with a `Next:` step. The pure classifiers are in
-`scripts/consumer-closure-diagnostics.mjs`:
+Failures print as `[code] message` with a `Next:` step. The pure classifiers
+are in `scripts/consumer-closure-diagnostics.mjs`:
 
 - `consumer-closure-incomplete`: an offline install or reinstall hit
   `ENOTCACHED`, or the captured lockfile has a registry entry without
-  `resolved` and `integrity`. The message names the package and version npm
-  requested.
-- `override-not-inherited`: the consumer's own lockfile holds a pinned package
-  at another version, or more than one copy of it. The message lists each
-  copy's path and version.
+  `resolved` and `integrity`. For `ENOTCACHED` the message gives npm's request
+  URL, and the package and version when the URL names them. This is the only
+  typed failure of the default phase.
+- `override-not-inherited`: in the opt-in phase, the consumer's own lockfile
+  holds a pinned package at another version, or more than one copy of it. The
+  message lists each copy's path and version.
 
-Any other npm failure keeps its original error. The classifiers are tested
-against recorded #89 stderr and the recorded fast-uri 3.1.8 consumer lockfile
+Any other failure keeps its original error. The classifiers are tested against
+the recorded #89 stderr and a reduced copy of a recorded fast-uri 3.1.8
+consumer lockfile, and the opt-in phase is exercised through a synthetic npm
 (`test/consumer-closure-diagnostics.test.mjs`). CI runs only the default
 phase.
 

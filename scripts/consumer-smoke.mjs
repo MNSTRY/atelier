@@ -69,8 +69,19 @@ function runOfflineNpm(args, options, { phase, hint }) {
   }
 }
 
+// Only this script's two closure diagnostics are printed as `[code] message`;
+// any other error, including a typed one from a verifier, keeps its crash.
+const CLOSURE_CODES = new Set([CONSUMER_CLOSURE_INCOMPLETE, OVERRIDE_NOT_INHERITED])
+const closureDiagnostic = (error) => error instanceof AtelierDiagnosticError && CLOSURE_CODES.has(error.code)
+
+function printDiagnostic(error) {
+  console.error(`[${error.code}] ${error.message}`)
+  if (error.hint) console.error(`Next: ${error.hint}`)
+}
+
 // A bare consumer's npm: no inherited npm_config_* settings, an empty user
-// config and HOME, and its own cache directory.
+// config and HOME, and its own cache directory. The global npmrc and proxy
+// variables such as HTTPS_PROXY still apply.
 function bareNpmEnvironment(home, cache) {
   const inherited = Object.entries(process.env).filter(([name]) => !/^npm_config_/i.test(name))
   return { ...Object.fromEntries(inherited), HOME: home, USERPROFILE: home, npm_config_cache: cache, npm_config_userconfig: join(home, '.npmrc') }
@@ -94,7 +105,7 @@ function verifyCapturedClosure() {
     const online = bareNpmEnvironment(home, join(closureRoot, 'online-cache'))
     runNpm(['install', tarballPath, '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: consumerRoot, env: online })
     const consumerLock = JSON.parse(readFileSync(join(consumerRoot, 'package-lock.json'), 'utf8'))
-    const findings = overrideFindings({ publisherOverrides: packageJson.overrides, consumerLock })
+    const { findings, compared } = overrideFindings({ publisherOverrides: packageJson.overrides, consumerLock })
     if (findings.length > 0) {
       const described = findings.map((finding) => `${finding.package} is pinned to ${finding.pinned} by override, but a bare consumer installs ${finding.found.map((copy) => `${copy.path}@${copy.version}`).join(', ')}`)
       throw new AtelierDiagnosticError(OVERRIDE_NOT_INHERITED, described.join('; '), {
@@ -127,7 +138,7 @@ function verifyCapturedClosure() {
       const onlyOffline = actual.filter((line) => !expected.includes(line))
       throw new Error(`offline reinstall tree differs from the online install: only online [${onlyOnline.join(', ')}], only offline [${onlyOffline.join(', ')}]`)
     }
-    console.log(`[consumer:closure] a bare consumer resolved the tarball online, honoured ${Object.keys(packageJson.overrides ?? {}).length} publisher override(s) without inheriting them, and reinstalled the same ${actual.length}-package tree offline from its own lockfile (${tarballs.length} registry tarballs)`)
+    console.log(`[consumer:closure] a bare consumer resolved the tarball online, honoured ${compared.length} installed publisher override(s) without inheriting them, and reinstalled the same ${actual.length}-package tree offline from its own lockfile (${tarballs.length} registry tarballs)`)
   } finally {
     rmSync(closureRoot, { recursive: true, force: true })
   }
@@ -170,13 +181,26 @@ try {
     .map(([path, entry]) => `${path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length)}@${entry.version}`)
   if (closure.length > 0) runNpm(['cache', 'add', ...closure])
 
-  runOfflineNpm(['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
-    cwd: tempRoot,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }, {
-    phase: 'offline install from the publisher lockfile closure',
-    hint: 'npm overrides do not reach consumers, so a bare consumer can resolve a version the publisher lockfile never recorded. Rerun with --captured-closure and network access to see the consumer\'s own tree.',
-  })
+  try {
+    runOfflineNpm(['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'], {
+      cwd: tempRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }, {
+      phase: 'offline install from the publisher lockfile closure',
+      hint: 'npm overrides do not reach consumers, so a bare consumer can resolve a version the publisher lockfile never recorded. Rerun with --captured-closure and network access: that phase still runs after this failure and checks the consumer\'s own tree.',
+    })
+  } catch (error) {
+    // The captured-closure phase is what can explain this failure, so when it
+    // was requested it still runs; the smoke fails either way.
+    if (!capturedClosureRequested || !closureDiagnostic(error) || error.code !== CONSUMER_CLOSURE_INCOMPLETE) throw error
+    try {
+      verifyCapturedClosure()
+    } catch (capturedError) {
+      printDiagnostic(error)
+      throw capturedError
+    }
+    throw error
+  }
 
   const consumerPackage = JSON.parse(readFileSync(join(tempRoot, 'package.json'), 'utf8'))
   if ('overrides' in consumerPackage) throw new Error('bare consumer must not inherit publisher overrides')
@@ -340,9 +364,8 @@ if (!validateDecisionAnswers(request.questions, result.answers).ok) throw new Er
 
   if (capturedClosureRequested) verifyCapturedClosure()
 } catch (error) {
-  if (!(error instanceof AtelierDiagnosticError) || process.env.ATELIER_DEBUG === '1') throw error
-  console.error(`[${error.code}] ${error.message}`)
-  if (error.hint) console.error(`Next: ${error.hint}`)
+  if (!closureDiagnostic(error) || process.env.ATELIER_DEBUG === '1') throw error
+  printDiagnostic(error)
   process.exitCode = error.exitCode
 } finally {
   if (tarballPath && ownsTarball) rmSync(tarballPath, { force: true })

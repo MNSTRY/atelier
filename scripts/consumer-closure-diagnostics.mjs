@@ -15,6 +15,11 @@ export const OVERRIDE_NOT_INHERITED = 'override-not-inherited'
 const ENOTCACHED = /^npm (?:error|ERR!) code ENOTCACHED$/m
 const REQUEST_URL = /^npm (?:error|ERR!) request to (\S+) failed/m
 const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+// An override key may select versions (`name@range`); only a bare name is an
+// unconditional pin.
+const SELECTOR_KEY = /^(?:@[^/@]+\/)?[^/@]+@/
+// npm colours its output on a terminal and Windows hosts end lines with CRLF.
+const ANSI = /\u001b\[[0-9;]*m/g
 
 // The package and version npm asked for, from a registry URL. A tarball URL
 // (`<registry>/<name>/-/<basename>-<version>.tgz`) names both; a packument URL
@@ -35,7 +40,7 @@ function requestedPackage(url) {
 // A finding for npm stderr that reports ENOTCACHED, else null. Any other npm
 // failure is not classified here and keeps its own error.
 export function classifyNpmFailure(stderr) {
-  const text = String(stderr ?? '')
+  const text = String(stderr ?? '').replace(ANSI, '').replace(/\r\n?/g, '\n')
   if (!ENOTCACHED.test(text)) return null
   const url = text.match(REQUEST_URL)?.[1] ?? null
   return { code: CONSUMER_CLOSURE_INCOMPLETE, ...(url ? requestedPackage(url) : { package: null, version: null }), url }
@@ -54,24 +59,31 @@ function installedCopies(lockfile, name) {
 }
 
 // One finding per publisher override the consumer's lockfile does not honour:
-// a copy at another version, or more than one copy. Only exact-version
-// overrides can be compared, so any other override shape is refused rather
-// than skipped.
+// a copy at another version, or more than one copy. An override whose package
+// the consumer does not install has nothing to honour; `compared` names the
+// overrides that had at least one copy to check. Only unconditional
+// exact-version overrides can be compared, so a version-selector key or a
+// non-exact value is refused rather than skipped.
 export function overrideFindings({ publisherOverrides, consumerLock }) {
   if (!consumerLock || typeof consumerLock.packages !== 'object' || consumerLock.packages === null) {
     throw new TypeError('consumer lockfile must be lockfileVersion 2 or 3 with a packages map')
   }
   const findings = []
+  const compared = []
   for (const [name, pinned] of Object.entries(publisherOverrides ?? {})) {
+    if (SELECTOR_KEY.test(name)) {
+      throw new TypeError(`override key ${name} selects versions; the captured-closure check compares unconditional pins only`)
+    }
     if (typeof pinned !== 'string' || !EXACT_VERSION.test(pinned)) {
       throw new TypeError(`override for ${name} is not an exact version; the captured-closure check compares exact pins only`)
     }
     const found = installedCopies(consumerLock, name)
+    if (found.length > 0) compared.push(name)
     if (found.length > 1 || found.some((copy) => copy.version !== pinned)) {
       findings.push({ code: OVERRIDE_NOT_INHERITED, package: name, pinned, found })
     }
   }
-  return findings
+  return { findings, compared }
 }
 
 // The registry tarballs an offline `npm ci` needs from the consumer's own

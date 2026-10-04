@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -23,9 +23,11 @@ const PR89_STDERR = [
   '',
 ].join('\n')
 
-// Recorded: the package-lock.json a fresh bare consumer wrote when it installed
-// the fast-uri 3.1.8 candidate tarball online. Only the candidate's own local
-// `file:` path is shortened.
+// Reduced from a recorded lockfile: the package-lock.json that a fresh bare
+// consumer (named bare-consumer in that run) wrote when it installed the
+// fast-uri 3.1.8 candidate tarball online. Each entry keeps only its version,
+// resolved URL and integrity as recorded; other fields npm writes are dropped,
+// and the candidate's own local `file:` path is shortened.
 const registry = (name, version, integrity) => ({
   version,
   resolved: `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-${version}.tgz`,
@@ -94,16 +96,19 @@ test('the requested package is read from scoped tarball and packument URLs (synt
   assert.equal(packument.version, null)
   const older = classifyNpmFailure('npm ERR! code ENOTCACHED\nnpm ERR! request to https://registry.npmjs.org/ajv failed: cache mode\n')
   assert.deepEqual([older.package, older.version], ['ajv', null])
+  // npm colours its prefix on a terminal, and Windows output ends lines with CRLF.
+  const coloured = classifyNpmFailure(PR89_STDERR.replaceAll('npm error', '\u001b[31mnpm error\u001b[39m').replaceAll('\n', '\r\n'))
+  assert.deepEqual([coloured.package, coloured.version], ['fast-uri', '3.1.8'])
   const bare = classifyNpmFailure('npm error code ENOTCACHED\n')
   assert.deepEqual({ ...bare }, { code: CONSUMER_CLOSURE_INCOMPLETE, package: null, version: null, url: null })
 })
 
 test('the recorded candidate consumer lock honours the fast-uri 3.1.8 override with one copy', () => {
-  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: CANDIDATE_LOCK }), [])
+  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: CANDIDATE_LOCK }), { findings: [], compared: ['fast-uri'] })
 })
 
 test('a PR #89-shaped consumer lock is a typed override-not-inherited finding naming both copies', () => {
-  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '4.2.1' }, consumerLock: pr89ShapedLock() }), [{
+  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '4.2.1' }, consumerLock: pr89ShapedLock() }).findings, [{
     code: OVERRIDE_NOT_INHERITED,
     package: 'fast-uri',
     pinned: '4.2.1',
@@ -118,14 +123,14 @@ test('a PR #89-shaped consumer lock is a typed override-not-inherited finding na
 test('one copy at a version other than the pin is also not inherited', () => {
   const lock = structuredClone(CANDIDATE_LOCK)
   lock.packages['node_modules/fast-uri'].version = '3.1.7'
-  const [finding] = overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: lock })
+  const [finding] = overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: lock }).findings
   assert.deepEqual(finding.found, [{ path: 'node_modules/fast-uri', version: '3.1.7' }])
 })
 
 test('two copies at the pinned version are still a finding', () => {
   const lock = structuredClone(CANDIDATE_LOCK)
   lock.packages['node_modules/ajv/node_modules/fast-uri'] = registry('fast-uri', '3.1.8', 'sha512-synthetic-nested')
-  const [finding] = overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: lock })
+  const [finding] = overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: lock }).findings
   assert.deepEqual(finding.found.map((copy) => copy.path), ['node_modules/ajv/node_modules/fast-uri', 'node_modules/fast-uri'])
 })
 
@@ -133,11 +138,11 @@ test('a copy is named by npm, not by the last path segment (synthetic)', () => {
   // A scoped package with the same basename is not a copy of fast-uri.
   const scoped = structuredClone(CANDIDATE_LOCK)
   scoped.packages['node_modules/@other/fast-uri'] = registry('@other/fast-uri', '1.0.0', 'sha512-synthetic-scoped')
-  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: scoped }), [])
+  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: scoped }).findings, [])
   // An npm: alias installs fast-uri under another path; the entry's name says so.
   const aliased = structuredClone(CANDIDATE_LOCK)
   aliased.packages['node_modules/fast-uri-v4'] = { name: 'fast-uri', ...registry('fast-uri', '4.2.1', 'sha512-synthetic-alias') }
-  const [finding] = overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: aliased })
+  const [finding] = overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: aliased }).findings
   assert.deepEqual(finding.found, [
     { path: 'node_modules/fast-uri', version: '3.1.8' },
     { path: 'node_modules/fast-uri-v4', version: '4.2.1' },
@@ -145,18 +150,24 @@ test('a copy is named by npm, not by the last path segment (synthetic)', () => {
   // A workspace link is not an installed copy.
   const linked = structuredClone(CANDIDATE_LOCK)
   linked.packages['node_modules/ajv/node_modules/fast-uri'] = { resolved: 'packages/fast-uri', link: true }
-  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: linked }), [])
+  assert.deepEqual(overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock: linked }).findings, [])
 })
 
-test('an override the consumer does not install has nothing to inherit', () => {
-  assert.deepEqual(overrideFindings({ publisherOverrides: { 'left-pad': '1.3.0' }, consumerLock: CANDIDATE_LOCK }), [])
-  assert.deepEqual(overrideFindings({ publisherOverrides: undefined, consumerLock: CANDIDATE_LOCK }), [])
+test('an override the consumer does not install has nothing to inherit and is not counted as compared', () => {
+  assert.deepEqual(overrideFindings({ publisherOverrides: { 'left-pad': '1.3.0' }, consumerLock: CANDIDATE_LOCK }), { findings: [], compared: [] })
+  assert.deepEqual(overrideFindings({ publisherOverrides: { 'left-pad': '1.3.0', 'fast-uri': '3.1.8' }, consumerLock: CANDIDATE_LOCK }).compared, ['fast-uri'])
+  assert.deepEqual(overrideFindings({ publisherOverrides: undefined, consumerLock: CANDIDATE_LOCK }), { findings: [], compared: [] })
 })
 
 test('overrides that are not exact versions, and lockfiles without a packages map, are refused', () => {
   for (const spec of ['^3.1.8', '>=3.1.8', '$fast-uri', { '.': '3.1.8' }, '']) {
     assert.throws(() => overrideFindings({ publisherOverrides: { 'fast-uri': spec }, consumerLock: CANDIDATE_LOCK }), /exact version/)
   }
+  // A version-selector key applies only to some versions, so it is not an unconditional pin.
+  for (const key of ['fast-uri@^3', 'fast-uri@3.1.8', '@scope/name@1']) {
+    assert.throws(() => overrideFindings({ publisherOverrides: { [key]: '3.1.8' }, consumerLock: CANDIDATE_LOCK }), /selects versions/)
+  }
+  assert.deepEqual(overrideFindings({ publisherOverrides: { '@scope/name': '1.0.0' }, consumerLock: CANDIDATE_LOCK }).findings, [])
   for (const consumerLock of [undefined, { lockfileVersion: 1, dependencies: {} }, { packages: null }]) {
     assert.throws(() => overrideFindings({ publisherOverrides: { 'fast-uri': '3.1.8' }, consumerLock }), /packages map/)
   }
@@ -223,42 +234,183 @@ test('consumer-smoke keeps the default publisher-lock install and gates the capt
   assert.match(source, /process\.argv\.includes\('--captured-closure'\) \|\| process\.env\.ATELIER_CONSUMER_CLOSURE === '1'/)
 })
 
-// consumer-smoke resolves npm from npm_execpath. A synthetic npm that replays a
-// recorded install failure drives the real default path with no registry and
-// no real install: `cache add` succeeds, the offline install fails.
-function runSmokeWithInstallFailure(t, installStderr) {
+// consumer-smoke resolves npm from npm_execpath. A synthetic npm drives the real
+// script with no registry and no real install. It follows a scenario: the
+// publisher-lock offline install fails with recorded stderr, the captured
+// phase's online install writes the scenario's consumer lockfile, `ls` returns
+// the scenario's tree, and `cache add` succeeds. Every call is logged with the
+// environment it saw. The phase is read from the cache directory the script
+// set. TMPDIR is the test's own, so leftover temporary directories are visible.
+const SYNTHETIC_NPM = `import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+const args = process.argv.slice(2)
+const scenario = JSON.parse(readFileSync(process.env.SYNTHETIC_NPM_SCENARIO, 'utf8'))
+const cache = process.env.npm_config_cache ?? null
+const phase = cache?.endsWith('offline-cache') ? 'offline' : cache?.endsWith('online-cache') ? 'online' : 'publisher'
+appendFileSync(process.env.SYNTHETIC_NPM_LOG, JSON.stringify({ args, phase, cwd: process.cwd(), home: process.env.HOME ?? null, cache,
+  userconfig: process.env.npm_config_userconfig ?? null, registry: process.env.npm_config_registry ?? null, nodeModules: existsSync('node_modules') }) + '\\n')
+const fail = (step) => { process.stderr.write(step.stderr); process.exit(1) }
+const [command] = args
+if (command === 'cache') process.exit(0)
+if (command === 'install' && phase === 'publisher') fail(scenario.publisherInstall)
+if (command === 'install' && phase === 'online') { writeFileSync('package-lock.json', JSON.stringify(scenario.consumerLock)); mkdirSync('node_modules'); process.exit(0) }
+if (command === 'ls') { process.stdout.write(JSON.stringify(scenario.trees[phase])); process.exit(0) }
+if (command === 'ci' && phase === 'offline') { if (scenario.ci) fail(scenario.ci); mkdirSync('node_modules'); process.exit(0) }
+process.stderr.write('unexpected synthetic npm call ' + args.join(' ') + '\\n')
+process.exit(1)
+`
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+
+function runSmoke(t, scenario, { capturedClosure = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'atelier-closure-diagnostic-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  const temporary = join(root, 'tmp')
+  mkdirSync(temporary)
   const tarball = join(root, `${packageJson.name.replace(/^@/, '').replace('/', '-')}-${packageJson.version}.tgz`)
   writeFileSync(tarball, 'synthetic tarball, never installed\n')
-  const npm = join(root, 'npm-cli.mjs')
-  writeFileSync(npm, [
-    'const [command] = process.argv.slice(2)',
-    "if (command === 'cache') process.exit(0)",
-    `if (command === 'install') { process.stderr.write(${JSON.stringify(installStderr)}); process.exit(1) }`,
-    "process.stderr.write(`unexpected synthetic npm command ${command}\\n`)",
-    'process.exit(1)',
-  ].join('\n'))
+  writeFileSync(join(root, 'npm-cli.mjs'), SYNTHETIC_NPM)
+  writeFileSync(join(root, 'scenario.json'), JSON.stringify(scenario))
+  writeFileSync(join(root, 'calls.jsonl'), '')
   const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(npm_|ATELIER_)/i.test(name)))
-  return spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/consumer-smoke.mjs', import.meta.url))], {
-    env: { ...environment, npm_execpath: npm, ATELIER_CANDIDATE_TARBALL: tarball },
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/consumer-smoke.mjs', import.meta.url)), ...(capturedClosure ? ['--captured-closure'] : [])], {
+    env: {
+      ...environment,
+      npm_execpath: join(root, 'npm-cli.mjs'),
+      // An inherited npm setting the bare consumer must not see.
+      npm_config_registry: 'https://registry.invalid/',
+      ATELIER_CANDIDATE_TARBALL: tarball,
+      SYNTHETIC_NPM_SCENARIO: join(root, 'scenario.json'),
+      SYNTHETIC_NPM_LOG: join(root, 'calls.jsonl'),
+      TMPDIR: temporary,
+    },
     encoding: 'utf8',
   })
+  const calls = readFileSync(join(root, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  return { ...result, tarball, calls, leftovers: readdirSync(temporary) }
 }
 
-test('the default publisher-lock install reports the recorded #89 failure as a typed diagnostic', (t) => {
-  const result = runSmokeWithInstallFailure(t, PR89_STDERR)
+const PUBLISHER_DIAGNOSTIC = [
+  '[consumer-closure-incomplete] offline install from the publisher lockfile closure: the warmed npm cache does not hold fast-uri@3.1.8 (https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz)',
+  /^Next: npm overrides do not reach consumers.*--captured-closure.*still runs after this failure/,
+]
+function assertPublisherDiagnostic(lines) {
+  assert.equal(lines[0], PUBLISHER_DIAGNOSTIC[0])
+  assert.match(lines[1], PUBLISHER_DIAGNOSTIC[1])
+}
+
+// The captured-phase scenarios use the publisher's actual override.
+const [[OVERRIDDEN, PIN] = []] = Object.entries(packageJson.overrides ?? {})
+const noOverride = OVERRIDDEN === undefined && 'the publisher has no override to check'
+function consumerLockWith(copies) {
+  const lock = structuredClone(CANDIDATE_LOCK)
+  for (const path of Object.keys(lock.packages)) if (path.endsWith(`node_modules/${OVERRIDDEN}`)) delete lock.packages[path]
+  for (const [path, version] of Object.entries(copies)) lock.packages[path] = registry(OVERRIDDEN, version, `sha512-synthetic-${version}`)
+  return lock
+}
+const tree = (version) => ({
+  name: 'atelier-bare-consumer',
+  dependencies: { [packageJson.name]: { version: packageJson.version, dependencies: { ajv: { version: '8.20.0' }, [OVERRIDDEN]: { version } } } },
+})
+const capturedScenario = (overrides = {}) => ({
+  publisherInstall: { stderr: PR89_STDERR },
+  consumerLock: consumerLockWith({ [`node_modules/${OVERRIDDEN}`]: PIN }),
+  trees: { online: tree(PIN), offline: tree(PIN) },
+  ...overrides,
+})
+
+test('the default publisher-lock install reports the recorded #89 failure as a typed diagnostic and attempts nothing else', (t) => {
+  const result = runSmoke(t, { publisherInstall: { stderr: PR89_STDERR } })
   assert.equal(result.status, 1)
   const lines = result.stderr.trim().split('\n')
-  assert.equal(lines[0], '[consumer-closure-incomplete] offline install from the publisher lockfile closure: the warmed npm cache does not hold fast-uri@3.1.8 (https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz)')
-  assert.match(lines[1], /^Next: npm overrides do not reach consumers.*--captured-closure/)
+  assertPublisherDiagnostic(lines)
   assert.equal(lines.length, 2)
+  assert.deepEqual(result.calls.map((call) => [call.phase, call.args[0]]), [['publisher', 'cache'], ['publisher', 'install']])
+  assert.deepEqual(result.leftovers, [])
 })
 
 test('any other install failure keeps its original error', (t) => {
-  const result = runSmokeWithInstallFailure(t, 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/fast-uri\n')
+  const result = runSmoke(t, { publisherInstall: { stderr: 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/fast-uri\n' } }, { capturedClosure: true })
   assert.notEqual(result.status, 0)
   assert.doesNotMatch(result.stderr, /\[consumer-closure-incomplete\]/)
   assert.match(result.stderr, /npm error code E404/)
+  // Only a closure failure lets the captured phase run after the default one.
+  assert.equal(result.calls.some((call) => call.phase !== 'publisher'), false)
+  assert.deepEqual(result.leftovers, [])
+})
+
+test('with --captured-closure, a #89-shaped consumer tree after the publisher failure is override-not-inherited', { skip: noOverride }, (t) => {
+  const result = runSmoke(t, capturedScenario({
+    consumerLock: consumerLockWith({ [`node_modules/${OVERRIDDEN}`]: '0.0.0-synthetic-other', [`node_modules/ajv/node_modules/${OVERRIDDEN}`]: PIN }),
+  }), { capturedClosure: true })
+  assert.equal(result.status, 1)
+  const lines = result.stderr.trim().split('\n')
+  assertPublisherDiagnostic(lines)
+  assert.equal(lines[2], `[override-not-inherited] ${OVERRIDDEN} is pinned to ${PIN} by override, but a bare consumer installs node_modules/ajv/node_modules/${OVERRIDDEN}@${PIN}, node_modules/${OVERRIDDEN}@0.0.0-synthetic-other`)
+  assert.match(lines[3], /^Next: npm applies overrides only in the root project/)
+  assert.equal(lines.length, 4)
+  const online = result.calls.filter((call) => call.phase === 'online')
+  // Online, with no --offline, from the same candidate tarball.
+  assert.deepEqual(online.map((call) => call.args), [['install', result.tarball, '--ignore-scripts', '--no-audit', '--no-fund']])
+  assert.equal(online[0].registry, null)
+  assert.equal(online[0].userconfig, join(online[0].home, '.npmrc'))
+  assert.equal(result.calls.some((call) => call.phase === 'offline'), false)
+  assert.deepEqual(result.leftovers, [])
+})
+
+test('with --captured-closure, a consumer closure that reinstalls offline is reported and the smoke still fails', { skip: noOverride }, (t) => {
+  const result = runSmoke(t, capturedScenario(), { capturedClosure: true })
+  assert.equal(result.status, 1)
+  assert.equal(result.stdout.trim(), `[consumer:closure] a bare consumer resolved the tarball online, honoured 1 installed publisher override(s) without inheriting them, and reinstalled the same 3-package tree offline from its own lockfile (6 registry tarballs)`)
+  const lines = result.stderr.trim().split('\n')
+  assertPublisherDiagnostic(lines)
+  assert.equal(lines.length, 2)
+  const captured = result.calls.filter((call) => call.phase !== 'publisher')
+  assert.deepEqual(captured.map((call) => [call.phase, call.args[0]]), [['online', 'install'], ['online', 'ls'], ['offline', 'cache'], ['offline', 'ci'], ['offline', 'ls']])
+  const [install, , cache, ci] = captured
+  // One bare HOME and user config; separate online and offline caches; no inherited registry.
+  assert.ok(captured.every((call) => call.home === install.home && call.userconfig === join(install.home, '.npmrc') && call.registry === null))
+  assert.notEqual(install.cache, cache.cache)
+  assert.equal(cache.cache, ci.cache)
+  assert.deepEqual(cache.args.slice(1), ['add', ...capturedClosure(consumerLockWith({ [`node_modules/${OVERRIDDEN}`]: PIN })).tarballs.map((tarball) => tarball.resolved)])
+  assert.equal(cache.args.length, 2 + 6)
+  assert.deepEqual(ci.args, ['ci', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'])
+  // node_modules from the online install is removed before the offline reinstall.
+  assert.equal(ci.nodeModules, false)
+  assert.deepEqual(result.leftovers, [])
+})
+
+test('with --captured-closure, an override the consumer does not install is not reported as honoured', { skip: noOverride }, (t) => {
+  const result = runSmoke(t, capturedScenario({ consumerLock: consumerLockWith({}), trees: { online: tree(PIN), offline: tree(PIN) } }), { capturedClosure: true })
+  assert.equal(result.status, 1)
+  assert.match(result.stdout, /honoured 0 installed publisher override\(s\)/)
+  assert.deepEqual(result.leftovers, [])
+})
+
+test('with --captured-closure, an offline reinstall that misses the cache is a typed incomplete closure', { skip: noOverride }, (t) => {
+  const result = runSmoke(t, capturedScenario({ ci: { stderr: PR89_STDERR } }), { capturedClosure: true })
+  assert.equal(result.status, 1)
+  const lines = result.stderr.trim().split('\n')
+  assertPublisherDiagnostic(lines)
+  assert.equal(lines[2], "[consumer-closure-incomplete] offline reinstall from the consumer's own lockfile: the warmed npm cache does not hold fast-uri@3.1.8 (https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz)")
+  assert.match(lines[3], /^Next: The cache was warmed only from the captured lockfile/)
+  assert.deepEqual(result.leftovers, [])
+})
+
+test('with --captured-closure, a captured lockfile entry without integrity is a typed incomplete closure before any reinstall', { skip: noOverride }, (t) => {
+  const consumerLock = consumerLockWith({ [`node_modules/${OVERRIDDEN}`]: PIN })
+  delete consumerLock.packages['node_modules/ajv'].integrity
+  const result = runSmoke(t, capturedScenario({ consumerLock }), { capturedClosure: true })
+  assert.equal(result.status, 1)
+  const lines = result.stderr.trim().split('\n')
+  assertPublisherDiagnostic(lines)
+  assert.equal(lines[2], "[consumer-closure-incomplete] the consumer's own lockfile records node_modules/ajv without a registry tarball and integrity")
+  assert.equal(result.calls.some((call) => call.phase === 'offline'), false)
+  assert.deepEqual(result.leftovers, [])
+})
+
+test('with --captured-closure, a different offline tree fails with both differences named', { skip: noOverride }, (t) => {
+  const result = runSmoke(t, capturedScenario({ trees: { online: tree(PIN), offline: tree('0.0.0-synthetic-other') } }), { capturedClosure: true })
+  assert.notEqual(result.status, 0)
+  assertPublisherDiagnostic(result.stderr.trim().split('\n'))
+  assert.match(result.stderr, new RegExp(`offline reinstall tree differs from the online install: only online \\[[^\\]]*${OVERRIDDEN}@${PIN.replaceAll('.', '\\.')}\\], only offline \\[[^\\]]*${OVERRIDDEN}@0\\.0\\.0-synthetic-other\\]`))
+  assert.deepEqual(result.leftovers, [])
 })
