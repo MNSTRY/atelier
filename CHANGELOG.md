@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Patch the fast-uri dependency and override from 3.1.7 to 3.1.8, the patched
+  3.x release for GHSA-hrr3-gc8f-f4qj (3.1.7 is in the affected range; whether
+  Atelier's use was exploitable is not established). The direct dependency
+  keeps packed consumers on one deduplicated copy: Ajv's own `^3.0.1` range
+  resolves to it, so a bare consumer installs 3.1.8 only.
 - Personal workspaces gain an explicit selection record, a read-only inventory of
   the private home, and a restore of authored inputs from an earlier generation:
   `selectPersonalGeneration`, `selectionConfirmDigest`, `readPersonalSelection`,
