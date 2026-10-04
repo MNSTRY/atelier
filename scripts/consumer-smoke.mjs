@@ -74,7 +74,13 @@ function runOfflineNpm(args, options, { phase, hint }) {
 const CLOSURE_CODES = new Set([CONSUMER_CLOSURE_INCOMPLETE, OVERRIDE_NOT_INHERITED])
 const closureDiagnostic = (error) => error instanceof AtelierDiagnosticError && CLOSURE_CODES.has(error.code)
 
+// A diagnostic printed before the captured phase runs is not printed again.
+const printed = new WeakSet()
+
+// ATELIER_DEBUG=1 prints the whole error, with npm's own stderr as its cause.
 function printDiagnostic(error) {
+  printed.add(error)
+  if (process.env.ATELIER_DEBUG === '1') return console.error(error)
   console.error(`[${error.code}] ${error.message}`)
   if (error.hint) console.error(`Next: ${error.hint}`)
 }
@@ -101,6 +107,8 @@ function verifyCapturedClosure() {
     mkdirSync(home)
     mkdirSync(consumerRoot)
     writeFileSync(join(consumerRoot, 'package.json'), bareConsumerPackage)
+    // Refuse an override shape that cannot be checked before using the network.
+    overrideFindings({ publisherOverrides: packageJson.overrides, consumerLock: { packages: {} } })
 
     const online = bareNpmEnvironment(home, join(closureRoot, 'online-cache'))
     runNpm(['install', tarballPath, '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: consumerRoot, env: online })
@@ -116,8 +124,8 @@ function verifyCapturedClosure() {
     const { tarballs, missing } = capturedClosure(consumerLock)
     if (missing.length > 0) {
       throw new AtelierDiagnosticError(CONSUMER_CLOSURE_INCOMPLETE,
-        `the consumer's own lockfile records ${missing.join(', ')} without a registry tarball and integrity`,
-        { hint: 'An offline reinstall needs every registry entry locked with resolved and integrity; inspect how the consumer resolved these entries.', exitCode: 1 })
+        `the consumer's own lockfile records ${missing.join(', ')} without a registry resolved URL or integrity`,
+        { hint: 'An offline reinstall needs every registry entry locked with both resolved and integrity; inspect how the consumer resolved these entries.', exitCode: 1 })
     }
     const onlineTree = JSON.parse(runNpm(['ls', '--all', '--json'], { cwd: consumerRoot, env: online }))
     if (onlineTree.problems?.length) throw new Error(`online bare consumer dependency closure is invalid: ${onlineTree.problems.join('; ')}`)
@@ -187,18 +195,16 @@ try {
       stdio: ['ignore', 'pipe', 'pipe'],
     }, {
       phase: 'offline install from the publisher lockfile closure',
-      hint: 'npm overrides do not reach consumers, so a bare consumer can resolve a version the publisher lockfile never recorded. Rerun with --captured-closure and network access: that phase still runs after this failure and checks the consumer\'s own tree.',
+      hint: capturedClosureRequested
+        ? 'The captured-closure phase follows and checks the consumer\'s own tree. If it passes, a bare consumer resolves correctly and only the publisher lockfile closure used to warm this cache is incomplete.'
+        : 'npm overrides do not reach consumers, so a bare consumer can resolve a version the publisher lockfile never recorded. Rerun with --captured-closure and network access to check the consumer\'s own tree.',
     })
   } catch (error) {
     // The captured-closure phase is what can explain this failure, so when it
     // was requested it still runs; the smoke fails either way.
     if (!capturedClosureRequested || !closureDiagnostic(error) || error.code !== CONSUMER_CLOSURE_INCOMPLETE) throw error
-    try {
-      verifyCapturedClosure()
-    } catch (capturedError) {
-      printDiagnostic(error)
-      throw capturedError
-    }
+    printDiagnostic(error)
+    verifyCapturedClosure()
     throw error
   }
 
@@ -364,9 +370,12 @@ if (!validateDecisionAnswers(request.questions, result.answers).ok) throw new Er
 
   if (capturedClosureRequested) verifyCapturedClosure()
 } catch (error) {
-  if (!closureDiagnostic(error) || process.env.ATELIER_DEBUG === '1') throw error
-  printDiagnostic(error)
-  process.exitCode = error.exitCode
+  if (printed.has(error)) process.exitCode = error.exitCode
+  else if (!closureDiagnostic(error) || process.env.ATELIER_DEBUG === '1') throw error
+  else {
+    printDiagnostic(error)
+    process.exitCode = error.exitCode
+  }
 } finally {
   if (tarballPath && ownsTarball) rmSync(tarballPath, { force: true })
   rmSync(tempRoot, { recursive: true, force: true })

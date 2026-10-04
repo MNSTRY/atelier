@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -232,6 +232,9 @@ test('consumer-smoke keeps the default publisher-lock install and gates the capt
   assert.ok(source.includes("['install', tarballPath, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false']"))
   assert.ok(source.includes("runNpm(['cache', 'add', ...closure])"))
   assert.match(source, /process\.argv\.includes\('--captured-closure'\) \|\| process\.env\.ATELIER_CONSUMER_CLOSURE === '1'/)
+  // Source-only: the opt-in phase after a successful default phase needs a real
+  // install to reach, so no synthetic test executes this call.
+  assert.ok(source.includes('if (capturedClosureRequested) verifyCapturedClosure()'))
 })
 
 // consumer-smoke resolves npm from npm_execpath. A synthetic npm drives the real
@@ -260,7 +263,8 @@ process.exit(1)
 `
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-function runSmoke(t, scenario, { capturedClosure = false } = {}) {
+// `combined` sends stdout and stderr to one file, so their order is observable.
+function runSmoke(t, scenario, { capturedClosure = false, combined = false, env = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'atelier-closure-diagnostic-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const temporary = join(root, 'tmp')
@@ -271,7 +275,9 @@ function runSmoke(t, scenario, { capturedClosure = false } = {}) {
   writeFileSync(join(root, 'scenario.json'), JSON.stringify(scenario))
   writeFileSync(join(root, 'calls.jsonl'), '')
   const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(npm_|ATELIER_)/i.test(name)))
+  const output = combined ? openSync(join(root, 'combined.txt'), 'w') : null
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/consumer-smoke.mjs', import.meta.url)), ...(capturedClosure ? ['--captured-closure'] : [])], {
+    ...(combined ? { stdio: ['ignore', output, output] } : {}),
     env: {
       ...environment,
       npm_execpath: join(root, 'npm-cli.mjs'),
@@ -280,21 +286,27 @@ function runSmoke(t, scenario, { capturedClosure = false } = {}) {
       ATELIER_CANDIDATE_TARBALL: tarball,
       SYNTHETIC_NPM_SCENARIO: join(root, 'scenario.json'),
       SYNTHETIC_NPM_LOG: join(root, 'calls.jsonl'),
+      // os.tmpdir() reads TMPDIR on POSIX and TEMP/TMP on Windows.
       TMPDIR: temporary,
+      TEMP: temporary,
+      TMP: temporary,
+      ...env,
     },
     encoding: 'utf8',
   })
+  if (combined) closeSync(output)
   const calls = readFileSync(join(root, 'calls.jsonl'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
-  return { ...result, tarball, calls, leftovers: readdirSync(temporary) }
+  return { ...result, tarball, calls, leftovers: readdirSync(temporary), combined: combined ? readFileSync(join(root, 'combined.txt'), 'utf8') : null }
 }
 
-const PUBLISHER_DIAGNOSTIC = [
-  '[consumer-closure-incomplete] offline install from the publisher lockfile closure: the warmed npm cache does not hold fast-uri@3.1.8 (https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz)',
-  /^Next: npm overrides do not reach consumers.*--captured-closure.*still runs after this failure/,
-]
-function assertPublisherDiagnostic(lines) {
-  assert.equal(lines[0], PUBLISHER_DIAGNOSTIC[0])
-  assert.match(lines[1], PUBLISHER_DIAGNOSTIC[1])
+const PUBLISHER_DIAGNOSTIC = '[consumer-closure-incomplete] offline install from the publisher lockfile closure: the warmed npm cache does not hold fast-uri@3.1.8 (https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz)'
+// Without the flag the hint offers it; with the flag it explains what follows.
+function assertPublisherDiagnostic(lines, { captured = true } = {}) {
+  assert.equal(lines[0], PUBLISHER_DIAGNOSTIC)
+  if (captured) {
+    assert.match(lines[1], /^Next: The captured-closure phase follows and checks the consumer's own tree\. If it passes, a bare consumer resolves correctly/)
+    assert.doesNotMatch(lines[1], /Rerun with --captured-closure/)
+  } else assert.match(lines[1], /^Next: npm overrides do not reach consumers.*Rerun with --captured-closure and network access/)
 }
 
 // The captured-phase scenarios use the publisher's actual override.
@@ -321,7 +333,7 @@ test('the default publisher-lock install reports the recorded #89 failure as a t
   const result = runSmoke(t, { publisherInstall: { stderr: PR89_STDERR } })
   assert.equal(result.status, 1)
   const lines = result.stderr.trim().split('\n')
-  assertPublisherDiagnostic(lines)
+  assertPublisherDiagnostic(lines, { captured: false })
   assert.equal(lines.length, 2)
   assert.deepEqual(result.calls.map((call) => [call.phase, call.args[0]]), [['publisher', 'cache'], ['publisher', 'install']])
   assert.deepEqual(result.leftovers, [])
@@ -378,6 +390,30 @@ test('with --captured-closure, a consumer closure that reinstalls offline is rep
   assert.deepEqual(result.leftovers, [])
 })
 
+test('with --captured-closure, the publisher diagnostic prints once and before the captured outcome', { skip: noOverride }, (t) => {
+  const passed = runSmoke(t, capturedScenario(), { capturedClosure: true, combined: true })
+  assert.equal(passed.status, 1)
+  const lines = passed.combined.trim().split('\n')
+  assertPublisherDiagnostic(lines)
+  assert.match(lines[2], /^\[consumer:closure\] a bare consumer resolved the tarball online/)
+  assert.equal(lines.length, 3)
+  const failed = runSmoke(t, capturedScenario({ ci: { stderr: PR89_STDERR } }), { capturedClosure: true, combined: true })
+  const failedLines = failed.combined.trim().split('\n')
+  assertPublisherDiagnostic(failedLines)
+  assert.match(failedLines[2], /^\[consumer-closure-incomplete\] offline reinstall from the consumer's own lockfile/)
+  assert.equal(failedLines.filter((line) => line === PUBLISHER_DIAGNOSTIC).length, 1)
+})
+
+test('with ATELIER_DEBUG=1, the publisher diagnostic prints with npm\'s own stderr as its cause', { skip: noOverride }, (t) => {
+  const result = runSmoke(t, capturedScenario(), { capturedClosure: true, combined: true, env: { ATELIER_DEBUG: '1' } })
+  assert.equal(result.status, 1)
+  assert.match(result.combined, /AtelierDiagnosticError: offline install from the publisher lockfile closure/)
+  assert.match(result.combined, /cache mode is 'only-if-cached'/)
+  assert.equal(result.combined.split('AtelierDiagnosticError: offline install').length - 1, 1)
+  assert.match(result.combined, /\[consumer:closure\]/)
+  assert.deepEqual(result.leftovers, [])
+})
+
 test('with --captured-closure, an override the consumer does not install is not reported as honoured', { skip: noOverride }, (t) => {
   const result = runSmoke(t, capturedScenario({ consumerLock: consumerLockWith({}), trees: { online: tree(PIN), offline: tree(PIN) } }), { capturedClosure: true })
   assert.equal(result.status, 1)
@@ -402,7 +438,7 @@ test('with --captured-closure, a captured lockfile entry without integrity is a 
   assert.equal(result.status, 1)
   const lines = result.stderr.trim().split('\n')
   assertPublisherDiagnostic(lines)
-  assert.equal(lines[2], "[consumer-closure-incomplete] the consumer's own lockfile records node_modules/ajv without a registry tarball and integrity")
+  assert.equal(lines[2], "[consumer-closure-incomplete] the consumer's own lockfile records node_modules/ajv without a registry resolved URL or integrity")
   assert.equal(result.calls.some((call) => call.phase === 'offline'), false)
   assert.deepEqual(result.leftovers, [])
 })
