@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { createHmac } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import vm from 'node:vm'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { pluginClientProof, pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof } from '../src/projection/obsidian/plugin-bridge/channel.mjs'
 
-// Inert state-method regression. No onload, sockets, app, plugin files or timers.
+// Inert state and request-flow regression. No onload, sockets, app, plugin writes or timers.
 // An optional source path allows the same assertions to demonstrate the defect.
 const sourcePath = process.argv[2] || fileURLToPath(new URL('../plugins/obsidian/main.js', import.meta.url))
 const source = fs.readFileSync(sourcePath, 'utf8')
@@ -13,11 +16,12 @@ const channelData = (changes = {}) => ({
   schema: 'atelier-obsidian-plugin-data/v1', scopeId: 'scope-invented-a',
   bearer: Buffer.alloc(32, 1).toString('base64url'), channel: { host: '127.0.0.1', port: 12345 }, ...changes,
 })
-function world() {
+function world({ requestFlow = false } = {}) {
   const module = { exports: {} }
   const calls = { writes: 0, modules: [], notices: [] }
   class ClockNotAdmitted { constructor() { throw new Error('No invented wall clock') } static now() { throw new Error('No invented wall clock') } }
-  const context = vm.createContext({ module, Date: ClockNotAdmitted, require(name) {
+  class InventedClock { static now() { return 1_000_000 } }
+  const context = vm.createContext({ module, TextEncoder, Date: requestFlow ? InventedClock : ClockNotAdmitted, require(name) {
     calls.modules.push(name)
     assert.equal(name, 'obsidian', 'VM cannot load file, socket, timer or native modules')
     return { Plugin: class {}, Modal: class {}, Notice: class { constructor(text) { calls.notices.push(text) } } }
@@ -26,18 +30,27 @@ function world() {
   const plugin = new module.exports()
   plugin.statusBarEl = { setText() {}, setAttr() {} }
   plugin.shownState = null
+  plugin.noticeState = null
+  plugin.session = null
+  plugin.cycling = null
+  plugin.unloaded = false
+  plugin.lastObservedStatus = null
   plugin.manifest = { version: 'synthetic' }
-  plugin.appVersion = 'synthetic'
+  plugin.appVersion = '1.13.7'
   const data = channelData()
   plugin.channel = { ...data.channel, scopeId: data.scopeId, bearer: data.bearer }
   plugin.view = { state: 'connecting', reason: 'not-yet-asked', report: null }
   plugin.saveData = () => { calls.writes += 1; throw new Error('Plugin writes forbidden') }
   return { plugin, calls, context }
 }
-function observed(plugin, { state = 'stale', reason = 'canonical-graph-invalid', generation = 'gen-invented-a', time = checkedAt, scopeId = plugin.channel.scopeId } = {}) {
-  const report = { schema: 'atelier-obsidian-plugin-status/v1', scopeId, service: { status: 'healthy' }, pendingEdits: { open: 3 }, view: {
+function reportOf(plugin, { state = 'stale', reason = 'canonical-graph-invalid', generation = 'gen-invented-a', time = checkedAt, scopeId = plugin.channel.scopeId } = {}) {
+  return { schema: 'atelier-obsidian-plugin-status/v1', scopeId, service: { status: 'healthy' }, pendingEdits: { open: 3 }, view: {
     state, reason, verified: state === 'current', generationId: generation, preparedGenerationId: generation, checkedAt: time, heldNoteCount: 2, retainedEdits: 1,
   } }
+}
+function observed(plugin, options = {}) {
+  const report = reportOf(plugin, options)
+  const { state, reason } = report.view
   const shown = state === 'held-for-your-edit' ? 'held' : state === 'disabled' ? 'stale' : state
   plugin.setView({ state: shown, reason, report })
   return report
@@ -48,8 +61,89 @@ const noHistory = (plugin) => {
   const shown = rows(plugin)
   assert.equal(shown['Last observed generation'], undefined)
   assert.equal(shown['Last observed reason'], undefined)
-  assert.equal(shown.Generation, 'none yet')
+  assert.equal(shown.Generation, plugin.view.state === 'unreachable' ? 'unknown' : 'none yet')
   assert.equal(plugin.view.report, null)
+}
+
+// The production post(), handshake(), opened(), request() and runCycle() use
+// this finite stand-in for http.request. Every response is queued explicitly;
+// canonical channel computations seal it. No listener, clock, file or timer
+// is opened. The only clock value and cryptographic bytes here are invented.
+function requestWorld(steps) {
+  const state = world({ requestFlow: true })
+  const { plugin, calls } = state
+  const remaining = [...steps]
+  const pending = []
+  calls.requests = []
+  calls.destroyed = 0
+  let nonce = 0
+  let bound = null
+  let sessionKey = null
+  let sessionId = null
+  const vaultPath = ['', 'invented', 'vault'].join('/')
+  plugin.app = { vault: { adapter: { getBasePath: () => vaultPath } } }
+  plugin.fs = { realpathSync: (value) => { assert.equal(value, vaultPath); return value } }
+  plugin.crypto = { createHmac, randomBytes: (size) => Buffer.alloc(size, ++nonce) }
+  plugin.instanceId = `pi-${'1'.repeat(32)}`
+  plugin.setView(plugin.view)
+  plugin.http = { request(options, callback) {
+    const request = new EventEmitter()
+    request.destroy = () => { calls.destroyed += 1 }
+    request.end = (text) => {
+      const step = remaining.shift()
+      assert.ok(step, 'every request must have an explicitly admitted response')
+      assert.equal(options.path, `/plugin/${step.command}`)
+      assert.equal(options.method, 'POST')
+      assert.equal(options.agent, false)
+      assert.ok(['127.0.0.1', '::1'].includes(options.host))
+      const body = JSON.parse(text)
+      calls.requests.push({ command: step.command, body })
+      let responseBody = step.body
+      if (step.command === 'challenge') {
+        bound = { bearer: plugin.channel.bearer, scopeId: plugin.channel.scopeId, authority: options.headers.Host,
+          clientNonce: body.clientNonce, serverNonce: '2'.repeat(64), handshakeId: `ph-${'3'.repeat(32)}` }
+        assert.equal(body.keyHint, pluginKeyHint({ ...bound, issuedAt: body.issuedAt }))
+        assert.equal(body.issuedAt, 1_000_000)
+        sessionKey = pluginSessionKey(bound)
+        sessionId = `ps-${'4'.repeat(32)}`
+        responseBody ??= { protocol: plugin.constructor.channel.protocol, handshakeId: bound.handshakeId,
+          serverNonce: bound.serverNonce, serverProof: step.badProof ? '0'.repeat(64) : pluginServerProof(bound) }
+      } else if (step.command === 'hello') {
+        assert.equal(body.vaultProof, pluginVaultProof({ sessionKey, vaultPath }))
+        assert.equal(body.clientProof, pluginClientProof({ ...bound, ...body }))
+      } else {
+        assert.equal(body.mac, pluginRequestMac({ sessionKey, command: step.command, sessionId, counter: body.counter }))
+      }
+      if (step.command !== 'challenge' && !step.transport && !step.httpStatus && responseBody === undefined) {
+        const document = step.command === 'hello' ? { sessionId } : step.command === 'status' ? (step.report || reportOf(plugin)) : { ok: true }
+        const payload = JSON.stringify(document)
+        responseBody = { payload, mac: step.badMac ? '0'.repeat(64) : pluginResponseMac({ sessionKey, command: step.command, sessionId,
+          counter: step.command === 'hello' ? 0 : body.counter, payload }) }
+      }
+      const deliver = () => {
+        if (step.transport === 'timeout') { request.emit('timeout'); return }
+        if (step.transport) { request.emit('error', { code: step.transport === 'refused' ? 'ECONNREFUSED' : 'ECONNRESET' }); return }
+        const response = new EventEmitter()
+        response.statusCode = step.httpStatus || 200
+        response.setEncoding = () => {}
+        callback(response)
+        response.emit('data', JSON.stringify(responseBody ?? { error: step.error || 'invented-refusal' }))
+        response.emit('end')
+      }
+      if (step.hold) pending.push(deliver)
+      else queueMicrotask(deliver)
+    }
+    return request
+  } }
+  return { ...state, respond() { assert.ok(pending.length); pending.shift()() }, done() {
+    assert.equal(remaining.length, 0); assert.equal(pending.length, 0)
+    assert.equal(calls.writes, 0); assert.deepEqual(calls.modules, ['obsidian'])
+  } }
+}
+const firstRound = (status = {}) => [{ command: 'challenge' }, { command: 'hello' }, { command: 'status', ...status }]
+async function flushUntil(check) {
+  for (let count = 0; count < 50 && !check(); count += 1) await Promise.resolve()
+  assert.ok(check(), 'the explicitly queued callback must complete within a finite microtask budget')
 }
 
 test('stale disconnect retains only explicitly historical scope-bound cause, generation and check', () => {
@@ -57,7 +151,7 @@ test('stale disconnect retains only explicitly historical scope-bound cause, gen
   const shown = rows(plugin)
   assert.equal(shown.State, 'service unreachable'); assert.equal(shown.Reason, 'refused')
   assert.equal(plugin.view.report, null)
-  assert.equal(shown.Generation, 'none yet'); assert.equal(shown['Checked at'], 'not yet')
+  assert.equal(shown.Generation, 'unknown'); assert.equal(shown['Prepared generation'], 'unknown'); assert.equal(shown['Checked at'], 'unknown')
   assert.equal(shown['Last observed state'], 'stale'); assert.equal(shown['Last observed reason'], 'canonical graph invalid')
   assert.equal(shown['Last observed generation'], 'gen-invented-a'); assert.equal(shown['Last observed check'], checkedAt)
   assert.equal(shown['Held edits'], 'unknown'); assert.equal(shown['Pending edits'], 'unknown')
@@ -66,7 +160,7 @@ test('stale disconnect retains only explicitly historical scope-bound cause, gen
 test('a previously current report is historical on disconnect and never grants current validity', () => {
   const { plugin } = world(); observed(plugin, { state: 'current', reason: 'published-and-verified' }); disconnect(plugin)
   assert.equal(rows(plugin).State, 'service unreachable'); assert.equal(rows(plugin)['Last observed state'], 'current')
-  assert.equal(plugin.view.report, null); assert.equal(rows(plugin).Generation, 'none yet')
+  assert.equal(plugin.view.report, null); assert.equal(rows(plugin).Generation, 'unknown')
 })
 test('repeated transport interruptions do not invent a newer check or replace the stale cause', () => {
   const { plugin } = world(); observed(plugin); disconnect(plugin); disconnect(plugin, 'timeout')
@@ -150,4 +244,125 @@ test('stored fields are a snapshot; no old service health, counts, content or se
   assert.deepEqual(Object.keys(plugin.lastObservedStatus).sort(), ['channel', 'checkedAt', 'generationId', 'reason', 'state'])
   assert.equal(plugin.lastObservedStatus.channel, plugin.channel, 'only an existing private in-memory channel reference; never serialized')
   assert.equal(calls.writes, 0); assert.deepEqual(calls.modules, ['obsidian'])
+})
+
+for (const transport of ['refused', 'timeout']) test(`production round retains authenticated history after a ${transport} lease interruption`, async () => {
+  const state = requestWorld([...firstRound(), { command: 'lease', transport }])
+  await state.plugin.cycle(); await state.plugin.cycle()
+  const shown = rows(state.plugin)
+  assert.equal(shown.State, 'service unreachable'); assert.equal(shown.Reason, transport)
+  assert.equal(shown['Last observed reason'], 'canonical graph invalid')
+  assert.equal(shown['Last observed generation'], 'gen-invented-a'); assert.equal(shown['Last observed check'], checkedAt)
+  for (const label of ['Generation', 'Prepared generation', 'Checked at', 'Held edits', 'Retained edits', 'Pending edits']) assert.equal(shown[label], 'unknown')
+  assert.equal(state.plugin.session, null); state.done()
+})
+for (const transport of ['refused', 'timeout']) test(`production status ${transport} interruption retains the last authenticated report`, async () => {
+  const state = requestWorld([...firstRound(), { command: 'lease' }, { command: 'status', transport }])
+  await state.plugin.cycle(); await state.plugin.cycle()
+  assert.equal(rows(state.plugin)['Last observed generation'], 'gen-invented-a')
+  assert.equal(rows(state.plugin).Reason, transport); state.done()
+})
+for (const refusal of [{ httpStatus: 401, error: 'invented-refusal' }, { httpStatus: 410, error: 'session-unknown' }]) {
+  for (const command of ['challenge', 'hello']) for (const transport of ['refused', 'timeout']) {
+    test(`production lease ${refusal.httpStatus} ${refusal.error} clears history before ${command} ${transport}`, async () => {
+      const retry = command === 'challenge' ? [{ command, transport }] : [{ command: 'challenge' }, { command, transport }]
+      const state = requestWorld([...firstRound(), { command: 'lease', ...refusal }, ...retry])
+      await state.plugin.cycle(); await state.plugin.cycle()
+      assert.equal(rows(state.plugin).Reason, transport); noHistory(state.plugin)
+      assert.equal(rows(state.plugin)['Last observed status'], 'not available'); state.done()
+    })
+  }
+}
+test('production failed listener proof clears history without sending a hello', async () => {
+  const state = requestWorld([...firstRound(), { command: 'lease', transport: 'refused' }, { command: 'challenge', badProof: true }])
+  await state.plugin.cycle(); await state.plugin.cycle(); await state.plugin.cycle()
+  assert.equal(rows(state.plugin).Reason, 'listener not proven'); noHistory(state.plugin)
+  assert.deepEqual(state.calls.requests.map(({ command }) => command), ['challenge', 'hello', 'status', 'lease', 'challenge']); state.done()
+})
+for (const response of [{ badMac: true }, { body: {} }, { httpStatus: 403 }, { transport: 'reset' }]) test(`production untrusted status ${JSON.stringify(response)} clears history`, async () => {
+  const state = requestWorld([...firstRound(), { command: 'lease' }, { command: 'status', ...response }])
+  await state.plugin.cycle(); await state.plugin.cycle(); noHistory(state.plugin); state.done()
+})
+for (const reportChange of [{ view: null }, { scopeId: 'scope-invented-b' }, { view: { state: 'disabled', reason: 'disabled-in-settings' } }]) {
+  test(`production sealed status ${JSON.stringify(reportChange)} cannot supply retained history`, async () => {
+    const steps = [...firstRound(), { command: 'lease' }, { command: 'status' }, { command: 'lease', transport: 'refused' }]
+    const state = requestWorld(steps)
+    steps[4].report = { ...reportOf(state.plugin), ...reportChange }
+    await state.plugin.cycle(); await state.plugin.cycle(); await state.plugin.cycle()
+    noHistory(state.plugin); state.done()
+  })
+}
+test('production held status maps the service state and reports recovery through notices', async () => {
+  const steps = [...firstRound(), { command: 'lease' }, { command: 'status' }]
+  const state = requestWorld(steps)
+  steps[2].report = reportOf(state.plugin, { state: 'held-for-your-edit', reason: 'edits-held' })
+  steps[4].report = reportOf(state.plugin, { state: 'current', reason: 'published-and-verified' })
+  await state.plugin.cycle()
+  assert.equal(rows(state.plugin).State, 'held (2)'); assert.equal(state.calls.notices.length, 1)
+  await state.plugin.cycle()
+  assert.equal(rows(state.plugin).State, 'current'); assert.equal(state.calls.notices.at(-1), 'Atelier: this view is current again.')
+  state.done()
+})
+for (const stateName of ['held-for-your-edit', 'stale', 'unreachable']) test(`production channel republish does not repeat a ${stateName} notice`, async () => {
+  const initial = stateName === 'unreachable' ? { transport: 'refused' } : {}
+  const retry = stateName === 'unreachable' ? [{ command: 'challenge', transport: 'refused' }] : firstRound()
+  const steps = [...firstRound(initial), ...retry]
+  const state = requestWorld(steps)
+  if (stateName !== 'unreachable') {
+    steps[2].report = reportOf(state.plugin, { state: stateName })
+    steps[5].report = steps[2].report
+  }
+  await state.plugin.cycle()
+  assert.equal(state.calls.notices.length, 1)
+  state.plugin.loadData = async () => channelData({ bearer: Buffer.alloc(32, 2).toString('base64url') })
+  await state.plugin.onExternalSettingsChange()
+  assert.equal(state.calls.notices.length, 1); state.done()
+})
+test('production channel republish preserves the current-again notice after an attention state', async () => {
+  const steps = [...firstRound(), ...firstRound()]
+  const state = requestWorld(steps)
+  steps[5].report = reportOf(state.plugin, { state: 'current', reason: 'published-and-verified', generation: 'gen-invented-b' })
+  await state.plugin.cycle()
+  state.plugin.loadData = async () => channelData({ channel: { host: '127.0.0.1', port: 12346 } })
+  await state.plugin.onExternalSettingsChange()
+  assert.equal(rows(state.plugin).Generation, 'gen-invented-b')
+  assert.equal(state.calls.notices.at(-1), 'Atelier: this view is current again.'); state.done()
+})
+test('production unchanged data callback preserves history through a transport interruption', async () => {
+  const state = requestWorld([...firstRound(), { command: 'lease', transport: 'timeout' }])
+  await state.plugin.cycle()
+  state.plugin.loadData = async () => channelData()
+  await state.plugin.onExternalSettingsChange()
+  assert.equal(rows(state.plugin)['Last observed generation'], 'gen-invented-a'); state.done()
+})
+test('production late old-channel status cannot restore history after the settings callback', async () => {
+  const steps = [...firstRound(), { command: 'lease' }, { command: 'status', hold: true }, { command: 'challenge', transport: 'timeout' }]
+  const state = requestWorld(steps)
+  await state.plugin.cycle()
+  const oldRound = state.plugin.cycle()
+  await flushUntil(() => state.calls.requests.length === 5)
+  state.plugin.loadData = async () => channelData({ scopeId: 'scope-invented-b' })
+  const changed = state.plugin.onExternalSettingsChange()
+  await flushUntil(() => state.plugin.channel.scopeId === 'scope-invented-b')
+  assert.equal(state.plugin.channel.scopeId, 'scope-invented-b')
+  assert.equal(rows(state.plugin).State, 'connecting'); assert.equal(state.plugin.lastObservedStatus, null)
+  state.respond(); await oldRound; await changed
+  noHistory(state.plugin); state.done()
+})
+test('production late old hello releases its session after a channel reset without restoring history', async () => {
+  const steps = [{ command: 'challenge' }, { command: 'hello', hold: true }, { command: 'release' }]
+  const state = requestWorld(steps)
+  const round = state.plugin.cycle()
+  await flushUntil(() => state.calls.requests.length === 2)
+  state.plugin.loadData = async () => channelData({ scopeId: 'scope-invented-b' })
+  await state.plugin.readChannel(); state.respond(); await round; await Promise.resolve()
+  assert.equal(state.plugin.session, null); assert.equal(state.plugin.lastObservedStatus, null)
+  assert.equal(rows(state.plugin).State, 'connecting'); state.done()
+})
+test('production late status after unload cannot create new history or notices', async () => {
+  const state = requestWorld([...firstRound({ hold: true }), { command: 'release' }])
+  const round = state.plugin.cycle()
+  await flushUntil(() => state.calls.requests.length === 3)
+  state.plugin.onunload(); state.respond(); await round; await Promise.resolve()
+  assert.equal(state.plugin.lastObservedStatus, null); assert.equal(state.calls.notices.length, 0); state.done()
 })

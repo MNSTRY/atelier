@@ -202,6 +202,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     this.unloaded = false
     this.view = { state: 'connecting', reason: 'not-yet-asked', report: null }
     this.shownState = null
+    this.noticeState = null
     // A round's failure that differs from the failure shown, not yet seen twice in a row.
     this.pendingFailure = null
     this.appVersion = typeof obsidian.apiVersion === 'string' ? obsidian.apiVersion : null
@@ -296,6 +297,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
           return
         }
         // The service started again since, the vault's key changed, or the session is not accepted: shake hands at once.
+        this.lastObservedStatus = null
         if (!(await this.handshake(channel))) return
       }
     }
@@ -415,7 +417,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     // Nothing is shown once the plugin unloaded.
     if (this.unloaded) return
     this.pendingFailure = null
-    const previous = this.shownState
+    const previous = this.noticeState
     // A transient display projection, never a freshness or permission record.
     // Only a report of this exact channel may be remembered; retain no service
     // health, edit counts, source content or credentials in the historical fields.
@@ -433,6 +435,13 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     this.statusBarEl.setText(labelOf(view))
     this.statusBarEl.setAttr('aria-label', `${labelOf(view)} (${readable(view.reason)})`)
     this.shownState = view.state
+    // A republished channel resets the display before its first answer, but
+    // does not repeat attention notices or erase the recovery transition.
+    if (view.state === 'connecting') {
+      if (previous === null) this.noticeState = view.state
+      return
+    }
+    this.noticeState = view.state
     if (previous === view.state || previous === null) return
     if (Object.prototype.hasOwnProperty.call(ATTENTION, view.state)) new obsidian.Notice(ATTENTION[view.state](view))
     else if (view.state === 'current' && Object.prototype.hasOwnProperty.call(ATTENTION, previous)) new obsidian.Notice('Atelier: this view is current again.')
@@ -444,6 +453,8 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     const count = (value) => (Number.isInteger(value) ? String(value) : 'unknown')
     const channel = this.channel
     const last = this.lastObservedStatus?.channel === channel ? this.lastObservedStatus : null
+    const missingGeneration = this.view.state === 'unreachable' ? 'unknown' : 'none yet'
+    const missingCheck = this.view.state === 'unreachable' ? 'unknown' : 'not yet'
     return [
       ['View', channel ? channel.scopeId : 'not set up'],
       ['State', labelOf(this.view).replace(/^Atelier: /, '')],
@@ -454,9 +465,9 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
         ['Last observed generation', last.generationId || 'none yet'],
         ['Last observed check', last.checkedAt || 'not yet'],
       ] : [['Last observed status', 'not available']]),
-      ['Generation', typeof view.generationId === 'string' ? view.generationId : 'none yet'],
-      ['Prepared generation', typeof view.preparedGenerationId === 'string' ? view.preparedGenerationId : 'none yet'],
-      ['Checked at', typeof view.checkedAt === 'string' ? view.checkedAt : 'not yet'],
+      ['Generation', typeof view.generationId === 'string' ? view.generationId : missingGeneration],
+      ['Prepared generation', typeof view.preparedGenerationId === 'string' ? view.preparedGenerationId : missingGeneration],
+      ['Checked at', typeof view.checkedAt === 'string' ? view.checkedAt : missingCheck],
       ['Held edits', count(view.heldNoteCount)],
       ['Retained edits', count(view.retainedEdits)],
       ['Pending edits', count(isPlainObject(report.pendingEdits) ? report.pendingEdits.open : null)],
