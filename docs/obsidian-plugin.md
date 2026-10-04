@@ -33,16 +33,20 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
   the prepared generation, when freshness was last checked, the held, retained
   and pending edits, the service address and state, and the plugin and app
   versions. While the service is unreachable, current generations, check time
-  and edit counts are unknown. After a refused or timed-out request on the same
-  channel, the window also shows the last authenticated state, reason,
+  and edit counts are unknown. After a connection refusal or timeout on the
+  same channel, the window also shows the last authenticated state, reason,
   generation and check under "Last observed" labels. Those rows are historical
   and never establish current freshness, service health or permission.
-  History stays only in memory and is cleared on a channel change, setup or
-  authentication refusal, an untrusted answer, a disabled view or unload.
-  Without a prior usable report, "Last observed status" says "not available".
-  A republished channel resets the display to `connecting` before its next
-  answer; this reset does not repeat an unchanged notice or lose the
-  transition back to current. Plugin 1.1.2 adds this status continuity.
+  History stays only in memory. It is cleared on a channel change, missing or
+  unsupported setup, authentication refusal, an untrusted answer, a missing or
+  malformed view, a report for another scope, a disabled view or unload.
+  A connection reset or any other failure outside connection refusal and
+  timeout also clears it. Without a prior usable report, "Last observed
+  status" says "not available". After startup admits the channel, a republish
+  resets the display to `connecting` before its next answer; this reset does
+  not repeat an unchanged notice or lose the transition back to current.
+  Republish keeps an unsupported-app or unavailable-Node setup label and its
+  channel closed. Plugin 1.1.2 adds this status continuity.
 - A notice appears when the view moves into a state that needs a person (held,
   stale, service unreachable, app too old) and when it is current again.
   `updating` is not announced: it is what every change looks like.

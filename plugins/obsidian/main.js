@@ -200,6 +200,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     this.session = null
     this.cycling = null
     this.unloaded = false
+    this.channelAdmitted = false
     this.view = { state: 'connecting', reason: 'not-yet-asked', report: null }
     this.shownState = null
     this.noticeState = null
@@ -228,6 +229,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
       this.setView({ state: 'not-set-up', reason: 'node-modules-unavailable', report: null })
       return
     }
+    this.channelAdmitted = true
     // This launch of the plugin: the service tells two apps holding the same vault apart by it.
     this.instanceId = `pi-${this.crypto.randomBytes(16).toString('hex')}`
     await this.readChannel()
@@ -240,6 +242,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     // The lease lapses by itself; releasing it says at once that the vault closed. A round still under way stops at its
     // next step, and a session it opens after this is released at once.
     this.unloaded = true
+    this.channelAdmitted = false
     this.lastObservedStatus = null
     const session = this.session
     this.session = null
@@ -248,6 +251,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
 
   // Obsidian calls this when data.json changed on disk: Atelier republished the channel.
   async onExternalSettingsChange() {
+    if (!this.channelAdmitted || this.unloaded) return
     await this.readChannel()
     // A round under way still speaks for the old channel; the next one uses the new.
     if (this.cycling) await this.cycling
@@ -255,8 +259,10 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
   }
 
   async readChannel() {
+    if (!this.channelAdmitted || this.unloaded) return
     let data = null
     try { data = await this.loadData() } catch { data = null }
+    if (!this.channelAdmitted || this.unloaded) return
     const next = channelOf(data)
     const same = next && this.channel && next.host === this.channel.host && next.port === this.channel.port && next.scopeId === this.channel.scopeId && next.bearer === this.channel.bearer
     if (!same) {
@@ -277,12 +283,12 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
 
   // Whether a round that started for `channel` may still act.
   current(channel) {
-    return !this.unloaded && channel === this.channel
+    return this.channelAdmitted && !this.unloaded && channel === this.channel
   }
 
   async runCycle() {
     const channel = this.channel
-    if (channel === null || this.unloaded) return
+    if (!this.channelAdmitted || channel === null || this.unloaded) return
     if (this.session === null) {
       if (!(await this.handshake(channel))) return
     } else {

@@ -7,7 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { pluginClientProof, pluginKeyHint, pluginRequestMac, pluginResponseMac, pluginServerProof, pluginSessionKey, pluginVaultProof } from '../src/projection/obsidian/plugin-bridge/channel.mjs'
 
-// Inert state and request-flow regression. No onload, sockets, app, plugin writes or timers.
+// Inert state, startup and request-flow regression. No real app, sockets, plugin writes or timers.
 // An optional source path allows the same assertions to demonstrate the defect.
 const sourcePath = process.argv[2] || fileURLToPath(new URL('../plugins/obsidian/main.js', import.meta.url))
 const source = fs.readFileSync(sourcePath, 'utf8')
@@ -16,15 +16,24 @@ const channelData = (changes = {}) => ({
   schema: 'atelier-obsidian-plugin-data/v1', scopeId: 'scope-invented-a',
   bearer: Buffer.alloc(32, 1).toString('base64url'), channel: { host: '127.0.0.1', port: 12345 }, ...changes,
 })
-function world({ requestFlow = false } = {}) {
+function world({ requestFlow = false, apiVersion = '1.13.7', unavailableModules = false } = {}) {
   const module = { exports: {} }
-  const calls = { writes: 0, modules: [], notices: [] }
+  const calls = { writes: 0, modules: [], notices: [], requests: [], intervals: 0, dataReads: 0 }
   class ClockNotAdmitted { constructor() { throw new Error('No invented wall clock') } static now() { throw new Error('No invented wall clock') } }
   class InventedClock { static now() { return 1_000_000 } }
-  const context = vm.createContext({ module, TextEncoder, Date: requestFlow ? InventedClock : ClockNotAdmitted, require(name) {
+  const statusBarEl = { setText() {}, setAttr() {}, addClass() {} }
+  class PluginStandIn {
+    addStatusBarItem() { return statusBarEl }
+    registerDomEvent() {}
+    addCommand() {}
+    registerInterval() { throw new Error('No interval admitted') }
+  }
+  const context = vm.createContext({ module, TextEncoder, Date: requestFlow ? InventedClock : ClockNotAdmitted,
+    setInterval() { calls.intervals += 1; throw new Error('No timer admitted') }, require(name) {
     calls.modules.push(name)
+    if (unavailableModules && name !== 'obsidian') throw new Error('No Node module available in this invented host')
     assert.equal(name, 'obsidian', 'VM cannot load file, socket, timer or native modules')
-    return { Plugin: class {}, Modal: class {}, Notice: class { constructor(text) { calls.notices.push(text) } } }
+    return { apiVersion, Plugin: PluginStandIn, Modal: class {}, Notice: class { constructor(text) { calls.notices.push(text) } } }
   } })
   vm.runInContext(source, context, { filename: sourcePath, timeout: 1000 })
   const plugin = new module.exports()
@@ -34,6 +43,7 @@ function world({ requestFlow = false } = {}) {
   plugin.session = null
   plugin.cycling = null
   plugin.unloaded = false
+  plugin.channelAdmitted = true // State/request fixtures represent an already admitted launch.
   plugin.lastObservedStatus = null
   plugin.manifest = { version: 'synthetic' }
   plugin.appVersion = '1.13.7'
@@ -145,6 +155,49 @@ async function flushUntil(check) {
   for (let count = 0; count < 50 && !check(); count += 1) await Promise.resolve()
   assert.ok(check(), 'the explicitly queued callback must complete within a finite microtask budget')
 }
+
+for (const [name, options, expectedState, expectedReason, expectedModules] of [
+  ['below-floor app', { apiVersion: '1.13.6' }, 'unsupported', 'app-below-minimum-version', ['obsidian']],
+  ['unreadable app version', { apiVersion: null }, 'unsupported', 'app-below-minimum-version', ['obsidian']],
+  ['unavailable Node modules', { unavailableModules: true }, 'not-set-up', 'node-modules-unavailable', ['obsidian', 'http']],
+]) test(`production startup with ${name} keeps its label and channel closed after republish`, async () => {
+  const { plugin, calls } = world(options)
+  plugin.loadData = async () => { calls.dataReads += 1; return channelData() }
+  await plugin.onload()
+  assert.equal(plugin.view.state, expectedState); assert.equal(plugin.view.reason, expectedReason)
+  const notices = calls.notices.length
+  await assert.doesNotReject(() => plugin.onExternalSettingsChange())
+  await plugin.readChannel(); await plugin.cycle()
+  assert.equal(plugin.view.state, expectedState); assert.equal(plugin.view.reason, expectedReason)
+  assert.equal(plugin.channel, null); assert.equal(plugin.session, null)
+  assert.equal(calls.dataReads, 0); assert.equal(calls.intervals, 0); assert.equal(calls.requests.length, 0)
+  assert.equal(calls.writes, 0); assert.equal(calls.notices.length, notices)
+  assert.deepEqual(calls.modules, expectedModules)
+})
+
+test('production settings callback and direct cycle stay closed after unload', async () => {
+  const { plugin, calls } = world(); observed(plugin)
+  plugin.loadData = async () => { calls.dataReads += 1; return channelData() }
+  plugin.onunload()
+  const shown = plugin.view
+  await plugin.onExternalSettingsChange(); await plugin.readChannel(); await plugin.cycle()
+  assert.equal(plugin.view, shown); assert.equal(plugin.lastObservedStatus, null)
+  assert.equal(calls.dataReads, 0); assert.equal(calls.intervals, 0); assert.equal(calls.requests.length, 0)
+  assert.deepEqual(calls.modules, ['obsidian'])
+})
+
+test('production channel data read completing after unload cannot replace the channel or history', async () => {
+  const { plugin, calls } = world(); observed(plugin)
+  const channel = plugin.channel; const shown = plugin.view; const notices = calls.notices.length
+  let complete
+  plugin.loadData = () => new Promise((resolve) => { complete = resolve })
+  const callback = plugin.onExternalSettingsChange()
+  assert.equal(typeof complete, 'function')
+  plugin.onunload(); complete(channelData({ scopeId: 'scope-invented-b' })); await callback
+  assert.equal(plugin.channel, channel); assert.equal(plugin.view, shown); assert.equal(plugin.lastObservedStatus, null)
+  assert.equal(calls.notices.length, notices); assert.equal(calls.intervals, 0); assert.equal(calls.requests.length, 0)
+  assert.deepEqual(calls.modules, ['obsidian'])
+})
 
 test('stale disconnect retains only explicitly historical scope-bound cause, generation and check', () => {
   const { plugin } = world(); observed(plugin); disconnect(plugin)
@@ -262,7 +315,7 @@ for (const transport of ['refused', 'timeout']) test(`production status ${transp
   assert.equal(rows(state.plugin)['Last observed generation'], 'gen-invented-a')
   assert.equal(rows(state.plugin).Reason, transport); state.done()
 })
-for (const refusal of [{ httpStatus: 401, error: 'invented-refusal' }, { httpStatus: 410, error: 'session-unknown' }]) {
+for (const refusal of [{ httpStatus: 401, error: 'invented-refusal' }, { httpStatus: 409, error: 'session-unknown' }]) {
   for (const command of ['challenge', 'hello']) for (const transport of ['refused', 'timeout']) {
     test(`production lease ${refusal.httpStatus} ${refusal.error} clears history before ${command} ${transport}`, async () => {
       const retry = command === 'challenge' ? [{ command, transport }] : [{ command: 'challenge' }, { command, transport }]
@@ -360,9 +413,13 @@ test('production late old hello releases its session after a channel reset witho
   assert.equal(rows(state.plugin).State, 'connecting'); state.done()
 })
 test('production late status after unload cannot create new history or notices', async () => {
-  const state = requestWorld([...firstRound({ hold: true }), { command: 'release' }])
+  const state = requestWorld([...firstRound(), { command: 'lease' }, { command: 'status', hold: true }, { command: 'release' }])
+  await state.plugin.cycle()
+  assert.equal(state.plugin.lastObservedStatus.generationId, 'gen-invented-a')
+  const notices = state.calls.notices.length
   const round = state.plugin.cycle()
-  await flushUntil(() => state.calls.requests.length === 3)
-  state.plugin.onunload(); state.respond(); await round; await Promise.resolve()
-  assert.equal(state.plugin.lastObservedStatus, null); assert.equal(state.calls.notices.length, 0); state.done()
+  await flushUntil(() => state.calls.requests.length === 5)
+  state.plugin.onunload(); assert.equal(state.plugin.lastObservedStatus, null)
+  state.respond(); await round; await Promise.resolve()
+  assert.equal(state.plugin.lastObservedStatus, null); assert.equal(state.calls.notices.length, notices); state.done()
 })
