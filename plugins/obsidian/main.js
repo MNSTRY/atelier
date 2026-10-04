@@ -196,6 +196,7 @@ class AtelierStatusModal extends obsidian.Modal {
 class AtelierProjectionPlugin extends obsidian.Plugin {
   async onload() {
     this.channel = null
+    this.lastObservedStatus = null
     this.session = null
     this.cycling = null
     this.unloaded = false
@@ -238,6 +239,7 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     // The lease lapses by itself; releasing it says at once that the vault closed. A round still under way stops at its
     // next step, and a session it opens after this is released at once.
     this.unloaded = true
+    this.lastObservedStatus = null
     const session = this.session
     this.session = null
     if (this.channel && session) void this.release(this.channel, session)
@@ -256,9 +258,13 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     try { data = await this.loadData() } catch { data = null }
     const next = channelOf(data)
     const same = next && this.channel && next.host === this.channel.host && next.port === this.channel.port && next.scopeId === this.channel.scopeId && next.bearer === this.channel.bearer
-    if (!same) this.session = null
+    if (!same) {
+      this.session = null
+      this.lastObservedStatus = null
+    } else if (this.lastObservedStatus?.channel === this.channel) this.lastObservedStatus.channel = next
     this.channel = next
     if (next === null) this.setView({ state: 'not-set-up', reason: data === null ? 'no-channel-data' : 'channel-data-unusable', report: null })
+    else if (!same) this.setView({ state: 'connecting', reason: 'not-yet-asked', report: null })
   }
 
   // One round: shake hands (once per session), renew the lease, read the status.
@@ -386,13 +392,18 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
 
   unreachable(answer) {
     const reason = answer.kind === 'unreachable' ? answer.code : typeof answer.error === 'string' ? answer.error : answer.body && typeof answer.body.error === 'string' ? answer.body.error : `answered-${answer.statusCode}`
-    return { state: 'unreachable', reason, report: null }
+    // Retain history only for a transport interruption, never an unsealed or
+    // refused answer, failed listener proof or unknown authentication state.
+    const transportFailure = answer.kind === 'unreachable' && ['refused', 'timeout'].includes(answer.code)
+    return { state: 'unreachable', reason, report: null, transportFailure }
   }
 
   // What a round found. A failure other than the one shown ('not set up' where 'service unreachable' is shown, or the other
   // way round) is shown only when the next round finds it too, so answers that alternate between them do not make the
   // status bar flip. Anything else is shown at once.
   showRound(view) {
+    // A setup refusal clears remembered evidence even while its label is debounced.
+    if (view.state === 'not-set-up' || (view.state === 'unreachable' && view.transportFailure !== true)) this.lastObservedStatus = null
     if (ROUND_FAILURES.has(view.state) && ROUND_FAILURES.has(this.shownState) && view.state !== this.shownState && this.pendingFailure !== view.state) {
       this.pendingFailure = view.state
       return
@@ -405,6 +416,19 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     if (this.unloaded) return
     this.pendingFailure = null
     const previous = this.shownState
+    // A transient display projection, never a freshness or permission record.
+    // Only a report of this exact channel may be remembered; retain no service
+    // health, edit counts, source content or credentials in the historical fields.
+    if (!this.channel || view.state === 'not-set-up' || view.state === 'unsupported' || (view.state === 'unreachable' && view.transportFailure !== true)) this.lastObservedStatus = null
+    else if (view.report !== null) {
+      const report = view.report
+      const observed = isPlainObject(report) && report.schema === CHANNEL.statusSchema && report.scopeId === this.channel.scopeId && isPlainObject(report.view) && report.view.state !== 'disabled' ? report.view : null
+      this.lastObservedStatus = observed === null ? null : {
+        channel: this.channel, state: view.state, reason: view.reason,
+        generationId: typeof observed.generationId === 'string' ? observed.generationId : null,
+        checkedAt: typeof observed.checkedAt === 'string' ? observed.checkedAt : null,
+      }
+    }
     this.view = view
     this.statusBarEl.setText(labelOf(view))
     this.statusBarEl.setAttr('aria-label', `${labelOf(view)} (${readable(view.reason)})`)
@@ -419,10 +443,17 @@ class AtelierProjectionPlugin extends obsidian.Plugin {
     const view = isPlainObject(report.view) ? report.view : {}
     const count = (value) => (Number.isInteger(value) ? String(value) : 'unknown')
     const channel = this.channel
+    const last = this.lastObservedStatus?.channel === channel ? this.lastObservedStatus : null
     return [
       ['View', channel ? channel.scopeId : 'not set up'],
       ['State', labelOf(this.view).replace(/^Atelier: /, '')],
       ['Reason', readable(this.view.reason)],
+      ...(this.view.state !== 'unreachable' ? [] : last ? [
+        ['Last observed state', readable(last.state)],
+        ['Last observed reason', readable(last.reason)],
+        ['Last observed generation', last.generationId || 'none yet'],
+        ['Last observed check', last.checkedAt || 'not yet'],
+      ] : [['Last observed status', 'not available']]),
       ['Generation', typeof view.generationId === 'string' ? view.generationId : 'none yet'],
       ['Prepared generation', typeof view.preparedGenerationId === 'string' ? view.preparedGenerationId : 'none yet'],
       ['Checked at', typeof view.checkedAt === 'string' ? view.checkedAt : 'not yet'],
