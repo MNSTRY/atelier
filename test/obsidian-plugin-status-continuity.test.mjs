@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import vm from 'node:vm'
 import test from 'node:test'
@@ -422,4 +422,44 @@ test('production late status after unload cannot create new history or notices',
   state.plugin.onunload(); assert.equal(state.plugin.lastObservedStatus, null)
   state.respond(); await round; await Promise.resolve()
   assert.equal(state.plugin.lastObservedStatus, null); assert.equal(state.calls.notices.length, notices); state.done()
+})
+
+// The sole ledger stays RELEASED_PLUGIN_CODE in test/obsidian-plugin.test.mjs. It is
+// read as text and parsed as strict literal data; that module is never imported or run.
+const LEDGER_SOURCE = fileURLToPath(new URL('./obsidian-plugin.test.mjs', import.meta.url))
+const PLUGIN_DIRECTORY = fileURLToPath(new URL('../plugins/obsidian/', import.meta.url))
+const LEDGER_OPEN = 'const RELEASED_PLUGIN_CODE = Object.freeze({'
+const LEDGER_ENTRY = /^ {2}'(\d+\.\d+\.\d+)': 'sha256:([0-9a-f]{64})',$/u
+
+function releasedPluginCode() {
+  const source = fs.readFileSync(LEDGER_SOURCE, 'utf8')
+  assert.equal(source.includes('\r'), false, 'the plugin ledger must use LF line endings')
+  const lines = source.split('\n')
+  assert.equal((source.match(/RELEASED_PLUGIN_CODE\s*=/gu) || []).length, 1, 'exactly one RELEASED_PLUGIN_CODE table')
+  const declarations = lines.filter((line) => /RELEASED_PLUGIN_CODE\s*=/u.test(line))
+  assert.deepEqual(declarations, [LEDGER_OPEN], 'exactly one RELEASED_PLUGIN_CODE table')
+  const open = lines.indexOf(LEDGER_OPEN)
+  const close = lines.indexOf('})', open + 1)
+  assert.ok(close > open + 1, 'RELEASED_PLUGIN_CODE has entries and a closing line')
+  const table = new Map()
+  for (const line of lines.slice(open + 1, close)) {
+    const entry = line.match(LEDGER_ENTRY)
+    assert.ok(entry, `malformed RELEASED_PLUGIN_CODE entry: ${JSON.stringify(line)}`)
+    assert.equal(table.has(entry[1]), false, `duplicate RELEASED_PLUGIN_CODE version ${entry[1]}`)
+    table.set(entry[1], `sha256:${entry[2]}`)
+  }
+  return table
+}
+
+test('the shipped plugin code matches its released digest', () => {
+  const hash = createHash('sha256')
+  for (const name of ['main.js', 'styles.css']) {
+    hash.update(`${name}\u0000`)
+    hash.update(fs.readFileSync(`${PLUGIN_DIRECTORY}${name}`))
+    hash.update('\u0000')
+  }
+  const { version } = JSON.parse(fs.readFileSync(`${PLUGIN_DIRECTORY}manifest.json`, 'utf8'))
+  const table = releasedPluginCode()
+  assert.ok(table.has(version), `plugin version ${version} is not recorded in RELEASED_PLUGIN_CODE`)
+  assert.equal(`sha256:${hash.digest('hex')}`, table.get(version))
 })
