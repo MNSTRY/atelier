@@ -32,7 +32,17 @@ is `src/projection/obsidian/plugin-bridge/channel.mjs`; the service's half is
   a window with the view, its state and the reason in words, the committed and
   the prepared generation, when freshness was last checked, the held, retained
   and pending edits, the service address and state, and the plugin and app
-  versions.
+  versions. While the service is unreachable, current generations, check time
+  and edit counts are unknown. After a refused or timed-out request on the same
+  channel, the window also shows the last authenticated state, reason,
+  generation and check under "Last observed" labels. Those rows are historical
+  and never establish current freshness, service health or permission.
+  History stays only in memory and is cleared on a channel change, setup or
+  authentication refusal, an untrusted answer, a disabled view or unload.
+  Without a prior usable report, "Last observed status" says "not available".
+  A republished channel resets the display to `connecting` before its next
+  answer; this reset does not repeat an unchanged notice or lose the
+  transition back to current. Plugin 1.1.2 adds this status continuity.
 - A notice appears when the view moves into a state that needs a person (held,
   stale, service unreachable, app too old) and when it is current again.
   `updating` is not announced: it is what every change looks like.
@@ -488,6 +498,14 @@ note open in the editor.
 
 ## Evidence
 
+- `test/obsidian-plugin-status-continuity.test.mjs` exercises transient history
+  and the shipped request flow through a finite, socket-free `http.request`
+  stand-in. Canonical channel computations seal the invented replies. It
+  checks refused and timed-out lease/status requests, rejected leases followed
+  by interrupted handshakes, listener proof and answer authentication,
+  republished data, notice deduplication and recovery, and late answers after
+  a channel change or unload. It opens no service or app and writes no plugin
+  data. These tests complement the real-listener and real-app checks below.
 - `test/obsidian-plugin.test.mjs` runs the shipped `main.js` in a stand-in app
   against a real listener on an ephemeral loopback port: parity of the
   plugin's constants and of every proof and MAC with the channel contract (a
