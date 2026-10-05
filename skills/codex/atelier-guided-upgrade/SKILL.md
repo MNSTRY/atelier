@@ -44,19 +44,28 @@ Verify the resolved identity and inventory before running its commands. Inspect
 migration/compatibility effects before rewriting the old Atelier lock. Retain the
 old lock and all lineage. Keep installation changes distinct from generated files.
 
-For npm workspaces, check advisory-pinned dependencies in the staged installed
-tree with `npm ls <package> --all`. A dependency publisher's root-project
-`overrides` are not inherited by its consumers. Confirm that every installed
-copy of an advisory-pinned package is at an intended version, and that the
-installed tree agrees with this workspace's own lock and satisfies the declared
-version ranges; a valid range need not equal the resolved version literally.
-Record a disagreement between the installed tree and the lock as a stale
-installation. Approval authorizes the permitted change; adoption requires the
-completed change and its readback. When an offline npm reinstall is required,
-warm the cache from this workspace's own lock (its `resolved` and `integrity`
-records), then verify that `npm ci --offline --ignore-scripts` reproduces the
-same dependency tree. Record the Node and npm versions, registry and platform,
-and whether each observation used a real registry or a fixture.
+When the package manager identified above is npm, check advisory-pinned
+dependencies in the staged candidate: the selected package's exact `overrides`
+entries and any package the owner names. A dependency publisher's root-project
+`overrides` are not inherited by its consumers. `npm ls <package> --all` lists
+every installed copy and reports copies outside a declared range; a valid range
+need not equal the resolved version literally. Confirm that every copy is at
+its pin or an owner-approved version. `npm ls` alone does not compare with the
+lock. For the npm root project's lock identified above, compare
+`npm ls --all --json` with `npm ls --all --json --package-lock-only` and record
+each differing path and version as a stale installation. Changing a pin or an
+override in the owner's project is an installation effect that needs the
+owner's consent; adoption requires the completed change and its readback. When
+an offline npm reinstall is required, prove it in the staged candidate only,
+never in the working installation: `npm ci` removes `node_modules` first. Use a
+fresh, empty cache directory (`--cache <dir>`). With `npm cache add`, add only
+the lock's http(s) `resolved` tarballs that carry `integrity`, and record any
+entry missing either. This contacts the hosts named in the lock; use only the
+owner's configured registry and credentials. Then run
+`npm ci --offline --ignore-scripts --cache <dir>` and compare
+`npm ls --all --json` before and after. Record the Node and npm versions,
+registry and platform in private evidence, and whether each observation used a
+real registry or a fixture.
 
 Check exact-plan eligibility: Linux/macOS, one managed repository at `.`, config
 and workspace at its root, linked candidate worktree, clean state and supported
