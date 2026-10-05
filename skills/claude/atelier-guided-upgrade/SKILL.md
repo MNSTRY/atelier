@@ -64,29 +64,13 @@ with the cause when known, and as stale unless the owner confirms the omission.
 Do not report that the tree agrees with the lock while any difference is
 unexplained. Changing a pin or an override in the owner's project is an
 installation effect that needs the owner's consent; adoption requires the
-completed change and its readback. Prove an offline npm reinstall only when the
-owner or the repository's procedure requires offline installs, and only in the
-staged candidate, never in the working installation: `npm ci` removes
-`node_modules` first. Before it, confirm that `npm prefix` is the candidate's
-own npm root and that its `node_modules` is not linked to or shared with the
-working installation, and take `npm ls --all --json`. Use a fresh, empty cache
-directory outside the candidate and the working installation, and pass
-`--cache <dir>` to every command. With `npm cache add`, add only the lock's
-registry tarballs: entries whose `resolved` is an http(s) URL and that carry
-`integrity`. Skip the root, links, bundled and local `file:` entries. Record a
-registry entry that lacks `resolved` or `integrity`, and do not claim the proof
-while one remains. Fetch only from the owner's configured registry with the
-owner's credentials; if a tarball would come from another host, record it and
-do not fetch it unless the owner authorizes that. Then run
-`npm ci --offline --ignore-scripts --cache <dir>` and compare
-`npm ls --all --json` with the earlier output: they must match and report no
-`problems`. This reinstall runs no lifecycle scripts, so repeat any
-investigated script step the candidate needs before its acceptance checks. The
-reinstall proof was qualified once in a bare consumer, and the lock comparison
-was observed once on one development tree whose only differences were packages
-for other platforms, both on macOS with npm 10. Other platforms, npm versions,
-real workspaces and missing packages are unqualified. Record the Node and npm
-versions, registry and platform in private evidence, and whether each
+completed change and its readback. This skill does not prove an offline
+reinstall. When the owner or the repository's procedure requires offline
+installs, follow that procedure and record its result separately. The lock
+comparison was observed once on one development tree whose only differences
+were packages for other platforms, on macOS with npm 10. Other platforms, npm
+versions, real workspaces and missing packages are unqualified. Record the Node
+and npm versions, registry and platform in private evidence, and whether each
 observation used a real registry or a fixture.
 
 Check exact-plan eligibility: Linux/macOS, one managed repository at `.`, config
