@@ -49,23 +49,34 @@ dependencies in the staged candidate: the selected package's exact `overrides`
 entries and any package the owner names. A dependency publisher's root-project
 `overrides` are not inherited by its consumers. `npm ls <package> --all` lists
 every installed copy and reports copies outside a declared range; a valid range
-need not equal the resolved version literally. Confirm that every copy is at
-its pin or an owner-approved version. `npm ls` alone does not compare with the
-lock. For the npm root project's lock identified above, compare
-`npm ls --all --json` with `npm ls --all --json --package-lock-only` and record
-each differing path and version as a stale installation. Changing a pin or an
-override in the owner's project is an installation effect that needs the
-owner's consent; adoption requires the completed change and its readback. When
-an offline npm reinstall is required, prove it in the staged candidate only,
-never in the working installation: `npm ci` removes `node_modules` first. Use a
-fresh, empty cache directory (`--cache <dir>`). With `npm cache add`, add only
-the lock's http(s) `resolved` tarballs that carry `integrity`, and record any
-entry missing either. This contacts the hosts named in the lock; use only the
-owner's configured registry and credentials. Then run
+need not equal the resolved version literally. Each copy must be at its pin or
+an owner-approved version; more than one copy can be valid in a consumer's
+tree. `npm ls` alone does not compare with the lock. For the npm root project's
+lock identified above, compare the paths and versions of `npm ls --all --json`
+with those of `npm ls --all --json --package-lock-only`, and refuse a tree that
+reports `problems`. An entry with no installed version that the lock marks
+`optional` is a package for another platform: record it as not installed on
+this platform. Record every other difference as a stale installation. Changing
+a pin or an override in the owner's project is an installation effect that
+needs the owner's consent; adoption requires the completed change and its
+readback. Prove an offline npm reinstall only when the owner or the
+repository's procedure requires offline installs, and only in the staged
+candidate: `npm ci` removes `node_modules` first. Before it, confirm that
+`npm prefix` is the candidate's own npm root and that its `node_modules` is not
+linked to or shared with the working installation, and take
+`npm ls --all --json`. Use a fresh, empty cache directory outside the candidate
+(`--cache <dir>`). With `npm cache add`, add only the lock's http(s) `resolved`
+tarballs that carry `integrity`, and record any entry missing either. This
+contacts the hosts named in the lock: fetch only from the owner's configured
+registry with the owner's credentials, and record any other host without
+fetching it unless the owner authorizes that. Then run
 `npm ci --offline --ignore-scripts --cache <dir>` and compare
-`npm ls --all --json` before and after. Record the Node and npm versions,
-registry and platform in private evidence, and whether each observation used a
-real registry or a fixture.
+`npm ls --all --json` with the earlier output. The reinstall proof was
+qualified once in a bare consumer, and the lock comparison was observed once on
+one development tree, both on macOS with npm 10; other platforms, npm versions
+and real workspaces are unqualified. Record the Node and npm versions, registry
+and platform in private evidence, and whether each observation used a real
+registry or a fixture.
 
 Check exact-plan eligibility: Linux/macOS, one managed repository at `.`, config
 and workspace at its root, linked candidate worktree, clean state and supported
