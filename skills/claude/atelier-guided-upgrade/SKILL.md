@@ -44,6 +44,20 @@ Verify the resolved identity and inventory before running its commands. Inspect
 migration/compatibility effects before rewriting the old Atelier lock. Retain the
 old lock and all lineage. Keep installation changes distinct from generated files.
 
+For npm workspaces, check advisory-pinned dependencies in the staged installed
+tree with `npm ls <package> --all`. A dependency publisher's root-project
+`overrides` are not inherited by its consumers. Confirm that every installed
+copy of an advisory-pinned package is at an intended version, and that the
+installed tree agrees with this workspace's own lock and satisfies the declared
+version ranges; a valid range need not equal the resolved version literally.
+Record a disagreement between the installed tree and the lock as a stale
+installation. Approval authorizes the permitted change; adoption requires the
+completed change and its readback. When an offline npm reinstall is required,
+warm the cache from this workspace's own lock (its `resolved` and `integrity`
+records), then verify that `npm ci --offline --ignore-scripts` reproduces the
+same dependency tree. Record the Node and npm versions, registry and platform,
+and whether each observation used a real registry or a fixture.
+
 Check exact-plan eligibility: Linux/macOS, one managed repository at `.`, config
 and workspace at its root, linked candidate worktree, clean state and supported
 Git settings. Packs, overlays and other unsupported participants require the
