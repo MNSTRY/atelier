@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- `atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
+  candidate's own dependency closure, and `planConsumerClosure` is exported from
+  `@mnstry/atelier/upgrade`. The plan reads the candidate's `package.json`, its
+  `package-lock.json` and the selected package's installed manifest only: it
+  runs no npm command, uses no network, reads no npm configuration and writes
+  nothing. It reports the lockfile's sources, registry hosts and platform
+  exclusions, checks the selected package's exact `overrides` against every
+  installed copy, and lists selector, nested and non-exact overrides as
+  unchecked. Refusals reuse `usage`, `consumer-closure-incomplete` and
+  `override-not-inherited`, each with one bounded reason. A completed plan
+  exits 3 with `"proof": "not-run"` and a refusal exits 2; the command never
+  exits 0 and does not prove an offline reinstall. The consumer-closure
+  classifiers moved unchanged to `src/upgrade/closure-diagnostics.mjs`, and
+  `scripts/consumer-closure-diagnostics.mjs` re-exports them.
 - Patch the fast-uri dependency and override from 3.1.7 to 3.1.8, the patched
   3.x release for GHSA-hrr3-gc8f-f4qj (3.1.7 is in the affected range; whether
   Atelier's use was exploitable is not established). The direct dependency

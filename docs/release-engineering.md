@@ -257,7 +257,8 @@ offline-only hosts keep the behaviour above:
    online install.
 
 Failures print as `[code] message` with a `Next:` step. The pure classifiers
-are in `scripts/consumer-closure-diagnostics.mjs`:
+are in `src/upgrade/closure-diagnostics.mjs`, and
+`scripts/consumer-closure-diagnostics.mjs` re-exports them for this script:
 
 - `consumer-closure-incomplete`: an offline install or reinstall hit
   `ENOTCACHED`, or the captured lockfile has a registry entry missing

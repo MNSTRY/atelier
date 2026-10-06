@@ -316,3 +316,60 @@ For the bounded, manually confirmed single-repository workflow, see
 commands are separate from the legacy flag-based migration workflow above.
 They preserve history and honor existing commit hooks; they do not install a
 new package or activate a runtime.
+
+## Consumer dependency closure plan
+
+`atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
+candidate's own dependency closure. A consumer does not inherit a dependency
+publisher's npm `overrides`, so the candidate's own lockfile is what counts.
+
+The command reads the candidate's `package.json`, its `package-lock.json` and
+the selected package's installed manifest. It does not run npm, use the network,
+read npm configuration or credentials, or write anything. The directory need not
+be an Atelier workspace, and `--npm-root` has no default.
+
+The result is one JSON document with `"proof": "not-run"`:
+
+- the lockfile's SHA-256, version and entry count;
+- entries by source (`npm`, `git`, `local_path`, links, bundled) and the registry
+  hosts the lockfile names;
+- the number of registry tarballs an offline proof would need;
+- lockfile entries whose `os`, `cpu` or `libc` excludes this host;
+- the selected package's exact `overrides` that were checked against every
+  installed copy, the ones with no copy, and the ones left unchecked (a
+  version-selector key, a nested override, or a value that is not an exact
+  version);
+- every refusal, with its code, one `reason`, a message and a next step.
+
+Exit code 3 means a completed plan. Exit code 2 means a refusal, printed as
+`[code] message` with a `Next:` step. The command never exits 0: a plan is not a
+pass, and this command does not prove an offline reinstall.
+
+Refusals reuse existing codes:
+
+- `usage`: the input is not supported. Reasons: `npm-root-required`,
+  `npm-root-not-absolute`, `npm-root-not-directory`, `argument-unsupported`,
+  `manifest-missing`, `lockfile-missing`, `lockfile-invalid`,
+  `lockfile-version` (version 1), `workspaces`, `prefix-mismatch` (a parent
+  directory declares workspaces) and `linked-node-modules`.
+- `consumer-closure-incomplete`: an offline reinstall could not be proven for a
+  lockfile entry. Reasons: `missing-integrity`, `git-source`, `other-host`,
+  `outside-project`, `zero-copies` and `selected-package-unreadable`.
+- `override-not-inherited`: reason `copy-off-pin`. A copy is installed at a
+  version other than the selected package's exact pin. More than one copy, all
+  at the pin, is reported and not refused.
+
+Options:
+
+- `--package NAME` selects the package whose overrides are checked. It defaults
+  to `@mnstry/atelier`.
+- `--registry-host HOST[,HOST]` names the approved registry hosts. A tarball on
+  any other host is then refused. Without it, hosts are reported and
+  `approvedRegistryVerified` is `false`, because the plan does not read npm
+  configuration.
+
+Limits: the plan cannot run `npm prefix`, so `prefixVerified` is always `false`
+and any parent directory that declares workspaces is refused. Containment of
+links and local files is checked by path, without following links. Platform
+evidence uses this process's `os` and `cpu`; `libc` is unknown unless a caller
+of `planConsumerClosure` supplies it.
