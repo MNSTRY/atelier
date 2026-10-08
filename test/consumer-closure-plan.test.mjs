@@ -98,12 +98,22 @@ test('a clean candidate is a completed plan that is not a proof', (t) => {
   })
   assert.deepEqual(result.host, APPLE)
   assert.deepEqual(result.sources, {
-    counts: { npm: 3, git: 0, local_path: 0, link: 0, bundled: 0 },
+    counts: { npm: 3, git: 0, local_path: 0, link: 0, bundled: 0, unclassified: 0 },
     registryHosts: { 'registry.example.test': 3 },
+    registrySchemes: { https: 3 },
   })
   assert.deepEqual(result.capture, { registryTarballs: 3 })
   assert.deepEqual(result.otherPlatform, [])
-  assert.deepEqual(result.selectedPackage, { name: SELECTED, copies: [{ path: 'node_modules/@example/publisher', version: '1.0.0' }] })
+  assert.deepEqual(result.selectedPackage, {
+    name: SELECTED,
+    copies: [{ path: 'node_modules/@example/publisher', version: '1.0.0' }],
+    manifests: [{
+      path: 'node_modules/@example/publisher/package.json',
+      name: SELECTED,
+      version: '1.0.0',
+      sha256: createHash('sha256').update(fixtureText('publisher-package.json')).digest('hex'),
+    }],
+  })
   assert.equal(closureRefusalError(result), null)
   assert.equal(Object.hasOwn(result, 'ok'), false, 'a plan carries no field that reads as a pass')
 })
@@ -224,7 +234,7 @@ test('links, folders and local files inside the project, and bundled entries, ar
   const { npmRoot } = candidate(t, 'inside-link-and-bundled-lock.json')
   const result = plan(npmRoot)
   assert.deepEqual(result.refusals, [])
-  assert.deepEqual(result.sources.counts, { npm: 3, git: 0, local_path: 2, link: 1, bundled: 1 })
+  assert.deepEqual(result.sources.counts, { npm: 3, git: 0, local_path: 2, link: 1, bundled: 1, unclassified: 0 })
   assert.deepEqual(result.capture, { registryTarballs: 3 })
 })
 
@@ -463,4 +473,345 @@ test('a nested copy is found at its own lockfile path before the hoisted one', (
     { dependencyPath: 'plain-dep > pinned-dep', lockPath: 'node_modules/plain-dep/node_modules/pinned-dep', excludedBy: 'os' },
   ])
   assert.deepEqual(result.missing, [])
+})
+
+// Corrections after the r10 review. Each case is a fixture changed in memory in
+// the one way its name says; no fixture file is edited and none is added.
+const PUBLISHER_PATH = 'node_modules/@example/publisher'
+const NESTED_PUBLISHER_PATH = 'node_modules/plain-dep/node_modules/@example/publisher'
+const PUBLISHER_MANIFEST_SHA256 = createHash('sha256').update(fixtureText('publisher-package.json')).digest('hex')
+
+function candidateWith(t, lockName, mutate, options) {
+  const made = candidate(t, lockName, options)
+  const lock = fixture(lockName)
+  mutate(lock, made)
+  fs.writeFileSync(path.join(made.npmRoot, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`)
+  return made
+}
+
+function installManifest(npmRoot, lockPath, manifest) {
+  const directory = path.join(npmRoot, ...lockPath.split('/'))
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+}
+
+const NO_OVERRIDES_USED = { checked: [], notInstalled: [], unchecked: [], multipleCopiesAtPin: [] }
+
+test('a selected manifest that declares another name is refused, and its overrides are not used', (t) => {
+  const { npmRoot } = candidate(t, 'clean-lock.json')
+  installManifest(npmRoot, PUBLISHER_PATH, { ...fixture('publisher-package.json'), name: '@example/other' })
+  const result = plan(npmRoot)
+  assert.deepEqual(reasons(result), ['consumer-closure-incomplete/selected-package-mismatch'])
+  assert.equal(result.refusals[0].path, PUBLISHER_PATH)
+  assert.deepEqual(result.refusals[0].locked, { name: SELECTED, version: '1.0.0' })
+  assert.deepEqual(result.refusals[0].manifest, { name: '@example/other', version: '1.0.0' })
+  assert.deepEqual(result.overrides, NO_OVERRIDES_USED)
+  assert.equal(result.status, 'refused')
+})
+
+test('a selected manifest at another version than its lockfile copy is refused, and its overrides are not used', (t) => {
+  const { npmRoot } = candidate(t, 'clean-lock.json')
+  // A stale node_modules: the lockfile says 1.0.0, the installed manifest 0.9.0.
+  installManifest(npmRoot, PUBLISHER_PATH, { ...fixture('publisher-package.json'), version: '0.9.0' })
+  const result = plan(npmRoot)
+  assert.deepEqual(reasons(result), ['consumer-closure-incomplete/selected-package-mismatch'])
+  assert.deepEqual(result.refusals[0].locked, { name: SELECTED, version: '1.0.0' })
+  assert.deepEqual(result.refusals[0].manifest, { name: SELECTED, version: '0.9.0' })
+  assert.deepEqual(result.selectedPackage.copies, [{ path: PUBLISHER_PATH, version: '1.0.0' }])
+  assert.deepEqual(result.selectedPackage.manifests.map(({ path: read, name, version }) => ({ path: read, name, version })),
+    [{ path: `${PUBLISHER_PATH}/package.json`, name: SELECTED, version: '0.9.0' }])
+  assert.deepEqual(result.overrides, NO_OVERRIDES_USED, 'pinned-dep is not reported as checked from a manifest the lockfile does not describe')
+})
+
+test('two lockfile copies of the selected package at different versions are refused even when each manifest matches its copy', (t) => {
+  const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages[NESTED_PUBLISHER_PATH] = { ...lock.packages[PUBLISHER_PATH], version: '2.0.0' }
+  })
+  installManifest(npmRoot, NESTED_PUBLISHER_PATH, { ...fixture('publisher-package.json'), version: '2.0.0', overrides: { 'pinned-dep': '9.9.9' } })
+  const result = plan(npmRoot)
+  assert.deepEqual(reasons(result), ['consumer-closure-incomplete/selected-copies-differ'])
+  assert.deepEqual(result.refusals[0].copies, [{ path: PUBLISHER_PATH, version: '1.0.0' }, { path: NESTED_PUBLISHER_PATH, version: '2.0.0' }])
+  assert.deepEqual(result.selectedPackage.manifests.map((read) => read.path), [`${PUBLISHER_PATH}/package.json`, `${NESTED_PUBLISHER_PATH}/package.json`])
+  assert.deepEqual(result.overrides, NO_OVERRIDES_USED)
+})
+
+test('a second selected manifest that does not match its own lockfile copy is refused', (t) => {
+  const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages[NESTED_PUBLISHER_PATH] = { ...lock.packages[PUBLISHER_PATH] }
+  })
+  installManifest(npmRoot, NESTED_PUBLISHER_PATH, { ...fixture('publisher-package.json'), version: '1.0.1' })
+  const result = plan(npmRoot)
+  assert.deepEqual(reasons(result), ['consumer-closure-incomplete/selected-package-mismatch'])
+  assert.equal(result.refusals[0].path, NESTED_PUBLISHER_PATH)
+  assert.deepEqual(result.refusals[0].manifest, { name: SELECTED, version: '1.0.1' })
+  assert.deepEqual(result.overrides, NO_OVERRIDES_USED, 'the first copy matched, but one refused copy stops the override check')
+
+  // The same second copy with no installed manifest is unreadable, not skipped.
+  fs.rmSync(path.join(npmRoot, ...NESTED_PUBLISHER_PATH.split('/')), { recursive: true })
+  const unreadable = plan(npmRoot)
+  assert.deepEqual(reasons(unreadable), ['consumer-closure-incomplete/selected-package-unreadable'])
+  assert.equal(unreadable.refusals[0].path, NESTED_PUBLISHER_PATH)
+  assert.deepEqual(unreadable.overrides, NO_OVERRIDES_USED)
+})
+
+test('two copies of the selected package at one version, with matching manifests, are accepted and both read paths are recorded', (t) => {
+  const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages[NESTED_PUBLISHER_PATH] = { ...lock.packages[PUBLISHER_PATH] }
+  })
+  installManifest(npmRoot, NESTED_PUBLISHER_PATH, fixture('publisher-package.json'))
+  const result = plan(npmRoot)
+  assert.deepEqual(result.refusals, [])
+  assert.equal(result.status, 'planned')
+  assert.deepEqual(result.selectedPackage.manifests.map(({ path: read, name, version }) => ({ path: read, name, version })), [
+    { path: `${PUBLISHER_PATH}/package.json`, name: SELECTED, version: '1.0.0' },
+    { path: `${NESTED_PUBLISHER_PATH}/package.json`, name: SELECTED, version: '1.0.0' },
+  ])
+  assert.deepEqual(result.overrides.checked, ['pinned-dep'])
+
+  // Same version, different overrides: the copies do not agree.
+  installManifest(npmRoot, NESTED_PUBLISHER_PATH, { ...fixture('publisher-package.json'), overrides: { 'pinned-dep': '9.9.9' } })
+  const disagreeing = plan(npmRoot)
+  assert.deepEqual(reasons(disagreeing), ['consumer-closure-incomplete/selected-copies-differ'])
+  assert.deepEqual(disagreeing.overrides, NO_OVERRIDES_USED)
+})
+
+const withLinkedOverride = (npmRoot) => {
+  const publisher = fixture('publisher-package.json')
+  installManifest(npmRoot, PUBLISHER_PATH, { ...publisher, overrides: { ...publisher.overrides, 'inner-dep': '1.0.0' } })
+}
+
+test('an overridden package that only a link provides is unchecked as link-only, never checked and never not installed', (t) => {
+  // The fixture's link target, packages/inner-dep, carries no name.
+  const { npmRoot } = candidate(t, 'inside-link-and-bundled-lock.json')
+  assert.equal(Object.hasOwn(fixture('inside-link-and-bundled-lock.json').packages['packages/inner-dep'], 'name'), false)
+  withLinkedOverride(npmRoot)
+  const result = plan(npmRoot)
+  assert.deepEqual(result.refusals, [])
+  assert.deepEqual(result.overrides.unchecked.filter((item) => item.name === 'inner-dep'), [{ name: 'inner-dep', reason: 'link-only' }])
+  assert.equal(result.overrides.checked.includes('inner-dep'), false)
+  assert.equal(result.overrides.notInstalled.includes('inner-dep'), false)
+  assert.deepEqual(result.overrides.checked, ['pinned-dep'])
+  assert.deepEqual(result.overrides.notInstalled, ['absent-dep'])
+
+  // The selected package depending on it directly does not turn the link into
+  // a missing copy either.
+  const direct = candidateWith(t, 'inside-link-and-bundled-lock.json', (lock) => {
+    lock.packages[PUBLISHER_PATH].dependencies['inner-dep'] = '^1.0.0'
+  })
+  withLinkedOverride(direct.npmRoot)
+  const required = plan(direct.npmRoot)
+  assert.deepEqual(required.refusals, [])
+  assert.deepEqual(required.overrides.unchecked.filter((item) => item.name === 'inner-dep'), [{ name: 'inner-dep', reason: 'link-only' }])
+})
+
+test('a project folder entry is never an installed copy, whatever name it carries', (t) => {
+  const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages['packages/pinned-dep'] = { name: 'pinned-dep', version: '0.0.1' }
+    lock.packages['packages/absent-dep'] = { version: '0.0.1' }
+  })
+  const result = plan(npmRoot)
+  assert.deepEqual(result.refusals, [], 'a folder at another version is not an off-pin copy')
+  assert.deepEqual(result.overrides.checked, ['pinned-dep'])
+  assert.deepEqual(result.overrides.notInstalled, ['absent-dep'])
+  assert.deepEqual(result.overrides.multipleCopiesAtPin, [])
+})
+
+test('a linked copy beside a registry copy off the pin keeps the off-pin refusal', (t) => {
+  const { npmRoot } = candidateWith(t, 'inside-link-and-bundled-lock.json', (lock) => {
+    lock.packages['node_modules/plain-dep/node_modules/inner-dep'] = { ...lock.packages['node_modules/plain-dep'], version: '0.9.0' }
+  })
+  withLinkedOverride(npmRoot)
+  const result = plan(npmRoot)
+  assert.deepEqual(reasons(result), ['override-not-inherited/copy-off-pin'])
+  assert.equal(result.refusals[0].package, 'inner-dep')
+  assert.deepEqual(result.refusals[0].found, [{ path: 'node_modules/plain-dep/node_modules/inner-dep', version: '0.9.0' }])
+  assert.deepEqual(result.overrides.unchecked.filter((item) => item.name === 'inner-dep'), [{ name: 'inner-dep', reason: 'linked-copy' }])
+  assert.equal(result.overrides.checked.includes('inner-dep'), false)
+  assert.equal(result.overrides.notInstalled.includes('inner-dep'), false)
+})
+
+test('an npm root given through a link is refused, and the real path of the same candidate is planned', (t) => {
+  const { holder, npmRoot } = candidate(t, 'clean-lock.json')
+  const linked = path.join(holder, 'linked-candidate')
+  fs.symlinkSync(npmRoot, linked, 'junction')
+  const result = plan(linked)
+  assert.deepEqual(reasons(result), ['usage/npm-root-linked'])
+  assert.equal(result.npmRoot, linked)
+  assert.equal(Object.hasOwn(result, 'lock'), false, 'nothing behind the link is classified')
+  assert.deepEqual(plan(npmRoot).refusals, [])
+  assert.deepEqual(plan(`${npmRoot}${path.sep}`).refusals, [], 'a trailing separator is normalized, not refused')
+})
+
+test('a link from outside into a member of a parent-declared workspace is refused', (t) => {
+  const { holder, npmRoot } = candidate(t, 'clean-lock.json')
+  fs.writeFileSync(path.join(holder, 'package.json'), `${JSON.stringify({ name: 'holder', private: true, workspaces: ['candidate'] })}\n`)
+  const away = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-closure-away-')))
+  t.after(() => fs.rmSync(away, { recursive: true, force: true }))
+  const linked = path.join(away, 'member')
+  fs.symlinkSync(npmRoot, linked, 'junction')
+  // The typed path has no workspace above it; the directory npm would work in does.
+  assert.deepEqual(reasons(plan(linked)), ['usage/npm-root-linked'])
+  assert.deepEqual(reasons(plan(npmRoot)), ['usage/prefix-mismatch'])
+})
+
+test('a real node_modules directory that resolves elsewhere is refused', (t) => {
+  const { holder, npmRoot } = candidate(t, 'clean-lock.json')
+  const own = path.join(npmRoot, 'node_modules')
+  assert.equal(fs.lstatSync(own).isSymbolicLink(), false)
+  const original = fs.realpathSync
+  // Injected for this one path only, and restored below: a mount or a
+  // hard-linked directory cannot be built portably in a test.
+  fs.realpathSync = (target, ...rest) => (target === own ? path.join(holder, 'elsewhere', 'node_modules') : original(target, ...rest))
+  try {
+    assert.deepEqual(reasons(plan(npmRoot)), ['usage/linked-node-modules'])
+  } finally {
+    fs.realpathSync = original
+  }
+  assert.equal(fs.realpathSync, original)
+  assert.deepEqual(plan(npmRoot).refusals, [])
+})
+
+test('a packages entry that is not an object is refused as an invalid lockfile, naming the entry', (t) => {
+  for (const bad of [null, 'text', ['list'], 7, true]) {
+    const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+      lock.packages['node_modules/plain-dep'] = bad
+    })
+    const result = plan(npmRoot)
+    assert.deepEqual(reasons(result), ['usage/lockfile-invalid'], JSON.stringify(bad))
+    assert.equal(result.refusals[0].path, 'node_modules/plain-dep')
+    assert.equal(Object.hasOwn(result, 'sources'), false, 'no classifier ran over the malformed map')
+  }
+  const rootEntry = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages[''] = null
+  })
+  assert.deepEqual(reasons(plan(rootEntry.npmRoot)), ['usage/lockfile-invalid'])
+  assert.equal(plan(rootEntry.npmRoot).refusals[0].path, '')
+
+  const noMap = candidateWith(t, 'clean-lock.json', (lock) => {
+    delete lock.packages
+  })
+  assert.deepEqual(reasons(plan(noMap.npmRoot)), ['usage/lockfile-version'])
+})
+
+test('a link must name the folder it resolves to, and a folder entry outside the root is refused', (t) => {
+  for (const resolved of [undefined, '', '   ', 7]) {
+    const { npmRoot } = candidateWith(t, 'inside-link-and-bundled-lock.json', (lock) => {
+      if (resolved === undefined) delete lock.packages['node_modules/inner-dep'].resolved
+      else lock.packages['node_modules/inner-dep'].resolved = resolved
+    })
+    const result = plan(npmRoot)
+    assert.deepEqual(reasons(result), ['consumer-closure-incomplete/link-target-missing'], JSON.stringify(resolved))
+    assert.equal(result.refusals[0].path, 'node_modules/inner-dep')
+    assert.equal(result.sources.counts.link, 1)
+  }
+  const outside = candidateWith(t, 'clean-lock.json', (lock) => {
+    lock.packages['../outside/folder-dep'] = { version: '1.0.0' }
+  })
+  const result = plan(outside.npmRoot)
+  assert.deepEqual(reasons(result), ['consumer-closure-incomplete/outside-project'])
+  assert.equal(result.refusals[0].path, '../outside/folder-dep')
+})
+
+test('a registry URL with no readable host is never approved, and schemes are reported apart from hosts', () => {
+  const lock = {
+    packages: {
+      'node_modules/odd-dep': { version: '1.0.0', resolved: 'https://[not-a-host/odd-dep-1.0.0.tgz', integrity: 'sha512-invented' },
+      'node_modules/plain-http-dep': { version: '1.0.0', resolved: 'http://registry.example.test/plain-http-dep-1.0.0.tgz', integrity: 'sha512-invented' },
+    },
+  }
+  const npmRoot = path.resolve('candidate')
+  const unverified = lockSourceFindings(lock, { npmRoot })
+  assert.deepEqual(unverified.findings, [])
+  assert.deepEqual(unverified.registryHosts, { unparseable: 1, 'registry.example.test': 1 })
+  assert.deepEqual(unverified.registrySchemes, { https: 1, http: 1 })
+
+  // Naming the sentinel as an approved host approves nothing.
+  const approved = lockSourceFindings(lock, { npmRoot, approvedRegistryHosts: ['unparseable', 'registry.example.test'] })
+  assert.deepEqual(approved.findings, [{ reason: 'other-host', path: 'node_modules/odd-dep', host: null }])
+})
+
+test('every lockfile entry is counted once: known sources plus unclassified equal the entry count', (t) => {
+  for (const lockName of ['clean-lock.json', 'inside-link-and-bundled-lock.json', 'missing-integrity-lock.json', 'git-source-lock.json', 'other-platform-lock.json']) {
+    const { npmRoot } = candidate(t, lockName)
+    const result = plan(npmRoot)
+    const counted = Object.values(result.sources.counts).reduce((sum, count) => sum + count, 0)
+    assert.equal(counted, result.lock.entries, lockName)
+  }
+  const { npmRoot } = candidateWith(t, 'clean-lock.json', (lock) => {
+    delete lock.packages['node_modules/plain-dep'].resolved
+  })
+  const result = plan(npmRoot)
+  assert.deepEqual(result.sources.counts, { npm: 2, git: 0, local_path: 0, link: 0, bundled: 0, unclassified: 1 })
+  assert.deepEqual(reasons(result), ['consumer-closure-incomplete/missing-integrity'])
+})
+
+test('an empty package name or an empty approved host list is refused, and omitting either keeps the default', (t) => {
+  const { npmRoot } = candidate(t, 'clean-lock.json')
+  for (const options of [{ selectedPackage: '' }, { selectedPackage: '   ' }, { selectedPackage: 7 }, { approvedRegistryHosts: [] }, { approvedRegistryHosts: [' '] }, { approvedRegistryHosts: 'registry.example.test' }]) {
+    const result = plan(npmRoot, options)
+    assert.deepEqual(reasons(result), ['usage/argument-unsupported'], JSON.stringify(options))
+    assert.equal(result.proof, 'not-run')
+    assert.equal(Object.hasOwn(result, 'lock'), false)
+  }
+  assert.deepEqual(plan(npmRoot, { approvedRegistryHosts: null }).refusals, [])
+  assert.equal(plan(npmRoot, { approvedRegistryHosts: undefined }).approvedRegistryVerified, false)
+})
+
+test('every argument the CLI does not accept prints exactly one refused plan, then the typed refusal, and exits 2', (t) => {
+  const { holder, npmRoot } = candidate(t, 'clean-lock.json')
+  const before = snapshot(holder)
+  const rooted = ['--npm-root', npmRoot]
+  const cases = [
+    [[...rooted, '--prove'], ['--prove']],
+    [[...rooted, '--fetch'], ['--fetch']],
+    [[...rooted, '--json'], ['--json']],
+    [[...rooted, 'extra'], ['extra']],
+    [['--npm-root'], ['--npm-root']],
+    [[...rooted, '--package'], ['--package']],
+    [[...rooted, '--registry-host'], ['--registry-host']],
+    [[...rooted, '--package='], ['--package']],
+    // The shared parser reads an empty separate value as a valueless flag
+    // followed by an empty positional argument; both are refused.
+    [[...rooted, '--package', ''], ['(empty argument)']],
+    [[...rooted, '--package=   '], ['--package']],
+    [[...rooted, '--registry-host='], ['--registry-host']],
+    [[...rooted, '--registry-host', ' , ,'], ['--registry-host']],
+    [[...rooted, '--registry-host=   '], ['--registry-host']],
+    [[...rooted, ...rooted], ['--npm-root']],
+    [[...rooted, `--npm-root=${npmRoot}`], ['--npm-root']],
+    [[...rooted, '--package', SELECTED, `--package=${SELECTED}`], ['--package']],
+    [[...rooted, '--registry-host', 'registry.example.test', '--registry-host=registry.example.test'], ['--registry-host']],
+  ]
+  for (const [args, named] of cases) {
+    const label = JSON.stringify(args.slice(args[0] === '--npm-root' && args.length > 1 ? 2 : 0))
+    const result = cli(t, args)
+    assert.equal(result.status, CLOSURE_REFUSAL_EXIT, label)
+    // JSON.parse accepts one document only, so this also shows nothing else
+    // was printed to stdout.
+    const printed = JSON.parse(result.stdout)
+    assert.equal(printed.command, 'upgrade closure', label)
+    assert.equal(printed.proof, 'not-run', label)
+    assert.equal(printed.status, 'refused', label)
+    assert.deepEqual(reasons(printed), ['usage/argument-unsupported'], label)
+    assert.deepEqual(printed.refusals[0].arguments, named, label)
+    assert.equal(Object.hasOwn(printed, 'lock'), false, label)
+    const lines = result.stderr.trimEnd().split(/\r?\n/)
+    assert.equal(lines.length, 2, label)
+    assert.equal(lines[0], `[usage] ${printed.refusals[0].message}`, label)
+    assert.match(lines[1], /^Next: This command plans only/, label)
+    assert.deepEqual(result.leftovers, [], label)
+  }
+  assert.deepEqual(snapshot(holder), before)
+})
+
+test('a completed plan through the CLI names the manifests it read and never exits 0', (t) => {
+  const { npmRoot } = candidate(t, 'clean-lock.json')
+  const result = cli(t, [`--npm-root=${npmRoot}`, `--package=${SELECTED}`, '--registry-host=registry.example.test'])
+  assert.equal(result.status, CLOSURE_PLAN_EXIT, result.stderr)
+  assert.notEqual(result.status, 0)
+  const printed = JSON.parse(result.stdout)
+  assert.equal(printed.approvedRegistryVerified, true)
+  assert.deepEqual(printed.selectedPackage.manifests, [
+    { path: `${PUBLISHER_PATH}/package.json`, name: SELECTED, version: '1.0.0', sha256: PUBLISHER_MANIFEST_SHA256 },
+  ])
 })

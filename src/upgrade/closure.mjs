@@ -1,10 +1,13 @@
 // Read-only planner for a consumer's own dependency closure (`upgrade closure`).
 //
-// It reads the candidate's package.json, its package-lock.json and the
-// selected package's installed manifest, and classifies what an offline
-// reinstall proof would need. It never runs npm, never uses the network, never
-// reads npm configuration or credentials, and never writes. A completed plan
-// is not a proof: `proof` is always 'not-run', and no path here exits 0.
+// It reads the candidate's package.json and package-lock.json, the installed
+// manifest of every lockfile copy of the selected package, the package.json of
+// each directory above the npm root (to refuse a parent that declares
+// workspaces) and, when no package is named, this package's own package.json
+// for the default name. It classifies what an offline reinstall proof would
+// need. It never runs npm, never uses the network, never reads npm
+// configuration or credentials, and never writes. A completed plan is not a
+// proof: `proof` is always 'not-run', and no path here exits 0.
 //
 // Refusals reuse the existing typed codes. `usage` covers an input this plan
 // does not support, `consumer-closure-incomplete` a lockfile entry that an
@@ -33,10 +36,11 @@ const HINTS = {
   'npm-root-required': 'Pass --npm-root with the absolute path of the staged candidate\'s npm root; this command has no default directory.',
   'npm-root-not-absolute': 'Pass --npm-root as an absolute path, so the plan cannot follow the current directory.',
   'npm-root-not-directory': 'Check the path: --npm-root must name an existing directory.',
-  'argument-unsupported': 'This command plans only and accepts --npm-root, --package and --registry-host. It does not fetch, install or prove.',
+  'npm-root-linked': 'Pass the real path of the npm root. npm works from the physical directory, so a path through a link can name a project whose parent directories this plan did not check.',
+  'argument-unsupported': 'This command plans only and accepts --npm-root, --package and --registry-host, each once and each with a value. It does not fetch, install or prove.',
   'manifest-missing': 'Point --npm-root at the directory that holds the candidate\'s own package.json.',
   'lockfile-missing': 'Install the candidate with npm so it has its own package-lock.json, then plan again.',
-  'lockfile-invalid': 'Regenerate the candidate\'s package-lock.json with npm; this plan reads it as JSON.',
+  'lockfile-invalid': 'Regenerate the candidate\'s package-lock.json with npm; this plan reads it as a JSON object whose packages map holds one object per entry.',
   'lockfile-version': 'Regenerate the lockfile with a current npm (lockfileVersion 2 or 3); version 1 has no packages map to classify.',
   workspaces: 'npm workspaces are not supported by this plan. Check a single npm root project, or record the workspace as unchecked.',
   'prefix-mismatch': 'A parent directory declares npm workspaces, so npm would treat another directory as this project\'s root. Plan from a root that npm resolves to itself.',
@@ -45,8 +49,11 @@ const HINTS = {
   'git-source': 'A git dependency cannot be captured from the registry. Record it as unchecked, or replace it with a published version before proving the closure.',
   'other-host': 'This tarball is on a host that was not named as an approved registry. Name the host with --registry-host only if the owner approves it.',
   'outside-project': 'This entry points outside the candidate. Record it as unchecked, or bring the dependency inside the project or onto the registry.',
+  'link-target-missing': 'A link entry must name the folder it resolves to. Regenerate the lockfile with npm, or record the linked dependency as unchecked.',
   'zero-copies': 'The lockfile lists no copy of a package it must hold, so nothing was checked. Reinstall the candidate and confirm the lockfile is the candidate\'s own.',
   'selected-package-unreadable': 'Install the selected package in the candidate, so its manifest and overrides can be read from the candidate\'s own node_modules.',
+  'selected-package-mismatch': 'The installed manifest is not the package the lockfile records at that path, so its overrides were not used. Reinstall the candidate from its own lockfile, then plan again.',
+  'selected-copies-differ': 'The lockfile installs the selected package more than once and the copies do not agree, so no single set of overrides applies. Deduplicate the selected package, or record its overrides as unchecked.',
   'copy-off-pin': 'npm applies overrides only in the root project, so consumers never receive them. Changing a pin or an override in the owner\'s project needs the owner\'s consent.',
 }
 
@@ -155,11 +162,18 @@ function platformExclusion(entry, host) {
 // - `other-host`: a tarball on a host outside `approvedRegistryHosts`, when
 //   the caller names approved hosts;
 // - `outside-project`: a link, folder or local file outside the npm root, or a
-//   source with a scheme this plan does not know.
-// Entries with no `resolved` or no `integrity` are left to `capturedClosure`.
+//   source with a scheme this plan does not know;
+// - `link-target-missing`: a link with no folder named in `resolved`.
+// An installed entry with no `resolved` is counted as `unclassified`, so the
+// counts always add up to the number of entries; refusing it is left to
+// `capturedClosure`. `registrySchemes` counts http and https separately:
+// approving a host says nothing about the transport. A registry URL that does
+// not parse is counted under `unparseable` and, when approved hosts are named,
+// is always a finding: no approved host can match it.
 export function lockSourceFindings(lock, { npmRoot, approvedRegistryHosts = null } = {}) {
-  const counts = { npm: 0, git: 0, local_path: 0, link: 0, bundled: 0 }
+  const counts = { npm: 0, git: 0, local_path: 0, link: 0, bundled: 0, unclassified: 0 }
   const registryHosts = {}
+  const registrySchemes = {}
   const findings = []
   const approved = Array.isArray(approvedRegistryHosts) && approvedRegistryHosts.length > 0 ? new Set(approvedRegistryHosts) : null
   const entries = Object.entries(lock?.packages ?? {}).sort(([left], [right]) => left.localeCompare(right))
@@ -172,7 +186,8 @@ export function lockSourceFindings(lock, { npmRoot, approvedRegistryHosts = null
     const resolved = typeof entry?.resolved === 'string' ? entry.resolved : null
     if (entry?.link) {
       counts.link += 1
-      if (!insideProject(npmRoot, resolved ?? entryPath)) findings.push({ reason: 'outside-project', path: entryPath })
+      if (resolved === null || resolved.trim() === '') findings.push({ reason: 'link-target-missing', path: entryPath })
+      else if (!insideProject(npmRoot, resolved)) findings.push({ reason: 'outside-project', path: entryPath })
       continue
     }
     if (!installedPath(entryPath)) {
@@ -180,7 +195,10 @@ export function lockSourceFindings(lock, { npmRoot, approvedRegistryHosts = null
       if (!insideProject(npmRoot, entryPath)) findings.push({ reason: 'outside-project', path: entryPath })
       continue
     }
-    if (resolved === null) continue
+    if (resolved === null) {
+      counts.unclassified += 1
+      continue
+    }
     if (/^(?:git\+|git:)/.test(resolved)) {
       counts.git += 1
       findings.push({ reason: 'git-source', path: entryPath })
@@ -194,9 +212,12 @@ export function lockSourceFindings(lock, { npmRoot, approvedRegistryHosts = null
       } catch {
         host = null
       }
-      const key = host ?? 'unparseable'
+      const scheme = resolved.slice(0, resolved.indexOf(':'))
+      registrySchemes[scheme] = (registrySchemes[scheme] ?? 0) + 1
+      // An empty host is as unusable as a URL that does not parse.
+      const key = host || 'unparseable'
       registryHosts[key] = (registryHosts[key] ?? 0) + 1
-      if (approved && !approved.has(key)) findings.push({ reason: 'other-host', path: entryPath, host: key })
+      if (approved && (!host || !approved.has(host))) findings.push({ reason: 'other-host', path: entryPath, host: host || null })
       continue
     }
     counts.local_path += 1
@@ -205,7 +226,19 @@ export function lockSourceFindings(lock, { npmRoot, approvedRegistryHosts = null
       findings.push({ reason: 'outside-project', path: entryPath })
     }
   }
-  return { counts, registryHosts, findings }
+  return { counts, registryHosts, registrySchemes, findings }
+}
+
+// The names that link entries install: a link lives at a node_modules path and
+// carries no version of its own, so an override for such a name cannot be
+// compared by this plan.
+function linkedNames(lock) {
+  const names = new Set()
+  for (const [entryPath, entry] of Object.entries(lock?.packages ?? {})) {
+    if (entryPath === '' || !entry?.link || !installedPath(entryPath)) continue
+    names.add(entryPath.slice(entryPath.lastIndexOf('node_modules/') + 'node_modules/'.length))
+  }
+  return names
 }
 
 // Every copy of `name` the lockfile installs, by the same rule the override
@@ -371,6 +404,25 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
     rootIsDirectory = false
   }
   if (!rootIsDirectory) return refuse(USAGE, 'npm-root-not-directory', '--npm-root does not name an existing directory')
+  // npm works from the physical directory. A path through a link would have
+  // its own parents checked for workspaces here, not the parents npm sees.
+  let realRoot = null
+  try {
+    realRoot = fs.realpathSync(root)
+  } catch {
+    realRoot = null
+  }
+  if (realRoot !== root) {
+    return refuse(USAGE, 'npm-root-linked', '--npm-root is not the real path of the directory: it is a link or passes through one')
+  }
+  if (selectedPackage !== null && selectedPackage !== undefined && (typeof selectedPackage !== 'string' || selectedPackage.trim() === '')) {
+    return refuse(USAGE, 'argument-unsupported', '--package needs a package name', { argument: '--package' })
+  }
+  if (approvedRegistryHosts !== null && approvedRegistryHosts !== undefined
+    && (!Array.isArray(approvedRegistryHosts) || approvedRegistryHosts.length === 0
+      || approvedRegistryHosts.some((item) => typeof item !== 'string' || item.trim() === ''))) {
+    return refuse(USAGE, 'argument-unsupported', '--registry-host needs at least one host name', { argument: '--registry-host' })
+  }
 
   const manifest = readJsonObject(path.join(root, 'package.json'))
   if (!manifest.value) return refuse(USAGE, 'manifest-missing', 'the npm root has no readable package.json')
@@ -389,6 +441,13 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
   if (![2, 3].includes(lock.lockfileVersion) || !isObject(lock.packages)) {
     return refuse(USAGE, 'lockfile-version', 'package-lock.json must be lockfileVersion 2 or 3 with a packages map')
   }
+  // Every classifier below iterates the packages map, so its shape is checked
+  // once here and a malformed entry is a typed refusal, never a TypeError.
+  const malformed = Object.keys(lock.packages).filter((entryPath) => !isObject(lock.packages[entryPath])).sort((left, right) => left.localeCompare(right))
+  if (malformed.length > 0) {
+    return refuse(USAGE, 'lockfile-invalid', `package-lock.json records ${JSON.stringify(malformed[0])} as something other than a package entry`,
+      { path: malformed[0], malformedEntries: malformed.length })
+  }
   if (declaresWorkspaces(lock.packages[''])) {
     return refuse(USAGE, 'workspaces', 'the lockfile records npm workspaces, which this plan does not support')
   }
@@ -402,11 +461,14 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
   plan.host = { os: host?.os ?? process.platform, cpu: host?.cpu ?? process.arch, libc: host?.libc ?? null }
 
   const sources = lockSourceFindings(lock, { npmRoot: root, approvedRegistryHosts })
-  plan.sources = { counts: sources.counts, registryHosts: sources.registryHosts }
+  plan.sources = { counts: sources.counts, registryHosts: sources.registryHosts, registrySchemes: sources.registrySchemes }
   plan.approvedRegistryVerified = Array.isArray(approvedRegistryHosts) && approvedRegistryHosts.length > 0
   const sourceMessages = {
     'git-source': (finding) => `the lockfile records ${finding.path} from a git source, which an offline reinstall from the registry cannot capture`,
-    'other-host': (finding) => `the lockfile records ${finding.path} from ${finding.host}, which is not an approved registry host`,
+    'other-host': (finding) => (finding.host === null
+      ? `the lockfile records ${finding.path} from a registry URL with no readable host, which no approved registry host can match`
+      : `the lockfile records ${finding.path} from ${finding.host}, which is not an approved registry host`),
+    'link-target-missing': (finding) => `the lockfile records ${finding.path} as a link without the folder it resolves to`,
     'outside-project': (finding) => `the lockfile records ${finding.path} from a source outside the npm root`,
   }
   for (const finding of sources.findings) {
@@ -427,26 +489,57 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
     .filter((item) => item.excludedBy !== null)
     .sort((left, right) => left.path.localeCompare(right.path))
 
-  const selected = typeof selectedPackage === 'string' && selectedPackage.trim() !== '' ? selectedPackage.trim() : ownPackageName()
+  const selected = typeof selectedPackage === 'string' ? selectedPackage.trim() : ownPackageName()
   const copies = lockCopies(lock, selected)
-  plan.selectedPackage = { name: selected, copies: copies.map(({ path: copyPath, version }) => ({ path: copyPath, version })) }
+  // `manifests` names every installed manifest this plan read for the selected
+  // package, with the identity it declares, so a reader can see what the
+  // override check was based on.
+  plan.selectedPackage = { name: selected, copies: copies.map(({ path: copyPath, version }) => ({ path: copyPath, version })), manifests: [] }
   plan.overrides = { checked: [], notInstalled: [], unchecked: [], multipleCopiesAtPin: [] }
   if (copies.length === 0) {
     refuse(CONSUMER_CLOSURE_INCOMPLETE, 'zero-copies',
       `the lockfile lists no copy of the selected package ${selected}, so its overrides were not checked`, { package: selected })
   } else {
-    const installedManifest = insideProject(root, copies[0].path)
-      ? readJsonObject(path.join(root, copies[0].path, 'package.json'))
-      : { missing: true }
-    if (!installedManifest.value) {
-      refuse(CONSUMER_CLOSURE_INCOMPLETE, 'selected-package-unreadable',
-        `the manifest of the selected package ${selected} cannot be read at ${copies[0].path}, so its overrides were not checked`,
-        { package: selected, path: copies[0].path })
-    } else {
-      const { exact, unchecked } = splitOverrides(installedManifest.value.overrides)
+    // Each copy's manifest is bound to its own lockfile entry by name and
+    // version. Overrides are used only when every copy is bound and all copies
+    // agree; a refused or unreadable copy contributes nothing.
+    const bound = []
+    for (const copy of copies) {
+      const manifestPath = `${copy.path}/package.json`
+      const installedManifest = insideProject(root, copy.path)
+        ? readJsonObject(path.join(root, copy.path, 'package.json'))
+        : { missing: true }
+      if (!installedManifest.value) {
+        refuse(CONSUMER_CLOSURE_INCOMPLETE, 'selected-package-unreadable',
+          `the manifest of the selected package ${selected} cannot be read at ${copy.path}, so its overrides were not checked`,
+          { package: selected, path: copy.path })
+        continue
+      }
+      const declared = {
+        name: typeof installedManifest.value.name === 'string' ? installedManifest.value.name : null,
+        version: typeof installedManifest.value.version === 'string' ? installedManifest.value.version : null,
+      }
+      plan.selectedPackage.manifests.push({ path: manifestPath, ...declared, sha256: sha256(installedManifest.bytes) })
+      if (declared.name !== selected || copy.version === null || declared.version !== copy.version) {
+        refuse(CONSUMER_CLOSURE_INCOMPLETE, 'selected-package-mismatch',
+          `the manifest at ${manifestPath} declares ${declared.name ?? 'no name'}@${declared.version ?? 'no version'}, but the lockfile records ${selected}@${copy.version ?? 'no version'} there, so its overrides were not used`,
+          { package: selected, path: copy.path, locked: { name: selected, version: copy.version }, manifest: declared })
+        continue
+      }
+      bound.push({ copy, overrides: installedManifest.value.overrides })
+    }
+    const lockedVersions = [...new Set(copies.map((copy) => String(copy.version)))]
+    const overrideSets = [...new Set(bound.map((item) => JSON.stringify(item.overrides ?? null)))]
+    if (lockedVersions.length > 1 || (bound.length === copies.length && overrideSets.length > 1)) {
+      refuse(CONSUMER_CLOSURE_INCOMPLETE, 'selected-copies-differ',
+        `the lockfile installs the selected package ${selected} at ${copies.map((copy) => `${copy.path}@${copy.version}`).join(', ')}, and the copies do not agree, so its overrides were not checked`,
+        { package: selected, copies: plan.selectedPackage.copies })
+    } else if (bound.length === copies.length) {
+      const { exact, unchecked } = splitOverrides(bound[0].overrides)
       plan.overrides.unchecked = unchecked
       const { findings, compared } = overrideFindings({ publisherOverrides: exact, consumerLock: lock })
       const required = new Set(copies.flatMap((copy) => copy.dependencies))
+      const linked = linkedNames(lock)
       const offPin = new Set()
       for (const finding of findings) {
         const away = finding.found.filter((copy) => copy.version !== finding.pinned)
@@ -461,7 +554,12 @@ export function planConsumerClosure({ npmRoot, selectedPackage = null, approvedR
           { package: finding.package, pinned: finding.pinned, found: finding.found })
       }
       for (const name of Object.keys(exact)) {
-        if (compared.includes(name)) {
+        if (linked.has(name)) {
+          // A link provides this package and the plan does not read the linked
+          // folder's version: never checked and never "not installed". An
+          // off-pin registry copy beside the link is still refused above.
+          plan.overrides.unchecked.push({ name, reason: compared.includes(name) ? 'linked-copy' : 'link-only' })
+        } else if (compared.includes(name)) {
           if (!offPin.has(name)) plan.overrides.checked.push(name)
         } else if (required.has(name)) {
           // The selected package depends on it, yet the lockfile holds no copy:
@@ -489,31 +587,51 @@ export function closureRefusalError(plan) {
 
 const CLOSURE_FLAGS = ['npm-root', 'package', 'registry-host']
 
-// `atelier upgrade closure --npm-root <absolute-dir>`. Prints the plan as
-// JSON, then exits 3 for a completed plan or throws the typed refusal (exit
-// 2). It resolves no Atelier project and writes nothing.
-export function runClosurePlanCommand(args) {
+// How often each closure flag appears in the raw arguments, in either
+// spelling (`--flag value` or `--flag=value`). The shared parser keeps only
+// the last value of a repeated flag, so repeats are counted here.
+function repeatedFlags(argv) {
+  return CLOSURE_FLAGS.filter((flag) => argv.filter((item) => item === `--${flag}` || (typeof item === 'string' && item.startsWith(`--${flag}=`))).length > 1)
+}
+
+// `atelier upgrade closure --npm-root <absolute-dir>`. Prints exactly one JSON
+// plan, then exits 3 for a completed plan or throws the typed refusal (exit
+// 2). An argument this command does not accept is a refused plan too, so
+// every run prints one document. It resolves no Atelier project and writes
+// nothing. `argv` is the raw argument list, used only to refuse a flag given
+// more than once.
+export function runClosurePlanCommand(args, argv = []) {
   const unsupported = [
     ...Object.keys(args).filter((key) => key !== '_' && !CLOSURE_FLAGS.includes(key)).map((key) => `--${key}`),
-    ...(args._ ?? []).slice(1),
+    ...(args._ ?? []).slice(1).map((item) => (item === '' ? '(empty argument)' : item)),
   ]
-  if (unsupported.length > 0) {
-    throw new AtelierDiagnosticError(USAGE, `upgrade closure does not accept ${unsupported.join(', ')}`,
-      { hint: HINTS['argument-unsupported'], exitCode: CLOSURE_REFUSAL_EXIT })
-  }
   const valueless = CLOSURE_FLAGS.filter((flag) => args[flag] === true)
-  if (valueless.length > 0) {
-    throw new AtelierDiagnosticError(USAGE, `${valueless.map((flag) => `--${flag}`).join(', ')} needs a value`,
-      { hint: HINTS['argument-unsupported'], exitCode: CLOSURE_REFUSAL_EXIT })
-  }
+  const repeated = repeatedFlags(Array.isArray(argv) ? argv : [])
   const hosts = typeof args['registry-host'] === 'string'
     ? args['registry-host'].split(',').map((item) => item.trim()).filter(Boolean)
     : null
-  const plan = planConsumerClosure({
-    npmRoot: typeof args['npm-root'] === 'string' ? args['npm-root'] : null,
-    selectedPackage: typeof args.package === 'string' ? args.package : null,
-    approvedRegistryHosts: hosts,
-  })
+  let argumentProblem = null
+  if (unsupported.length > 0) argumentProblem = [`upgrade closure does not accept ${unsupported.join(', ')}`, unsupported]
+  else if (valueless.length > 0) argumentProblem = [`${valueless.map((flag) => `--${flag}`).join(', ')} needs a value`, valueless.map((flag) => `--${flag}`)]
+  else if (repeated.length > 0) argumentProblem = [`${repeated.map((flag) => `--${flag}`).join(', ')} was given more than once`, repeated.map((flag) => `--${flag}`)]
+  else if (typeof args.package === 'string' && args.package.trim() === '') argumentProblem = ['--package needs a package name', ['--package']]
+  else if (hosts !== null && hosts.length === 0) argumentProblem = ['--registry-host needs at least one host name', ['--registry-host']]
+
+  const plan = argumentProblem
+    ? {
+        command: 'upgrade closure',
+        proof: 'not-run',
+        status: 'refused',
+        npmRoot: typeof args['npm-root'] === 'string' ? args['npm-root'] : null,
+        prefixVerified: false,
+        approvedRegistryVerified: false,
+        refusals: [{ code: USAGE, reason: 'argument-unsupported', message: argumentProblem[0], hint: HINTS['argument-unsupported'], arguments: argumentProblem[1] }],
+      }
+    : planConsumerClosure({
+        npmRoot: typeof args['npm-root'] === 'string' ? args['npm-root'] : null,
+        selectedPackage: typeof args.package === 'string' ? args.package : null,
+        approvedRegistryHosts: hosts,
+      })
   console.log(JSON.stringify(plan, null, 2))
   const refusal = closureRefusalError(plan)
   if (refusal) throw refusal

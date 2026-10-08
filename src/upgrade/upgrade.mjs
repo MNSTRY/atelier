@@ -688,7 +688,7 @@ export function runUpgradeCommand(argv = process.argv.slice(2)) {
   // `closure` plans against an explicit npm root, which need not be an Atelier
   // workspace. It runs before the project is resolved, writes nothing, and lets
   // its typed refusal reach the command wrapper unchanged.
-  if (args._[0] === 'closure') return runClosurePlanCommand(args)
+  if (args._[0] === 'closure') return runClosurePlanCommand(args, argv)
   const project = commandProject({ argv, writeLocalState: args._[0] !== 'explain' })
   if (['plan', 'apply', 'status', 'recover', 'explain'].includes(args._[0])) {
     try {

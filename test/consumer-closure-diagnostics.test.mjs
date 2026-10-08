@@ -450,3 +450,47 @@ test('with --captured-closure, a different offline tree fails with both differen
   assert.match(result.stderr, new RegExp(`offline reinstall tree differs from the online install: only online \\[[^\\]]*${OVERRIDDEN}@${PIN.replaceAll('.', '\\.')}\\], only offline \\[[^\\]]*${OVERRIDDEN}@0\\.0\\.0-synthetic-other\\]`))
   assert.deepEqual(result.leftovers, [])
 })
+
+// Corrections after the r10 review of the closure planner, which shares these
+// classifiers. All lockfile content below is invented.
+test('a project folder entry is never an installed copy, and no name is derived from its path (synthetic)', () => {
+  const lock = {
+    packages: {
+      '': { name: 'invented-consumer' },
+      // A link target with no name: its path must not be read as a package name.
+      'packages/inner-dep': { version: '2.0.0' },
+      // A link target that carries a name is still a folder, not a copy.
+      'packages/named-dep': { name: 'named-dep', version: '2.0.0' },
+      'node_modules/inner-dep': { resolved: 'packages/inner-dep', link: true },
+    },
+  }
+  for (const name of ['er-dep', 'inner-dep', 'named-dep', 'packages/inner-dep']) {
+    assert.deepEqual(overrideFindings({ publisherOverrides: { [name]: '1.0.0' }, consumerLock: lock }), { findings: [], compared: [] }, name)
+  }
+  // A registry copy beside the link is still compared, and still off the pin.
+  lock.packages['node_modules/host-dep/node_modules/inner-dep'] = { version: '0.9.0' }
+  const mixed = overrideFindings({ publisherOverrides: { 'inner-dep': '1.0.0' }, consumerLock: lock })
+  assert.deepEqual(mixed.compared, ['inner-dep'])
+  assert.deepEqual(mixed.findings, [{
+    code: OVERRIDE_NOT_INHERITED,
+    package: 'inner-dep',
+    pinned: '1.0.0',
+    found: [{ path: 'node_modules/host-dep/node_modules/inner-dep', version: '0.9.0' }],
+  }])
+})
+
+test('a lockfile entry that is not an object is never a copy and never a captured tarball (synthetic)', () => {
+  const lock = {
+    packages: {
+      '': { name: 'invented-consumer' },
+      'node_modules/null-dep': null,
+      'node_modules/text-dep': 'text',
+      'node_modules/list-dep': ['list'],
+      'node_modules/real-dep': { version: '1.0.0', resolved: 'https://registry.example.test/real-dep/-/real-dep-1.0.0.tgz', integrity: 'sha512-invented' },
+    },
+  }
+  assert.deepEqual(overrideFindings({ publisherOverrides: { 'null-dep': '1.0.0', 'real-dep': '1.0.0' }, consumerLock: lock }), { findings: [], compared: ['real-dep'] })
+  const { tarballs, missing } = capturedClosure(lock)
+  assert.deepEqual(tarballs.map((tarball) => tarball.path), ['node_modules/real-dep'])
+  assert.deepEqual(missing, ['node_modules/list-dep', 'node_modules/null-dep', 'node_modules/text-dep'])
+})

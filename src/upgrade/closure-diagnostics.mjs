@@ -46,13 +46,19 @@ export function classifyNpmFailure(stderr) {
   return { code: CONSUMER_CLOSURE_INCOMPLETE, ...(url ? requestedPackage(url) : { package: null, version: null }), url }
 }
 
+const isEntry = (entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+const underNodeModules = (path) => /(?:^|\/)node_modules\//.test(path)
+
 // Every installed copy of `name` in a v2/v3 lockfile, one per node_modules
 // path, sorted by path. A copy's name is the entry's own `name` (set for an
 // npm: alias) or else the path after its last node_modules/. The root entry
-// ('') is the consumer itself, and links are not copies.
+// ('') is the consumer itself, and links are not copies. A path outside
+// node_modules is a folder of the project (the target of a link): it is never
+// a copy, and no name is derived from it. An entry that is not an object is
+// not a copy either.
 function installedCopies(lockfile, name) {
   return Object.entries(lockfile?.packages ?? {})
-    .filter(([path, entry]) => path !== '' && !entry.link
+    .filter(([path, entry]) => path !== '' && isEntry(entry) && !entry.link && underNodeModules(path)
       && (entry.name ?? path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length)) === name)
     .map(([path, entry]) => ({ path, version: entry.version ?? null }))
     .sort((left, right) => left.path.localeCompare(right.path))
@@ -91,12 +97,18 @@ export function overrideFindings({ publisherOverrides, consumerLock }) {
 // Local entries (the candidate's `file:` tarball, links) and bundled entries
 // are not cached.
 // `missing` lists registry-installed paths that lack either field, which an
-// offline reinstall could not satisfy.
+// offline reinstall could not satisfy. An entry that is not an object is
+// listed as missing too: it names nothing that could be reinstalled.
 export function capturedClosure(consumerLock) {
   const tarballs = []
   const missing = []
   for (const [path, entry] of Object.entries(consumerLock?.packages ?? {})) {
-    if (path === '' || entry.link || entry.inBundle) continue
+    if (path === '') continue
+    if (!isEntry(entry)) {
+      missing.push(path)
+      continue
+    }
+    if (entry.link || entry.inBundle) continue
     const resolved = typeof entry.resolved === 'string' ? entry.resolved : null
     if (resolved && !/^https?:\/\//.test(resolved)) continue
     if (resolved && typeof entry.integrity === 'string') tarballs.push({ path, resolved, integrity: entry.integrity })
