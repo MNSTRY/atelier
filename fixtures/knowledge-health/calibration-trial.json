@@ -1,0 +1,37 @@
+{
+  "id": "invented-recorded-extraction",
+  "suiteDigest": "sha256:09dbcb8939f3ea0abf5f1859bec3454e40479ce2d0806b9545896823fb1bc261",
+  "processor": {
+    "id": "invented-supplier-example",
+    "version": "r1",
+    "configurationDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "currency": "USD",
+  "outcomes": [
+    {
+      "caseId": "c1",
+      "sourceDigest": "sha256:05c72f180626c6692ed4edb2600ea11fa3547ef554acab15e88153dae432aad4",
+      "status": "complete",
+      "evidence": [
+        {
+          "locator": {
+            "kind": "line",
+            "value": "2"
+          },
+          "text": "Approval is unknown."
+        },
+        {
+          "locator": {
+            "kind": "line",
+            "value": "2"
+          },
+          "text": "Approval is unknown."
+        }
+      ],
+      "attempts": 1,
+      "elapsedMs": null,
+      "cost": null,
+      "humanAssessment": null
+    }
+  ]
+}

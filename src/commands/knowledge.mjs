@@ -13,8 +13,12 @@ import {
   readKnowledgePlan,
 } from '../knowledge/workspace.mjs'
 import { createKnowledgeSessions } from '../knowledge/sessions.mjs'
+import { runKnowledgeSemantic } from './knowledge-semantic.mjs'
 
-try {
+// semantic reports its own typed failures and leaves untyped ones to the
+// command executor, so it runs outside this command's message-only catch.
+if (process.argv[2] === 'semantic') await runKnowledgeSemantic(process.argv.slice(3))
+else try {
   const argv = process.argv.slice(2)
   const args = parseArgs(argv)
   const command = args._[0]
@@ -25,7 +29,7 @@ try {
     args._.length !== (command === 'session' ? 2 : 1)
   )
     throw new Error(
-      'use knowledge check, context, evaluate, dashboard, or session; see knowledge --help'
+      'use knowledge check, context, evaluate, dashboard, session, or semantic; see knowledge --help'
     )
   const allowed = new Set([
     '_',

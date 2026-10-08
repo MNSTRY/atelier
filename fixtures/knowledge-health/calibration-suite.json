@@ -1,0 +1,26 @@
+{
+  "id": "public-invented-calibration",
+  "revision": "r1",
+  "thresholds": {
+    "minimumRecall": 1,
+    "maximumUnexpected": 0,
+    "maximumFailed": 0
+  },
+  "cases": [
+    {
+      "id": "c1",
+      "stratum": "qualification",
+      "split": "calibration",
+      "sourceDigest": "sha256:05c72f180626c6692ed4edb2600ea11fa3547ef554acab15e88153dae432aad4",
+      "expected": [
+        {
+          "locator": {
+            "kind": "line",
+            "value": "2"
+          },
+          "text": "Approval is unknown."
+        }
+      ]
+    }
+  ]
+}

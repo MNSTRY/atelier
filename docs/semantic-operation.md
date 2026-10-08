@@ -226,15 +226,38 @@ retrievable. Corrected interpretations reuse immutable raw capture.
 A ledger reservation owns its attempt identifier even before intake publication.
 After intake begins, the reservation must still be reserved at the returned
 history head before `ready-for-host` is returned. A refused saved reservation
-carries `recorded` with the actual record and current head for reopening.
+carries `recorded` with the actual record reference and the head returned by its
+successful append. This saved head is diagnostic; reopen with `status` to obtain
+the current history head before supplying confirmation for another write.
 
 Executed output is captured before source-freshness or interpretation checks.
 If the original or adopted domain changed, interpretation refuses as stale and
-carries `captured` with the actual intake completion and current history head.
+carries `captured` with the actual intake completion. Its head identifies a
+successful append made by this call, or the history observed at call entry when
+no append returned. It is diagnostic and may be older than later history; it
+does not establish current custody or authority for another write. Reopen with
+`status` for the current head and the stored completion readback. Compare
+completion records canonically; their object key order is not a digest contract.
 `status` can reopen those exact bytes as complete while the semantic operation
 remains reserved and stale; it does not imply accepted interpretation or permit
 claiming the output was never executed. The existing completed-attempt guard
 still prevents abandonment, and identical-byte completion remains idempotent.
+
+Saved receipts survive whatever value a failure throws. After a write or capture
+has returned, the runner adds `recorded` or `captured` in place when the original
+object or function has writable data properties for those receipts, or can accept
+new properties. It preserves that object’s identity, `code` and message. Otherwise,
+including a primitive or an object with missing receipt properties that cannot be
+added, it throws `SemanticOperationError` with a generic message and the receipts
+as its own properties. The wrapper retains the original value as a non-enumerable
+`cause` and its original own-data `SEMANTIC_*` code, or uses
+`SEMANTIC_OPERATION_INTERRUPTED`. A write that failed before returning saved
+nothing and attaches nothing. Existing writable receipt properties retain their
+attributes, so `JSON.stringify(error)` can omit non-enumerable receipts. The
+wrapper’s non-enumerable `cause` is also omitted; an original error decorated in
+place retains its existing properties and their visibility. Read `recorded` and
+`captured` explicitly when reporting a failure. Neither `cause` nor property order
+is a serialization contract.
 
 The semantic projection also returns labelled `dependencyWitnesses`. The existing
 generic projector emits `evidences` claims for ledger dependencies; these are

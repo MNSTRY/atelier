@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0-alpha.13
+
+- Add the public Knowledge Health workshop on the existing local Knowledge
+  host: original wording, separate interpretation and four distinct responses;
+  optional Review in a separate session; a selected-draft copy-only handoff
+  retained with its original receipt. Exact retries do not append duplicates,
+  and reopening after restart reads the same proposal. The source owner edits
+  through ordinary repository tooling and reassesses; no browser source-apply
+  endpoint is added. Include the installed workshop kit and receiving guidance.
+- `atelier knowledge semantic` exposes the internal semantic operation runner
+  (`docs/semantic-operation.md`) as eleven operations: `begin`, `status`,
+  `reconcile`, `complete`, `proposals`, `contribution`, `relation`, `record`,
+  `cascade`, `context` and `project`. Each reads one JSON object
+  `{workspaceId, run, request}` from stdin, at most 256 KiB, in the workspace
+  `atelier ingest` uses. Each operation accepts exactly its documented request
+  fields, each of a declared kind; an unknown or missing field, a null
+  required field or a value of the wrong kind refuses as
+  `SEMANTIC_OPERATION_INVALID` before any store is opened, so nothing is
+  written. Formats such as timestamps are checked by the runner. Atelier calls no model: the host supplies its raw output, candidates
+  and usage (`null` when unknown), and interpretations stay pending until
+  receiver records, which are caller assertions, accept them. Failures print
+  `{ok:false, code, error}` with the runner's own `SEMANTIC_*` code,
+  `SEMANTIC_OPERATION_INTERRUPTED` for an uncoded error, or
+  `SEMANTIC_OPERATION_REFUSED` for Atelier's other refusals; `recorded` or
+  `captured` details are included whenever the runner attached them. No package export
+  or schema changes.
+
 ## Unreleased
 
 - Patch the fast-uri dependency and override from 3.1.7 to 3.1.8, the patched
