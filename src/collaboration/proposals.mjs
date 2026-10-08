@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { canonicalize } from '../attestation/jcs.mjs'
 import { createCollaborationEventLedger } from './event-ledger.mjs'
 import {
   atomicReplacePrivateText,
@@ -12,6 +13,7 @@ export const ATELIER_PROPOSAL_SCHEMA = 'atelier-proposal@v1'
 export const ATELIER_PROPOSALS_SCHEMA = 'atelier-proposals@v1'
 export const PROPOSAL_REVIEW_STATUSES = new Set(['reviewed', 'accepted', 'rejected', 'superseded'])
 export const COPY_ONLY_PROPOSAL_CAPABILITY = 'proposal.copy-only'
+export const WORKSHOP_HANDOFF_RETENTION_KIND = 'workshop-handoff'
 const PROPOSAL_ID_PATTERN = /^proposal-[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 function nowIso() {
@@ -383,6 +385,190 @@ export function createProposalStore({
     return { ok: true, status: 200, record, diagnostics }
   }
 
+  const RETAINED_FIELD_LIMITS = { sessionId: 120, viewId: 120, path: 500, action: 120, intent: 500, actor: 160 }
+  const sha256Hex = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+
+  // The original saved receipt that names one retained handoff. Nothing is
+  // trimmed: a value that is not already usable is not an identity.
+  function retentionIdentity(receipt) {
+    if (!isRecord(receipt)) return null
+    const { sessionId, requestId, valueDigest } = receipt
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 120) return null
+    if (typeof requestId !== 'string' || !requestId || requestId.length > 200) return null
+    if (typeof valueDigest !== 'string' || !/^[a-f0-9]{64}$/.test(valueDigest)) return null
+    return { kind: WORKSHOP_HANDOFF_RETENTION_KIND, sessionId, requestId, valueDigest }
+  }
+
+  // The value digest is not part of the id, so another value saved under the
+  // same original request meets the first record and is refused.
+  function retainedProposalId(identity) {
+    return proposalId(canonicalize({ kind: identity.kind, sessionId: identity.sessionId, requestId: identity.requestId }))
+  }
+
+  // The digest covers exactly what the record holds, so a lookup recomputes it.
+  function retainedDigest(record) {
+    const proposal = record.proposal
+    return sha256Hex(canonicalize({
+      sessionId: proposal.sessionId,
+      viewId: proposal.viewId,
+      path: proposal.path,
+      action: proposal.action,
+      intent: proposal.intent,
+      actor: record.retention.actor,
+      diff: record.diff,
+      payload: record.payload,
+    }))
+  }
+
+  // Lookup by the original saved receipt. Only the ledger answers: a
+  // compatibility snapshot is never a retained outcome, and a ledger that
+  // cannot be read is unknown, not absent.
+  function lookupRetainedProposal(receipt) {
+    const identity = retentionIdentity(receipt)
+    if (!identity) {
+      return { ok: false, status: 422, outcome: 'refused', error: 'selected draft receipt is not usable as a retention identity' }
+    }
+    const id = retainedProposalId(identity)
+    const found = materializedProposal(id)
+    if (!found.ok && found.status === 404) {
+      return fs.existsSync(proposalPath(id))
+        ? { ok: false, status: 409, outcome: 'unknown', id, error: 'a snapshot exists for this receipt without a ledger record; inspect it before retrying' }
+        : { ok: true, status: 200, outcome: 'not-found', id, record: null }
+    }
+    if (!found.ok) return { ok: false, status: found.status, outcome: 'unknown', id, error: found.error }
+    const kept = found.record?.retention
+    let digest = null
+    try {
+      digest = isRecord(kept) ? retainedDigest(found.record) : null
+    } catch {
+      digest = null
+    }
+    if (
+      !isRecord(kept) || kept.kind !== identity.kind || kept.sessionId !== identity.sessionId ||
+      kept.requestId !== identity.requestId || digest === null || digest !== kept.payloadDigest
+    ) {
+      return { ok: false, status: 422, outcome: 'unknown', id, error: 'the retained proposal does not match its own receipt identity or digest' }
+    }
+    if (kept.valueDigest !== identity.valueDigest) {
+      return { ok: false, status: 409, outcome: 'conflict', id, error: 'a different value is already retained for this original receipt' }
+    }
+    return { ok: true, status: 200, outcome: 'retained', id, record: found.record }
+  }
+
+  // The handoff as it was retained, for readback after a lost reply or a
+  // source change.
+  function retainedHandoff(record) {
+    const proposal = record.proposal
+    return {
+      sessionId: proposal.sessionId,
+      viewId: proposal.viewId,
+      path: proposal.path,
+      action: proposal.action,
+      actor: record.retention.actor,
+      intent: proposal.intent,
+      directWrite: false,
+      applyEndpoint: null,
+      diff: JSON.parse(record.diff),
+      proposal: record.payload,
+    }
+  }
+
+  // Retain one server-derived handoff once, keyed by its original saved
+  // receipt. The caller derives the handoff; this store never trims or cuts
+  // it. A field that would not fit is refused, and the ledger's own line
+  // ceiling refuses the rest. A retained record is `proposed`: it is neither a
+  // review decision nor a source change.
+  function retainProposal(handoff = {}) {
+    if (!isRecord(handoff) || !isRecord(handoff.proposal) || !isRecord(handoff.diff)) {
+      return { ok: false, status: 422, outcome: 'refused', error: 'handoff shape is not supported' }
+    }
+    const authority = validateCopyOnlyProposalAuthority({ ...handoff.proposal, ...handoff })
+    if (!authority.ok || handoff.directWrite !== false || handoff.applyEndpoint !== null) {
+      return { ok: false, status: 409, outcome: 'refused', error: 'proposal authority refused: a retained handoff is copy-only' }
+    }
+    for (const [field, max] of Object.entries(RETAINED_FIELD_LIMITS)) {
+      const value = handoff[field]
+      if (typeof value !== 'string' || !value || value !== value.trim() || value.length > max) {
+        return { ok: false, status: 413, outcome: 'refused', error: `handoff ${field} cannot be retained without changing it` }
+      }
+    }
+    const identity = retentionIdentity(handoff.proposal.selectedDraftReceipt)
+    if (!identity || identity.sessionId !== handoff.sessionId) {
+      return { ok: false, status: 422, outcome: 'refused', error: 'selected draft receipt is not usable as a retention identity' }
+    }
+    let record
+    try {
+      const diffText = JSON.stringify(handoff.diff, null, 2)
+      if (diffText.length > 50000) {
+        return { ok: false, status: 413, outcome: 'refused', error: 'handoff diff cannot be retained without truncation' }
+      }
+      const createdAt = nowIso()
+      record = {
+        schema: ATELIER_PROPOSAL_SCHEMA,
+        workspaceId,
+        proposal: {
+          id: retainedProposalId(identity),
+          status: 'proposed',
+          createdAt,
+          updatedAt: createdAt,
+          sessionId: handoff.sessionId,
+          viewId: handoff.viewId,
+          path: handoff.path,
+          action: handoff.action,
+          intent: handoff.intent,
+          reason: '',
+          storage: {
+            kind: 'local',
+            ignored: true,
+          },
+          authority: copyOnlyActionSummary(handoff.action),
+          eventVersion: 1,
+        },
+        diff: diffText,
+        payload: handoff.proposal,
+        retention: { ...identity, actor: handoff.actor, receipt: handoff.proposal.selectedDraftReceipt },
+      }
+      record.retention.payloadDigest = retainedDigest(record)
+    } catch {
+      return { ok: false, status: 422, outcome: 'refused', error: 'handoff cannot be canonicalized' }
+    }
+    const unknown = (error) => ({ ok: false, status: 409, outcome: 'unknown', error })
+    const settle = (known) => {
+      if (known.outcome !== 'retained') return known
+      return known.record.retention.payloadDigest === record.retention.payloadDigest
+        ? { ok: true, status: 200, outcome: 'existing', record: known.record, diagnostics: [] }
+        : { ok: false, status: 409, outcome: 'conflict', error: 'a different handoff is already retained for this original receipt' }
+    }
+    const known = lookupRetainedProposal(identity)
+    if (known.outcome !== 'not-found') return settle(known)
+    const appended = eventLedger.append({
+      aggregateId: record.proposal.id,
+      expectedVersion: 0,
+      type: 'proposal-created',
+      actor: handoff.actor,
+      at: record.proposal.createdAt,
+      payload: { record },
+    })
+    if (!appended.ok) {
+      // A version conflict means another writer appended first. Read back the
+      // original identity; never append again.
+      if (appended.status === 409) {
+        const again = lookupRetainedProposal(identity)
+        return again.outcome === 'retained'
+          ? settle(again)
+          : unknown('the append conflicted and the original receipt could not be read back; repeat the same request')
+      }
+      return { ok: false, status: appended.status, outcome: appended.status === 413 ? 'refused' : 'unknown', error: appended.error }
+    }
+    // Retention is acknowledged only from the ledger's own readback.
+    const back = lookupRetainedProposal(identity)
+    if (back.outcome !== 'retained' || back.record.retention.payloadDigest !== record.retention.payloadDigest) {
+      return unknown('the retained proposal could not be read back after its append; repeat the same request')
+    }
+    const diagnostics = writeSnapshotProjectionWith(snapshotWriter, proposalPath(record.proposal.id), back.record)
+    return { ok: true, status: 200, outcome: 'created', record: back.record, diagnostics }
+  }
+
   function reviewProposal(id, body = {}) {
     const read = readProposal(id)
     if (!read.ok) return read
@@ -457,6 +643,9 @@ export function createProposalStore({
     readProposal,
     listProposals,
     createProposal,
+    lookupRetainedProposal,
+    retainedHandoff,
+    retainProposal,
     reviewProposal,
   }
 }

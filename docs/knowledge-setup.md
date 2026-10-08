@@ -198,3 +198,51 @@ Use `atelier dev --knowledge` after graph/build to work through Onboard, Model,
 Deepen, Apply, and Learn. The browser and `knowledge session` CLI share
 source-bound private drafts, confirmation, and recovery. See
 [knowledge workspaces](knowledge-workspace.md) for the complete flow and limits.
+
+## Recording a host's semantic extraction
+
+`atelier knowledge semantic` records an extraction that your own tool or model
+ran, so a receiver can review it against the exact source. Atelier never runs
+the extraction. The runner, its request shapes and the receiver journey are
+described in [semantic operation](semantic-operation.md); this section covers
+the command.
+
+- Run it in the Git workspace where `atelier ingest` planned and ran the
+  sources. Each call reads one JSON object from stdin, at most 256 KiB:
+  `{"workspaceId": "...", "run": "<knowledge domain run>", "request": {...}}`.
+- Operations: `begin`, `status`, `reconcile`, `complete`, `proposals`,
+  `contribution` (prepareContribution), `relation` (prepareRelation), `record`,
+  `cascade`, `context` and `project`.
+- `request` holds exactly the operation's fields. Optional fields are `limit`
+  for `proposals`, and `supersedes` with `revisionReason` for `contribution`.
+  Every field has a declared kind: text, an object, an array, an integer
+  `limit`, `kind` as one of `entity`, `assertion` or `unknown`, and
+  `supersedes` or `revisionReason` also as `null`. Any other field, a missing
+  or null required one, or a value of the wrong kind refuses as
+  `SEMANTIC_OPERATION_INVALID` and writes nothing. Formats such as timestamps
+  and digests are checked by the runner, which may already have captured raw
+  output by then. The command closes every request; the internal library
+  closes only `begin` and some nested values, so library callers do not get
+  this check.
+- Success prints the operation's JSON result. A failure prints
+  `{"ok": false, "code": "SEMANTIC_...", "error": "..."}` on stderr and exits 1:
+  - the operation's own refusals keep their `SEMANTIC_*` code;
+  - when the runner attached a saved ledger write or captured raw output to the
+    failure, it carries `recorded` or `captured` with a `nextAction`, under the
+    runner's own code, or `SEMANTIC_OPERATION_INTERRUPTED` when the error had
+    none. Reopen the same operation rather than running the extraction again.
+    A few runner paths can still fail without attaching that detail;
+  - Atelier's other refusals, such as an invalid digest or a directory that is
+    not the Git workspace, are coded `SEMANTIC_OPERATION_REFUSED`.
+
+  A failure whose text could reveal host detail and that saved nothing is
+  reported by the command runner instead, without host detail: as
+  `[internal-error]`, or as `[code] message` for Atelier's lowercase codes.
+- Receiver records submitted through `record` are the caller's assertions:
+  Atelier checks their consistency but does not authenticate who made them.
+- Raw output travels inside the 256 KiB request as UTF-8 text, so larger raw
+  output cannot be recorded through the command yet.
+- Known limits from the runner's review stay: contradictory host declarations
+  across the ledger and intake can lead to two executions, found afterwards,
+  and a detected contradiction cannot yet be resolved. Neither is hidden by the
+  command.

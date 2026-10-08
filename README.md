@@ -39,6 +39,23 @@ Use [portable template profiles](docs/template-profile.md) to bind semantic and
 surface roles to canonical sources, with optional advisory decisions and
 separate host and release validation.
 
+Follow the [Knowledge Health workshop](docs/knowledge-health/quickstart.md) to
+inspect its finding, retain a contribution, and follow the owning correction
+and evidence refresh. Use the exact version and host qualified for that release.
+
+The Knowledge Health kit starts subprocesses, which the egress scanner does not
+model. `src/knowledge-health/example.mjs` and `src/knowledge-health/workshop.mjs`
+run `git init` in the new disposable directory they create.
+`src/knowledge/participatory/installed-workshop.mjs` imports the subprocess API
+and calls nothing through it; its setup uses that workshop's `git init`.
+`src/knowledge-health/proof/installed-check.mjs` runs the installed `atelier`
+bin and `git init` in a consumer directory.
+`src/knowledge-health/proof/common.mjs` runs `npm` and Node for the maintainer
+rehearsal script `src/knowledge-health/proof/rehearse.mjs`, which calls
+`npm view`, `npm install` and `npm pack` against `https://registry.npmjs.org`.
+No Atelier command or package export runs that script; it uses the network only
+when a maintainer starts it by hand.
+
 ## From files to a working system
 
 Start with a question that changes useful work. The
@@ -77,7 +94,7 @@ governed projections
 You can see the complete loop in a disposable sample workspace:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.13
 npx mnstry-atelier init --fixture=sample-workspace --target ./sample
 npx mnstry-atelier graph --project ./sample/atelier.project.json
 npx mnstry-atelier project --project ./sample/atelier.project.json
@@ -361,15 +378,28 @@ for observation/reconciliation and one non-force push only when the exact
 reviewed commit plan requested and confirmed it, no earlier local commit is
 waiting to be published, and HEAD still names the verified commit object. Sync
 never uses the network actor fallback, follows tags, or recursively publishes
-submodule refs. The local authoring HTTP client
+submodule refs.
+
+The explicitly invoked maintainer rehearsal
+`src/knowledge-health/proof/rehearse.mjs` uses
+`src/knowledge-health/proof/common.mjs` to run `npm view`, `npm install` and
+optional `npm pack` against `https://registry.npmjs.org`. These commands can use
+the public package registry. The rehearsal uses empty consumer npm configuration
+and a disposable install/cache; installation uses `--ignore-scripts`. It is a
+maintainer proof command, not an automatic local authoring or conformance
+operation, and it calls no model provider. Its `npm ls` reads the consumer
+dependency tree. This disclosure does not authorize a registry rehearsal or
+publication.
+
+The local authoring HTTP client
 refuses non-loopback URLs, the served pages authorize no external origin, and
 release audit scans every executable or markup file in the exact `npm pack`
 inventory for egress primitives. The standalone gate also scans executable and
 markup files under `src/`, `bin/`, `scripts/`, `templates/`, `examples/`, and
 `skills/`. Two limits worth stating plainly: the egress control does not
 interpret data-only `.json` or `.md` files, and it does not model
-`child_process`; the reviewed `gh` and enrolled Git paths above are documented
-subprocess exceptions rather than scanner detections:
+`child_process`; the `gh`, enrolled Git and explicit maintainer `npm` paths above
+are documented subprocess exceptions rather than scanner detections:
 
 ```bash
 npm run egress:check
@@ -451,7 +481,7 @@ Node.js 22 (22.18.0 or later) or Node.js 24 (24.13.1 or later) is required.
 Pin the prerelease while the package remains in alpha:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.13
 ```
 
 Then choose the path that matches what you are building:
@@ -470,7 +500,7 @@ Then choose the path that matches what you are building:
 
 ## Status and command reference
 
-Current package: `@mnstry/atelier@0.2.0-alpha.12`.
+Current package: `@mnstry/atelier@0.2.0-alpha.13`.
 
 The alpha package is usable and contract-tested, but its library API may still
 change before a stable release. Pin the exact version in production toolchains.
@@ -565,3 +595,5 @@ and [Coordination](docs/coordination.md) for portable runtime profiles and host 
 The optional [knowledge workspace](docs/knowledge-workspace.md) connects
 onboarding, ontology modeling, evidence deepening, application, and outcome
 learning with shared private coauthor sessions for people and agents.
+
+The [public workshop profile](docs/knowledge-health/devday/public-default.md) uses the existing Knowledge host to retain ordinary drafts and one copy-only source-owner handoff as a local proposal.

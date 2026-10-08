@@ -1,0 +1,18 @@
+{
+  "schema": "mnstry.atelier-project-config@v1",
+  "name": "knowledge-health-example",
+  "roots": {
+    "workspace": "."
+  },
+  "graph": {
+    "repoAccessPath": "repo-access.v1.json",
+    "outputPath": "output/knowledge.graph.json"
+  },
+  "repos": [
+    {
+      "name": "records",
+      "path": "records",
+      "readBoundary": "public"
+    }
+  ]
+}

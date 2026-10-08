@@ -150,6 +150,29 @@ export function createCoauthorStore({ workspaceRoot = process.cwd() } = {}) {
       });
     },
     read(id) { return load(id).state; },
+    // Owning readback of the existing immutable values and verified event chain.
+    // Read only: missing values are unknown/unavailable, never repaired here.
+    readSavedFields(id) {
+      return locked(() => {
+        const state = load(id).state;
+        const values = state.saved.map(saved => {
+          const parents = ['.atelier-local', 'coauthor', 'values', contentDigest(id)];
+          let dir = root;
+          for (const part of parents) {
+            dir = path.join(dir, part);
+            const info = fs.lstatSync(dir);
+            if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('redirected saved-value directory refused');
+          }
+          const raw = readText(path.join(dir, `${contentDigest(saved.receipt.requestId)}.json`));
+          const value = JSON.parse(raw);
+          validate(value, 'draft');
+          const expected = { schema: 'atelier-coauthor-draft@v1', status: 'draft', text: saved.text, receipt: saved.receipt };
+          if (raw !== canonicalize(expected) || canonicalize(value) !== canonicalize(expected)) throw new Error('saved value differs from owning event receipt');
+          return value;
+        });
+        return { state, values };
+      });
+    },
     // One verified ledger snapshot for a bounded history listing. Keep failures
     // per aggregate, and do not cache across calls or trust a caller's events.
     readMany(ids) {

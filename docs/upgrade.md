@@ -9,6 +9,27 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.13
+
+The public [Knowledge Health workshop](knowledge-health/devday/public-default.md)
+uses an invented local workspace. Participants can retain their original words,
+a separate interpretation and a `note`, `perspective-only`, `disagreement` or
+`pause` response. Review is a separate optional session. A selected draft can
+produce one retained copy-only source-owner proposal; retries and reopen read
+back its original receipt instead of appending another proposal. A source owner
+reviews the proposal and edits the declaration with normal repository tools,
+then reads it back and reassesses. The browser host grants no source-apply route.
+
+`atelier knowledge semantic` exposes the existing semantic runner's eleven
+operations through JSON stdin. It retains the runner's refusal codes and saved
+failure details. The [semantic operation contract](semantic-operation.md)
+remains authoritative; this release adds no schema or package export.
+
+Existing source and local history remain owned by their original repositories.
+A package update supplies no interpretation approval, source-write permission,
+Obsidian host qualification, publication authority or runtime activation. Rehearse
+this exact installed version in a disposable workspace before client use.
+
 ## Unreleased
 
 The bundled readiness pack retains its original v1 content and digest. Existing
@@ -229,7 +250,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.12
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.13
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -237,7 +258,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.12"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.13"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 

@@ -447,7 +447,9 @@ export function renderKnowledgePage() {
         pending = null,
         endedRequests = [],
         dirty = false,
-        contextRequest = 0
+        contextRequest = 0,
+        editGeneration = 0,
+        composing = false
       const note = (id, text, error = false) => {
         el(id).textContent = text
         el(id).classList.toggle('error', error)
@@ -526,7 +528,8 @@ export function renderKnowledgePage() {
           }
           if (data.questions.some((q) => q.id === old))
             el('question').value = old
-          if (!el('steps').children.length)
+          const firstLoad = !el('steps').children.length
+          if (firstLoad)
             for (const [i, f] of data.flows.entries()) {
               const b = node('button', undefined, el('steps'))
               b.type = 'button'
@@ -537,6 +540,7 @@ export function renderKnowledgePage() {
               const o = node('option', f.title, el('flow'))
               o.value = f.id
             }
+          if (firstLoad && !active && data.workshop?.available) stage = 'workshop'
           choose(stage)
           note(
             'status',
@@ -563,6 +567,12 @@ export function renderKnowledgePage() {
         node('h2', flow.title, out)
         node('p', flow.description, out, 'muted')
         el('work').textContent = selected()?.work || ''
+        if (stage === 'workshop') {
+          const box = card(out, 'One missing supporting relationship')
+          node('p', 'Read both invented sources. Keep your words, interpretation, response and revision separate.', box)
+          node('p', 'A draft or copy-only handoff does not apply a source change or approve readiness.', box, 'notice')
+          details(box, 'Current finding and exact source evidence', dashboard.workshop.context)
+        }
         if (stage === 'onboard') {
           const box = card(out, 'People and purpose')
           node('p', 'Steward: ' + dashboard.steward, box)
@@ -893,17 +903,46 @@ export function renderKnowledgePage() {
       function setBusy(value) {
         busy = value
         el('discard').hidden = !dirty
-        el('discard').disabled = value || Boolean(pending)
-        el('start').disabled = value || dirty || Boolean(pending)
+        el('discard').disabled = value || Boolean(pending) || composing
+        el('start').disabled = value || dirty || Boolean(pending) || composing
         el('open-session').disabled = value || dirty || Boolean(pending)
-        el('reload-session').disabled = value
-        el('editor').disabled = value || !active?.current || Boolean(pending)
+        el('reload-session').disabled = value || composing
+        // The native field owns text, IME and undo while a request is pending.
+        el('editor').disabled = !active
+        if (value || pending || composing) el('answer').readOnly = false
+        for (const b of el('controls').querySelectorAll('button'))
+          b.disabled = value || Boolean(pending) || composing || !active?.current
         el('pending-controls').hidden = !pending
         el('retry-request').disabled = value
         el('end-retry').disabled = value
         el('export-request').disabled = value
         for (const b of el('sessions').querySelectorAll('button'))
           b.disabled = value || dirty || Boolean(pending)
+      }
+      function participantText(value, field) {
+        if (active?.record.context?.participantResponseProfile === 'four-choice-separate-review-r1'
+          && field === 'interpretation') {
+          try { return JSON.parse(value).text } catch { return value }
+        }
+        return value
+      }
+      function showWorkshopReview() {
+        if (!active?.current || busy || pending || dirty || composing) return
+        const parentId = active.record.id
+        const preview = node('div', undefined, el('controls'), 'saved')
+        node('h3', 'Review declaration', preview)
+        node('p', 'Current declaration: []', preview)
+        node('p', 'Selected draft: ["devday:workshop"]', preview)
+        node('p', 'This preview has no saved or source effect. Select the draft to record and save it separately.', preview)
+        const select = node('button', 'Select this draft', preview)
+        select.type = 'button'
+        select.onclick = () => {
+          if (active.record.id !== parentId || busy || pending || dirty || composing) return
+          send('workshop-review', { requestId: crypto.randomUUID(), sessionId: parentId })
+        }
+        const back = node('button', 'Return', preview)
+        back.type = 'button'
+        back.onclick = () => preview.remove()
       }
       function renderSession({ preserve = false } = {}) {
         if (!active) return
@@ -935,7 +974,8 @@ export function renderKnowledgePage() {
         el('hint').textContent =
           prompt?.[2] ||
           'Review the retained wording and export it for the source owner.'
-        if (!preserve && !dirty) el('answer').value = state.proposal?.text || ''
+        if (!preserve && !dirty) el('answer').value = participantText(state.proposal?.text || '', state.fields[state.index]?.id)
+          || (record.flow === 'workshop-review' && state.phase === 'input' ? '["devday:workshop"]' : '')
         const recorded = el('recorded-wording')
         recorded.replaceChildren()
         const field = state.fields[state.index]?.id
@@ -943,7 +983,7 @@ export function renderKnowledgePage() {
         if (
           dirty &&
           state.proposal &&
-          el('answer').value !== state.proposal.text
+          el('answer').value !== participantText(state.proposal.text, field)
         ) {
           node(
             'p',
@@ -952,7 +992,7 @@ export function renderKnowledgePage() {
             'notice'
           )
           node('h3', 'Current recorded wording', recorded)
-          node('p', state.proposal.text, recorded, 'saved')
+          node('p', participantText(state.proposal.text, field), recorded, 'saved')
           node(
             'small',
             'Session revision ' +
@@ -966,7 +1006,7 @@ export function renderKnowledgePage() {
             recorded,
             'Retained answers for this step',
             answers.map((a) => ({
-              text: a.text,
+              text: participantText(a.text, field),
               eventId: a.eventId,
               revision:
                 (state.events.find((e) => e.id === a.eventId)?.event
@@ -976,12 +1016,12 @@ export function renderKnowledgePage() {
           history.open = Boolean(
             dirty &&
               state.proposal &&
-              el('answer').value !== state.proposal.text
+              el('answer').value !== participantText(state.proposal.text, field)
           )
         }
         el('answer').hidden = !prompt && !dirty
         el('answer').readOnly =
-          !['input', 'draft'].includes(state.phase) && !dirty
+          !['input', 'draft'].includes(state.phase) && !dirty && !composing && !pending && !busy
         el('confirmation').hidden = state.phase !== 'confirmation'
         el('controls').replaceChildren()
         const action = (title, type) => {
@@ -995,22 +1035,58 @@ export function renderKnowledgePage() {
           b.onclick = () => intent(type)
         }
         if (['input', 'draft'].includes(state.phase)) {
-          action('Record my answer', 'answer')
+          const participant = record.context?.participantResponseProfile === 'four-choice-separate-review-r1'
+          if (participant && field === 'choice') {
+            for (const [value, label] of [['note', 'Note'], ['perspective-only', 'Perspective'], ['disagreement', 'Disagreement'], ['pause', 'Pause']]) {
+              const choice = node('button', label, el('controls'))
+              choice.type = 'button'
+              choice.onclick = () => {
+                if (busy || pending || composing) return
+                el('answer').value = value
+                editGeneration++
+                dirty = true
+                intent('answer')
+              }
+            }
+          } else action(record.flow === 'workshop-review' ? 'Record selected draft'
+            : participant && field === 'interpretation' ? 'Record optional interpretation' : 'Record my answer', 'answer')
+          if (state.phase === 'draft' && (!participant || field === 'interpretation')) action('Propose revised wording', 'propose')
           if (state.phase === 'draft') action('Save private draft', 'save')
         }
         if (state.phase === 'confirmation') {
-          details(el('controls'), 'Proposed wording', state.proposal.text)
+          details(el('controls'), 'Proposed wording', participantText(state.proposal.text, field))
           details(
             el('controls'),
             'Original wording',
-            state.answers.find(
+            participantText(state.answers.find(
               (a) => a.eventId === state.proposal.originalEventId
-            )?.text || ''
+            )?.text || '', field)
           )
           action('Confirm revised wording', 'confirm')
           action('Keep original wording', 'reject')
         }
         if (state.phase === 'saved') action('Continue', 'advance')
+        if (state.phase === 'complete' && record.flow === 'workshop'
+          && record.context?.participantResponseProfile === 'four-choice-separate-review-r1'
+          && active.owningReadbacks?.verified === true) {
+          const review = node('button', 'Review', el('controls'))
+          review.type = 'button'
+          review.onclick = showWorkshopReview
+        }
+        if (state.phase === 'complete' && (record.flow === 'workshop-review'
+          || record.flow === 'workshop' && state.saved.find(s => s.fieldId === 'choice')?.text === 'revision')) {
+          const b = node('button', 'Prepare source-owner handoff', el('controls'))
+          b.onclick = async () => {
+            if (busy || pending || dirty || composing) return
+            setBusy(true)
+            try {
+              const value = await request('workshop-handoff', { sessionId: record.id })
+              details(el('bound-context'), 'Copy-only source-owner handoff', value.handoff)
+              note('session-status', 'Handoff prepared from durable readback. Source-owner editing and reassessment remain required.')
+            } catch (error) { note('session-status', error.message, true) }
+            finally { setBusy(false) }
+          }
+        }
         if (state.phase === 'paused') action('Resume', 'resume')
         else if (
           ['input', 'draft', 'confirmation', 'saved', 'recovery'].includes(
@@ -1034,6 +1110,14 @@ export function renderKnowledgePage() {
           'Evidence captured for this session',
           record.context || 'No context available at session start.'
         )
+        if (active.owningReadbacks) details(el('bound-context'), 'Descriptor, event history and immutable saved values', active.owningReadbacks)
+        if (record.context?.participantResponseProfile === 'four-choice-separate-review-r1' && record.flow === 'workshop')
+          details(el('bound-context'), 'Original contribution and choice IDs', {
+            contributionId: state.answers.filter(a => a.fieldId === 'original-words').at(-1)?.eventId || null,
+            choiceId: state.answers.filter(a => a.fieldId === 'choice').at(-1)?.eventId || null,
+            choiceStatus: state.saved.some(s => s.fieldId === 'choice') && active.owningReadbacks?.verified ? 'confirmed'
+              : state.answers.some(a => a.fieldId === 'choice') ? 'unconfirmed' : 'not-recorded'
+          })
         el('history').replaceChildren()
         for (const saved of state.saved) {
           const box = node('div', undefined, el('history'), 'saved')
@@ -1043,7 +1127,7 @@ export function renderKnowledgePage() {
               saved.fieldId,
             box
           )
-          node('p', saved.text, box)
+          node('p', participantText(saved.text, saved.fieldId), box)
           details(box, 'Durable draft receipt', saved.receipt)
         }
         setBusy(busy)
@@ -1066,14 +1150,14 @@ export function renderKnowledgePage() {
           return false
         }
       }
-      async function send(route, input) {
-        pending = { route, input }
+      async function send(route, input, generation = editGeneration) {
+        pending = { route, input, generation }
         setBusy(true)
         try {
           active = await request(route, input)
           pending = null
-          dirty = false
-          renderSession()
+          if (generation === editGeneration && !composing) dirty = false
+          renderSession({ preserve: dirty || composing })
           note(
             'session-status',
             active.current
@@ -1100,7 +1184,7 @@ export function renderKnowledgePage() {
             'Save not confirmed. Preserve your wording and inspect the recovery controls.' +
             step
           )
-        if (route === 'start')
+        if (route === 'start' || route === 'workshop-review')
           return 'Session started. Its retained state was read back.' + step
         const type = input.event?.type
         if (type === 'answer')
@@ -1131,8 +1215,8 @@ export function renderKnowledgePage() {
             'Resolve the pending request with Retry or End retry before recording another intent.',
             true
           )
-        if (!active || busy) return
-        if (dirty && type !== 'answer')
+        if (!active || busy || composing) return
+        if (dirty && !['answer', 'propose'].includes(type))
           return note(
             'session-status',
             'Record or export your changed answer before moving on.',
@@ -1145,8 +1229,10 @@ export function renderKnowledgePage() {
           type,
           expectedRevision: active.state.revision,
         }
-        if (type === 'answer') {
+        if (['answer', 'propose'].includes(type)) {
           event.text = el('answer').value
+          if (active.record.context?.participantResponseProfile === 'four-choice-separate-review-r1'
+            && active.state.fields[active.state.index]?.id === 'interpretation') event.text = JSON.stringify({ text: event.text })
           if (!event.text.trim())
             return note('session-status', 'Write an answer first.', true)
         }
@@ -1160,7 +1246,7 @@ export function renderKnowledgePage() {
             'Resolve the pending request before starting another session.',
             true
           )
-        if (!dashboard || busy || dirty) return
+        if (!dashboard || busy || dirty || composing) return
         send('start', {
           requestId: crypto.randomUUID(),
           flow: el('flow').value,
@@ -1178,6 +1264,7 @@ export function renderKnowledgePage() {
         )
       }
       el('answer').oninput = () => {
+        editGeneration++
         dirty = true
         setBusy(busy)
         note(
@@ -1185,12 +1272,53 @@ export function renderKnowledgePage() {
           'Unsaved wording in this tab. Record it to retain the answer in session history.'
         )
       }
+      el('answer').oncompositionstart = () => {
+        composing = true
+        dirty = true
+        editGeneration++
+        setBusy(busy)
+      }
+      el('answer').oncompositionend = () => {
+        composing = false
+        dirty = true
+        editGeneration++
+        renderSession({ preserve: true })
+      }
       el('question').onchange = render
       el('refresh').onclick = refresh
       el('reload-session').onclick = () =>
         active && readSession(active.record.id)
-      el('retry-request').onclick = () =>
-        pending && !busy && send(pending.route, pending.input)
+      el('retry-request').onclick = async () => {
+        if (!pending || busy || composing) return
+        const original = pending
+        setBusy(true)
+        try {
+          const sessionId = ['start', 'workshop-review'].includes(original.route)
+            ? 'kg-' + original.input.requestId.toLowerCase() : original.input.sessionId
+          const lookup = await request('lookup', { sessionId, eventId: original.input.event?.id || null })
+          if (lookup.outcome === 'unknown') {
+            note('session-status', 'Original outcome unknown. Keep this request and inspect retained history; no retry was sent.', true)
+          } else if (lookup.outcome === 'observed') {
+            // Compare the actual retained event before clearing original custody.
+            const retained = lookup.session.state.events.find(e => e.id === original.input.event?.id)
+            if (original.route === 'event' && (!retained || Object.keys(retained.event).length !== Object.keys(original.input.event).length || Object.keys(original.input.event).some(k => retained.event[k] !== original.input.event[k])))
+              throw new Error('original ID has different retained intent')
+            if (original.route === 'start' && (['flow', 'snapshot'].some(k => lookup.session.record[k] !== original.input[k]) || lookup.session.record.author !== original.input.author.trim()))
+              throw new Error('original start ID has different retained intent')
+            if (original.route === 'workshop-review' && (lookup.session.record.flow !== 'workshop-review'
+              || lookup.session.record.context.participant?.sessionId !== original.input.sessionId))
+              throw new Error('original Review ID has different retained participant')
+            active = lookup.session
+            pending = null
+            if (original.generation === editGeneration && !composing) dirty = false
+            renderSession({ preserve: dirty || composing })
+            note('session-status', 'Original request found in durable history; no repeated effect was sent.')
+          } else if (lookup.outcome === 'not-found') {
+            await send(original.route, original.input, original.generation)
+          } else throw new Error('original outcome not established')
+        } catch (error) { note('session-status', 'Original lookup failed: ' + error.message, true) }
+        finally { setBusy(false) }
+      }
       el('end-retry').onclick = async () => {
         if (!pending || busy) return
         const ended = pending

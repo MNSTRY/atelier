@@ -1,0 +1,19 @@
+{
+  "status":"not-observed",
+  "participantCode":null,
+  "recordingChoice":null,
+  "observedAt":null,
+  "packageVersion":null,
+  "packageIntegrity":null,
+  "exampleSourceBeforeSha256":null,
+  "exampleSourceAfterSha256":null,
+  "baseline":{"explanation":null,"confidence":null,"reason":"Not yet observed"},
+  "understandingAfter":{"explanation":null,"uncertainties":null,"reason":"Not yet observed"},
+  "contribution":{"originalWords":null,"participantOutcome":null,"meaningfulToParticipant":null,"reason":"Not yet observed"},
+  "reassessment":{"observed":false,"findingBefore":null,"findingAfter":null,"exactReadbackEvidence":null,"reason":"Not yet observed"},
+  "difficulty":{"participantWords":null,"assistance":null,"elapsedMinutes":null,"reason":"Not measured"},
+  "usefulness":{"participantWords":null,"participantRating":null,"reason":"Not yet observed"},
+  "evidenceRefs":[],
+  "facilitatorInterpretation":null,
+  "acceptance":"not-established"
+}

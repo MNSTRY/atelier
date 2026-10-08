@@ -25,6 +25,8 @@ export function catalogDocument() {
         "src/knowledge/ingestion.mjs",
         "src/ingestion/semantic.mjs",
         "src/commands/knowledge.mjs",
+        "src/commands/knowledge-semantic.mjs",
+        "src/knowledge/semantic-operation.mjs",
         "src/knowledge/plan.mjs",
         "src/knowledge/context.mjs",
         "src/knowledge/workspace.mjs",
