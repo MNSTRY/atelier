@@ -18,6 +18,11 @@ plan and exit code 2 a refusal; the command never exits 0, because a plan is not
 proof of an offline reinstall. See
 [Consumer dependency closure plan](#consumer-dependency-closure-plan).
 
+This release also introduces `@mnstry/atelier/ui`, a tenant-neutral control
+grammar for local Atelier tooling and compatible downstream interfaces. Existing
+consumers do not need to change. Consumers that adopt it map the
+`--system-control-*` custom properties to their own theme.
+
 No existing command, schema or stored record changes in this release. A package
 update supplies no interpretation approval, source-write permission, publication
 authority or runtime activation. Rehearse this exact installed version in a

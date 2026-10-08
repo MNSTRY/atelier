@@ -28,6 +28,9 @@ test('project projection writes a readable local GUI from the graph', (t) => {
   // Default branding output: MNSTRY eyebrow, no theme override block appended.
   assert.match(html, /MNSTRY Atelier · local projection/)
   assert.equal(html.match(/:root\{/g).length, 1)
+  assert.match(html, /class="system-control" data-variant="secondary" data-size="compact"/)
+  assert.match(html, /\.system-control \{/)
+  assert.doesNotMatch(html, /atelier-control|--atelier-control/)
 })
 
 test('project projection applies distribution branding from ext', (t) => {

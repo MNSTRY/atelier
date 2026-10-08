@@ -61,6 +61,7 @@
     "./readiness": "./src/readiness/readiness.mjs",
     "./readiness-protocols": "./src/readiness-protocols/bundled-pack.mjs",
     "./server": "./src/server/local-sidecar.mjs",
+    "./ui": "./src/ui/control-system.mjs",
     "./harness": "./src/harness/context.mjs",
     "./collaboration": "./src/collaboration/index.mjs",
     "./support": "./src/support/support-bundle.mjs",

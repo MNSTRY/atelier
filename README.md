@@ -276,6 +276,23 @@ if (graph.errors.length > 0) throw new Error(graph.errors.join('\n'))
 console.log(graph.nodes)
 ```
 
+Interfaces that need the same control grammar as Atelier's generated tooling
+can import the additive UI subpath. The stylesheet contains no brand copy or
+publication semantics; map its `--system-control-*` properties to the
+consumer's own theme:
+
+```js
+import {
+  atelierControlStyles,
+  renderActionGroup,
+} from '@mnstry/atelier/ui'
+
+const navigation = renderActionGroup([
+  { label: 'Library', href: '/library/' },
+  { label: 'Concepts', href: '/concepts/' },
+], { label: 'Browse the workspace' })
+```
+
 The package exports change over the alpha series, so pin the exact prerelease
 version and treat the package export map and shipped source modules as the
 executable API reference. [Distribution contracts](./docs/distributions.md) explain
