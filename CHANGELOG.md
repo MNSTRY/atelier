@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0-alpha.14
+
+- `atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
+  candidate's own dependency closure, and `planConsumerClosure` is exported from
+  `@mnstry/atelier/upgrade`. The plan reads the candidate's `package.json` and
+  `package-lock.json`, the installed manifest of every lockfile copy of the
+  selected package, `package.json` in each directory above the npm root (to
+  refuse a parent that declares workspaces) and, for the default package name,
+  Atelier's own `package.json`. It runs no npm command, uses no network, reads
+  no npm configuration and writes nothing. It reports the lockfile's sources,
+  registry hosts and schemes, and platform exclusions. It checks the selected
+  package's exact `overrides` against every installed copy, only after binding
+  each installed manifest to the name and version of its lockfile entry, and
+  lists selector, nested and non-exact overrides, and overrides for packages a
+  link provides, as unchecked. The npm root must be the directory's real path.
+  Refusals reuse `usage`, `consumer-closure-incomplete` and
+  `override-not-inherited`, each with one bounded reason. Every run prints one
+  JSON document, including a run whose arguments are refused. A completed plan
+  exits 3 with `"proof": "not-run"` and a refusal exits 2; the command never
+  exits 0 and does not prove an offline reinstall. The consumer-closure
+  classifiers moved to `src/upgrade/closure-diagnostics.mjs`, and
+  `scripts/consumer-closure-diagnostics.mjs` re-exports them. Two of them
+  changed: a project folder entry in a lockfile is never counted as an
+  installed copy, and a lockfile entry that is not an object is reported as
+  missing by `capturedClosure` instead of raising a `TypeError`.
+
 ## 0.2.0-alpha.13
 
 - Add the public Knowledge Health workshop on the existing local Knowledge

@@ -9,6 +9,20 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.14
+
+`atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
+candidate's own dependency closure before an upgrade. It reads the candidate's
+lockfile and manifests only and runs no npm command. Exit code 3 is a completed
+plan and exit code 2 a refusal; the command never exits 0, because a plan is not
+proof of an offline reinstall. See
+[Consumer dependency closure plan](#consumer-dependency-closure-plan).
+
+No existing command, schema or stored record changes in this release. A package
+update supplies no interpretation approval, source-write permission, publication
+authority or runtime activation. Rehearse this exact installed version in a
+disposable workspace before client use.
+
 ## Upgrading to 0.2.0-alpha.13
 
 The public [Knowledge Health workshop](knowledge-health/devday/public-default.md)
@@ -250,7 +264,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.13
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -258,7 +272,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.13"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.14"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -337,3 +351,114 @@ For the bounded, manually confirmed single-repository workflow, see
 commands are separate from the legacy flag-based migration workflow above.
 They preserve history and honor existing commit hooks; they do not install a
 new package or activate a runtime.
+
+## Consumer dependency closure plan
+
+`atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
+candidate's own dependency closure. A consumer does not inherit a dependency
+publisher's npm `overrides`, so the candidate's own lockfile is what counts.
+
+The command reads these files and no others:
+
+- the candidate's `package.json` and `package-lock.json`;
+- the installed `package.json` of every lockfile copy of the selected package;
+- `package.json` in each directory above the npm root, up to the filesystem
+  root, to refuse a parent that declares workspaces. When the npm root is under
+  your home directory, that includes a `package.json` in the home directory;
+- Atelier's own `package.json`, for the default package name, when `--package`
+  is not given.
+
+It does not run npm, use the network, read npm configuration or credentials, or
+write anything. The directory need not be an Atelier workspace, and `--npm-root`
+has no default.
+
+Every run prints exactly one JSON document with `"proof": "not-run"`, including
+a run whose arguments are refused. A completed plan holds:
+
+- the lockfile's SHA-256, version and entry count;
+- entries by source (`npm`, `git`, `local_path`, `link`, `bundled` and
+  `unclassified`, an installed entry with no `resolved`); the counts add up to
+  the entry count;
+- the registry hosts the lockfile names, and separately the URL schemes (`http`,
+  `https`) it uses;
+- the number of registry tarballs an offline proof would need;
+- lockfile entries whose `os`, `cpu` or `libc` excludes this host;
+- the selected package's lockfile copies, and under `manifests` the path, name,
+  version and SHA-256 of each installed manifest that was read;
+- the selected package's exact `overrides` that were checked against every
+  installed copy, the ones with no copy, and the ones left unchecked: a
+  version-selector key, a nested override, a value that is not an exact
+  version, or a package that a link provides (`link-only`, or `linked-copy`
+  when a registry copy is installed beside the link);
+- every refusal, with its code, one `reason`, a message and a next step.
+
+A refused plan holds its refusals and whatever else was established. A refusal
+of the arguments, the npm root or the shape of the lockfile stops the plan
+there, so it holds nothing about the lockfile's entries; any other refusal is
+listed beside the rest of the classification.
+
+Exit code 3 means a completed plan. Exit code 2 means a refusal: the JSON
+document, then `[code] message` with a `Next:` step on standard error. The
+command never exits 0: a plan is not a pass, and this command does not prove an
+offline reinstall.
+
+Overrides are taken from the installed manifest only when it is the package the
+lockfile records: each copy's manifest must declare the selected name and the
+version of its own lockfile entry, and all copies must be at one version with
+the same overrides. Otherwise the plan is refused and no override is reported
+as checked.
+
+Refusals reuse existing codes:
+
+- `usage`: the input is not supported. Reasons: `npm-root-required`,
+  `npm-root-not-absolute`, `npm-root-not-directory`, `npm-root-linked` (the
+  path is a link or passes through one), `argument-unsupported` (an unknown
+  flag, an extra argument, a flag with no value or an empty value, or a flag
+  given more than once), `manifest-missing`, `lockfile-missing`,
+  `lockfile-invalid` (not a JSON object, or a `packages` entry that is not an
+  object), `lockfile-version` (version 1, or no `packages` map), `workspaces`,
+  `prefix-mismatch` (a parent directory declares workspaces) and
+  `linked-node-modules`.
+- `consumer-closure-incomplete`: an offline reinstall could not be proven for a
+  lockfile entry. Reasons: `missing-integrity`, `git-source`, `other-host`,
+  `outside-project`, `link-target-missing` (a link that names no folder),
+  `zero-copies`, `selected-package-unreadable`, `selected-package-mismatch`
+  (an installed manifest that is not the package its lockfile entry records)
+  and `selected-copies-differ`.
+- `override-not-inherited`: reason `copy-off-pin`. A copy is installed at a
+  version other than the selected package's exact pin. More than one copy, all
+  at the pin, is reported and not refused.
+
+Options:
+
+- `--package NAME` selects the package whose overrides are checked. It defaults
+  to `@mnstry/atelier`.
+- `--registry-host HOST[,HOST]` names the approved registry hosts. A tarball on
+  any other host, or at a URL with no readable host, is then refused. Without
+  it, hosts are reported and `approvedRegistryVerified` is `false`, because the
+  plan does not read npm configuration.
+
+Give each option once, with a value, after the word `closure`. An option with
+an empty value is refused; leave the option out to use its default.
+
+Limits:
+
+- The plan cannot run `npm prefix`, so `prefixVerified` is always `false`.
+  Instead it requires `--npm-root` to be the directory's real path and refuses
+  any parent directory of it that declares workspaces. A path that is a link,
+  or passes through one, is refused.
+- Containment of links and local files is checked by path, without following
+  links. The folder a link points to is not opened: an override for a package
+  that a link provides is listed as unchecked, never as checked.
+- Approving a host does not verify the transport. A host is matched by its
+  exact name and port; `http` and `https` are reported and not distinguished.
+- The manifest binding compares the name and version the installed manifest
+  declares. It does not verify the installed files against the lockfile's
+  `integrity`.
+- Platform evidence uses this process's `os` and `cpu`; `libc` is unknown
+  unless a caller of `planConsumerClosure` supplies it.
+- A flag with no value placed before the word `closure` (for example
+  `atelier upgrade --package closure`) takes `closure` as its value, so the
+  ordinary upgrade command runs instead of this one.
+- `lockTreeDifferences`, the comparison of two `npm ls` trees, is in the source
+  but is not exported from the package and no command uses it.

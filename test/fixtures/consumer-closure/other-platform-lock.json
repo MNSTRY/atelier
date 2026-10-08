@@ -1,0 +1,82 @@
+{
+  "name": "closure-plan-consumer",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "closure-plan-consumer",
+      "version": "1.0.0",
+      "dependencies": {
+        "@example/publisher": "1.0.0"
+      }
+    },
+    "node_modules/@example/publisher": {
+      "version": "1.0.0",
+      "resolved": "https://registry.example.test/@example/publisher/-/publisher-1.0.0.tgz",
+      "integrity": "sha512-adqdH7xU8hR/cKmSBKTysqYaraDRr5zSTD5GiPQCCw6h8BCYQoGdyHKWJmJo20J2iuuKaKZ7LtgIP6Nb19WJqQ==",
+      "dependencies": {
+        "pinned-dep": "^1.0.0",
+        "plain-dep": "^2.0.0"
+      }
+    },
+    "node_modules/pinned-dep": {
+      "version": "1.2.3",
+      "resolved": "https://registry.example.test/pinned-dep/-/pinned-dep-1.2.3.tgz",
+      "integrity": "sha512-x2a2GRayvKpAzKs55OOuh6S4Z0WBIdnEAPWWCj29d1FM7F7c1t7MMgrAgYkTKUbG2jcIqTBfiC9EinqThDrHDQ=="
+    },
+    "node_modules/plain-dep": {
+      "version": "2.0.0",
+      "resolved": "https://registry.example.test/plain-dep/-/plain-dep-2.0.0.tgz",
+      "integrity": "sha512-X2UbP7PDLuhGAGz/2yehyoDhnNQvDwyyi9m37DpalKITvwklxiYv52QItfzQOBl5Xbnwc5dTQk9RUidFASyi4g=="
+    },
+    "node_modules/@example/native-linux-x64": {
+      "version": "1.0.0",
+      "resolved": "https://registry.example.test/@example/native-linux-x64/-/native-linux-x64-1.0.0.tgz",
+      "integrity": "sha512-fkcUBgWKXUX3F8V57eY2dXf47rNakTcyPIAGixclnuLx7UxxB/VGofH+uPGoLmAR6qXozseqTAX0/uOD6LHZAA==",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "cpu": [
+        "x64"
+      ]
+    },
+    "node_modules/@example/native-darwin-arm64": {
+      "version": "1.0.0",
+      "resolved": "https://registry.example.test/@example/native-darwin-arm64/-/native-darwin-arm64-1.0.0.tgz",
+      "integrity": "sha512-85geo7V0zI9SwWHxvwb4BqD/hvhVGMf7d6y+V+gibhRaIZWC1EdgIz4v7tCMA+vw4K0o1kw1TCnm3fwj5pninw==",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "cpu": [
+        "arm64"
+      ]
+    },
+    "node_modules/@example/native-linux-x64-musl": {
+      "version": "1.0.0",
+      "resolved": "https://registry.example.test/@example/native-linux-x64-musl/-/native-linux-x64-musl-1.0.0.tgz",
+      "integrity": "sha512-ZZXt6V9znDnCdEhzlGBLDpNvmsE3DK1/8gQStoHczEX/+T0T9FaEejTiVKp6KwP51QFIKnIaiXh1SNEkkbIVBQ==",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "cpu": [
+        "x64"
+      ],
+      "libc": [
+        "musl"
+      ]
+    },
+    "node_modules/not-windows": {
+      "version": "1.0.0",
+      "resolved": "https://registry.example.test/not-windows/-/not-windows-1.0.0.tgz",
+      "integrity": "sha512-dWaQbWG4JXFBCEz7d9dOjQaJKs4jh4aPYaG7xvcTNE8lH/6GeHZdN2uCdLHbNAvr4SLZTxSs1Jbkp3voUfsvOA==",
+      "optional": true,
+      "os": [
+        "!win32"
+      ]
+    }
+  }
+}

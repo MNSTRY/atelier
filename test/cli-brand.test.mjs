@@ -66,6 +66,7 @@ Core commands:
   upgrade explain --plan          Explain saved changes and consent without writes.
   upgrade apply --plan --confirm   Apply the selected plan through commit hooks.
   upgrade status|recover          Inspect receipts or preview recovery.
+  upgrade closure --npm-root      Plan a consumer dependency-closure check; reads only, proves nothing.
   upgrade --dry-run               Plan a legacy package/template upgrade.
   upgrade --apply                 Apply a branch-based reviewable upgrade.
   lock check|write                Verify or create atelier.lock.json.

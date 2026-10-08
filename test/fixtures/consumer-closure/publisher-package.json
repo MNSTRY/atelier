@@ -1,0 +1,17 @@
+{
+  "name": "@example/publisher",
+  "version": "1.0.0",
+  "dependencies": {
+    "pinned-dep": "^1.0.0",
+    "plain-dep": "^2.0.0"
+  },
+  "overrides": {
+    "pinned-dep": "1.2.3",
+    "absent-dep": "9.9.9",
+    "ranged-dep": "^3.0.0",
+    "selector-dep@^1": "1.0.5",
+    "nested-parent": {
+      "nested-child": "4.0.0"
+    }
+  }
+}
