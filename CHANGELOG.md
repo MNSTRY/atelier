@@ -26,6 +26,14 @@
   installed copy, and a lockfile entry that is not an object is reported as
   missing by `capturedClosure` instead of raising a `TypeError`.
 
+- Add a tenant-neutral HTML control system at `@mnstry/atelier/ui`. The shared
+  geometry, variants, focus treatment, motion, action-group layouts, and safe
+  renderers are used by Atelier's generated project UI and are available to
+  downstream publication kits without importing publication semantics into
+  Atelier.
+- The Obsidian service test suites reserve the loopback ports they choose, so
+  another test cannot take a port between its selection and its use.
+
 ## 0.2.0-alpha.13
 
 - Add the public Knowledge Health workshop on the existing local Knowledge
