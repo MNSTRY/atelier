@@ -200,6 +200,13 @@ async function openWorkshop(t) {
     workshop.sidecar = createAtelierSidecarServer({ workspaceRoot: published, knowledgeProject: project })
     const address = await workshop.sidecar.listen()
     workshop.base = `http://127.0.0.1:${address.port}`
+    workshop.nonce = null
+  }
+  // The mutation nonce is requested just before the first request that needs
+  // it. Driving a session takes seconds of synchronous work; a request sent
+  // after such a pause on a connection opened before it can meet a socket the
+  // server has already closed as idle.
+  workshop.grant = async () => {
     const grant = await postJson('/api/knowledge/session', {}, workshop.base)
     assert.equal(grant.response.status, 200)
     workshop.nonce = grant.body.mutationNonce
@@ -208,7 +215,10 @@ async function openWorkshop(t) {
     if (workshop.sidecar) await workshop.sidecar.close()
     workshop.sidecar = null
   }
-  workshop.handoff = (body) => postJson('/api/knowledge/workshop-handoff', body, workshop.base, workshop.nonce)
+  workshop.handoff = async (body) => {
+    if (!workshop.nonce) await workshop.grant()
+    return postJson('/api/knowledge/workshop-handoff', body, workshop.base, workshop.nonce)
+  }
   workshop.readProposal = async (id) => {
     const response = await fetch(`${workshop.base}/api/proposals/${id}`, { headers: { Origin: workshop.base, 'Sec-Fetch-Site': 'same-origin' } })
     return { response, body: await response.json().catch(() => ({})) }
@@ -391,6 +401,7 @@ test('an incomplete Review, a response that selects nothing and an unknown sessi
 test('a saved value that is altered or missing refuses retention before any append', async (t) => {
   const workshop = await openWorkshop(t)
   const altered = contribute(workshop, { suffix: '1' })
+  const original = contribute(workshop, { suffix: '2' })
   const selectedValue = workshop.savedValue(altered.reviewId, 'selected-save')
   const kept = fs.readFileSync(selectedValue, 'utf8')
   fs.rmSync(selectedValue)
@@ -405,7 +416,6 @@ test('a saved value that is altered or missing refuses retention before any appe
   assert.equal(missing.response.status, 409)
 
   // The original contribution is read back from its own session too.
-  const original = contribute(workshop, { suffix: '2' })
   const wordsValue = workshop.savedValue(original.participantId, 'words-save')
   const words = fs.readFileSync(wordsValue, 'utf8')
   fs.rmSync(wordsValue)
@@ -419,6 +429,7 @@ test('a saved value that is altered or missing refuses retention before any appe
 test('the handoff request keeps its nonce, origin and session-only body fences', async (t) => {
   const workshop = await openWorkshop(t)
   const { reviewId } = contribute(workshop)
+  await workshop.grant()
   const withoutNonce = await postJson('/api/knowledge/workshop-handoff', { sessionId: reviewId }, workshop.base)
   assert.equal(withoutNonce.response.status, 403)
   const crossOrigin = await fetch(`${workshop.base}/api/knowledge/workshop-handoff`, {
@@ -443,6 +454,7 @@ test('the handoff request keeps its nonce, origin and session-only body fences',
 test('the generic proposal route keeps its published-HTML fence and cannot claim retention', async (t) => {
   const workshop = await openWorkshop(t)
   const { reviewId } = contribute(workshop)
+  await workshop.grant()
   const markdown = await postJson('/api/proposals', {
     sessionId: reviewId,
     viewId: 'knowledge-workshop',
