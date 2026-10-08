@@ -189,7 +189,7 @@
     "esbuild": "0.25.12",
     "playwright": "1.55.1",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react-dom": "19.3.0",
     "typescript": "5.8.3"
   },
   "license": "Apache-2.0",
