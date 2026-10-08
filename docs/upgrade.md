@@ -9,6 +9,20 @@ workspace between Atelier package releases. The flow is local-only: it does not
 provision repositories, contact a Git host, mutate the MNSTRY runtime, or write
 through a browser view.
 
+## Upgrading to 0.2.0-alpha.14
+
+`atelier upgrade closure --npm-root ABSOLUTE_NPM_ROOT` plans a check of a staged
+candidate's own dependency closure before an upgrade. It reads the candidate's
+lockfile and manifests only and runs no npm command. Exit code 3 is a completed
+plan and exit code 2 a refusal; the command never exits 0, because a plan is not
+proof of an offline reinstall. See
+[Consumer dependency closure plan](#consumer-dependency-closure-plan).
+
+No existing command, schema or stored record changes in this release. A package
+update supplies no interpretation approval, source-write permission, publication
+authority or runtime activation. Rehearse this exact installed version in a
+disposable workspace before client use.
+
 ## Upgrading to 0.2.0-alpha.13
 
 The public [Knowledge Health workshop](knowledge-health/devday/public-default.md)
@@ -250,7 +264,7 @@ For registry installs, pin the exact version and record the resolved version
 in the lockfile:
 
 ```bash
-npm install --save-dev @mnstry/atelier@0.2.0-alpha.13
+npm install --save-dev @mnstry/atelier@0.2.0-alpha.14
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
@@ -258,7 +272,7 @@ For Git installs, pin the release tag rather than a branch, so the lock file
 records exactly what was reviewed:
 
 ```bash
-npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.13"
+npm install --save-dev "git+https://github.com/MNSTRY/atelier.git#v0.2.0-alpha.14"
 npx mnstry-atelier lock write --project ./atelier.project.json
 ```
 
